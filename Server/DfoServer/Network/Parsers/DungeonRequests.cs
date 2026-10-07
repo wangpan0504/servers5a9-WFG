@@ -28,6 +28,9 @@ internal readonly record struct DungeonSelectionRequest(
 
 internal static class DungeonRequests
 {
+    // 选择界面返回实收为空正文；未知形状不猜造应答。
+    public static bool IsSelectionReturn(ReadOnlySpan<byte> body) => body.IsEmpty;
+
     public static bool TryParseDeath(ReadOnlySpan<byte> body, out DungeonDeathRequest? request)
     {
         request = null;

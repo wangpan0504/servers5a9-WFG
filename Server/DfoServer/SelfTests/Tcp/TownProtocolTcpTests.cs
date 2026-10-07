@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DfoServer.GameWorld.Towns;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -6,7 +7,7 @@ namespace DfoServer.Testing;
 
 internal static class TownProtocolTcpTests
 {
-    public static async Task RunAsync(ServerOptions source, string root)
+    public static async Task RunAsync(ServerOptions source, string root, TownCatalog towns)
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "town"));
         await fixture.CliAsync(null, 2, "--selftest", "unexpected");
@@ -28,6 +29,7 @@ internal static class TownProtocolTcpTests
             peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
             peer.Travel(38, 1, 873, 253, 38, 0, returnTown: 38);
             peer.Travel(38, 0, 645, 251, 38, 1, kind: 6);
+            GateReturn(fixture, peer);
             string before = fixture.Snapshot();
             for (int i = 0; i < 2; i++)
             {
@@ -136,12 +138,70 @@ internal static class TownProtocolTcpTests
             That(!sent.Any(p => p.GetProperty("Kind").GetInt32() == 1 && p.GetProperty("Opcode").GetInt32() == opcode), "unimplemented has no fabricated ACK");
         }
 
-        await PreparedAsync(fixture);
+        await PreparedAsync(fixture, towns);
         Console.WriteLine("PASS C# TCP town: entry, exit, raw travel, quests, docks, portals, NPC, dungeon select notice and reconnect");
     }
 
+    static void GateReturn(TcpTestFixture fixture, TcpPeer peer)
+    {
+        peer.Travel(38, 2, 1085, 249, 38, 0);
+        string[] tables = fixture.Query("SELECT name FROM sqlite_schema WHERE type='table' AND name!='characters' ORDER BY name")
+            .Select(row => (string)row[0]).ToArray();
+        string assets = JsonSerializer.Serialize(tables.Select(table => fixture.Query($"SELECT * FROM \"{table}\" ORDER BY rowid")));
+        string columns = string.Join(',', fixture.Query("PRAGMA table_info(characters)").Select(row => (string)row[1])
+            .Where(name => name is not ("town" or "area" or "x" or "y" or "revision")).Select(name => '"' + name + '"'));
+        string character = fixture.Snapshot($"SELECT {columns} FROM characters WHERE id=$p0", peer.Id);
+        foreach (ushort x in new ushort[] { 90, 79 })
+        {
+            peer.Send(35, Move(x, 249));
+            peer.Barrier();
+            string before = fixture.Snapshot();
+            long revision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            peer.Send(15, new byte[4]);
+            peer.Expect(1, 15, [1]);
+            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+            peer.Expect(0, 27, new byte[42]);
+            peer.Send(15, new byte[4]);
+            peer.Expect(1, 15, [1]);
+            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+            peer.Expect(0, 27, new byte[42]);
+            That(fixture.Snapshot() == before, "入口重复请求冻结返回点，不提前写库");
+            peer.Send(132);
+            peer.Expect(1, 132, [1]);
+            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
+            peer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write((byte)38); w.Write((byte)2); w.Write((ushort)89); w.Write((ushort)249); w.Write((byte)0); w.Write((byte)1); }));
+            peer.Expect(0, 24, Build(w => { w.Write((byte)38); w.Write((byte)2); w.Write((ushort)1); w.Write(peer.Id); w.Write((ushort)89); w.Write((ushort)249); w.Write(new byte[] { 0, 1, 1 }); }));
+            That(fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", peer.Id) == $"[[38,2,89,249,{revision + 1}]]",
+                "边界内外返回提交安全落点，包体与落库一致");
+            before = fixture.Snapshot();
+            peer.Send(132);
+            peer.Barrier();
+            That(fixture.Snapshot() == before, "重复132无额外包和位置提交");
+            That(fixture.Snapshot($"SELECT {columns} FROM characters WHERE id=$p0", peer.Id) == character &&
+                JsonSerializer.Serialize(tables.Select(table => fixture.Query($"SELECT * FROM \"{table}\" ORDER BY rowid"))) == assets,
+                "安全回城保持全部角色资产、任务、物品UID和其他数据库表");
+            peer.Send(631, Move(100, 249, motion: true));
+            peer.Barrier();
+            That(fixture.Snapshot("SELECT x,y FROM characters WHERE id=$p0", peer.Id) == "[[100,249]]", "回城后移动恢复，可以走离入口");
+        }
+        peer.Travel(38, 0, 645, 251, 38, 2);
+    }
+
     sealed record Trip(byte Town, byte Area, ushort X, ushort Y, ushort PreviousTown, ushort PreviousArea, bool Bottom = false, uint? ReturnTown = null, byte Kind = 0, uint Npc = 0);
-    static async Task PreparedAsync(TcpTestFixture fixture)
+    static string AtPosition(TcpTestFixture fixture, ushort id, Location target)
+    {
+        var rows = fixture.Query("SELECT * FROM characters ORDER BY id");
+        var columns = fixture.Query("PRAGMA table_info(characters)").Select(row => (string)row[1]).ToArray();
+        var row = rows.Single(row => Convert.ToUInt16(row[Array.IndexOf(columns, "id")]) == id);
+        var fields = new (string Name, int Value)[] { ("town", target.Town), ("area", target.Area), ("x", target.X), ("y", target.Y) };
+        if (fields.Any(field => Convert.ToInt32(row[Array.IndexOf(columns, field.Name)]) != field.Value))
+            row[Array.IndexOf(columns, "revision")] = Convert.ToInt64(row[Array.IndexOf(columns, "revision")]) + 1;
+        foreach (var field in fields)
+            row[Array.IndexOf(columns, field.Name)] = field.Value;
+        return JsonSerializer.Serialize(rows);
+    }
+
+    static async Task PreparedAsync(TcpTestFixture fixture, TownCatalog towns)
     {
         string original = fixture.Snapshot();
         string audit = Path.Combine(fixture.Root, "preparation");
@@ -249,6 +309,7 @@ internal static class TownProtocolTcpTests
                     peer.Send(16, new byte[4]);
                     peer.SendBarrier();
                     peer.Expect(1, 15, [1]);
+                    peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
                     peer.Expect(0, 27, new byte[42]);
                     peer.Expect(1, 1347, [1]);
                     That(fixture.Snapshot() == before, "opening dungeon select preserves town state and does not answer a short opcode 16");
@@ -264,8 +325,30 @@ internal static class TownProtocolTcpTests
                     peer.Send(15, [3, 0, 0, 0]);
                     peer.SendBarrier();
                     peer.Expect(1, 15, [1]);
+                    peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
                     peer.Expect(1, 1347, [1]);
                     That(fixture.Snapshot() == before, "chosen dungeon does not reopen the empty select list");
+                    peer.Send(631, Move(854, 261, motion: true));
+                    peer.Barrier();
+                    That(fixture.Snapshot() == before, "选图坐标不能覆盖持久城镇返回点");
+                    peer.Send(132, [0]);
+                    peer.Barrier();
+                    var back = towns.SelectionReturn(new(trip.Town, trip.Area, trip.X, trip.Y), quests)!;
+                    string afterReturn = AtPosition(fixture, id, back);
+                    peer.Send(132);
+                    peer.Expect(1, 132, [1]);
+                    peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
+                    peer.Expect(0, 23, [(byte)peer.Id, (byte)(peer.Id >> 8), back.Town, back.Area, (byte)back.X, (byte)(back.X >> 8), (byte)back.Y, (byte)(back.Y >> 8), 0, 1]);
+                    peer.Expect(0, 24, [back.Town, back.Area, 1, 0, (byte)peer.Id, (byte)(peer.Id >> 8), (byte)back.X, (byte)(back.X >> 8), (byte)back.Y, (byte)(back.Y >> 8), 0, 1, 1]);
+                    peer.Send(132);
+                    peer.Barrier();
+                    That(fixture.Snapshot() == afterReturn, "返回132只提交资源落点，重复点击不重发和写库");
+                    peer.Send(15, new byte[4]);
+                    peer.Expect(1, 15, [1]);
+                    peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+                    peer.Expect(0, 27, new byte[42]);
+                    peer.Send(132);
+                    peer.Batch((1, 132), (0, 3), (0, 23), (0, 24));
                     peer.Send(631, Move(854, 261, motion: true));
                     peer.Barrier();
                     That(fixture.Snapshot("SELECT town,area,x,y FROM characters WHERE id=$p0", id) == "[[118,0,854,261]]", "movement works after dungeon failure");

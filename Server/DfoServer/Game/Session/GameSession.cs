@@ -7,7 +7,7 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Session;
 
-// 选图、加载、副本内和结算留到进图合同闭合后再进入。
+// MapSelect 表示选图界面；正式加载、战斗和结算仍由独立副本合同接入。
 internal enum SessionPhase : byte
 {
     Unselected,
@@ -140,6 +140,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         completed = new HashSet<int>();
         Ready = false;
         Phase = SessionPhase.Unselected;
+        CurrentDungeonSelection = null;
         TravelReason = reason;
     }
 }

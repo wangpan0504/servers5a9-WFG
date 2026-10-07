@@ -96,7 +96,7 @@ internal static class DungeonEntryProbeTests
             }
             Check(missingState && bytes.Length == 0, "diagnostic module rejects mismatched connection wiring");
             var mixed = new GameCommandRegistry();
-            new DungeonSelectionHandler(log).Register(mixed);
+            new DungeonSelectionHandler(new TownProjection(towns, characters, null, itemResources.EpicPieces), log).Register(mixed);
             new DungeonHandler(log).Register(mixed);
             bool duplicate = false;
             try

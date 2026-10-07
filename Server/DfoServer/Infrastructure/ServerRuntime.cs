@@ -47,7 +47,7 @@ internal static class ServerRuntime
             var catalog = DungeonCatalog.Load(pvf);
             var rooms = options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.FinishLoadingMonsters
                 ? DungeonRoomCatalog.Load(pvf) : null;
-            dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms);
+            dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms, projection);
             createActivity = static session => new DungeonProbeState(session);
         }
         IGameCommandModule[] modules =
@@ -67,7 +67,7 @@ internal static class ServerRuntime
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
-            new DungeonSelectionHandler(log),
+            new DungeonSelectionHandler(projection, log),
             dungeon,
             new AgitWarHandler(),
             new ClientNoticeHandler(log)

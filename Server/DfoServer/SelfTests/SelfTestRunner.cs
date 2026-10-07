@@ -18,6 +18,7 @@ internal static class SelfTestRunner
         await PacketCaptureTests.RunAsync();
         ClientNoticeTests.Run();
         DungeonRequestTests.Run();
+        DungeonSelectionReturnTests.RunCore();
         AuthenticationTests.Run();
         AuthenticationServiceTests.Run();
         AuthenticationRepositoryTests.Run();
@@ -91,6 +92,7 @@ internal static class SelfTestRunner
         await DungeonDeathProtocolTests.RunAsync(towns, pvf);
         DungeonEntryPlanTests.Run(pvf);
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
+        await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);
         QuestCatalogTests.Run(pvf);
         StarterSkillTests.Run(pvf, characters);
         ItemCatalogTests.Run(pvf);

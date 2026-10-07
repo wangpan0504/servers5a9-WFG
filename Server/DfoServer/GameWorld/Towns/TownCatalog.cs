@@ -16,7 +16,10 @@ internal sealed record Rectangle(int X, int Y, int Width, int Height)
 internal sealed record WalkRegion(Rectangle Bounds, int[] Quests, int[] Conditions);
 internal sealed record Link(Rectangle Gate, byte Town, byte Area, int[] Quests, int[] Conditions);
 internal sealed record TownNpc(uint Id, int X, int Y);
-internal sealed record TownMap(string Path, WalkRegion[] Bounds, Link[] Links, bool IsRoom, TownNpc[] Npcs, string? Error = null);
+internal sealed record TownMap(string Path, WalkRegion[] Bounds, Link[] Links, bool IsRoom, TownNpc[] Npcs, string? Error = null)
+{
+    public WalkRegion[] DungeonGates { get; init; } = [];
+}
 internal sealed record TownPhase(int Index, int Quest);
 internal sealed record RoomPortal(byte Town, byte Area, Rectangle Bounds, int Level, int Quest);
 internal sealed record TownArea(byte Town, byte Area, int Level, int[] Quests, int[] AnyQuests, int[] ExceptQuests, Location? Gate, TownMap Default, TownMap[] Phases, TownPhase[] Shifts)
@@ -61,6 +64,39 @@ internal sealed class TownCatalog
         var map = area.Map(completed);
         // Native arrival can be inside the door but outside the walking rectangles.
         return map.Error is null && (map.Bounds.Any(r => Allowed(r.Quests, r.Conditions, completed) && r.Bounds.Contains(p.X, p.Y)) || map.Links.Any(l => l.Gate.Door && Allowed(l.Quests, l.Conditions, completed) && l.Gate.Contains(p.X, p.Y)));
+    }
+
+    public Location? SelectionReturn(Location position, IReadOnlySet<int>? completed = null)
+    {
+        completed ??= NoQuests;
+        if (!Areas.TryGetValue((position.Town, position.Area), out var area))
+            return position;
+        var map = area.Map(completed);
+        var gates = map.DungeonGates.Where(g => g.Bounds.Door && Allowed(g.Quests, g.Conditions, completed)).ToArray();
+        // 按入口脚本解析边界外8像素的返回点，不沿用边缘站位。
+        const int margin = 8;
+        if (gates.Length == 0)
+            return position;
+        Location? result = null;
+        long bestDistance = long.MaxValue;
+        foreach (var gate in gates.Select(g => g.Bounds))
+        {
+            long centerX = (long)gate.X + gate.Width / 2, centerY = (long)gate.Y + gate.Height / 2;
+            // 上下站位保持不变，只调整横向坐标。
+            foreach (long x in new[] { (long)gate.X - margin, (long)gate.X + gate.Width + margin })
+            {
+                if (x is < 0 or > ushort.MaxValue || map.Error is not null ||
+                    !map.Bounds.Any(r => Allowed(r.Quests, r.Conditions, completed) && r.Bounds.Contains((int)x, position.Y)) ||
+                    gates.Any(g => g.Bounds.Contains((int)x, position.Y)))
+                    continue;
+                long dx = x - centerX, dy = position.Y - centerY, distance = dx * dx + dy * dy;
+                if (distance >= bestDistance)
+                    continue;
+                bestDistance = distance;
+                result = position with { X = (ushort)x };
+            }
+        }
+        return result;
     }
 
     public Location? Entrance(Location from, Location target, IReadOnlySet<int>? completed = null)
@@ -282,7 +318,8 @@ internal sealed class TownCatalog
                 var data = ReadMap(pvf, path, [], texts);
                 var own = data.Text;
                 var bounds = Rows(own, "virtual movable area", 4).Select(r => new WalkRegion(Rect(r.Values), r.Quests, r.Conditions)).ToArray();
-                var links = Rows(own, "town movable area", 6).Where(r => r.Values[4] is >= 0 and <= 255 && r.Values[5] is >= 0 and <= 255).Select(r => new Link(Rect(r.Values), (byte)r.Values[4], (byte)r.Values[5], r.Quests, r.Conditions)).ToList();
+                var movable = Rows(own, "town movable area", 6);
+                var links = movable.Where(r => r.Values[4] is >= 0 and <= 255 && r.Values[5] is >= 0 and <= 255).Select(r => new Link(Rect(r.Values), (byte)r.Values[4], (byte)r.Values[5], r.Quests, r.Conditions)).ToList();
                 foreach (Match animation in Regex.Matches(Block(own, "town movable area with animation"), @"\[movable area\](.*?)\[/movable area\]", RegexOptions.Singleline))
                 {
                     string block = animation.Groups[1].Value;
@@ -305,7 +342,11 @@ internal sealed class TownCatalog
                             npcs.Add(new(checked((uint)row.Values[0]), row.Values[2], row.Values[3]));
                 }
 
-                map = new(path, bounds, links.ToArray(), data.IsRoom, npcs.Distinct().ToArray());
+                map = new(path, bounds, links.ToArray(), data.IsRoom, npcs.Distinct().ToArray())
+                {
+                    DungeonGates = movable.Where(r => r.Values[4] == -1 && r.Values[5] == -1)
+                        .Select(r => new WalkRegion(Rect(r.Values), r.Quests, r.Conditions)).ToArray()
+                };
             }
             catch (FileNotFoundException ex)
             {

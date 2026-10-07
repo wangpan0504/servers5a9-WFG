@@ -7,6 +7,7 @@ using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Town;
+using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Network.Projection;
 
@@ -83,6 +84,35 @@ internal sealed class TownProjection(TownCatalog towns, CharacterCatalog charact
     {
         if (context.Session.Ready && context.Session.Selected is { } c)
             presence?.Join(context.Owner, context.Sender, c);
+    }
+
+    public async Task<bool> DetachForDungeonSelectionAsync(GameConnectionContext context, DungeonSelectionReceipt receipt)
+    {
+        Task? detached = context.Owner.Execute(() =>
+        {
+            if (!context.Session.CanPublishDungeonSelection(receipt))
+                return null;
+            Remove(context);
+            return context.Sender.ClearScene();
+        });
+        if (detached is null)
+            return false;
+        await detached;
+        return context.Session.CanPublishDungeonSelection(receipt);
+    }
+
+    public async Task ReturnFromDungeonSelectionAsync(GameConnectionContext context, DungeonSelectionReceipt receipt)
+    {
+        bool CanSend() => context.Session.CanPublishDungeonSelection(receipt, returning: true);
+        await context.Reply(CmdPacketType.BACK_2_VILLAGE, DungeonPackets.SelectionReturned(), "dungeon_selection_return_ack", CanSend);
+        await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "selection_return_town_state", CanSend);
+        await LocationAsync(context, receipt.Character, canSend: CanSend);
+        context.Owner.Execute(() =>
+        {
+            if (CanSend())
+                presence?.Join(context.Owner, context.Sender, receipt.Character);
+            return true;
+        });
     }
 
     public void Move(GameConnectionContext context)

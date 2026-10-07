@@ -24,6 +24,7 @@ internal static class DungeonProbeTcpTests
             string before = fixture.Snapshot();
             peer.Send(15, new byte[4]);
             peer.Expect(1, 15, [1]);
+            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
             That(peer.Expect(0, 27).Body.Length == 42, "diagnostic mode shares the normal selection entry");
             byte[] request = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
             peer.Send(16, request);
@@ -33,6 +34,9 @@ internal static class DungeonProbeTcpTests
             ushort firstKey = U16(map, 25);
             That(firstKey > previousKey, "reselection does not reuse diagnostic object keys on the connection");
             previousKey = U16(map, 25 + 3 * 22);
+            peer.Send(132);
+            peer.Barrier();
+            That(fixture.Snapshot() == before, "选图132不能越过已开始的副本诊断活动");
             peer.Send(37, new byte[8]);
             peer.Expect(1, 37, [1]);
             peer.Expect(0, 30, new byte[5]);
@@ -57,6 +61,8 @@ internal static class DungeonProbeTcpTests
                 peer.Send(42);
                 peer.Expect(1, 42, [1]);
                 peer.Expect(0, 24);
+                peer.Send(132);
+                peer.Barrier();
                 peer.Send(16, request);
                 peer.Barrier();
                 That(fixture.Snapshot() == before, "return does not restore same-selection probe quota or write assets");

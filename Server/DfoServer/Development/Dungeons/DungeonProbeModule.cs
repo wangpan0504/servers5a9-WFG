@@ -2,6 +2,7 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Protocol;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Projection;
 using DfoServer.Network;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
@@ -14,8 +15,9 @@ internal sealed class DungeonProbeModule : IGameCommandModule
     readonly DungeonCatalog probeCatalog;
     readonly DungeonEntryProbeMode probeStage;
     readonly DungeonRoomCatalog? roomProbeCatalog;
+    readonly TownProjection? projection;
 
-    public DungeonProbeModule(ServerLog log, DungeonCatalog catalog, DungeonEntryProbeMode stage, DungeonRoomCatalog? rooms = null)
+    public DungeonProbeModule(ServerLog log, DungeonCatalog catalog, DungeonEntryProbeMode stage, DungeonRoomCatalog? rooms = null, TownProjection? projection = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         if (stage is <= DungeonEntryProbeMode.Disabled or > DungeonEntryProbeMode.FinishLoadingMonsters)
@@ -26,6 +28,7 @@ internal sealed class DungeonProbeModule : IGameCommandModule
         probeCatalog = catalog;
         probeStage = stage;
         roomProbeCatalog = rooms;
+        this.projection = projection;
     }
 
     static DungeonProbeState Probe(GameConnectionContext context) =>
@@ -279,7 +282,12 @@ internal sealed class DungeonProbeModule : IGameCommandModule
         context.Owner.Execute(() =>
         {
             if (context.BlocksTownActions && context.Session.Selected?.Id == character.Id && context.Session.Selected.Revision == character.Revision)
+            {
+                // 诊断42已投影原计划的位置，只结束共用选择阶段，不追加132的落点提交。
+                context.Session.ReturnFromDungeonSelection(restorePosition: false);
                 probe.ReturnedToTown = true;
+                projection?.Join(context);
+            }
             return true;
         });
         return CommandResult.Handled;
