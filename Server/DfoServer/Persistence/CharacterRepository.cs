@@ -217,9 +217,18 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
                 active.Add(new(checked((byte)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), checked((uint)reader.GetInt64(2))));
         }
 
+        query.CommandText = """
+            SELECT COALESCE(g.game_options,a.game_options) FROM characters c
+            LEFT JOIN character_game_settings g ON g.character_id=c.id AND g.account=c.account
+            LEFT JOIN account_client_settings a ON a.account=c.account
+            WHERE c.id=$id
+            """;
+        byte flags = DfoServer.Game.Settings.ClientSettingsRules.VisibilityFlags(
+            query.ExecuteScalar() is byte[] options ? [.. options] : default);
         return character with
         {
             CompletedQuests = quests.ToArray(),
+            VisibilityFlags = flags,
             Skills = skills.ToArray(),
             ActiveMainQuests = active.ToArray(),
             Learning = ReadLearning(db, character.Id, transaction),

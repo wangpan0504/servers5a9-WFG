@@ -209,7 +209,8 @@ internal static class MailboxPersistenceTests
     {
         using var f = new Fixture();
         string character = JsonSerializer.Serialize(f.ReadSender());
-        const string dropMail = "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages;";
+        const string dropSettings = "DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings;";
+        const string dropMail = dropSettings + "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages;";
         f.Execute(dropMail + "DROP TABLE character_dungeon_growth_receipts; ALTER TABLE account_wallets DROP COLUMN rental_points; PRAGMA user_version=1;");
         var upgraded = new CharacterRepository(f.Path);
         TestCheck.That(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion &&
@@ -246,7 +247,7 @@ internal static class MailboxPersistenceTests
         f.Sender = f.ReadSender();
         f.Send([f.Sender.Inventory.Items[0]], 100);
         before = f.Snapshot();
-        f.Execute("ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_source TO resource_sha256; PRAGMA user_version=4;");
+        f.Execute(dropSettings + "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_source TO resource_sha256; PRAGMA user_version=4;");
         _ = new CharacterRepository(f.Path);
         TestCheck.That(f.Snapshot() == before, "v4来源列迁移保留邮件、托管UID、金币、租赁点数及成长账本");
         f.Integrity();

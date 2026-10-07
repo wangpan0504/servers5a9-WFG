@@ -18,6 +18,7 @@ using DfoServer.GameWorld.Dungeons;
 using PvfLib;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Rental;
+using DfoServer.Game.Settings;
 
 namespace DfoServer.Infrastructure;
 // 唯一装配入口：按领域增加模块及依赖，不在协议循环中维护业务分支。
@@ -33,7 +34,8 @@ internal static class ServerRuntime
         var presence = new TownPresence(towns);
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
-        var projection = new TownProjection(towns, characters, presence, itemResources.EpicPieces, mailboxProjection);
+        var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")));
+        var projection = new TownProjection(towns, characters, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings));
         var inventoryProjection = new InventoryProjection(characters, projection, itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
         IGameCommandModule dungeon;
@@ -56,6 +58,7 @@ internal static class ServerRuntime
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning),
             new SkillHandler(learning, log),
             new TownHandler(projection, log),
+            new SettingsHandler(settings, log, projection),
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
             new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),

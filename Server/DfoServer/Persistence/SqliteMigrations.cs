@@ -20,7 +20,13 @@ internal static class SqliteMigrations
                 Execute(db, tx, statement);
         }),
         new(5, "成长奖励资源来源", static (db, tx) =>
-            Execute(db, tx, "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_sha256 TO resource_source"))
+            Execute(db, tx, "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_sha256 TO resource_source")),
+        new(6, "客户端设置", static (db, tx) =>
+        {
+            foreach (string statement in ClientSettingsSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                Execute(db, tx, statement);
+        }),
+        new(7, "角色主设置快照", static (db, tx) => Execute(db, tx, CharacterGameSettingsSchema))
     ];
 
     // 只新增事实账本，不补发存量角色经验或点数。
@@ -112,6 +118,9 @@ internal static class SqliteMigrations
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts LIMIT 0",
         "SELECT [account_id],[salt],[password_hash],[iterations],[disabled],[revision] FROM [accounts] LIMIT 0",
+        "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",
+        "SELECT [character_id],[account],[character_options] FROM [character_client_settings] LIMIT 0",
+        "SELECT [character_id],[account],[game_options] FROM [character_game_settings] LIMIT 0",
         "SELECT [id],[account],[slot],[name],[revision],[town],[area],[x],[y],[direction],[return_town],[return_area],[return_x],[return_y],[return_direction],[job],[grow_type],[level],[accepted_story_level],[gold],[experience],[inventory_expansion],[revive_coins],[win_points],[gold_carry_limit],[auction_gold_limit],[cargo_capacity] FROM [characters] LIMIT 0",
         "SELECT [character_id],[quest_id] FROM [character_completed_quests] LIMIT 0",
         "SELECT [character_id],[skill_id],[level] FROM [character_skills] LIMIT 0",
@@ -136,6 +145,29 @@ internal static class SqliteMigrations
         "SELECT [character_id],[day],[amount] FROM [mailbox_sent_gold] LIMIT 0",
         "SELECT [audit_id],[mail_id],[account],[character_id],[generation],[action_name],[created_at],[assets] FROM [mailbox_audit_log] LIMIT 0",
     ];
+
+    // 设置按账号与角色分别保存原始字节；缺省不建行，不改角色资产与 revision。
+    internal const string ClientSettingsSchema = """
+        CREATE TABLE account_client_settings(
+            account TEXT NOT NULL PRIMARY KEY REFERENCES accounts(account_id),
+            game_options BLOB NOT NULL CHECK(typeof(game_options)='blob' AND length(game_options)=204)
+        );
+        CREATE TABLE character_client_settings(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            character_options BLOB NOT NULL CHECK(typeof(character_options)='blob' AND length(character_options)=512),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    internal const string CharacterGameSettingsSchema = """
+        CREATE TABLE character_game_settings(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            game_options BLOB NOT NULL CHECK(typeof(game_options)='blob' AND length(game_options)=204),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
 
     // 邮箱从 v4 追加；新库完整 SQL 同时维护，升级逐条 DDL 参与原事务。
     internal const string MailboxSchema = """

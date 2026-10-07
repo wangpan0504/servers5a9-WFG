@@ -137,6 +137,25 @@ CREATE TABLE currency_audit_log(
 
 CREATE UNIQUE INDEX character_account_identity ON characters(id,account);
 
+CREATE TABLE account_client_settings(
+    account TEXT NOT NULL PRIMARY KEY REFERENCES accounts(account_id),
+    game_options BLOB NOT NULL CHECK(typeof(game_options)='blob' AND length(game_options)=204)
+);
+
+CREATE TABLE character_client_settings(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    character_options BLOB NOT NULL CHECK(typeof(character_options)='blob' AND length(character_options)=512),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
+CREATE TABLE character_game_settings(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    game_options BLOB NOT NULL CHECK(typeof(game_options)='blob' AND length(game_options)=204),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
 CREATE TABLE account_cargo(
     account TEXT PRIMARY KEY,
     revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),

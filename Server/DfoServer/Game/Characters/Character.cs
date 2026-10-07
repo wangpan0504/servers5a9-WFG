@@ -7,6 +7,8 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
 {
     public byte Job { get; init; }
     public byte GrowType { get; init; }
+    // 来自角色设置的场景显示位，不改写位置、进度或资产revision。
+    public byte VisibilityFlags { get; init; } = 6;
     public byte Level { get; init; } = 1;
     public uint AcceptedStoryLevel { get; init; }
     public int[] CompletedQuests { get; init; } = [];

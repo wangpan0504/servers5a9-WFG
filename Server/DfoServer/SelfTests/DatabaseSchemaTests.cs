@@ -48,7 +48,8 @@ internal static class DatabaseSchemaTests
             {
                 "DROP TABLE schema_metadata", "UPDATE schema_metadata SET value='another-database'",
                 "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
-                "ALTER TABLE inventory_creature_details DROP COLUMN detail"
+                "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
+                "DROP TABLE character_game_settings"
             })
             {
                 string rejected = Path.Combine(root, Guid.NewGuid().ToString("N") + ".db");

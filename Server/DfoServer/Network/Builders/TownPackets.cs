@@ -100,7 +100,7 @@ internal static class TownPackets
             writer.Write((ushort)0); // 02678840.
             writer.Write(0u);
             writer.Write(0UL); // 026768F0.
-            writer.Write((byte)6); // 02677B70: native bit flags 1 and 2, no trade/movement prohibition bits.
+            writer.Write(character.VisibilityFlags); // 保留原无关显示位，三项外观开关与当前角色主设置一致。
             writer.Write(0u);
             writer.Write((byte)0);
             writer.Write((ushort)0);

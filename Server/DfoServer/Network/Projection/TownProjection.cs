@@ -12,10 +12,11 @@ using DfoServer.Game.Dungeons;
 namespace DfoServer.Network.Projection;
 
 internal sealed class TownProjection(TownCatalog towns, CharacterCatalog characters, TownPresence? presence, EpicPieceCatalog pieces,
-    MailboxProjection? mailbox = null)
+    MailboxProjection? mailbox = null, SettingsProjection? settings = null)
 {
     public async Task EnterAsync(GameConnectionContext context)
     {
+        var settingReceipt = settings?.Capture(context);
         var c = context.Session.Selected ?? throw new InvalidOperationException("No selected character");
         await context.Reply(CmdPacketType.SELECT_CHARACTER, TownPackets.Select(c), "select_character");
         if (c.AcceptedStoryLevel > 0)
@@ -42,6 +43,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterCatalog charact
             await mailbox.InitializeAsync(context);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
         await LocationAsync(context, c, initial: true);
+        if (settings is not null && settingReceipt is not null)
+            await settings.InitializeAsync(context, settingReceipt);
         await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "enter_gameworld_complete");
     }
 

@@ -39,6 +39,7 @@ internal static class TcpRegressionTests
         ("booster-equipment", BoosterEquipmentTcpTests.RunAsync),
         ("authentication", (options, root, _) => AuthenticationTcpTests.RunAsync(options, root)),
         ("native-login", (options, root, _) => NativeLoginTcpTests.RunAsync(options, root)),
+        ("settings", (options, root, _) => ClientSettingsTcpTests.RunAsync(options, root)),
         ("presence", (options, root, _) => TownPresenceTcpTests.RunAsync(options, root))
     ];
 

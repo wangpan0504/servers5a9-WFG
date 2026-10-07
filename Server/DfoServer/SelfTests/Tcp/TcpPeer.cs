@@ -24,6 +24,7 @@ internal sealed class TcpPeer : IDisposable
     public ushort Id { get; private set; }
     public WirePacket[] SpecialContainers { get; private set; } = [];
     public byte[][] Mailbox { get; private set; } = [];
+    public WirePacket[] ClientSettings { get; private set; } = [];
 
     static readonly Encoding names;
     static TcpPeer()
@@ -167,7 +168,8 @@ internal sealed class TcpPeer : IDisposable
         return Roster;
     }
 
-    public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null)
+    public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
+        (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null)
     {
         Send(4, Build(w => w.Write(slot)));
         var expected = prepared ? PreparedEntry : Entry;
@@ -197,10 +199,22 @@ internal sealed class TcpPeer : IDisposable
         SpecialContainers = [creatures, avatars, pets, medals];
         var tail = new List<WirePacket>();
         var mails = new List<byte[]>();
+        ClientSettings = [];
         foreach (var notice in inventoryNotices ?? [])
             tail.Add(Expect(notice.Kind, notice.Opcode));
         foreach (var notice in expected.Skip(afterCargo))
         {
+            // 设置必须在地区绑定后、入城完成前回放；单独保留以免改变旧用例的包索引。
+            if (notice == ((byte)0, (ushort)124))
+            {
+                ClientSettings = (settings ?? []).Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
+                if (appearanceFlags.HasValue)
+                    Expect(0, 357, Build(w =>
+                    {
+                        w.Write(U16(prefix[0].Body, 9));
+                        w.Write(appearanceFlags.Value);
+                    }));
+            }
             if (notice == ((byte)0, (ushort)3))
             {
                 var packet = Read();
@@ -217,6 +231,8 @@ internal sealed class TcpPeer : IDisposable
         Mailbox = mails.ToArray();
         WirePacket[] packets = [.. prefix, .. middle, .. tail];
         Id = U16(packets[0].Body, 9);
+        if (appearanceFlags.HasValue)
+            TestCheck.That(packets[2].Body[^23] == appearanceFlags.Value, "Actor外观flags与设置后357一致");
         TestCheck.That(packets[prepared ? 7 : 6].Body[0] == 2 && packets[prepared ? 8 : 7].Body[0] == 12,
             "personal and account cargo initialize before locks");
         TestCheck.That(packets[4].Body[0] == 0, "main inventory initialization precedes cargo");

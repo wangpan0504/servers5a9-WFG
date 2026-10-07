@@ -28,6 +28,8 @@ internal static class SelfTestRunner
         await AccountDatabaseConcurrencyTests.RunAsync();
         await TownPresenceConcurrencyTests.RunAsync();
         DatabaseSchemaTests.Run();
+        ClientSettingsStoreTests.Run();
+        SettingsProtocolTests.Run();
         RepositoryBoundaryTests.Run();
         CharacterReadTests.Run();
         await SessionPlanningTests.RunAsync();
