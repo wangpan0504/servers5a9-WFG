@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Network;
+using DfoServer.Network.Parsers;
 
 namespace DfoServer;
 
@@ -14,6 +15,32 @@ internal static class ClientNoticeTests
         Check(!ClientNotices.TryParse(37, new byte[4], out _), "finish loading other width stays unrecognized");
         Check(ClientNotices.TryParse(38, new byte[10], out var skill) && skill.Action == "use_skill" && skill.Detail.Length == 6 + 20, "use skill records ten bytes");
         Check(!ClientNotices.TryParse(38, new byte[9], out _), "use skill other width stays unrecognized");
+        // 独立固定预期来自匹配ARAD正常战斗的三类实收样本，不以解析结果反算预期。
+        (string Hex, ushort At1, ushort At3, ushort At5, string Tail)[] uses =
+        [
+            ("002E00D00729000001004AADA701", 46, 2000, 41, "4AADA701"),
+            ("0005007017234800010052760356", 5, 6000, 18467, "52760356"),
+            ("00A9000000F16D000100DD2A7E19", 169, 0, 28145, "DD2A7E19")
+        ];
+        foreach (var sample in uses)
+        {
+            byte[] body = Convert.FromHexString(sample.Hex);
+            Check(SkillRequests.TryParseUse(body, out var use) && use is not null && use.Unknown0 == 0 &&
+                use.Unknown1 == sample.At1 && use.Unknown3 == sample.At3 && use.Unknown5 == sample.At5 &&
+                use.Unknown7 == 0 && use.Unknown8 == 1 && use.RemainingFields.SequenceEqual(Convert.FromHexString(sample.Tail)),
+                "actual skill use preserves all field widths and the four unknown trailing bytes");
+            Check(ClientNotices.TryParse(38, body, out var actual) && actual.Action == "use_skill" &&
+                actual.Detail == "bytes=" + sample.Hex, "actual fourteen-byte skill use reaches the observation handler");
+            body[10] ^= 255;
+            Check(use!.RemainingFields.SequenceEqual(Convert.FromHexString(sample.Tail)) &&
+                use.RemainingFields is System.Collections.IList frozen && frozen.IsReadOnly,
+                "skill use owns an immutable copy of the unknown suffix");
+        }
+        Check(SkillRequests.TryParseUse(new byte[10], out var original) && original!.RemainingFields.Count == 0,
+            "original ten-byte writer footprint has no fabricated suffix");
+        foreach (int length in new[] { 0, 9, 11, 12, 13, 15, 88 })
+            Check(!SkillRequests.TryParseUse(new byte[length], out var invalid) && invalid is null &&
+                !ClientNotices.TryParse(38, new byte[length], out _), "unsupported skill use length remains unhandled " + length);
         Check(ClientNotices.TryParse(33, Convert.FromHexString("2100490C0000"), out var trigger) && trigger.Action == "quest_trigger" && trigger.Detail == "quest=3145 value=0 tail=0", "quest trigger 3145 clear value");
         Check(!ClientNotices.TryParse(33, Convert.FromHexString("2100490C00"), out _), "quest trigger other width stays unrecognized");
         Check(!ClientNotices.TryParse(33, Convert.FromHexString("2200490C0000"), out _), "quest trigger echo mismatch stays unrecognized");

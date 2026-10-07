@@ -45,6 +45,46 @@ internal static class DungeonDeathProtocolTests
         foreach (int length in new[] { 0, 6, 87, 89, 100 })
             Check(!DungeonRequests.TryParseDeath(new byte[length], out var invalid) && invalid is null,
                 "death parser rejects unsupported body width " + length);
+        // 匹配ARAD的真实单人击杀样本；第二例的首个u64非零，不能只验证全零前缀。
+        (string Hex, uint Key, ulong First, uint FirstCount, ulong Second, uint SecondCount, ulong Contribution)[] samples =
+        [
+            ("010100000100000000000000000000000000C902000000000000020000000111010100430200000000000002001302A5000000000084670003000000F8010000000000002D021801A801BD000C001F0007000000A0DF2458", 257, 0, 0, 713, 2, 579),
+            ("040100000100080000000000000001000000E90200000000000005000000011101010026020000000000000500D302B60000000000A62E0003000000F801000000000000D701D000D101B6000C001F0027000000BFDD7F32", 260, 8, 1, 745, 5, 550)
+        ];
+        foreach (var sample in samples)
+        {
+            byte[] captured = Convert.FromHexString(sample.Hex);
+            Check(DungeonRequests.TryParseDeath(captured, out var parsed) && parsed!.ObjectKey == sample.Key && parsed.Reporter == 1
+                && parsed.SinglePlayerStatistics is not null, "真实普通单人死亡包识别单参与者统计布局");
+            var statistics = parsed!.SinglePlayerStatistics!;
+            Check(statistics.Unknown6 == sample.First && statistics.Unknown14 == sample.FirstCount && statistics.Unknown18 == sample.Second
+                && statistics.Unknown26 == sample.SecondCount, "两个完整u64和u32统计字段保持本次实收值");
+            Check(statistics.Participant == new DungeonDeathParticipant(0x111, 1, sample.Contribution, checked((ushort)sample.SecondCount)),
+                "参与者类型、对象key、完整u64和u16保持真实字节");
+            byte[] remaining = captured[45..];
+            captured[45] ^= 255;
+            Check(statistics.RemainingFields.Count == 43 && statistics.RemainingFields.SequenceEqual(remaining)
+                && statistics.RemainingFields is System.Collections.IList list && list.IsReadOnly,
+                "统计后续43B独立冻结，解析不解释为奖励");
+        }
+        byte[] wideStatistics = Convert.FromHexString(samples[0].Hex);
+        BinaryPrimitives.WriteUInt64LittleEndian(wideStatistics.AsSpan(6), 0xFEDCBA9876543210);
+        BinaryPrimitives.WriteUInt64LittleEndian(wideStatistics.AsSpan(18), 0xF123456789ABCDEF);
+        BinaryPrimitives.WriteUInt64LittleEndian(wideStatistics.AsSpan(35), 0xE23456789ABCDEF1);
+        Check(DungeonRequests.TryParseSinglePlayerDeathStatistics(wideStatistics, out var wide)
+            && wide!.Unknown6 == 0xFEDCBA9876543210 && wide.Unknown18 == 0xF123456789ABCDEF
+            && wide.Participant.UnknownValue == 0xE23456789ABCDEF1, "统计u64保留高位，不截为u32或猜成有符号伤害");
+        foreach (byte count in new byte[] { 0, 2, 255 })
+        {
+            wideStatistics[30] = count;
+            Check(!DungeonRequests.TryParseSinglePlayerDeathStatistics(wideStatistics, out var unsupported) && unsupported is null,
+                "未知参与者数量不使用单人偏移 " + count);
+            Check(DungeonRequests.TryParseDeath(wideStatistics, out var diagnostic) && diagnostic!.SinglePlayerStatistics is null,
+                "统计识别失败保留旧诊断原字节，不制造战斗资格");
+        }
+        foreach (int length in new[] { 0, 30, 45, 74, 87, 89, 102 })
+            Check(!DungeonRequests.TryParseSinglePlayerDeathStatistics(new byte[length], out var unsupported) && unsupported is null,
+                "未确认统计宽度不产生部分对象 " + length);
         foreach (ushort key in new ushort[] { 0, 1, 0x8123, ushort.MaxValue })
         {
             byte[] notice = DungeonEntryProbe.BuildDeath(key);

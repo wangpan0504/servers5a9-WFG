@@ -7,19 +7,23 @@ internal sealed class CharacterGrowthCatalog
     public const int MaximumSupportedLevel = 95;
     private readonly SkillCatalog points;
 
-    private CharacterGrowthCatalog(ulong[] experience, SkillCatalog points)
+    private CharacterGrowthCatalog(ulong[] experience, SkillCatalog points, string resourceSha256)
     {
         CumulativeExperience = Array.AsReadOnly(experience);
         this.points = points;
+        ResourceSha256 = resourceSha256;
     }
 
     // 0 是初始经验零，后续项是资源中的累计边界。
     public IReadOnlyList<ulong> CumulativeExperience { get; }
+    public string ResourceSha256 { get; }
 
     public static CharacterGrowthCatalog Load(PvfArchive pvf)
     {
         ulong[] experience = ParseExperienceTable(pvf.ReadTokens("character/exptable.tbl"));
-        return new CharacterGrowthCatalog(experience, SkillCatalog.Load(pvf));
+        if (experience.Length != 100)
+            throw new InvalidDataException("匹配经验表的99项累计边界改变");
+        return new CharacterGrowthCatalog(experience, SkillCatalog.Load(pvf), pvf.Sha256);
     }
 
     public ulong GetLevelStartExperience(int level)

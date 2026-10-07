@@ -4,7 +4,13 @@ namespace DfoServer.Network.Parsers;
 
 internal readonly record struct DungeonEntryRequest(uint DungeonIndex);
 internal sealed record DungeonMoveRequest(byte X, byte Y, uint Unknown2, uint Unknown6, byte Unknown10, IReadOnlyList<byte> RemainingFields);
-internal sealed record DungeonDeathRequest(uint ObjectKey, ushort Reporter, IReadOnlyList<byte> RemainingFields);
+internal sealed record DungeonDeathParticipant(ushort Kind, ushort ObjectKey, ulong UnknownValue, ushort UnknownCount);
+internal sealed record DungeonSinglePlayerDeathStatistics(ulong Unknown6, uint Unknown14, ulong Unknown18, uint Unknown26,
+    DungeonDeathParticipant Participant, IReadOnlyList<byte> RemainingFields);
+internal sealed record DungeonDeathRequest(uint ObjectKey, ushort Reporter, IReadOnlyList<byte> RemainingFields)
+{
+    public DungeonSinglePlayerDeathStatistics? SinglePlayerStatistics { get; init; }
+}
 
 // Unknown 后的数字为正文偏移；保留未确认字段，不推断常量域或业务枚举。
 internal readonly record struct DungeonSelectionRequest(
@@ -25,10 +31,27 @@ internal static class DungeonRequests
     public static bool TryParseDeath(ReadOnlySpan<byte> body, out DungeonDeathRequest? request)
     {
         request = null;
-        // 仅识别当前普通怪物实收的 88B 路径；其统计尾部不解释为奖励或权威伤害。
+        // 诊断仍保留整个88B样本；统计布局另按已核对的单参与者形状识别，不据此签发死亡事实。
         if (body.Length != 88) return false;
+        TryParseSinglePlayerDeathStatistics(body, out var statistics);
         request = new(BinaryPrimitives.ReadUInt32LittleEndian(body), BinaryPrimitives.ReadUInt16LittleEndian(body[4..]),
-            Array.AsReadOnly(body[6..].ToArray()));
+            Array.AsReadOnly(body[6..].ToArray())) { SinglePlayerStatistics = statistics };
+        return true;
+    }
+
+    internal static bool TryParseSinglePlayerDeathStatistics(ReadOnlySpan<byte> body, out DungeonSinglePlayerDeathStatistics? statistics)
+    {
+        statistics = null;
+        // 02B52FE6/02C5AA0B的公共前缀为u32/u16/u64/u32/u64/u32；随后u8数量及14B参与者。
+        // 本次普通单人实收只有count=1、总长88B。其他数量和发送分支不能借此偏移解析。
+        if (body.Length != 88 || body[30] != 1)
+            return false;
+        var participant = new DungeonDeathParticipant(BinaryPrimitives.ReadUInt16LittleEndian(body[31..]),
+            BinaryPrimitives.ReadUInt16LittleEndian(body[33..]), BinaryPrimitives.ReadUInt64LittleEndian(body[35..]),
+            BinaryPrimitives.ReadUInt16LittleEndian(body[43..]));
+        statistics = new(BinaryPrimitives.ReadUInt64LittleEndian(body[6..]), BinaryPrimitives.ReadUInt32LittleEndian(body[14..]),
+            BinaryPrimitives.ReadUInt64LittleEndian(body[18..]), BinaryPrimitives.ReadUInt32LittleEndian(body[26..]),
+            participant, Array.AsReadOnly(body[45..].ToArray()));
         return true;
     }
     public static bool TryParseMove(ReadOnlySpan<byte> body, out DungeonMoveRequest? request)

@@ -1,6 +1,8 @@
 using DfoServer.Game.Accounts;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Characters;
 namespace DfoServer.Game.Characters;
 // 角色用例依赖的持久化边界；SQLite、迁移与离线导入细节不进入 Game。
 internal interface ICharacterRepository
@@ -14,5 +16,7 @@ internal interface ICharacterRepository
     Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint);
     Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning);
     Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit);
+    DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
+        PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
 }

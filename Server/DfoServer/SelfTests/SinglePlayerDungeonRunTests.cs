@@ -144,6 +144,85 @@ internal static class SinglePlayerDungeonRunTests
         Check(!SinglePlayerDungeonRun.TryCreate(entry with { Maze = wrongMaze, StartMap = wrongMap }, 1, 23,
             route with { Rooms = [Plan(wrongMap, 10, 11), .. route.Rooms.Skip(1)] }, authority, out _, out _),
             "未知normal地图种类不能因fixture曾使用而进入实例");
+        // 合成已确认事件验证提交协调，不代替生产战斗来源或真实奖励事务。
+        var transactionMaze = new DungeonMaze(0, 2, 2, "fixture-commit", [c.Position], [c.Position], [c], []);
+        var transactionEntry = entry with { Maze = transactionMaze, StartMap = c, BossMap = c };
+        var transactionRoute = new DungeonFixedRoute([Plan(c, 20, 21)], []);
+        Check(SinglePlayerDungeonRun.TryCreate(transactionEntry, 4, 300, transactionRoute, authority, out var coordinated, out _),
+            "提交协调fixture建立独立实例");
+        var committingRun = coordinated!;
+        committingRun.CompleteLoading(committingRun.Snapshot.Identity, Guid.NewGuid());
+        var originalSnapshot = committingRun.Snapshot;
+        var firstDeath = authority.Death(originalSnapshot.Identity, 20, 1);
+        var preparation = committingRun.PrepareConfirmedDeath(firstDeath);
+        var pending = preparation.Pending!;
+        Check(preparation.Outcome == DungeonRunOutcome.Accepted && pending.Result.ClearFact is null &&
+            pending.Result.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 21 }) &&
+            committingRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 20, 21 }) &&
+            committingRun.Snapshot.Identity == originalSnapshot.Identity && committingRun.Phase == SinglePlayerDungeonPhase.Dungeon,
+            "准备死亡只冻结候选，不消费死亡事件或改变实例");
+        Check(ReferenceEquals(committingRun.PrepareConfirmedDeath(firstDeath).Pending, pending) &&
+            ReferenceEquals(committingRun.PrepareConfirmedDeath(authority.Death(originalSnapshot.Identity, 20, 1, firstDeath.EventId)).Pending, pending),
+            "待提交相同事实重复准备保留同一候选与稳定事件ID");
+        Check(committingRun.PrepareConfirmedDeath(authority.Death(originalSnapshot.Identity, 21, 2, firstDeath.EventId)).Outcome == DungeonRunOutcome.Rejected &&
+            committingRun.PrepareConfirmedDeath(new FixtureCombatAuthority().Death(originalSnapshot.Identity, 20, 1, firstDeath.EventId)).Outcome == DungeonRunOutcome.Rejected,
+            "同ID篡改载荷或更换签发来源不能替换待提交事实");
+        Check(committingRun.PrepareConfirmedDeath(authority.Death(originalSnapshot.Identity, 21, 2)).Outcome == DungeonRunOutcome.Rejected &&
+            committingRun.Return(originalSnapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Rejected &&
+            committingRun.Move(originalSnapshot.Identity, Guid.NewGuid(), b.Position).Outcome == DungeonRunOutcome.Rejected &&
+            committingRun.AcceptConfirmedDeath(firstDeath).Outcome == DungeonRunOutcome.Rejected,
+            "待提交期间新死亡、退出、过房与旧入口都不能抢先改变状态");
+        var forged = new PreparedDungeonDeath(firstDeath, pending.Monster, pending.Result);
+        Check(committingRun.ConfirmCommittedDeath(forged).Outcome == DungeonRunOutcome.Rejected &&
+            !committingRun.CancelUncommittedDeath(forged), "重新构造的候选不能确认或撤销原准备");
+        Check(committingRun.CancelUncommittedDeath(pending) && !committingRun.CancelUncommittedDeath(pending) &&
+            committingRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 20, 21 }),
+            "明确未提交时撤销准备，死亡集和epoch保持原样");
+        var retryPending = committingRun.PrepareConfirmedDeath(firstDeath).Pending!;
+        Check(!ReferenceEquals(retryPending, pending) && retryPending.Death.EventId == firstDeath.EventId &&
+            committingRun.ConfirmCommittedDeath(pending).Outcome == DungeonRunOutcome.Rejected &&
+            !committingRun.CancelUncommittedDeath(pending), "回滚后使用原事件重试，旧候选不能消费或释放新准备");
+        Check(committingRun.ConfirmCommittedDeath(retryPending).Outcome == DungeonRunOutcome.Accepted &&
+            committingRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 21 }) &&
+            committingRun.ConfirmCommittedDeath(retryPending).Outcome == DungeonRunOutcome.Duplicate &&
+            committingRun.ConfirmCommittedDeath(retryPending).ClearFact is null &&
+            committingRun.PrepareConfirmedDeath(firstDeath).Outcome == DungeonRunOutcome.Duplicate,
+            "提交确认只消费一次；重复确认不重新输出奖励或清图");
+        var lastDeath = authority.Death(committingRun.Snapshot.Identity, 21, 2);
+        var lastPending = committingRun.PrepareConfirmedDeath(lastDeath).Pending!;
+        Check(committingRun.AcceptConfirmedDeath(firstDeath).Outcome == DungeonRunOutcome.Duplicate &&
+            committingRun.IsPendingDeath(lastPending), "末次候选待提交时，先前已确认死亡仍按重复处理");
+        Check(lastPending.Result.ClearFact is { ConfirmedDeathEvents.Count: 2 } &&
+            lastPending.Result.ClearFact.Identity == lastPending.Result.Snapshot.Identity &&
+            lastPending.Result.ClearFact.ConfirmedDeathEvents.Contains(firstDeath.EventId) &&
+            lastPending.Result.ClearFact.ConfirmedDeathEvents.Contains(lastDeath.EventId) &&
+            lastPending.Result.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement &&
+            lastPending.Result.Snapshot.Identity.Epoch == originalSnapshot.Identity.Epoch + 1 &&
+            committingRun.Phase == SinglePlayerDungeonPhase.Dungeon && committingRun.Snapshot.LivingMonsters.Count == 1,
+            "末次死亡在提交前提供冻结清图候选，实际实例尚未结算");
+        Check(committingRun.CancelUncommittedDeath(lastPending) && committingRun.Phase == SinglePlayerDungeonPhase.Dungeon &&
+            committingRun.Snapshot.Identity == originalSnapshot.Identity,
+            "末次死亡回滚不丢失清图资格或提前推进epoch");
+        var lastRetry = committingRun.PrepareConfirmedDeath(lastDeath).Pending!;
+        Check(lastRetry.Result.ClearFact!.ConfirmedDeathEvents.SequenceEqual(lastPending.Result.ClearFact!.ConfirmedDeathEvents) &&
+            lastRetry.Result.Snapshot.Identity == lastPending.Result.Snapshot.Identity,
+            "回滚后的同事实重试保持清图身份和全部死亡事件ID");
+        Check(SinglePlayerDungeonRun.TryCreate(transactionEntry, 5, 400, transactionRoute, authority, out var otherRun, out _),
+            "另一个实例用于候选隔离验证");
+        otherRun!.CompleteLoading(otherRun.Snapshot.Identity, Guid.NewGuid());
+        Check(otherRun.ConfirmCommittedDeath(lastRetry).Outcome == DungeonRunOutcome.Rejected &&
+            !otherRun.CancelUncommittedDeath(lastRetry) && otherRun.Snapshot.LivingMonsters.Count == 2,
+            "另一个实例不能消费或撤销原实例待提交候选");
+        var committed = committingRun.ConfirmCommittedDeath(lastRetry);
+        Check(ReferenceEquals(committed, lastRetry.Result) && committingRun.Phase == SinglePlayerDungeonPhase.Settlement &&
+            committingRun.Snapshot.Identity == lastRetry.Result.Snapshot.Identity && committingRun.Snapshot.LivingMonsters.Count == 0 &&
+            committingRun.ConfirmCommittedDeath(lastRetry).ClearFact is null && !committingRun.CancelUncommittedDeath(lastRetry),
+            "提交后发布准备时的同一清图结果，不能撤销或重复结算");
+        Check(pending.Result.Snapshot.LivingMonsters is IList<ushort> frozenLiving && frozenLiving.IsReadOnly &&
+            lastRetry.Result.ClearFact!.ConfirmedDeathEvents is IList<Guid> frozenEvents && frozenEvents.IsReadOnly,
+            "待提交名单与清图事件集保持只读快照");
+        Check(committingRun.Return(committingRun.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted,
+            "确认完成后解除待提交门禁，正常退出仍可执行");
         Console.WriteLine($"PASS {checks} single-player lifecycle identity and confirmed-event assertions");
     }
 

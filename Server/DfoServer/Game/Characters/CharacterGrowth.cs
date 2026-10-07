@@ -42,6 +42,24 @@ internal sealed class CharacterGrowthPlan
     public CharacterLearningState Learning { get; }
     public int LevelSpDelta { get; }
 
+    // 调用方提供已核验的奖励增量；累计等级表只决定升级边界，不决定奖励额度。
+    public static CharacterGrowthResult AddExperience(Character expected, ulong amount, CharacterGrowthCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(catalog);
+        if (expected.Learning is null)
+            return Fail(CharacterGrowthFailure.InvalidSnapshot);
+        if (amount == 0 || amount > ulong.MaxValue - expected.Learning.Experience)
+            return Fail(CharacterGrowthFailure.InvalidTarget);
+        ulong target = expected.Learning.Experience + amount;
+        if (target >= catalog.GetCumulativeExperienceBoundary(CharacterGrowthCatalog.MaximumSupportedLevel))
+            return Fail(CharacterGrowthFailure.InvalidTarget);
+        byte level = 1;
+        while (target >= catalog.GetCumulativeExperienceBoundary(level))
+            level++;
+        return Create(expected, level, target, catalog);
+    }
+
     // 累计经验与等级来自调用方明确的权威候选；这里不生成击杀、任务或其他经验来源。
     public static CharacterGrowthResult Create(Character expected, byte targetLevel, ulong targetExperience,
         CharacterGrowthCatalog catalog)

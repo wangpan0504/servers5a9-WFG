@@ -81,6 +81,7 @@ internal static class SelfTestRunner
         DungeonMonsterPacketsTests.Run(pvf);
         DungeonProbeRunTests.Run(pvf);
         SinglePlayerDungeonRunTests.Run(pvf);
+        DungeonDropPacketsTests.Run();
         await DungeonDeathProtocolTests.RunAsync(towns, pvf);
         DungeonEntryPlanTests.Run(pvf);
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
@@ -91,6 +92,9 @@ internal static class SelfTestRunner
         SkillCatalogTests.Run(pvf);
         CharacterGrowthCatalogTests.Run(pvf);
         CharacterGrowthTests.Run(towns, pvf);
+        DungeonKillExperienceCatalogTests.Run(pvf);
+        DungeonMonsterDropCatalogTests.Run(pvf);
+        DungeonGrowthRepositoryTests.Run(towns, pvf, characters);
         SkillLearningCatalogTests.Run(pvf);
         SkillLearningTests.Run(pvf, characters);
         SkillRepositoryTests.Run(towns, pvf, characters);

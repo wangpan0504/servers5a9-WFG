@@ -6,8 +6,25 @@ internal readonly record struct SkillPurchaseItem(ushort SkillId, byte Decrease,
 
 internal sealed record SkillPurchaseRequest(byte Context, IReadOnlyList<SkillPurchaseItem> Items, byte Mode);
 
+// 数字为正文偏移；这里只保留已核对的写宽，不把技能使用记录解释为命中或伤害事实。
+internal sealed record SkillUseRequest(byte Unknown0, ushort Unknown1, ushort Unknown3, ushort Unknown5,
+    byte Unknown7, ushort Unknown8, IReadOnlyList<byte> RemainingFields);
+
 internal static class SkillRequests
 {
+    public static bool TryParseUse(ReadOnlySpan<byte> body, out SkillUseRequest? request)
+    {
+        request = null;
+        // 02BF2AB9 的直接写入为10B；匹配ARAD正常战斗实收为14B，末4B的生产及意义仍待确认。
+        // 两种已知形状分别保留，其他宽度不能截断后借用本布局。
+        if (body.Length is not (10 or 14))
+            return false;
+        request = new(body[0], BinaryPrimitives.ReadUInt16LittleEndian(body[1..]),
+            BinaryPrimitives.ReadUInt16LittleEndian(body[3..]), BinaryPrimitives.ReadUInt16LittleEndian(body[5..]),
+            body[7], BinaryPrimitives.ReadUInt16LittleEndian(body[8..]), Array.AsReadOnly(body[10..].ToArray()));
+        return true;
+    }
+
     public static SkillPurchaseRequest ParsePurchase(ReadOnlySpan<byte> body)
     {
         // 028A1130 发送的正文不含 echo；未知业务取值保持原样，由业务层另行校验。

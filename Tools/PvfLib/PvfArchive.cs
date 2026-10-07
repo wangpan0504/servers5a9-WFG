@@ -20,6 +20,9 @@ public sealed class PvfArchive : IDisposable
     private bool disposed;
     private readonly record struct Entry(int DataType, int Size, int Group, int Offset);
 
+    private string? sha256;
+    public string Sha256 { get { EnsureOpen(); return sha256 ??= source.ComputeSha256(); } }
+
     public string Format => protectedFormat ? "protected_nkpi" : "nkpi";
     public int FileCount => entries.Count;
     public int GroupCount => groups.Length;

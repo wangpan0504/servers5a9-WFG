@@ -230,3 +230,21 @@ CREATE TABLE "character_inventory_slots"(
 );
 
 CREATE UNIQUE INDEX account_cargo_slot ON character_inventory_slots(account,slot_index) WHERE list_type=12;
+
+CREATE TABLE character_dungeon_growth_receipts(
+character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
+instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>0),
+task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+map_id INTEGER NOT NULL,monster_key INTEGER NOT NULL CHECK(monster_key BETWEEN 0 AND 65535),
+combat_sequence INTEGER NOT NULL CHECK(combat_sequence>0),
+generation INTEGER NOT NULL CHECK(generation>0),amount INTEGER NOT NULL CHECK(amount>0),
+rule_id TEXT NOT NULL,resource_sha256 TEXT NOT NULL,
+monster_id INTEGER NOT NULL,monster_level INTEGER NOT NULL CHECK(monster_level BETWEEN 1 AND 255),
+before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),
+after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),
+before_experience INTEGER NOT NULL CHECK(before_experience>=0),
+after_experience INTEGER NOT NULL CHECK(after_experience=before_experience+amount),
+revision INTEGER NOT NULL CHECK(revision>0),
+PRIMARY KEY(character_id,event_id),UNIQUE(character_id,instance_id,monster_key),
+UNIQUE(character_id,instance_id,combat_sequence),
+FOREIGN KEY(character_id,account) REFERENCES characters(id,account));

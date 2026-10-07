@@ -43,6 +43,15 @@ internal static class CharacterGrowthTests
         var jump = CharacterGrowthPlan.Create(levelOne, 3, 2035, catalog);
         Check(jump.Success && jump.Plan!.LevelSpDelta == 60 && jump.Plan.Learning.Trees.All(tree => tree.Sp == 60),
             "跨等级贡献只按源与目标表差计算");
+        var automaticLevel = CharacterGrowthPlan.AddExperience(character, 1035, catalog);
+        Check(automaticLevel.Success && automaticLevel.Plan!.TargetLevel == 3 && automaticLevel.Plan.Learning.Experience == 2035 &&
+            automaticLevel.Plan.Learning.Trees[0].Sp == 37 && automaticLevel.Plan.Learning.Trees[1].Sp == 59,
+            "已核验奖励增量自动匹配累计等级边界，并保留两树消费余额");
+        Check(CharacterGrowthPlan.AddExperience(levelOne, 2035, catalog).Plan!.TargetLevel == 3 &&
+            CharacterGrowthPlan.AddExperience(character, 1034, catalog).Plan!.TargetLevel == 2 &&
+            CharacterGrowthPlan.AddExperience(character, 0, catalog).Failure == CharacterGrowthFailure.InvalidTarget &&
+            CharacterGrowthPlan.AddExperience(character, ulong.MaxValue, catalog).Failure == CharacterGrowthFailure.InvalidTarget,
+            "同级、跨级和精确边界匹配，零增量及累计溢出拒绝");
         Check(CharacterGrowthPlan.Create(character, 2, 1000, catalog).Failure == CharacterGrowthFailure.InvalidTarget,
             "相同绝对经验候选拒绝，不提供稳定事件幂等");
         Check(CharacterGrowthPlan.Create(character, 2, 999, catalog).Failure == CharacterGrowthFailure.InvalidTarget &&

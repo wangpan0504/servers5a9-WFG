@@ -10,6 +10,15 @@ internal sealed record DungeonRunSnapshot(DungeonRunIdentity Identity, SinglePla
     IReadOnlyList<ushort> LivingMonsters);
 internal sealed record DungeonClearFact(DungeonRunIdentity Identity, uint DungeonId, IReadOnlyList<Guid> ConfirmedDeathEvents);
 internal sealed record DungeonRunResult(DungeonRunOutcome Outcome, DungeonRunSnapshot Snapshot, DungeonClearFact? ClearFact = null);
+internal sealed record DungeonDeathPreparation(DungeonRunOutcome Outcome, PreparedDungeonDeath? Pending = null);
+
+// 只代表已核验的待提交候选。数据库结果确定之前，死亡集和清图状态保持原样。
+internal sealed class PreparedDungeonDeath(ConfirmedDungeonMonsterDeath death, DungeonPlannedMonster monster, DungeonRunResult result)
+{
+    public ConfirmedDungeonMonsterDeath Death { get; } = death;
+    public DungeonPlannedMonster Monster { get; } = monster;
+    public DungeonRunResult Result { get; } = result;
+}
 
 // 正式战斗组件持有的能力对象。协议 handler 不创建权威，也不把客户端死亡字段变成此事件。
 // 只有实际战斗解析已确认死亡之后，派生组件才调用签发方法；本类没有 bool died 成功入口。
@@ -51,6 +60,7 @@ internal sealed class SinglePlayerDungeonRun
     private readonly Dictionary<Guid, ActionFact> acceptedActions = [];
     private readonly Dictionary<Guid, ConfirmedDungeonMonsterDeath> deaths = [];
     private readonly HashSet<long> combatSequences = [];
+    private PreparedDungeonDeath? pendingDeath;
     private Room current;
     private DungeonRunIdentity identity;
     public long StartCharacterRevision => entry.CharacterRevision;
@@ -145,7 +155,7 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (Replay(expected, actionId, "loaded", null) is { } replay)
             return replay;
-        if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Loading || actionId == Guid.Empty || !CanAdvance())
+        if (pendingDeath is not null || !Matches(expected) || Phase != SinglePlayerDungeonPhase.Loading || actionId == Guid.Empty || !CanAdvance())
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "loaded", null));
         Phase = SinglePlayerDungeonPhase.Dungeon;
@@ -157,6 +167,8 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (Replay(expected, actionId, "move", target) is { } replay)
             return replay;
+        if (pendingDeath is not null)
+            return Result(DungeonRunOutcome.Rejected);
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
             !current.Cleared || !connections.Contains((current.Plan.Room.Map.Position, target)) || !rooms.TryGetValue(target, out Room? next))
             return Result(DungeonRunOutcome.Rejected);
@@ -171,7 +183,7 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (Replay(expected, actionId, "return", null) is { } replay)
             return replay;
-        if (!Matches(expected) || Phase == SinglePlayerDungeonPhase.Returned || actionId == Guid.Empty || identity.Epoch == long.MaxValue)
+        if (pendingDeath is not null || !Matches(expected) || Phase == SinglePlayerDungeonPhase.Returned || actionId == Guid.Empty || identity.Epoch == long.MaxValue)
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "return", null));
         Phase = SinglePlayerDungeonPhase.Returned;
@@ -182,20 +194,78 @@ internal sealed class SinglePlayerDungeonRun
     public DungeonRunResult AcceptConfirmedDeath(ConfirmedDungeonMonsterDeath confirmed)
     {
         ArgumentNullException.ThrowIfNull(confirmed);
+        // 旧的纯内存入口不能抢先确认正在等待数据库结果的候选，既有死亡重放仍可识别。
+        bool awaitingCommit = pendingDeath is not null;
+        DungeonDeathPreparation preparation = PrepareConfirmedDeath(confirmed);
+        if (preparation.Outcome != DungeonRunOutcome.Accepted)
+            return Result(preparation.Outcome);
+        return awaitingCommit ? Result(DungeonRunOutcome.Rejected) : ConfirmCommittedDeath(preparation.Pending!);
+    }
+
+    // 在原实例owner内准备；调用方随后同事务保存事件身份与奖励，提交后才确认内存。
+    public DungeonDeathPreparation PrepareConfirmedDeath(ConfirmedDungeonMonsterDeath confirmed)
+    {
+        ArgumentNullException.ThrowIfNull(confirmed);
         if (!ReferenceEquals(confirmed.Authority, authority))
-            return Result(DungeonRunOutcome.Rejected);
+            return new(DungeonRunOutcome.Rejected);
         if (deaths.TryGetValue(confirmed.EventId, out ConfirmedDungeonMonsterDeath? old))
-            return Result(old.Identity == confirmed.Identity && old.MonsterKey == confirmed.MonsterKey && old.CombatSequence == confirmed.CombatSequence
+            return new(SameDeath(old, confirmed)
                 ? DungeonRunOutcome.Duplicate : DungeonRunOutcome.Rejected);
+        if (pendingDeath is not null)
+            return SameDeath(pendingDeath.Death, confirmed)
+                ? new(DungeonRunOutcome.Accepted, pendingDeath) : new(DungeonRunOutcome.Rejected);
         if (!Matches(confirmed.Identity) || Phase != SinglePlayerDungeonPhase.Dungeon || confirmed.EventId == Guid.Empty ||
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
             !current.Plan.Monsters.Any(monster => monster.ObjectKey == confirmed.MonsterKey) || current.Dead.Contains(confirmed.MonsterKey))
-            return Result(DungeonRunOutcome.Rejected);
+            return new(DungeonRunOutcome.Rejected);
+        bool settles = current.Plan.Room.Map == entry.BossMap && rooms.Values.All(room =>
+            room == current ? room.Dead.Count + 1 == room.Plan.Monsters.Count : room.Cleared);
+        DungeonRunIdentity nextIdentity = settles ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
+        var nextSnapshot = new DungeonRunSnapshot(nextIdentity,
+            settles ? SinglePlayerDungeonPhase.Settlement : Phase, current.Plan.Room.Map,
+            Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
+                monster.ObjectKey != confirmed.MonsterKey).Select(monster => monster.ObjectKey).ToArray()));
+        DungeonClearFact? clear = settles
+            ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) : null;
+        pendingDeath = new(confirmed, current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey),
+            new(DungeonRunOutcome.Accepted, nextSnapshot, clear));
+        return new(DungeonRunOutcome.Accepted, pendingDeath);
+    }
+
+    // 只接受本实例当前准备对象，不能用另一实例或重新构造的候选确认提交。
+    public bool IsPendingDeath(PreparedDungeonDeath prepared) => prepared is not null && ReferenceEquals(pendingDeath, prepared);
+
+    public DungeonRunResult ConfirmCommittedDeath(PreparedDungeonDeath prepared)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (!ReferenceEquals(pendingDeath, prepared))
+        {
+            ConfirmedDungeonMonsterDeath death = prepared.Death;
+            return deaths.TryGetValue(death.EventId, out var accepted) && ReferenceEquals(accepted, death)
+                ? Result(DungeonRunOutcome.Duplicate) : Result(DungeonRunOutcome.Rejected);
+        }
+        ConfirmedDungeonMonsterDeath confirmed = prepared.Death;
         current.Dead.Add(confirmed.MonsterKey);
         combatSequences.Add(confirmed.CombatSequence);
         deaths.Add(confirmed.EventId, confirmed);
-        return SettleIfCleared();
+        identity = prepared.Result.Snapshot.Identity;
+        Phase = prepared.Result.Snapshot.Phase;
+        pendingDeath = null;
+        return prepared.Result;
     }
+
+    // 仅在存储明确未提交或已回滚时撤销准备；结果不明时保留候选并查询持久receipt。
+    public bool CancelUncommittedDeath(PreparedDungeonDeath prepared)
+    {
+        if (prepared is null || !ReferenceEquals(pendingDeath, prepared))
+            return false;
+        pendingDeath = null;
+        return true;
+    }
+
+    private static bool SameDeath(ConfirmedDungeonMonsterDeath first, ConfirmedDungeonMonsterDeath second) =>
+        ReferenceEquals(first.Authority, second.Authority) && first.EventId == second.EventId && first.Identity == second.Identity &&
+        first.MonsterKey == second.MonsterKey && first.CombatSequence == second.CombatSequence;
 
     private DungeonRunResult SettleIfCleared()
     {
