@@ -19,7 +19,7 @@ internal static class DatabaseSchemaTests
             var accounts = new AuthenticationService(new AuthenticationRepository(path));
             using (var db = Open(path))
             {
-                Check(Query(db, "PRAGMA user_version") is 1L, "首次发布完整结构直接标记 v1");
+                Check(Query(db, "PRAGMA user_version") is 2L, "首次发布完整结构直接标记当前 v2");
                 Check(Query(db, "SELECT value FROM schema_metadata WHERE key='baseline_id'") is SqliteMigrations.BaselineId,
                     "统一数据库保存独立基线标识");
                 Check(Query(db, "SELECT count(*) FROM accounts") is 0L && Query(db, "SELECT count(*) FROM characters") is 0L,
@@ -47,7 +47,7 @@ internal static class DatabaseSchemaTests
             foreach (string mutation in new[]
             {
                 "DROP TABLE schema_metadata", "UPDATE schema_metadata SET value='another-database'",
-                "PRAGMA user_version=0", "PRAGMA user_version=2", "ALTER TABLE accounts DROP COLUMN disabled",
+                "PRAGMA user_version=0", "PRAGMA user_version=3", "ALTER TABLE accounts DROP COLUMN disabled",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail"
             })
             {
@@ -96,6 +96,8 @@ internal static class DatabaseSchemaTests
 
     private static void VerifyFutureMigrations(string path)
     {
+        using (var reset = Open(path))
+            Execute(reset, "PRAGMA user_version=1");
         string before = Snapshot(path);
         SqliteMigration second = new(2, "test_add_column", (db, tx) =>
         {
@@ -119,7 +121,9 @@ internal static class DatabaseSchemaTests
             SqliteMigrations.Apply(db, [second]);
             Check(Snapshot(path) == after, "已执行迁移不重复运行");
         }
-        Reject<InvalidDataException>(() => new CharacterRepository(path), "当前 v1 程序不回退打开后续版本");
+        using (var future = Open(path))
+            Execute(future, $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}");
+        Reject<InvalidDataException>(() => new CharacterRepository(path), "当前程序不回退打开后续版本");
     }
 
     private static SqliteConnection Open(string path)

@@ -53,6 +53,9 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
     public byte Extension119 { get; init; }
     public byte Extension120 { get; init; }
     public ushort Extension121 { get; init; }
+    // 租赁实例复用普通 Equipment 的持久化与穿脱链路；该标记只用于
+    // S2C988 面板筛选和物品行期限投影，不占用客户端物品核心字段。
+    public bool IsRental { get; init; }
     [JsonIgnore] public byte Upgrade => (byte)(Attr & 0x1F);
     [JsonIgnore] public bool IsStackable => Kind is ItemKind.Consumable or ItemKind.Material or ItemKind.Quest or
         ItemKind.CreatureConsumable or ItemKind.Emblem or ItemKind.Profession or ItemKind.GuardianGem;

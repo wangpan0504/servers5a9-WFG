@@ -43,7 +43,7 @@ internal sealed class InventoryProjection(CharacterCatalog characters, TownProje
             });
         }
         await RestoreLocksAsync(context, current.Inventory, slots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
-        if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera))
+        if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera and <= DfoServer.Game.Currency.CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
         if (plan.ChangedEpicPieces.Length != 0)
             await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(current.Inventory.EpicPieces, pieces, plan.ChangedEpicPieces), "epic_book_committed_delta", CanSend);

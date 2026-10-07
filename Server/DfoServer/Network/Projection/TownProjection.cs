@@ -22,6 +22,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterCatalog charact
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(c), "actor");
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, characters), "player");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
+        await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
         if (c.CompletedQuests.Length > 0)
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(c), "completed_quests");
         if (c.Learning.Initialized)

@@ -11,36 +11,41 @@ internal enum CurrencyKind
     CommonSoul, UncommonSoul, RareSoul, UniqueSoul,
     // 13/14原本已分别保存这两个物品的余额；更正名称，不能交换存量资产或客户端槽位。
     LegendarySoul = 13, EpicSoul = 14,
-    Cera, TokenCera, HappyTokenCera
+    Cera, TokenCera, HappyTokenCera,
+    // 租赁幸运星是账号级虚拟余额，不映射到任何普通背包槽位。
+    RentalPoint = 18
 }
 
 // 账号余额随选中角色载入不可变快照；换角重读，不为每个角色复制持久余额。
-internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<CurrencyKind, int> Balances)
+internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<CurrencyKind, int> Balances, int RentalPoints = 0)
 {
     public static AccountWallet Empty { get; } = new(0, ImmutableSortedDictionary<CurrencyKind, int>.Empty);
-    public int Get(CurrencyKind kind) => Balances.GetValueOrDefault(kind);
+    public int Get(CurrencyKind kind) => kind == CurrencyKind.RentalPoint ? RentalPoints : Balances.GetValueOrDefault(kind);
     public AccountWallet Set(CurrencyKind kind, int count)
     {
         if (!CurrencyWallet.IsAccount(kind) || count < 0)
             throw new InvalidDataException("无效账号货币余额");
+        if (kind == CurrencyKind.RentalPoint)
+            return this with { RentalPoints = count };
         return this with { Balances = count == 0 ? Balances.Remove(kind) : Balances.SetItem(kind, count) };
     }
-    public bool Same(AccountWallet other) => Revision == other.Revision && Balances.SequenceEqual(other.Balances);
+    public bool Same(AccountWallet other) => Revision == other.Revision && RentalPoints == other.RentalPoints && Balances.SequenceEqual(other.Balances);
     public void Validate()
     {
-        if (Revision < 0 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Value <= 0))
+        if (Revision < 0 || RentalPoints < 0 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key == CurrencyKind.RentalPoint || pair.Value <= 0))
             throw new InvalidDataException("无效账号钱包快照");
     }
 }
 
 internal static class CurrencyWallet
 {
-    public static bool IsAccount(CurrencyKind kind) => kind is >= CurrencyKind.BlackCube and <= CurrencyKind.HappyTokenCera;
+    public static bool IsAccount(CurrencyKind kind) => kind is >= CurrencyKind.BlackCube and <= CurrencyKind.HappyTokenCera or CurrencyKind.RentalPoint;
     public static long Get(InventorySnapshot inventory, CurrencyKind kind) => kind switch
     {
         CurrencyKind.Gold => inventory.Gold,
         CurrencyKind.ReviveCoin => inventory.ReviveCoins,
         CurrencyKind.WinPoint => inventory.WinPoints,
+        CurrencyKind.RentalPoint => inventory.AccountWallet.RentalPoints,
         _ when IsAccount(kind) => inventory.AccountWallet.Get(kind),
         _ => throw new InvalidDataException("未知货币")
     };
@@ -53,6 +58,7 @@ internal static class CurrencyWallet
             CurrencyKind.Gold => inventory with { Gold = checked((uint)count) },
             CurrencyKind.ReviveCoin => inventory with { ReviveCoins = checked((int)count) },
             CurrencyKind.WinPoint => inventory with { WinPoints = checked((int)count) },
+            CurrencyKind.RentalPoint => inventory with { AccountWallet = inventory.AccountWallet.Set(kind, checked((int)count)) },
             _ when IsAccount(kind) => inventory with { AccountWallet = inventory.AccountWallet.Set(kind, checked((int)count)) },
             _ => throw new InvalidDataException("未知货币")
         };

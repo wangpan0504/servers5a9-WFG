@@ -38,8 +38,8 @@ internal static class CurrencyTcpTests
             peer.Send(63);
             peer.Expect(0, 53, cera);
             var packets = peer.Select();
-            Bytes(packets[7].Body, [0], "base gold cap stage initialized");
-            Bytes(packets[8].Body, cera, "account wallet initialized on selection");
+            Bytes(packets[8].Body, [0], "base gold cap stage initialized");
+            Bytes(packets[9].Body, cera, "account wallet initialized on selection");
             var main = packets[4].Body;
             That(Balance(main, 0, 0) == 20_000_000 && Balance(main, 1, 1) == 9 && Balance(main, 2, 2) == 10 &&
                 Balance(main, 358, 3037) == 88 && Balance(main, 365, 10158124) == 6, "TCP virtual quantities and epic soul mapping");
@@ -66,14 +66,14 @@ internal static class CurrencyTcpTests
         using (var peer = Open(fixture))
         {
             var packets = peer.Select();
-            Bytes(packets[7].Body, [1], "restart restores expanded cap stage");
+            Bytes(packets[8].Body, [1], "restart restores expanded cap stage");
             That(Balance(packets[4].Body, 0, 0) == 15_000_000, "restart restores exact charged gold");
         }
         using (var peer = Open(fixture))
         {
             var packets = peer.Select(1);
-            Bytes(packets[7].Body, [0], "sibling keeps independent cap stage");
-            Bytes(packets[8].Body, cera, "sibling shares account cash");
+            Bytes(packets[8].Body, [0], "sibling keeps independent cap stage");
+            Bytes(packets[9].Body, cera, "sibling shares account cash");
             That(Balance(packets[4].Body, 0, 0) == 0 && Balance(packets[4].Body, 1, 1) == 0 && Balance(packets[4].Body, 358, 3037) == 88,
                 "sibling shares crystals but not gold or revival coins");
             byte[] upgrade = new byte[14]; upgrade[13] = 1;

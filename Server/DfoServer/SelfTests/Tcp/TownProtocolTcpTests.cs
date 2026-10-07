@@ -184,7 +184,7 @@ internal static class TownProtocolTcpTests
             Bytes(packets[2].Body.AsSpan(131, 3), [0, 0x25, 95], "prepared actor identity");
             var player = packets[3].Body;
             That(player.Length == 257 && player[143] == 0 && player[144] == 15 && player[190] == 15, "prepared skill trees");
-            completed = packets[5].Body;
+            completed = packets[6].Body;
             That(completed.Length == 30004 && U32(completed) == 30000 && quests.Count == 942 && completed.AsSpan(4).ToArray().Select((b, i) => (b, i)).Where(p => p.b != 0).Select(p => p.i).ToHashSet().SetEquals(quests), "complete quest bitmap");
             Bytes(packets[^2].Body, [38, 0, 0, 0], "initial return town");
             peer.Barrier();
@@ -229,7 +229,7 @@ internal static class TownProtocolTcpTests
             }), "relogin normalized room");
             Bytes(packets.Single(packet => packet.Kind == 0 && packet.Opcode == 1379).Body, Build(w => w.Write(respawn.District)), "district room return");
             Bytes(packets[1].Body, [95, 0, 0, 0], "story survives reconnect");
-            Bytes(packets[5].Body, completed, "quests survive reconnect");
+            Bytes(packets[6].Body, completed, "quests survive reconnect");
             That(fixture.Snapshot("SELECT town,area,x,y,return_town FROM characters WHERE id=$p0", id) == $"[[38,1,450,234,{respawn.District}]]", "respawn persisted");
             foreach (var trip in respawn.Routes)
             {

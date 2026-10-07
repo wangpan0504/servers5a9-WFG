@@ -91,7 +91,7 @@ internal static partial class InventoryTcpTests
         using (var peer = Open(fixture))
         {
             var entry = peer.Select(inventoryNotices: [(0, 251)]);
-            Bytes(entry[7].Body, [1, 0, 3, 12, 0, 1], "restarted session restores moved equipment lock");
+            Bytes(entry[8].Body, [1, 0, 3, 12, 0, 1], "restarted session restores moved equipment lock");
             string before = Snapshot(fixture);
             Sql("CREATE TRIGGER fail_tcp_lock BEFORE UPDATE ON character_inventory_items BEGIN SELECT RAISE(ABORT,'lock failure'); END");
             peer.Send(268, [3, 12, 0]);

@@ -10,9 +10,9 @@ internal sealed record WirePacket(byte Kind, ushort Opcode, byte[] Body);
 internal sealed class TcpPeer : IDisposable
 {
     public static readonly (byte Kind, ushort Opcode)[] Entry =
-        [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 13), (0, 13), (0, 950), (0, 53), (0, 1152), (0, 3), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
+        [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 988), (0, 13), (0, 13), (0, 950), (0, 53), (0, 1152), (0, 3), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
     public static readonly (byte Kind, ushort Opcode)[] PreparedEntry =
-        [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 356), (0, 13), (0, 13), (0, 950), (0, 53), (0, 1152), (0, 3), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
+        [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 988), (0, 356), (0, 13), (0, 13), (0, 950), (0, 53), (0, 1152), (0, 3), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
     readonly TcpClient client = new()
     {
         NoDelay = true
@@ -170,7 +170,7 @@ internal sealed class TcpPeer : IDisposable
     {
         Send(4, Build(w => w.Write(slot)));
         var expected = prepared ? PreparedEntry : Entry;
-        int afterCargo = prepared ? 8 : 7;
+        int afterCargo = prepared ? 9 : 8;
         // 保留普通入城断言的返回索引，特殊容器单独暴露；线上顺序仍逐包严格验证。
         var prefix = Batch(expected[..2]);
         var creatures = Expect(0, 105);
@@ -196,7 +196,7 @@ internal sealed class TcpPeer : IDisposable
         SpecialContainers = [creatures, avatars, pets, medals];
         WirePacket[] packets = [.. prefix, .. middle, .. Batch([.. inventoryNotices ?? [], .. expected.Skip(afterCargo)])];
         Id = U16(packets[0].Body, 9);
-        TestCheck.That(packets[prepared ? 6 : 5].Body[0] == 2 && packets[prepared ? 7 : 6].Body[0] == 12,
+        TestCheck.That(packets[prepared ? 7 : 6].Body[0] == 2 && packets[prepared ? 8 : 7].Body[0] == 12,
             "personal and account cargo initialize before locks");
         TestCheck.That(packets[4].Body[0] == 0, "main inventory initialization precedes cargo");
         ushort expansionSlots = U16(packets[4].Body, 1);

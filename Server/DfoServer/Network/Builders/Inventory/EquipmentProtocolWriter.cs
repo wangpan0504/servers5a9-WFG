@@ -70,7 +70,7 @@ internal static class EquipmentProtocolWriter
                 writer.Write(option.EquipmentType);
                 writer.Write(option.Number);
             }
-            writer.Write(core.ExpireTime);
+            writer.Write(item.Core.IsRental ? item.RemainingSeconds(now) : core.ExpireTime);
             writer.Write(core.EmblemSocketCount);
             if (core.EmblemSocketCount > 0)
                 writer.Write(core.Emblem1);

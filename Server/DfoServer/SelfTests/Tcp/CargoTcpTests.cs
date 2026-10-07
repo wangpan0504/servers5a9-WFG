@@ -47,8 +47,8 @@ internal static class CargoTcpTests
         using (var peer = Open(fixture))
         {
             var entered = peer.Select();
-            Bytes(entered[5].Body, [2, 8, 0, 0, 0, 0], "Client personal cargo includes its auxiliary count after the empty list");
-            Bytes(entered[6].Body, [12, 0, 0, 0, 0, 0, 0, 0, 0], "closed account cargo initializes zero money and no items");
+            Bytes(entered[6].Body, [2, 8, 0, 0, 0, 0], "Client personal cargo includes its auxiliary count after the empty list");
+            Bytes(entered[7].Body, [12, 0, 0, 0, 0, 0, 0, 0, 0], "closed account cargo initializes zero money and no items");
             peer.Send(305);
             peer.Expect(1, 305, [1]);
             ExpectGold(peer, 19_900_000);
@@ -117,8 +117,8 @@ internal static class CargoTcpTests
             peer.Expect(1, 7, [1]);
             peer.Expect(0, 2);
             var sibling = peer.Select(1, inventoryNotices: [(1, 713)]);
-            Cargo(sibling[5].Body, 2, 8, 0, 0);
-            Cargo(sibling[6].Body, 12, 24, 750, 1);
+            Cargo(sibling[6].Body, 2, 8, 0, 0);
+            Cargo(sibling[7].Body, 12, 24, 750, 1);
             Transfer(peer, 12, 0, weaponId, 1, 0, 3, 0, 1);
             That(peer.Expect(0, 14).Body[0] == 0 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
                 "sibling can withdraw shared equipment into quick bar");
@@ -136,7 +136,7 @@ internal static class CargoTcpTests
         {
             var entry = peer.Select(1);
             That(U32(entry[4].Body, 376) == weaponId && U16(entry[4].Body, 374) == 3, "restart restores sibling equipment in quick bar");
-            Cargo(entry[6].Body, 12, 24, 0, 0);
+            Cargo(entry[7].Body, 12, 24, 0, 0);
             peer.Barrier();
         }
         await fixture.StopAsync();

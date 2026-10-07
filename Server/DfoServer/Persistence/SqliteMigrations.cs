@@ -9,7 +9,11 @@ internal static class SqliteMigrations
     public const string BaselineId = "s5a9-database-v1";
     public const int BaselineVersion = 1;
     // 首次发布直接建立完整 v1。后续结构变化从 v2 起连续追加，并同步更新完整 SQL。
-    private static readonly SqliteMigration[] Steps = [];
+    private static readonly SqliteMigration[] Steps =
+    [
+        new(2, "account_wallet_rental_points", static (db, tx) =>
+            Execute(db, tx, "ALTER TABLE account_wallets ADD COLUMN rental_points INTEGER NOT NULL DEFAULT 0 CHECK(rental_points BETWEEN 0 AND 2147483647)"))
+    ];
     public static int CurrentVersion => Steps.Length == 0 ? BaselineVersion : Steps[^1].Version;
 
     public static void Apply(SqliteConnection db) => Apply(db, Steps);
@@ -85,7 +89,7 @@ internal static class SqliteMigrations
         "SELECT [character_id],[context],[sp],[tp] FROM [character_skill_points] LIMIT 0",
         "SELECT [character_id],[context],[slot],[skill_id],[level] FROM [character_skill_bindings] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[list_type],[slot_index],[item_uid_before],[item_uid_after],[item_id_before],[item_id_after],[value_before],[value_after],[item_kind_before],[item_kind_after],[count_before],[count_after],[count_delta],[core_hash_before],[core_hash_after] FROM [inventory_audit_log] LIMIT 0",
-        "SELECT [account],[revision] FROM [account_wallets] LIMIT 0",
+        "SELECT [account],[revision],[rental_points] FROM [account_wallets] LIMIT 0",
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",

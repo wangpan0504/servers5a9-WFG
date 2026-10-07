@@ -39,6 +39,7 @@ internal static class SelfTestRunner
         GrowthPacketsTests.Run();
         SkillRequestTests.Run();
         ItemRequestTests.Run();
+        RentalTests.Run();
         SkillPacketsTests.Run();
     }
 

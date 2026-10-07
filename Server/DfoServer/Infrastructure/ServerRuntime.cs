@@ -17,6 +17,7 @@ using DfoServer.Persistence;
 using DfoServer.GameWorld.Dungeons;
 using PvfLib;
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Rental;
 
 namespace DfoServer.Infrastructure;
 // 唯一装配入口：按领域增加模块及依赖，不在协议循环中维护业务分支。
@@ -54,6 +55,7 @@ internal static class ServerRuntime
             new SkillHandler(learning, log),
             new TownHandler(projection, log),
             new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
             new ShopHandler(new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),

@@ -39,7 +39,7 @@ internal static class StartupTcpTests
         command.CommandText = "PRAGMA integrity_check";
         TestCheck.That((string?)command.ExecuteScalar() == "ok", "CLI startup and restart preserve SQLite integrity");
         command.CommandText = "PRAGMA user_version";
-        TestCheck.That(command.ExecuteScalar() is 1L, "CLI database starts at release schema v1");
+        TestCheck.That(command.ExecuteScalar() is 2L, "CLI database starts at current rental schema v2");
         command.CommandText = "SELECT value FROM schema_metadata WHERE key='baseline_id'";
         TestCheck.That(command.ExecuteScalar() is Persistence.SqliteMigrations.BaselineId, "CLI database has the S5A9 baseline");
         command.CommandText = "SELECT count(*) FROM accounts WHERE account_id='different-source'";

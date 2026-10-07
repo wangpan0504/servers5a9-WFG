@@ -210,8 +210,8 @@ internal static partial class InventoryTcpTests
         using (var peer = Open(fixture))
         {
             var entry = peer.Select(inventoryNotices: [(1, 713), (0, 251)]);
-            Bytes(entry[7].Body, [1, 0, 65, 0], "sorting lock restored after item lists");
-            Bytes(entry[8].Body, [1, 0, 0, 20, 0, 1], "only unexpired equipment lock restored");
+            Bytes(entry[8].Body, [1, 0, 65, 0], "sorting lock restored after item lists");
+            Bytes(entry[9].Body, [1, 0, 0, 20, 0, 1], "only unexpired equipment lock restored");
             That(U16(entry[4].Body, 3) == 18 && fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE action_name='item_expired'") is [[1L]],
                 "selection expires locked item before inventory projection");
             string before = Snapshot(fixture);
