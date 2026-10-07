@@ -140,10 +140,14 @@ internal static class DungeonGrowthRepositoryTests
             Reject<InvalidOperationException>(() => DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable),
                 "已确认死亡不能重新规划本服奖励");
             // 模拟已发布 v2 库；迁移只建空账本，不赠送经验、点数或事件。
+            Execute("DROP TABLE character_dungeon_pickup_receipts");
+            Execute("DROP TABLE character_dungeon_loot_receipts");
+            Execute("DROP TABLE character_dungeon_state");
             Execute("DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings; DROP TABLE character_dungeon_growth_receipts; DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages");
             Execute("PRAGMA user_version=2");
             var migrated = new CharacterRepository(path).List(replacement).Single(character => character.Id == edited.Id);
             Check(SkillRepositoryTests.Equal(migrated, edited) && CountReceipts() == 0 &&
+                migrated.DungeonState is null && Convert.ToInt64(Query("SELECT count(*) FROM character_dungeon_state")) == 0 &&
                 Convert.ToInt64(Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion,
                 "v2升级当前结构保持已有角色状态，新增账本为空");
             Execute("ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN amount TO broken_amount");

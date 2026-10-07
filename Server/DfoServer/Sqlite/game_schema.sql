@@ -5,6 +5,16 @@ CREATE TABLE schema_metadata(
     value TEXT NOT NULL
 );
 
+CREATE TABLE character_dungeon_state(
+    character_id INTEGER NOT NULL PRIMARY KEY,account TEXT NOT NULL,
+    next_object_key INTEGER NOT NULL CHECK(next_object_key BETWEEN 1 AND 65536),
+    last_attempt INTEGER NOT NULL CHECK(last_attempt>=0),
+    capsule_experience INTEGER NOT NULL CHECK(capsule_experience BETWEEN 0 AND 4294967295),
+    proficiency_level INTEGER NOT NULL CHECK(proficiency_level BETWEEN 0 AND 4294967295),
+    proficiency_experience INTEGER NOT NULL CHECK(proficiency_experience>=0),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
 CREATE TABLE accounts(
     account_id TEXT PRIMARY KEY,
     salt BLOB NOT NULL,
@@ -316,3 +326,32 @@ revision INTEGER NOT NULL CHECK(revision>0),
 PRIMARY KEY(character_id,event_id),UNIQUE(character_id,instance_id,monster_key),
 UNIQUE(character_id,instance_id,combat_sequence),
 FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE character_dungeon_loot_receipts(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
+  instance_id TEXT NOT NULL,task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
+  epoch INTEGER NOT NULL CHECK(epoch>0),map_id INTEGER NOT NULL,
+  monster_key INTEGER NOT NULL CHECK(monster_key BETWEEN 1 AND 65535),
+  rule_id TEXT NOT NULL,resource_source TEXT NOT NULL,
+  ground_key INTEGER CHECK(ground_key BETWEEN 1 AND 65535),
+  core TEXT CHECK(core IS NULL OR (json_valid(core) AND json_type(core)='object')),
+  x INTEGER CHECK(x BETWEEN 0 AND 65535),y INTEGER CHECK(y BETWEEN 0 AND 65535),
+  record_slot INTEGER CHECK(record_slot BETWEEN -32768 AND 32767),
+  CHECK((ground_key IS NULL AND core IS NULL AND x IS NULL AND y IS NULL AND record_slot IS NULL) OR
+    (ground_key IS NOT NULL AND core IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL AND record_slot IS NOT NULL)),
+  PRIMARY KEY(character_id,event_id),UNIQUE(character_id,ground_key),
+  FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE character_dungeon_pickup_receipts(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
+  ground_key INTEGER NOT NULL CHECK(ground_key BETWEEN 1 AND 65535),
+  instance_id TEXT NOT NULL,task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
+  epoch INTEGER NOT NULL CHECK(epoch>0),destination_list INTEGER NOT NULL,
+  destination_slot INTEGER NOT NULL CHECK(destination_slot BETWEEN 0 AND 351),
+  item_uid INTEGER NOT NULL CHECK(item_uid BETWEEN 1 AND 2147483647),
+  after_core TEXT NOT NULL CHECK(json_valid(after_core) AND json_type(after_core)='object'),
+  revision INTEGER NOT NULL CHECK(revision>0),
+  PRIMARY KEY(character_id,event_id),UNIQUE(character_id,ground_key),
+  FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_loot_receipts(character_id,event_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));

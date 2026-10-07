@@ -25,9 +25,10 @@ internal static class ClientNotices
                 // 02280690 在 selector 不是 10/20/40 时写 6 字节。清图达成走这条，不回 ACK33，也不改条件。
                 notice = new("quest_trigger", trigger);
                 return true;
-            case (ushort)CmdPacketType.USE_SKILL when SkillRequests.TryParseUse(body, out _):
+            case (ushort)CmdPacketType.USE_SKILL when SkillRequests.TryParseUse(body, out var use):
                 // 保留10B原码形状和14B实收形状的全部字节；只记录，不回包、不确认伤害或发奖。
-                notice = new("use_skill", "bytes=" + Convert.ToHexString(body));
+                notice = new("use_skill", "bytes=" + Convert.ToHexString(body) + " checksum=" +
+                    (use!.ChecksumMatches is null ? "absent" : use.ChecksumMatches.Value ? "matched" : "mismatched"));
                 return true;
             case (ushort)CmdPacketType.FINISH_QUEST when TryFinish(body, out string finish):
                 notice = new("finish_quest", finish);

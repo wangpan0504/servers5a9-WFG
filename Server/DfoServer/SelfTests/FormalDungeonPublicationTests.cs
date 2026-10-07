@@ -1,0 +1,350 @@
+using System.Buffers.Binary;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text.Json;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
+using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Session;
+using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Infrastructure;
+using DfoServer.Network;
+using DfoServer.Network.Handlers;
+using DfoServer.Network.Projection;
+using DfoServer.Network.Protocol;
+using DfoServer.Persistence;
+using DfoServer.Testing;
+using Microsoft.Data.Sqlite;
+using PvfLib;
+
+namespace DfoServer;
+
+internal static class FormalDungeonPublicationTests
+{
+    public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items)
+    {
+        int before = TestCheck.Count;
+        var learning = SkillLearningCatalog.Load(pvf);
+        var growth = CharacterGrowthCatalog.Load(pvf);
+        var kills = DungeonKillExperienceCatalog.Load(pvf);
+        var catalog = DungeonCatalog.Load(pvf);
+        var rooms = DungeonRoomCatalog.Load(pvf);
+        await StorageFailureAsync(false);
+        await StorageFailureAsync(true);
+        foreach (int packet in new[] { 1, 2 }) await SendFailureAsync(packet);
+        await ReselectDuringSendAsync();
+        await ReturnDuringSendAsync();
+        await PickupLostResultAsync();
+        Console.WriteLine($"PASS {TestCheck.Count - before} 正式Handler真实文件提交、结果丢失、发送故障及重选隔离断言（合成死亡，非实机）");
+
+        GameCommandRegistry Registry(Fixture f, TownPresence? presence = null)
+        {
+            var commands = new GameCommandRegistry();
+            new DungeonHandler(f.Log, catalog, rooms, growth, kills,
+                new TownProjection(towns, characters, presence, items.EpicPieces),
+                DungeonMonsterDropCatalog.Load(pvf), items.Items, items.EpicPieces).Register(commands);
+            commands.Seal();
+            return commands;
+        }
+        (FormalDungeonReceipt Entry, Packet Death) Enter(Fixture f)
+        {
+            var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms)
+                ?? throw new InvalidOperationException("FAIL 正式通知fixture准入失败");
+            f.Session.CompleteFormalDungeonLoading();
+            var monster = entry.Monsters.Monsters[0];
+            return (entry, new(1, 39, Death(monster.ObjectKey, entry.Character.Id, checked((byte)monster.CandidateLevel))));
+        }
+        async Task StorageFailureAsync(bool lostResult)
+        {
+            using var f = new Fixture(towns, characters, learning, lostResult);
+            var (entry, death) = Enter(f);
+            var previous = f.Session.Selected!;
+            var commands = Registry(f);
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput();
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            if (!lostResult)
+                f.Sql("CREATE TRIGGER publication_fail AFTER INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'formal publication rollback'); END");
+            await RejectAsync(lostResult ? typeof(IOException) : typeof(SqliteException),
+                () => commands.DispatchAsync(context, death), "存储故障不伪装Handler成功");
+            Check(stream.Frames.Count == 0 && !stop.IsCancellationRequested && ReferenceEquals(f.Session.Selected, previous) &&
+                f.Session.DungeonSnapshot!.LivingMonsters.Contains(entry.Monsters.Monsters[0].ObjectKey),
+                "存储返回前失败不发死亡/经验，也不提前确认内存死亡");
+            if (lostResult)
+                Check(f.Count() == 1 && f.Read().Learning.Experience == kills.GetExperience(3) && f.LostResult!.Calls == 1,
+                    "模拟SQL已提交但返回结果丢失，持久角色与receipt真实存在");
+            else
+            {
+                Check(f.Count() == 0 && Same(previous, f.Read()), "真实SQL晚期失败回滚角色和receipt");
+                f.Sql("DROP TRIGGER publication_fail");
+            }
+            Check(await commands.DispatchAsync(context, death) == CommandResult.Handled, "原正文重试恢复原待提交事实");
+            Check(f.Count() == 1 && Same(f.Session.Selected!, f.Read()) && f.Read().Revision == previous.Revision + 1 &&
+                f.Read().Learning.Experience == kills.GetExperience(3), "重试不重复经验revision，只安装实际持久角色");
+            Check(stream.Opcodes.SequenceEqual(new ushort[] { 38, 37 }) && stream.Frames[1].Length == 16 + 91,
+                "明确提交/确认后仅发一次完整死亡与经验通知");
+            if (lostResult)
+                Check(f.LostResult!.Calls == 2 && f.LostResult.LastDuplicate && f.LostResult.SamePrepared,
+                    "结果不明恢复使用同一候选，命中持久receipt只读重放");
+            await commands.DispatchAsync(context, death);
+            Check(f.Count() == 1 && stream.Frames.Count == 2, "确认后再次重试没有通知或第二份经验");
+        }
+        async Task SendFailureAsync(int failedPacket)
+        {
+            using var f = new Fixture(towns, characters, learning, false);
+            var (entry, death) = Enter(f);
+            var previous = f.Session.Selected!;
+            var commands = Registry(f);
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput { FailOn = failedPacket };
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(2, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            await RejectAsync(typeof(IOException), () => commands.DispatchAsync(context, death), "首/次通知写入失败向上传递");
+            Check(stop.IsCancellationRequested && f.Count() == 1 && f.Read().Revision == previous.Revision + 1 &&
+                Same(f.Read(), f.Session.Selected!) && !f.Session.DungeonSnapshot!.LivingMonsters.Contains(entry.Monsters.Monsters[0].ObjectKey),
+                "发送失败结束连接，已提交经验与死亡确认保持一致");
+            Check(stream.Frames.Count == failedPacket - 1 && sender.PendingBytes == 0,
+                "部分发送故障只保留已写帧，释放发送预算");
+            await commands.DispatchAsync(context, death);
+            Check(f.Count() == 1 && stream.Frames.Count == failedPacket - 1, "失败后原报告不能再次发奖或补发成功");
+            f.Session.End();
+            f.Session.Select(f.Created.Slot);
+            f.Session.MarkReady();
+            Check(Same(f.Read(), f.Session.Selected!) && f.Session.DungeonSnapshot is null &&
+                f.Session.Selected!.DungeonState == entry.Character.DungeonState,
+                "重登恢复已提交经验和预留身份，丢弃断线实例");
+        }
+        async Task ReselectDuringSendAsync()
+        {
+            using var f = new Fixture(towns, characters, learning, false);
+            var (_, death) = Enter(f);
+            var commands = Registry(f);
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput { HoldOn = 1 };
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(3, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            var publication = commands.DispatchAsync(context, death);
+            try
+            {
+                await stream.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Check(f.Count() == 1 && Same(f.Read(), f.Session.Selected!) && !publication.IsCompleted,
+                    "网络等待期间死亡与经验已提交，不占账号owner锁");
+                f.Session.ReturnToRoster();
+                f.Session.Select(f.Created.Slot);
+                f.Session.MarkReady();
+            }
+            finally { stream.Release.TrySetResult(); }
+            Check(await publication.WaitAsync(TimeSpan.FromSeconds(5)) == CommandResult.Handled &&
+                stream.Opcodes.SequenceEqual(new ushort[] { 38 }) && !stop.IsCancellationRequested,
+                "重选后允许已经在途的首帧完成，拦截旧epoch后续经验通知");
+            Check(f.Session.Phase == SessionPhase.Town && f.Session.DungeonSnapshot is null && f.Count() == 1 && Same(f.Read(), f.Session.Selected!),
+                "旧通知收尾不恢复原run、不覆盖新选角或再次保存经验");
+        }
+        async Task ReturnDuringSendAsync()
+        {
+            using var f = new Fixture(towns, characters, learning, false);
+            var (first, _) = Enter(f);
+            var presence = new TownPresence(towns);
+            var commands = Registry(f, presence);
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput { HoldOn = 1 };
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(4, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            var publication = commands.DispatchAsync(context, new(1, 42, []));
+            FormalDungeonReceipt? second = null;
+            try
+            {
+                await stream.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Check(f.Session.Phase == SessionPhase.Town && f.Session.DungeonSnapshot is null && !publication.IsCompleted,
+                    "正式退出先结束原实例，再等待返回通知");
+                f.Session.ReturnToRoster();
+                f.Session.Select(f.Created.Slot);
+                f.Session.MarkReady();
+                Check(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                    "重选后从合法城镇入口再次准入，不能沿用旧副本位置");
+                second = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms);
+                Check(second is not null && second.Snapshot.Identity.InstanceId != first.Snapshot.Identity.InstanceId,
+                    "旧返回通知等待时新选角已建立另一副本");
+            }
+            finally { stream.Release.TrySetResult(); }
+            Check(await publication.WaitAsync(TimeSpan.FromSeconds(5)) == CommandResult.Handled &&
+                stream.Opcodes.SequenceEqual(new ushort[] { 42 }) && !stop.IsCancellationRequested,
+                "旧退出仅允许在途ACK结束，禁止向新副本发旧城镇切图");
+            Check(presence.Count == 0 && f.Session.Phase == SessionPhase.Loading &&
+                f.Session.CanPublishFormalDungeon(second!) && f.Session.Selected!.DungeonState!.LastAttempt == 2,
+                "迟到退出不把新副本角色加入城镇同屏，不破坏新run或身份预留");
+        }
+        async Task PickupLostResultAsync()
+        {
+            using var f = new Fixture(towns, characters, learning, true, losePickup: true);
+            var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, DungeonMonsterDropCatalog.Load(pvf), items.Items, bound => 0)!;
+            f.Session.CompleteFormalDungeonLoading();
+            var commands = Registry(f);
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput();
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(5, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            await commands.DispatchAsync(context, new(1, 39, Death(entry.Monsters.Monsters[0].ObjectKey, entry.Character.Id, 3)));
+            var old = f.Session.Selected!;
+            uint key = BinaryPrimitives.ReadUInt32LittleEndian(stream.Frames[0].AsSpan(20));
+            byte[] get = new byte[20];
+            BinaryPrimitives.WriteUInt32LittleEndian(get, key);
+            int sentBefore = stream.Frames.Count;
+            await RejectAsync(typeof(IOException), () => commands.DispatchAsync(context, new(1, 43, get)),
+                "拾取真实SQL已提交但返回值丢失，Handler不伪成功");
+            Check(ReferenceEquals(old, f.Session.Selected) && f.Read().Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 1 &&
+                stream.Frames.Count == sentBefore && f.Session.ReturnFromFormalDungeon() is null,
+                "未知拾取结果保留原准备和在线旧快照，已持久物品存在但不提前通知");
+            Check(await commands.DispatchAsync(context, new(1, 43, get)) == CommandResult.Handled && f.LostResult!.PickupCalls == 2 && f.LostResult.PickupDuplicate &&
+                Same(f.Read(), f.Session.Selected!) && f.Read().Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 1,
+                "原key恢复命中持久receipt，只安装实际角色，不加第二件");
+            Check(stream.Opcodes.Skip(sentBefore).SequenceEqual(new ushort[] { 39, 14, 43 }),
+                "原地面转移通知先于最终库存快照，成功ACK只收尾一次");
+        }
+    }
+
+    // 独立编码本版88B合成统计，故障测试通过正式Parser/Handler进入业务。
+    static byte[] Death(ushort key, ushort reporter, byte level)
+    {
+        byte[] bytes = new byte[88];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, key);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), reporter);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(18), 650);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(26), 1);
+        bytes[30] = 1;
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(31), 0x111);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(33), reporter);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(35), 600);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(43), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(56), level);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(60), 504);
+        byte[] digest = MD5.HashData(bytes.AsSpan(0, 84));
+        bytes[84] = (byte)(digest[0] ^ digest[13] ^ digest[8] ^ digest[10] ^ 0x81);
+        bytes[85] = (byte)(digest[1] ^ digest[9] ^ digest[5] ^ digest[12] ^ 0x78);
+        bytes[86] = (byte)(digest[2] ^ digest[6] ^ digest[14] ^ digest[4] ^ 0x1A);
+        bytes[87] = (byte)(digest[3] ^ digest[15] ^ digest[11] ^ digest[7] ^ 0xBF);
+        return bytes;
+    }
+    static void Check(bool condition, string name) => TestCheck.That(condition, name);
+    static bool Same(Character first, Character second) => JsonSerializer.Serialize(first) == JsonSerializer.Serialize(second);
+    static async Task RejectAsync(Type expected, Func<Task> action, string name)
+    {
+        try { await action().WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (Exception ex) when (expected.IsInstanceOfType(ex)) { Check(true, name); return; }
+        throw new InvalidOperationException("FAIL 未遇到预期故障: " + name);
+    }
+    sealed class ControlledOutput : MemoryStream
+    {
+        public int FailOn { get; init; }
+        public int HoldOn { get; init; }
+        int writes;
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<byte[]> Frames { get; } = [];
+        public IEnumerable<ushort> Opcodes => Frames.Select(frame => BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)));
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            int number = ++writes;
+            if (number == HoldOn)
+            {
+                Started.TrySetResult();
+                await Release.Task.WaitAsync(cancellationToken);
+            }
+            if (number == FailOn) throw new IOException("合成正式副本通知写入故障");
+            Frames.Add(buffer.ToArray());
+        }
+    }
+    sealed class Fixture : IDisposable
+    {
+        readonly string root = Path.Combine(Path.GetTempPath(), "S5A9-formal-publication-" + Guid.NewGuid().ToString("N"));
+        readonly string path;
+        readonly CharacterRepository repository;
+        public AccountOwners.Lease Owner { get; }
+        public GameSession Session { get; }
+        public Character Created { get; }
+        public ServerLog Log { get; }
+        public LostResultRepository? LostResult { get; }
+        public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, bool lostResult, bool losePickup = false)
+        {
+            path = Path.Combine(root, "game.db");
+            repository = new(path);
+            Owner = new AccountOwners().Acquire("formal-publication", () => { });
+            LostResult = lostResult ? new(repository, loseGrowth: !losePickup, losePickup: losePickup) : null;
+            Session = new(LostResult is null ? repository : LostResult, towns, Owner);
+            Created = Session.CreateCharacter("FormalSend", characters.Get(0), learning);
+            Session.Select(Created.Slot);
+            Session.MarkReady();
+            Check(Session.LeaveRoom() && Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "通知fixture由合法城镇入口准备");
+            Log = new(Path.Combine(root, "logs"));
+        }
+        public Character Read() => repository.LoadCharacter(Owner, Created.Slot);
+        public long Count()
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "SELECT count(*) FROM character_dungeon_growth_receipts";
+            return Convert.ToInt64(command.ExecuteScalar());
+        }
+        public void Sql(string sql)
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+        public void Dispose()
+        {
+            Log.Dispose();
+            Owner.Dispose();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+    // 故障注入只丢弃真实仓储第一次提交后的返回值，不伪造SQL结果或领域确认。
+    sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false) : ICharacterRepository
+    {
+        PreparedDungeonDeath? first;
+        public int Calls { get; private set; }
+        public bool LastDuplicate { get; private set; }
+        public bool SamePrepared { get; private set; }
+        public int PickupCalls { get; private set; }
+        public bool PickupDuplicate { get; private set; }
+        public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
+            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null)
+        {
+            Calls++;
+            first ??= prepared;
+            SamePrepared = ReferenceEquals(first, prepared);
+            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot);
+            LastDuplicate = result.Duplicate;
+            if (Calls == 1 && loseGrowth) throw new IOException("合成SQL已提交但结果丢失");
+            return result;
+        }
+        public AccountWallet LoadAccountWallet(AccountOwners.Lease owner) => inner.LoadAccountWallet(owner);
+        public CharacterRosterEntry[] ListRoster(AccountOwners.Lease owner) => inner.ListRoster(owner);
+        public Character LoadCharacter(AccountOwners.Lease owner, ushort slot) => inner.LoadCharacter(owner, slot);
+        public Character[] List(AccountOwners.Lease owner) => inner.List(owner);
+        public bool NameExists(string name) => inner.NameExists(name);
+        public Character Create(AccountOwners.Lease owner, NewCharacter character) => inner.Create(owner, character);
+        public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back) => inner.Save(owner, expected, position, back);
+        public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitLearning(owner, expected, learning);
+        public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
+        public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
+        public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);
+        public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
+            DungeonGroundPickupPreparation prepared, InventoryPlan plan)
+        {
+            PickupCalls++;
+            var result = inner.CommitDungeonPickup(owner, expected, prepared, plan);
+            PickupDuplicate = result.Duplicate;
+            if (PickupCalls == 1 && losePickup) throw new IOException("合成拾取已提交但返回结果丢失");
+            return result;
+        }
+    }
+}

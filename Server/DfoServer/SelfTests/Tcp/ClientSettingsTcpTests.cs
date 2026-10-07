@@ -159,7 +159,7 @@ internal static class ClientSettingsTcpTests
         }
         await CharacterScopeAsync(fixture);
         await fixture.StopAsync();
-        That(fixture.Query("PRAGMA user_version") is [[7L]] && fixture.Query("PRAGMA integrity_check") is [["ok"]]
+        That(fixture.Query("PRAGMA user_version") is [[long version]] && version == DfoServer.Persistence.SqliteMigrations.CurrentVersion && fixture.Query("PRAGMA integrity_check") is [["ok"]]
             && fixture.Query("PRAGMA foreign_key_check").Length == 0, "设置TCP数据库版本及完整性正常");
     }
 

@@ -19,7 +19,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public bool SelectionRosterPushed { get; set; }
     // 可选活动只暴露操作门禁与连接收尾；具体状态由对应模块拥有。
     public IGameConnectionActivity? Activity { get; } = activity;
-    public bool BlocksTownActions => Activity?.BlocksTownActions == true;
+    public bool BlocksTownActions => Activity?.BlocksTownActions == true ||
+        Session.Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement;
 
     public Task Reply(CmdPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.Send(1, (ushort)opcode, body, action, canSend);
     public Task Notify(NotiPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.Send(0, (ushort)opcode, body, action, canSend);

@@ -13,31 +13,44 @@ internal static class ClientNoticeTests
         Check(!ClientNotices.TryParse(16, new byte[25], out _), "dungeon selection belongs to the dungeon module");
         Check(!ClientNotices.TryParse(37, new byte[8], out _), "finish loading belongs to the dungeon module");
         Check(!ClientNotices.TryParse(37, new byte[4], out _), "finish loading other width stays unrecognized");
-        Check(ClientNotices.TryParse(38, new byte[10], out var skill) && skill.Action == "use_skill" && skill.Detail.Length == 6 + 20, "use skill records ten bytes");
+        Check(ClientNotices.TryParse(38, new byte[10], out var skill) && skill.Action == "use_skill" &&
+            skill.Detail == "bytes=00000000000000000000 checksum=absent", "use skill records ten bytes without a checksum");
         Check(!ClientNotices.TryParse(38, new byte[9], out _), "use skill other width stays unrecognized");
         // 独立固定预期来自匹配ARAD正常战斗的三类实收样本，不以解析结果反算预期。
         (string Hex, ushort At1, ushort At3, ushort At5, string Tail)[] uses =
         [
             ("002E00D00729000001004AADA701", 46, 2000, 41, "4AADA701"),
             ("0005007017234800010052760356", 5, 6000, 18467, "52760356"),
-            ("00A9000000F16D000100DD2A7E19", 169, 0, 28145, "DD2A7E19")
+            ("00A9000000F16D000100DD2A7E19", 169, 0, 28145, "DD2A7E19"),
+            ("00050070172900000100D260CC5C", 5, 6000, 41, "D260CC5C")
         ];
         foreach (var sample in uses)
         {
             byte[] body = Convert.FromHexString(sample.Hex);
             Check(SkillRequests.TryParseUse(body, out var use) && use is not null && use.Unknown0 == 0 &&
                 use.Unknown1 == sample.At1 && use.Unknown3 == sample.At3 && use.Unknown5 == sample.At5 &&
-                use.Unknown7 == 0 && use.Unknown8 == 1 && use.RemainingFields.SequenceEqual(Convert.FromHexString(sample.Tail)),
-                "actual skill use preserves all field widths and the four unknown trailing bytes");
+                use.Unknown7 == 0 && use.Unknown8 == 1 && use.RemainingFields.SequenceEqual(Convert.FromHexString(sample.Tail)) &&
+                use.BodyChecksum == BinaryPrimitives.ReadUInt32LittleEndian(Convert.FromHexString(sample.Tail)) &&
+                use.ChecksumMatches == true,
+                "actual skill use preserves all fields and matches the independent body checksum sample");
             Check(ClientNotices.TryParse(38, body, out var actual) && actual.Action == "use_skill" &&
-                actual.Detail == "bytes=" + sample.Hex, "actual fourteen-byte skill use reaches the observation handler");
+                actual.Detail == "bytes=" + sample.Hex + " checksum=matched", "actual fourteen-byte skill use reaches the observation handler");
             body[10] ^= 255;
             Check(use!.RemainingFields.SequenceEqual(Convert.FromHexString(sample.Tail)) &&
-                use.RemainingFields is System.Collections.IList frozen && frozen.IsReadOnly,
-                "skill use owns an immutable copy of the unknown suffix");
+                use.RemainingFields is System.Collections.IList frozen && frozen.IsReadOnly && use.ChecksumMatches == true,
+                "skill use owns an immutable copy of the suffix and the original checksum result");
+            Check(SkillRequests.TryParseUse(body, out var badChecksum) && badChecksum!.ChecksumMatches == false &&
+                badChecksum.BodyChecksum != use.BodyChecksum && ClientNotices.TryParse(38, body, out var mismatch) &&
+                mismatch.Detail == "bytes=" + Convert.ToHexString(body) + " checksum=mismatched",
+                "checksum mismatch remains recorded while the current producer and consumer await verification");
+            body = Convert.FromHexString(sample.Hex);
+            body[1] ^= 1;
+            Check(SkillRequests.TryParseUse(body, out var badBody) && badBody!.ChecksumMatches == false &&
+                badBody.BodyChecksum == use.BodyChecksum, "a changed body does not match the unchanged checksum");
         }
-        Check(SkillRequests.TryParseUse(new byte[10], out var original) && original!.RemainingFields.Count == 0,
-            "original ten-byte writer footprint has no fabricated suffix");
+        Check(SkillRequests.TryParseUse(new byte[10], out var original) && original!.RemainingFields.Count == 0 &&
+            original.BodyChecksum is null && original.ChecksumMatches is null,
+            "original ten-byte writer footprint has no fabricated suffix or checksum result");
         foreach (int length in new[] { 0, 9, 11, 12, 13, 15, 88 })
             Check(!SkillRequests.TryParseUse(new byte[length], out var invalid) && invalid is null &&
                 !ClientNotices.TryParse(38, new byte[length], out _), "unsupported skill use length remains unhandled " + length);

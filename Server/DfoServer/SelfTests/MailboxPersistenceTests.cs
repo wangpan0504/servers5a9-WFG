@@ -208,19 +208,19 @@ internal static class MailboxPersistenceTests
     static void Migration()
     {
         using var f = new Fixture();
-        string character = JsonSerializer.Serialize(f.ReadSender());
-        const string dropSettings = "DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings;";
+        string character = JsonSerializer.Serialize(f.ReadSender() with { DungeonState = null });
+        const string dropSettings = "DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings;";
         const string dropMail = dropSettings + "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages;";
         f.Execute(dropMail + "DROP TABLE character_dungeon_growth_receipts; ALTER TABLE account_wallets DROP COLUMN rental_points; PRAGMA user_version=1;");
         var upgraded = new CharacterRepository(f.Path);
         TestCheck.That(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion &&
-            JsonSerializer.Serialize(upgraded.LoadCharacter(f.SenderOwner, 0)) == character,
+            JsonSerializer.Serialize(upgraded.LoadCharacter(f.SenderOwner, 0) with { DungeonState = null }) == character,
             "v1升级完整结构保留全部原角色、库存、UID及详情");
         f.Execute("INSERT INTO account_wallets(account,rental_points) VALUES('sender',123);");
-        character = JsonSerializer.Serialize(f.ReadSender());
+        character = JsonSerializer.Serialize(f.ReadSender() with { DungeonState = null });
         f.Execute(dropMail + "DROP TABLE character_dungeon_growth_receipts; PRAGMA user_version=2;");
         upgraded = new CharacterRepository(f.Path);
-        TestCheck.That(JsonSerializer.Serialize(upgraded.LoadCharacter(f.SenderOwner, 0)) == character &&
+        TestCheck.That(JsonSerializer.Serialize(upgraded.LoadCharacter(f.SenderOwner, 0) with { DungeonState = null }) == character &&
             f.Query("SELECT rental_points FROM account_wallets WHERE account='sender'") is 123L,
             "master v2升级保留租赁点数及原资产");
         f.Execute(dropMail + "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_source TO resource_sha256; PRAGMA user_version=3;");
@@ -230,7 +230,7 @@ internal static class MailboxPersistenceTests
                 'legacy-rule','legacy-resource-marker',1,1,95,95,0,1,1);
             """);
         upgraded = new CharacterRepository(f.Path);
-        TestCheck.That(JsonSerializer.Serialize(upgraded.LoadCharacter(f.SenderOwner, 0)) == character &&
+        TestCheck.That(JsonSerializer.Serialize(upgraded.LoadCharacter(f.SenderOwner, 0) with { DungeonState = null }) == character &&
             f.Query("SELECT resource_source FROM character_dungeon_growth_receipts") is "legacy-resource-marker",
             "master v3升级保留成长账本历史来源值和全部资产");
         string before = f.Snapshot();

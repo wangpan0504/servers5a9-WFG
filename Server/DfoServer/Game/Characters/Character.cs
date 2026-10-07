@@ -17,6 +17,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public ActiveMainQuest[] ActiveMainQuests { get; init; } = [];
     public CharacterLearningState Learning { get; init; } = CharacterLearningState.Uninitialized;
     public InventorySnapshot Inventory { get; init; } = InventorySnapshot.Empty;
+    public CharacterDungeonState? DungeonState { get; init; }
 }
 
 internal sealed record ActiveMainQuest(byte Slot, ushort QuestId, uint ConditionState);
@@ -33,6 +34,7 @@ internal sealed record NewCharacter(string Name, Location Position, Location? Re
     public ActiveMainQuest[] ActiveMainQuests { get; init; } = [];
     public CharacterLearningState InitialLearning { get; init; } = CharacterLearningState.Uninitialized;
     public InventorySnapshot Inventory { get; init; } = InventorySnapshot.Empty;
+    public CharacterDungeonState? DungeonState { get; init; }
 
     public void Validate()
     {
@@ -48,6 +50,7 @@ internal sealed record NewCharacter(string Name, Location Position, Location? Re
             ActiveMainQuests.Select(quest => quest.Slot).Distinct().Count() != ActiveMainQuests.Length)
             throw new InvalidDataException("Invalid active main quests");
         InitialLearning.Validate();
+        DungeonState?.Validate();
         Inventory.Validate(allocating: true);
         if (!Inventory.AccountWallet.Same(DfoServer.Game.Currency.AccountWallet.Empty))
             throw new InvalidDataException("建角只初始化角色资产，账号余额由当前账号装载");

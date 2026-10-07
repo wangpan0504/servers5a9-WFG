@@ -42,7 +42,9 @@ internal static class ServerRuntime
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
-            dungeon = new DungeonHandler(log);
+            dungeon = new DungeonHandler(log, DungeonCatalog.Load(pvf), DungeonRoomCatalog.Load(pvf),
+                CharacterGrowthCatalog.Load(pvf), DungeonKillExperienceCatalog.Load(pvf), projection,
+                DungeonMonsterDropCatalog.Load(pvf), itemResources.Items, itemResources.EpicPieces);
         }
         else
         {

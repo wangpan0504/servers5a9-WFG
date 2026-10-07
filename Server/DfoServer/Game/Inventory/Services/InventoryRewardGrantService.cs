@@ -51,9 +51,7 @@ internal static class InventoryRewardGrantService
         var inventory = character.Inventory;
         var wallet = inventory;
         var currencies = new CurrencyService(goldLimits);
-        var planned = inventory.Items.ToDictionary(item => item.Position);
-        Dictionary<(InventoryListType List, int ItemId), List<short>>? stacks = null;
-        var freeSlots = new Dictionary<(InventoryListType List, short Start, short End), short>();
+        var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId));
         var now = utcNow ?? DateTimeOffset.UtcNow;
         for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
@@ -81,24 +79,88 @@ internal static class InventoryRewardGrantService
             var template = catalog.Get(reward.ItemId);
             if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
                 return InventoryResult.Reject();
-            int remaining = reward.Count;
             var prototype = instances is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement) : instances[rewardIndex].Core;
             if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || instances?[rewardIndex].IsExpired(now.ToUnixTimeSeconds()) == true)
                 return InventoryResult.Reject(19);
             if (prototype.IsExpired(now.ToUnixTimeSeconds()))
                 return InventoryResult.Reject(19);
+            if (!placement.TryAdd(template, prototype, reward.Count, instances?[rewardIndex]))
+                return InventoryResult.Reject(17);
+        }
+
+        var after = wallet with { Items = placement.Items() };
+        after.Validate(allocating: true);
+        return new(true, 0, new(inventory, after, "reward_grant"));
+    }
+
+    // 地面等业务提供已冻结的完整核心；此入口不接存量UID，不确认来源资格或重复拾取。
+    public static InventoryResult TryGrantCore(Character character, ItemCore core, ItemTemplate template,
+        EpicPieceCatalog pieces, DateTimeOffset? utcNow = null)
+    {
+        ArgumentNullException.ThrowIfNull(character);
+        ArgumentNullException.ThrowIfNull(core);
+        ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(pieces);
+        if (core.ItemId != template.Id || core.Kind != template.Kind ||
+            core.Kind != ItemKind.Equipment && !core.IsStackable ||
+            CurrencyWallet.RewardKind(core.ItemId) is not null || pieces.ByPiece.ContainsKey(core.ItemId))
+            return InventoryResult.Reject();
+        try
+        {
+            core.Validate();
+        }
+        catch (InvalidDataException)
+        {
+            return InventoryResult.Reject();
+        }
+        if (core.IsExpired((utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds()))
+            return InventoryResult.Reject(19);
+        if (core.Count > template.StackLimit)
+            return InventoryResult.Reject(17);
+
+        // ItemCore及其附属值均不可变，直接共享完整核心；不重新Create或计算期限。
+        var inventory = character.Inventory;
+        var placement = new RewardPlacement(inventory, [core.ItemId]);
+        if (!placement.TryAdd(template, core, core.Count))
+            return InventoryResult.Reject(17);
+        var after = inventory with { Items = placement.Items() };
+        after.Validate(allocating: true);
+        return new(true, 0, new(inventory, after, "reward_grant_core"));
+    }
+
+    // 两个grant入口共用一次规划内的放置集合与索引；不是另一份在线背包owner。
+    sealed class RewardPlacement
+    {
+        readonly InventorySnapshot inventory;
+        readonly IEnumerable<int> itemIds;
+        readonly Dictionary<InventorySlot, InventoryItem> planned;
+        Dictionary<(InventoryListType List, int ItemId), List<short>>? stacks;
+        readonly Dictionary<(InventoryListType List, short Start, short End), short> freeSlots = [];
+
+        public RewardPlacement(InventorySnapshot inventory, IEnumerable<int> itemIds)
+        {
+            this.inventory = inventory;
+            this.itemIds = itemIds;
+            planned = inventory.Items.ToDictionary(item => item.Position);
+        }
+
+        public ImmutableArray<InventoryItem> Items() => planned.Values.OrderBy(item => item.Position.List)
+            .ThenBy(item => item.Position.Index).ToImmutableArray();
+
+        public bool TryAdd(ItemTemplate template, ItemCore prototype, int remaining, InventoryItem? instance = null)
+        {
             var range = ItemSlotBoundService.Range(template.Kind, inventory.Expansion);
             var list = ItemSlotBoundService.List(template.Kind);
             if (prototype.IsStackable)
             {
                 // 自动发放只向首个兼容堆叠完整入库，不能靠拆成新格绕过该次入库上限。
                 if (remaining > template.StackLimit)
-                    return InventoryResult.Reject(17);
+                    return false;
                 // 索引只缩小候选范围，完整属性兼容仍由同一个堆叠规则决定。
                 if (stacks is null)
                 {
                     stacks = [];
-                    var wanted = rewards.Select(row => row.ItemId).ToHashSet();
+                    var wanted = itemIds.ToHashSet();
                     foreach (var existing in planned.Values)
                     {
                         if (!wanted.Contains(existing.Core.ItemId) || !existing.Core.IsStackable || existing.Core.EquipmentLockId != 0)
@@ -125,7 +187,7 @@ internal static class InventoryRewardGrantService
                 if (item is not null)
                 {
                     if (!InventoryStackRuleService.CanMerge(prototype, item.Core, remaining, template.StackLimit))
-                        return InventoryResult.Reject(17);
+                        return false;
                     planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + remaining) } };
                     remaining = 0;
                 }
@@ -140,7 +202,7 @@ internal static class InventoryRewardGrantService
                     continue;
                 int count = Math.Min(remaining, template.StackLimit);
                 var core = prototype.IsStackable ? prototype with { Value = count } : prototype;
-                planned.Add(position, instances is null ? CreateItem(template, position, core) : instances[rewardIndex] with { Position = position, Core = core });
+                planned.Add(position, instance is null ? CreateItem(template, position, core) : instance with { Position = position, Core = core });
                 if (prototype.IsStackable)
                 {
                     var key = (list, prototype.ItemId);
@@ -154,13 +216,8 @@ internal static class InventoryRewardGrantService
             // 发放只新增或合并，不产生空格；本次操作内的页面游标可单调前进。
             freeSlots[page] = slot;
 
-            if (remaining != 0)
-                return InventoryResult.Reject(17);
+            return remaining == 0;
         }
-
-        var after = wallet with { Items = planned.Values.OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() };
-        after.Validate(allocating: true);
-        return new(true, 0, new(inventory, after, "reward_grant"));
     }
 
     public static InventoryItem CreateItem(ItemTemplate template, InventorySlot position, ItemCore core)

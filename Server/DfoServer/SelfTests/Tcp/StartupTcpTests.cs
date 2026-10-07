@@ -39,7 +39,10 @@ internal static class StartupTcpTests
         command.CommandText = "PRAGMA integrity_check";
         TestCheck.That((string?)command.ExecuteScalar() == "ok", "CLI startup and restart preserve SQLite integrity");
         command.CommandText = "PRAGMA user_version";
-        TestCheck.That(command.ExecuteScalar() is long version && version == DfoServer.Persistence.SqliteMigrations.CurrentVersion, "CLI database starts at current release schema");
+        TestCheck.That(command.ExecuteScalar() is long version && version == Persistence.SqliteMigrations.CurrentVersion,
+            "CLI新建和实际服务重启均保持当前结构版本");
+        command.CommandText = "SELECT count(*) FROM character_dungeon_growth_receipts";
+        TestCheck.That(command.ExecuteScalar() is 0L, "CLI创建与重启保留空成长账本，不凭启动发奖");
         command.CommandText = "SELECT value FROM schema_metadata WHERE key='baseline_id'";
         TestCheck.That(command.ExecuteScalar() is Persistence.SqliteMigrations.BaselineId, "CLI database has the S5A9 baseline");
         command.CommandText = "SELECT count(*) FROM accounts WHERE account_id='different-source'";

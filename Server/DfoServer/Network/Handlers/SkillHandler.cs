@@ -14,6 +14,12 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
     private async Task<CommandResult> PurchaseAsync(GameConnectionContext context, Packet packet)
     {
         var parsed = SkillRequests.ParsePurchase(packet.Body);
+        // 原版坏检查值的拒绝合同尚未确认；只记录匹配结果，不把检查值当成学习资格。
+        log.Write("skill_purchase_request", new
+        {
+            Connection = context.Id, parsed.Context, parsed.Mode, Count = parsed.Items.Count,
+            Length = packet.Body.Length, parsed.BodyChecksum, parsed.ChecksumMatches
+        });
         if (context.BlocksTownActions || parsed.Items.Any(item => item.Decrease > 1))
             return CommandResult.CloseConnection;
         var request = new SkillLearningCommand(parsed.Context, parsed.Mode, Array.AsReadOnly(parsed.Items

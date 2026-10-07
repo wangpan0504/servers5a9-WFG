@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders.Inventory;
@@ -22,6 +24,74 @@ internal static class DungeonPackets
 
     // ACK16 成功标志为 1 时，0233B36D 不再读后续字段。这只确认导航房间已建立，不代替地图或怪物初始化。
     public static byte[] SelectionAccepted() => [1];
+
+    // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。
+    public static byte[] Information(DungeonEntryPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        byte[] body = new byte[36];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, checked((uint)plan.DungeonId));
+        body[4] = plan.Difficulty;
+        body[7] = checked((byte)plan.Maze.SourceOrdinal);
+        body[8] = checked((byte)plan.BossMap.Position.X);
+        body[9] = checked((byte)plan.BossMap.Position.Y);
+        body[10] = byte.MaxValue;
+        body[11] = byte.MaxValue;
+        // 未解释字段保持匹配形状：offset16的u16为0，offset20的FFFFFFFF选择跳过分支。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(20), uint.MaxValue);
+        return body;
+    }
+
+    // NOTI29空名单为23B；seed由调用方显式提供，不能在Builder推导资源或实例随机规则。
+    public static byte[] StartMap(DungeonEntryPlan plan, uint seed)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        byte[] body = new byte[23];
+        body[0] = checked((byte)plan.StartMap.Position.X);
+        body[1] = checked((byte)plan.StartMap.Position.Y);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(3), seed);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), 1);
+        body[13] = 1;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(14), checked((uint)plan.StartMap.Id));
+        // 三个空列表及fog字段保留0，FF跳过成员选择；不代替NOTI28的格记录初始化。
+        body[22] = byte.MaxValue;
+        return body;
+    }
+
+    // NOTI29每个已规划monster完整22B；等级和类型由领域确定，不在此解释资源行。
+    public static byte[] StartMap(DungeonEntryPlan plan, DungeonMonsterPlan monsters, uint seed)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(monsters);
+        if (monsters.Room.Map != plan.StartMap || monsters.Monsters.Count > byte.MaxValue)
+            throw new InvalidDataException("怪物计划与房间不匹配或超过通知数量范围");
+        byte[] empty = StartMap(plan, seed);
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(empty.AsSpan(0, 18));
+        writer.Write(checked((byte)monsters.Monsters.Count));
+        foreach (var monster in monsters.Monsters)
+        {
+            if (monster.CandidateLevel is < 1 or > byte.MaxValue)
+                throw new NotSupportedException("怪物生成等级超出单字节范围");
+            if (monster.SpawnType is not (0 or 3))
+                throw new NotSupportedException("怪物生成类型不是已核验的普通或Boss类型");
+            writer.Write((ushort)0);
+            writer.Write(checked((uint)monster.SourceOrdinal));
+            writer.Write(monster.ObjectKey);
+            writer.Write(checked((uint)monster.MonsterId));
+            writer.Write(checked((byte)monster.CandidateLevel));
+            writer.Write(monster.SpawnType);
+            writer.Write((byte)0);
+            writer.Write((byte)0);
+            // 行offset16为必读有符号创建组，FF对应-1，不能省略或挪作等级/类型。
+            writer.Write(byte.MaxValue);
+            writer.Write(0u);
+            writer.Write((byte)0);
+        }
+        writer.Write(empty.AsSpan(19));
+        return stream.ToArray();
+    }
 
     // NOTI30 在 023842FC/0238434A 读取 u32 和 u8。当前普通路径是五个 0。
     public static byte[] LoadingNotice() => new byte[5];

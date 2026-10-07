@@ -26,7 +26,13 @@ internal static class SqliteMigrations
             foreach (string statement in ClientSettingsSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                 Execute(db, tx, statement);
         }),
-        new(7, "角色主设置快照", static (db, tx) => Execute(db, tx, CharacterGameSettingsSchema))
+        new(7, "角色主设置快照", static (db, tx) => Execute(db, tx, CharacterGameSettingsSchema)),
+        new(8, "角色副本身份及成长附属owner", static (db, tx) => Execute(db, tx, DungeonOwnerSchema)),
+        new(9, "副本冻结掉落与拾取账本", static (db, tx) =>
+        {
+            Execute(db, tx, DungeonLootSchema);
+            Execute(db, tx, DungeonPickupSchema);
+        })
     ];
 
     // 只新增事实账本，不补发存量角色经验或点数。
@@ -50,6 +56,47 @@ internal static class SqliteMigrations
         FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
         """;
     public static int CurrentVersion => Steps.Length == 0 ? BaselineVersion : Steps[^1].Version;
+    private const string DungeonLootSchema = """
+        CREATE TABLE character_dungeon_loot_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
+          instance_id TEXT NOT NULL,task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
+          epoch INTEGER NOT NULL CHECK(epoch>0),map_id INTEGER NOT NULL,
+          monster_key INTEGER NOT NULL CHECK(monster_key BETWEEN 1 AND 65535),
+          rule_id TEXT NOT NULL,resource_source TEXT NOT NULL,
+          ground_key INTEGER CHECK(ground_key BETWEEN 1 AND 65535),
+          core TEXT CHECK(core IS NULL OR (json_valid(core) AND json_type(core)='object')),
+          x INTEGER CHECK(x BETWEEN 0 AND 65535),y INTEGER CHECK(y BETWEEN 0 AND 65535),
+          record_slot INTEGER CHECK(record_slot BETWEEN -32768 AND 32767),
+          CHECK((ground_key IS NULL AND core IS NULL AND x IS NULL AND y IS NULL AND record_slot IS NULL) OR
+            (ground_key IS NOT NULL AND core IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL AND record_slot IS NOT NULL)),
+          PRIMARY KEY(character_id,event_id),UNIQUE(character_id,ground_key),
+          FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        """;
+    private const string DungeonPickupSchema = """
+        CREATE TABLE character_dungeon_pickup_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
+          ground_key INTEGER NOT NULL CHECK(ground_key BETWEEN 1 AND 65535),
+          instance_id TEXT NOT NULL,task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
+          epoch INTEGER NOT NULL CHECK(epoch>0),destination_list INTEGER NOT NULL,
+          destination_slot INTEGER NOT NULL CHECK(destination_slot BETWEEN 0 AND 351),
+          item_uid INTEGER NOT NULL CHECK(item_uid BETWEEN 1 AND 2147483647),
+          after_core TEXT NOT NULL CHECK(json_valid(after_core) AND json_type(after_core)='object'),
+          revision INTEGER NOT NULL CHECK(revision>0),
+          PRIMARY KEY(character_id,event_id),UNIQUE(character_id,ground_key),
+          FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_loot_receipts(character_id,event_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        """;
+    private const string DungeonOwnerSchema = """
+        CREATE TABLE character_dungeon_state(
+          character_id INTEGER NOT NULL PRIMARY KEY,account TEXT NOT NULL,
+          next_object_key INTEGER NOT NULL CHECK(next_object_key BETWEEN 1 AND 65536),
+          last_attempt INTEGER NOT NULL CHECK(last_attempt>=0),
+          capsule_experience INTEGER NOT NULL CHECK(capsule_experience BETWEEN 0 AND 4294967295),
+          proficiency_level INTEGER NOT NULL CHECK(proficiency_level BETWEEN 0 AND 4294967295),
+          proficiency_experience INTEGER NOT NULL CHECK(proficiency_experience>=0),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        """;
 
     public static void Apply(SqliteConnection db) => Apply(db, Steps);
 
@@ -116,6 +163,9 @@ internal static class SqliteMigrations
     private static readonly string[] RequiredColumns =
     [
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
+        "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
+        "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",
+        "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience FROM character_dungeon_state LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts LIMIT 0",
         "SELECT [account_id],[salt],[password_hash],[iterations],[disabled],[revision] FROM [accounts] LIMIT 0",
         "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",

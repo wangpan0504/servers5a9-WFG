@@ -59,11 +59,17 @@ internal sealed class SinglePlayerDungeonRun
     private readonly HashSet<(DungeonPoint, DungeonPoint)> connections;
     private readonly Dictionary<Guid, ActionFact> acceptedActions = [];
     private readonly Dictionary<Guid, ConfirmedDungeonMonsterDeath> deaths = [];
+    private readonly HashSet<PreparedDungeonDeath> committedPreparations = [];
     private readonly HashSet<long> combatSequences = [];
     private PreparedDungeonDeath? pendingDeath;
     private Room current;
     private DungeonRunIdentity identity;
     public long StartCharacterRevision => entry.CharacterRevision;
+    internal uint DungeonId => entry.DungeonId;
+    internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
+    internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
+        Phase == SinglePlayerDungeonPhase.Dungeon && !current.Dead.Contains(key)
+            ? current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key) : null;
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()));
@@ -101,9 +107,10 @@ internal sealed class SinglePlayerDungeonRun
         foreach (DungeonMonsterPlan plan in approvedRoute.Rooms)
         {
             // 不把未支持生成规则或缺失资源行替换成空房间。
+            DungeonMonsterPlan resourcePlan;
             try
             {
-                DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1);
+                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException)
             {
@@ -112,7 +119,10 @@ internal sealed class SinglePlayerDungeonRun
             }
             if (plan.Monsters.Count != plan.Room.Monsters.Count || plan.Monsters.Any(monster => monster.SourceOrdinal < 0 ||
                 monster.SourceOrdinal >= plan.Room.Monsters.Count || monster.Source != plan.Room.Monsters[monster.SourceOrdinal] ||
-                monster.MonsterId != monster.Source.MonsterId || monster.ObjectKey == entry.CharacterId || !keys.Add(monster.ObjectKey)) ||
+                monster.MonsterId != monster.Source.MonsterId ||
+                monster.CandidateLevel != resourcePlan.Monsters[monster.SourceOrdinal].CandidateLevel ||
+                monster.SpawnType != resourcePlan.Monsters[monster.SourceOrdinal].SpawnType ||
+                monster.ObjectKey == entry.CharacterId || !keys.Add(monster.ObjectKey)) ||
                 plan.Monsters.Select(monster => monster.SourceOrdinal).Distinct().Count() != plan.Monsters.Count)
             {
                 reason = "invalid: 房间怪物身份不完整或重复";
@@ -234,6 +244,8 @@ internal sealed class SinglePlayerDungeonRun
 
     // 只接受本实例当前准备对象，不能用另一实例或重新构造的候选确认提交。
     public bool IsPendingDeath(PreparedDungeonDeath prepared) => prepared is not null && ReferenceEquals(pendingDeath, prepared);
+    internal bool IsConfirmedDeath(PreparedDungeonDeath prepared) => prepared is not null && committedPreparations.Contains(prepared) &&
+        deaths.TryGetValue(prepared.Death.EventId, out var accepted) && ReferenceEquals(accepted, prepared.Death);
 
     public DungeonRunResult ConfirmCommittedDeath(PreparedDungeonDeath prepared)
     {
@@ -248,6 +260,7 @@ internal sealed class SinglePlayerDungeonRun
         current.Dead.Add(confirmed.MonsterKey);
         combatSequences.Add(confirmed.CombatSequence);
         deaths.Add(confirmed.EventId, confirmed);
+        committedPreparations.Add(prepared);
         identity = prepared.Result.Snapshot.Identity;
         Phase = prepared.Result.Snapshot.Phase;
         pendingDeath = null;

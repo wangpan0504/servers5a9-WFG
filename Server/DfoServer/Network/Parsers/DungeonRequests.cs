@@ -4,9 +4,11 @@ namespace DfoServer.Network.Parsers;
 
 internal readonly record struct DungeonEntryRequest(uint DungeonIndex);
 internal sealed record DungeonMoveRequest(byte X, byte Y, uint Unknown2, uint Unknown6, byte Unknown10, IReadOnlyList<byte> RemainingFields);
-internal sealed record DungeonDeathParticipant(ushort Kind, ushort ObjectKey, ulong UnknownValue, ushort UnknownCount);
+// 目标实例按来源记录的正HP降低量及次数；原生setter统计在夹取前计算，允许overkill，不是服务端伤害模拟。
+internal sealed record DungeonDeathParticipant(ushort Kind, ushort ObjectKey, ulong CumulativeHpDecrease, ushort PositiveHpDecreaseCount);
 internal sealed record DungeonSinglePlayerDeathStatistics(ulong Unknown6, uint Unknown14, ulong Unknown18, uint Unknown26,
-    DungeonDeathParticipant Participant, IReadOnlyList<byte> RemainingFields);
+    DungeonDeathParticipant Participant, byte RewriteFlag, uint SpawnLevel, ulong SpawnHpSnapshot,
+    uint BodyChecksum, bool ChecksumMatches, IReadOnlyList<byte> RemainingFields);
 internal sealed record DungeonDeathRequest(uint ObjectKey, ushort Reporter, IReadOnlyList<byte> RemainingFields)
 {
     public DungeonSinglePlayerDeathStatistics? SinglePlayerStatistics { get; init; }
@@ -52,9 +54,13 @@ internal static class DungeonRequests
         var participant = new DungeonDeathParticipant(BinaryPrimitives.ReadUInt16LittleEndian(body[31..]),
             BinaryPrimitives.ReadUInt16LittleEndian(body[33..]), BinaryPrimitives.ReadUInt64LittleEndian(body[35..]),
             BinaryPrimitives.ReadUInt16LittleEndian(body[43..]));
+        uint checksum = BinaryPrimitives.ReadUInt32LittleEndian(body[84..]);
+        // 029083A0写改写标志、等级getter及this+1140的创建HP快照；快照不是新恢复的原版maxHP公式。
+        // 末4B由通用发送前处理追加。这里只报告检查结果，原诊断长度接受行为不据此改变。
         statistics = new(BinaryPrimitives.ReadUInt64LittleEndian(body[6..]), BinaryPrimitives.ReadUInt32LittleEndian(body[14..]),
             BinaryPrimitives.ReadUInt64LittleEndian(body[18..]), BinaryPrimitives.ReadUInt32LittleEndian(body[26..]),
-            participant, Array.AsReadOnly(body[45..].ToArray()));
+            participant, body[55], BinaryPrimitives.ReadUInt32LittleEndian(body[56..]), BinaryPrimitives.ReadUInt64LittleEndian(body[60..]),
+            checksum, checksum == ClientBodyChecksum.Compute(body[..84]), Array.AsReadOnly(body[45..].ToArray()));
         return true;
     }
     public static bool TryParseMove(ReadOnlySpan<byte> body, out DungeonMoveRequest? request)

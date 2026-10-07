@@ -11,7 +11,8 @@ internal sealed partial class CharacterRepository
     // reward必须来自明确业务规则。此入口不生成额度，不接诊断死亡或网络字段。
     // 成功返回后调用方在原owner内确认死亡并发布Selected；这里不修改实例或发送通知。
     public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected,
-        SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog) => owner.Execute(() =>
+        SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog,
+        FrozenDungeonGroundDeath? loot = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -55,6 +56,7 @@ internal sealed partial class CharacterRepository
         // 同ID重读返回当前持久角色；不根据旧expected再次加经验，也不重发清图事实。
         if (duplicate)
         {
+            VerifyDungeonLoot(db, tx, owner.Account, expected.Id, prepared.Death.EventId, loot);
             tx.Commit();
             return new DungeonGrowthCommit(current, true);
         }
@@ -119,6 +121,7 @@ internal sealed partial class CharacterRepository
               $rule,$resource,$monster,$monsterLevel,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision)
             """;
         command.ExecuteNonQuery();
+        SaveDungeonLoot(db, tx, owner.Account, expected, prepared, loot);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");

@@ -122,6 +122,16 @@ internal static class SinglePlayerDungeonRunTests
             "all rooms share one unique object key namespace");
         Check(!SinglePlayerDungeonRun.TryCreate(entry, 1, 23, route with { Rooms = [Plan(a, 99, 11), .. route.Rooms.Skip(1)] }, authority, out _, out _),
             "monster key cannot alias owning character identity");
+        foreach (var changed in new[]
+        {
+            route.Rooms[0].Monsters[0] with { CandidateLevel = 1 },
+            route.Rooms[0].Monsters[0] with { SpawnType = 3 }
+        })
+        {
+            var changedRoom = route.Rooms[0] with { Monsters = [changed, .. route.Rooms[0].Monsters.Skip(1)] };
+            Check(!SinglePlayerDungeonRun.TryCreate(entry, 1, 23, route with { Rooms = [changedRoom, .. route.Rooms.Skip(1)] }, authority, out _, out _),
+                "实例不接受与完整资源规划不一致的等级或生成类型");
+        }
         Check(retry!.AcceptConfirmedDeath(authority.Death(retry!.Snapshot.Identity, 10, 1, Guid.Empty)).Outcome == DungeonRunOutcome.Rejected,
             "empty formal event identity cannot become an accepted fact");
         Check(retry!.Snapshot.LivingMonsters is IList<ushort> readonlyKeys && readonlyKeys.IsReadOnly,

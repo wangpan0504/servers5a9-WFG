@@ -12,6 +12,7 @@ using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
@@ -47,7 +48,10 @@ internal static class DungeonEntryProbeTests
             var probe = new DungeonProbeState(session);
             var context = new GameConnectionContext(new(1, IPAddress.Loopback, bytes, lifetime), owner, session, sender, probe);
             using var log = new ServerLog(Path.Combine(root, "logs"));
-            var disabled = Registry(new DungeonHandler(log));
+            var projection = new TownProjection(towns, characters, null, itemResources.EpicPieces);
+            var formalHandler = new DungeonHandler(log, catalog, DungeonRoomCatalog.Load(pvf),
+                CharacterGrowthCatalog.Load(pvf), DungeonKillExperienceCatalog.Load(pvf), projection);
+            var disabled = Registry(formalHandler);
             var information = Registry(new DungeonProbeModule(log, catalog, DungeonEntryProbeMode.Information));
             var town = Registry(new TownHandler(new TownProjection(towns, characters, null, itemResources.EpicPieces), log));
             byte[] selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
@@ -97,7 +101,7 @@ internal static class DungeonEntryProbeTests
             Check(missingState && bytes.Length == 0, "diagnostic module rejects mismatched connection wiring");
             var mixed = new GameCommandRegistry();
             new DungeonSelectionHandler(new TownProjection(towns, characters, null, itemResources.EpicPieces), log).Register(mixed);
-            new DungeonHandler(log).Register(mixed);
+            formalHandler.Register(mixed);
             bool duplicate = false;
             try
             {
@@ -485,21 +489,35 @@ internal static class DungeonEntryProbeTests
 
             void VerifyBuilders(DungeonEntryPlan plan)
             {
-                byte[] start = DungeonEntryProbe.BuildStartMap(plan, uint.MaxValue);
+                byte[] informationBody = DungeonPackets.Information(plan);
+                Check(informationBody.SequenceEqual(Convert.FromHexString(
+                    "03000000000000010400FFFF0000000000000000FFFFFFFF000000000000000000000000")) &&
+                    DungeonEntryProbe.BuildInformation(plan).SequenceEqual(informationBody),
+                    "正式NOTI28保持独立固定36B预期，诊断委托同一字节实现");
+                byte[] start = DungeonPackets.StartMap(plan, uint.MaxValue);
                 Check(start.Length == 23 && start[0] == 0 && start[1] == 1
                     && BinaryPrimitives.ReadUInt32LittleEndian(start.AsSpan(3)) == uint.MaxValue
                     && start[13] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(start.AsSpan(14)) == 76121 && start[22] == byte.MaxValue,
-                    "start-map builder preserves first room and full seed as a candidate without sending it");
+                    "正式start-map纯Builder保留首房间及完整seed，不推进会话或发送");
+                Check(DungeonEntryProbe.BuildStartMap(plan, uint.MaxValue).SequenceEqual(start) &&
+                    DungeonEntryProbe.BuildFinishLoading().SequenceEqual(DungeonPackets.LoadingNotice()) &&
+                    DungeonEntryProbe.BuildPlayerState(plan.CharacterId).SequenceEqual(DungeonPackets.DungeonPlayerState(plan.CharacterId)) &&
+                    DungeonEntryProbe.BuildDeath(0x8123).SequenceEqual(DungeonPackets.MonsterDeath(0x8123, [])),
+                    "诊断加载、玩家状态及死亡只委托正式纯Builder");
+                Check(DungeonPackets.LoadingNotice().SequenceEqual(new byte[5]) &&
+                    DungeonPackets.DungeonPlayerState(0x8123).SequenceEqual(new byte[] { 1, 0x23, 0x81, 1 }) &&
+                    DungeonPackets.MonsterDeath(0x8123, []).SequenceEqual(new byte[] { 0x23, 0x81, 0, 0, 0, 0, 255, 0, 0 }),
+                    "5B加载、4B状态及9B零掉落死亡保持独立固定预期");
                 foreach (int value in new[] { -1, 256 })
                 {
-                    Overflow(() => DungeonEntryProbe.BuildInformation(plan with { Maze = plan.Maze with { SourceOrdinal = value } }), "maze ordinal");
-                    Overflow(() => DungeonEntryProbe.BuildInformation(plan with { BossMap = plan.BossMap with { Position = new(value, 0) } }), "boss x");
-                    Overflow(() => DungeonEntryProbe.BuildInformation(plan with { BossMap = plan.BossMap with { Position = new(0, value) } }), "boss y");
-                    Overflow(() => DungeonEntryProbe.BuildStartMap(plan with { StartMap = plan.StartMap with { Position = new(value, 0) } }), "start x");
-                    Overflow(() => DungeonEntryProbe.BuildStartMap(plan with { StartMap = plan.StartMap with { Position = new(0, value) } }), "start y");
+                    Overflow(() => DungeonPackets.Information(plan with { Maze = plan.Maze with { SourceOrdinal = value } }), "maze ordinal");
+                    Overflow(() => DungeonPackets.Information(plan with { BossMap = plan.BossMap with { Position = new(value, 0) } }), "boss x");
+                    Overflow(() => DungeonPackets.Information(plan with { BossMap = plan.BossMap with { Position = new(0, value) } }), "boss y");
+                    Overflow(() => DungeonPackets.StartMap(plan with { StartMap = plan.StartMap with { Position = new(value, 0) } }, 1), "start x");
+                    Overflow(() => DungeonPackets.StartMap(plan with { StartMap = plan.StartMap with { Position = new(0, value) } }, 1), "start y");
                 }
 
-                Overflow(() => DungeonEntryProbe.BuildStartMap(plan with { StartMap = plan.StartMap with { Id = -1 } }), "negative map id");
+                Overflow(() => DungeonPackets.StartMap(plan with { StartMap = plan.StartMap with { Id = -1 } }, 1), "negative map id");
             }
 
             void Overflow(Action action, string field)

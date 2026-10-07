@@ -106,6 +106,7 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
         }
 
         WriteLearning(db, transaction, id, character.InitialLearning);
+        CreateDungeonState(db, transaction, owner.Account, id, character.DungeonState);
         var learning = ReadLearning(db, id, transaction);
         // 新角色尚无实体；读取同账号已有仓库后合入角色初始物品，不能重写共享资产。
         var before = ReadInventory(db, id, transaction) with { Gold = 0 };
@@ -126,7 +127,8 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
             Skills = [.. character.Skills],
             ActiveMainQuests = [.. character.ActiveMainQuests],
             Learning = learning,
-            Inventory = inventory
+            Inventory = inventory,
+            DungeonState = character.DungeonState
         };
     });
     public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint) => owner.Execute(() =>
@@ -232,7 +234,8 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
             Skills = skills.ToArray(),
             ActiveMainQuests = active.ToArray(),
             Learning = ReadLearning(db, character.Id, transaction),
-            Inventory = ReadInventory(db, character.Id, transaction, shared)
+            Inventory = ReadInventory(db, character.Id, transaction, shared),
+            DungeonState = ReadDungeonState(db, character.Id, transaction)
         };
     }
 }

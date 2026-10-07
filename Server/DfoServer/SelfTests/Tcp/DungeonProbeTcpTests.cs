@@ -46,6 +46,15 @@ internal static class DungeonProbeTcpTests
                 writer.Write(peer.Id);
                 writer.Write((byte)1);
             }));
+            // 技能包只记录摘要状态；正常、篡改及未知宽度都不能凭此发死亡/经验或关闭连接。
+            foreach (string hex in new[]
+            {
+                "002E00D00729000001004AADA701", "00050070172900000100D260CC5C",
+                "00050070172900000100D260CC5D", "00050070172900000100", "0005007017290000010000"
+            })
+                peer.Send(38, Convert.FromHexString(hex));
+            peer.Barrier();
+            That(fixture.Snapshot() == before, "skill checksum observation never awards assets or confirms a death");
             peer.Send(35, Move(1000, 249));
             peer.Barrier();
             That(fixture.Snapshot() == before, "activity gate prevents dungeon movement becoming a town save");
@@ -71,5 +80,16 @@ internal static class DungeonProbeTcpTests
                 That(fixture.Snapshot() != before, "successful return releases the activity gate for town movement");
             }
         }
+        await fixture.StopAsync();
+        string[] skillDetails = fixture.Events()
+            .Where(entry => entry.GetProperty("Kind").GetString() == "client_notice")
+            .Select(entry => entry.GetProperty("Detail"))
+            .Where(detail => detail.GetProperty("Action").GetString() == "use_skill")
+            .Select(detail => detail.GetProperty("Detail").GetString()!).ToArray();
+        That(skillDetails.Length == 8 &&
+            skillDetails.Count(detail => detail.EndsWith("checksum=matched", StringComparison.Ordinal)) == 4 &&
+            skillDetails.Count(detail => detail.EndsWith("checksum=mismatched", StringComparison.Ordinal)) == 2 &&
+            skillDetails.Count(detail => detail.EndsWith("checksum=absent", StringComparison.Ordinal)) == 2,
+            "真实TCP记录正常、篡改与10B摘要状态，未知宽度保持未实现");
     }
 }

@@ -1,0 +1,14 @@
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+
+namespace DfoServer.Game.Dungeons;
+
+internal sealed record FormalDungeonReceipt(Character Character, long Generation, long SelectionEpoch,
+    DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed);
+internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
+    ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,
+    DungeonGroundObject? Drop = null);
+internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
+    bool ProjectionCurrent);
+internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
+    DungeonGroundObject? Ground = null, DungeonPickupCommit? Commit = null);

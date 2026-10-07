@@ -7,7 +7,7 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Session;
 
-// MapSelect 表示选图界面；正式加载、战斗和结算仍由独立副本合同接入。
+// 角色会话阶段由Session维护，正式副本按其私有实例推进。
 internal enum SessionPhase : byte
 {
     Unselected,
@@ -135,6 +135,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     void Invalidate(string reason)
     {
+        // 原实例失效后，不让其迟到回执找到同账号的新Selected。
+        formalDungeon = null;
         SelectionEpoch++;
         Selected = null;
         completed = new HashSet<int>();

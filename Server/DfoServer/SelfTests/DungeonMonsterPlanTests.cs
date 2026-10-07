@@ -67,14 +67,20 @@ internal static class DungeonMonsterPlanTests
         var fifth = catalog.Get(maze.MapSpecification!.Single(map => map.Id == 76125));
         Check(fifth.Monsters.Count == 6 && fifth.Monsters[4].RawValues.SequenceEqual([1, 1, 0, 503, 233, 0, 1, 1]),
             "76125第五行特殊整数原样保留，不替换为前三整数1/0/3");
-        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(fifth, 99, 100),
-            "76125含未支持生成条件时拒绝整房计划，不丢弃第五行");
+        var fifthPlan = DungeonMonsterPlan.FromRoom(fifth, 99, 100);
+        Check(fifthPlan.Monsters.Count == 6 && fifthPlan.Monsters[4].CandidateLevel == 1 &&
+            fifthPlan.Monsters[4].SourceOrdinal == 4 && fifthPlan.Monsters[4].SpawnType == 0 &&
+            ReferenceEquals(fifthPlan.Monsters[4].Source, fifth.Monsters[4]) &&
+            fifthPlan.Monsters.Where(monster => monster.SourceOrdinal != 4).All(monster => monster.CandidateLevel == 3),
+            "76125完整六行保留，精确特殊资源行使用已指定的本服Lv1");
         var bossRoom = catalog.Get(maze.MapSpecification!.Single(map => map.Id == 76126));
         Check(bossRoom.Monsters.Count == 2 && bossRoom.Monsters[0].MonsterId == 107000903 &&
             bossRoom.Monsters[0].RankKind == "[boss]" && bossRoom.Monsters[1].MonsterId == 107000906 &&
             bossRoom.Monsters[1].RankKind == "[normal]", "76126真实Boss与普通怪物身份分别保留");
-        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(bossRoom, 99, 100),
-            "Boss未支持时不发布仅包含普通怪物的残缺房间");
+        var bossPlan = DungeonMonsterPlan.FromRoom(bossRoom, 99, 100);
+        Check(bossPlan.Monsters.Count == 2 && bossPlan.Monsters.All(monster => monster.CandidateLevel == 3) &&
+            bossPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 3, 0 }),
+            "76126完整Boss与普通怪物计划分别保留类型3和0，等级均为资源Lv3");
         Check(DungeonMonsterPlan.FromRoom(first.Room, 99, 10).Monsters.Select(item => item.ObjectKey)
             .SequenceEqual(new ushort[] { 10, 11, 12, 13 }), "unoccupied keys remain consecutive");
         Check(DungeonMonsterPlan.FromRoom(first.Room, 10, 10).Monsters[0].ObjectKey == 11,
@@ -92,7 +98,9 @@ internal static class DungeonMonsterPlanTests
         Unsupported(source with { RawValues = [1, 0, 3, 573, 197, 0, 1] }, "unknown short row stays unsupported");
         Unsupported(source with { RawValues = [1, 0, 3, 573, 197, 0, 1, 1, 0] }, "unknown long row stays unsupported");
         Unsupported(source with { PlacementKind = "[random]" }, "random placement stays unsupported");
-        Unsupported(source with { RankKind = "[boss]" }, "boss rank stays unsupported");
+        Check(DungeonMonsterPlan.FromRoom(With(source with { RankKind = "[boss]" }), 99, 10).Monsters[0].SpawnType == 3,
+            "匹配固定Boss品级进入独立类型3，不能仍当普通0");
+        Unsupported(source with { RankKind = "[future]" }, "unknown rank stays unsupported");
         foreach (int field in new[] { 1, 6, 7 })
         {
             int[] raw = source.RawValues.ToArray();
@@ -101,6 +109,28 @@ internal static class DungeonMonsterPlanTests
         }
 
         Unsupported(source with { MonsterId = 2 }, "inconsistent resource template ID stays unsupported");
+        var special = fifth.Monsters[4];
+        DungeonRoomDefinition ChangedSpecial(DungeonRoomMonster changed) => fifth with
+        {
+            Monsters = Array.AsReadOnly(fifth.Monsters.Select((monster, index) => index == 4 ? changed : monster).ToArray())
+        };
+        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(fifth with
+            { Map = fifth.Map with { Id = 76124 } }, 99, 100), "特殊Lv1规则不能移到其他地图");
+        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(fifth with
+            { Map = fifth.Map with { Path = "map/fixture.map" } }, 99, 100), "特殊Lv1规则要求匹配地图路径");
+        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(fifth with
+            { Monsters = Array.AsReadOnly(fifth.Monsters.Reverse().ToArray()) }, 99, 100), "特殊Lv1规则不能改变资源行顺序");
+        foreach (int field in new[] { 1, 2, 3, 4, 5 })
+        {
+            int[] raw = special.RawValues.ToArray();
+            raw[field]++;
+            Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ChangedSpecial(special with
+                { RawValues = Array.AsReadOnly(raw) }), 99, 100), "篡改特殊完整资源行不能借本服Lv1例外 " + field);
+        }
+        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ChangedSpecial(special with
+            { Path = "monster/fixture.mob" }), 99, 100), "特殊Lv1规则要求匹配怪物资源路径");
+        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ChangedSpecial(special with
+            { RankKind = "[boss]" }), 99, 100), "特殊Lv1规则不能把普通资源行改成Boss");
         var mixed = first.Room with { Monsters = Array.AsReadOnly(new[] { source, source with { RankKind = "[future]" } }) };
         Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(mixed, 99, 10),
             "mixed supported and unknown rows reject the whole plan rather than publishing a partial roster");

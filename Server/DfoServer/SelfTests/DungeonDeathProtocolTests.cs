@@ -45,11 +45,23 @@ internal static class DungeonDeathProtocolTests
         foreach (int length in new[] { 0, 6, 87, 89, 100 })
             Check(!DungeonRequests.TryParseDeath(new byte[length], out var invalid) && invalid is null,
                 "death parser rejects unsupported body width " + length);
-        // 匹配ARAD的真实单人击杀样本；第二例的首个u64非零，不能只验证全零前缀。
-        (string Hex, uint Key, ulong First, uint FirstCount, ulong Second, uint SecondCount, ulong Contribution)[] samples =
+        // 匹配ARAD已实收的13条单人报文，固定预期独立取自原字节；解析不签发死亡或证明本轮实机击杀。
+        // 第七例首个u64及u32非零，不能只验证全零前缀。
+        (string Hex, uint Key, ulong First, uint FirstCount, ulong Second, uint SecondCount, ulong Contribution, uint Checksum)[] samples =
         [
-            ("010100000100000000000000000000000000C902000000000000020000000111010100430200000000000002001302A5000000000084670003000000F8010000000000002D021801A801BD000C001F0007000000A0DF2458", 257, 0, 0, 713, 2, 579),
-            ("040100000100080000000000000001000000E90200000000000005000000011101010026020000000000000500D302B60000000000A62E0003000000F801000000000000D701D000D101B6000C001F0027000000BFDD7F32", 260, 8, 1, 745, 5, 550)
+            ("010100000100000000000000000000000000C902000000000000020000000111010100430200000000000002001302A5000000000084670003000000F8010000000000002D021801A801BD000C001F0007000000A0DF2458", 257, 0, 0, 713, 2, 579, 0x5824DFA0),
+            ("03010000010000000000000000000000000080020000000000000600000001110101005C020000000000000600FB02C60000000000877E0003000000F801000000000000870207015C01C6000C001F000A00000092A06A85", 259, 0, 0, 640, 6, 604, 0x856AA092),
+            ("000100000100000000000000000000000000D4020000000000000400000001110101003B020000000000000400DF01E2000000000024010003000000F8010000000000003D02C5001802E2000C001F000C0000000BA70BE1", 256, 0, 0, 724, 4, 571, 0xE10BA70B),
+            ("020100000100000000000000000000000000A30200000000000006000000011101010044020000000000000600FB02CC000000000047150003000000F8010000000000008302D0006702CC000C001F0011000000C3DBD2AC", 258, 0, 0, 675, 6, 580, 0xACD2DBC3),
+            ("0601000001000000000000000000000000004303000000000000040000000111010100DF0200000000000004003702DE0000000000E14A0003000000F8010000000000009A01DE00BF01DE000C001F00230000005D1058E9", 262, 0, 0, 835, 4, 735, 0xE958105D),
+            ("080100000100000000000000000000000000A00200000000000002000000011101010037020000000000000200A902AD0000000000F16D0003000000F8010000000000000A02F4001C02CF000C001F00240000006C67E37D", 264, 0, 0, 672, 2, 567, 0x7DE3676C),
+            ("040100000100080000000000000001000000E90200000000000005000000011101010026020000000000000500D302B60000000000A62E0003000000F801000000000000D701D000D101B6000C001F0027000000BFDD7F32", 260, 8, 1, 745, 5, 550, 0x327FDDBF),
+            ("0701000001000000000000000000000000005E030000000000000500000001110101005A030000000000000500CA02C400000000003E0F0003000000F801000000000000D501270194010D010C001F002300000028E0604F", 263, 0, 0, 862, 5, 858, 0x4F60E028),
+            ("05010000010000000000000000000000000060020000000000000500000001110101004B02000000000000050011014A01000000001C490003000000F80100000000000088010A01A001E1000C001F002700000038C01E7E", 261, 0, 0, 608, 5, 587, 0x7E1EC038),
+            ("0C0100000100000000000000000000000000BA02000000000000020000000111010100110200000000000002003B031301000000006C3D0003000000F80100000000000087020701460206010C002100260000005B7907C1", 268, 0, 0, 698, 2, 529, 0xC107795B),
+            ("0A0100000100000000000000000000000000B702000000000000020000000111010100190200000000000002003B0318010000000052690003000000F8010000000000002D0218012D0218010C0021002600000058328B66", 266, 0, 0, 695, 2, 537, 0x668B3258),
+            ("0B0100000100000000000000000000000000680200000000000002000000011101010028020000000000000200200324010000000049160003000000F8010000000000008302D0001F0224010C00210026000000620E8954", 267, 0, 0, 616, 2, 552, 0x54890E62),
+            ("0901000001000000000000000000000000009C02000000000000060000000111010100410200000000000006002803120100000000B30B0003000000F8010000000000003D02C500EF0212010C0021002B0000000B9E768E", 265, 0, 0, 668, 6, 577, 0x8E769E0B)
         ];
         foreach (var sample in samples)
         {
@@ -60,20 +72,55 @@ internal static class DungeonDeathProtocolTests
             Check(statistics.Unknown6 == sample.First && statistics.Unknown14 == sample.FirstCount && statistics.Unknown18 == sample.Second
                 && statistics.Unknown26 == sample.SecondCount, "两个完整u64和u32统计字段保持本次实收值");
             Check(statistics.Participant == new DungeonDeathParticipant(0x111, 1, sample.Contribution, checked((ushort)sample.SecondCount)),
-                "参与者类型、对象key、完整u64和u16保持真实字节");
+                "参与者类型、对象key、完整累计HP降低量和事件次数保持实收字节");
+            Check(statistics.RewriteFlag == 0 && statistics.SpawnLevel == 3 && statistics.SpawnHpSnapshot == 504 &&
+                statistics.BodyChecksum == sample.Checksum && statistics.ChecksumMatches &&
+                ClientBodyChecksum.Compute(captured.AsSpan(0, 84)) == sample.Checksum,
+                "实际正文的改写分支、等级、创建HP快照和检查值与独立固定预期一致");
             byte[] remaining = captured[45..];
             captured[45] ^= 255;
             Check(statistics.RemainingFields.Count == 43 && statistics.RemainingFields.SequenceEqual(remaining)
                 && statistics.RemainingFields is System.Collections.IList list && list.IsReadOnly,
                 "统计后续43B独立冻结，解析不解释为奖励");
         }
+
+        byte[] invalidChecksum = Convert.FromHexString(samples[0].Hex);
+        invalidChecksum[84] ^= 1;
+        Check(DungeonRequests.TryParseDeath(invalidChecksum, out var mismatch) && mismatch!.SinglePlayerStatistics is { ChecksumMatches: false }
+            && mismatch.RemainingFields.SequenceEqual(invalidChecksum[6..]),
+            "正文检查值不匹配仍保留诊断88B长度接受和完整原字节");
+        byte[] invalidPayload = Convert.FromHexString(samples[0].Hex);
+        invalidPayload[60] ^= 1;
+        Check(DungeonRequests.TryParseSinglePlayerDeathStatistics(invalidPayload, out var changedSnapshot) &&
+            changedSnapshot!.SpawnHpSnapshot == 505 && changedSnapshot.BodyChecksum == samples[0].Checksum && !changedSnapshot.ChecksumMatches,
+            "创建HP字节变化不会继续匹配未变的检查值");
+        byte[] rewritePayload = Convert.FromHexString(samples[0].Hex);
+        rewritePayload[55] = 0x80;
+        Check(DungeonRequests.TryParseDeath(rewritePayload, out var rewrite) && rewrite!.SinglePlayerStatistics is { RewriteFlag: 0x80, ChecksumMatches: false },
+            "Parser保留完整改写标志而不规范化、默认或签发战斗资格");
         byte[] wideStatistics = Convert.FromHexString(samples[0].Hex);
         BinaryPrimitives.WriteUInt64LittleEndian(wideStatistics.AsSpan(6), 0xFEDCBA9876543210);
         BinaryPrimitives.WriteUInt64LittleEndian(wideStatistics.AsSpan(18), 0xF123456789ABCDEF);
         BinaryPrimitives.WriteUInt64LittleEndian(wideStatistics.AsSpan(35), 0xE23456789ABCDEF1);
+        BinaryPrimitives.WriteUInt32LittleEndian(wideStatistics.AsSpan(56), 0xC456789A);
+        BinaryPrimitives.WriteUInt64LittleEndian(wideStatistics.AsSpan(60), 0xD3456789ABCDEF12);
+        BinaryPrimitives.WriteUInt32LittleEndian(wideStatistics.AsSpan(84), 0xF56789AB);
         Check(DungeonRequests.TryParseSinglePlayerDeathStatistics(wideStatistics, out var wide)
             && wide!.Unknown6 == 0xFEDCBA9876543210 && wide.Unknown18 == 0xF123456789ABCDEF
-            && wide.Participant.UnknownValue == 0xE23456789ABCDEF1, "统计u64保留高位，不截为u32或猜成有符号伤害");
+            && wide.Participant.CumulativeHpDecrease == 0xE23456789ABCDEF1 && wide.SpawnLevel == 0xC456789A
+            && wide.SpawnHpSnapshot == 0xD3456789ABCDEF12 && wide.BodyChecksum == 0xF56789AB && !wide.ChecksumMatches,
+            "统计、创建HP快照及等级保留完整无符号高位，不截断或猜成服务端伤害");
+        byte[] originalSkill = Convert.FromHexString("002E00D0072900000100");
+        Check(SkillRequests.TryParseUse(originalSkill, out var tenByteSkill) && tenByteSkill!.RemainingFields.Count == 0 &&
+            tenByteSkill.BodyChecksum is null && tenByteSkill.ChecksumMatches is null,
+            "共享正文检查算法后10B技能路径仍无伪造检查值");
+        byte[] capturedSkill = Convert.FromHexString("002E00D00729000001004AADA701");
+        Check(SkillRequests.TryParseUse(capturedSkill, out var fourteenByteSkill) && fourteenByteSkill!.BodyChecksum == 0x01A7AD4A &&
+            fourteenByteSkill.ChecksumMatches == true && ClientBodyChecksum.Compute(originalSkill) == 0x01A7AD4A,
+            "C2S38和39共享检查公式，技能固定实收预期保持一致");
+        capturedSkill[10] ^= 1;
+        Check(SkillRequests.TryParseUse(capturedSkill, out var invalidSkill) && invalidSkill!.ChecksumMatches == false,
+            "共享算法后14B技能不匹配继续保留观察接受行为");
         foreach (byte count in new byte[] { 0, 2, 255 })
         {
             wideStatistics[30] = count;
