@@ -38,6 +38,15 @@ internal static class InventoryRewardGrantService
         profile.Equipment.Select(item => CreateItem(item.Template, new(InventoryListType.Equipment, item.Slot), Create(item.Template))).ToImmutableArray());
 
     public static InventoryResult TryGrantBatch(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null)
+        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow);
+
+    public static InventoryResult TryGrantItems(Character character, IReadOnlyList<InventoryItem> instances, ItemCatalog catalog,
+        GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null)
+        => Grant(character, instances.Select(item => new InventoryReward(item.Core.ItemId, item.Core.Count)).ToArray(),
+            instances, catalog, goldLimits, pieces, utcNow);
+
+    static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
+        ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow)
     {
         var inventory = character.Inventory;
         var wallet = inventory;
@@ -46,8 +55,9 @@ internal static class InventoryRewardGrantService
         Dictionary<(InventoryListType List, int ItemId), List<short>>? stacks = null;
         var freeSlots = new Dictionary<(InventoryListType List, short Start, short End), short>();
         var now = utcNow ?? DateTimeOffset.UtcNow;
-        foreach (var reward in rewards)
+        for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
+            var reward = rewards[rewardIndex];
             if (reward.Count <= 0 || reward.Upgrade > 31 || reward.Refinement > 127)
                 return InventoryResult.Reject();
             if (pieces.ByPiece.TryGetValue(reward.ItemId, out var piece))
@@ -72,7 +82,9 @@ internal static class InventoryRewardGrantService
             if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
                 return InventoryResult.Reject();
             int remaining = reward.Count;
-            var prototype = Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement);
+            var prototype = instances is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement) : instances[rewardIndex].Core;
+            if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || instances?[rewardIndex].IsExpired(now.ToUnixTimeSeconds()) == true)
+                return InventoryResult.Reject(19);
             if (prototype.IsExpired(now.ToUnixTimeSeconds()))
                 return InventoryResult.Reject(19);
             var range = ItemSlotBoundService.Range(template.Kind, inventory.Expansion);
@@ -127,7 +139,8 @@ internal static class InventoryRewardGrantService
                 if (planned.ContainsKey(position))
                     continue;
                 int count = Math.Min(remaining, template.StackLimit);
-                planned.Add(position, CreateItem(template, position, prototype.IsStackable ? prototype with { Value = count } : prototype));
+                var core = prototype.IsStackable ? prototype with { Value = count } : prototype;
+                planned.Add(position, instances is null ? CreateItem(template, position, core) : instances[rewardIndex] with { Position = position, Core = core });
                 if (prototype.IsStackable)
                 {
                     var key = (list, prototype.ItemId);

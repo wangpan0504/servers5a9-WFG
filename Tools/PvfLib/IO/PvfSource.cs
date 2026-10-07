@@ -49,16 +49,6 @@ internal sealed class PvfSource : IDisposable
         return result;
     }
 
-    public string ComputeSha256()
-    {
-        ObjectDisposedException.ThrowIf(disposed, this);
-        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
-        const int block = 64 * 1024;
-        for (long offset = 0; offset < Length; offset += block)
-            hash.AppendData(Read(checked((int)offset), (int)Math.Min(block, Length - offset)));
-        return Convert.ToHexString(hash.GetHashAndReset());
-    }
-
     public void Dispose()
     {
         if (disposed)

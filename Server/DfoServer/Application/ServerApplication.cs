@@ -103,7 +103,7 @@ internal static class ServerApplication
         }
 
         if (command.Kind == ServerCommandKind.Gm)
-            return DevelopmentCommands.RunGm(command.Arguments, options);
+            return DevelopmentCommands.RunGm(command.Arguments, options, pvf);
         var itemResources = new ItemResources(pvf);
         var characters = CharacterCatalog.Load(pvf, itemResources.Items);
         if (command.Kind == ServerCommandKind.SelfTest)

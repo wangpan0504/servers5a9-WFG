@@ -12,7 +12,7 @@ internal static class DungeonMonsterDropCatalogTests
         DungeonMonsterDropEntry[] actual = [new(1000, 50), new(1047, 200), new(1004, 100)];
         var goblin = catalog.Get(1);
         var thrower = catalog.Get(2);
-        Check(catalog.ResourceSha256 == pvf.Sha256 && goblin.Path == "monster/goblin/goblin.mob"
+        Check(goblin.Path == "monster/goblin/goblin.mob"
             && thrower.Path == "monster/goblin/goblinthrower.mob", "掉落声明绑定匹配PVF与真实怪物目录身份");
         Check(goblin.Items is not null && thrower.Items is not null && goblin.Items.SequenceEqual(actual)
             && thrower.Items.SequenceEqual(actual), "普通哥布林两模板保留三个真实物品与原整数参数");

@@ -23,6 +23,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] SkillInfo { get; private set; } = [];
     public ushort Id { get; private set; }
     public WirePacket[] SpecialContainers { get; private set; } = [];
+    public byte[][] Mailbox { get; private set; } = [];
 
     static readonly Encoding names;
     static TcpPeer()
@@ -194,7 +195,27 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(avatars.Body[0] == 1 && U16(avatars.Body, 1) == 105 && pets.Body[0] == 7, "special container initialization and avatar capacity");
         TestCheck.That(medals.Body[0] == 38, "medal container initialization");
         SpecialContainers = [creatures, avatars, pets, medals];
-        WirePacket[] packets = [.. prefix, .. middle, .. Batch([.. inventoryNotices ?? [], .. expected.Skip(afterCargo)])];
+        var tail = new List<WirePacket>();
+        var mails = new List<byte[]>();
+        foreach (var notice in inventoryNotices ?? [])
+            tail.Add(Expect(notice.Kind, notice.Opcode));
+        foreach (var notice in expected.Skip(afterCargo))
+        {
+            if (notice == ((byte)0, (ushort)3))
+            {
+                var packet = Read();
+                while (packet.Kind == 0 && packet.Opcode == 97)
+                {
+                    mails.Add(packet.Body);
+                    packet = Read();
+                }
+                TestCheck.That(mails.Count > 0 && packet.Kind == 0 && packet.Opcode == 3, "mailbox initializes after account assets and before town state");
+                tail.Add(packet);
+            }
+            else tail.Add(Expect(notice.Kind, notice.Opcode));
+        }
+        Mailbox = mails.ToArray();
+        WirePacket[] packets = [.. prefix, .. middle, .. tail];
         Id = U16(packets[0].Body, 9);
         TestCheck.That(packets[prepared ? 7 : 6].Body[0] == 2 && packets[prepared ? 8 : 7].Body[0] == 12,
             "personal and account cargo initialize before locks");

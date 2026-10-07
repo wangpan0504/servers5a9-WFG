@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Persistence;
 
@@ -19,9 +20,8 @@ internal sealed partial class CharacterRepository
         ArgumentNullException.ThrowIfNull(catalog);
         ulong amount = reward.Amount;
         if (!run.IsPendingDeath(prepared) || prepared.Death.Identity.CharacterId != expected.Id || amount == 0 ||
-            string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 || reward.ResourceSha256 is not { Length: 64 } ||
-            reward.ResourceSha256.Any(character => !Uri.IsHexDigit(character)) || reward.MonsterId != prepared.Monster.MonsterId ||
-            reward.MonsterLevel != prepared.Monster.CandidateLevel || reward.ResourceSha256 != catalog.ResourceSha256)
+            string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 || reward.MonsterId != prepared.Monster.MonsterId ||
+            reward.MonsterLevel != prepared.Monster.CandidateLevel || reward.ResourceSource != DungeonKillExperienceCatalog.ResourcePath)
             throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡和明确正经验");
         var death = prepared.Death;
         var identity = death.Identity;
@@ -37,7 +37,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$event", death.EventId.ToString("N"));
         command.CommandText = """
             SELECT account,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,amount,
-              rule_id,resource_sha256,monster_id,monster_level
+              rule_id,resource_source,monster_id,monster_level
             FROM character_dungeon_growth_receipts WHERE character_id=$id AND event_id=$event
             """;
         bool duplicate;
@@ -48,7 +48,7 @@ internal sealed partial class CharacterRepository
                 reader.GetInt64(2) != identity.QuestId || reader.GetInt64(3) != identity.TaskAttempt || reader.GetInt64(4) != identity.Epoch ||
                 reader.GetInt64(5) != prepared.Result.Snapshot.CurrentMap.Id || reader.GetInt64(6) != death.MonsterKey ||
                 reader.GetInt64(7) != death.CombatSequence || reader.GetInt64(8) != checked((long)amount) ||
-                reader.GetString(9) != reward.RuleId || reader.GetString(10) != reward.ResourceSha256 ||
+                reader.GetString(9) != reward.RuleId || reader.GetString(10) != reward.ResourceSource ||
                 reader.GetInt64(11) != reward.MonsterId || reader.GetInt64(12) != reward.MonsterLevel))
                 throw new InvalidDataException("同一成长事件ID的来源或奖励被修改");
         }
@@ -103,7 +103,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$generation", owner.Generation);
         command.Parameters.AddWithValue("$amount", checked((long)amount));
         command.Parameters.AddWithValue("$rule", reward.RuleId);
-        command.Parameters.AddWithValue("$resource", reward.ResourceSha256);
+        command.Parameters.AddWithValue("$resource", reward.ResourceSource);
         command.Parameters.AddWithValue("$monster", reward.MonsterId);
         command.Parameters.AddWithValue("$monsterLevel", reward.MonsterLevel);
         command.Parameters.AddWithValue("$beforeLevel", plan.PreviousLevel);
@@ -114,7 +114,7 @@ internal sealed partial class CharacterRepository
         command.CommandText = """
             INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,
               task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,
-              rule_id,resource_sha256,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision)
+              rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision)
             VALUES($id,$account,$event,$instance,$quest,$attempt,$epoch,$map,$key,$sequence,$generation,$amount,
               $rule,$resource,$monster,$monsterLevel,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision)
             """;

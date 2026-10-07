@@ -68,7 +68,7 @@ internal static class AccountCredentialStoreTests
             TestCheck.That(!Login(reopened, "stable", NativeLoginWire.Digest).Succeeded && Login(reopened, "stable", NativeLoginWire.WrongDigest).Succeeded, "reopen rejects old credential and accepts updated credential");
             using (var db = Open(path))
             {
-                TestCheck.That(Scalar(db, "PRAGMA user_version") is 2L && Scalar(db, "PRAGMA integrity_check") is "ok", "credential boundary leaves current schema and database integrity intact");
+                TestCheck.That(Scalar(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && Scalar(db, "PRAGMA integrity_check") is "ok", "credential boundary preserves current schema and database integrity");
                 TestCheck.That(Scalar(db, "SELECT count(*) FROM accounts") is 3L, "only successfully created accounts persist");
             }
         }

@@ -9,17 +9,22 @@ internal static class DungeonKillExperienceCatalogTests
     {
         int checks = 0;
         var table = DungeonKillExperienceCatalog.Load(pvf);
-        Check(table.ResourceSha256 == pvf.Sha256 && table.GetExperience(1) == 30 && table.GetExperience(2) == 60 &&
+        Check(table.GetExperience(1) == 30 && table.GetExperience(2) == 60 &&
             table.GetExperience(3) == 72 && table.GetExperience(300) == 64906,
             "本服倍率1规则直接使用匹配表的等级与经验整数对");
         var maze = DungeonCatalog.Load(pvf).Get(3).Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3 &&
             candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
         var rooms = DungeonRoomCatalog.Load(pvf);
-        var room25 = DfoServer.Game.Dungeons.DungeonMonsterPlan.Create(rooms, maze.MapSpecification!.Single(map => map.Id == 76125), 99, 100);
-        var room26 = DfoServer.Game.Dungeons.DungeonMonsterPlan.Create(rooms, maze.MapSpecification!.Single(map => map.Id == 76126), 99, 200);
-        Check(room25.Monsters[4].CandidateLevel == 1 && table.GetExperience(room25.Monsters[4].CandidateLevel) == 30 &&
-            room26.Monsters.Count == 2 && room26.Monsters.All(monster => monster.CandidateLevel == 3 && table.GetExperience(monster.CandidateLevel) == 72),
-            "真实76125特殊Lv1行取30，76126 Boss和普通Lv3行按同一本服规则取72");
+        var room25 = rooms.Get(maze.MapSpecification!.Single(map => map.Id == 76125));
+        var room26 = rooms.Get(maze.MapSpecification!.Single(map => map.Id == 76126));
+        Check(room25.Monsters[4].RawValues.Take(3).SequenceEqual([1, 1, 0]) &&
+            room26.Monsters.Count == 2 && room26.Monsters.All(monster => monster.RawValues[2] == 3 &&
+                table.GetExperience(monster.RawValues[2]) == 72),
+            "76125特殊行原值保留，76126资源候选Lv3对应72，不假定特殊行实际生成等级");
+        Reject<NotSupportedException>(() => DfoServer.Game.Dungeons.DungeonMonsterPlan.FromRoom(room25, 99, 100),
+            "未支持的特殊生成行不能用于已确认死亡奖励");
+        Reject<NotSupportedException>(() => DfoServer.Game.Dungeons.DungeonMonsterPlan.FromRoom(room26, 99, 200),
+            "尚未支持Boss生成时拒绝残缺计划");
         Reject<NotSupportedException>(() => table.GetExperience(0), "零等级不补经验");
         Reject<NotSupportedException>(() => table.GetExperience(301), "表外等级拒绝而不夹取");
         Reject<InvalidDataException>(() => DungeonKillExperienceCatalog.Parse([]), "空表拒绝");

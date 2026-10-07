@@ -6,13 +6,13 @@ namespace DfoServer.GameWorld.Dungeons;
 internal sealed class DungeonKillExperienceCatalog
 {
     public const string RuleId = "local-monster-level-x1-v1";
+    public const string ResourcePath = "monster/monsterexp.tbl";
     private readonly IReadOnlyDictionary<int, uint> values;
-    private DungeonKillExperienceCatalog(string resourceSha256, IReadOnlyDictionary<int, uint> values)
-        => (ResourceSha256, this.values) = (resourceSha256, values);
-    public string ResourceSha256 { get; }
+    private DungeonKillExperienceCatalog(IReadOnlyDictionary<int, uint> values)
+        => this.values = values;
 
     public static DungeonKillExperienceCatalog Load(PvfArchive pvf) =>
-        new(pvf.Sha256, Parse(pvf.ReadTokens("monster/monsterexp.tbl")));
+        new(Parse(pvf.ReadTokens(ResourcePath)));
 
     public uint GetExperience(int monsterLevel) => values.TryGetValue(monsterLevel, out var value)
         ? value : throw new NotSupportedException("怪物等级没有本服经验表记录");

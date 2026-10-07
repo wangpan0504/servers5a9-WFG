@@ -13,7 +13,6 @@ internal sealed class DungeonMonsterDropCatalog
     readonly PvfArchive archive;
     readonly IReadOnlyDictionary<int, string> monsters;
     readonly ConcurrentDictionary<int, Lazy<DungeonMonsterDropDeclaration>> declarations = new();
-    public string ResourceSha256 => archive.Sha256;
 
     private DungeonMonsterDropCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> monsters)
         => (this.archive, this.monsters) = (archive, monsters);

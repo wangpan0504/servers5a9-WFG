@@ -15,12 +15,14 @@ internal enum DevelopmentAction
     QuestAdd,
     QuestRemove,
     QuestClear,
-    Skill
+    Skill,
+    Gold,
+    Item
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
 {
-    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow <角色> <0-127> | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255>。其他账号在命令前加 account <账号>。";
+    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow <角色> <0-127> | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量>。其他账号在命令前加 account <账号>。";
     public static DevelopmentRequest Parse(string line, string defaultAccount)
     {
         if (string.IsNullOrWhiteSpace(line) || line.Length > 512)
@@ -52,6 +54,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             "quest-add" when tokens.Length == i + 3 => Numbered(DevelopmentAction.QuestAdd, account, tokens[i + 1], tokens[i + 2]),
             "quest-del" when tokens.Length == i + 3 => Numbered(DevelopmentAction.QuestRemove, account, tokens[i + 1], tokens[i + 2]),
             "skill" when tokens.Length == i + 4 => Skilled(account, tokens[i + 1], tokens[i + 2], tokens[i + 3]),
+            "gold" when tokens.Length == i + 3 => Numbered(DevelopmentAction.Gold, account, tokens[i + 1], tokens[i + 2]),
+            "item" when tokens.Length == i + 4 => new(DevelopmentAction.Item, account, tokens[i + 1], Integer(tokens[i + 2]), Integer(tokens[i + 3])),
             _ => throw new InvalidDataException(Usage)
         };
         request.Validate();
@@ -70,11 +74,13 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             return;
         if (!CharacterName.IsValid(Name))
             throw new InvalidDataException("角色名无效");
-        if (Writes)
+        if (Action == DevelopmentAction.Gold && Primary < 0 || Action == DevelopmentAction.Item && (Primary <= 0 || Secondary <= 0))
+            throw new InvalidDataException("金币、道具ID或数量无效");
+        if (Writes && Action is not (DevelopmentAction.Gold or DevelopmentAction.Item))
             ToProgressEdit().Validate();
     }
 
-    public bool Writes => Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill;
+    public bool Writes => Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item;
 
     public CharacterProgressEdit ToProgressEdit()
     {

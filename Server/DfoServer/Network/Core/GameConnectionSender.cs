@@ -59,6 +59,9 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         return done.Task;
     }
 
+    public void Post(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null) =>
+        Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend)));
+
     public Task ClearScene()
     {
         long next = Interlocked.Increment(ref epoch);

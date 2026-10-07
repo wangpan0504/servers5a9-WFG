@@ -17,6 +17,8 @@ internal sealed class CurrencyService(GoldLimitCatalog limits)
         return 0;
     }
     public int CarryLimit(Character character) => Math.Max(limits.CarryLimit(character.Level), character.Inventory.GoldCarryLimit);
+    public static InventoryResult SetGold(Character character, uint amount) => amount > int.MaxValue ? InventoryResult.Reject() :
+        new(true, 0, new(character.Inventory, character.Inventory with { Gold = amount }, "gm_gold", new(character)));
     public InventoryResult Initialize(Character character) => new(true, 0, new(character.Inventory,
         character.Inventory with { GoldCarryLimit = CarryLimit(character) }, "gold_limit_initialize"));
     public InventoryResult Grant(Character character, CurrencyKind kind, int amount)

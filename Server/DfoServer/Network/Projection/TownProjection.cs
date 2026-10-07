@@ -10,7 +10,8 @@ using DfoServer.Game.Town;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class TownProjection(TownCatalog towns, CharacterCatalog characters, TownPresence? presence, EpicPieceCatalog pieces)
+internal sealed class TownProjection(TownCatalog towns, CharacterCatalog characters, TownPresence? presence, EpicPieceCatalog pieces,
+    MailboxProjection? mailbox = null)
 {
     public async Task EnterAsync(GameConnectionContext context)
     {
@@ -36,6 +37,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterCatalog charact
         await context.Notify(NotiPacketType.UPGRADE_CARRY_GOLD, CurrencyPackets.GoldLimit(c.Inventory), "gold_limit_initialize");
         await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(c.Inventory.AccountWallet), "account_cera_initialize");
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
+        if (mailbox is not null)
+            await mailbox.InitializeAsync(context);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
         await LocationAsync(context, c, initial: true);
         await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "enter_gameworld_complete");

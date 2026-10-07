@@ -8,7 +8,7 @@ using DfoServer.Infrastructure;
 
 namespace DfoServer.Network.Handlers;
 
-// V31 租赁请求只负责解析、提交后应答和投影；费用与装备实例由 RentalService 规划。
+// S5A9 租赁请求只负责解析、提交后应答和投影；费用与装备实例由 RentalService 规划。
 internal sealed class RentalHandler(RentalService rental, InventoryProjection projection, ServerLog log) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)

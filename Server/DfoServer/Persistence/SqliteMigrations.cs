@@ -13,7 +13,14 @@ internal static class SqliteMigrations
     [
         new(2, "account_wallet_rental_points", static (db, tx) =>
             Execute(db, tx, "ALTER TABLE account_wallets ADD COLUMN rental_points INTEGER NOT NULL DEFAULT 0 CHECK(rental_points BETWEEN 0 AND 2147483647)")),
-        new(3, "副本成长事件账本", static (db, tx) => Execute(db, tx, DungeonGrowthSchema))
+        new(3, "副本成长事件账本", static (db, tx) => Execute(db, tx, DungeonGrowthSchema)),
+        new(4, "mailbox", static (db, tx) =>
+        {
+            foreach (string statement in MailboxSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                Execute(db, tx, statement);
+        }),
+        new(5, "成长奖励资源来源", static (db, tx) =>
+            Execute(db, tx, "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_sha256 TO resource_source"))
     ];
 
     // 只新增事实账本，不补发存量角色经验或点数。
@@ -103,7 +110,7 @@ internal static class SqliteMigrations
     private static readonly string[] RequiredColumns =
     [
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
-        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_sha256,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts LIMIT 0",
+        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts LIMIT 0",
         "SELECT [account_id],[salt],[password_hash],[iterations],[disabled],[revision] FROM [accounts] LIMIT 0",
         "SELECT [id],[account],[slot],[name],[revision],[town],[area],[x],[y],[direction],[return_town],[return_area],[return_x],[return_y],[return_direction],[job],[grow_type],[level],[accepted_story_level],[gold],[experience],[inventory_expansion],[revive_coins],[win_points],[gold_carry_limit],[auction_gold_limit],[cargo_capacity] FROM [characters] LIMIT 0",
         "SELECT [character_id],[quest_id] FROM [character_completed_quests] LIMIT 0",
@@ -124,5 +131,61 @@ internal static class SqliteMigrations
         "SELECT [item_uid],[detail] FROM [inventory_avatar_details] LIMIT 0",
         "SELECT [item_uid],[detail] FROM [inventory_creature_details] LIMIT 0",
         "SELECT [character_id],[account],[list_type],[owner_character_id],[slot_index],[item_uid] FROM [character_inventory_slots] LIMIT 0",
+        "SELECT [mail_id],[revision],[recipient_id],[recipient_account],[sender_id],[sender_name],[body],[gold],[created_at],[expires_at],[state],[system_mail],[delivery_key],[delivery_content] FROM [mailbox_messages] LIMIT 0",
+        "SELECT [attachment_id],[mail_id],[ordinal],[item_uid],[source_uid],[source_list],[source_slot],[claimed] FROM [mailbox_attachments] LIMIT 0",
+        "SELECT [character_id],[day],[amount] FROM [mailbox_sent_gold] LIMIT 0",
+        "SELECT [audit_id],[mail_id],[account],[character_id],[generation],[action_name],[created_at],[assets] FROM [mailbox_audit_log] LIMIT 0",
     ];
+
+    // 邮箱从 v4 追加；新库完整 SQL 同时维护，升级逐条 DDL 参与原事务。
+    internal const string MailboxSchema = """
+        CREATE TABLE mailbox_messages(
+            mail_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(mail_id BETWEEN 1 AND 1073741823),
+            revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
+            recipient_id INTEGER NOT NULL,
+            recipient_account TEXT NOT NULL,
+            sender_id INTEGER NOT NULL CHECK(sender_id BETWEEN 0 AND 65535),
+            sender_name TEXT NOT NULL,
+            body TEXT NOT NULL,
+            gold INTEGER NOT NULL CHECK(gold BETWEEN 0 AND 2147483647),
+            created_at INTEGER NOT NULL CHECK(created_at>=0),
+            expires_at INTEGER,
+            state INTEGER NOT NULL DEFAULT 1 CHECK(state BETWEEN 0 AND 3),
+            system_mail INTEGER NOT NULL CHECK(system_mail IN (0,1)),
+            delivery_key TEXT UNIQUE,
+            delivery_content TEXT,
+            FOREIGN KEY(recipient_id,recipient_account) REFERENCES characters(id,account),
+            CHECK(expires_at IS NULL OR expires_at>created_at),
+            CHECK((system_mail=0 AND delivery_key IS NULL AND delivery_content IS NULL) OR
+                  (system_mail=1 AND delivery_key IS NOT NULL AND delivery_content IS NOT NULL))
+        );
+        CREATE INDEX mailbox_inbox ON mailbox_messages(recipient_id,state,created_at,mail_id);
+        CREATE TABLE mailbox_attachments(
+            attachment_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(attachment_id BETWEEN 1 AND 1073741823),
+            mail_id INTEGER NOT NULL REFERENCES mailbox_messages(mail_id),
+            ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 9),
+            item_uid INTEGER UNIQUE REFERENCES character_inventory_items(item_uid),
+            source_uid INTEGER NOT NULL CHECK(source_uid>=0),
+            source_list INTEGER NOT NULL,
+            source_slot INTEGER NOT NULL,
+            claimed INTEGER NOT NULL DEFAULT 0 CHECK(claimed IN (0,1)),
+            UNIQUE(mail_id,ordinal),
+            CHECK((claimed=0 AND item_uid IS NOT NULL) OR (claimed=1 AND item_uid IS NULL))
+        );
+        CREATE TABLE mailbox_sent_gold(
+            character_id INTEGER PRIMARY KEY REFERENCES characters(id),
+            day INTEGER NOT NULL,
+            amount INTEGER NOT NULL CHECK(amount BETWEEN 0 AND 9223372036854775807)
+        );
+        CREATE TABLE mailbox_audit_log(
+            audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mail_id INTEGER NOT NULL REFERENCES mailbox_messages(mail_id),
+            account TEXT NOT NULL,
+            character_id INTEGER NOT NULL,
+            generation INTEGER NOT NULL,
+            action_name TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            assets TEXT NOT NULL CHECK(json_valid(assets))
+        );
+        """;
 }

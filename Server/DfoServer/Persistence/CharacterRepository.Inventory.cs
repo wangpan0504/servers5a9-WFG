@@ -14,21 +14,37 @@ internal sealed partial class CharacterRepository
 {
     public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => owner.Execute(() =>
     {
+        ValidateInventoryPlan(expected, plan);
+        if (!plan.Changed)
+            return expected;
+        using var db = database.Open();
+        using var transaction = db.BeginTransaction(deferred: false);
+        var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan);
+        transaction.Commit();
+        return character;
+    });
+
+    static void ValidateInventoryPlan(Character expected, InventoryPlan plan)
+    {
         if (!SameInventory(expected.Inventory, plan) || plan.CharacterPrecondition?.Matches(expected) == false)
             throw new InvalidOperationException("背包规划不是当前快照");
         plan.After.Validate(allocating: true);
         if (plan.After.AccountWallet.Revision != plan.Before.AccountWallet.Revision || plan.After.AccountCargo.Revision != plan.Before.AccountCargo.Revision ||
             plan.After.EpicPieces.Revision != plan.Before.EpicPieces.Revision)
             throw new InvalidOperationException("业务不能修改账号资产版本");
-        if (!plan.Changed)
-            return expected;
-        using var db = database.Open();
-        using var transaction = db.BeginTransaction(deferred: false);
+    }
+
+    Character CommitInventoryInTransaction(SqliteConnection db, SqliteTransaction transaction, AccountOwners.Lease owner,
+        Character expected, InventoryPlan plan, IReadOnlySet<long>? retained = null, IReadOnlyDictionary<long, InventoryItem>? incoming = null)
+    {
+        ValidateInventoryPlan(expected, plan);
         var current = Require(db, transaction, owner.Account, expected.Name);
         // GM进度修改不递增revision；库存和规划资格都必须在写事务内重新核对。
         if (current.Id != expected.Id || current.Revision != expected.Revision ||
             !SameInventory(current.Inventory, plan) || plan.CharacterPrecondition?.Matches(current) == false)
             throw new InvalidOperationException("角色库存、规划资格或owner/revision已变化");
+        if (!plan.Changed)
+            return current;
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -42,15 +58,14 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$expansion", plan.After.Expansion);
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("Character revision or owner changed");
-        var inventory = WriteInventory(db, transaction, owner, expected.Id, plan, plan.After);
+        var inventory = WriteInventory(db, transaction, owner, expected.Id, plan, plan.After, retained, incoming);
         inventory = WriteWallet(db, transaction, owner, expected.Id, plan, inventory);
         inventory = WriteCargo(db, transaction, owner, expected.Id, plan, inventory);
         WriteShopPurchases(db, transaction, owner.Account, expected.Id, plan.Before, inventory);
         inventory = WriteEpicPieces(db, transaction, owner, expected.Id, plan.Before, inventory, plan.Reason);
-        transaction.Commit();
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
         return current with { Revision = current.Revision + 1, Inventory = inventory };
-    });
+    }
 
     static bool SameInventory(InventorySnapshot left, InventoryPlan plan)
     {
@@ -119,7 +134,9 @@ internal sealed partial class CharacterRepository
             LEFT JOIN character_inventory_slots s ON s.item_uid=i.item_uid AND s.account=i.account AND s.character_id IS i.character_id
             LEFT JOIN inventory_avatar_details a ON a.item_uid=i.item_uid
             LEFT JOIN inventory_creature_details p ON p.item_uid=i.item_uid
-            WHERE i.account=$account AND i.character_id IS $id ORDER BY s.list_type,s.slot_index;
+            WHERE i.account=$account AND i.character_id IS $id
+              AND NOT EXISTS(SELECT 1 FROM mailbox_attachments m WHERE m.item_uid=i.item_uid)
+            ORDER BY s.list_type,s.slot_index;
             """;
         command.Parameters.AddWithValue("$account", account);
         command.Parameters.AddWithValue("$id", (object?)characterId ?? DBNull.Value);
@@ -143,7 +160,8 @@ internal sealed partial class CharacterRepository
     }
 
     static InventorySnapshot WriteInventory(SqliteConnection db, SqliteTransaction transaction, AccountOwners.Lease owner,
-        ushort characterId, InventoryPlan plan, InventorySnapshot after)
+        ushort characterId, InventoryPlan plan, InventorySnapshot after, IReadOnlySet<long>? mailRetained = null,
+        IReadOnlyDictionary<long, InventoryItem>? incoming = null)
     {
         var before = plan.Before;
         string reason = plan.Reason;
@@ -160,6 +178,8 @@ internal sealed partial class CharacterRepository
         }
 
         var retained = after.Items.Where(item => item.Uid != 0).Select(item => item.Uid).ToHashSet();
+        if (mailRetained is not null)
+            retained.UnionWith(mailRetained);
         foreach (var item in before.Items.Where(item => !retained.Contains(item.Uid)))
         {
             BindSlot(item.Position);
@@ -197,8 +217,10 @@ internal sealed partial class CharacterRepository
             else
             {
                 command.Parameters.AddWithValue("$uid", item.Uid);
-                var old = plan.BeforeIndex.FindUid(item.Uid) ?? throw new InvalidOperationException("待转移实例不属于当前快照");
-                command.Parameters.AddWithValue("$oldOwner", old.Position.List == InventoryListType.AccountCargo ? DBNull.Value : characterId);
+                var previous = plan.BeforeIndex.FindUid(item.Uid);
+                var old = previous ?? incoming?.GetValueOrDefault(item.Uid) ??
+                    throw new InvalidOperationException("待转移实例不属于当前快照或已验证邮件");
+                command.Parameters.AddWithValue("$oldOwner", previous?.Position.List == InventoryListType.AccountCargo ? DBNull.Value : characterId);
                 command.CommandText = "UPDATE character_inventory_items SET character_id=$id,item_core=$core,updated_at=CURRENT_TIMESTAMP WHERE character_id IS $oldOwner AND account=$account AND item_uid=$uid";
                 if (command.ExecuteNonQuery() != 1)
                     throw new InvalidOperationException("物品更新失去所有权");

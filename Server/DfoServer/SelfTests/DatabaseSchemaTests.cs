@@ -19,7 +19,7 @@ internal static class DatabaseSchemaTests
             var accounts = new AuthenticationService(new AuthenticationRepository(path));
             using (var db = Open(path))
             {
-                Check(Query(db, "PRAGMA user_version") is 2L, "首次发布完整结构直接标记当前 v2");
+                Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion, "新库完整结构直接标记当前版本");
                 Check(Query(db, "SELECT value FROM schema_metadata WHERE key='baseline_id'") is SqliteMigrations.BaselineId,
                     "统一数据库保存独立基线标识");
                 Check(Query(db, "SELECT count(*) FROM accounts") is 0L && Query(db, "SELECT count(*) FROM characters") is 0L,
@@ -47,7 +47,7 @@ internal static class DatabaseSchemaTests
             foreach (string mutation in new[]
             {
                 "DROP TABLE schema_metadata", "UPDATE schema_metadata SET value='another-database'",
-                "PRAGMA user_version=0", "PRAGMA user_version=3", "ALTER TABLE accounts DROP COLUMN disabled",
+                "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail"
             })
             {
@@ -99,26 +99,27 @@ internal static class DatabaseSchemaTests
         using (var reset = Open(path))
             Execute(reset, "PRAGMA user_version=1");
         string before = Snapshot(path);
-        SqliteMigration second = new(2, "test_add_column", (db, tx) =>
+        SqliteMigration current = new(2, "existing_schema", (_, _) => { });
+        SqliteMigration second = new(3, "test_add_column", (db, tx) =>
         {
             SqliteMigrations.Execute(db, tx, "ALTER TABLE accounts ADD COLUMN future_value INTEGER NOT NULL DEFAULT 0");
             SqliteMigrations.Execute(db, tx, "UPDATE characters SET revision=revision+1");
         });
-        SqliteMigration failing = new(3, "test_failure", (db, tx) =>
+        SqliteMigration failing = new(4, "test_failure", (db, tx) =>
         {
             SqliteMigrations.Execute(db, tx, "CREATE TABLE partial_migration(value INTEGER)");
             SqliteMigrations.Execute(db, tx, "CREATE TABLE accounts(collision INTEGER)");
         });
         using (var db = Open(path))
         {
-            Reject<SqliteException>(() => SqliteMigrations.Apply(db, [second, failing]), "后续步骤失败回滚整个升级事务");
+            Reject<SqliteException>(() => SqliteMigrations.Apply(db, [current, second, failing]), "后续步骤失败回滚整个升级事务");
             Check(Snapshot(path) == before, "失败时账号、角色、DDL 和版本全部保持");
             Reject<InvalidOperationException>(() => SqliteMigrations.Apply(db, [failing]), "拒绝不连续的迁移编号");
-            SqliteMigrations.Apply(db, [second]);
-            Check(Query(db, "PRAGMA user_version") is 2L && Query(db, "SELECT revision FROM characters") is 8L,
+            SqliteMigrations.Apply(db, [current, second]);
+            Check(Query(db, "PRAGMA user_version") is 3L && Query(db, "SELECT revision FROM characters") is 8L,
                 "追加迁移按版本执行并同步提交数据和版本");
             string after = Snapshot(path);
-            SqliteMigrations.Apply(db, [second]);
+            SqliteMigrations.Apply(db, [current, second]);
             Check(Snapshot(path) == after, "已执行迁移不重复运行");
         }
         using (var future = Open(path))

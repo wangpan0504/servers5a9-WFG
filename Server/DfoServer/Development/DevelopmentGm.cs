@@ -2,17 +2,20 @@ using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Mailbox;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Development;
 
-internal static class DevelopmentGm
+internal static partial class DevelopmentGm
 {
     public const string Written = " 已写入。服务端通行校验立即使用新等级和任务。客户端回到选角并再次进入后刷新画面。属性块仍是匹配职业的初始值。";
-    public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find)
+    public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find,
+        MailboxService? mailbox = null, ItemCatalog? items = null)
     {
         try
         {
-            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount));
+            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items);
         }
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
         {
@@ -20,10 +23,15 @@ internal static class DevelopmentGm
         }
     }
 
-    public static string Execute(ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find, DevelopmentRequest request)
+    public static string Execute(ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find, DevelopmentRequest request,
+        MailboxService? mailbox = null, ItemCatalog? items = null)
     {
         try
         {
+            request.Validate();
+            if (request.Action == DevelopmentAction.Item)
+                return SendItem(request, mailbox ?? throw new InvalidOperationException("邮件服务未装配"),
+                    items ?? throw new InvalidOperationException("物品资源未装配"));
             var live = find(request.Account);
             if (!request.Writes)
             {
@@ -31,6 +39,12 @@ internal static class DevelopmentGm
                 return FormatQuery(request, rows);
             }
 
+            if (request.Action == DevelopmentAction.Gold)
+            {
+                var character = live is not null ? live.SetCharacterGold(request.Name, (uint)request.Primary) :
+                    WithLease(owners, request.Account, lease => SetGold(repository, lease, request));
+                return "OK " + Summary(character) + " 该角色金币已设为 " + character.Inventory.Gold + "。客户端回到选角并再次进入后刷新。";
+            }
             var updated = live is null ? WithLease(owners, request.Account, lease => repository.UpdateProgress(lease, request.ToProgressEdit())) : live.UpdateProgress(request.ToProgressEdit());
             return "OK " + Summary(updated) + Written;
         }
@@ -75,6 +89,6 @@ internal static class DevelopmentGm
             " job=" + character.Job + " grow=" + character.GrowType + " level=" + character.Level +
             " story=" + character.AcceptedStoryLevel + " rev=" + character.Revision +
             " pos=" + character.Position.Town + "/" + character.Position.Area + "/" + character.Position.X + "/" + character.Position.Y +
-            " ret=" + returnPoint + " quests=" + character.CompletedQuests.Length + " skills=" + character.Skills.Length;
+            " ret=" + returnPoint + " quests=" + character.CompletedQuests.Length + " skills=" + character.Skills.Length + " gold=" + character.Inventory.Gold;
     }
 }

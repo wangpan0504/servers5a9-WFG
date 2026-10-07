@@ -39,6 +39,10 @@ internal static class SelfTestRunner
         GrowthPacketsTests.Run();
         SkillRequestTests.Run();
         ItemRequestTests.Run();
+        MailboxProtocolTests.Run();
+        MailboxPersistenceTests.Run();
+        await MailboxPublicationTests.RunAsync();
+        DevelopmentAssetTests.RunCore();
         RentalTests.Run();
         SkillPacketsTests.Run();
     }
@@ -54,6 +58,8 @@ internal static class SelfTestRunner
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
+        await MailboxTests.RunAsync(towns, characters, itemResources, pvf);
+        DevelopmentAssetTests.RunResources(towns, itemResources);
         InventoryBatchTests.Run(itemResources);
         SpecialContainerTests.Run(towns, characters, itemResources);
         CurrencyTests.Run(towns, characters, itemResources);

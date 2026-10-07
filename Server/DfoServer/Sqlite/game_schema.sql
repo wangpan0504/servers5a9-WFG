@@ -1,4 +1,4 @@
--- S5A9 首次发布的完整数据库结构；账号与游戏数据统一保存。
+-- S5A9 当前完整数据库结构；账号与游戏数据统一保存。
 
 CREATE TABLE schema_metadata(
     key TEXT NOT NULL PRIMARY KEY,
@@ -231,6 +231,55 @@ CREATE TABLE "character_inventory_slots"(
 
 CREATE UNIQUE INDEX account_cargo_slot ON character_inventory_slots(account,slot_index) WHERE list_type=12;
 
+-- 邮箱 v4：附件沿用完整物品实例与详情，只变更持久所有者和所在位置。
+CREATE TABLE mailbox_messages(
+    mail_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(mail_id BETWEEN 1 AND 1073741823),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
+    recipient_id INTEGER NOT NULL,
+    recipient_account TEXT NOT NULL,
+    sender_id INTEGER NOT NULL CHECK(sender_id BETWEEN 0 AND 65535),
+    sender_name TEXT NOT NULL,
+    body TEXT NOT NULL,
+    gold INTEGER NOT NULL CHECK(gold BETWEEN 0 AND 2147483647),
+    created_at INTEGER NOT NULL CHECK(created_at>=0),
+    expires_at INTEGER,
+    state INTEGER NOT NULL DEFAULT 1 CHECK(state BETWEEN 0 AND 3),
+    system_mail INTEGER NOT NULL CHECK(system_mail IN (0,1)),
+    delivery_key TEXT UNIQUE,
+    delivery_content TEXT,
+    FOREIGN KEY(recipient_id,recipient_account) REFERENCES characters(id,account),
+    CHECK(expires_at IS NULL OR expires_at>created_at),
+    CHECK((system_mail=0 AND delivery_key IS NULL AND delivery_content IS NULL) OR
+          (system_mail=1 AND delivery_key IS NOT NULL AND delivery_content IS NOT NULL))
+);
+CREATE INDEX mailbox_inbox ON mailbox_messages(recipient_id,state,created_at,mail_id);
+CREATE TABLE mailbox_attachments(
+    attachment_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(attachment_id BETWEEN 1 AND 1073741823),
+    mail_id INTEGER NOT NULL REFERENCES mailbox_messages(mail_id),
+    ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 9),
+    item_uid INTEGER UNIQUE REFERENCES character_inventory_items(item_uid),
+    source_uid INTEGER NOT NULL CHECK(source_uid>=0),
+    source_list INTEGER NOT NULL,
+    source_slot INTEGER NOT NULL,
+    claimed INTEGER NOT NULL DEFAULT 0 CHECK(claimed IN (0,1)),
+    UNIQUE(mail_id,ordinal),
+    CHECK((claimed=0 AND item_uid IS NOT NULL) OR (claimed=1 AND item_uid IS NULL))
+);
+CREATE TABLE mailbox_sent_gold(
+    character_id INTEGER PRIMARY KEY REFERENCES characters(id),
+    day INTEGER NOT NULL,
+    amount INTEGER NOT NULL CHECK(amount BETWEEN 0 AND 9223372036854775807)
+);
+CREATE TABLE mailbox_audit_log(
+    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mail_id INTEGER NOT NULL REFERENCES mailbox_messages(mail_id),
+    account TEXT NOT NULL,
+    character_id INTEGER NOT NULL,
+    generation INTEGER NOT NULL,
+    action_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    assets TEXT NOT NULL CHECK(json_valid(assets))
+);
 CREATE TABLE character_dungeon_growth_receipts(
 character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
 instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>0),
@@ -238,7 +287,7 @@ task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK
 map_id INTEGER NOT NULL,monster_key INTEGER NOT NULL CHECK(monster_key BETWEEN 0 AND 65535),
 combat_sequence INTEGER NOT NULL CHECK(combat_sequence>0),
 generation INTEGER NOT NULL CHECK(generation>0),amount INTEGER NOT NULL CHECK(amount>0),
-rule_id TEXT NOT NULL,resource_sha256 TEXT NOT NULL,
+rule_id TEXT NOT NULL,resource_source TEXT NOT NULL,
 monster_id INTEGER NOT NULL,monster_level INTEGER NOT NULL CHECK(monster_level BETWEEN 1 AND 255),
 before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),
 after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),

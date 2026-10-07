@@ -144,12 +144,16 @@ def self_check():
                 reply = "OK count=1 | 测角 id=1 slot=0 job=0 grow=0 level=1 story=0 rev=0 pos=38/1/450/234 ret=38/0/622/196 quests=0 skills=0"
             elif line == "account 10000 level 测角 50":
                 reply = "OK 测角 id=1 slot=0 job=0 grow=0 level=50 story=0 rev=0 pos=38/1/450/234 ret=38/0/622/196 quests=0 skills=1 已写入。"
+            elif line == "account 10000 gold 测角 12345":
+                reply = "OK 测角 id=1 gold=12345 该角色金币已设为12345。"
+            elif line == "account 10000 item 测角 18400 2":
+                reply = "OK 测角 id=1 item=18400 count=2 mail=1 已发送到该角色邮箱。"
             else:
                 reply = "ERR 未识别"
             conn.sendall((reply + "\n").encode("utf-8"))
 
-    threading.Thread(target=once, daemon=True).start()
-    threading.Thread(target=once, daemon=True).start()
+    for _ in range(4):
+        threading.Thread(target=once, daemon=True).start()
     probe = socket.socket()
     probe.bind((BIND, 0))
     web_port = probe.getsockname()[1]
@@ -166,7 +170,9 @@ def self_check():
         assert meta is not None and meta["account"] == "10000" and meta["gmPort"] == gm_port, meta
         page = urlopen(f"http://{BIND}:{web_port}/", timeout=3).read().decode("utf-8")
         assert "开发 GM" in page
-        for line in ("account 10000 list", "account 10000 level 测角 50"):
+        assert 'id="gold"' in page and 'id="item-id"' in page and 'id="item-count"' in page and "通过邮件发放" in page
+        commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2")
+        for line in commands:
             req = Request(
                 f"http://{BIND}:{web_port}/api/command",
                 data=json.dumps({"line": line}).encode("utf-8"),
@@ -175,7 +181,7 @@ def self_check():
             )
             body = json.loads(urlopen(req, timeout=3).read().decode("utf-8"))
             assert body["ok"] and body["text"].startswith("OK "), body
-        assert received == ["account 10000 list", "account 10000 level 测角 50"], received
+        assert received == list(commands), received
     finally:
         listener.close()
     print("PASS gm web proxy")

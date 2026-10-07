@@ -7,7 +7,7 @@ using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Persistence;
 
-internal sealed partial class CharacterRepository(string path) : ICharacterRepository
+internal sealed partial class CharacterRepository(string path) : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore
 {
     readonly SqliteGameDatabase database = new(path);
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>

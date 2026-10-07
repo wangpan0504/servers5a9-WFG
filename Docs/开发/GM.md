@@ -1,6 +1,6 @@
 # 开发 GM
 
-本工具只服务开发期调整已有角色的存档。它不新增游戏 opcode，不代表已经实现升级、转职、任务领奖、技能学习或物品发放。客户端没有 GM 面板；命令在服务进程内执行，或在服务停止后直接写 `game.db`。
+本工具只服务开发期调整已有角色的存档，并提供角色金币设置和简易道具邮件发放。它不新增游戏 opcode，不代替正常升级、转职、任务领奖或技能学习。客户端没有 GM 面板；命令在服务进程内执行，或在服务停止后直接写 `game.db`。
 
 当前命令行、管理端口及网页均属于开发调试工具。面向用户的独立 GM 工具将在邮件系统实现后另行提供。
 
@@ -9,7 +9,7 @@
 | 命令 | 写入 | 范围 |
 |---|---|---|
 | `list` | 否 | 当前账号的角色摘要 |
-| `show <角色>` | 否 | 单个角色的 id、槽位、job、grow、等级、剧情接受等级、revision、位置、返回点、任务数、技能数 |
+| `show <角色>` | 否 | 单个角色的 id、槽位、job、grow、等级、剧情接受等级、revision、位置、返回点、任务数、技能数和金币余额 |
 | `quests <角色>` | 否 | 已完成任务编号，按编号升序 |
 | `skills <角色>` | 否 | `技能:等级`，按技能编号升序 |
 | `level <角色> <等级>` | 是 | 1–95 |
@@ -19,10 +19,16 @@
 | `quest-del <角色> <任务>` | 是 | 删除一条；本来没有也成功 |
 | `quest-clear <角色>` | 是 | 清空该角色的完成任务 |
 | `skill <角色> <技能> <等级>` | 是 | 技能 0–65535，等级 1–255 为设置；等级 0 删除。新技能最多 255 条 |
+| `gold <角色> <金额>` | 是 | 设置该角色金币余额，0–2147483647，0清零；开发设置不受等级携带上限限制，正常玩法仍按自身上限执行 |
+| `item <角色> <道具ID> <数量>` | 是 | 发到该角色系统邮箱；装备及其他非堆叠物品按件创建，单封最多10件；堆叠数量不超过模板上限 |
 
 默认账号是 `10000`，与原生登录的开发账号一致。其他账号在命令前加 `account <账号>`。账号只允许字母、数字、`_` 和 `-`，最长 64。角色名沿用 CP936 名称合同。
 
-这些写入不改 job、位置、返回点或 revision。选角仍会把出生点设回 PVF 房间，所以这里不提供传送。等级和 grow 不重算 89 字节初始属性，也不自动补技能。本工具没有物品、金币或仓库资产的发放命令；这些资产的持久化和业务入口见[背包与装备](../模块/背包与装备.md)。
+进度写入不改 job、位置、返回点或 revision。选角仍会把出生点设回 PVF 房间，所以这里不提供传送。等级和 grow 不重算 89 字节初始属性，也不自动补技能。
+
+金币按指定角色执行背包资产事务及审计，实际变化递增角色 revision；同额设置保持只读。提交后同步当前 Selected，客户端重新选择角色后刷新，不即时推送金币差量；同账号其他角色只改其存档，不能覆盖当前 Selected，也不改账号货币。离线操作使用原 owner 拒绝接管合同。数量、归属和持久化规则见[背包与装备](../模块/背包与装备.md)。
+
+道具复用完整创建策略，装备保持品级、耐久、封装和独立 UID，材料使用堆叠数量；时装和宠物保留对应详情。系统邮件最长十五天，物品期限更早时邮件一起到期。GM 投递后不即时提示，重新选择角色后加载邮箱；领取仍走[邮件](../模块/邮件.md)和统一 grant，容量不足不截断。虚拟钱包和碎片不能伪装成实体邮件。本工具不提供道具查询、强化参数、全服发放或仓库编辑。
 
 ## 2. 在线与离线
 
@@ -32,7 +38,7 @@
 ./start-server.bat --gm-port 23102
 ```
 
-服务只在 `127.0.0.1` 上接受一行 UTF-8 命令并回一行结果。它不跟随 `ListenAddress`，也不向游戏客户端发 GM 包。隔离测试默认关闭 GM，相关专项测试使用各自的空闲端口。
+服务只在 `127.0.0.1` 上接受一行 UTF-8 命令并回一行结果。它不跟随 `ListenAddress`，开发修改后统一重新选角刷新客户端。隔离测试默认关闭 GM，相关专项测试使用各自的空闲端口。
 
 同一条命令的两条路径：
 
@@ -43,7 +49,7 @@
 
 成功行以 `OK ` 开始。失败行以 `ERR ` 开始，进程退出码为 1。`help` 只打印用法。
 
-代码按职责分为 [DevelopmentRequest](../../Server/DfoServer/Development/DevelopmentRequest.cs) 的行命令解析、[DevelopmentGm](../../Server/DfoServer/Development/DevelopmentGm.cs) 的执行与结果文本，以及 [Network/Management](../../Server/DfoServer/Network/Management) 的 TCP 传输。写入请求转换成 Game 层的 CharacterProgressEdit，在线状态和 Repository 不依赖 GM 文本命令类型。
+代码按职责分为 [DevelopmentRequest](../../Server/DfoServer/Development/DevelopmentRequest.cs) 的行命令解析、[DevelopmentGm](../../Server/DfoServer/Development/DevelopmentGm.cs)及其[资产业务](../../Server/DfoServer/Development/DevelopmentGm.Assets.cs)的执行与结果文本，以及 [Network/Management](../../Server/DfoServer/Network/Management) 的 TCP 传输。进度请求转换成 CharacterProgressEdit，金币及物品使用 Game 的类型化资产和邮件入口；在线状态和 Repository 不依赖 GM 文本命令类型。
 
 ## 3. 命令
 
@@ -58,6 +64,8 @@ dotnet run --project Server/DfoServer -- --gm story 测试角色 50
 dotnet run --project Server/DfoServer -- --gm grow 测试角色 37
 dotnet run --project Server/DfoServer -- --gm quest-add 测试角色 10100
 dotnet run --project Server/DfoServer -- --gm skill 测试角色 179 7
+dotnet run --project Server/DfoServer -- --gm gold 测试角色 1000000
+dotnet run --project Server/DfoServer -- --gm item 测试角色 18400 2
 dotnet run --project Server/DfoServer -- --gm account other-1 list
 ```
 

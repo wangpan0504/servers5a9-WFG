@@ -62,7 +62,7 @@ internal static class DungeonGrowthRepositoryTests
             Reject<InvalidDataException>(() => repository.CommitDungeonGrowth(owner, initial, run, pending,
                 Reward(1000, pending) with { RuleId = "fixture-next-version" }, growth), "规则变更不能重放旧奖励ID");
             Reject<InvalidDataException>(() => repository.CommitDungeonGrowth(owner, initial, run, pending,
-                Reward(1000, pending) with { ResourceSha256 = new string('A', 64) }, growth), "资源身份改变不能重放旧奖励ID");
+                Reward(1000, pending) with { ResourceSource = "monster/otherexp.tbl" }, growth), "资源身份改变不能重放旧奖励ID");
             Check(run.ConfirmCommittedDeath(pending).Outcome == DungeonRunOutcome.Accepted,
                 "明确提交后才确认死亡");
             Reject<InvalidDataException>(() => repository.CommitDungeonGrowth(owner, first.Character, run, pending, Reward(1000, pending), growth),
@@ -130,7 +130,7 @@ internal static class DungeonGrowthRepositoryTests
             var rewardTable = DungeonKillExperienceCatalog.Load(pvf);
             var localReward = DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable);
             var localCommit = repository.CommitDungeonGrowth(replacement, localCharacter, localRun, localPending, localReward, growth);
-            Check(localReward.RuleId == DungeonKillExperienceCatalog.RuleId && localReward.ResourceSha256 == pvf.Sha256 &&
+            Check(localReward.RuleId == DungeonKillExperienceCatalog.RuleId && localReward.ResourceSource == DungeonKillExperienceCatalog.ResourcePath &&
                 localReward.Amount == 72 && localReward.MonsterLevel == 3 && localCommit.Character.Level == 2 &&
                 localCommit.Character.Learning.Experience == 1022 && localCommit.Character.Learning.Trees.All(tree => tree.Sp == 30),
                 "本服真实Lv3表值72通过规则规划与原子事务，跨级自动发SP");
@@ -140,12 +140,12 @@ internal static class DungeonGrowthRepositoryTests
             Reject<InvalidOperationException>(() => DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable),
                 "已确认死亡不能重新规划本服奖励");
             // 模拟已发布 v2 库；迁移只建空账本，不赠送经验、点数或事件。
-            Execute("DROP TABLE character_dungeon_growth_receipts");
+            Execute("DROP TABLE character_dungeon_growth_receipts; DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages");
             Execute("PRAGMA user_version=2");
             var migrated = new CharacterRepository(path).List(replacement).Single(character => character.Id == edited.Id);
             Check(SkillRepositoryTests.Equal(migrated, edited) && CountReceipts() == 0 &&
                 Convert.ToInt64(Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion,
-                "v2到v3迁移保持已有角色状态，新增账本为空");
+                "v2升级当前结构保持已有角色状态，新增账本为空");
             Execute("ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN amount TO broken_amount");
             Reject<SqliteException>(() => new CharacterRepository(path), "当前版本的残缺成长账本初始化必须失败");
         }
@@ -169,7 +169,7 @@ internal static class DungeonGrowthRepositoryTests
             throw new InvalidOperationException("FAIL expected " + typeof(T).Name + ": " + name);
         }
         DungeonExperienceReward Reward(uint amount, PreparedDungeonDeath prepared) =>
-            new("fixture-only", pvf.Sha256, prepared.Monster.MonsterId, prepared.Monster.CandidateLevel, amount);
+            new("fixture-only", DungeonKillExperienceCatalog.ResourcePath, prepared.Monster.MonsterId, prepared.Monster.CandidateLevel, amount);
         long CountReceipts() => Convert.ToInt64(Query("SELECT count(*) FROM character_dungeon_growth_receipts"));
         object? Query(string sql)
         {

@@ -9,7 +9,7 @@ using DfoServer.Game.Characters;
 namespace DfoServer.Network.Protocol;
 
 internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler loginHandler, GameCommandRegistry commands, ICharacterRepository repository, TownCatalog towns, OnlineSessionDirectory online, TownProjection projection, ServerLog log,
-    Func<GameSession, IGameConnectionActivity>? createActivity = null) : IConnectionProtocol
+    Func<GameSession, IGameConnectionActivity>? createActivity = null, MailboxProjection? mailbox = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -19,6 +19,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = Convert.ToHexString(body.Span) }), connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
+        if (mailbox is not null)
+            session.MailboxArrived = receipt => mailbox.Alarm(context, receipt);
         try
         {
             online.Register(login.Owner, session);

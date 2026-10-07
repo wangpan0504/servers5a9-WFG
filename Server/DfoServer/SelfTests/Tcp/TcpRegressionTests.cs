@@ -26,6 +26,8 @@ internal static class TcpRegressionTests
         ("currency", CurrencyTcpTests.RunAsync),
         ("cargo", CargoTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
+        ("mailbox", MailboxTcpTests.RunAsync),
+        ("gm-assets", DevelopmentAssetTcpTests.RunAsync),
         ("repair", RepairTcpTests.RunAsync),
         ("refinement", RefinementTcpTests.RunAsync),
         ("refinement-tickets", RefinementTicketTcpTests.RunAsync),

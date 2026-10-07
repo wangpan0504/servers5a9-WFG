@@ -1,12 +1,15 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Network.Management;
 using DfoServer.Persistence;
+using DfoServer.Infrastructure;
+using DfoServer.Game.Mailbox;
+using PvfLib;
 
 namespace DfoServer.Development;
 
 internal static class DevelopmentCommands
 {
-    public static int RunGm(string[] args, ServerOptions options)
+    public static int RunGm(string[] args, ServerOptions options, PvfArchive pvf)
     {
         string line = string.Join(' ', args);
         DevelopmentRequest request;
@@ -48,7 +51,9 @@ internal static class DevelopmentCommands
             Directory.CreateDirectory(options.DataDirectory);
             using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             var repository = new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"));
-            Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request));
+            var resources = request.Action == DevelopmentAction.Item ? new ItemResources(pvf) : null;
+            var mailbox = resources is null ? null : new MailboxService(repository, resources.Items, resources.GoldLimits, resources.EpicPieces);
+            Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items));
             return 0;
         }
         catch (IOException)

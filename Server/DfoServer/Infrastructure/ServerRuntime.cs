@@ -31,7 +31,9 @@ internal static class ServerRuntime
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
         accounts.EnsureDevelopmentAccount();
         var presence = new TownPresence(towns);
-        var projection = new TownProjection(towns, characters, presence, itemResources.EpicPieces);
+        var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var mailboxProjection = new MailboxProjection(mailbox, online);
+        var projection = new TownProjection(towns, characters, presence, itemResources.EpicPieces, mailboxProjection);
         var inventoryProjection = new InventoryProjection(characters, projection, itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
         IGameCommandModule dungeon;
@@ -54,6 +56,7 @@ internal static class ServerRuntime
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning),
             new SkillHandler(learning, log),
             new TownHandler(projection, log),
+            new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
             new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
@@ -73,7 +76,7 @@ internal static class ServerRuntime
             module.Register(commands);
         commands.Seal();
         var login = new LoginHandler(options, owners, accounts, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection);
         var channel = new ChannelProtocolHandler(options, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         return new ServerHost(options, channel, game, management, Started, log);
@@ -96,7 +99,8 @@ internal static class ServerRuntime
         });
         string DevelopmentCommand(string line)
         {
-            string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find);
+            string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
+                mailbox, itemResources.Items);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });
             return result;
         }
