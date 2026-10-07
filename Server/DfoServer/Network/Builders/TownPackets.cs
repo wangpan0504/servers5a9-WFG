@@ -1,0 +1,254 @@
+using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Game.Characters;
+using DfoServer.Network.Builders.Inventory;
+
+namespace DfoServer.Network.Builders;
+// Client 包体构造。只读取角色快照，不修改会话或访问数据库。
+internal static class TownPackets
+{
+    public static byte[] Select(Character character)
+    {
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write((byte)1);
+            writer.Write(0u);
+            writer.Write((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            writer.Write(character.Id);
+            writer.Write((ushort)0);
+            writer.Write((ushort)156);
+            writer.Write((ushort)0);
+            writer.Write((byte)0);
+            writer.Write(0u);
+            for (int i = 0; i < 30; i++)
+            {
+                // 任务条件编码为 0 时客户端视为达成；3145 单清图条件初始为 1，空槽仍为 FFFF/0。
+                ushort quest = ushort.MaxValue;
+                uint conditionState = 0;
+                foreach (var active in character.ActiveMainQuests)
+                {
+                    if (active.Slot != i)
+                        continue;
+                    quest = active.QuestId;
+                    conditionState = active.ConditionState;
+                }
+
+                writer.Write(quest);
+                writer.Write(conditionState);
+            }
+
+            writer.Write(0u);
+            writer.Write(new byte[16]); // 020296D0: four quest bookmarks.
+            writer.Write(character.Position.Town); // 02341BCA 读初始城镇，02341E12 用它切换城镇；此处不是职业。
+            writer.Write(new byte[] { 0, 1, 31 }); // 03B32D50: tutorial flag, count, completed step.
+            writer.Write((ushort)0);
+            writer.Write((ushort)156);
+            writer.Write((byte)0);
+            writer.Write((ushort)0);
+            writer.Write((byte)0);
+            writer.Write((byte)0); // Tail quest count and premium flag.
+            if (stream.Length != 235)
+                throw new InvalidDataException("Client select size changed");
+            return stream.ToArray();
+        }
+    }
+
+    public static byte[] Actor(Character character)
+    {
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write((byte)0);
+            writer.Write((ushort)1);
+            writer.Write(new byte[2]);
+            // 0267DA80 reads 0x74 bytes. The two fixed UTF-16 names remain empty.
+            byte[] state = new byte[116];
+            state[7] = 1;
+            writer.Write(state);
+            writer.Write(character.Id);
+            PacketEncoding.WriteString(writer, character.Name);
+            writer.Write(character.Job);
+            writer.Write(character.GrowType);
+            writer.Write(character.Level);
+            writer.Write(new byte[3]); // 02676FB0 level, two helper bytes, one direct byte.
+            EquipmentProtocolWriter.Appearance(writer, character.Inventory);
+            writer.Write(0u);
+            writer.Write(new byte[4]);
+            writer.Write(new byte[8]); // 0267DF38..0267D678.
+            writer.Write((byte)0);
+            writer.Write(0u);
+            writer.Write((byte)0);
+            writer.Write(0u);
+            PacketEncoding.WriteString(writer, "");
+            writer.Write((byte)0); // 0267B3B0.
+            writer.Write(new byte[2]);
+            writer.Write(0u);
+            PacketEncoding.WriteString(writer, "");
+            writer.Write(0u);
+            writer.Write((ushort)0); // 026775E3 / 026775F9: mandatory fields after the name.
+            writer.Write(0u);
+            writer.Write((byte)1);
+            writer.Write(new byte[2]); // Main flag, 02679660 pair.
+            writer.Write((byte)0);
+            writer.Write(0u); // 026777A0.
+            writer.Write((byte)0);
+            writer.Write(0u);
+            writer.Write(0u);
+            writer.Write((ushort)0);
+            writer.Write(new byte[2]);
+            writer.Write((ushort)0); // 02678840.
+            writer.Write(0u);
+            writer.Write(0UL); // 026768F0.
+            writer.Write((byte)6); // 02677B70: native bit flags 1 and 2, no trade/movement prohibition bits.
+            writer.Write(0u);
+            writer.Write((byte)0);
+            writer.Write((ushort)0);
+            writer.Write((byte)0);
+            writer.Write((ushort)0);
+            writer.Write((byte)0);
+            writer.Write((ushort)0);
+            writer.Write((byte)0xff);
+            writer.Write(new byte[2]);
+            writer.Write(0u);
+            writer.Write(new byte[2]); // 0267F273..0267FED3.
+            return stream.ToArray();
+        }
+    }
+
+    public static byte[] Position(ushort id, Location position, bool area)
+    {
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write(id);
+            if (area)
+            {
+                writer.Write(position.Town);
+                writer.Write(position.Area);
+            }
+
+            writer.Write(position.X);
+            writer.Write(position.Y);
+            writer.Write(position.Direction);
+            if (area)
+                writer.Write((byte)1);
+            else
+                writer.Write((ushort)100);
+            return stream.ToArray();
+        }
+    }
+
+    public static byte[] Player(Character character, CharacterCatalog characters)
+    {
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write((byte)1);
+            writer.Write((ushort)1);
+            writer.Write(new byte[19]);
+            writer.Write(character.Id);
+            writer.Write(character.Learning.Experience); // 02678520 的完整u64累计经验。
+            byte[] stats = CharacterStatsPackets.Build(characters.Get(character.Job).InitialStats);
+            writer.Write(stats.Length);
+            writer.Write(stats); // 03BE25C0: u32 length followed by raw bytes.
+            writer.Write((byte)0);
+            EquipmentProtocolWriter.Player(writer, character.Inventory);
+            writer.Write(0u);
+            writer.Write((byte)0); // 023C3A90: equipment count, scalar, extra list count.
+            writer.Write((ushort)0);
+            writer.Write((byte)0); // 0267BFA0: empty auxiliary inventory.
+            writer.Write(new byte[8]); // 0267BC60.
+            // 02676C60 -> 02676660: active set, two (u8 count; u16 id/u8 level) skill lists.
+            writer.Write(character.Skills.Length == 0 ? (byte)0xff : (byte)0);
+            for (int tree = 0; tree < 2; tree++)
+            {
+                CharacterSkill[] skills = character.Learning.Initialized
+                    ? character.Learning.Trees.Single(value => value.Context == tree).Skills
+                        .OrderBy(skill => skill.Id).Select(skill => new CharacterSkill(skill.Id, skill.Level)).ToArray()
+                    : character.Skills;
+                writer.Write(checked((byte)skills.Length));
+                foreach (var skill in skills)
+                {
+                    writer.Write(skill.Id);
+                    writer.Write(skill.Level);
+                }
+            }
+
+            writer.Write((byte)0);
+            writer.Write(new byte[4]); // Direct byte, then 02676300 count plus three bytes.
+            writer.Write((byte)0);
+            writer.Write(0u); // 02676410 / 02676510 empty lists.
+            writer.Write(0u);
+            writer.Write(0u); // Direct scalar, then 02675CD0.
+            writer.Write(new byte[3]); // 0267B480, direct byte, 0267AC80 empty list.
+            return stream.ToArray();
+        }
+    }
+
+    public static byte[] CompletedQuests(Character character)
+    {
+        // 0/356 -> 023A0000 reads a raw 30000-byte table through 03BE25C0.
+        byte[] body = new byte[30004];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, 30000);
+        foreach (int id in character.CompletedQuests)
+        {
+            if (id is <= 0 or >= 30000)
+                throw new InvalidDataException("Client quest table bounds");
+            body[4 + id] = 1;
+        }
+
+        return body;
+    }
+
+    public static byte[] StoryLevel(Character character)
+    {
+        // 0/1382 -> 0176A230 stores StoryDigest+60; 01768FE0 compares accepted vs current level.
+        byte[] body = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, character.AcceptedStoryLevel);
+        return body;
+    }
+
+    public static byte[] RoomReturnTown(Location point)
+    {
+        // NOTI1379 -> 023D0680 reads one i32; 03B875C0 stores TownScene+3A0.
+        byte[] body = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(body, point.Town);
+        return body;
+    }
+
+    public static byte[] ActorState(ushort id)
+    {
+        // 023D6D80: u8 count, then u16 actor id and u8 state; state 0 is town.
+        return new byte[]
+        {
+            1,
+            (byte)id,
+            (byte)(id >> 8),
+            0
+        };
+    }
+
+    public static byte[] RemoveActor(ushort id)
+    {
+        // Client NOTI6的023D179F只读一个u16，随后023D1929按该ID移除客户端actor。
+        byte[] body = new byte[2];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(body, id);
+        return body;
+    }
+
+    public static byte[] Transition(ushort id, Location position)
+    {
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write(new byte[] { position.Town, position.Area });
+            writer.Write((ushort)1);
+            writer.Write(id);
+            writer.Write(position.X);
+            writer.Write(position.Y);
+            writer.Write(new byte[] { position.Direction, 1, 1 });
+            return stream.ToArray(); // 023DFA82 consumes a third byte after direction and area state.
+        }
+    }
+}

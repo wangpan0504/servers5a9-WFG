@@ -1,0 +1,102 @@
+using DfoServer.Development.Dungeons;
+using DfoServer.Game.Session;
+using DfoServer.Game.Accounts;
+using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Development;
+using DfoServer.Game.Auth;
+using DfoServer.Network;
+using DfoServer.Network.Management;
+using DfoServer.Network.Handlers;
+using DfoServer.Network.Handlers.Inventory;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Network.Projection;
+using DfoServer.Network.Projection.Inventory;
+using DfoServer.Network.Protocol;
+using DfoServer.Persistence;
+using DfoServer.GameWorld.Dungeons;
+using PvfLib;
+using DfoServer.GameWorld.Items;
+
+namespace DfoServer.Infrastructure;
+// 唯一装配入口：按领域增加模块及依赖，不在协议循环中维护业务分支。
+internal static class ServerRuntime
+{
+    public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
+        SkillLearningCatalog learning, ItemResources itemResources, ServerLog log)
+    {
+        var owners = new AccountOwners();
+        var online = new OnlineSessionDirectory();
+        var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
+        accounts.EnsureDevelopmentAccount();
+        var presence = new TownPresence(towns);
+        var projection = new TownProjection(towns, characters, presence, itemResources.EpicPieces);
+        var inventoryProjection = new InventoryProjection(characters, projection, itemResources.EpicPieces);
+        var commands = new GameCommandRegistry();
+        IGameCommandModule dungeon;
+        Func<GameSession, IGameConnectionActivity>? createActivity = null;
+        if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
+        {
+            dungeon = new DungeonHandler(log);
+        }
+        else
+        {
+            var catalog = DungeonCatalog.Load(pvf);
+            var rooms = options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.FinishLoadingMonsters
+                ? DungeonRoomCatalog.Load(pvf) : null;
+            dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms);
+            createActivity = static session => new DungeonProbeState(session);
+        }
+        IGameCommandModule[] modules =
+        [
+            new SessionHandler(projection, log),
+            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning),
+            new SkillHandler(learning, log),
+            new TownHandler(projection, log),
+            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
+            new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
+            new ShopHandler(new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection),
+            new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
+            new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
+            new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new DungeonSelectionHandler(log),
+            dungeon,
+            new AgitWarHandler(),
+            new ClientNoticeHandler(log)
+        ];
+        foreach (var module in modules)
+            module.Register(commands);
+        commands.Seal();
+        var login = new LoginHandler(options, owners, accounts, log);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity);
+        var channel = new ChannelProtocolHandler(options, log);
+        Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
+        return new ServerHost(options, channel, game, management, Started, log);
+        void Started() => log.Write("ready", new
+        {
+            options.ChannelPort,
+            options.GamePort,
+            options.GmPort,
+            options.DevelopmentAccount,
+            options.DevelopmentDungeonEntryProbe,
+            Pid = Environment.ProcessId,
+            Towns = towns.Areas.Keys.Select(key => key.Item1).Distinct().Count(),
+            Areas = towns.Areas.Count,
+            MissingMaps = towns.Areas.Values
+                .SelectMany(area => area.Phases.Prepend(area.Default))
+                .Where(map => map.Error is not null)
+                .Select(map => new { map.Path, map.Error })
+                .Distinct()
+                .ToArray()
+        });
+        string DevelopmentCommand(string line)
+        {
+            string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find);
+            log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });
+            return result;
+        }
+    }
+}

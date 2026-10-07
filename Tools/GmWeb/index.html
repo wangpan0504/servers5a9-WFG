@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>开发 GM</title>
+<style>
+  :root { color-scheme: light; --ink:#1c1915; --muted:#655e54; --line:#ddd4c6; --card:#fffdf8; --bg:#f3efe6; --accent:#0f6b4c; --bad:#8d2f2f; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 "PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif; }
+  main { max-width:920px; margin:0 auto; padding:28px 20px 48px; }
+  h1 { font-size:28px; margin:0 0 6px; letter-spacing:-0.03em; }
+  p.lead { margin:0 0 22px; color:var(--muted); }
+  section { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin:0 0 14px; }
+  h2 { font-size:15px; margin:0 0 12px; }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+  input { font:inherit; color:inherit; background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-width:0; }
+  input[type="number"] { width:112px; }
+  #account, #name { width:180px; }
+  button { font:inherit; border:0; border-radius:8px; padding:8px 12px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.quiet { background:#efeae1; color:var(--ink); }
+  button:disabled { opacity:.45; cursor:default; }
+  .chars { display:flex; flex-wrap:wrap; gap:8px; }
+  .chars button { background:#fff; color:var(--ink); border:1px solid var(--line); text-align:left; }
+  .chars button.selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+  .meta { color:var(--muted); font-size:13px; }
+  #result { white-space:pre-wrap; word-break:break-word; margin:0; }
+  #result.ok { color:var(--accent); }
+  #result.bad { color:var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>开发 GM</h1>
+  <p class="lead">这是单独打开的本机网页。它只把下面的操作发给游戏服务的 GM 端口。改完后回到选角，再进入游戏，画面才会按新存档刷新。属性仍是职业初始值。</p>
+  <section>
+    <h2>账号</h2>
+    <div class="row">
+      <div><label for="account">账号</label><input id="account" autocomplete="off"></div>
+      <button id="refresh" type="button">刷新角色</button>
+      <span id="status" class="meta"></span>
+    </div>
+    <div id="chars" class="chars" style="margin-top:12px"></div>
+  </section>
+  <section>
+    <h2>调整选中角色</h2>
+    <div class="row">
+      <div><label for="name">角色名</label><input id="name" autocomplete="off"></div>
+      <button id="detail" class="quiet" type="button">查看任务和技能</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div><label for="level">等级 1–95</label><input id="level" type="number" min="1" max="95" value="50"></div>
+      <button id="set-level" type="button">设置等级</button>
+      <div><label for="story">剧情接受等级 0–95</label><input id="story" type="number" min="0" max="95" value="50"></div>
+      <button id="set-story" type="button">设置剧情</button>
+      <div><label for="grow">觉醒字节 0–127</label><input id="grow" type="number" min="0" max="127" value="0"></div>
+      <button id="set-grow" type="button">设置觉醒</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div><label for="quest">任务编号</label><input id="quest" type="number" min="1" max="29999" value="10100"></div>
+      <button id="quest-add" type="button">完成任务</button>
+      <button id="quest-del" class="quiet" type="button">删除任务</button>
+      <button id="quest-clear" class="quiet" type="button">清空任务</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div><label for="skill">技能编号</label><input id="skill" type="number" min="0" max="65535" value="179"></div>
+      <div><label for="skill-level">技能等级，0 为删除</label><input id="skill-level" type="number" min="0" max="255" value="7"></div>
+      <button id="set-skill" type="button">设置技能</button>
+    </div>
+  </section>
+  <section>
+    <h2>结果</h2>
+    <p id="result" class="meta">还没有命令。</p>
+  </section>
+</main>
+<script>
+const result = document.querySelector("#result");
+const chars = document.querySelector("#chars");
+let defaultAccount = "";
+
+function show(text, kind) {
+  result.className = kind || "meta";
+  result.textContent = text;
+}
+
+function parseSummary(segment) {
+  const tokens = segment.trim().split(/\s+/);
+  const fields = { name: tokens[0] || "" };
+  for (const token of tokens.slice(1)) {
+    const at = token.indexOf("=");
+    if (at > 0) fields[token.slice(0, at)] = token.slice(at + 1);
+  }
+  return fields;
+}
+
+function renderList(text) {
+  chars.replaceChildren();
+  const body = text.startsWith("OK ") ? text.slice(3) : text;
+  const parts = body.split(" | ").slice(1);
+  if (!parts.length) {
+    chars.textContent = "这个账号还没有角色。";
+    return;
+  }
+  for (const part of parts) {
+    const role = parseSummary(part);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${role.name}  Lv${role.level || "?"}  觉醒 ${role.grow || "0"}`;
+    button.addEventListener("click", () => selectRole(role, button));
+    chars.appendChild(button);
+  }
+}
+
+function selectRole(role, button) {
+  document.querySelector("#name").value = role.name;
+  if (role.level) document.querySelector("#level").value = role.level;
+  if (role.story) document.querySelector("#story").value = role.story;
+  if (role.grow) document.querySelector("#grow").value = role.grow;
+  for (const item of chars.querySelectorAll("button")) item.classList.remove("selected");
+  button.classList.add("selected");
+}
+
+async function post(line) {
+  const response = await fetch("/api/command", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ line })
+  });
+  const body = await response.json();
+  if (!body.ok) throw new Error(body.error || "命令失败");
+  return body.text;
+}
+
+async function refresh() {
+  const text = await post(line("list"));
+  show(text, text.startsWith("OK ") ? "ok" : "bad");
+  if (text.startsWith("OK ")) renderList(text);
+}
+
+async function run(rest, reload) {
+  const text = await post(line(rest));
+  show(text, text.startsWith("OK ") ? "ok" : "bad");
+  if (reload && text.startsWith("OK ")) {
+    const listed = await post(line("list"));
+    if (listed.startsWith("OK ")) renderList(listed);
+  }
+}
+
+function line(rest) {
+  const account = document.querySelector("#account").value.trim() || defaultAccount;
+  return `account ${account} ${rest}`;
+}
+
+function name() {
+  const value = document.querySelector("#name").value.trim();
+  if (!value) {
+    show("先选择或填写角色名。", "bad");
+    return "";
+  }
+  return value;
+}
+
+function guard(work) {
+  return async () => {
+    try { await work(); }
+    catch (ex) { show(ex.message, "bad"); }
+  };
+}
+
+document.querySelector("#refresh").addEventListener("click", guard(refresh));
+document.querySelector("#detail").addEventListener("click", guard(async () => {
+  const role = name();
+  if (!role) return;
+  const quests = await post(line(`quests ${role}`));
+  const skills = await post(line(`skills ${role}`));
+  show(`${quests}\n${skills}`, quests.startsWith("OK ") && skills.startsWith("OK ") ? "ok" : "bad");
+}));
+document.querySelector("#set-level").addEventListener("click", guard(async () => {
+  const role = name();
+  if (role) await run(`level ${role} ${document.querySelector("#level").value}`, true);
+}));
+document.querySelector("#set-story").addEventListener("click", guard(async () => {
+  const role = name();
+  if (role) await run(`story ${role} ${document.querySelector("#story").value}`, true);
+}));
+document.querySelector("#set-grow").addEventListener("click", guard(async () => {
+  const role = name();
+  if (role) await run(`grow ${role} ${document.querySelector("#grow").value}`, true);
+}));
+document.querySelector("#quest-add").addEventListener("click", guard(async () => {
+  const role = name();
+  if (role) await run(`quest-add ${role} ${document.querySelector("#quest").value}`, true);
+}));
+document.querySelector("#quest-del").addEventListener("click", guard(async () => {
+  const role = name();
+  if (role) await run(`quest-del ${role} ${document.querySelector("#quest").value}`, true);
+}));
+document.querySelector("#quest-clear").addEventListener("click", guard(async () => {
+  const role = name();
+  if (role) await run(`quest-clear ${role}`, true);
+}));
+document.querySelector("#set-skill").addEventListener("click", guard(async () => {
+  const role = name();
+  if (role) await run(`skill ${role} ${document.querySelector("#skill").value} ${document.querySelector("#skill-level").value}`, true);
+}));
+
+fetch("/api/meta").then(r => r.json()).then(meta => {
+  defaultAccount = meta.account || "";
+  document.querySelector("#account").value = defaultAccount;
+  const port = meta.gmPort ? `127.0.0.1:${meta.gmPort}` : "未开启";
+  document.querySelector("#status").textContent = `GM 端口 ${port}`;
+}).catch(() => show("网页状态读取失败。", "bad"));
+</script>
+</body>
+</html>

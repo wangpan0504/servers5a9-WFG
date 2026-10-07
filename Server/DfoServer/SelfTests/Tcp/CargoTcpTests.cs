@@ -1,0 +1,176 @@
+using System.Text.Json;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Persistence;
+using static DfoServer.Testing.TcpPeer;
+using static DfoServer.Testing.TestCheck;
+
+namespace DfoServer.Testing;
+
+internal static class CargoTcpTests
+{
+    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var itemResources = resources.ItemResources;
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "cargo"));
+        var characters = resources.Characters;
+        var towns = resources.Towns;
+        var owners = new AccountOwners();
+        var repo = new CharacterRepository(fixture.Database);
+        int weaponId = characters.Get(0).Equipment.Single(item => item.Slot == 12).Template.Id;
+        long weaponUid;
+        string weaponCore;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var current = repo.Create(owner, new("CargoTcp", towns.Room, towns.InitialReturn)
+            {
+                Level = 60, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                Inventory = InventoryRewardGrantService.CreateStarter(characters.Get(0))
+            });
+            var items = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(0, 20_000_000), new(3299, 600), new(50, 1)]));
+            current = InventoryService.Commit(repo, owner, current, new CurrencyService(itemResources.GoldLimits).Grant(current, CurrencyKind.Cera, 5000));
+            var weapon = current.Inventory.Find(new(InventoryListType.Equipment, 12))!;
+            var core = weapon.Core with { Attr = 11, Rune = 3, AmplifyValue = 25, Random0 = new(1, 2, 3), Extension114 = new(1, 222) };
+            current = repo.CommitInventory(owner, current, new(current.Inventory,
+                current.Inventory with { Items = current.Inventory.Items.Replace(weapon, weapon with { Core = core }) }, "cargo_fixture"));
+            current = InventoryService.Commit(repo, owner, current, items.Move(current,
+                new(new(InventoryListType.Equipment, 12), weaponId, 1, new(InventoryListType.Main, 9), 0, 0, -1, 0, 0)));
+            weaponUid = weapon.Uid;
+            weaponCore = JsonSerializer.Serialize(core);
+            repo.Create(owner, new("CargoSibling", towns.Room, towns.InitialReturn) { AcceptedStoryLevel = 1 });
+        }
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            var entered = peer.Select();
+            Bytes(entered[5].Body, [2, 8, 0, 0, 0, 0], "Client personal cargo includes its auxiliary count after the empty list");
+            Bytes(entered[6].Body, [12, 0, 0, 0, 0, 0, 0, 0, 0], "closed account cargo initializes zero money and no items");
+            peer.Send(305);
+            peer.Expect(1, 305, [1]);
+            ExpectGold(peer, 19_900_000);
+            Cargo(peer.Expect(0, 13).Body, 12, 1, 0, 0);
+            peer.Send(305);
+            peer.Expect(1, 305, [0, 20, 0]);
+            peer.Barrier();
+            peer.Send(306);
+            peer.Expect(1, 306, [1]);
+            ExpectGold(peer, 17_900_000);
+            Cargo(peer.Expect(0, 13).Body, 12, 8, 0, 0);
+            peer.Send(307, Build(w => w.Write(1000)));
+            peer.Expect(1, 307, [1, 232, 3, 0, 0]);
+            ExpectGold(peer, 17_899_000);
+            peer.Send(308, Build(w => w.Write(250)));
+            peer.Expect(1, 308, [1, 238, 2, 0, 0]);
+            ExpectGold(peer, 17_899_250);
+            peer.Send(308, Build(w => w.Write(751)));
+            peer.Expect(1, 308, [0, 10, 0]);
+            peer.Barrier();
+            Transfer(peer, 0, 9, weaponId, 1, 2, 7, 0, 1);
+            var main = peer.Expect(0, 14).Body;
+            That(main[0] == 0 && U32(main, 5) == uint.MaxValue, "personal deposit clears original physical slot");
+            var personal = peer.Expect(0, 14).Body;
+            That(personal[0] == 2 && U16(personal, 3) == 7 && U32(personal, 5) == weaponId && personal.Length == 126,
+                "personal deposit uses complete 123-byte entry");
+            Transfer(peer, 2, 7, weaponId, 1, 12, 7, 0, 1);
+            That(peer.Expect(0, 14).Body[0] == 2 && peer.Expect(0, 14).Body[0] == 12, "cross cargo move clears personal and updates account");
+            That(fixture.Query("SELECT character_id,item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[DBNull, var saved]] &&
+                Equals(saved, weaponCore), "account storage changes owner while preserving complete core and UID");
+            peer.Send(20, Build(w => { w.Write(8); w.Write(new byte[] { 8, 20, 16, 12, 24, 0, 32, 0 }); }));
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 12, 16, 0]);
+            var sorted = peer.Expect(0, 14).Body;
+            That(sorted[0] == 12 && U16(sorted, 1) == 2 && U16(sorted, 3) == 0 && U32(sorted, 5) == weaponId && U32(sorted, 128) == uint.MaxValue,
+                "account sorting publishes new slot and clears previous slot");
+            Transfer(peer, 0, 121, 3299, 17, 12, 1, 0, 17);
+            That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 12, "partial deposit updates both stacks");
+            Transfer(peer, 0, 121, 3299, 2, 12, 7, 0, 2, actualTargetSlot: 1);
+            That(peer.Expect(0, 14).Body[0] == 0 && U32(peer.Expect(0, 14).Body, 9) == 19,
+                "deposit into an empty requested slot merges into existing account stack");
+            That(fixture.Query("SELECT COUNT(*) FROM character_inventory_slots WHERE list_type=12 AND slot_index=7") is [[0L]],
+                "automatic merge does not allocate requested target slot seven");
+            Transfer(peer, 12, 1, 3299, 0, 0, 122, 0, 19, actualTargetSlot: 121);
+            That(U32(peer.Expect(0, 14).Body, 9) == 600 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
+                "partial withdrawal merges full quantity and clears account stack");
+            peer.Send(408, [65, 0]);
+            peer.Expect(1, 408, [1]);
+            That(U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue, "personal upgrade consumes the requested tool");
+            Cargo(peer.Expect(0, 13).Body, 2, 24, 0, 0);
+            peer.Send(408, [65, 0]);
+            peer.Expect(1, 408, [0, 17, 0]);
+            peer.Barrier();
+            peer.Send(713, [12, 0, 0]);
+            peer.Expect(1, 713, [1, 12, 0, 0]);
+            peer.Send(306);
+            peer.Expect(1, 306, [1]);
+            peer.Expect(0, 53, [1, 184, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            Cargo(peer.Expect(0, 13).Body, 12, 16, 750, 1);
+            peer.Expect(1, 713, [1, 12, 0, 0]);
+            peer.Send(306);
+            peer.Expect(1, 306, [1]);
+            That(U32(peer.Expect(0, 14).Body, 9) == 350, "material upgrade charges 250 from inventory");
+            Cargo(peer.Expect(0, 13).Body, 12, 24, 750, 1);
+            peer.Expect(1, 713, [1, 12, 0, 0]);
+            peer.Send(7);
+            peer.Expect(1, 7, [1]);
+            peer.Expect(0, 2);
+            var sibling = peer.Select(1, inventoryNotices: [(1, 713)]);
+            Cargo(sibling[5].Body, 2, 8, 0, 0);
+            Cargo(sibling[6].Body, 12, 24, 750, 1);
+            Transfer(peer, 12, 0, weaponId, 1, 0, 3, 0, 1);
+            That(peer.Expect(0, 14).Body[0] == 0 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
+                "sibling can withdraw shared equipment into quick bar");
+            peer.Expect(1, 714, [1, 0, 3, 0]);
+            peer.Send(308, Build(w => w.Write(750)));
+            peer.Expect(1, 308, [1, 0, 0, 0, 0]);
+            ExpectGold(peer, 750);
+            peer.Barrier();
+            That(fixture.Query("SELECT character_id,item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[long id, var core]] &&
+                id == peer.Id && Equals(core, weaponCore), "sibling becomes sole owner of same UID and complete core");
+        }
+        await fixture.StopAsync();
+        await fixture.StartAsync("cargo-restart");
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(1);
+            That(U32(entry[4].Body, 376) == weaponId && U16(entry[4].Body, 374) == 3, "restart restores sibling equipment in quick bar");
+            Cargo(entry[6].Body, 12, 24, 0, 0);
+            peer.Barrier();
+        }
+        await fixture.StopAsync();
+        That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+            "warehouse transactions preserve database integrity");
+    }
+
+    static void Transfer(TcpPeer peer, byte source, short sourceSlot, int sourceId, int count, byte target, short targetSlot, int targetId, int moved, short? actualTargetSlot = null)
+    {
+        peer.Send(19, Build(w =>
+        {
+            w.Write(source); w.Write(sourceSlot); w.Write(sourceId); w.Write(count);
+            w.Write(target); w.Write(targetSlot); w.Write(targetId); w.Write(0); w.Write(-1); w.Write((ushort)0);
+        }));
+        peer.Expect(1, 19, Build(w =>
+        {
+            w.Write((byte)1); w.Write(source); w.Write(sourceSlot); w.Write(moved); w.Write(target); w.Write(actualTargetSlot ?? targetSlot);
+        }));
+    }
+    static void Cargo(byte[] body, byte list, ushort capacity, uint gold, ushort count)
+    {
+        int header = list == 12 ? 9 : 5;
+        int tail = list == 2 ? 1 : 0;
+        That(body[0] == list && U16(body, 1) == capacity && U16(body, header - 2) == count && body.Length == header + 123 * count + tail,
+            "independent cargo capacity, count and complete entry widths");
+        if (list == 12)
+            That(U32(body, 3) == gold, "account cargo money precedes count");
+        else
+            That(body[header + 123 * count] == 0, "personal cargo auxiliary count follows all physical entries");
+    }
+    static void ExpectGold(TcpPeer peer, uint expected)
+    {
+        var delta = peer.Expect(0, 14).Body;
+        That(delta.Length == 126 && delta[0] == 0 && U16(delta, 1) == 1 && U16(delta, 3) == 0 && U32(delta, 9) == expected,
+            "gold delta is committed absolute balance");
+    }
+}

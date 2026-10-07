@@ -1,0 +1,51 @@
+using DfoServer.Game.Session;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Network.Builders;
+using DfoServer.Infrastructure;
+using DfoServer.Network.Handlers;
+using DfoServer.Network.Projection;
+using DfoServer.Game.Characters;
+
+namespace DfoServer.Network.Protocol;
+
+internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler loginHandler, GameCommandRegistry commands, ICharacterRepository repository, TownCatalog towns, OnlineSessionDirectory online, TownProjection projection, ServerLog log,
+    Func<GameSession, IGameConnectionActivity>? createActivity = null) : IConnectionProtocol
+{
+    public async Task RunAsync(ConnectionContext connection)
+    {
+        using var login = await loginHandler.AuthenticateAsync(connection);
+        if (login is null)
+            return;
+        await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = Convert.ToHexString(body.Span) }), connection.CaptureSent);
+        var session = new GameSession(repository, towns, login.Owner, login.Identity);
+        var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
+        try
+        {
+            online.Register(login.Owner, session);
+            await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(options.AdvertisedAddress, options.GamePort), "endpoint");
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(session.Roster()), "roster");
+            while (!connection.Stop.IsCancellationRequested)
+            {
+                var request = GameFrame.ParseClient(await connection.ReadAsync());
+                bool loginPacket = request.Opcode is (ushort)CmdPacketType.LOGIN or (ushort)CmdPacketType.LOGIN_PRECHECK;
+                if (loginPacket)
+                    throw new InvalidDataException("Login already completed on this connection");
+                string name = ((CmdPacketType)request.Opcode).ToString();
+                log.Write("recv", new { Connection = connection.Id, request.Kind, request.Opcode, Name = name, Body = loginPacket || request.Opcode == (ushort)CmdPacketType.CLIENT_SPEC_STATISTIC ? "[login-redacted]" : Convert.ToHexString(request.Body) });
+                var result = await commands.DispatchAsync(context, request);
+                if (result == CommandResult.CloseConnection)
+                    return;
+                if (result == CommandResult.Unhandled)
+                    log.Write("unimplemented", new { Connection = connection.Id, request.Opcode, Name = name, Length = request.Body.Length });
+            }
+        }
+        finally
+        {
+            online.Remove(login.Owner.Account, session);
+            projection.Remove(context);
+            context.Activity?.Reset();
+            session.End();
+            // 随后的 await using 先停止发送泵，再由 login 释放精确 owner。
+        }
+    }
+}

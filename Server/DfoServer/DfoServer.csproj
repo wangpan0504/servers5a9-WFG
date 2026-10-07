@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>DfoServer</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../Tools/ArchitectureCheck/ArchitectureCheck.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="../../Tools/PvfLib/PvfLib.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <None Update="Resources/**" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Sqlite/*.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="Data/Pvf/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../start-server.bat;../../start-server.sh" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

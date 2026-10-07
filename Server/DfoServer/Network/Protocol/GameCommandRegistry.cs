@@ -1,0 +1,55 @@
+using System.Collections.Frozen;
+
+namespace DfoServer.Network.Protocol;
+
+internal enum CommandResult
+{
+    Handled,
+    Unhandled,
+    CloseConnection
+}
+
+internal delegate Task<CommandResult> GameCommandHandler(GameConnectionContext context, Packet request);
+internal interface IGameCommandModule
+{
+    void Register(GameCommandRegistry commands);
+}
+
+internal sealed class GameCommandRegistry
+{
+    sealed record Registration(string Source, GameCommandHandler Handler);
+    readonly Dictionary<ushort, Registration> registrations = [];
+    FrozenDictionary<ushort, Registration>? commands;
+    public void Register(CmdPacketType opcode, GameCommandHandler handler, string source)
+    {
+        if (commands is not null)
+            throw new InvalidOperationException("Command registry is already sealed");
+        ArgumentNullException.ThrowIfNull(handler);
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        if (opcode >= CmdPacketType.END)
+            throw new ArgumentOutOfRangeException(nameof(opcode));
+        ushort value = (ushort)opcode;
+        if (registrations.TryGetValue(value, out var previous))
+            throw new InvalidOperationException($"Duplicate command {opcode} ({value}): {previous.Source} / {source}");
+        registrations.Add(value, new(source, handler));
+    }
+
+    public void Seal()
+    {
+        if (commands is not null)
+            throw new InvalidOperationException("Command registry is already sealed");
+        commands = registrations.ToFrozenDictionary();
+        registrations.Clear();
+    }
+
+    public async Task<CommandResult> DispatchAsync(GameConnectionContext context, Packet request)
+    {
+        if (commands is null)
+            throw new InvalidOperationException("Command registry is not sealed");
+        context.Owner.Execute(() => true);
+        CommandResult result = commands.TryGetValue(request.Opcode, out var command) ? await command.Handler(context, request) : CommandResult.Unhandled;
+        // 异步处理结束后仍须属于当前账号；旧连接不能继续下一条业务。
+        context.Owner.Execute(() => true);
+        return result;
+    }
+}

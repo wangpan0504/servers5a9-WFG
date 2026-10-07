@@ -1,0 +1,14 @@
+@echo off
+setlocal DisableDelayedExpansion
+set "SERVER_EXE="
+if exist "%~dp0DfoServer.exe" set "SERVER_EXE=%~dp0DfoServer.exe"
+if not defined SERVER_EXE if exist "%~dp0dist\win-x64\DfoServer.exe" set "SERVER_EXE=%~dp0dist\win-x64\DfoServer.exe"
+if not defined SERVER_EXE if exist "%~dp0Server\DfoServer\bin\Debug\net10.0\DfoServer.exe" set "SERVER_EXE=%~dp0Server\DfoServer\bin\Debug\net10.0\DfoServer.exe"
+if not defined SERVER_EXE (
+  echo DfoServer was not found. Build first:
+  echo   dotnet build ServerS5A9.sln -c Debug
+  exit /b 1
+)
+for %%I in ("%SERVER_EXE%") do cd /d "%%~dpI"
+"%SERVER_EXE%" %*
+exit /b %ERRORLEVEL%

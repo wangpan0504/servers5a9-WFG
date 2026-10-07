@@ -1,0 +1,80 @@
+using DfoServer.Game.Session;
+using DfoServer.Game.Accounts;
+using Microsoft.Data.Sqlite;
+using DfoServer.Game.Characters;
+
+namespace DfoServer.Development;
+
+internal static class DevelopmentGm
+{
+    public const string Written = " 已写入。服务端通行校验立即使用新等级和任务。客户端回到选角并再次进入后刷新画面。属性块仍是匹配职业的初始值。";
+    public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find)
+    {
+        try
+        {
+            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
+        {
+            return "ERR " + ex.Message.Replace('\n', ' ').Replace('\r', ' ');
+        }
+    }
+
+    public static string Execute(ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find, DevelopmentRequest request)
+    {
+        try
+        {
+            var live = find(request.Account);
+            if (!request.Writes)
+            {
+                var rows = live is null ? WithLease(owners, request.Account, repository.List) : live.QueryCharacters();
+                return FormatQuery(request, rows);
+            }
+
+            var updated = live is null ? WithLease(owners, request.Account, lease => repository.UpdateProgress(lease, request.ToProgressEdit())) : live.UpdateProgress(request.ToProgressEdit());
+            return "OK " + Summary(updated) + Written;
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "Stale account generation")
+        {
+            throw new InvalidOperationException("账号世代已变化，请重试");
+        }
+    }
+
+    static T WithLease<T>(AccountOwners owners, string account, Func<AccountOwners.Lease, T> action)
+    {
+        // 拒绝接管，避免开发命令断开正在游戏的连接。
+        if (!owners.TryAcquire(account, static () =>
+        {
+        }, DuplicateLoginPolicy.Reject, out var lease, out var reason) || lease is null)
+            throw new InvalidOperationException(reason == OwnerRejectReason.DuplicateAccountOwner ? "账号正在使用，请重试" : "无法取得账号");
+        using (lease)
+            return action(lease);
+    }
+
+    static string FormatQuery(DevelopmentRequest request, Character[] rows)
+    {
+        if (request.Action == DevelopmentAction.List)
+            return "OK count=" + rows.Length + (rows.Length == 0 ? "" : " | " + string.Join(" | ", rows.Select(Summary)));
+        var match = rows.Where(c => string.Equals(c.Name, request.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (match.Length != 1)
+            throw new InvalidDataException("角色不存在");
+        var character = match[0];
+        return request.Action switch
+        {
+            DevelopmentAction.Show => "OK " + Summary(character),
+            DevelopmentAction.Quests => "OK " + character.Name + " quests=" + string.Join(',', character.CompletedQuests),
+            DevelopmentAction.Skills => "OK " + character.Name + " skills=" + string.Join(',', character.Skills.Select(s => s.Id + ":" + s.Level)),
+            _ => throw new InvalidDataException("不是查询命令")
+        };
+    }
+
+    static string Summary(Character character)
+    {
+        string returnPoint = character.Return is { } back ? back.Town + "/" + back.Area + "/" + back.X + "/" + back.Y : "-";
+        return character.Name + " id=" + character.Id + " slot=" + character.Slot +
+            " job=" + character.Job + " grow=" + character.GrowType + " level=" + character.Level +
+            " story=" + character.AcceptedStoryLevel + " rev=" + character.Revision +
+            " pos=" + character.Position.Town + "/" + character.Position.Area + "/" + character.Position.X + "/" + character.Position.Y +
+            " ret=" + returnPoint + " quests=" + character.CompletedQuests.Length + " skills=" + character.Skills.Length;
+    }
+}
