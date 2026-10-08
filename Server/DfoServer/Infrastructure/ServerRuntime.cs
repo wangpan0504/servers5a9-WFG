@@ -39,12 +39,19 @@ internal static class ServerRuntime
         var inventoryProjection = new InventoryProjection(characters, projection, itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
         IGameCommandModule dungeon;
+        IGameCommandModule? settlement = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
-            dungeon = new DungeonHandler(log, DungeonCatalog.Load(pvf), DungeonRoomCatalog.Load(pvf),
-                CharacterGrowthCatalog.Load(pvf), DungeonKillExperienceCatalog.Load(pvf), projection,
-                DungeonMonsterDropCatalog.Load(pvf), itemResources.Items, itemResources.EpicPieces);
+            var dungeonCatalog = DungeonCatalog.Load(pvf);
+            var growth = CharacterGrowthCatalog.Load(pvf);
+            var rooms = DungeonRoomCatalog.Load(pvf);
+            var drops = DungeonMonsterDropCatalog.Load(pvf);
+            dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
+                growth, DungeonKillExperienceCatalog.Load(pvf), projection,
+                drops, itemResources.Items, itemResources.EpicPieces);
+            settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
+                rooms, drops, itemResources.Items);
         }
         else
         {
@@ -79,6 +86,7 @@ internal static class ServerRuntime
         ];
         foreach (var module in modules)
             module.Register(commands);
+        settlement?.Register(commands);
         commands.Seal();
         var login = new LoginHandler(options, owners, accounts, log);
         var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection);

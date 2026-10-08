@@ -1,5 +1,7 @@
+using System.Security.Cryptography;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.Network.Parsers;
 
 namespace DfoServer;
 
@@ -30,9 +32,12 @@ internal static class NativeDungeonCombatAuthorityTests
             report with { MonsterKey = 65536 }, report with { MonsterKey = 999 }, report with { MonsterKey = 102 },
             report with { ReporterKey = 98 }, report with { ParticipantKey = 98 }, report with { ParticipantKind = 0x0211 },
             report with { SpawnLevel = 2 }, report with { SpawnLevel = uint.MaxValue }, report with { SpawnHpSnapshot = 0 },
-            report with { CumulativeHpDecrease = 0 }, report with { CumulativeHpDecrease = 503 },
-            report with { PositiveHpDecreaseCount = 0, Unknown26 = 0 }, report with { Unknown26 = 4 },
-            report with { Unknown26 = 65539 }, report with { Unknown18 = 503 }, report with { Unknown18 = 704 },
+            report with { CumulativeHpDecrease = 0 },
+            report with { PositiveHpDecreaseCount = 0, Unknown26 = 0 }, report with { Unknown26 = 2 },
+            report with { Unknown18 = 503 },
+            report with { CumulativeHpDecrease = 400, Unknown18 = 503, Unknown26 = 4 },
+            report with { CumulativeHpDecrease = 0, Unknown18 = 800, Unknown26 = 4 },
+            report with { Unknown18 = 503, Unknown26 = 4 },
             report with { ChecksumMatches = false }, report with { BodySha256 = new string('A', 63) },
             report with { BodySha256 = new string('G', 64) }, report with { BodySha256 = null! }
         })
@@ -84,7 +89,7 @@ internal static class NativeDungeonCombatAuthorityTests
         var secondReport = Observation(101) with { CumulativeHpDecrease = 600, Unknown18 = 799 };
         var second = authority.ValidateAndIssue(run, identity, secondReport);
         Check(second.Outcome == DungeonRunOutcome.Accepted && second.Death!.CombatSequence == 2 &&
-            second.Death.EventId != death.EventId, "允许夹取前overkill与最大199扰动，另一key只递增一次");
+            second.Death.EventId != death.EventId, "允许夹取前overkill及总统计差异，另一key只递增一次");
         Confirm(run, second.Death!);
         Check(run.Move(identity, Guid.NewGuid(), new(1, 0)).Outcome == DungeonRunOutcome.Accepted, "合成首房清空后过房");
         Check(Rejected(authority.ValidateAndIssue(run, identity, report)) &&
@@ -116,13 +121,96 @@ internal static class NativeDungeonCombatAuthorityTests
         Check(!wrongAuthority.BindTo(otherRun) && Rejected(wrongAuthority.ValidateAndIssue(otherRun, otherRun.Snapshot.Identity, report)),
             "非exact实例权威不能绑定或签发");
 
+        // 正文仅供Parser核对实收统计；签发时actor/key明确换成合成夹具，不重现原实机实例身份。
+        foreach (var sample in new (ushort Key, ulong Total, uint Count, ulong Own, ushort OwnCount, string Body)[]
+        {
+            (421, 831, 3, 696, 2, "A501000004000000000000000000000000003F03000000000000030000000111010400B80200000000000002008902F200000000004C490003000000F8010000000000009A01DE009A01DE0007000A000B00000013C1E948"),
+            (468, 1728, 6, 1528, 5, "D40100000400000000000000000000000000C006000000000000060000000111010400F8050000000000000500F802CF0000000000911B0003000000F8010000000000003D02C5002C02C50007000C000C000000AE73A489"),
+            (523, 1486, 5, 1415, 4, "0B0200000400000000000000000000000000CE0500000000000005000000011101040087050000000000000400D002FC000000000099110003000000F8010000000000008302D0003F02060107000C001900000006CF40E1"),
+            (577, 1355, 3, 1164, 2, "4102000004000000000000000000000000004B050000000000000300000001110104008C040000000000000200AA02F800000000007B5E0003000000F801000000000000870207017B02FD0007000C002100000058A21776"),
+            (636, 1841, 6, 1735, 5, "7C02000004000000000000000000000000003107000000000000060000000111010400C70600000000000005006E01CE0000000000D93C0003000000F8010000000000007301DE00EF00DE0007000D002F000000D6E88C44")
+        })
+        {
+            byte[] body = Convert.FromHexString(sample.Body);
+            Check(DungeonRequests.TryParseDeath(body, out var parsed) && parsed?.SinglePlayerStatistics is not null,
+                "控制技能死亡实收88B可按单参与者正文解析 " + sample.Key);
+            var request = parsed!;
+            var statistics = request.SinglePlayerStatistics!;
+            Check(request.ObjectKey == sample.Key && request.Reporter == 4 && statistics.ChecksumMatches &&
+                statistics.Participant.Kind == 0x0111 && statistics.Participant.ObjectKey == 4 &&
+                statistics.Unknown18 == sample.Total && statistics.Unknown26 == sample.Count &&
+                statistics.Participant.CumulativeHpDecrease == sample.Own &&
+                statistics.Participant.PositiveHpDecreaseCount == sample.OwnCount &&
+                statistics.RewriteFlag == 0 && statistics.SpawnLevel == 3 && statistics.SpawnHpSnapshot == 504,
+                "控制技能死亡实收检查值及完整统计不变 " + sample.Key);
+
+            var (sampleAuthority, sampleRun) = Fixture();
+            Load(sampleRun);
+            var sampleIdentity = sampleRun.Snapshot.Identity;
+            var sampleReport = Observation(100) with
+            {
+                CumulativeHpDecrease = statistics.Participant.CumulativeHpDecrease,
+                PositiveHpDecreaseCount = statistics.Participant.PositiveHpDecreaseCount,
+                Unknown18 = statistics.Unknown18, Unknown26 = statistics.Unknown26,
+                SpawnLevel = statistics.SpawnLevel, SpawnHpSnapshot = statistics.SpawnHpSnapshot,
+                RewriteFlag = statistics.RewriteFlag, ChecksumMatches = statistics.ChecksumMatches,
+                BodySha256 = Convert.ToHexString(SHA256.HashData(body))
+            };
+            var accepted = sampleAuthority.ValidateAndIssue(sampleRun, sampleIdentity, sampleReport);
+            Check(accepted.Outcome == DungeonRunOutcome.Accepted && accepted.Death!.CombatSequence == 1,
+                "总次数多于本人次数的控制技能统计可签发合成事实 " + sample.Key);
+            Check(Duplicate(sampleAuthority.ValidateAndIssue(sampleRun, sampleIdentity, sampleReport), accepted.Death!),
+                "控制技能统计精确重放不重复签发 " + sample.Key);
+            Check(Rejected(sampleAuthority.ValidateAndIssue(sampleRun, sampleIdentity,
+                sampleReport with { Unknown18 = sampleReport.Unknown18 + 1 })),
+                "同key改写相容统计也不能替换已签发事实 " + sample.Key);
+            Check(sampleRun.Move(sampleIdentity, Guid.NewGuid(), new(1, 0)).Outcome == DungeonRunOutcome.Rejected,
+                "控制技能报告签发后尚未提交仍不能过房 " + sample.Key);
+            Confirm(sampleRun, accepted.Death!);
+            Check(Duplicate(sampleAuthority.ValidateAndIssue(sampleRun, sampleIdentity, sampleReport), accepted.Death!) &&
+                sampleRun.Move(sampleIdentity, Guid.NewGuid(), new(1, 0)).Outcome == DungeonRunOutcome.Rejected,
+                "控制技能死亡已确认可幂等重放，但存活怪未清空仍不能过房 " + sample.Key);
+            Confirm(sampleRun, sampleAuthority.ValidateAndIssue(sampleRun, sampleIdentity, Observation(101)).Death!);
+            Check(sampleRun.Move(sampleIdentity, Guid.NewGuid(), new(1, 0)).Outcome == DungeonRunOutcome.Accepted,
+                "控制技能统计与普通统计的死亡均确认后才能过房 " + sample.Key);
+        }
+
+        foreach (var sample in new[]
+        {
+            report with { CumulativeHpDecrease = 503 }, report with { Unknown18 = 704 },
+            report with { Unknown18 = 4600 },
+            report with { CumulativeHpDecrease = 400, Unknown18 = 800 },
+            report with { Unknown26 = 4 }, report with { Unknown26 = 65539 },
+            report with { CumulativeHpDecrease = 400, Unknown18 = 800, Unknown26 = 4 },
+            report with
+            {
+                SpawnHpSnapshot = 1UL << 40, CumulativeHpDecrease = 400, Unknown18 = (1UL << 40) + 1000,
+                PositiveHpDecreaseCount = ushort.MaxValue, Unknown26 = uint.MaxValue
+            }
+        })
+        {
+            var (mixedAuthority, mixedRun) = Fixture();
+            Load(mixedRun);
+            var mixed = mixedAuthority.ValidateAndIssue(mixedRun, mixedRun.Snapshot.Identity, sample);
+            Check(mixed.Outcome == DungeonRunOutcome.Accepted && mixed.Death!.CombatSequence == 1,
+                "同次数或更多来源均核验总终点，不限制总量差或本人独自覆盖HP，保留u64/u16/u32完整宽度");
+            Check(Duplicate(mixedAuthority.ValidateAndIssue(mixedRun, mixedRun.Snapshot.Identity, sample), mixed.Death!),
+                "完整宽度混合来源统计精确重放仍幂等");
+        }
+        var (mixedHighAuthority, mixedHighRun) = Fixture();
+        Load(mixedHighRun);
+        Check(Rejected(mixedHighAuthority.ValidateAndIssue(mixedHighRun, mixedHighRun.Snapshot.Identity, report with
+        {
+            SpawnHpSnapshot = 1UL << 40, CumulativeHpDecrease = 400, Unknown18 = 800, Unknown26 = 4
+        })), "混合来源总终点低于完整u64创建HP时拒绝，不截高位放行");
+
         var (highAuthority, highRun) = Fixture();
         Load(highRun);
         ulong highValue = (1UL << 40) + 100;
         var highReport = Observation(100) with { SpawnHpSnapshot = 1UL << 40, CumulativeHpDecrease = highValue, Unknown18 = highValue + 199 };
         var high = highAuthority.ValidateAndIssue(highRun, highRun.Snapshot.Identity, highReport);
         Check(high.Outcome == DungeonRunOutcome.Accepted && high.Death!.CombatSequence == 1,
-            "完整u64高位参与HP终点与扰动比较，不截成u32");
+            "完整u64高位参与HP终点与总量比较，不截成u32");
         var (edgeAuthority, edgeRun) = Fixture();
         Load(edgeRun);
         var edge = edgeAuthority.ValidateAndIssue(edgeRun, edgeRun.Snapshot.Identity, Observation(100) with

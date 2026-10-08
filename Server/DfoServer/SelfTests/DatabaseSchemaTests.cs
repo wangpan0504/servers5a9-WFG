@@ -23,6 +23,8 @@ internal static class DatabaseSchemaTests
                     "新建完整结构直接标记当前版本");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_growth_receipts") is 0L,
                     "当前完整结构包含空成长账本，不补发历史奖励");
+                Check(Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts") is 0L,
+                    "当前完整结构包含空通关账本，不补发历史经验");
                 Check(Query(db, "SELECT value FROM schema_metadata WHERE key='baseline_id'") is SqliteMigrations.BaselineId,
                     "统一数据库保存独立基线标识");
                 Check(Query(db, "SELECT count(*) FROM accounts") is 0L && Query(db, "SELECT count(*) FROM characters") is 0L,
@@ -56,7 +58,8 @@ internal static class DatabaseSchemaTests
                 "DROP TABLE character_dungeon_growth_receipts",
                 "ALTER TABLE character_dungeon_growth_receipts DROP COLUMN resource_source",
                 "DROP TABLE character_dungeon_state", "DROP TABLE character_dungeon_loot_receipts",
-                "DROP TABLE character_dungeon_pickup_receipts"
+                "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_dungeon_settlement_receipts",
+                "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN report_body"
             })
             {
                 string rejected = Path.Combine(root, Guid.NewGuid().ToString("N") + ".db");
@@ -105,7 +108,7 @@ internal static class DatabaseSchemaTests
 
     private static void VerifyReleasedMigrations(string root)
     {
-        foreach (int oldVersion in new[] { 1, 2, 3, 4, 5, 6, 7, 8 })
+        foreach (int oldVersion in new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 })
         {
             string path = Path.Combine(root, $"released-v{oldVersion}.db");
             _ = new CharacterRepository(path);
@@ -118,8 +121,9 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
-                Execute(db, "DROP TABLE character_dungeon_pickup_receipts");
-                Execute(db, "DROP TABLE character_dungeon_loot_receipts");
+                Execute(db, "DROP TABLE character_dungeon_settlement_receipts");
+                if (oldVersion < 9)
+                    Execute(db, "DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts");
                 if (oldVersion < 8) Execute(db, "DROP TABLE character_dungeon_state");
                 if (oldVersion < 7) Execute(db, "DROP TABLE character_game_settings");
                 if (oldVersion < 6) Execute(db, "DROP TABLE account_client_settings; DROP TABLE character_client_settings");
@@ -145,6 +149,8 @@ internal static class DatabaseSchemaTests
                     receipts == (oldVersion >= 3 ? 1 : 0), "真实旧版连续迁移保留v3已有账本，v1/v2只建立空账本");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_state") is 0L,
                     "旧角色迁移不补造key、attempt或附属成长owner");
+                Check(Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts") is 0L,
+                    "v1至v9升级只增加空通关账本，不合成历史奖励");
                 Check(Query(db, "SELECT rental_points FROM account_wallets WHERE account='migrated'") is long rental &&
                     rental == (oldVersion == 1 ? 0 : 17), "v1租赁默认值与v2既有租赁余额分别保留");
                 Check(Query(db, "SELECT revision||':'||level||':'||experience||':'||gold FROM characters WHERE id=1") is "7:2:60:123" &&
@@ -179,6 +185,7 @@ internal static class DatabaseSchemaTests
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('keep',0,'Rollback',9,38,1,450,234,0,2,60,321)");
             Execute(db, "INSERT INTO account_wallets(account,revision,rental_points) VALUES('keep',6,0)");
             Execute(db, "INSERT INTO character_skill_points VALUES(1,0,12,0),(1,1,34,0)");
+            Execute(db, "DROP TABLE character_dungeon_settlement_receipts");
             Execute(db, "DROP TABLE character_dungeon_pickup_receipts");
             Execute(db, "DROP TABLE character_dungeon_loot_receipts");
             Execute(db, "DROP TABLE character_dungeon_state");
@@ -192,6 +199,16 @@ internal static class DatabaseSchemaTests
         string before = Snapshot(rollback);
         Reject<SqliteException>(() => new CharacterRepository(rollback), "真实v2与v3执行后必需列检查失败回滚整链");
         Check(Snapshot(rollback) == before, "真实迁移失败不遗留租赁列、成长账本或版本升级");
+        string clearRollback = Path.Combine(root, "clear-upgrade-rollback.db");
+        _ = new CharacterRepository(clearRollback);
+        using (var db = Open(clearRollback))
+        {
+            Execute(db, "DROP TABLE character_dungeon_settlement_receipts; PRAGMA user_version=9; CREATE TABLE character_dungeon_settlement_receipts(collision INTEGER)");
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,experience,gold) VALUES('keep',0,'ClearKeep',11,38,1,450,234,0,321,456)");
+        }
+        string clearBefore = Snapshot(clearRollback);
+        Reject<SqliteException>(() => new CharacterRepository(clearRollback), "v9通关账本迁移撞表时拒绝启动");
+        Check(Snapshot(clearRollback) == clearBefore, "v10迁移失败保留v9版本、结构与原角色资产");
         using (var db = Open(rollback))
         {
             Check(Query(db, "PRAGMA user_version") is 1L &&

@@ -50,7 +50,7 @@ internal sealed class SinglePlayerDungeonRun
     {
         public DungeonMonsterPlan Plan { get; } = plan;
         public HashSet<ushort> Dead { get; } = [];
-        public bool Cleared => Dead.Count == Plan.Monsters.Count;
+        public bool Cleared => Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey));
     }
     private sealed record ActionFact(DungeonRunIdentity Identity, string Kind, DungeonPoint? Target);
     private readonly DungeonEntryPlan entry;
@@ -62,6 +62,8 @@ internal sealed class SinglePlayerDungeonRun
     private readonly HashSet<PreparedDungeonDeath> committedPreparations = [];
     private readonly HashSet<long> combatSequences = [];
     private PreparedDungeonDeath? pendingDeath;
+    private PreparedDungeonSettlement? pendingSettlement;
+    private PreparedDungeonSettlement? committedSettlement;
     private Room current;
     private DungeonRunIdentity identity;
     public long StartCharacterRevision => entry.CharacterRevision;
@@ -69,8 +71,10 @@ internal sealed class SinglePlayerDungeonRun
     internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
         Phase == SinglePlayerDungeonPhase.Dungeon && !current.Dead.Contains(key)
-            ? current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key) : null;
+            ? current.Plan.Monsters.SingleOrDefault(monster => monster.IsBlocking && monster.ObjectKey == key) : null;
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
+    public DungeonClearFact? ClearFact { get; private set; }
+    public bool HasPendingSettlement => pendingSettlement is not null;
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()));
 
@@ -122,6 +126,7 @@ internal sealed class SinglePlayerDungeonRun
                 monster.MonsterId != monster.Source.MonsterId ||
                 monster.CandidateLevel != resourcePlan.Monsters[monster.SourceOrdinal].CandidateLevel ||
                 monster.SpawnType != resourcePlan.Monsters[monster.SourceOrdinal].SpawnType ||
+                monster.IsBlocking != resourcePlan.Monsters[monster.SourceOrdinal].IsBlocking ||
                 monster.ObjectKey == entry.CharacterId || !keys.Add(monster.ObjectKey)) ||
                 plan.Monsters.Select(monster => monster.SourceOrdinal).Distinct().Count() != plan.Monsters.Count)
             {
@@ -193,7 +198,7 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (Replay(expected, actionId, "return", null) is { } replay)
             return replay;
-        if (pendingDeath is not null || !Matches(expected) || Phase == SinglePlayerDungeonPhase.Returned || actionId == Guid.Empty || identity.Epoch == long.MaxValue)
+        if (pendingDeath is not null || pendingSettlement is not null || !Matches(expected) || Phase == SinglePlayerDungeonPhase.Returned || actionId == Guid.Empty || identity.Epoch == long.MaxValue)
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "return", null));
         Phase = SinglePlayerDungeonPhase.Returned;
@@ -226,10 +231,9 @@ internal sealed class SinglePlayerDungeonRun
                 ? new(DungeonRunOutcome.Accepted, pendingDeath) : new(DungeonRunOutcome.Rejected);
         if (!Matches(confirmed.Identity) || Phase != SinglePlayerDungeonPhase.Dungeon || confirmed.EventId == Guid.Empty ||
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
-            !current.Plan.Monsters.Any(monster => monster.ObjectKey == confirmed.MonsterKey) || current.Dead.Contains(confirmed.MonsterKey))
+            !current.Plan.Monsters.Any(monster => monster.IsBlocking && monster.ObjectKey == confirmed.MonsterKey) || current.Dead.Contains(confirmed.MonsterKey))
             return new(DungeonRunOutcome.Rejected);
-        bool settles = current.Plan.Room.Map == entry.BossMap && rooms.Values.All(room =>
-            room == current ? room.Dead.Count + 1 == room.Plan.Monsters.Count : room.Cleared);
+        bool settles = TerminalBossCleared(confirmed.MonsterKey);
         DungeonRunIdentity nextIdentity = settles ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
         var nextSnapshot = new DungeonRunSnapshot(nextIdentity,
             settles ? SinglePlayerDungeonPhase.Settlement : Phase, current.Plan.Room.Map,
@@ -263,6 +267,8 @@ internal sealed class SinglePlayerDungeonRun
         committedPreparations.Add(prepared);
         identity = prepared.Result.Snapshot.Identity;
         Phase = prepared.Result.Snapshot.Phase;
+        if (prepared.Result.ClearFact is { } clear)
+            ClearFact = clear;
         pendingDeath = null;
         return prepared.Result;
     }
@@ -276,19 +282,78 @@ internal sealed class SinglePlayerDungeonRun
         return true;
     }
 
+    public DungeonSettlementPreparation PrepareSettlement(DungeonClearFact fact, ReadOnlySpan<byte> reportBody,
+        DungeonClearExperienceReward reward)
+    {
+        ArgumentNullException.ThrowIfNull(fact);
+        ArgumentNullException.ThrowIfNull(reward);
+        if (!ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
+            pendingDeath is not null || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 ||
+            (ulong)reward.BaseExperience + reward.RankExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
+            string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
+            string.IsNullOrWhiteSpace(reward.ResourceSource) || reward.ResourceSource.Length > 1024)
+            return new(DungeonRunOutcome.Rejected);
+        if ((pendingSettlement ?? committedSettlement) is { } frozen)
+            return frozen.ReportBody.SequenceEqual(reportBody) && frozen.Reward == reward
+                ? new(committedSettlement is null ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate, frozen)
+                : new(DungeonRunOutcome.Rejected);
+        pendingSettlement = new(fact, reportBody, reward, current.Plan.Room.Map.Id);
+        return new(DungeonRunOutcome.Accepted, pendingSettlement);
+    }
+
+    public bool IsPendingSettlement(PreparedDungeonSettlement prepared) => prepared is not null &&
+        ReferenceEquals(pendingSettlement, prepared) && Phase == SinglePlayerDungeonPhase.Settlement &&
+        ReferenceEquals(ClearFact, prepared.Fact) && prepared.Fact.Identity == identity;
+
+    public bool IsCommittedSettlement(PreparedDungeonSettlement prepared) => prepared is not null &&
+        ReferenceEquals(committedSettlement, prepared) && Phase == SinglePlayerDungeonPhase.Settlement &&
+        ReferenceEquals(ClearFact, prepared.Fact) && prepared.Fact.Identity == identity;
+
+    public DungeonRunOutcome ConfirmCommittedSettlement(PreparedDungeonSettlement prepared)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (IsCommittedSettlement(prepared))
+            return DungeonRunOutcome.Duplicate;
+        if (!IsPendingSettlement(prepared))
+            return DungeonRunOutcome.Rejected;
+        committedSettlement = prepared;
+        pendingSettlement = null;
+        return DungeonRunOutcome.Accepted;
+    }
+
     private static bool SameDeath(ConfirmedDungeonMonsterDeath first, ConfirmedDungeonMonsterDeath second) =>
         ReferenceEquals(first.Authority, second.Authority) && first.EventId == second.EventId && first.Identity == second.Identity &&
         first.MonsterKey == second.MonsterKey && first.CombatSequence == second.CombatSequence;
 
     private DungeonRunResult SettleIfCleared()
     {
-        if (current.Plan.Room.Map == entry.BossMap && rooms.Values.All(room => room.Cleared) && deaths.Count > 0)
+        if (TerminalBossCleared() && deaths.Count > 0)
         {
             Phase = SinglePlayerDungeonPhase.Settlement;
             Advance();
-            return new(DungeonRunOutcome.Accepted, Snapshot, new(identity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.ToArray())));
+            ClearFact = new(identity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.ToArray()));
+            return new(DungeonRunOutcome.Accepted, Snapshot, ClearFact);
         }
         return Result(DungeonRunOutcome.Accepted);
+    }
+
+    private bool TerminalBossCleared(ushort? preparedMonsterKey = null)
+    {
+        if (current.Plan.Room.Map != entry.BossMap || rooms.Values.Any(room => room != current && !room.Cleared))
+            return false;
+        if (current.Plan.Monsters.All(monster => !monster.IsBlocking || current.Dead.Contains(monster.ObjectKey) ||
+            monster.ObjectKey == preparedMonsterKey))
+            return true;
+        bool hasBlockingBoss = false;
+        foreach (var monster in current.Plan.Monsters)
+        {
+            if (!monster.IsBlocking || monster.Source.RankKind != "[boss]")
+                continue;
+            hasBlockingBoss = true;
+            if (!current.Dead.Contains(monster.ObjectKey) && monster.ObjectKey != preparedMonsterKey)
+                return false;
+        }
+        return hasBlockingBoss;
     }
     private bool Matches(DungeonRunIdentity expected) => identity == expected && Phase != SinglePlayerDungeonPhase.Returned;
     private bool CanAdvance() => identity.Epoch < long.MaxValue - 2;

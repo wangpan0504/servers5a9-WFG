@@ -19,6 +19,9 @@ internal static class SelfTestRunner
         await PacketCaptureTests.RunAsync();
         ClientNoticeTests.Run();
         DungeonRequestTests.Run();
+        DungeonSettlementProtocolTests.Run();
+        DungeonClearExperienceCatalogTests.Run();
+        DungeonSettlementTests.RunCore();
         DungeonSelectionReturnTests.RunCore();
         DungeonPickupProtocolTests.Run();
         SkillLearningDisconnectTests.Run();
@@ -45,6 +48,9 @@ internal static class SelfTestRunner
         InventoryCoreGrantTests.RunCore();
         DungeonDeathProtocolTests.Run();
         NativeDungeonCombatAuthorityTests.Run();
+        DungeonRoomCatalogTests.RunCore();
+        DungeonMonsterPlanTests.RunCore();
+        SinglePlayerDungeonRunTests.RunCore();
         DungeonExplicitDropPolicyTests.RunCore();
         DungeonGroundStateTests.RunCore();
         GrowthPacketsTests.Run();
@@ -113,6 +119,8 @@ internal static class SelfTestRunner
         CharacterGrowthCatalogTests.Run(pvf);
         CharacterGrowthTests.Run(towns, pvf);
         DungeonKillExperienceCatalogTests.Run(pvf);
+        DungeonSettlementTests.RunResources(pvf);
+        DungeonSettlementSessionTests.Run(towns, pvf, characters, itemResources);
         DungeonMonsterDropCatalogTests.Run(pvf);
         DungeonExplicitDropPolicyTests.RunResources(DungeonMonsterDropCatalog.Load(pvf), itemResources.Items);
         DungeonGrowthRepositoryTests.Run(towns, pvf, characters);

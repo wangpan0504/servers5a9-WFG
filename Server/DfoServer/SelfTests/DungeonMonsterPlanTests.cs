@@ -7,6 +7,44 @@ namespace DfoServer;
 
 internal static class DungeonMonsterPlanTests
 {
+    public static void RunCore()
+    {
+        int checks = 0;
+        void Check(bool value, string name)
+        {
+            checks++;
+            if (!value)
+                throw new InvalidOperationException("FAIL monster blocking plan: " + name);
+        }
+        var source = new DungeonRoomMonster(1, Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }),
+            "[fixed]", "[normal]", "monster/fixture.mob");
+        var room = new DungeonRoomDefinition(new("boss", new(0, 0), 1, "map/fixture.map"),
+            Array.AsReadOnly(new[] { source with { RankKind = "[boss]" }, source }), [], []);
+        var defaultPlan = DungeonMonsterPlan.FromRoom(room, 99, 10);
+        Check(defaultPlan.Monsters.All(monster => monster.IsBlocking), "missing teams default every source row to blocking");
+        Check(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [] }, 99, 10).Monsters.All(monster => monster.IsBlocking),
+            "empty team section keeps default blocking behavior");
+        var teams = room with { MonsterTeams = Array.AsReadOnly(new[] { 100, 0 }) };
+        var plan = DungeonMonsterPlan.FromRoom(teams, 99, 10);
+        Check(plan.Monsters.Select(monster => monster.IsBlocking).SequenceEqual([true, false]),
+            "team zero alone excludes a friendly actor from the clear requirement");
+        Check(plan.Monsters.Select(monster => monster.ObjectKey).SequenceEqual(new ushort[] { 10, 11 }) &&
+            plan.Monsters.Select(monster => monster.SourceOrdinal).SequenceEqual([0, 1]) &&
+            plan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 3, 0 }) &&
+            ReferenceEquals(plan.Monsters[1].Source, room.Monsters[1]), "friendly actor keeps its source ordinal key level and spawn type");
+        Check(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [0] }, 99, 10).Monsters.Select(monster => monster.IsBlocking)
+            .SequenceEqual([false, true]), "missing trailing team defaults to blocking by its source ordinal");
+        Check(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [-1, int.MaxValue] }, 99, 10).Monsters.All(monster => monster.IsBlocking),
+            "all nonzero team values remain blocking without guessed team enums");
+        bool rejected = false;
+        try { DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [100, 0, 0] }, 99, 10); }
+        catch (InvalidDataException) { rejected = true; }
+        Check(rejected, "synthetic metadata cannot add team indices beyond the resource roster");
+        Check(new DungeonPlannedMonster(0, 10, 1, 3, source).IsBlocking,
+            "existing fixture constructors keep ordinary blocking behavior");
+        Console.WriteLine($"PASS {checks} dungeon blocking monster plan assertions");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = 0;
@@ -81,6 +119,9 @@ internal static class DungeonMonsterPlanTests
         Check(bossPlan.Monsters.Count == 2 && bossPlan.Monsters.All(monster => monster.CandidateLevel == 3) &&
             bossPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 3, 0 }),
             "76126完整Boss与普通怪物计划分别保留类型3和0，等级均为资源Lv3");
+        Check(bossRoom.MonsterTeams!.SequenceEqual([100, 0]) &&
+            bossPlan.Monsters.Select(monster => monster.IsBlocking).SequenceEqual([true, false]),
+            "76126友方任务对象仍生成完整actor，但不作为清房敌人");
         Check(DungeonMonsterPlan.FromRoom(first.Room, 99, 10).Monsters.Select(item => item.ObjectKey)
             .SequenceEqual(new ushort[] { 10, 11, 12, 13 }), "unoccupied keys remain consecutive");
         Check(DungeonMonsterPlan.FromRoom(first.Room, 10, 10).Monsters[0].ObjectKey == 11,
@@ -92,7 +133,7 @@ internal static class DungeonMonsterPlanTests
             "skipping the last ushort character key refuses exhausted capacity");
 
         var source = first.Room.Monsters[0];
-        DungeonRoomDefinition With(DungeonRoomMonster value) => first.Room with { Monsters = Array.AsReadOnly(new[] { value }) };
+        DungeonRoomDefinition With(DungeonRoomMonster value) => first.Room with { Monsters = Array.AsReadOnly(new[] { value }), MonsterTeams = null };
         void Unsupported(DungeonRoomMonster value, string name)
             => Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(With(value), 99, 10), name);
         Unsupported(source with { RawValues = [1, 0, 3, 573, 197, 0, 1] }, "unknown short row stays unsupported");
@@ -131,10 +172,10 @@ internal static class DungeonMonsterPlanTests
             { Path = "monster/fixture.mob" }), 99, 100), "特殊Lv1规则要求匹配怪物资源路径");
         Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ChangedSpecial(special with
             { RankKind = "[boss]" }), 99, 100), "特殊Lv1规则不能把普通资源行改成Boss");
-        var mixed = first.Room with { Monsters = Array.AsReadOnly(new[] { source, source with { RankKind = "[future]" } }) };
+        var mixed = first.Room with { Monsters = Array.AsReadOnly(new[] { source, source with { RankKind = "[future]" } }), MonsterTeams = null };
         Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(mixed, 99, 10),
             "mixed supported and unknown rows reject the whole plan rather than publishing a partial roster");
-        var empty = first.Room with { Monsters = Array.Empty<DungeonRoomMonster>() };
+        var empty = first.Room with { Monsters = Array.Empty<DungeonRoomMonster>(), MonsterTeams = null };
         Check(DungeonMonsterPlan.FromRoom(empty, ushort.MaxValue, ushort.MaxValue).Monsters.Count == 0,
             "a genuinely empty resource roster needs no object keys");
         var candidate = source with { RawValues = [1, 0, int.MaxValue, 573, 197, -7, 1, 1] };

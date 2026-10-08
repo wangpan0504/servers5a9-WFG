@@ -209,7 +209,7 @@ internal static class MailboxPersistenceTests
     {
         using var f = new Fixture();
         string character = JsonSerializer.Serialize(f.ReadSender() with { DungeonState = null });
-        const string dropSettings = "DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings;";
+        const string dropSettings = "DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings;";
         const string dropMail = dropSettings + "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages;";
         f.Execute(dropMail + "DROP TABLE character_dungeon_growth_receipts; ALTER TABLE account_wallets DROP COLUMN rental_points; PRAGMA user_version=1;");
         var upgraded = new CharacterRepository(f.Path);

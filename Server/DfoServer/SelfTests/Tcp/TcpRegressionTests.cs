@@ -13,6 +13,16 @@ internal static class TcpRegressionTests
         ("town", (options, root, resources) => TownProtocolTcpTests.RunAsync(options, root, resources.Towns)),
         ("dungeon-probe", (options, root, _) => DungeonProbeTcpTests.RunAsync(options, root)),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
+        ("dungeon-settlement", async (_, _, resources) =>
+        {
+            DungeonRoomCatalogTests.Run(resources.Archive);
+            DungeonMonsterPlanTests.Run(resources.Archive);
+            SinglePlayerDungeonRunTests.Run(resources.Archive);
+            DungeonSettlementTests.RunResources(resources.Archive);
+            DungeonSettlementSessionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            await FormalDungeonSessionTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            await FormalDungeonPublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+        }),
         ("jobs", (options, root, _) => TownProtocolTcpTests.JobsAsync(options, root)),
         ("inventory", InventoryTcpTests.RunAsync),
         ("inventory-persistence", (_, _, resources) =>

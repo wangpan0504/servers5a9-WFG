@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Infrastructure;
@@ -31,18 +32,33 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
     async Task<CommandResult> SelectAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonRequests.TryParseSelection(request.Body, out var selection)) return CommandResult.Unhandled;
+        var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.Ready,
+            context.Session.SelectionEpoch, context.Session.Phase, context.Session.CurrentDungeonSelection));
+        var character = before.Selected;
+        if (character is null || !before.Ready || before.Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
+            context.BlocksTownActions)
+            return CommandResult.Unhandled;
         // 匹配普通单人3145形状；未知模式和费用资格不套用该入口。
         if (selection.Unknown5 != 0 || selection.Unknown7 != 0 || selection.Unknown8 != 0 || selection.Unknown9 != ushort.MaxValue ||
             selection.Unknown11 != 0 || selection.Unknown15 != 0 || selection.Unknown20 != 0 || selection.Unknown21 != 0)
-            return CommandResult.Unhandled;
+            return await RejectAsync();
         var receipt = context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms, drops, items);
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Request = selection, receipt?.Snapshot.Identity });
-        if (receipt is null) return CommandResult.Unhandled;
+        if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry), "formal_dungeon_information", Guard);
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed), "formal_start_map", Guard);
         return CommandResult.Handled;
+
+        async Task<CommandResult> RejectAsync()
+        {
+            bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
+                before.Phase, before.CurrentDungeonSelection);
+            // 只结束本次入场等待，保留原选图和回城锚点；不发送成功、弹窗或自动回城通知。
+            await context.Reply(CmdPacketType.SELECT_DUNGEON, DungeonPackets.SelectionRejected(), "formal_dungeon_rejected", CanSend);
+            return CommandResult.Handled;
+        }
     }
 
     async Task<CommandResult> LoadedAsync(GameConnectionContext context, Packet request)
@@ -80,6 +96,14 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             [new(drop.Reservation.GroundKey, drop.Reservation.RecordSlot, drop.Core, drop.Reservation.X, drop.Reservation.Y)] : [];
         await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, dropRows), "formal_monster_death", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
+        if (result.ClearFact is not null && context.Session.EnableFormalDungeonSettlement(result.MonsterKey) is { } completion)
+        {
+            bool CompletionGuard() => context.Session.CanPublishDungeonSettlement(completion.Receipt);
+            await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(completion.BossKey), "formal_boss_confirmed", CompletionGuard);
+            bool enabled = false;
+            await context.Notify(NotiPacketType.ENABLE_CLEAR_DUNGEON, [], "formal_clear_enabled", () => enabled = CompletionGuard());
+            if (enabled) context.Session.ConfirmFormalDungeonSettlementEnabled(completion.Receipt);
+        }
         return CommandResult.Handled;
     }
 

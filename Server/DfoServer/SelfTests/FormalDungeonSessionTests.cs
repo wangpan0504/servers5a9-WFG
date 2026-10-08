@@ -30,7 +30,11 @@ internal static class FormalDungeonSessionTests
         var kills = DungeonKillExperienceCatalog.Load(pvf);
         var catalog = DungeonCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
-        Lifecycle();
+        Lifecycle(0);
+        Lifecycle(14);
+        OrdinaryJobs();
+        OtherAdmissions();
+        RejectedEntry();
         Reservation();
         UnknownOwner();
         Invalidation();
@@ -39,21 +43,23 @@ internal static class FormalDungeonSessionTests
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Session文件库、六房合成击杀、身份及回滚断言（非实机）");
         return Task.CompletedTask;
 
-        void Lifecycle()
+        void Lifecycle(byte job)
         {
-            using var f = new Fixture("FormalChain", towns, characters, learning);
+            using var f = new Fixture("FormalJ" + job, towns, characters, learning, job: job);
             Check(f.Created.DungeonState == CharacterDungeonState.NewOrdinary && f.Created.Learning.Initialized &&
                 f.Created.Learning.Trees.Count == 2, "正常建角明确初始化副本owner与两树绑定");
             ulong startExperience = growth.GetCumulativeExperienceBoundary(1) - kills.GetExperience(3);
             f.Sql($"UPDATE characters SET experience={startExperience} WHERE id={f.Created.Id}");
             f.Sql("UPDATE character_dungeon_state SET capsule_experience=11,proficiency_level=2,proficiency_experience=33");
             f.SelectEntry();
+            var opening = f.Session.BeginDungeonSelection();
             var initial = f.Session.Selected!;
             var entry = Enter(f);
             var state = entry.Character.DungeonState!;
             Check(state.LastAttempt == 1 && state.NextObjectKey > 256 && entry.Character.Revision == initial.Revision + 1 &&
                 ReferenceEquals(entry.Character, f.Session.Selected) && Same(entry.Character, f.Read()),
                 "正式进场预留完整路线身份并安装实际提交角色");
+            Check(f.Session.CurrentDungeonSelection is null, "正式入场成功消费原选图上下文");
             var preservedState = state;
             Check(f.Session.Phase == SessionPhase.Loading && f.Session.CanPublishFormalDungeon(entry) &&
                 f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null, "Loading门禁防止重复预留");
@@ -84,6 +90,14 @@ internal static class FormalDungeonSessionTests
                         monster.ObjectKey >= 256 && monster.ObjectKey < state.NextObjectKey,
                         "所有真实房间怪key在进场预留范围内且全程唯一");
                     var observation = Observation(receipt, monster);
+                    if (!monster.IsBlocking)
+                    {
+                        long beforeFriendly = f.Count();
+                        Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Rejected &&
+                            f.Count() == beforeFriendly && f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey),
+                            "任务友方保留生成对象，但没有击杀事实、经验或掉落资格");
+                        continue;
+                    }
                     if (monster.MonsterId == 107000903)
                     {
                         // 本版Boss实收：改写仅影响prefix，实际participant累计及创建HP仍独立核验。
@@ -128,7 +142,7 @@ internal static class FormalDungeonSessionTests
                         "同key变更正文指纹拒绝");
                     oldRoomObservation = observation;
                     if (room == maps.Length - 1 && result.ClearFact is not null)
-                        Check(result.ClearFact.ConfirmedDeathEvents.Count == allKeys.Count, "Boss清图事实包含所有唯一已提交死亡");
+                        Check(result.ClearFact.ConfirmedDeathEvents.Count == f.Count(), "Boss清图事实只包含已提交敌对击杀，不伪造任务友方死亡");
                 }
                 if (room < targets.Length)
                 {
@@ -149,6 +163,17 @@ internal static class FormalDungeonSessionTests
                 !f.Session.CanPublishFormalDungeon(finalReceipt!), "回城清私有run，保留全部已提交成长");
             Check(f.Session.ObserveFormalDungeonDeath(oldRoomObservation!, kills, growth).Outcome == DungeonRunOutcome.Rejected,
                 "已回城拒绝旧死亡");
+            Check(f.Session.Move(new(1084, 249, 5, 0, 0, 0)), "正式退出后可合法移动到新的入口位置");
+            var moved = f.Session.Selected!;
+            var reopenedSelection = f.Session.BeginDungeonSelection();
+            Check(reopenedSelection.SelectionId > opening.SelectionId &&
+                f.Session.CurrentDungeonSelection?.OriginPosition == moved.Position &&
+                f.Session.CanPublishDungeonSelection(reopenedSelection) && !f.Session.CanPublishDungeonSelection(opening),
+                "正式退出后再选图使用新的SelectionId和实际OriginPosition，不复用旧返回身份");
+            Check(f.Session.ReturnFromDungeonSelection() is not null && f.Session.Phase == SessionPhase.Town &&
+                f.Session.CurrentDungeonSelection is null && f.Session.Selected!.DungeonState == final.DungeonState &&
+                f.Session.Selected.Learning.Experience == final.Learning.Experience && Same(f.Session.Selected, f.Read()),
+                "重新选图仍可132返回且保留成长、attempt和对象key高水位");
             f.Session.ReturnToRoster();
             var reopened = new GameSession(new CharacterRepository(f.Path), towns, f.Owner);
             reopened.Select(f.Created.Slot);
@@ -162,6 +187,84 @@ internal static class FormalDungeonSessionTests
                 second.Snapshot.Identity.InstanceId != entry.Snapshot.Identity.InstanceId &&
                 second.Monsters.Monsters.All(monster => monster.ObjectKey >= state.NextObjectKey),
                 "重开再进场不重用旧attempt、instance或怪key");
+        }
+
+        void OrdinaryJobs()
+        {
+            foreach (byte job in new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 15 })
+            {
+                using var f = new Fixture("FormalJ" + job, towns, characters, learning, job: job);
+                Check(f.Created.Job == job && f.Created.GrowType == 0 && f.Created.Learning.Initialized &&
+                    f.Created.Learning.Trees.Count == 2 && f.Created.DungeonState == CharacterDungeonState.NewOrdinary,
+                    $"普通职业{job}真实建角初始化双树与副本owner");
+                f.SelectEntry();
+                var selection = f.Session.BeginDungeonSelection();
+                Check(f.Session.Phase == SessionPhase.MapSelect && f.Session.CanPublishDungeonSelection(selection),
+                    $"普通职业{job}经合法旅行进入选图阶段");
+                var before = f.Session.Selected!;
+                var entry = Enter(f);
+                var loaded = f.Session.CompleteFormalDungeonLoading()!;
+                var monster = loaded.Monsters.Monsters[0];
+                var death = f.Session.ObserveFormalDungeonDeath(Observation(loaded, monster), kills, growth);
+                Check(death.Outcome == DungeonRunOutcome.Accepted && f.Count() == 1 &&
+                    f.Session.Selected!.Learning.Experience == before.Learning.Experience + kills.GetExperience(monster.CandidateLevel) &&
+                    Same(f.Session.Selected, f.Read()) && entry.Character.DungeonState!.LastAttempt == 1,
+                    $"普通职业{job}正式入场加载及一次死亡成长成功");
+                var final = f.Session.Selected;
+                Check(f.Session.ReturnFromFormalDungeon()?.Character == final && f.Session.Phase == SessionPhase.Town &&
+                    f.Session.DungeonSnapshot is null && Same(final!, f.Read()),
+                    $"普通职业{job}退出保留已提交经验与双树，不留下实例");
+            }
+        }
+
+        void OtherAdmissions()
+        {
+            foreach (var identity in new[] { (Job: (byte)9, Grow: 0), (Job: (byte)10, Grow: 0), (Job: (byte)14, Grow: 1), (Job: (byte)0, Grow: 37) })
+            {
+                using var f = new Fixture("EntryJ" + identity.Job, towns, characters, learning, job: identity.Job);
+                if (identity.Grow != 0)
+                    f.Session.UpdateProgress(new(CharacterProgressField.Grow, f.Owner.Account, f.Created.Name, identity.Grow, 0));
+                f.SelectEntry();
+                f.Session.BeginDungeonSelection();
+                var before = f.Session.Selected!;
+                var entry = Enter(f);
+                Check(f.Session.CompleteFormalDungeonLoading() is not null && f.Session.Phase == SessionPhase.Dungeon &&
+                    entry.Character.Job == identity.Job && entry.Character.GrowType == identity.Grow &&
+                    entry.Character.DungeonState!.LastAttempt == 1 && entry.Character.Revision == before.Revision + 1 &&
+                    Same(before with { Revision = entry.Character.Revision, DungeonState = entry.Character.DungeonState }, entry.Character) &&
+                    Same(entry.Character, f.Read()),
+                    $"特殊职业/转职{identity.Job}/{identity.Grow}允许真实准入加载，保留原技能状态而不伪造初始化");
+                Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town &&
+                    f.Session.DungeonSnapshot is null && f.Count() == 0 && Same(f.Session.Selected!, f.Read()),
+                    "特殊职业/转职可退出且无击杀成长写入；其成长支持另行处理");
+            }
+        }
+
+        void RejectedEntry()
+        {
+            using var ordinary = new Fixture("RejectRoute", towns, characters, learning, job: 14);
+            ordinary.SelectEntry();
+            var current = ordinary.Session.BeginDungeonSelection();
+            var selected = ordinary.Session.Selected!;
+            foreach (var request in new[] { (Dungeon: 4u, Task: 3145u, Difficulty: (byte)0), (Dungeon: 3u, Task: 3146u, Difficulty: (byte)0),
+                (Dungeon: 3u, Task: 3145u, Difficulty: (byte)1) })
+                Check(ordinary.Session.EnterFormalDungeon(request.Dungeon, request.Task, request.Difficulty, catalog, rooms) is null &&
+                    ReferenceEquals(selected, ordinary.Session.Selected) && Same(selected, ordinary.Read()) &&
+                    ordinary.Session.CanPublishDungeonSelection(current) && ordinary.Session.DungeonSnapshot is null,
+                    "放开普通职业仍保留副本/任务/难度资格，拒绝不预留attempt或key");
+            foreach (bool missing in new[] { false, true })
+            {
+                using var f = new Fixture(missing ? "TaskMissing" : "TaskReached", towns, characters, learning, job: 14);
+                f.Sql(missing ? "DELETE FROM character_active_main_quests" : "UPDATE character_active_main_quests SET condition_state=0");
+                f.SelectEntry();
+                var selection = f.Session.BeginDungeonSelection();
+                var context = f.Session.CurrentDungeonSelection;
+                var before = f.Session.Selected!;
+                Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null &&
+                    ReferenceEquals(before, f.Session.Selected) && Same(before, f.Read()) &&
+                    ReferenceEquals(context, f.Session.CurrentDungeonSelection) && f.Session.CanPublishDungeonSelection(selection) &&
+                    f.Session.DungeonSnapshot is null, "真实任务缺失或已达成仍拒绝，不改attempt/key/revision和返回身份");
+            }
         }
 
         void Reservation()
@@ -238,7 +341,7 @@ internal static class FormalDungeonSessionTests
         {
             using var f = new Fixture("LegacyFormal", towns, characters, learning);
             var original = f.Read();
-            f.Sql("DROP TABLE character_dungeon_pickup_receipts");
+            f.Sql("DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts");
             f.Sql("DROP TABLE character_dungeon_loot_receipts");
             f.Sql("DROP TABLE character_dungeon_state");
             f.Sql("PRAGMA user_version=7");
@@ -247,9 +350,14 @@ internal static class FormalDungeonSessionTests
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_state")) == 0,
                 "真实v7到v8迁移旧角色保持unknown，不改资产或补aux/key");
             f.SelectEntry();
+            var selection = f.Session.BeginDungeonSelection();
+            var context = f.Session.CurrentDungeonSelection;
             var selected = f.Session.Selected!;
             Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null && f.Session.DungeonSnapshot is null &&
-                ReferenceEquals(selected, f.Session.Selected) && Same(selected, f.Read()), "旧unknown角色选角可用但正式准入拒绝");
+                ReferenceEquals(selected, f.Session.Selected) && Same(selected, f.Read()) &&
+                f.Session.Phase == SessionPhase.MapSelect && ReferenceEquals(context, f.Session.CurrentDungeonSelection) &&
+                f.Session.CanPublishDungeonSelection(selection), "旧unknown角色拒绝不改角色、revision或原选图返回上下文");
+            Check(f.Session.ReturnFromDungeonSelection() is not null, "缺owner拒绝后仍可返回城镇");
         }
 
         void Invalidation()
@@ -321,8 +429,9 @@ internal static class FormalDungeonSessionTests
 
         void FrozenLootTransaction()
         {
-            using var f = new Fixture("LootReceipt", towns, characters, learning);
+            using var f = new Fixture("LootReceipt", towns, characters, learning, job: 14);
             f.SelectEntry();
+            f.Session.BeginDungeonSelection();
             var drops = DungeonMonsterDropCatalog.Load(pvf);
             int calls = 0;
             var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
@@ -331,7 +440,11 @@ internal static class FormalDungeonSessionTests
                 "准入同事务预留完整怪物与最多一件地面key范围");
             f.Session.CompleteFormalDungeonLoading();
             var first = entry.Monsters.Monsters[0];
-            var observation = Observation(entry, first);
+            var observation = Observation(entry, first) with
+            {
+                CumulativeHpDecrease = 696, PositiveHpDecreaseCount = 2, Unknown18 = 831, Unknown26 = 3
+            };
+            var changedObservation = observation with { Unknown18 = 832, BodySha256 = new string('B', 64) };
             var original = f.Session.Selected!;
             f.Sql("CREATE TRIGGER loot_fail AFTER INSERT ON character_dungeon_loot_receipts BEGIN SELECT RAISE(ABORT,'late loot failure'); END");
             Reject<SqliteException>(() => f.Session.ObserveFormalDungeonDeath(observation, kills, growth),
@@ -339,6 +452,9 @@ internal static class FormalDungeonSessionTests
             Check(calls == 2 && f.Count() == 0 && Same(original, f.Read()) && ReferenceEquals(original, f.Session.Selected) &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 0,
                 "冻结随机后SQL回滚不留经验或物品，也不提前发布地面");
+            Check(f.Session.ObserveFormalDungeonDeath(changedObservation, kills, growth).Outcome == DungeonRunOutcome.Rejected &&
+                calls == 2 && f.Count() == 0 && Same(original, f.Read()),
+                "待提交控制死亡的相容改包不能换事件、重抽掉落或提前发经验");
             f.Sql("DROP TRIGGER loot_fail");
             var death = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
             var ground = death.Drop ?? throw new InvalidOperationException("FAIL 明确合成命中没有地面对象");
@@ -346,8 +462,11 @@ internal static class FormalDungeonSessionTests
                 f.Count() == 1 && f.Read().Learning.Experience == 72 &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 1,
                 "原事实重试只复用冻结结果，一次提交XP及完整地面核心");
-            Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate && calls == 2,
-                "重复死亡不重抽或增发地面");
+            Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate &&
+                f.Session.ObserveFormalDungeonDeath(changedObservation, kills, growth).Outcome == DungeonRunOutcome.Rejected && calls == 2 &&
+                f.Count() == 1 && f.Read().Learning.Experience == 72 &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 1,
+                "控制死亡提交后精确重复与相容改包均不再次发经验、抽奖或增发地面");
             uint key = ground.Reservation.GroundKey;
             Check(f.Session.PickFormalDungeonItem(key + 1000, itemResources.Items, itemResources.EpicPieces).Outcome == DungeonRunOutcome.Rejected,
                 "客户端任意key不提供拾取资格");
@@ -456,14 +575,14 @@ internal static class FormalDungeonSessionTests
         public AccountOwners.Lease Owner { get; }
         public GameSession Session { get; }
         public Character Created { get; }
-        public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, bool secondCharacter = false)
+        public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, bool secondCharacter = false, byte job = 0)
         {
             Path = System.IO.Path.Combine(root, "game.db");
             Repository = new(Path);
             Owner = Owners.Acquire("formal-session", () => { });
             Session = new(Repository, towns, Owner);
             if (secondCharacter) Session.CreateCharacter("RecordDummy", characters.Get(0), learning);
-            Created = Session.CreateCharacter(name, characters.Get(0), learning);
+            Created = Session.CreateCharacter(name, characters.Get(job), learning);
         }
         public void SelectEntry()
         {

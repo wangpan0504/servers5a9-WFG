@@ -6,6 +6,49 @@ namespace DfoServer;
 
 internal static class DungeonRoomCatalogTests
 {
+    public static void RunCore()
+    {
+        int checks = 0;
+        var fixture = new Fixture();
+        void Check(bool value, string name)
+        {
+            checks++;
+            if (!value)
+                throw new InvalidOperationException("FAIL room team metadata: " + name);
+        }
+        void Reject(PvfToken[] tokens, string name)
+        {
+            bool rejected = false;
+            try { fixture.Parse(tokens); }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException) { rejected = true; }
+            Check(rejected, name);
+        }
+        var row = fixture.Monster()[1..^1];
+        var monsters = fixture.Block("monster", [.. row, .. row]);
+        var teamTokens = fixture.Block("monster team", [new(0, 100), new(0, 0)]);
+        var parsed = fixture.Parse([.. monsters, .. teamTokens]);
+        Check(parsed.MonsterTeams!.SequenceEqual([100, 0]) && parsed.Monsters.Count == 2,
+            "team values retain positional source order beside the complete actor roster");
+        teamTokens[1] = new(0, 0);
+        Check(parsed.MonsterTeams!.SequenceEqual([100, 0]) && parsed.MonsterTeams is IList teams && teams.IsReadOnly,
+            "parsed teams are read only and do not retain mutable input tokens");
+        Check(fixture.Parse(monsters).MonsterTeams is { Count: 0 }, "absent team section preserves default blocking metadata");
+        Check(fixture.Parse([.. monsters, .. fixture.Block("monster team", [])]).MonsterTeams is { Count: 0 },
+            "explicitly empty team section is valid");
+        Check(fixture.Parse([.. monsters, .. fixture.Block("monster team", [new(0, 0)])]).MonsterTeams!.SequenceEqual([0]),
+            "missing trailing team entries remain absent instead of inventing friendly values");
+        Check(fixture.Parse([.. monsters, .. fixture.Block("monster team", [new(0, int.MinValue), new(0, int.MaxValue)])])
+            .MonsterTeams!.SequenceEqual([int.MinValue, int.MaxValue]), "nonzero team integers stay opaque and complete");
+        Reject([.. monsters, .. fixture.Block("monster team", [new(6, fixture.String("0").Value)])], "nonnumeric team rejected");
+        Reject([.. monsters, .. fixture.Block("monster team", [new(0, 100), new(0, 0), new(0, 0)])], "excess team index rejected");
+        Reject(fixture.Block("monster team", [new(0, 0)]), "team without corresponding monster rejected");
+        Reject([.. monsters, fixture.Tag("monster team"), new(0, 100)], "unclosed team section rejected");
+        Reject([.. monsters, .. fixture.Block("monster team", []), .. fixture.Block("monster team", [])], "duplicate team sections rejected");
+        Check(fixture.Parse([.. monsters, .. fixture.Block("future room data", [new(6, fixture.String("opaque").Value)])]).Monsters.Count == 2,
+            "unrelated unknown metadata keeps existing parsing behavior");
+        Console.WriteLine($"PASS {checks} dungeon room team metadata assertions");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = 0;

@@ -69,7 +69,7 @@ internal static class DungeonExplicitDropPolicy
     public const int TriggerThreshold = 1000;
     public const int SelectionDenominator = 350;
 
-    // 仅验证资源池；job0/普通单人Dungeon3/3145、难度及固定普通生成资格由Session准入核对。
+    // 仅验证资源池；普通单人Dungeon3/3145、难度及固定普通生成资格由Session准入核对。
     public static DungeonExplicitDropPool CreatePool(string resourceSource, DungeonMonsterDropDeclaration declaration,
         Func<int, ItemTemplate> resolveItem) => new(resourceSource, declaration, resolveItem);
 

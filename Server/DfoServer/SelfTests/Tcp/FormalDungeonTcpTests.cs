@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Development.Dungeons;
+using DfoServer.Network.Management;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -14,7 +15,7 @@ internal static class FormalDungeonTcpTests
     {
         var growth = CharacterGrowthCatalog.Load(resources.Archive);
         var kills = DungeonKillExperienceCatalog.Load(resources.Archive);
-        await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"));
+        await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"), gm: true);
         await fixture.StartAsync();
         byte[]? oldReport = null;
         ulong experience = 0;
@@ -49,6 +50,20 @@ internal static class FormalDungeonTcpTests
                     ushort key = U16(map, offset + 6);
                     byte level = map[offset + 12];
                     byte[] report = Death(key, peer.Id, level);
+                    if (room == ids.Length - 1 && U32(map, offset + 8) == 107000906)
+                    {
+                        peer.Send(39, report); peer.Barrier();
+                        That(Experience(fixture, peer.Id) == experience &&
+                            fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, key) is [[0L]],
+                            "托比保留真实场景key，但友方死亡报告不能授予经验、掉落或阻塞已开启的结算");
+                        continue;
+                    }
+                    if (room == 1 && index == 0)
+                        report = Death(key, peer.Id, level, 696, 3, 2, 831);
+                    else if (room == 1 && index == 2)
+                        report = Death(key, peer.Id, level, 1528, 6, 5, 1728);
+                    else if (room == 2 && index == 0)
+                        report = Death(key, peer.Id, level, 400, 4, 3, 800);
                     if (oldReport is null)
                     {
                         byte[] altered = (byte[])report.Clone();
@@ -56,7 +71,7 @@ internal static class FormalDungeonTcpTests
                         peer.Send(39, altered);
                         peer.Barrier();
                         That(Experience(fixture, peer.Id) == 0, "不匹配正文检查值不能发奖");
-                        var insufficient = Death(key, peer.Id, level, 503);
+                        var insufficient = Death(key, peer.Id, level, 503, totalDecrease: 503);
                         peer.Send(39, insufficient);
                         peer.Barrier();
                         That(Experience(fixture, peer.Id) == 0, "初始HP未被累计降低量覆盖不能发奖");
@@ -74,6 +89,21 @@ internal static class FormalDungeonTcpTests
                     That(notice.Length == 91 && notice[0] == expectedLevel && U64(notice, 1) == experience &&
                         U32(notice, 9) == kills.GetExperience(level) && U16(notice, 13) == growth.GetSpDelta(1, expectedLevel) &&
                         U16(notice, 15) == growth.GetSpDelta(1, expectedLevel), "完整NOTI37绝对经验等级及两树SP来自已提交角色");
+                    if (room == ids.Length - 1 && map[offset + 13] == 3)
+                    {
+                        int bossOffset = 19 + Enumerable.Range(0, count).Single(row => map[19 + row * 22 + 13] == 3) * 22;
+                        ushort bossKey = U16(map, bossOffset + 6);
+                        peer.Expect(0, 115, [1, 1, (byte)bossKey, (byte)(bossKey >> 8)]);
+                        peer.Expect(0, 31, []);
+                        byte[] bossCheck = new byte[39];
+                        BinaryPrimitives.WriteUInt16LittleEndian(bossCheck, peer.Id);
+                        BinaryPrimitives.WriteUInt16LittleEndian(bossCheck.AsSpan(2), bossKey);
+                        BinaryPrimitives.WriteUInt32LittleEndian(bossCheck.AsSpan(13), map[bossOffset + 12]);
+                        BinaryPrimitives.WriteUInt64LittleEndian(bossCheck.AsSpan(17), U64(report, 60));
+                        peer.Send(117, bossCheck);
+                        peer.Barrier();
+                        That(Experience(fixture, peer.Id) == experience, "117仅协调已死亡Boss，已开启结算不重复发31或经验");
+                    }
                     if (dropCount != 0)
                     {
                         uint ground = U32(deathNotice, 4);
@@ -100,9 +130,21 @@ internal static class FormalDungeonTcpTests
                             "重复拾取明确拒绝并恢复等待，库存不再增加");
                         picked++;
                     }
+                    string growthBeforeReplay = fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id");
+                    string lootBeforeReplay = fixture.Snapshot("SELECT * FROM character_dungeon_loot_receipts ORDER BY character_id,event_id");
+                    string inventoryBeforeReplay = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
                     peer.Send(39, report);
                     peer.Barrier();
-                    That(Experience(fixture, peer.Id) == experience, "精确重复不通知或重复发奖");
+                    byte[] changedReplay = (byte[])report.Clone();
+                    BinaryPrimitives.WriteUInt64LittleEndian(changedReplay.AsSpan(18), U64(changedReplay, 18) + 1);
+                    SealDeath(changedReplay);
+                    peer.Send(39, changedReplay);
+                    peer.Barrier();
+                    That(Experience(fixture, peer.Id) == experience &&
+                        fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id") == growthBeforeReplay &&
+                        fixture.Snapshot("SELECT * FROM character_dungeon_loot_receipts ORDER BY character_id,event_id") == lootBeforeReplay &&
+                        fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == inventoryBeforeReplay,
+                        "精确重复及相容统计变化的同怪重复均不通知、追加经验或掉落receipt、生成物品UID");
                     oldReport = report;
                 }
                 if (room < target.Length)
@@ -115,14 +157,90 @@ internal static class FormalDungeonTcpTests
                     map = peer.Expect(0, 29).Body;
                 }
             }
-            That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id) is [[29L]],
-                "实际默认服务六房共有29条唯一成长事实");
-            peer.Send(42);
-            peer.Expect(1, 42, [1]);
+            That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id) is [[28L]],
+                "六房28个敌对对象各一条成长事实，友方托比没有伪造击杀或额外经验");
+            var clearCatalog = DungeonClearExperienceCatalog.Load(resources.Archive);
+            var clearReward = clearCatalog.Calculate(DungeonCatalog.Load(resources.Archive).Get(3), 0, 90);
+            byte[] reportResult = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 90);
+            byte[] corruptedResult = (byte[])reportResult.Clone(); corruptedResult[49] ^= 1;
+            peer.Send(46, corruptedResult); peer.Barrier();
+            That(Experience(fixture, peer.Id) == experience, "46检查值错误不触发结算或经验");
+            string assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
+            peer.Send(46, reportResult);
+            ReadClear();
+            experience += clearReward.TotalExperience;
+            That(Experience(fixture, peer.Id) == experience && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[1L]],
+                "通关基础与评分经验仅一次提交，击杀经验不再累计");
+            peer.Send(46, reportResult); ReadClear();
+            That(Experience(fixture, peer.Id) == experience, "同报告46回放投影不再加经验");
+            byte[] changedResult = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99);
+            peer.Send(46, changedResult); peer.Barrier();
+            That(Experience(fixture, peer.Id) == experience, "改变评分的46不能替换冻结报告");
+            peer.Send(69); peer.Expect(1, 69, [1]);
+            peer.Send(70); That(peer.Expect(1, 70).Body.Length == 17, "70普通八槽完整ACK");
+            peer.Send(71, [0, 0]); That(peer.Expect(1, 71).Body.Length == 33, "71空道具结果保留八槽完整ACK");
+            peer.Send(72, [2, 2]); peer.Expect(1, 72, [1, 2, 2]);
+            peer.Send(72, [1, 2]); peer.Expect(1, 72, [1, 1, 2]);
             peer.Expect(0, 24);
             peer.Barrier();
+            That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assetsBeforeClear &&
+                Experience(fixture, peer.Id) == experience, "空翻牌及结果页回城不生成道具或重复经验");
+            ClearAgain(Enter(peer));
+            peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 261, [9]);
+            peer.Expect(0, 28);
+            byte[] retryMap = peer.Expect(0, 29).Body;
+            That(U16(retryMap, 25) > U16(map, 25), "再挑战创建新Run、新尝试及新怪key");
+            ClearAgain(retryMap);
+            peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 1]); peer.Expect(1, 15, [1]);
+            peer.Send(72, [1, 3]); peer.Expect(1, 72, [1, 1, 3]);
+            SelectMap(peer);
+            peer.Send(132); peer.Expect(1, 132, [1]);
+            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]); peer.Expect(0, 23); peer.Expect(0, 24);
+            peer.Barrier();
+            That(Experience(fixture, peer.Id) == experience && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[3L]],
+                "再挑战各一次结算，重选按真实15/132退出，旧报告不跨实例重复发奖");
             nextKey = checked((ushort)Convert.ToInt64(fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]));
+
+            void ReadClear()
+            {
+                byte[] result = peer.Expect(0, 34).Body;
+                byte[] exp = peer.Expect(0, 37).Body;
+                byte[] clear = peer.Expect(0, 35).Body;
+                That(result.Length == 16 && result[6] == 90 && U16(result, 9) == peer.Id && exp.Length == 91 &&
+                    U32(exp, 9) == clearReward.TotalExperience && clear.Length == 218 && U32(clear, 0) == clearReward.BaseExperience &&
+                    U32(clear, 4) == clearReward.RankExperience && clear[192] == 1,
+                    "正式结算34→37→35匹配宽度，显示冻结评分及已提交奖励");
+            }
+
+            void ClearAgain(byte[] startMap)
+            {
+                for (int room = 0; room < ids.Length; room++)
+                {
+                    Load(peer);
+                    int count = startMap[18];
+                    for (int index = 0; index < count; index++)
+                    {
+                        int offset = 19 + index * 22;
+                        if (U32(startMap, offset + 8) == 107000906) continue;
+                        peer.Send(39, Death(U16(startMap, offset + 6), peer.Id, startMap[offset + 12]));
+                        peer.Expect(0, 38);
+                        experience = U64(peer.Expect(0, 37).Body, 1);
+                    }
+                    if (room == ids.Length - 1)
+                    {
+                        peer.Expect(0, 115); peer.Expect(0, 31, []);
+                    }
+                    else
+                    {
+                        byte[] move = new byte[100]; move[0] = target[room].X; move[1] = target[room].Y;
+                        peer.Send(45, move); peer.Expect(1, 45, [1]); startMap = peer.Expect(0, 29).Body;
+                    }
+                }
+            }
         }
+        VerifyEntryRecoveryAndJobs(fixture, kills);
         string persisted = fixture.Snapshot("SELECT level,experience FROM characters");
         string inventory = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
         string points = fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context");
@@ -144,7 +262,81 @@ internal static class FormalDungeonTcpTests
             That(Experience(fixture, peer.Id) == experience, "新实例拒绝上轮死亡请求，不增加资产经验");
         }
         await fixture.StopAsync();
-        Console.WriteLine($"PASS 正式TCP原生统计合成击杀、六房升级、真实随机拾取{picked}件、重复拒绝及服务重启（非Windows实机；零样本不作拾取覆盖）");
+        Console.WriteLine($"PASS 正式TCP静默拒绝后回城重进、全部职业和转职加载、原生统计合成击杀、六房升级、真实随机拾取{picked}件、重复拒绝及服务重启（非Windows实机；零样本不作拾取覆盖）");
+    }
+
+    static void VerifyEntryRecoveryAndJobs(TcpTestFixture fixture, DungeonKillExperienceCatalog kills)
+    {
+        ushort slot = 1;
+        foreach (byte job in new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 9, 10 })
+        {
+            using var peer = Open(fixture);
+            peer.Create("FormalJ" + job, job);
+            peer.Select(slot++);
+            EntryTown(peer);
+            if (job == 14)
+            {
+                SelectMap(peer);
+                string before = fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
+                byte[] rejection = Selection(1);
+                for (int repeat = 0; repeat < 2; repeat++)
+                {
+                    peer.Send(16, rejection);
+                    peer.Expect(1, 16, [0, 9, 0, 0]);
+                    // 下一帧必须直接为屏障ACK；拒绝不附带弹窗、入场或自动回城通知。
+                    peer.Barrier();
+                    That(fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == before,
+                        $"职业{job}重复准入拒绝保留角色revision、attempt与key，不发成功通知");
+                }
+                peer.Send(132);
+                peer.Expect(1, 132, [1]);
+                peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
+                byte[] area = peer.Expect(0, 23).Body;
+                byte[] transition = peer.Expect(0, 24).Body;
+                That(area[2] == 38 && area[3] == 2 && U16(area, 6) == 249 &&
+                    transition[0] == 38 && transition[1] == 2 && U16(transition, 8) == 249 &&
+                    fixture.Query("SELECT x,y FROM characters WHERE id=$p0", peer.Id) is [[var x, 249L]] && U16(area, 4) == Convert.ToUInt16(x),
+                    "拒绝后的132返回沿原选图上下文，地区绑定与实际保存落点一致");
+                peer.Barrier();
+                peer.Send(35, Move(1085, 249));
+                peer.Barrier();
+            }
+            byte[] map = Enter(peer);
+            Load(peer);
+            That(fixture.Query("SELECT job,last_attempt FROM characters JOIN character_dungeon_state ON character_id=id WHERE id=$p0", peer.Id)
+                is [[var actualJob, 1L]] && Convert.ToByte(actualJob) == job,
+                $"职业{job}真实TCP建角、旅行、选图、入场及加载建立一次正式尝试");
+            if (job == 14)
+            {
+                ushort key = U16(map, 25);
+                byte level = map[31];
+                peer.Send(39, Death(key, peer.Id, level));
+                That(U16(peer.Expect(0, 38).Body) == key, "女圣职者加载后死亡沿正式通道确认当前怪物key");
+                byte[] growth = peer.Expect(0, 37).Body;
+                That(U32(growth, 9) == kills.GetExperience(level) && Experience(fixture, peer.Id) == kills.GetExperience(level),
+                    "女圣职者拒绝、132返回、15重进后可完成正式死亡成长");
+            }
+            peer.Send(42);
+            peer.Expect(1, 42, [1]);
+            peer.Expect(0, 24);
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Create("PromotedTcp");
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "grow PromotedTcp 37", out string reply) && reply.StartsWith("OK "),
+                "独立测试服务通过正式GM存储用例更新转职字节");
+            peer.Select(slot);
+            EntryTown(peer);
+            Enter(peer);
+            Load(peer);
+            That(fixture.Query("SELECT grow_type,last_attempt FROM characters JOIN character_dungeon_state ON character_id=id WHERE id=$p0", peer.Id)
+                is [[37L, 1L]], "转职角色真实TCP准入加载，不依赖普通职业成长资格");
+            peer.Send(42);
+            peer.Expect(1, 42, [1]);
+            peer.Expect(0, 24);
+            peer.Barrier();
+        }
     }
 
     static ulong Experience(TcpTestFixture fixture, ushort id) => checked((ulong)Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", id)[0][0]));
@@ -156,12 +348,23 @@ internal static class FormalDungeonTcpTests
     }
     static byte[] Enter(TcpPeer peer)
     {
-        peer.Send(15, new byte[4]);
-        peer.Expect(1, 15, [1]);
-        peer.Expect(0, 27, new byte[42]);
-        peer.Send(16, Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000"));
+        SelectMap(peer);
+        peer.Send(16, Selection());
         That(peer.Expect(0, 28).Body.Length == 36, "正式NOTI28完整36B");
         return peer.Expect(0, 29).Body;
+    }
+    static void SelectMap(TcpPeer peer)
+    {
+        peer.Send(15, new byte[4]);
+        peer.Expect(1, 15, [1]);
+        peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+        peer.Expect(0, 27, new byte[42]);
+    }
+    static byte[] Selection(byte difficulty = 0)
+    {
+        byte[] body = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
+        body[4] = difficulty;
+        return body;
     }
     static void Load(TcpPeer peer)
     {
@@ -171,25 +374,31 @@ internal static class FormalDungeonTcpTests
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
     }
     // 明确合成的网络统计。独立正文编码/MD5折叠，不调用服务Parser/Builder自证。
-    static byte[] Death(ushort key, ushort reporter, byte level, ulong decrease = 600)
+    static byte[] Death(ushort key, ushort reporter, byte level, ulong decrease = 600,
+        uint totalCount = 1, ushort ownCount = 1, ulong? totalDecrease = null)
     {
         byte[] bytes = new byte[88];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, key);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), reporter);
-        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(18), decrease + 50);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(26), 1);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(18), totalDecrease ?? decrease + 50);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(26), totalCount);
         bytes[30] = 1;
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(31), 0x111);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(33), reporter);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(35), decrease);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(43), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(43), ownCount);
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(56), level);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(60), 504);
+        SealDeath(bytes);
+        return bytes;
+    }
+
+    static void SealDeath(byte[] bytes)
+    {
         byte[] digest = MD5.HashData(bytes.AsSpan(0, 84));
         bytes[84] = (byte)(digest[0] ^ digest[13] ^ digest[8] ^ digest[10] ^ 0x81);
         bytes[85] = (byte)(digest[1] ^ digest[9] ^ digest[5] ^ digest[12] ^ 0x78);
         bytes[86] = (byte)(digest[2] ^ digest[6] ^ digest[14] ^ digest[4] ^ 0x1A);
         bytes[87] = (byte)(digest[3] ^ digest[15] ^ digest[11] ^ digest[7] ^ 0xBF);
-        return bytes;
     }
 }

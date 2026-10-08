@@ -9,7 +9,8 @@ internal sealed record DungeonRoomDefinition(
     DungeonMap Map,
     IReadOnlyList<DungeonRoomMonster> Monsters,
     IReadOnlyList<DungeonRoomPassiveObject> PassiveObjects,
-    IReadOnlyList<int> Buffs);
+    IReadOnlyList<int> Buffs,
+    IReadOnlyList<int>? MonsterTeams = null);
 
 internal sealed class DungeonRoomCatalog
 {
@@ -70,7 +71,7 @@ internal sealed class DungeonRoomCatalog
             }
 
             string tag = resolve(tokens[i++].Value).ToLowerInvariant();
-            if (tag is not ("[monster]" or "[passive object]" or "[buff]"))
+            if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]"))
                 continue;
             if (sections.ContainsKey(tag))
                 throw new NotSupportedException("unsupported: 房间重复资源块 " + tag);
@@ -117,7 +118,10 @@ internal sealed class DungeonRoomCatalog
         }
 
         var buffs = sections.TryGetValue("[buff]", out var buffTokens) ? Integers(buffTokens) : Freeze(Array.Empty<int>());
-        return new(map, Freeze(monsterRows), Freeze(objectRows), buffs);
+        var teams = sections.TryGetValue("[monster team]", out var teamTokens) ? Integers(teamTokens) : Freeze(Array.Empty<int>());
+        if (teams.Count > monsterRows.Count)
+            throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
+        return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams);
 
         string Resolve(int id, IReadOnlyDictionary<int, string> paths, string kind)
         {

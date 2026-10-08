@@ -10,6 +10,7 @@ internal sealed record DungeonPlannedMonster(
     DungeonRoomMonster Source)
 {
     public byte SpawnType { get; init; }
+    public bool IsBlocking { get; init; } = true;
 }
 
 // 此计划只分配房间对象身份；不建立战斗、死亡、清房或奖励状态。
@@ -20,6 +21,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
 
     internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey)
     {
+        if (room.MonsterTeams is { } teams && teams.Count > room.Monsters.Count)
+            throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
         var result = new List<DungeonPlannedMonster>();
         int nextKey = firstObjectKey;
         for (int index = 0; index < room.Monsters.Count; index++)
@@ -48,7 +51,9 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             // raw[2]的完整整数在计划层保留，投影层再检查wire范围，不截断生成等级。
             result.Add(new(index, (ushort)nextKey, source.MonsterId, localLevelOne ? 1 : raw[2], source)
             {
-                SpawnType = source.RankKind == "[boss]" ? (byte)3 : (byte)0
+                SpawnType = source.RankKind == "[boss]" ? (byte)3 : (byte)0,
+                // team 与资源行同索引；0为友方任务对象，缺项沿用普通阻塞行为。
+                IsBlocking = room.MonsterTeams is not { } monsterTeams || index >= monsterTeams.Count || monsterTeams[index] != 0
             });
             nextKey++;
         }

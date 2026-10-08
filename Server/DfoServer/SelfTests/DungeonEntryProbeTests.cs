@@ -80,14 +80,15 @@ internal static class DungeonEntryProbeTests
             var before = session.Selected ?? throw new Exception("FAIL: probe character missing");
             string persistedBefore = JsonSerializer.Serialize(repository.List(owner).Single());
             long epoch = session.SelectionEpoch;
-            Check(await disabled.DispatchAsync(context, request) == CommandResult.Unhandled && bytes.Length == 0
-                && probe.SelectionEpoch is null, "default handler leaves a valid dungeon request unacknowledged");
+            await VerifyFormalRejection(context.Activity);
+            Check(bytes.Length == 0 && probe.SelectionEpoch is null, "正式拒绝不建立诊断状态");
             RejectConfiguration(() => new DungeonProbeModule(log, catalog, DungeonEntryProbeMode.Disabled));
             RejectConfiguration(() => new DungeonProbeModule(log, null!, DungeonEntryProbeMode.Information));
             RejectConfiguration(() => new DungeonProbeModule(log, catalog, DungeonEntryProbeMode.FinishLoadingMonsters));
             var ordinary = new GameConnectionContext(new(5, IPAddress.Loopback, bytes, lifetime), owner, session, sender);
+            await VerifyFormalRejection(null);
             Check(ordinary.Activity is null && !ordinary.BlocksTownActions
-                && await disabled.DispatchAsync(ordinary, request) == CommandResult.Unhandled && bytes.Length == 0,
+                && bytes.Length == 0,
                 "normal selection runs without allocating diagnostic state");
             bool missingState = false;
             try
@@ -465,6 +466,18 @@ internal static class DungeonEntryProbeTests
                 Check(session.LeaveRoom() && session.Selected!.Position.Town == 38 && session.Selected.Position.Area == 0,
                     "probe fixture follows the actual room exit to Elvengard");
                 Check(session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "probe fixture follows the left dungeon gate route");
+            }
+
+            async Task VerifyFormalRejection(IGameConnectionActivity? activity)
+            {
+                using var rejection = new MemoryStream();
+                using var rejectionStop = new CancellationTokenSource();
+                await using var rejectionSender = new GameConnectionSender(owner, rejection, rejectionStop, 0, (_, _, _, _, _) => { });
+                var rejectionContext = new GameConnectionContext(new(7, IPAddress.Loopback, rejection, rejectionStop),
+                    owner, session, rejectionSender, activity);
+                Check(await disabled.DispatchAsync(rejectionContext, request) == CommandResult.Handled &&
+                    rejection.Length == 20 && rejection.ToArray().AsSpan(16).SequenceEqual(new byte[] { 0, 9, 0, 0 }),
+                    "就绪角色缺副本owner时收到静默拒绝，保留诊断fixture原发送序列");
             }
 
             void VerifyInformationFrames(int count)

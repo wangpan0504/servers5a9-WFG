@@ -19,6 +19,8 @@ internal interface ICharacterRepository
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
     DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null);
+    DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
+        PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog);
     DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
         DungeonGroundPickupPreparation prepared, InventoryPlan plan);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);

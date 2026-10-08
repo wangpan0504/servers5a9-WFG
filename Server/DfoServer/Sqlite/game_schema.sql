@@ -355,3 +355,24 @@ CREATE TABLE character_dungeon_pickup_receipts(
   PRIMARY KEY(character_id,event_id),UNIQUE(character_id,ground_key),
   FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_loot_receipts(character_id,event_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE character_dungeon_settlement_receipts(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
+  instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>0),
+  task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),map_id INTEGER NOT NULL,
+  death_events BLOB NOT NULL CHECK(typeof(death_events)='blob' AND length(death_events)>0 AND length(death_events)%16=0),
+  report_body BLOB NOT NULL CHECK(typeof(report_body)='blob' AND length(report_body) BETWEEN 1 AND 4096),
+  generation INTEGER NOT NULL CHECK(generation>0),
+  base_experience INTEGER NOT NULL CHECK(base_experience BETWEEN 0 AND 4294967295),
+  rank_experience INTEGER NOT NULL CHECK(rank_experience BETWEEN 0 AND 4294967295),
+  total_experience INTEGER NOT NULL CHECK(total_experience BETWEEN 1 AND 4294967295 AND total_experience=base_experience+rank_experience),
+  rank_bonus_index INTEGER NOT NULL CHECK(rank_bonus_index BETWEEN -1 AND 4),
+  rule_id TEXT NOT NULL,resource_source TEXT NOT NULL,
+  before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),
+  after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),
+  before_experience INTEGER NOT NULL CHECK(before_experience>=0),
+  after_experience INTEGER NOT NULL CHECK(after_experience=before_experience+total_experience),
+  revision INTEGER NOT NULL CHECK(revision>0),
+  PRIMARY KEY(character_id,event_id),UNIQUE(character_id,instance_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));

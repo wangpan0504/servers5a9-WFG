@@ -32,6 +32,11 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
         return true;
     }
 
+    public bool MatchesIssuedSpawn(SinglePlayerDungeonRun run, ushort monsterKey, uint level, ulong hp) =>
+        ReferenceEquals(boundRun, run) && issued.TryGetValue(monsterKey, out var accepted) &&
+        accepted.Map == run.Snapshot.CurrentMap && accepted.Observation.SpawnLevel == level &&
+        accepted.Observation.SpawnHpSnapshot == hp;
+
     public NativeDungeonDeathResult ValidateAndIssue(SinglePlayerDungeonRun run, DungeonRunIdentity expectedIdentity,
         NativeDungeonDeathObservation observation)
     {
@@ -73,14 +78,17 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
             monster.Source.PlacementKind != "[fixed]" || monster.Source.RankKind != "[boss]"))
             return new(DungeonRunOutcome.Unsupported);
         if (!observation.ChecksumMatches || (long)observation.SpawnLevel != monster.CandidateLevel ||
-            observation.SpawnHpSnapshot == 0 || observation.CumulativeHpDecrease < observation.SpawnHpSnapshot ||
+            observation.SpawnHpSnapshot == 0 || observation.CumulativeHpDecrease == 0 ||
             observation.PositiveHpDecreaseCount == 0 || sequence == long.MaxValue)
             return new(DungeonRunOutcome.Rejected);
-        // 改写只替换prefix总量/次数，participant累计仍须覆盖正创建HP；不猜最大HP等于快照。
-        bool validPrefix = bossRewrite ? ValidBossRewritePrefix(observation.Unknown18, observation.Unknown26) :
-            observation.Unknown26 == observation.PositiveHpDecreaseCount &&
-            observation.Unknown18 >= observation.CumulativeHpDecrease &&
-            observation.Unknown18 - observation.CumulativeHpDecrease < 200;
+        // 普通prefix统计全部来源，参与者行只是本人分项。单行不代表只有一种HP降低来源。
+        // 总量含客户端随机扰动，只核对报告相容性，不构成服务端独立伤害模拟。
+        bool validPrefix = bossRewrite
+            ? observation.CumulativeHpDecrease >= observation.SpawnHpSnapshot &&
+                ValidBossRewritePrefix(observation.Unknown18, observation.Unknown26)
+            : observation.Unknown26 >= observation.PositiveHpDecreaseCount &&
+                observation.Unknown18 >= observation.CumulativeHpDecrease &&
+                observation.Unknown18 >= observation.SpawnHpSnapshot;
         if (!validPrefix)
             return new(DungeonRunOutcome.Rejected);
 

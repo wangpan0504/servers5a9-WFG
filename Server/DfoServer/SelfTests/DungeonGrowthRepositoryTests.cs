@@ -140,7 +140,7 @@ internal static class DungeonGrowthRepositoryTests
             Reject<InvalidOperationException>(() => DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable),
                 "已确认死亡不能重新规划本服奖励");
             // 模拟已发布 v2 库；迁移只建空账本，不赠送经验、点数或事件。
-            Execute("DROP TABLE character_dungeon_pickup_receipts");
+            Execute("DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts");
             Execute("DROP TABLE character_dungeon_loot_receipts");
             Execute("DROP TABLE character_dungeon_state");
             Execute("DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings; DROP TABLE character_dungeon_growth_receipts; DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages");

@@ -21,10 +21,14 @@ internal static class DungeonKillExperienceCatalogTests
             room26.Monsters.Count == 2 && room26.Monsters.All(monster => monster.RawValues[2] == 3 &&
                 table.GetExperience(monster.RawValues[2]) == 72),
             "76125特殊行原值保留，76126资源候选Lv3对应72，不假定特殊行实际生成等级");
-        Reject<NotSupportedException>(() => DfoServer.Game.Dungeons.DungeonMonsterPlan.FromRoom(room25, 99, 100),
-            "未支持的特殊生成行不能用于已确认死亡奖励");
-        Reject<NotSupportedException>(() => DfoServer.Game.Dungeons.DungeonMonsterPlan.FromRoom(room26, 99, 200),
-            "尚未支持Boss生成时拒绝残缺计划");
+        var special = DfoServer.Game.Dungeons.DungeonMonsterPlan.FromRoom(room25, 99, 100);
+        Check(special.Monsters.Count == 6 && special.Monsters[4].Source.RawValues[2] == 0 &&
+            special.Monsters[4].CandidateLevel == 1 && table.GetExperience(special.Monsters[4].CandidateLevel) == 30,
+            "本服限定76125特殊行保留原值，使用实际规划Lv1查击杀经验");
+        var boss = DfoServer.Game.Dungeons.DungeonMonsterPlan.FromRoom(room26, 99, 200);
+        Check(boss.Monsters.Count == 2 && boss.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 3, 0 }) &&
+            boss.Monsters.All(monster => monster.CandidateLevel == 3 && table.GetExperience(monster.CandidateLevel) == 72),
+            "完整Boss房保留两行生成类型，按已支持计划等级查经验");
         Reject<NotSupportedException>(() => table.GetExperience(0), "零等级不补经验");
         Reject<NotSupportedException>(() => table.GetExperience(301), "表外等级拒绝而不夹取");
         Reject<InvalidDataException>(() => DungeonKillExperienceCatalog.Parse([]), "空表拒绝");

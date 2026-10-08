@@ -6,6 +6,151 @@ namespace DfoServer;
 
 internal static class SinglePlayerDungeonRunTests
 {
+    public static void RunCore()
+    {
+        int checks = 0;
+        void Check(bool value, string name)
+        {
+            checks++;
+            if (!value)
+                throw new InvalidOperationException("FAIL nonblocking dungeon actor: " + name);
+        }
+        var authority = new FixtureCombatAuthority();
+        var start = new DungeonMap("map", new(0, 0), 1, "map/fixture-start.map");
+        var friendly = new DungeonMap("map", new(1, 0), 2, "map/fixture-friendly.map");
+        var boss = new DungeonMap("boss", new(2, 0), 3, "map/fixture-boss.map");
+        var maze = new DungeonMaze(0, 3, 1, "fixture-teams", [start.Position], [boss.Position], [start, friendly, boss], []);
+        var entry = new DungeonEntryPlan(99, 17, 3, 3145, 0, 0, maze, start, boss);
+        var route = new DungeonFixedRoute([WithTeams(Plan(start, 10, 11), 100, 0),
+            WithTeams(Plan(friendly, 12), 0), WithTeams(BossPlan(boss, 13, 14), 100, 0)],
+            [new(start.Position, friendly.Position), new(friendly.Position, boss.Position)]);
+        Check(SinglePlayerDungeonRun.TryCreate(entry, 1, 100, route, authority, out var created, out _),
+            "resource-qualified friendly actors preserve the full route and key namespace");
+        var run = created!;
+        run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
+        var original = run.Snapshot;
+        Check(original.LivingMonsters.SequenceEqual(new ushort[] { 10, 11 }) && run.CurrentLivingMonster(10) is { IsBlocking: true } &&
+            run.CurrentLivingMonster(11) is null, "snapshot retains the friendly actor while combat qualification excludes it");
+        Check(run.Move(original.Identity, Guid.NewGuid(), friendly.Position).Outcome == DungeonRunOutcome.Rejected,
+            "a living hostile still blocks movement despite its friendly companion");
+        var friendlyDeath = authority.Death(original.Identity, 11, 1);
+        Check(run.PrepareConfirmedDeath(friendlyDeath) is { Outcome: DungeonRunOutcome.Rejected, Pending: null } &&
+            run.AcceptConfirmedDeath(friendlyDeath).Outcome == DungeonRunOutcome.Rejected && run.Snapshot.Identity == original.Identity &&
+            run.Snapshot.LivingMonsters.SequenceEqual(original.LivingMonsters) && run.ClearFact is null,
+            "friendly reports do not prepare deaths consume sequences change actors or generate clear events");
+        var hostileDeath = authority.Death(original.Identity, 10, 1);
+        Check(run.AcceptConfirmedDeath(hostileDeath).Outcome == DungeonRunOutcome.Accepted &&
+            run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 11 }), "only the hostile death removes an actor");
+        Check(run.Move(run.Snapshot.Identity, Guid.NewGuid(), friendly.Position).Outcome == DungeonRunOutcome.Accepted,
+            "the surviving friendly companion does not block a cleared room");
+        run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
+        Check(run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 12 }) && run.CurrentLivingMonster(12) is null &&
+            run.Move(run.Snapshot.Identity, Guid.NewGuid(), boss.Position).Outcome == DungeonRunOutcome.Accepted,
+            "an all-friendly intermediate room remains populated and permits its approved passage");
+        run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
+        var beforeBoss = run.Snapshot;
+        var bossDeath = authority.Death(beforeBoss.Identity, 13, 2);
+        var pending = run.PrepareConfirmedDeath(bossDeath).Pending!;
+        Check(pending.Result is { Snapshot.Phase: SinglePlayerDungeonPhase.Settlement, ClearFact.ConfirmedDeathEvents.Count: 2 } &&
+            pending.Result.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 14 }) &&
+            pending.Result.ClearFact!.ConfirmedDeathEvents.SequenceEqual(new[] { hostileDeath.EventId, bossDeath.EventId }) &&
+            run.Phase == SinglePlayerDungeonPhase.Dungeon && run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 13, 14 }),
+            "last hostile prepares settlement with friendly actors alive and no fabricated friendly event");
+        var committed = run.ConfirmCommittedDeath(pending);
+        Check(committed.ClearFact is not null && ReferenceEquals(run.ClearFact, committed.ClearFact) &&
+            run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 14 }) && run.Phase == SinglePlayerDungeonPhase.Settlement,
+            "committed hostile death preserves the actual clear fact reference and friendly actor");
+        Check(run.AcceptConfirmedDeath(bossDeath).Outcome == DungeonRunOutcome.Duplicate &&
+            run.AcceptConfirmedDeath(authority.Death(beforeBoss.Identity, 13, 3)).Outcome == DungeonRunOutcome.Rejected &&
+            run.ClearFact!.ConfirmedDeathEvents.Count == 2 && run.ConfirmCommittedDeath(pending).ClearFact is null,
+            "same monster repeats cannot create another death receipt or clear reward fact");
+        foreach (int index in new[] { 0, 1 })
+        {
+            var firstRoom = route.Rooms[0];
+            var changed = firstRoom.Monsters[index] with { IsBlocking = !firstRoom.Monsters[index].IsBlocking };
+            var forged = firstRoom with { Monsters = firstRoom.Monsters.Select((monster, ordinal) => ordinal == index ? changed : monster).ToArray() };
+            Check(!SinglePlayerDungeonRun.TryCreate(entry, 2, 200, route with { Rooms = [forged, .. route.Rooms.Skip(1)] }, authority, out _, out _),
+                "caller cannot forge blocking eligibility away from the same resource row");
+        }
+        var defaultRoute = route with { Rooms = [Plan(start, 10, 11), .. route.Rooms.Skip(1)] };
+        Check(SinglePlayerDungeonRun.TryCreate(entry, 3, 300, defaultRoute, authority, out var defaultRun, out _),
+            "fixtures without team metadata retain their former lifecycle contract");
+        defaultRun!.CompleteLoading(defaultRun.Snapshot.Identity, Guid.NewGuid());
+        defaultRun.AcceptConfirmedDeath(authority.Death(defaultRun.Snapshot.Identity, 10, 1));
+        Check(defaultRun.CurrentLivingMonster(11) is { IsBlocking: true } &&
+            defaultRun.Move(defaultRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position).Outcome == DungeonRunOutcome.Rejected,
+            "missing team still requires every ordinary monster death");
+        var emptyBossRoute = route with { Rooms = [route.Rooms[0], route.Rooms[1], WithTeams(Plan(boss, 13, 14), 0, 0)] };
+        Check(SinglePlayerDungeonRun.TryCreate(entry, 4, 400, emptyBossRoute, authority, out var emptyBossRun, out _),
+            "all-friendly terminal fixture retains both declared actors");
+        emptyBossRun!.CompleteLoading(emptyBossRun.Snapshot.Identity, Guid.NewGuid());
+        var onlyDeath = authority.Death(emptyBossRun.Snapshot.Identity, 10, 1);
+        emptyBossRun.AcceptConfirmedDeath(onlyDeath);
+        emptyBossRun.Move(emptyBossRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
+        emptyBossRun.CompleteLoading(emptyBossRun.Snapshot.Identity, Guid.NewGuid());
+        emptyBossRun.Move(emptyBossRun.Snapshot.Identity, Guid.NewGuid(), boss.Position);
+        var loadedBoss = emptyBossRun.CompleteLoading(emptyBossRun.Snapshot.Identity, Guid.NewGuid());
+        Check(loadedBoss.ClearFact!.ConfirmedDeathEvents.SequenceEqual(new[] { onlyDeath.EventId }) &&
+            loadedBoss.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement &&
+            loadedBoss.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 13, 14 }),
+            "the original all-blocking-clear path preserves only real death events with friendly actors alive");
+        var multiBoss = WithTeams(BossPlan(boss, 20, 21, 22, 23), 100, 100, 100, 0);
+        var multiSources = multiBoss.Room.Monsters.Select((source, index) => index == 2 ? source with { RankKind = "[normal]" } : source).ToArray();
+        multiBoss = DungeonMonsterPlan.FromRoom(multiBoss.Room with { Monsters = Array.AsReadOnly(multiSources) }, 99, 20);
+        var terminalMaze = maze with { Starts = [boss.Position], MapSpecification = [boss] };
+        var terminalEntry = entry with { Maze = terminalMaze, StartMap = boss };
+        Check(SinglePlayerDungeonRun.TryCreate(terminalEntry, 5, 500, new([multiBoss], []), authority, out var multiRun, out _),
+            "multiple blocking bosses normal hostiles and a friendly boss share the original run");
+        multiRun!.CompleteLoading(multiRun.Snapshot.Identity, Guid.NewGuid());
+        var firstBossDeath = authority.Death(multiRun.Snapshot.Identity, 20, 1);
+        var firstBossResult = multiRun.AcceptConfirmedDeath(firstBossDeath);
+        Check(firstBossResult.ClearFact is null && multiRun.Phase == SinglePlayerDungeonPhase.Dungeon &&
+            multiRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 21, 22, 23 }),
+            "one dead boss cannot clear while another blocking boss remains alive");
+        var finalBossDeath = authority.Death(multiRun.Snapshot.Identity, 21, 2);
+        var multiClear = multiRun.AcceptConfirmedDeath(finalBossDeath);
+        Check(multiClear.ClearFact!.ConfirmedDeathEvents.SequenceEqual(new[] { firstBossDeath.EventId, finalBossDeath.EventId }) &&
+            multiClear.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement &&
+            multiClear.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 22, 23 }),
+            "all blocking bosses clear despite living normal enemies and friendly bosses without fabricating their deaths");
+        var side = new DungeonMap("map", new(0, 1), 4, "map/fixture-side.map");
+        var sideMaze = new DungeonMaze(0, 3, 2, "fixture-uncleared-side", [start.Position], [boss.Position], [start, friendly, boss, side], []);
+        var sideRoute = route with
+        {
+            Rooms = [.. route.Rooms, Plan(side, 15)],
+            Connections = [.. route.Connections, new(start.Position, side.Position)]
+        };
+        Check(SinglePlayerDungeonRun.TryCreate(entry with { Maze = sideMaze }, 6, 600, sideRoute, authority, out var sideRun, out _),
+            "uncleared branch fixture uses only approved room connections");
+        sideRun!.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        sideRun.AcceptConfirmedDeath(authority.Death(sideRun.Snapshot.Identity, 10, 1));
+        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
+        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), boss.Position);
+        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        var prematureBoss = sideRun.AcceptConfirmedDeath(authority.Death(sideRun.Snapshot.Identity, 13, 2));
+        Check(prematureBoss.ClearFact is null && sideRun.Phase == SinglePlayerDungeonPhase.Dungeon &&
+            sideRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 14 }), "an uncleared earlier room prevents terminal boss settlement");
+        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
+        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), start.Position);
+        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), side.Position);
+        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        sideRun.AcceptConfirmedDeath(authority.Death(sideRun.Snapshot.Identity, 15, 3));
+        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), start.Position);
+        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
+        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), boss.Position);
+        var delayedClear = sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
+        Check(delayedClear.ClearFact is { ConfirmedDeathEvents.Count: 3 } &&
+            delayedClear.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement &&
+            delayedClear.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 14 }),
+            "loading uses the same boss predicate once all prior blocking actors are actually dead");
+        Console.WriteLine($"PASS {checks} dungeon nonblocking actor lifecycle assertions");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = 0;
@@ -242,6 +387,16 @@ internal static class SinglePlayerDungeonRunTests
             "[fixed]", "[normal]", "monster/fixture.mob")).ToArray();
         var room = new DungeonRoomDefinition(map, Array.AsReadOnly(sources), [], []);
         return new(room, Array.AsReadOnly(keys.Select((key, index) => new DungeonPlannedMonster(index, key, 1, 3, sources[index])).ToArray()));
+    }
+
+    private static DungeonMonsterPlan WithTeams(DungeonMonsterPlan plan, params int[] teams)
+        => DungeonMonsterPlan.FromRoom(plan.Room with { MonsterTeams = Array.AsReadOnly(teams) }, 99, plan.Monsters[0].ObjectKey);
+
+    private static DungeonMonsterPlan BossPlan(DungeonMap map, params ushort[] keys)
+    {
+        var plan = Plan(map, keys);
+        var sources = plan.Room.Monsters.Select(source => source with { RankKind = "[boss]" }).ToArray();
+        return DungeonMonsterPlan.FromRoom(plan.Room with { Monsters = Array.AsReadOnly(sources) }, 99, keys[0]);
     }
 
     // 仅为状态机单测合成已确认事实，不是实际伤害、HP 或死亡的战斗算法。

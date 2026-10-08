@@ -13,7 +13,14 @@ internal sealed partial class GameSession
 {
     sealed record FormalDungeon(DungeonEntryPlan Entry, DungeonFixedRoute Route,
         SinglePlayerDungeonRun Run, NativeDungeonCombatAuthority Authority, uint MapSeed,
-        DungeonGroundState Ground, IReadOnlyDictionary<int, DungeonExplicitDropPool> Pools, Func<int, int> Draw);
+        DungeonGroundState Ground, IReadOnlyDictionary<int, DungeonExplicitDropPool> Pools, Func<int, int> Draw)
+    {
+        public long StartedTimestamp { get; } = System.Diagnostics.Stopwatch.GetTimestamp();
+        public uint KillExperienceTotal { get; set; }
+        public uint ClearTimeMilliseconds { get; set; }
+        public bool SettlementEnabled { get; set; }
+        public FormalSettlement? Settlement { get; set; }
+    }
     FormalDungeon? formalDungeon;
     public DungeonRunSnapshot? DungeonSnapshot => owner.Execute(() => formalDungeon?.Run.Snapshot);
 
@@ -22,8 +29,8 @@ internal sealed partial class GameSession
         Func<int, int>? draw = null)
     {
         var (expected, epoch) = owner.Execute(() => (Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect && formalDungeon is null ? Selected : null, SelectionEpoch));
-        if (expected is null || expected.Job != 0 || expected.GrowType != 0 || !expected.Learning.Initialized ||
-            expected.DungeonState is not { } state || !DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _))
+        if (expected is null || expected.DungeonState is not { } state ||
+            !DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _))
             return null;
         state.Validate();
         if (state.NextObjectKey > ushort.MaxValue || state.LastAttempt == long.MaxValue)
@@ -45,7 +52,7 @@ internal sealed partial class GameSession
         if (drops is not null && items is not null)
         {
             foreach (var plan in plans)
-            foreach (var monster in plan.Monsters.Where(monster => monster.MonsterId is 1 or 2 && monster.SpawnType == 0))
+            foreach (var monster in plan.Monsters.Where(monster => monster.IsBlocking && monster.MonsterId is 1 or 2 && monster.SpawnType == 0))
             {
                 if (!pools.ContainsKey(monster.MonsterId))
                     pools.Add(monster.MonsterId, DungeonExplicitDropPolicy.CreatePool("monster/monster.lst", drops.Get(monster.MonsterId), items.Get));
@@ -72,6 +79,7 @@ internal sealed partial class GameSession
             Selected = repository.ReserveDungeonAttempt(owner, expected, next);
             formalDungeon = new(committedEntry, route, run!, authority, checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue)),
                 ground, pools, draw ?? RandomNumberGenerator.GetInt32);
+            CurrentDungeonSelection = null;
             Phase = SessionPhase.Loading;
             return FormalReceipt();
         });
@@ -120,12 +128,15 @@ internal sealed partial class GameSession
         if (loot is not null && !dungeon.Ground.PublishCommitted(pending, loot))
             throw new InvalidOperationException("已提交掉落的原准备不能发布");
         Phase = dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon;
+        dungeon.KillExperienceTotal = checked(dungeon.KillExperienceTotal + reward.Amount);
+        if (committed.Death.ClearFact is not null)
+            dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
         return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward, committed.Death.ClearFact, loot?.Ground);
     });
 
     public FormalDungeonPickupResult PickFormalDungeonItem(uint groundKey, ItemCatalog items, EpicPieceCatalog pieces) => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon)
+        if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.Run.HasPendingSettlement)
             return new FormalDungeonPickupResult(DungeonRunOutcome.Rejected);
         var identity = dungeon.Run.Snapshot.Identity;
         var original = dungeon.Ground.FindAvailable(identity, groundKey) ?? dungeon.Ground.Snapshot.Items
@@ -160,6 +171,17 @@ internal sealed partial class GameSession
     public bool CanPublishFormalDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>
         Ready && owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch &&
         ReferenceEquals(Selected, receipt.Character) && formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity);
+
+    public bool CanPublishFormalDungeonRejection(Character character, long epoch, SessionPhase phase,
+        DungeonSelectionContext? selection) => owner.Execute(() =>
+    {
+        if (!Ready || SelectionEpoch != epoch || Phase != phase || formalDungeon is not null ||
+            !ReferenceEquals(CurrentDungeonSelection, selection))
+            return false;
+        if (!ReferenceEquals(Selected, character))
+            throw new InvalidOperationException("副本拒绝发布前角色快照已变化");
+        return true;
+    });
 
     FormalDungeonReceipt FormalReceipt()
     {

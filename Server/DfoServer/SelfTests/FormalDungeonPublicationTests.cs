@@ -33,6 +33,7 @@ internal static class FormalDungeonPublicationTests
         var kills = DungeonKillExperienceCatalog.Load(pvf);
         var catalog = DungeonCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
+        await EntryRejectionAsync();
         await StorageFailureAsync(false);
         await StorageFailureAsync(true);
         foreach (int packet in new[] { 1, 2 }) await SendFailureAsync(packet);
@@ -57,6 +58,45 @@ internal static class FormalDungeonPublicationTests
             f.Session.CompleteFormalDungeonLoading();
             var monster = entry.Monsters.Monsters[0];
             return (entry, new(1, 39, Death(monster.ObjectKey, entry.Character.Id, checked((byte)monster.CandidateLevel))));
+        }
+        async Task EntryRejectionAsync()
+        {
+            using var f = new Fixture(towns, characters, learning, false);
+            f.Session.BeginDungeonSelection();
+            var previous = f.Session.Selected!;
+            var selection = f.Session.CurrentDungeonSelection;
+            long epoch = f.Session.SelectionEpoch;
+            string persisted = JsonSerializer.Serialize(f.Read());
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput();
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(6, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            var request = new Packet(1, 16, Convert.FromHexString("030000000100000000FFFF0000000000490C00000000000000"));
+            Check(await Registry(f).DispatchAsync(context, request) == CommandResult.Handled &&
+                stream.Frames is [{ Length: 20 } frame] && frame[0] == 1 &&
+                BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 16 &&
+                frame.AsSpan(16).SequenceEqual(new byte[] { 0, 9, 0, 0 }),
+                "入场拒绝仅发送完整静默ACK16，不伪造初始化或自动回城通知");
+            Check(f.Session.Phase == SessionPhase.MapSelect && ReferenceEquals(f.Session.Selected, previous) &&
+                ReferenceEquals(f.Session.CurrentDungeonSelection, selection) &&
+                JsonSerializer.Serialize(f.Read()) == persisted &&
+                f.Session.CanPublishFormalDungeonRejection(previous, epoch, SessionPhase.MapSelect, selection),
+                "拒绝不预留副本身份，不改变角色与原选图返回锚点");
+            Check(f.Session.ReturnFromDungeonSelection() is not null &&
+                !f.Session.CanPublishFormalDungeonRejection(previous, epoch, SessionPhase.MapSelect, selection),
+                "回城后原入场拒绝回执不能继续发布");
+            f.Session.BeginDungeonSelection();
+            Check(!f.Session.CanPublishFormalDungeonRejection(previous, epoch, SessionPhase.MapSelect, selection),
+                "新选择身份不接受上一次拒绝回执");
+            f.Session.ReturnToRoster();
+            f.Session.Select(f.Created.Slot);
+            f.Session.MarkReady();
+            f.Session.BeginDungeonSelection();
+            Check(!f.Session.CanPublishFormalDungeonRejection(f.Session.Selected!, epoch, SessionPhase.MapSelect,
+                    f.Session.CurrentDungeonSelection) &&
+                f.Session.CanPublishFormalDungeonRejection(f.Session.Selected!, f.Session.SelectionEpoch,
+                    SessionPhase.MapSelect, f.Session.CurrentDungeonSelection),
+                "阶段和当前选择均匹配时，新选角仍不接受旧epoch拒绝回执");
         }
         async Task StorageFailureAsync(bool lostResult)
         {
@@ -336,6 +376,8 @@ internal static class FormalDungeonPublicationTests
         public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitLearning(owner, expected, learning);
         public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
+        public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
+            PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog);
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
             DungeonGroundPickupPreparation prepared, InventoryPlan plan)

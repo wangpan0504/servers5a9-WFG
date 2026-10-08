@@ -315,11 +315,13 @@ internal static class TownProtocolTcpTests
                     That(fixture.Snapshot() == before, "opening dungeon select preserves town state and does not answer a short opcode 16");
                     peer.Send(16, [3, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0x49, 0x0C, 0, 0, 0, 0, 0, 0, 0]);
                     peer.SendBarrier();
+                    peer.Expect(1, 16, [0, 9, 0, 0]);
                     peer.Expect(1, 1347, [1]);
-                    That(fixture.Snapshot() == before, "unimplemented dungeon initialization never acknowledges success or changes persisted state");
+                    That(fixture.Snapshot() == before, "入场资格不符时静默拒绝，不发成功或修改存档");
                     peer.Send(16, [3, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0x49, 0x0C, 0, 0, 0, 0, 0, 0, 0]);
                     peer.Send(37, new byte[8]);
                     peer.SendBarrier();
+                    peer.Expect(1, 16, [0, 9, 0, 0]);
                     peer.Expect(1, 1347, [1]);
                     That(fixture.Snapshot() == before, "repeated selection and unsolicited loading completion cannot publish a dungeon or advance quests");
                     peer.Send(15, [3, 0, 0, 0]);

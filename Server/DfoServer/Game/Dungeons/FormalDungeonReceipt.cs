@@ -12,3 +12,7 @@ internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, 
     bool ProjectionCurrent);
 internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     DungeonGroundObject? Ground = null, DungeonPickupCommit? Commit = null);
+internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds, byte RankPoint, byte RankGrade,
+    uint MonsterExperience);
+internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
+    DfoServer.GameWorld.Dungeons.DungeonClearExperienceReward? Reward = null, DungeonSettlementPresentation? Presentation = null);
