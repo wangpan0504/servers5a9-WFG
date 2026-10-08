@@ -54,8 +54,8 @@ internal static class SkillPacketsTests
         That(multi.Length == 18 && multiAck.Context == 1 && multiAck.Mode == 1 && multiAck.Sp == 1234 && multiAck.Tp == 987 && multiAck.Skills.Length == 2,
             "multi ACK uses5B entries and selected context balances");
         That(multiAck.Skills[0] == new LearnedSkill(254, 65535, 255), "ACK retains accepted command change order");
-        foreach (ushort code in new ushort[] { 0x12, 0x15, 0x16 })
-            That(SkillPackets.Failure(code).SequenceEqual(new byte[] { 0, (byte)code, 0 }), "known failure complete three-byte contract");
+        foreach (ushort code in new ushort[] { 2, 0x12, 0x15, 0x16, 0xD9 })
+            That(SkillPackets.Failure(code).SequenceEqual(new byte[] { 0, (byte)code, (byte)(code >> 8) }), "known failure complete three-byte contract");
         Reject(() => SkillPackets.Failure(0), "unknown failure code never fabricated");
         Reject(() => SkillPackets.Initialized(CharacterLearningState.Uninitialized), "uninitialized state cannot be serialized");
         Reject(() => SkillPackets.Initialized(State(new(0, 0, 0, []), new(1, 0, 0, []))), "empty trees cannot impersonate full initialized skills");

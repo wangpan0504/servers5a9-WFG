@@ -26,6 +26,8 @@ internal static class SkillLearningTests
             [14] = Definition(14, [3], 3, 1, 0, type: SkillType.Passive, skillClass: 4, growtypeCount: null),
             [15] = Definition(15, [0], 3, 1, 0, type: SkillType.Unknown),
             [16] = Definition(16, [0], 3, 1, 0, type: SkillType.Passive, skillClass: null),
+            [17] = Definition(17, [0], 300, 1, 0),
+            [18] = Definition(18, [0], 3, 1, int.MaxValue),
             [200] = Definition(200, [0], 3, 1, 0, type: SkillType.Passive, skillClass: 4)
         };
         SkillLearningDefinition Resolve(byte job, ushort id) => job == 0 ? definitions[id] : throw new KeyNotFoundException();
@@ -114,6 +116,33 @@ internal static class SkillLearningTests
         SkillLearningResult third = SkillLearning.Plan(0, 0, 10, again.State!, Request(), Resolve);
         That(third.Success && third.State!.Trees[0].Sp == 1 && third.Changes.Single().Level == 3,
             "repeat-last cost applies current learned level index");
+        var threeAtOnce = SkillLearning.Plan(0, 0, 10, source, new(1, 1, [new(5, false, 3)]), Resolve);
+        Check(threeAtOnce.Success && threeAtOnce.State!.Trees[1].Sp == 1 && threeAtOnce.State.Trees[0].Sp == 30 &&
+            threeAtOnce.State.Trees.All(tree => tree.Tp == 4) && threeAtOnce.Changes.Single() == new LearnedSkill(0, 5, 3),
+            "正向多级逐阶按7/11/11费用扣对应树29SP，只返回最终等级及原新槽");
+        var intermediateLevelFailure = SkillLearning.Plan(0, 0, 4, source, new(0, 0, [new(5, false, 3)]), Resolve);
+        Check(intermediateLevelFailure.Failure == SkillLearningFailure.RequiredLevel && intermediateLevelFailure.State is null &&
+            intermediateLevelFailure.Changes.Count == 0 && source.Trees.All(tree => tree.Sp == 30 && tree.Skills.Count == 1),
+            "多级第三阶角色等级不足不泄漏前两阶、不扣SP或分配持久slot");
+        var intermediateSpFailure = SkillLearning.Plan(0, 0, 10, State(28, []), new(0, 0, [new(5, false, 3)]), Resolve);
+        Check(intermediateSpFailure.Failure == SkillLearningFailure.InsufficientSp && intermediateSpFailure.State is null &&
+            intermediateSpFailure.Changes.Count == 0, "多级末阶SP不足整条拒绝，不能平均费用或保留部分等级");
+        var multiBatch = new SkillLearningCommand(0, 1, [new(5, false, 2), new(6, false, 1)]);
+        var multiBatchSuccess = SkillLearning.Plan(0, 0, 10, source, multiBatch, Resolve);
+        Check(multiBatchSuccess.Success && multiBatchSuccess.State!.Trees[0].Sp == 7 &&
+            multiBatchSuccess.Changes.Select(skill => (skill.Id, skill.Level)).SequenceEqual(new[] { ((ushort)5, (byte)2), ((ushort)6, (byte)1) }),
+            "同批前一技能最终多级结果满足后一前置，一次规划总扣23SP");
+        var multiBatchFailure = SkillLearning.Plan(0, 0, 10, State(22, []), multiBatch, Resolve);
+        Check(multiBatchFailure.Failure == SkillLearningFailure.InsufficientSp && multiBatchFailure.State is null &&
+            multiBatchFailure.Changes.Count == 0, "批次后段失败也撤销先前完整多级规划");
+        var byteBoundary = SkillLearning.Plan(0, 0, 1, source, new(0, 0, [new(17, false, 255)]), Resolve);
+        Check(byteBoundary.Success && byteBoundary.Changes.Single().Level == 255 && byteBoundary.Changes.Single().Slot == 0 &&
+            byteBoundary.State!.Trees[0].Sp == 30, "最大正向delta255在明确合成零费/范围内到达byte等级255，FF仅不能当slot");
+        Check(SkillLearning.Plan(0, 0, 1, byteBoundary.State!, new(0, 0, [new(17, false, 1)]), Resolve).Failure ==
+            SkillLearningFailure.OutsideSupportedLevel, "等级256不能byte回绕或伪成功");
+        var overflow = SkillLearning.Plan(0, 0, 95, source, new(0, 0, [new(18, false, 2)]), Resolve);
+        Check(overflow.Failure == SkillLearningFailure.OutsideSupportedLevel && overflow.State is null && overflow.Changes.Count == 0,
+            "中间门槛计算溢出是目标资格拒绝，不包装学习成功或提交部分费用");
         That(SkillLearning.Plan(0, 0, 10, third.State!, Request(), Resolve).Failure == SkillLearningFailure.Mastered, "最终成长上限阻止继续学习");
         That(SkillLearning.Plan(0, 0, 1, source, Request(), Resolve).Success, "required level exact boundary admitted");
         That(SkillLearning.Plan(0, 0, 2, result.State!, Request(), Resolve).Failure == SkillLearningFailure.RequiredLevel,
@@ -126,6 +155,12 @@ internal static class SkillLearningTests
         That(SkillLearning.Plan(0, 0, 10, source, Request(8), Resolve).Failure == SkillLearningFailure.Unsupported, "feature TP skill excluded from SP branch");
         That(SkillLearning.Plan(0, 0, 10, source, Request(9), Resolve).Failure == SkillLearningFailure.Unsupported, "combo learning not ordinary any-slot assignment");
         That(SkillLearning.Plan(0, 0, 10, source, Request(6), Resolve).Failure == SkillLearningFailure.Prerequisite, "unmet prerequisite blocks learning");
+        var prerequisiteRejected = SkillLearning.Plan(0, 0, 10, source,
+            new(1, 1, [new(7, false, 1), new(6, false, 1)]), Resolve);
+        Check(prerequisiteRejected.Failure == SkillLearningFailure.Prerequisite && prerequisiteRejected.State is null &&
+            prerequisiteRejected.Changes.Count == 0 && source.Trees.All(tree => tree.Sp == 30 && tree.Tp == 4 &&
+                tree.Skills.Count == 1 && tree.Skills.Single() == new LearnedSkill(8, 7, 1)),
+            "批次后段前置拒绝不泄漏先前规划，两树余额与实际绑定不变");
         That(SkillLearning.Plan(0, 0, 10, source, Request(10), Resolve).Success,
             "存在资源的未学前置等级0可满足required0，不伪造missing getter");
         That(SkillLearning.Plan(0, 0, 10, source, Request(11), Resolve).Failure == SkillLearningFailure.Unsupported,
@@ -169,13 +204,30 @@ internal static class SkillLearningTests
         int checks = Count;
         SkillLearningCommand Request(ushort id = 5) => new(0, 0, [new(id, false, 1)]);
         var actual = SkillLearningCatalog.Load(pvf);
-        That(actual.Get(0, 5).GetBasePointCost(0) == 15, "matching resource hardattack base cost independently known");
+        Check(actual.Get(0, 5).GetBasePointCost(0) == 15, "matching resource hardattack base cost independently known");
         SkillLearningResult real = SkillLearning.Plan(0, 0, 1, State(15, []), Request(), actual.Get);
-        That(real.Success && real.State!.Trees[0].Sp == 0 && real.Changes.Single().Level == 1, "real PVF ordinary hardattack learning consumes15 SP");
+        Check(real.Success && real.State!.Trees[0].Sp == 0 && real.Changes.Single().Level == 1, "real PVF ordinary hardattack learning consumes15 SP");
+        var quickStanding = SkillLearning.Plan(0, 0, 1, State(10, []), Request(190), actual.Get);
+        Check(quickStanding.Success && quickStanding.State!.Trees[0].Sp == 0 && quickStanding.State.Trees[1].Sp == 10 &&
+            quickStanding.Changes.Single() == new LearnedSkill(0, 190, 1), "真实190首学无需range声明，准确扣本树10SP并绑定实际槽");
+        var quickStandingAgain = SkillLearning.Plan(0, 0, 1, quickStanding.State!, Request(190), actual.Get);
+        Check(quickStandingAgain.Failure == SkillLearningFailure.Mastered && quickStandingAgain.State is null &&
+            quickStandingAgain.Changes.Count == 0 && quickStanding.State!.Trees[0].Sp == 0,
+            "重复190请求目标2的primary1与实际第二OR0均不满足，精通拒绝不再扣点");
+        var overQuickStanding = SkillLearning.Plan(0, 0, 1, State(30, []), new(0, 0, [new(190, false, 2)]), actual.Get);
+        Check(overQuickStanding.Failure == SkillLearningFailure.OutsideSupportedLevel && overQuickStanding.State is null &&
+            overQuickStanding.Changes.Count == 0, "未学190请求两级是目标级D9资格失败，不能以临时计划到1伪称原已精通");
         CharacterProfile actualProfile = characters.Get(0);
         SkillLearningResult realInitial = SkillLearning.Initialize(0, actualProfile.Skills, actual);
         That(actualProfile.Skills.Length == 6 && realInitial.Success && realInitial.State!.Trees.All(tree => tree.Sp == 0 && tree.Tp == 0),
             "real job0 all six initial skills bind with zero points including mastered resource without range");
+        var realMultiple = SkillLearning.Plan(0, 0, 5, realInitial.State! with
+        {
+            Trees = Array.AsReadOnly(realInitial.State!.Trees.Select(tree => tree with { Sp = 30 }).ToArray())
+        }, new(1, 1, [new(5, false, 2)]), actual.Get);
+        Check(realMultiple.Success && realMultiple.State!.Trees[1].Sp == 0 && realMultiple.State.Trees[0].Sp == 30 &&
+            realMultiple.Changes.Single().Id == 5 && realMultiple.Changes.Single().Level == 3,
+            "真实job0鬼斩从CHR等级1正向两级，逐阶门槛3/5、费用15/15、只扣第二树30SP");
         That(realInitial.State!.Trees.All(tree => tree.Skills.Select(skill => new CharacterSkill(skill.Id, skill.Level)).SequenceEqual(actualProfile.Skills)) &&
             realInitial.State!.Trees.All(tree => tree.Skills.Select(skill => skill.Slot).SequenceEqual(new byte[] { 0, 1, 2, 102, 103, 104 })),
             "真实初始技能保留原ID等级，主动与被动槽位分别投影两树");
@@ -206,6 +258,8 @@ internal static class SkillLearningTests
         }
         Console.WriteLine($"PASS {Count - checks} resource skill learning assertions");
     }
+
+    private static void Check(bool condition, string message) => That(condition, message);
 
     private static CharacterLearningState State(ushort sp, IReadOnlyList<LearnedSkill> skills) => new(123,
         Array.AsReadOnly(new CharacterSkillTree[] { new(0, sp, 4, skills), new(1, sp, 4, skills) }));

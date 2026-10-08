@@ -99,6 +99,9 @@ internal static class DungeonRoomCatalogTests
             && next.Monsters[^1].MonsterId == 2 && next.Monsters[^1].Path == "monster/goblin/goblinthrower.mob"
             && next.PassiveObjects.Count == 21 && next.Buffs.Count == 0,
             "next room resolves the thrower and keeps its own objects without inventing absent buffs");
+        var bossRoom = catalog.Get(maze.MapSpecification!.Single(map => map.Id == 76126));
+        That(bossRoom.Monsters.Select(monster => monster.Team).SequenceEqual(new int?[] { 100, 0 }),
+            "76126保留Boss与Tobi的逐行team100/0，零值不丢失");
         Reject(() => catalog.Get(first with { Path = "map/../../monster/goblin/goblin.mob" }), "room rejects resource root escape");
         Reject(() => catalog.Get(first with { Path = "map/missing-fixture.map" }), "room rejects missing map resource");
         Reject(() => catalog.Get(first with { Id = -1 }), "room rejects negative map index");
@@ -108,6 +111,16 @@ internal static class DungeonRoomCatalogTests
         var parsed = fixture.Parse(valid);
         valid[1] = new(0, 999);
         That(parsed.Monsters[0].MonsterId == 1, "parsed room does not retain mutable input tokens");
+        That(parsed.Monsters[0].Team is null, "缺失team不补为0");
+        That(fixture.Parse([.. fixture.Monster(), .. fixture.Block("monster team", [new(0, 0)])]).Monsters[0].Team == 0,
+            "显式team0按原ordinal保存");
+        That(fixture.Parse([.. fixture.Monster(), .. fixture.Block("monster team", [new(0, -1)])]).Monsters[0].Team == -1,
+            "team负值原样保留，创建回退由计划层解释");
+        That(fixture.Parse([.. fixture.Monster(), .. fixture.Block("monster team", [])]).Monsters[0].Team is null,
+            "显式空team节保留null不补0");
+        Reject(() => fixture.Parse([.. fixture.Monster(), .. fixture.Block("monster team", [new(0, 0), new(0, 100)])]),
+            "多余team不截断或错配生成行");
+        Reject(() => fixture.Parse([.. fixture.Monster(), .. fixture.Block("monster team", [new(6, 0)])]), "team字符串拒绝");
         var unusual = fixture.Parse(fixture.Monster(values: [1, int.MinValue, int.MaxValue, -3, 4, -5, 6, 7], placement: "[future placement]", rank: "[future rank]"));
         That(unusual.Monsters[0].RawValues.SequenceEqual([1, int.MinValue, int.MaxValue, -3, 4, -5, 6, 7])
             && unusual.Monsters[0].PlacementKind == "[future placement]" && unusual.Monsters[0].RankKind == "[future rank]",

@@ -70,6 +70,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         await context.Reply(CmdPacketType.FINISH_LOADING, [1], "formal_loading_ack", Guard);
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
+        await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(receipt.Character.Fatigue ??
+            throw new InvalidOperationException("已提交房间缺少疲劳owner")), "formal_room_fatigue", Guard);
         return CommandResult.Handled;
     }
 
@@ -111,7 +113,6 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         }
         return CommandResult.Handled;
     }
-
     async Task<CommandResult> PickupAsync(GameConnectionContext context, Packet request)
     {
         if (items is null || pieces is null || !DungeonPickupRequests.TryParseOrdinary(request.Body, out var parsed))

@@ -4,6 +4,7 @@ using DfoServer.Game.Town;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Inventory.Services;
 using System.Security.Cryptography;
 
@@ -13,8 +14,11 @@ internal sealed partial class GameSession
 {
     sealed record FormalDungeon(DungeonEntryPlan Entry, DungeonFixedRoute Route,
         SinglePlayerDungeonRun Run, NativeDungeonCombatAuthority Authority, uint MapSeed,
-        DungeonGroundState Ground, IReadOnlyDictionary<int, DungeonExplicitDropPool> Pools, Func<int, int> Draw)
+        DungeonGroundState Ground, IReadOnlyDictionary<int, DungeonExplicitDropPool> Pools, Func<int, int> Draw, Location TownReturnPosition)
     {
+        public bool HasPendingFatigue { get; set; }
+        public bool HasSelectedFreeCard { get; set; }
+        public bool HasSelectedPaidCard { get; set; }
         public long StartedTimestamp { get; } = System.Diagnostics.Stopwatch.GetTimestamp();
         public uint KillExperienceTotal { get; set; }
         public uint ClearTimeMilliseconds { get; set; }
@@ -29,7 +33,7 @@ internal sealed partial class GameSession
         Func<int, int>? draw = null)
     {
         var (expected, epoch) = owner.Execute(() => (Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect && formalDungeon is null ? Selected : null, SelectionEpoch));
-        if (expected is null ||
+        if (expected is null || expected.Fatigue is { Remaining: <= 0 } ||
             expected.DungeonState is not { } state)
             return null;
         bool allowClearedQuest = questId == 3145 &&
@@ -37,10 +41,10 @@ internal sealed partial class GameSession
         if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _, allowClearedQuest))
             return null;
         state.Validate();
-        if (entry!.QuestAcceptanceId == Guid.Empty)
-            return null;
-        if (state.NextObjectKey > ushort.MaxValue || state.LastAttempt == long.MaxValue)
-            return null;
+        var townReturn = towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet());
+        if (townReturn is null) return null;
+        if (entry!.QuestAcceptanceId == Guid.Empty) return null;
+        if (state.NextObjectKey > ushort.MaxValue || state.LastAttempt == long.MaxValue) return null;
         var topology = entry!.Maze.StaticTopology;
         if (!topology.Supported) return null;
         var plans = new List<DungeonMonsterPlan>();
@@ -71,7 +75,12 @@ internal sealed partial class GameSession
             }
         }
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
-            Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
+            Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()))
+        {
+            // job0普通Player构造链02C09A70→02BF6010在02BF64A6显式初始化team0。
+            // 本入口仅承接已证普通单人3145，不把该值推广到PVP或其他模式。
+            PlayerTeam = 0
+        };
         var authority = new NativeDungeonCombatAuthority();
         var committedEntry = entry with { CharacterRevision = checked(expected.Revision + 1) };
         if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out _) ||
@@ -84,7 +93,7 @@ internal sealed partial class GameSession
             // 先持久预留key/attempt；通知失败也不回绕key或复用旧身份。
             Selected = repository.ReserveDungeonAttempt(owner, expected, next);
             formalDungeon = new(committedEntry, route, run!, authority, checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue)),
-                ground, pools, draw ?? RandomNumberGenerator.GetInt32);
+                ground, pools, draw ?? RandomNumberGenerator.GetInt32, townReturn);
             CurrentDungeonSelection = null;
             Phase = SessionPhase.Loading;
             return FormalReceipt();
@@ -95,6 +104,13 @@ internal sealed partial class GameSession
     {
         if (!Ready || Selected is null || Phase != SessionPhase.Loading || formalDungeon is not { } dungeon ||
             dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || dungeon.Run.Snapshot.Identity.Epoch == long.MaxValue) return null;
+        // 扣点和首次房间receipt先原子持久化。SQL失败/返回值丢失时原Loading状态可精确重试。
+        if (Selected.Fatigue is not null)
+        {
+            dungeon.HasPendingFatigue = true;
+            Selected = repository.ConsumeDungeonRoomFatigue(owner, Selected, dungeon.Run);
+            dungeon.HasPendingFatigue = false;
+        }
         var result = dungeon.Run.CompleteLoading(dungeon.Run.Snapshot.Identity, Guid.NewGuid());
         if (result.Outcome != DungeonRunOutcome.Accepted) return null;
         Phase = dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon;
@@ -168,10 +184,16 @@ internal sealed partial class GameSession
 
     public TownTravelReceipt? ReturnFromFormalDungeon() => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null) return null;
+        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.HasPendingFatigue || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null ||
+            dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || dungeon.Run.Snapshot.Identity.Epoch == long.MaxValue ||
+            dungeon.Run.Phase == SinglePlayerDungeonPhase.Returned || !towns.IsPosition(dungeon.TownReturnPosition, completed)) return null;
+        // 复用选图入口外8px合法落点，先保存再消费实例；失败时仍保留原phase与run。
+        if (Selected.Position != dungeon.TownReturnPosition)
+            Selected = repository.Save(owner, Selected, dungeon.TownReturnPosition, Selected.Return);
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRoom();
         formalDungeon = null;
+        CurrentDungeonSelection = null;
         Phase = SessionPhase.Town;
         return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch);
     });
@@ -179,6 +201,37 @@ internal sealed partial class GameSession
     public bool CanPublishFormalDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>
         Ready && owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch &&
         ReferenceEquals(Selected, receipt.Character) && formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity);
+
+    public FormalDungeonClearReceipt? ReadFormalDungeonClear() => owner.Execute(() =>
+    {
+        if (!Ready || Selected is null || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon)
+            return null;
+        var clear = dungeon.Run.CommittedClearFact;
+        if (clear is null)
+            return null;
+        return new FormalDungeonClearReceipt(Selected, clear, owner.Generation, SelectionEpoch, dungeon.Run.Snapshot.Identity);
+    });
+
+    public IReadOnlyList<short>? ReadSettlementCardRights() => owner.Execute(() =>
+    {
+        if (!Ready || Selected is null || Phase != SessionPhase.Settlement || formalDungeon is null)
+            return null;
+        return new short[] { 1, -1, -1, -1, -1, -1, -1, -1 };
+    });
+
+    public FormalDungeonCardSelection? SelectSettlementCard(byte type, byte memberIndex) => owner.Execute(() =>
+    {
+        if (!Ready || Selected is null || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon)
+            return null;
+        if (memberIndex != 0)
+            return null;
+        if (type == 0)
+            dungeon.HasSelectedFreeCard = true;
+        else
+            dungeon.HasSelectedPaidCard = true;
+
+        return new FormalDungeonCardSelection(type, memberIndex);
+    });
 
     public bool CanPublishFormalDungeonRejection(Character character, long epoch, SessionPhase phase,
         DungeonSelectionContext? selection) => owner.Execute(() =>

@@ -259,7 +259,8 @@ internal static class SinglePlayerDungeonRunTests
         foreach (var changed in new[]
         {
             route.Rooms[0].Monsters[0] with { CandidateLevel = 1 },
-            route.Rooms[0].Monsters[0] with { SpawnType = 3 }
+            route.Rooms[0].Monsters[0] with { SpawnType = 3 },
+            route.Rooms[0].Monsters[0] with { Source = route.Rooms[0].Monsters[0].Source with { Team = 0 } }
         })
         {
             var changedRoom = route.Rooms[0] with { Monsters = [changed, .. route.Rooms[0].Monsters.Skip(1)] };
@@ -367,6 +368,39 @@ internal static class SinglePlayerDungeonRunTests
             "待提交名单与清图事件集保持只读快照");
         That(committingRun.Return(committingRun.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted,
             "确认完成后解除待提交门禁，正常退出仍可执行");
+        var friendlyMap = new DungeonMap("boss", new(0, 0), 76126,
+            "map/cataclysm/granflores/01_mirkwood/3145_76126.map");
+        var friendlyPlan = Plan(friendlyMap, 30, 31);
+        var friendlySources = friendlyPlan.Room.Monsters.Select((source, index) => source with { Team = index == 0 ? 100 : 7 }).ToArray();
+        friendlyPlan = friendlyPlan with
+        {
+            Room = friendlyPlan.Room with { Monsters = Array.AsReadOnly(friendlySources) },
+            Monsters = Array.AsReadOnly(friendlyPlan.Monsters.Select((monster, index) => monster with { Source = friendlySources[index] }).ToArray())
+        };
+        var friendlyMaze = new DungeonMaze(0, 1, 1, "fixture-only", [friendlyMap.Position], [friendlyMap.Position], [friendlyMap], []);
+        var friendlyEntry = new DungeonEntryPlan(99, 17, 3, 3145, 0, 0, friendlyMaze, friendlyMap, friendlyMap);
+        var friendlyRoute = new DungeonFixedRoute([friendlyPlan], []) { PlayerTeam = 7 };
+        That(SinglePlayerDungeonRun.TryCreate(friendlyEntry, 1, 500, friendlyRoute, authority, out var friendlyRun, out _),
+            "显式本人team7可创建合成实例，不假定玩家0");
+        friendlyRun!.CompleteLoading(friendlyRun.Snapshot.Identity, Guid.NewGuid());
+        That(friendlyRun.AcceptConfirmedDeath(authority.Death(friendlyRun.Snapshot.Identity, 31, 1)).Outcome == DungeonRunOutcome.Rejected &&
+            friendlyRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 30, 31 }),
+            "同team actor保留生成身份且不能签发战斗死亡或经验");
+        var enemyDeath = authority.Death(friendlyRun.Snapshot.Identity, 30, 1);
+        var friendlyPrepared = friendlyRun.PrepareConfirmedDeath(enemyDeath).Pending!;
+        That(friendlyPrepared.Result.ClearFact?.ClearMap == friendlyMap &&
+            friendlyPrepared.Result.ClearFact.ConfirmedDeathEvents.SequenceEqual([enemyDeath.EventId]) &&
+            friendlyPrepared.Result.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 31 }),
+            "仅敌方死亡产生绑定实际BossMap清图候选，同team actor仍然存活");
+        friendlyRun.ConfirmCommittedDeath(friendlyPrepared);
+        That(friendlyRun.Phase == SinglePlayerDungeonPhase.Settlement && friendlyRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 31 }),
+            "同team非战斗actor不阻塞清场，不删除生成或伪造死亡");
+        That(SinglePlayerDungeonRun.TryCreate(friendlyEntry, 2, 600, friendlyRoute with { PlayerTeam = null }, authority,
+            out var unknownTeamRun, out _), "未知本人team保持独立资格边界");
+        unknownTeamRun!.CompleteLoading(unknownTeamRun.Snapshot.Identity, Guid.NewGuid());
+        That(unknownTeamRun.AcceptConfirmedDeath(authority.Death(unknownTeamRun.Snapshot.Identity, 30, 1)).ClearFact is null &&
+            unknownTeamRun.Phase == SinglePlayerDungeonPhase.Dungeon,
+            "未知本人team不能自动继承友方排除或清图资格");
         Console.WriteLine($"PASS {Count - checks} single-player lifecycle identity and confirmed-event assertions");
     }
 

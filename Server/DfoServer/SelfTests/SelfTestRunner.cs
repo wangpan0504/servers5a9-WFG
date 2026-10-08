@@ -30,6 +30,8 @@ internal static class SelfTestRunner
         QuestClearEligibilityTests.Run();
         QuestRewardParameterTests.Run();
         QuestCompletionPlanTests.Run();
+        DungeonClearRewardProtocolTests.RunCore();
+        FatigueStateTests.RunCore();
         CharacterAttributeResourceTests.RunCore();
         AuthenticationTests.Run();
         AuthenticationServiceTests.Run();

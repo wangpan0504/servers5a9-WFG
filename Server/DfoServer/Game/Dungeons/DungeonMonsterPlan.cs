@@ -11,6 +11,8 @@ internal sealed record DungeonPlannedMonster(
 {
     public byte SpawnType { get; init; }
     public bool IsBlocking { get; init; } = true;
+    // 02A15E31的创建合同：缺失/负值使用100，零值原样保留。
+    public int Team => Source.Team is >= 0 ? Source.Team.Value : 100;
 }
 
 // 此计划只分配房间对象身份；不建立战斗、死亡、清房或奖励状态。

@@ -27,8 +27,10 @@ internal sealed class SkillLearningDefinition
         string[] unsupported, int? skillClass = null, int? skillFitnessGrowtypeCount = null,
         int[]? secondGrowtypeMaximumLevels = null, FixedSkillRule? fixedLevel = null,
         int[]? skillFitnessGrowtypes = null, int[]? skillFitnessSecondGrowtypes = null,
-        bool guildSkill = false, bool expertSkill = false, int[]? tpCosts = null, ushort[]? comboSkills = null, bool commandCustomizing = true)
+        bool guildSkill = false, bool expertSkill = false, int[]? tpCosts = null, ushort[]? comboSkills = null,
+        bool commandCustomizing = true, int? confirmedGrow0Maximum = null)
     {
+        ConfirmedGrow0Maximum = confirmedGrow0Maximum;
         growtypeFitness = fitness is null ? null : Array.AsReadOnly(fitness);
         IsFeatureSkill = featureSkill;
         HasComboDeclaration = comboDeclared;
@@ -82,6 +84,7 @@ internal sealed class SkillLearningDefinition
     public bool CommandCustomizing { get; }
     public bool IsFeatureSkill { get; }
     public bool HasComboDeclaration { get; }
+    public int? ConfirmedGrow0Maximum { get; }
     public bool IsGuildSkill { get; }
     public bool IsExpertSkill { get; }
     public IReadOnlyList<int>? DeclaredGrowtypeFitness => growtypeFitness;
@@ -109,11 +112,13 @@ internal sealed class SkillLearningDefinition
         return Math.Min(level, maximumLevels[growth & 15]);
     }
     // 04234A70、04234ACD 初始化 feature/combo 为零；特殊职业另有技能管理路径。
-    public bool SupportsOrdinarySpLearning => Type is SkillType.Active or SkillType.Passive &&
-        !IsFeatureSkill &&
-        !HasComboDeclaration && !IsGuildSkill && !IsExpertSkill && growtypeFitness is not null && costs is not null && maximumLevels is not null &&
+    public bool SupportsOrdinarySpLearning => SupportsOrdinarySpLearningAtLevel(1);
+
+    public bool SupportsOrdinarySpLearningAtLevel(int currentLearnedLevel) => currentLearnedLevel >= 0 &&
+        Type is SkillType.Active or SkillType.Passive && !IsFeatureSkill && !HasComboDeclaration && !IsGuildSkill && !IsExpertSkill &&
+        growtypeFitness is not null && costs is not null && maximumLevels is not null &&
         (growtypeMaximumLevels is not null || SecondGrowtypeMaximumLevels.Any(value => value > 0)) &&
-        requiredLevel is not null && requiredLevelRange is not null && Prerequisites is not null;
+        requiredLevel is not null && Prerequisites is not null && (currentLearnedLevel == 0 || requiredLevelRange is not null);
 
     public bool SupportsTpLearning => IsFeatureSkill && !IsGuildSkill && !HasComboDeclaration &&
         Type is SkillType.Active or SkillType.Passive && TpCosts.Count > 0 && maximumLevels is not null &&
@@ -125,7 +130,7 @@ internal sealed class SkillLearningDefinition
 
     public int GetOrdinaryResourceSpCost(int currentLearnedLevel, int growtype)
     {
-        if (!SupportsOrdinarySpLearning)
+        if (!SupportsOrdinarySpLearningAtLevel(currentLearnedLevel))
             throw new NotSupportedException("资源不在已确认的普通 SP 学习范围");
         if (growtype is < 0 or > 5)
             throw new ArgumentOutOfRangeException(nameof(growtype));
@@ -150,10 +155,15 @@ internal sealed class SkillLearningDefinition
     public int GetOrdinaryNextRequiredCharacterLevel(int currentLearnedLevel)
     {
         RequireSupportedType();
-        if (requiredLevel is not int basis || requiredLevelRange is not int range || maximumLevels is null)
-            throw new NotSupportedException("缺少已确认形状的 required level、range 或 maximum level");
+        if (requiredLevel is not int basis || maximumLevels is null)
+            throw new NotSupportedException("缺少已确认形状的 required level 或 maximum level");
         if (currentLearnedLevel < 0 || currentLearnedLevel >= maximumLevels.Max())
             throw new ArgumentOutOfRangeException(nameof(currentLearnedLevel));
+        // 02D4BF43..4B：target1的range乘项严格为零；不填造缺失range，也不据此开放后续等级。
+        if (currentLearnedLevel == 0)
+            return basis;
+        if (requiredLevelRange is not int range)
+            throw new NotSupportedException("后续学习缺少已确认形状的 required level range");
         // 02D52330 将 current+1 传给 02D4BEB0；这里只给普通资源门槛，未应用特殊状态减五等级。
         return checked(basis + currentLearnedLevel * range);
     }
@@ -256,6 +266,11 @@ internal sealed class SkillLearningCatalog
             "interval level", "add level per interval", "is apply contract skillmaster", "skill fitness second growtype", "guild skill", "expert skill", "special purchase cost", "command customizing"];
         var fields = new Dictionary<string, PvfToken[]>(StringComparer.Ordinal);
         var unsupported = new List<string>();
+        // 第二上限缺标签的零默认只用于已经闭合的190普通合同；未知扩展声明不能按ID忽略。
+        bool otherCapDeclaration = tokens.Where(token => token.Type == 3).Select(token => resolve(token.Value)).Any(tag =>
+            (tag.Contains("maximum", StringComparison.Ordinal) || tag.Contains("max level", StringComparison.Ordinal) ||
+                tag.StartsWith("[growtype", StringComparison.Ordinal)) &&
+            tag is not ("[maximum level]" or "[growtype maximum level]" or "[growtype fitness]"));
         for (int i = 0; i < tokens.Length; i++)
         {
             if (tokens[i].Type != 3)
@@ -359,11 +374,19 @@ internal sealed class SkillLearningCatalog
                 throw new InvalidDataException("固定等级技能参数非法");
             fixedLevel = new(interval, add, apply == 1);
         }
+        int? confirmedGrow0Maximum = job == 0 && skillId == 190 && path == "skill/swordman/quickstanding.skl" &&
+            type == SkillType.Active && kind is { Length: 1 } && resolve(kind[0].Value) == "[active]" &&
+            costs is { Length: 1 } && costs[0] == 10 && maximum is { Length: 6 } && maximum.All(value => value == 20) &&
+            growtype is { Length: 6 } && growtype.All(value => value == 1) && basis == 1 &&
+            !fields.ContainsKey("required level range") && prerequisites is { Length: 0 } &&
+            fitness is { Length: 6 } && fitness.All(value => value == 0) && !featureSkill && !comboDeclared && !otherCapDeclaration
+            ? 1 : null;
         return new SkillLearningDefinition(job, skillId, path, type, costs, maximum, growtype, basis, range,
             prerequisites, fitness, featureSkill, comboDeclared, unsupported.ToArray(), skillClass, skillFitnessGrowtypeCount, second, fixedLevel,
             skillFitness, secondFitness, fields.ContainsKey("guild skill"), fields.ContainsKey("expert skill"),
             fields.ContainsKey("special purchase cost") ? Integers("special purchase cost") : null,
-            combo.Select(id => (ushort)id).ToArray(), !fields.ContainsKey("command customizing") || Scalar("command customizing") != 0);
+            combo.Select(id => (ushort)id).ToArray(), !fields.ContainsKey("command customizing") || Scalar("command customizing") != 0,
+            confirmedGrow0Maximum);
 
         int[]? Integers(string tag)
         {

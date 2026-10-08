@@ -20,6 +20,7 @@ internal interface ICharacterRepository
     Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit);
     Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
+    Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
     QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);
     QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan);
     DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,

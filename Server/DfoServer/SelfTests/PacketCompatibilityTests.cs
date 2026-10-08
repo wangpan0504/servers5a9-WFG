@@ -35,6 +35,12 @@ internal static class PacketCompatibilityTests
         Match(TownPackets.StoryLevel(character), "5E0A69CDB91F050197DF9D0847F27C208C308526A65A5D035DAA88B209077F26", "story");
         Match(CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(character)]), "30F5769ED7013CE29FB5FBD5ABA8C882F211FFE63C94719451B7ADB5B145A5DF", "roster");
         Console.WriteLine($"PASS {Count - checks} packet compatibility assertions");
-        void Match(byte[] body, string expected, string name) => That(Convert.ToHexString(SHA256.HashData(body)) == expected, name);
+        void Match(byte[] body, string expected, string name)
+        {
+            string actual = Convert.ToHexString(SHA256.HashData(body));
+            if (actual != expected)
+                Console.WriteLine($"MISMATCH {name}: actual={actual} expected={expected} len={body.Length}");
+            That(actual == expected, name);
+        }
     }
 }

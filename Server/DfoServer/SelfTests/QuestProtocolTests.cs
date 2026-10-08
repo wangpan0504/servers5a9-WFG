@@ -53,6 +53,13 @@ internal static class QuestProtocolTests
         Reject(() => QuestPackets.FixedRewardRows([new(item with { Uid = 0 }, 2)]), "规划临时UID不得发布");
         Reject(() => QuestPackets.FixedRewardRows([new(item, 10)]), "增量不能超过实际库存数量");
         Reject(() => QuestPackets.FixedRewardRows([new(equipment, 2)]), "普通装备只能独立一件");
+        Check(QuestPackets.ActiveQuests([new(5, 3146, 1), new(0, 3145, 0)]).SequenceEqual(
+            Convert.FromHexString("02000000490C000000004A0C01000000")), "NOTI574来自全量任务并按槽原序恢复");
+        Check(QuestPackets.ActiveQuests([]).SequenceEqual(new byte[4]), "空全量活动表仍保留u32数量");
+        Reject(() => QuestPackets.ActiveQuests([new(0, 3145, 0), new(1, 3145, 0)]), "重复任务不污染全量客户端表");
+        byte[] play = DungeonSettlementPackets.PlayResult(0x81, 0xFEDCBA98, 2, 3, 4, [new(99, 0x81234567, 5)]);
+        Check(play.SequenceEqual(Convert.FromHexString("8198BADCFE0203040163006745238105")) && play.Length == 16,
+            "匹配NOTI34完整9B头加7B角色记录，不借旧版结算字段");
         int[] fixedItems = [10165055, 101010438, 10403, 12403, 14403, 16403, 18403];
         var fixedRewards = fixedItems.Select((id, index) => new QuestRewardItemProjection(new InventoryItem(100 + index,
             new(InventoryListType.Main, checked((short)(index == 0 ? 57 : index - 1))),

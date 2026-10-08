@@ -1,4 +1,5 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
 
 namespace DfoServer.Game.Skills;
@@ -14,7 +15,8 @@ internal enum SkillLearningFailure
     Mastered,
     RequiredLevel,
     Prerequisite,
-    Capacity
+    Capacity,
+    OutsideSupportedLevel
 }
 
 internal sealed record SkillLearningChangeRequest(ushort Id, bool Decrease, byte Magnitude);
@@ -22,11 +24,13 @@ internal sealed record SkillLearningCommand(byte Context, byte Mode, IReadOnlyLi
 internal sealed record SkillLearningReceipt(Character Character, long Generation, long SelectionEpoch)
 {
     public DfoServer.Game.Session.SessionPhase Phase { get; init; } = DfoServer.Game.Session.SessionPhase.Town;
+    public DungeonRunIdentity? DungeonIdentity { get; init; }
 }
 internal sealed record SkillLearningResult(SkillLearningFailure Failure, CharacterLearningState? State, IReadOnlyList<LearnedSkill> Changes)
 {
     public bool Success => Failure == SkillLearningFailure.None;
     public SkillLearningReceipt? Receipt { get; init; }
+    public SkillLearningReceipt? RejectionReceipt { get; init; }
     public bool RequiresSynchronization { get; init; }
     public int? TotalSp { get; init; }
     public int? TotalTp { get; init; }
@@ -163,48 +167,63 @@ internal static class SkillLearning
                 return Fail(SkillLearningFailure.MissingSkill);
             }
 
-            if (resource.Job != job || resource.SkillId != entry.Id || !resource.SupportsPointLearning)
-                return Fail(SkillLearningFailure.Unsupported);
             working.TryGetValue(entry.Id, out LearnedSkill? learned);
             int level = learned?.Level ?? 0;
+            if (resource.ConfirmedGrow0Maximum is int confirmedMaximum && !entry.Decrease)
+            {
+                if (level >= confirmedMaximum)
+                    return Fail(SkillLearningFailure.Mastered);
+                if (level + entry.Magnitude > confirmedMaximum)
+                    return Fail(SkillLearningFailure.OutsideSupportedLevel);
+            }
+            if (resource.Job != job || resource.SkillId != entry.Id ||
+                !(resource.SupportsPointLearning || resource.SupportsOrdinarySpLearningAtLevel(level)))
+                return Fail(SkillLearningFailure.Unsupported);
             if (resource.FixedLevel is not null)
                 return Fail(SkillLearningFailure.Mastered);
             int maximum = Math.Min(resource.GetMaximum(growtype), resource.DeclaredMaximumLevels![growtype & 15]);
-            int target = entry.Decrease ? Math.Min(level, Math.Max(free?.GetValueOrDefault(entry.Id) ?? 0, level - entry.Magnitude)) : level + entry.Magnitude;
-            if (entry.Decrease && ((resource.IsFeatureSkill ? totalTp : totalSp) is null || learned is null))
-                return Fail(SkillLearningFailure.Unsupported);
-            if (target > maximum || target > byte.MaxValue || !entry.Decrease && target <= level)
-                return Fail(SkillLearningFailure.Mastered);
-            if (!entry.Decrease && characterLevel + (resource.IsFeatureSkill ? 0 : contractLevels) < resource.GetOrdinaryNextRequiredCharacterLevel(target - 1))
-                return Fail(SkillLearningFailure.RequiredLevel);
-            foreach (SkillPrerequisite prerequisite in entry.Decrease ? [] : resource.Prerequisites!)
-            {
-                if (prerequisite.Level == 0 && !working.ContainsKey(prerequisite.SkillId))
-                {
-                    try
-                    {
-                        var prerequisiteDefinition = definition(job, prerequisite.SkillId);
-                        if (prerequisiteDefinition.Job != job || prerequisiteDefinition.SkillId != prerequisite.SkillId)
-                            return Fail(SkillLearningFailure.Unsupported);
-                    }
-                    catch (KeyNotFoundException)
-                    {
-                        return Fail(SkillLearningFailure.Unsupported);
-                    }
-                    // 客户端惰性构造存在资源的未学对象，实际等级零可满足所需零。
-                    continue;
-                }
-                if (!working.TryGetValue(prerequisite.SkillId, out LearnedSkill? required) || required.Level < prerequisite.Level)
-                    return Fail(SkillLearningFailure.Prerequisite);
-            }
-
-            // 已确认资源百分比截断；角色 +1100 减免状态当前明确为零，不引入额外状态。
+            int target;
             int cost = 0;
-            if (!entry.Decrease)
-                for (int rank = level; rank < target; rank++)
-                    cost = checked(cost + resource.GetPointCost(rank, growtype));
-            if (cost > (resource.IsFeatureSkill ? tp : sp))
-                return Fail(resource.IsFeatureSkill ? SkillLearningFailure.InsufficientTp : SkillLearningFailure.InsufficientSp);
+            try
+            {
+                target = entry.Decrease ? Math.Min(level, Math.Max(free?.GetValueOrDefault(entry.Id) ?? 0, level - entry.Magnitude)) : level + entry.Magnitude;
+                if (entry.Decrease && ((resource.IsFeatureSkill ? totalTp : totalSp) is null || learned is null))
+                    return Fail(SkillLearningFailure.Unsupported);
+                if (target > byte.MaxValue)
+                    return Fail(SkillLearningFailure.OutsideSupportedLevel);
+                if (target > maximum || !entry.Decrease && target <= level)
+                    return Fail(SkillLearningFailure.Mastered);
+                if (!entry.Decrease && characterLevel + (resource.IsFeatureSkill ? 0 : contractLevels) < resource.GetOrdinaryNextRequiredCharacterLevel(target - 1))
+                    return Fail(SkillLearningFailure.RequiredLevel);
+                foreach (SkillPrerequisite prerequisite in entry.Decrease ? [] : resource.Prerequisites!)
+                {
+                    if (prerequisite.Level == 0 && !working.ContainsKey(prerequisite.SkillId))
+                    {
+                        try
+                        {
+                            var prerequisiteDefinition = definition(job, prerequisite.SkillId);
+                            if (prerequisiteDefinition.Job != job || prerequisiteDefinition.SkillId != prerequisite.SkillId)
+                                return Fail(SkillLearningFailure.Unsupported);
+                        }
+                        catch (KeyNotFoundException)
+                        {
+                            return Fail(SkillLearningFailure.Unsupported);
+                        }
+                        continue;
+                    }
+                    if (!working.TryGetValue(prerequisite.SkillId, out LearnedSkill? required) || required.Level < prerequisite.Level)
+                        return Fail(SkillLearningFailure.Prerequisite);
+                }
+                if (!entry.Decrease)
+                    for (int rank = level; rank < target; rank++)
+                        cost = checked(cost + resource.GetPointCost(rank, growtype));
+                if (cost > (resource.IsFeatureSkill ? tp : sp))
+                    return Fail(resource.IsFeatureSkill ? SkillLearningFailure.InsufficientTp : SkillLearningFailure.InsufficientSp);
+            }
+            catch (OverflowException)
+            {
+                return Fail(SkillLearningFailure.OutsideSupportedLevel);
+            }
             byte slot;
             if (learned is not null)
             {

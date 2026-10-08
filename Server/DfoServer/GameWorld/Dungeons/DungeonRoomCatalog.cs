@@ -3,7 +3,11 @@ using PvfLib;
 namespace DfoServer.GameWorld.Dungeons;
 
 // 只保存匹配地图的资源行；整数和标记尚未全部映射到生成规则、战斗状态或 wire 字段。
-internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string RankKind, string Path);
+internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string RankKind, string Path)
+{
+    // 原始template+5C；缺项与-1不是team0。实际创建对负值使用默认100。
+    public int? Team { get; init; }
+}
 internal sealed record DungeonRoomPassiveObject(int ObjectId, IReadOnlyList<int> RawValues, string Path);
 internal sealed record DungeonRoomDefinition(
     DungeonMap Map,
@@ -121,6 +125,8 @@ internal sealed class DungeonRoomCatalog
         var teams = sections.TryGetValue("[monster team]", out var teamTokens) ? Integers(teamTokens) : Freeze(Array.Empty<int>());
         if (teams.Count > monsterRows.Count)
             throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
+        for (int index = 0; index < teams.Count; index++)
+            monsterRows[index] = monsterRows[index] with { Team = teams[index] };
         return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams);
 
         string Resolve(int id, IReadOnlyDictionary<int, string> paths, string kind)

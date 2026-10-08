@@ -31,10 +31,14 @@ internal static class SkillPointLedger
             if (skill.Level <= baseline) continue;
             var resource = definition(skill.Id);
             if (resource.IsFeatureSkill != tp) continue;
-            if (!resource.SupportsPointLearning || resource.FixedLevel is not null)
+            if (resource.FixedLevel is not null)
                 throw new NotSupportedException("已学技能费用不在普通SP范围");
             for (int rank = baseline; rank < skill.Level; rank++)
+            {
+                if (tp ? !resource.SupportsTpLearning : !resource.SupportsOrdinarySpLearningAtLevel(rank))
+                    throw new NotSupportedException("已学技能费用不在普通SP范围");
                 used = checked(used + resource.GetPointCost(rank, growth));
+            }
         }
         return used;
     }

@@ -159,7 +159,7 @@ internal static class QuestCompletionRepositoryTests
             for (int room = 0; room < 6; room++)
             {
                 var receipt = Session.CompleteFormalDungeonLoading()!;
-                foreach (var monster in receipt.Monsters.Monsters.Where(monster => monster.IsBlocking))
+                foreach (var monster in receipt.Monsters.Monsters.Where(monster => monster.Team != 0))
                 {
                     // 明确合成正常HP统计，仅验证生产资格/事务，不声称已实机击杀。
                     var observation = new NativeDungeonDeathObservation(monster.ObjectKey, receipt.Character.Id,
@@ -235,16 +235,19 @@ internal static class QuestCompletionRepositoryTests
         public bool NameExists(string name) => inner.NameExists(name);
         public Character Create(AccountOwners.Lease owner, NewCharacter character) => inner.Create(owner, character);
         public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back) => inner.Save(owner, expected, position, back);
-        public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? bonusSp = null, int? bonusTp = null) => inner.CommitLearning(owner, expected, learning, bonusSp, bonusTp);
-        public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
+        public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null) => inner.CommitLearning(owner, expected, learning, totalSp, totalTp);
         public Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitSkillLayout(owner, expected, learning);
+        public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
         public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
-        public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
+        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) => inner.ConsumeDungeonRoomFatigue(owner, expected, run);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null) =>
                 inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot);
+        public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
+            PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) =>
+                inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog);
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected, DungeonGroundPickupPreparation prepared, InventoryPlan plan) =>
             inner.CommitDungeonPickup(owner, expected, prepared, plan);
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);

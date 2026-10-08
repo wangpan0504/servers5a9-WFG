@@ -140,13 +140,15 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
             // S4A21的TP不足码2；本版无专用文案，但公共失败尾会解除学习等待。
             SkillLearningFailure.InsufficientTp => 0x0002,
             SkillLearningFailure.Mastered => 0x0012,
-            SkillLearningFailure.RequiredLevel or SkillLearningFailure.Prerequisite => 0x00D9,
+            SkillLearningFailure.RequiredLevel or SkillLearningFailure.Prerequisite or SkillLearningFailure.OutsideSupportedLevel or SkillLearningFailure.Capacity => 0x00D9,
             _ => null
         };
         log.Write("skill_purchase_rejected", new { Connection = context.Id, Reason = result.Failure.ToString(), parsed.Context, parsed.Mode });
         if (failure is not ushort knownCode)
             return CommandResult.Handled;
-        await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Failure(knownCode), "skill_purchase_rejected");
+        var rejectionReceipt = result.RejectionReceipt ?? throw new InvalidOperationException("Missing skill rejection receipt");
+        await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Failure(knownCode), "skill_purchase_rejected",
+            () => context.Session.CanPublishLearning(rejectionReceipt));
         return CommandResult.Handled;
     }
 }
