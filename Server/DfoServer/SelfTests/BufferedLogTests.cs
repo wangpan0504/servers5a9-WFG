@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Text;
 using System.Text.Json;
 using DfoServer.Infrastructure;
@@ -123,14 +124,6 @@ internal static class BufferedLogTests
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} buffered log assertions");
-    }
-
-    static void Reject<T>(Action action) where T : Exception
-    {
-        bool rejected = false;
-        try { action(); }
-        catch (T) { rejected = true; }
-        TestCheck.That(rejected, "expected " + typeof(T).Name);
     }
 
     sealed class ProbeStream : MemoryStream

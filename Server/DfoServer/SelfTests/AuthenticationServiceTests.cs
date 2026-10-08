@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Auth;
 using DfoServer.Testing;
 using System.Net;
@@ -87,14 +88,6 @@ internal static class AuthenticationServiceTests
         Reject<ArgumentOutOfRangeException>(() => new AuthenticationService(store, 99999));
         Reject<ArgumentNullException>(() => new AuthenticationService(null!));
         Console.WriteLine($"PASS {TestCheck.Count - checks} authentication use-case assertions");
-    }
-
-    static void Reject<T>(Action action) where T : Exception
-    {
-        bool rejected = false;
-        try { action(); }
-        catch (T) { rejected = true; }
-        TestCheck.That(rejected, "expected " + typeof(T).Name);
     }
 
     sealed class MemoryStore : IAccountCredentialStore

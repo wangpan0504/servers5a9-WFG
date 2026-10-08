@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
@@ -11,40 +12,40 @@ internal static class DungeonExplicitDropPolicyTests
 
     public static void RunCore()
     {
-        int checks = 0;
+        int checks = Count;
         DungeonMonsterDropEntry[] source = Rows();
         ItemTemplate[] templates = [Template(1000), Template(1047), Template(1004)];
         ItemTemplate Resolve(int id) => templates.Single(template => template.Id == id);
         var declaration = new DungeonMonsterDropDeclaration(1, GoblinPath, source, []);
         var pool = Create(declaration, Resolve);
         var thrower = Create(declaration with { MonsterId = 2, Path = ThrowerPath }, Resolve);
-        Check(DungeonExplicitDropPolicy.RuleId == "local-3145-explicit-consumables-10pct-v1" &&
+        That(DungeonExplicitDropPolicy.RuleId == "local-3145-explicit-consumables-10pct-v1" &&
             DungeonExplicitDropPolicy.TriggerDenominator == 10000 && DungeonExplicitDropPolicy.TriggerThreshold == 1000 &&
             DungeonExplicitDropPolicy.SelectionDenominator == 350, "只使用已批准本服规则的完整常量");
-        Check(pool.MonsterId == 1 && pool.Path == GoblinPath && thrower.MonsterId == 2 && thrower.Path == ThrowerPath,
+        That(pool.MonsterId == 1 && pool.Path == GoblinPath && thrower.MonsterId == 2 && thrower.Path == ThrowerPath,
             "仅两个模板保持各自规范路径");
-        Check(pool.Entries.Select(entry => (entry.SourceOrdinal, entry.Template.Id, entry.Weight))
+        That(pool.Entries.Select(entry => (entry.SourceOrdinal, entry.Template.Id, entry.Weight))
             .SequenceEqual(new[] { (0, 1000, 50), (1, 1047, 200), (2, 1004, 100) }), "完整原序和零基资源行索引");
-        Check(ReferenceEquals(pool.Entries[0].Template, templates[0]), "保留原不可变模板，不重建简化模板");
+        That(ReferenceEquals(pool.Entries[0].Template, templates[0]), "保留原不可变模板，不重建简化模板");
 
         int[] selectedCounts = new int[3];
         for (int roll = 0; roll < 350; roll++)
         {
             var choice = DungeonExplicitDropPolicy.Select(pool, 0, roll)!;
             int expectedOrdinal = roll < 50 ? 0 : roll < 250 ? 1 : 2;
-            Check(choice.SourceOrdinal == expectedOrdinal && choice.Count == 1 &&
+            That(choice.SourceOrdinal == expectedOrdinal && choice.Count == 1 &&
                 ReferenceEquals(choice.Template, pool.Entries[expectedOrdinal].Template), "命中互斥区间及模板数量: " + roll);
             selectedCounts[choice.SourceOrdinal]++;
         }
-        Check(selectedCounts.SequenceEqual(new[] { 50, 200, 100 }), "350个均匀选择值形成精确50/200/100权重区间");
+        That(selectedCounts.SequenceEqual(new[] { 50, 200, 100 }), "350个均匀选择值形成精确50/200/100权重区间");
         int triggered = 0;
         for (int roll = 0; roll < 10000; roll++)
         {
             if (DungeonExplicitDropPolicy.Select(pool, roll, 349) is not null)
                 triggered++;
         }
-        Check(triggered == 1000, "10000个均匀触发值仅前1000命中，不保证每怪掉落");
-        Check(DungeonExplicitDropPolicy.Select(pool, 999, 49) is { SourceOrdinal: 0, Count: 1 } &&
+        That(triggered == 1000, "10000个均匀触发值仅前1000命中，不保证每怪掉落");
+        That(DungeonExplicitDropPolicy.Select(pool, 999, 49) is { SourceOrdinal: 0, Count: 1 } &&
             DungeonExplicitDropPolicy.Select(pool, 999, 50) is { SourceOrdinal: 1, Count: 1 } &&
             DungeonExplicitDropPolicy.Select(pool, 999, 249) is { SourceOrdinal: 1, Count: 1 } &&
             DungeonExplicitDropPolicy.Select(pool, 999, 250) is { SourceOrdinal: 2, Count: 1 } &&
@@ -55,7 +56,7 @@ internal static class DungeonExplicitDropPolicyTests
         var frozenChoice = DungeonExplicitDropPolicy.Select(pool, 0, 0)!;
         source[0] = new(1047, 999);
         templates[0] = templates[0] with { Name = "已改源数组", StackLimit = 1 };
-        Check(pool.Entries[0].Weight == 50 && pool.Entries[0].Template.Id == 1000 &&
+        That(pool.Entries[0].Weight == 50 && pool.Entries[0].Template.Id == 1000 &&
             pool.Entries[0].Template.StackLimit == 1000 && frozenChoice.Template == pool.Entries[0].Template &&
             frozenChoice.Count == 1 && DungeonExplicitDropPolicy.Select(pool, 0, 49) == frozenChoice,
             "原缓冲替换不污染冻结池、模板或Choice");
@@ -97,7 +98,7 @@ internal static class DungeonExplicitDropPolicyTests
         // 此纯规则没有角色/地图状态；可用职业与等级不是掉落资格，正式范围由调用方核对。
         var callerScoped = Create(valid with { CommonChampionItems = [new(9999, 1)] },
             id => Template(id) with { Jobs = 1 << 15, MinimumLevel = 99 });
-        Check(DungeonExplicitDropPolicy.Select(callerScoped, 0, 0) is { Template.Jobs: 32768, Template.MinimumLevel: 99 },
+        That(DungeonExplicitDropPolicy.Select(callerScoped, 0, 0) is { Template.Jobs: 32768, Template.MinimumLevel: 99 },
             "不借模板使用条件筛掉奖励，也不读取冠军池冒充普通生成资格");
         RejectRange(() => DungeonExplicitDropPolicy.Select(pool, -1, 0), "负触发值拒绝");
         RejectRange(() => DungeonExplicitDropPolicy.Select(pool, 10000, 0), "触发上界拒绝");
@@ -106,29 +107,10 @@ internal static class DungeonExplicitDropPolicyTests
         RejectRange(() => DungeonExplicitDropPolicy.Select(pool, 0, 350), "选择上界拒绝");
         RejectRange(() => DungeonExplicitDropPolicy.Select(pool, 9999, 350), "未触发也不能掩盖非法选择值");
         RejectRange(() => DungeonExplicitDropPolicy.Select(pool, 0, int.MaxValue), "过大选择值不取模");
-        Console.WriteLine($"PASS {checks} 本服显式掉落纯规则断言");
+        Console.WriteLine($"PASS {Count - checks} 本服显式掉落纯规则断言");
 
-        void Check(bool value, string name)
-        {
-            checks++;
-            if (!value)
-                throw new InvalidOperationException("FAIL 本服显式掉落: " + name);
-        }
         void RejectData(Action action, string name) => Reject<InvalidDataException>(action, name);
         void RejectRange(Action action, string name) => Reject<ArgumentOutOfRangeException>(action, name);
-        void Reject<TException>(Action action, string name) where TException : Exception
-        {
-            try
-            {
-                action();
-            }
-            catch (TException)
-            {
-                Check(true, name);
-                return;
-            }
-            throw new InvalidOperationException("FAIL 本服显式掉落未拒绝: " + name);
-        }
         void RejectTemplate(Func<ItemTemplate, ItemTemplate> change, string name) =>
             RejectData(() => Create(valid, id => id == 1004 ? change(Template(id)) : Template(id)), name);
     }

@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
@@ -130,8 +131,7 @@ internal static class DungeonSettlementTests
             Execute($"UPDATE character_skill_points SET sp=sp+1 WHERE character_id={stale.Id} AND context=0");
             Reject<InvalidOperationException>(() => repository.CommitDungeonSettlement(owner, moved, staleRun, stalePrepared, growth), "相同revision下学习前提变化也拒绝");
 
-            foreach (var unsupported in new[] { Fixture("DarkClear") with { Job = 9 }, Fixture("CreateClear") with { Job = 10 },
-                Fixture("GrowClear") with { GrowType = 1 }, Fixture("OldClear") with { InitialLearning = CharacterLearningState.Uninitialized },
+            foreach (var unsupported in new[] { Fixture("GrowClear") with { GrowType = 15 }, Fixture("OldClear") with { InitialLearning = CharacterLearningState.Uninitialized },
                 Fixture("FullClear") with { Level = 95, InitialLearning = Learning(growth.GetCumulativeExperienceBoundary(95) - 1) },
                 Fixture("SpClear") with { InitialLearning = Learning(0, ushort.MaxValue) } })
             {
@@ -140,9 +140,19 @@ internal static class DungeonSettlementTests
                 deniedRun.AcceptConfirmedDeath(deniedAuthority.Death(deniedRun.Snapshot.Identity, 20));
                 var denied = deniedRun.PrepareSettlement(deniedRun.ClearFact!, new byte[] { 1 }, Reward).Pending!;
                 Reject<InvalidDataException>(() => repository.CommitDungeonSettlement(owner, role, deniedRun, denied, growth),
-                    "既有特殊成长、经验上界和SP溢出门禁保留");
+                    "非法成长、经验上界和SP溢出门禁保留");
                 Check(SkillRepositoryTests.Equal(repository.List(owner).Single(saved => saved.Id == role.Id), role) && Receipts() == 1,
                     "成长拒绝不截断奖励、不改变资产或新增receipt");
+            }
+            foreach (byte job in new byte[] { 9, 10 })
+            {
+                var role = repository.Create(owner, Fixture("Clear" + job) with { Job = job });
+                var (specialRun, specialAuthority) = CreateRun(role);
+                specialRun.AcceptConfirmedDeath(specialAuthority.Death(specialRun.Snapshot.Identity, 20));
+                var specialPrepared = specialRun.PrepareSettlement(specialRun.ClearFact!, new byte[] { 1 }, Reward).Pending!;
+                var committed = repository.CommitDungeonSettlement(owner, role, specialRun, specialPrepared, growth).Character;
+                Check(committed.Learning.Experience == role.Learning.Experience + Reward.TotalExperience,
+                    "特殊职业通关经验走既有原子成长事务 " + job);
             }
             Execute($"UPDATE character_dungeon_state SET last_attempt=2 WHERE character_id={stale.Id}");
             Reject<InvalidOperationException>(() => repository.CommitDungeonSettlement(owner, moved, staleRun, stalePrepared, growth), "旧副本尝试不能提交奖励");
@@ -200,10 +210,4 @@ internal static class DungeonSettlementTests
             => ConfirmDeath(identity, Guid.NewGuid(), key, 1);
     }
     private static void Check(bool value, string name) => TestCheck.That(value, name);
-    private static void Reject<T>(Action action, string name) where T : Exception
-    {
-        try { action(); }
-        catch (T) { Check(true, name); return; }
-        throw new InvalidOperationException("FAIL expected " + typeof(T).Name + ": " + name);
-    }
 }

@@ -15,7 +15,7 @@ internal static class MailboxTcpTests
     {
         var items = resources.ItemResources;
         var material = MailboxTests.TradableMaterial(resources.Archive, items);
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "mailbox"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "mailbox"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         long equipmentUid;

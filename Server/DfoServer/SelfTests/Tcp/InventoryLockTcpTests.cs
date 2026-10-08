@@ -3,7 +3,6 @@ using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -11,9 +10,9 @@ namespace DfoServer.Testing;
 
 internal static partial class InventoryTcpTests
 {
-    static async Task VerifyLocksAsync(ServerOptions source, string root, CharacterCatalog characters, TownCatalog towns)
+    static async Task VerifyLocksAsync(ServerOptions source, string root, CharacterCatalog characters, TownCatalog towns, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, root);
+        await using var fixture = new TcpTestFixture(source, root, resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             new GameSession(repository, towns, owner).CreateCharacter("BagLockTest", characters.Get(0));
@@ -93,11 +92,11 @@ internal static partial class InventoryTcpTests
             var entry = peer.Select(inventoryNotices: [(0, 251)]);
             Bytes(entry[8].Body, [1, 0, 3, 12, 0, 1], "restarted session restores moved equipment lock");
             string before = Snapshot(fixture);
-            Sql("CREATE TRIGGER fail_tcp_lock BEFORE UPDATE ON character_inventory_items BEGIN SELECT RAISE(ABORT,'lock failure'); END");
+            fixture.Sql("CREATE TRIGGER fail_tcp_lock BEFORE UPDATE ON character_inventory_items BEGIN SELECT RAISE(ABORT,'lock failure'); END");
             peer.Send(268, [3, 12, 0]);
             peer.Closed();
             That(Snapshot(fixture) == before, "failed lock transaction closes without success ACK or partial writes");
-            Sql("DROP TRIGGER fail_tcp_lock");
+            fixture.Sql("DROP TRIGGER fail_tcp_lock");
         }
         using (var peer = Open(fixture))
         {
@@ -110,14 +109,6 @@ internal static partial class InventoryTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]], "TCP locking database integrity");
 
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
         static void WearDelta(TcpPeer peer)
         {
             peer.Expect(0, 14);

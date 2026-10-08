@@ -136,7 +136,7 @@ pwsh -NoProfile -File Tools/Check-Development.ps1
 
 脚本依次检查仓库链接与路径、构建（含分层分析器）、分层规则正反例、PvfLib 合成数据和服务端 `--selftest-core`，失败即非零退出。默认产物写到 `build/check`，可用 `-Configuration Release` 或 `-ArtifactsPath <目录>` 调整；测试只使用合成输入与临时 SQLite，不要求运行数据，也不启动游戏监听。该命令可直接用于本地或 CI。
 
-`--selftest-core` 覆盖纯协议、命令参数、owner、认证、数据库基线及背包变化索引；新增无资源测试接入 `SelfTestRunner.RunCoreAsync`。完整 `--selftest` 包含全部基础测试和资源集成，不能以基础检查替代下表要求的完整自测或 TCP。资源相关用例需要 `Server/DfoServer/Data/Pvf/Script.pvf`。从仓库根执行，固定目录和启动参数见[环境与配置](Docs/开发/环境与配置.md)：
+`--selftest-core` 覆盖纯协议、命令参数、owner、认证、数据库基线及背包变化索引；新增无资源测试接入 `SelfTestRunner.RunCoreAsync`。完整 `--selftest` 包含全部基础测试和业务资源集成，不能以基础检查替代下表要求的完整自测或 TCP。百万文件资源普查单独使用 `--selftest-tcp resource-survey`，扫描器或 PVF 格式、读取、缓存变化时补跑；其合成解析边界仍由基础自测覆盖。资源相关用例需要 `Server/DfoServer/Data/Pvf/Script.pvf`。从仓库根执行，固定目录和启动参数见[环境与配置](Docs/开发/环境与配置.md)：
 
 ```powershell
 dotnet build ServerS5A9.sln -c Debug --nologo
@@ -144,8 +144,10 @@ dotnet run --project Tools/PvfLib.Tests -c Debug --no-build
 dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-core
 dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest
 dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-tcp
-# 定向 TCP 回归；多个组用逗号连接，同一轮仍按注册顺序串行执行。
+# 定向 TCP 回归；多个组用逗号连接，同一轮按注册顺序串行执行并共享只读资源。
 dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-tcp "material-exchange,booster"
+# 全量资源普查，按需执行。
+dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-tcp resource-survey
 powershell -NoProfile -ExecutionPolicy Bypass -File Tools/Check-Repository.ps1
 # 以下命令仅适用于 Git 工作区
 git diff --check
@@ -153,24 +155,39 @@ git diff --check
 
 macOS/Linux 的仓库检查改用 `pwsh -NoProfile -File Tools/Check-Repository.ps1`。该脚本检查路径可移植性和文档本地链接；修改标题时还要检查引用的锚点。
 
+### 检查范围
+
+开发迭代先完成 Debug 构建、基础检查及修改点和受影响链路的定向测试；不因一次局部修改反复运行全量资源与 TCP。最终提交、推送或整项交付前按下表补齐验证；相同代码与输入已通过的检查可复用，后续修改、失败或影响范围不明时按影响补测。公共测试夹具、资源共享或测试入口变化须运行完整 TCP，不能只测一个受益组。服务端构建要求 `0 warning / 0 error`。
+
 | 改动范围 | 至少完成的验证 |
 |---|---|
 | 纯文档 | 核对内容、路径、链接与标题锚点；仓库检查；有 Git 时检查 diff |
 | Parser、领域规则或单个功能 | Debug 构建、完整 `--selftest`、所属 TCP 组；补成功、拒绝与边界用例 |
-| PvfLib 格式、读取或缓存 | 独立合成测试、完整服务端 `--selftest` 和 `--selftest-tcp`；性能改动按[库文档](Tools/PvfLib/README.md#构建与验证)同条件测量 |
+| PvfLib 格式、读取、缓存或全量扫描器 | 独立合成测试、完整服务端 `--selftest`、`--selftest-tcp` 和 `resource-survey` 专项；性能改动按[库文档](Tools/PvfLib/README.md#构建与验证)同条件测量 |
 | 公共 Session、owner、Repository、Builder、注册或广播路径 | Debug 构建、完整 `--selftest` 和完整 `--selftest-tcp`，复查共享调用方 |
 | schema 或持久化变化 | 在上述范围外覆盖新建库、升级、失败回滚、重开库、存量恢复及较新版本拒绝 |
 | 启动、脚本、依赖或发布配置 | 对应脚本/参数验证、Release 发布、输出目录及目标平台启动检查 |
 
 测试以非零退出码表示失败，控制台给出用例结果；TCP 还会输出 fixture 路径及 `result.json`。资源样本断言失败时区分输入差异与实现回归，不以删除合法性检查或缩小原有用例来让测试通过。未准备资源、未运行的组、已有失败和未完成的实机验收都应在交付中明确。
 
-- 服务端构建要求 `0 warning / 0 error`；服务端用例全部使用 C#。公共 Session/Repository/Builder 变化运行完整自测和 TCP 回归；工具变化增加相应语法、参数或 fixture 检查。
-- 状态变化覆盖成功、拒绝、重复请求、旧 generation、revision 冲突、数据库失败回滚、重登/重启及迁移。网络变化检查完整帧、CRC、sequence、包序和失败后的连接行为。
-- [TCP 入口](Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs)启动独立 .NET 进程，使用 loopback 空闲端口与独立程序目录，按固定布局隔离 Data/Logs，输出到忽略的 `build/tcp-tests`；不连接实际运行实例，不启动 DNF。客户端独立编码请求，用后续确定的 ACK 检测多发/漏发，不以超时推断静默。
-- TCP 驱动按需共享一份 PVF/城镇/角色目录，不为每个用例重新打开归档；独立服务进程保留自身资源格式解析。子进程 stdout/stderr 固定缓冲写入 fixture 日志，CLI 返回值最多读入 64 KiB，错误摘要最多 4096 字符。启动失败也立即结束并等待本 fixture 的进程树与输出任务，不以 GC 或反复重跑解决资源累积。
-- 定向组名以 [TCP 入口](Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs)的注册表为准，所属模块文档列出对应命令；省略组名才执行全部。每组结果记录驱动提交量、工作集和累计分配量；各服务阶段的 `memory.json` 记录工作集峰值与停服前提交量。这些指标用于发现重复加载和增长，不等价于泄漏证明或进程树硬上限。资源不足立即停止并排查，不连续重试。
-- 共享构建输出的测试串行运行。Windows、macOS 和 Linux 共用入口，macOS/Linux 的仓库检查使用 `pwsh`；仅报告实际运行的平台。发行或构建配置变更增加对应 Release 验证。
-- **纯文档修改**只检查内部链接、路径、内容与源码的一致性及 diff，不要求 C# 测试或服务重启。缺少匹配资产时说明未执行的检查。
+### 测试代码约束
+
+以下要求适用于新增、修改和精简测试；评审以独有风险覆盖、可读性和执行成本为准，不以文件数、断言数或测试代码行数作为完成指标。
+
+1. **先查覆盖，再加用例。** 每个新增用例应对应明确的失败行为或边界，优先扩展所属模块已有用例。纯规则、Parser、Builder 和 schema 使用最小合成输入；真实 PVF 只用于资源合同和必要业务集成。可逆、低风险且无独立行为的改动不机械新增测试，不为逐行复刻实现而写测试。
+2. **按层分工，避免整套重复。** 必要组合矩阵放在纯规则层，事务与落库边界放在 Session/Repository 层；TCP 聚焦真实请求分派、完整帧/CRC/sequence、包序、保存回放和失败后的连接行为。TCP 不得再次调用 `--selftest-core` 或整套领域自测，也不搬运完整规则矩阵；仅对跨层交互选代表性成功、拒绝和关键边界。已在下层验证的条件，只有出现独立集成风险才增加 TCP 覆盖。
+3. **保持代码精简。** 服务端用例使用 C#，沿用现有程序集和命令入口；复用 `TestCheck`、`TcpPeer`、`TcpTestFixture` 的断言、wire 和 SQL 辅助，不在各模块复制同类函数。相同流程用简短数据表表达，确有重复才抽取小辅助；不引入通用测试框架、DSL、空包装或另一套业务实现，也不为压行数牺牲可读性。协议预期须独立编码，禁止调用被测生产 Builder 生成同一包的预期值。
+4. **公共只读资源按轮复用。** 相同 PVF 的归档、物品、角色、城镇和技能目录须通过现有 `TcpTestResources` 按需共用，驱动与同进程服务不得各自重载一份。业务 TCP 复用 `ServerRuntime` 装配真实监听，每组隔离数据库、owner、会话、日志和端口；不能共享可变角色或账号状态、依赖前一组数据，也不能用跨轮全局缓存掩盖初始化问题。资源所有者在整轮结束后释放。
+5. **按验证目标选择重连、服务重建或进程重启。** 提交回放优先断线重连；需要清空在线状态时重建服务、会话和仓储，仍共享只读资源。只有 CLI、固定目录、启动生命周期、抓包及代表性的持久化冷启动使用独立进程。当前公共背包、技能、正式副本、角色设置及启动组保留真实进程恢复；新增冷启动须说明现有用例不能覆盖的独立风险，不为每个功能重复启动。服务重建不得报告为跨进程恢复。
+6. **等待须有可观测条件。** 用 ACK、就绪状态或同步信号确定先后关系，等待设置超时；不得用固定睡眠代替完成条件，或用超时无包推断静默。故障注入和压力规模按本次风险选择，不把长延时、多档相同等待或全资源扫描作为普通回归的默认成本；确需这些输入时保留其独立验证目的。
+7. **精简必须保留风险覆盖。** 删除或合并用例时说明重复点与保留的覆盖位置；成功、拒绝、重复/过期请求、旧 generation/revision、真实 SQL 回滚、完整资产/UID、回放和迁移等受影响边界按层保留，不要求每层重复一遍。不得为提速跳过失败组、放宽期望、吞异常、随意缩小合法输入范围或隐藏覆盖减少；发现失败先区分测试缺陷、输入差异与业务回归。
+8. **执行与资源必须有界。** 构建、完整资源自测和 TCP 分阶段串行，运行期间不得重建共享产物；按[资源预算与停止边界](Docs/规范/并发事务与响应延迟.md#验证与停止边界)控制时间、内存和进程数，越界停止排查。子进程输出流式写日志，CLI 读取与错误摘要保持现有限额；成功、失败和取消均须回收本次连接、监听、任务及子进程。不得连接实际运行实例或启动 DNF 客户端，不以并发重复加载、强制 GC 或反复重跑掩盖成本和泄漏。
+
+测试结构、资源复用或性能调整须在同配置、同输入、同选组条件下比较总耗时、进程树峰值内存及冷启动次数，同时报告测试有效代码量的增减（排除空行与纯注释）。代码增长应对应新增的独有覆盖或必要夹具支持，不设机械的测试/业务行数比例，也不把某台机器的一次耗时写成固定门槛。覆盖范围变化单独说明，不能当作等量提速。
+
+定向组名以 [TCP 入口](Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs)为准；省略组名执行全部网络集成组。`dungeon-settlement`、`inventory-persistence` 是已有自测的定向入口，`resource-survey` 是全量普查，均需显式指定。每组结果记录断言数及驱动提交量、工作集、期间分配量，内含共享资源和同进程服务；独立进程阶段的 `memory.json` 记录工作集峰值与停服前提交量。这些指标不等价于泄漏证明或进程树硬上限。
+
+Windows、macOS 和 Linux 共用入口，仅报告实际运行的平台。纯文档修改只检查链接、路径、锚点、内容与 diff，不要求构建、自测或服务重启；缺少匹配资产时说明未执行项。
 
 模块文档维护测试入口和验收边界，不逐轮追加测试数量、日志路径或进程身份。构建、自测、TCP、客户端请求与界面确认分别报告；自动化通过不等于实机通过。
 

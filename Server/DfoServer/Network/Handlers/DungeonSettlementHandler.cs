@@ -44,6 +44,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     async Task<CommandResult> ResultAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
+        var previousLearning = context.Session.Selected?.Learning;
         var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
             request.Body, dungeons, rewards, growth);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
@@ -57,6 +58,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
         await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
+        if (previousLearning is not null && SkillPackets.BindingsChanged(previousLearning, receipt.Character.Learning))
+            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_clear_skills", Guard);
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.EmptyCardReward(result.Reward, result.Presentation!.MonsterExperience), "formal_clear_reward", Guard);
         return CommandResult.Handled;
     }

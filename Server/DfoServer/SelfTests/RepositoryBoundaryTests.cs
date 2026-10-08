@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
@@ -53,10 +54,4 @@ internal static class RepositoryBoundaryTests
         Console.WriteLine($"PASS {TestCheck.Count - checks} resource-free repository boundary assertions");
     }
 
-    static void Reject<T>(Action action, string message) where T : Exception
-    {
-        try { action(); }
-        catch (T) { TestCheck.That(true, message); return; }
-        throw new InvalidOperationException("FAIL: " + message);
-    }
 }

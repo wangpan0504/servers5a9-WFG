@@ -80,7 +80,10 @@ internal sealed record InventoryMoveRequest(InventorySlot Source, int SourceItem
 internal sealed record InventorySortRequest(InventoryListType List, DfoServer.GameWorld.Items.ItemKind Kind, byte Condition);
 internal enum InventoryLockOperation { SortLock, SortUnlock, EquipmentLock, EquipmentUnlock, CancelUnlock }
 internal sealed record InventoryDeleteEntry(byte Type, short Slot, int Value, int Count);
-internal sealed record InventoryDeleteRequest(InventoryListType List, InventoryDeleteEntry[] Items, int Flag);
+internal sealed record InventoryDeleteRequest(InventoryListType List, InventoryDeleteEntry[] Items, int Flag)
+{
+    public byte? ClientState { get; init; }
+}
 // 移动资格必须属于生成计划时的角色；不能把旧计划重新绑定到刷新后的expected。
 internal sealed class InventoryCharacterPrecondition(Character character)
 {

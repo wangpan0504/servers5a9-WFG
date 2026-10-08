@@ -255,13 +255,6 @@ internal static class DungeonSelectionReturnTests
         session.End();
     }
 
-    static void Reject<T>(Action action, string name) where T : Exception
-    {
-        try { action(); }
-        catch (T) { That(true, name); return; }
-        throw new InvalidOperationException(name);
-    }
-
     sealed class HeldOutput : MemoryStream
     {
         public bool Hold { get; set; }

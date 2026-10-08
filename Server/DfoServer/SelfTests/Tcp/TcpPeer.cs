@@ -24,6 +24,7 @@ internal sealed class TcpPeer : IDisposable
     public ushort Id { get; private set; }
     public WirePacket[] SpecialContainers { get; private set; } = [];
     public byte[][] Mailbox { get; private set; } = [];
+    public byte[] ExpertContract { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
 
     static readonly Encoding names;
@@ -168,8 +169,30 @@ internal sealed class TcpPeer : IDisposable
         return Roster;
     }
 
+    // 从提交的行独立编码预期，不借用服务端 Builder；初始化连招可含资源声明的默认组。
+    internal static byte[] StoredCombos(TcpTestFixture fixture, ushort characterId) => Build(writer =>
+    {
+        var rows = fixture.Query("SELECT context,root_id,children FROM character_skill_combos WHERE character_id=$p0 ORDER BY context,root_id", characterId);
+        writer.Write((byte)0);
+        writer.Write((byte)2);
+        for (byte context = 0; context < 2; context++)
+        {
+            var combos = rows.Where(row => Convert.ToByte(row[0]) == context).ToArray();
+            writer.Write(context);
+            writer.Write(checked((byte)combos.Length));
+            foreach (var combo in combos)
+            {
+                writer.Write(Convert.ToUInt16(combo[1]));
+                var children = (byte[])combo[2];
+                writer.Write(checked((byte)(children.Length / 2)));
+                writer.Write(children);
+            }
+        }
+    });
+
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
-        (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null)
+        (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,
+        byte[]? sceneSkills = null, byte[]? combos = null)
     {
         Send(4, Build(w => w.Write(slot)));
         var expected = prepared ? PreparedEntry : Entry;
@@ -185,6 +208,7 @@ internal sealed class TcpPeer : IDisposable
             if (index == afterCargo - 2 && packet.Kind == 0 && packet.Opcode == 19)
             {
                 SkillInfo = packet.Body;
+                ExpertContract = expertContract ? Expect(0, 66).Body : [];
                 packet = Read();
             }
             TestCheck.That(packet.Kind == expected[index].Kind && packet.Opcode == expected[index].Opcode,
@@ -207,6 +231,8 @@ internal sealed class TcpPeer : IDisposable
             // 设置必须在地区绑定后、入城完成前回放；单独保留以免改变旧用例的包索引。
             if (notice == ((byte)0, (ushort)124))
             {
+                if (sceneSkills is not null) Expect(0, 19, sceneSkills);
+                if (combos is not null) Expect(0, 447, combos);
                 ClientSettings = (settings ?? []).Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
                 if (appearanceFlags.HasValue)
                     Expect(0, 357, Build(w =>

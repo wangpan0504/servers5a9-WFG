@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Application;
 
 namespace DfoServer;
@@ -6,13 +7,7 @@ internal static class CommandLineTests
 {
     public static void Run()
     {
-        int checks = 0;
-        void Check(bool result, string message)
-        {
-            checks++;
-            if (!result)
-                throw new InvalidOperationException("FAIL command line: " + message);
-        }
+        int checks = Count;
         void Reject(string[] arguments)
         {
             bool rejected = false;
@@ -25,15 +20,15 @@ internal static class CommandLineTests
             {
                 rejected = true;
             }
-            Check(rejected, "invalid input must not reach listener: " + string.Join(' ', arguments));
+            That(rejected, "invalid input must not reach listener: " + string.Join(' ', arguments));
         }
 
-        Check(ServerCommand.Parse([]) is { Kind: ServerCommandKind.Serve, PacketCapture: false }, "default entry needs no configuration");
-        Check(ServerCommand.Parse(["--help"]).Kind == ServerCommandKind.Help, "standalone help");
-        Check(ServerCommand.Parse(["--gm", "account", "--selftest", "list"]).Arguments.SequenceEqual(["account", "--selftest", "list"]), "command-like account name remains a GM argument");
+        That(ServerCommand.Parse([]) is { Kind: ServerCommandKind.Serve, PacketCapture: false }, "default entry needs no configuration");
+        That(ServerCommand.Parse(["--help"]).Kind == ServerCommandKind.Help, "standalone help");
+        That(ServerCommand.Parse(["--gm", "account", "--selftest", "list"]).Arguments.SequenceEqual(["account", "--selftest", "list"]), "command-like account name remains a GM argument");
         var launch = ServerCommand.Parse(["--server-ip", "auto", "--packet-capture", "capture files"]);
-        Check(launch.PacketCapture && launch.Options["--server-ip"] == "auto" && launch.Arguments.SequenceEqual(["capture files"]), "runtime options and capture path remain separate");
-        Check(ServerCommand.Parse(["--packet-capture"]).Arguments.Length == 0, "capture defaults to fixed log directory");
+        That(launch.PacketCapture && launch.Options["--server-ip"] == "auto" && launch.Arguments.SequenceEqual(["capture files"]), "runtime options and capture path remain separate");
+        That(ServerCommand.Parse(["--packet-capture"]).Arguments.Length == 0, "capture defaults to fixed log directory");
         (string[] Arguments, ServerCommandKind Kind)[] supported =
         [
             (["--inspect"], ServerCommandKind.InspectTowns),
@@ -50,10 +45,10 @@ internal static class CommandLineTests
             (["--pvf-text", "sample.pvf", "character/character.lst"], ServerCommandKind.PvfText)
         ];
         foreach (var test in supported)
-            Check(ServerCommand.Parse(test.Arguments).Kind == test.Kind, string.Join(' ', test.Arguments));
-        Check(ServerCommand.Parse(["--selftest-tcp", "material-exchange,booster"]).Arguments.SequenceEqual(["material-exchange,booster"]), "TCP group selection preserved");
+            That(ServerCommand.Parse(test.Arguments).Kind == test.Kind, string.Join(' ', test.Arguments));
+        That(ServerCommand.Parse(["--selftest-tcp", "material-exchange,booster"]).Arguments.SequenceEqual(["material-exchange,booster"]), "TCP group selection preserved");
         foreach (string group in Testing.TcpRegressionTests.GroupNames)
-            Check(ServerCommand.Parse(["--selftest-tcp", group]).Kind == ServerCommandKind.TcpTest, "known TCP group " + group);
+            That(ServerCommand.Parse(["--selftest-tcp", group]).Kind == ServerCommandKind.TcpTest, "known TCP group " + group);
         foreach (string selection in new[] { "", "booster,", "booster,booster", "booster,unknown", "Booster" })
             Reject(["--selftest-tcp", selection]);
         foreach (string name in new[] { "--pvf", "--data-dir", "--log-dir", "--duplicate-login", "--client-ip" })
@@ -77,14 +72,14 @@ internal static class CommandLineTests
             Reject(arguments);
 
         var defaults = ServerOptions.Load();
-        Check(defaults.PvfPath == Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf") &&
+        That(defaults.PvfPath == Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf") &&
             defaults.DataDirectory == Path.Combine(AppContext.BaseDirectory, "Data") &&
             defaults.LogDirectory == Path.Combine(AppContext.BaseDirectory, "Logs"), "fixed paths use executable directory");
-        Check(defaults.GmPort == 0 && defaults.DuplicateLoginPolicy == Game.Accounts.DuplicateLoginPolicy.ReplaceExisting, "GM disabled and duplicate login always replaces old connection");
+        That(defaults.GmPort == 0 && defaults.DuplicateLoginPolicy == Game.Accounts.DuplicateLoginPolicy.ReplaceExisting, "GM disabled and duplicate login always replaces old connection");
         var custom = ServerOptions.Load(ServerCommand.Parse(["--listen-ip", "127.0.0.1", "--server-ip", "192.168.0.1", "--channel-port", "25000", "--game-port", "25001", "--session-ttl", "600"]).Options);
-        Check(custom.ListenAddress == "127.0.0.1" && custom.AdvertisedAddress == "192.168.0.1", "explicit listener wins independent of option order");
-        Check(custom.ChannelPort == 25000 && custom.GamePort == 25001 && custom.SessionTtlSeconds == 600, "supported launch overrides");
-        Check(ServerOptions.Load(ServerCommand.Parse(["--server-ip", "192.168.0.1"]).Options).ListenAddress == "0.0.0.0", "LAN address enables external listener");
+        That(custom.ListenAddress == "127.0.0.1" && custom.AdvertisedAddress == "192.168.0.1", "explicit listener wins independent of option order");
+        That(custom.ChannelPort == 25000 && custom.GamePort == 25001 && custom.SessionTtlSeconds == 600, "supported launch overrides");
+        That(ServerOptions.Load(ServerCommand.Parse(["--server-ip", "192.168.0.1"]).Options).ListenAddress == "0.0.0.0", "LAN address enables external listener");
         string root = Path.Combine(Path.GetTempPath(), "S5A9-command-options-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string workingDirectory = Environment.CurrentDirectory;
@@ -92,14 +87,14 @@ internal static class CommandLineTests
         {
             Environment.CurrentDirectory = root;
             File.WriteAllText(Path.Combine(root, "server.local.json"), "invalid JSON");
-            Check(ServerOptions.Load() == defaults, "working directory and local JSON cannot change fixed defaults");
-            Check(!Directory.Exists(Path.Combine(root, "Data")), "option validation creates no player data");
+            That(ServerOptions.Load() == defaults, "working directory and local JSON cannot change fixed defaults");
+            That(!Directory.Exists(Path.Combine(root, "Data")), "option validation creates no player data");
         }
         finally
         {
             Environment.CurrentDirectory = workingDirectory;
             Directory.Delete(root, true);
         }
-        Console.WriteLine($"PASS {checks} command line assertions");
+        Console.WriteLine($"PASS {Count - checks} command line assertions");
     }
 }

@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Buffers.Binary;
 using DfoServer.Game.Characters;
 using DfoServer.Network.Builders;
@@ -8,13 +9,7 @@ internal static class SkillPacketsTests
 {
     public static void Run()
     {
-        int checks = 0;
-        void Check(bool value, string name)
-        {
-            checks++;
-            if (!value)
-                throw new InvalidOperationException("FAIL skill packets: " + name);
-        }
+        int checks = Count;
         void Reject(Action action, string name)
         {
             try
@@ -23,44 +18,44 @@ internal static class SkillPacketsTests
             }
             catch (InvalidDataException)
             {
-                Check(true, name);
+                That(true, name);
                 return;
             }
             throw new InvalidOperationException("FAIL expected packet rejection: " + name);
         }
         var zero = State(new(0, 0, 0, [new(0, 5, 1)]), new(1, 0, 0, [new(0, 5, 1)]));
         byte[] sample = Convert.FromHexString("1E0000000813120C080010001A06080010051801120C080010001A06080010051801");
-        Check(SkillPackets.Initialized(zero).SequenceEqual(sample), "fixed NOTI19 sample includes zero-valued required fields and two actual bindings");
+        That(SkillPackets.Initialized(zero).SequenceEqual(sample), "fixed NOTI19 sample includes zero-valued required fields and two actual bindings");
         var decoded = DecodeInitialized(sample);
-        Check(decoded.Length == 2 && decoded.All(tree => tree.Sp == 0 && tree.Tp == 0 && tree.Skills.Single() == new LearnedSkill(0, 5, 1)),
+        That(decoded.Length == 2 && decoded.All(tree => tree.Sp == 0 && tree.Tp == 0 && tree.Skills.Single() == new LearnedSkill(0, 5, 1)),
             "independent protobuf reader verifies required presence and real slot0");
         byte[] ack = SkillPackets.Success(0, 0, zero, [new(0, 5, 1)]);
-        Check(ack.SequenceEqual(Convert.FromHexString("01000000000001000500010000")) && ack.Length == 13, "single ACK29 exact13B sample");
+        That(ack.SequenceEqual(Convert.FromHexString("01000000000001000500010000")) && ack.Length == 13, "single ACK29 exact13B sample");
         var parsedAck = DecodeSuccess(ack);
-        Check(parsedAck.Context == 0 && parsedAck.Mode == 0 && parsedAck.Sp == 0 && parsedAck.Tp == 0 && parsedAck.Skills.Single() == new LearnedSkill(0, 5, 1),
+        That(parsedAck.Context == 0 && parsedAck.Mode == 0 && parsedAck.Sp == 0 && parsedAck.Tp == 0 && parsedAck.Skills.Single() == new LearnedSkill(0, 5, 1),
             "ACK slot byte is actual binding not a status placeholder");
         var rich = State(new(1, 1234, 987, [new(254, 65535, 255), new(7, 300, 128)]),
             new(0, 65535, 65535, [new(0, 128, 1), new(130, 40000, 200)]));
         var richTrees = DecodeInitialized(SkillPackets.Initialized(rich));
-        Check(richTrees[0].Sp == 65535 && richTrees[0].Tp == 65535 && richTrees[1].Sp == 1234 && richTrees[1].Tp == 987,
+        That(richTrees[0].Sp == 65535 && richTrees[0].Tp == 65535 && richTrees[1].Sp == 1234 && richTrees[1].Tp == 987,
             "serialized tree order is context0 then1 even when model order reversed");
-        Check(richTrees[1].Skills.SequenceEqual(new[] { new LearnedSkill(7, 300, 128), new LearnedSkill(254, 65535, 255) }),
+        That(richTrees[1].Skills.SequenceEqual(new[] { new LearnedSkill(7, 300, 128), new LearnedSkill(254, 65535, 255) }),
             "multibyte varints preserve high slots IDs levels and canonical slot ordering");
         var singleContext = State(zero.Trees[0], new(1, 0, 0, []));
-        Check(SkillPackets.Success(0, 0, singleContext, [new(0, 5, 1)]).Length == 13,
+        That(SkillPackets.Success(0, 0, singleContext, [new(0, 5, 1)]).Length == 13,
             "ACK validates selected committed binding without requiring full other-context initialization projection");
         var manyBindings = Enumerable.Range(0, 100).Select(index => new LearnedSkill((byte)index, (ushort)(50000 + index), 1)).ToArray();
         var many = State(new(0, 65535, 0, manyBindings), new(1, 0, 65535, manyBindings));
         var manyTrees = DecodeInitialized(SkillPackets.Initialized(many));
-        Check(manyTrees.All(tree => tree.Skills.Length == 100) && manyTrees[0].Skills[99].Id == 50099,
+        That(manyTrees.All(tree => tree.Skills.Length == 100) && manyTrees[0].Skills[99].Id == 50099,
             "multibyte nested message lengths remain bounded and preserve all100 real bindings");
         byte[] multi = SkillPackets.Success(1, 1, rich, [new(254, 65535, 255), new(7, 300, 128)]);
         var multiAck = DecodeSuccess(multi);
-        Check(multi.Length == 18 && multiAck.Context == 1 && multiAck.Mode == 1 && multiAck.Sp == 1234 && multiAck.Tp == 987 && multiAck.Skills.Length == 2,
+        That(multi.Length == 18 && multiAck.Context == 1 && multiAck.Mode == 1 && multiAck.Sp == 1234 && multiAck.Tp == 987 && multiAck.Skills.Length == 2,
             "multi ACK uses5B entries and selected context balances");
-        Check(multiAck.Skills[0] == new LearnedSkill(254, 65535, 255), "ACK retains accepted command change order");
+        That(multiAck.Skills[0] == new LearnedSkill(254, 65535, 255), "ACK retains accepted command change order");
         foreach (ushort code in new ushort[] { 0x12, 0x15, 0x16 })
-            Check(SkillPackets.Failure(code).SequenceEqual(new byte[] { 0, (byte)code, 0 }), "known failure complete three-byte contract");
+            That(SkillPackets.Failure(code).SequenceEqual(new byte[] { 0, (byte)code, 0 }), "known failure complete three-byte contract");
         Reject(() => SkillPackets.Failure(0), "unknown failure code never fabricated");
         Reject(() => SkillPackets.Initialized(CharacterLearningState.Uninitialized), "uninitialized state cannot be serialized");
         Reject(() => SkillPackets.Initialized(State(new(0, 0, 0, []), new(1, 0, 0, []))), "empty trees cannot impersonate full initialized skills");
@@ -95,7 +90,7 @@ internal static class SkillPacketsTests
         Reject(() => DecodeInitialized(wrongLength), "nested message overread cannot borrow following tree bytes");
         byte[] badVarint = Convert.FromHexString("1F0000000813120D08800010001A06080010051801120C080010001A06080010051801");
         Reject(() => DecodeInitialized(badVarint), "noncanonical oversized zero varint rejected by independent decoder");
-        Console.WriteLine($"PASS {checks} skill packet protobuf and ACK boundary assertions");
+        Console.WriteLine($"PASS {Count - checks} skill packet protobuf and ACK boundary assertions");
     }
 
     private static CharacterLearningState State(CharacterSkillTree first, CharacterSkillTree second) => new(0, Array.AsReadOnly(new[] { first, second }));
@@ -128,8 +123,20 @@ internal static class SkillPacketsTests
                 uint id = skill.UInt();
                 Require(skill.UInt() == 24);
                 uint level = skill.UInt();
+                var keys = new List<byte>();
+                if (!skill.End)
+                {
+                    Require(skill.UInt() == 34);
+                    var command = new PbReader(skill.Message());
+                    while (!command.End)
+                    {
+                        uint key = command.UInt();
+                        Require(key <= byte.MaxValue && keys.Count < 255);
+                        keys.Add((byte)key);
+                    }
+                }
                 Require(skill.End && slot < 255 && id <= ushort.MaxValue && level is > 0 and <= 255);
-                skills.Add(new((byte)slot, (ushort)id, (byte)level));
+                skills.Add(new((byte)slot, (ushort)id, (byte)level) { Command = Convert.ToHexString(keys.ToArray()) });
             }
             Require(skills.Count is > 0 and <= 255 && skills.Select(skill => skill.Slot).Distinct().Count() == skills.Count &&
                 skills.Select(skill => skill.Id).Distinct().Count() == skills.Count);
@@ -154,8 +161,11 @@ internal static class SkillPacketsTests
             byte slot = reader.Byte();
             ushort id = reader.Word();
             byte level = reader.Byte();
-            Require(slot != 255 && level > 0 && reader.Byte() == 0);
-            skills.Add(new(slot, id, level));
+            byte hasCommand = reader.Byte();
+            Require(slot != 255 && hasCommand <= 1);
+            byte[] keys = hasCommand == 1 ? new byte[reader.Byte()] : [];
+            for (int key = 0; key < keys.Length; key++) keys[key] = reader.Byte();
+            skills.Add(new(slot, id, level) { Command = Convert.ToHexString(keys) });
         }
         byte mode = reader.Byte();
         Require(mode <= 1 && reader.End && skills.Select(skill => skill.Slot).Distinct().Count() == count &&

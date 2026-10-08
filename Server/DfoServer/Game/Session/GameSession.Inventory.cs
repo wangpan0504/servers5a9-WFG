@@ -8,9 +8,10 @@ internal sealed partial class GameSession
 {
     public DfoServer.Game.Currency.AccountWallet AccountWallet() => owner.Execute(() =>
         Selected?.Inventory.AccountWallet ?? repository.LoadAccountWallet(owner));
-    public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1) => owner.Execute(() =>
+    public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
+        bool requireTown = true) => owner.Execute(() =>
     {
-        if (!Ready || Phase != SessionPhase.Town || Selected is null)
+        if (!Ready || requireTown && Phase != SessionPhase.Town || Selected is null)
             return InventoryResult.Reject(invalidStateError);
         var result = operation(Selected);
         return CommitInventory(Selected, result);
@@ -20,11 +21,12 @@ internal sealed partial class GameSession
     {
         Selected = InventoryService.Commit(repository, owner, character, result);
         return result with { Receipt = result.Accepted && result.Plan is not null
-            ? new(Selected, owner.Generation, SelectionEpoch) : null };
+            ? new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase } : null };
     }
 
     public bool CanPublishInventory(InventoryCommitReceipt receipt) => owner.Execute(() =>
-        Ready && receipt.Generation == owner.Generation && MatchesSelection(receipt.SelectionEpoch, receipt.Character.Id) &&
+        Ready && receipt.Generation == owner.Generation && Phase == receipt.Phase &&
+        SelectionEpoch == receipt.SelectionEpoch && Selected?.Id == receipt.Character.Id &&
         Selected!.Revision == receipt.Character.Revision);
 
     public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1)

@@ -82,6 +82,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             part.CumulativeHpDecrease, part.PositiveHpDecreaseCount, statistics.RewriteFlag, statistics.SpawnLevel,
             statistics.SpawnHpSnapshot, statistics.Unknown18, statistics.Unknown26, statistics.ChecksumMatches,
             Convert.ToHexString(SHA256.HashData(request.Body)));
+        var previousLearning = context.Session.Selected?.Learning;
         var result = context.Session.ObserveFormalDungeonDeath(observation, rewards, growth);
         log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, parsed.ObjectKey, result.Receipt?.Snapshot.Identity, result.Reward, result.ClearFact });
         if (result.Outcome == DungeonRunOutcome.Duplicate) return CommandResult.Handled;
@@ -96,6 +97,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             [new(drop.Reservation.GroundKey, drop.Reservation.RecordSlot, drop.Core, drop.Reservation.X, drop.Reservation.Y)] : [];
         await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, dropRows), "formal_monster_death", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
+        if (previousLearning is not null && SkillPackets.BindingsChanged(previousLearning, receipt.Character.Learning))
+            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_growth_skills", Guard);
         if (result.ClearFact is not null && context.Session.EnableFormalDungeonSettlement(result.MonsterKey) is { } completion)
         {
             bool CompletionGuard() => context.Session.CanPublishDungeonSettlement(completion.Receipt);

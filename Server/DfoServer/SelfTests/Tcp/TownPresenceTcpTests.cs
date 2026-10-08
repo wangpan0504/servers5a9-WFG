@@ -5,9 +5,9 @@ namespace DfoServer.Testing;
 
 internal static class TownPresenceTcpTests
 {
-    public static async Task RunAsync(ServerOptions source, string root)
+    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "presence"), gm: true);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "presence"), gm: true, resources: resources);
         await fixture.StartAsync();
         using (var alpha = Open(fixture, "alpha"))
         using (var beta = Open(fixture, "beta"))

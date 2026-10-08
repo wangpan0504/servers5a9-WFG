@@ -373,8 +373,10 @@ internal static class FormalDungeonPublicationTests
         public bool NameExists(string name) => inner.NameExists(name);
         public Character Create(AccountOwners.Lease owner, NewCharacter character) => inner.Create(owner, character);
         public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back) => inner.Save(owner, expected, position, back);
-        public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitLearning(owner, expected, learning);
+        public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null) => inner.CommitLearning(owner, expected, learning, totalSp, totalTp);
+        public Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitSkillLayout(owner, expected, learning);
         public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
+        public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog);

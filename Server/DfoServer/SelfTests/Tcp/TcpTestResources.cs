@@ -12,10 +12,12 @@ internal sealed class TcpTestResources : IDisposable
     readonly Lazy<CharacterCatalog> characters;
     readonly Lazy<ItemResources> items;
     readonly Lazy<TownCatalog> towns;
+    readonly Lazy<SkillLearningCatalog> learning;
     public PvfArchive Archive => archive.Value;
     public ItemResources ItemResources => items.Value;
     public CharacterCatalog Characters => characters.Value;
     public TownCatalog Towns => towns.Value;
+    public SkillLearningCatalog Learning => learning.Value;
     public bool IsLoaded => archive.IsValueCreated;
 
     public TcpTestResources(ServerOptions options)
@@ -30,6 +32,7 @@ internal sealed class TcpTestResources : IDisposable
         items = new(() => new ItemResources(Archive));
         characters = new(() => CharacterCatalog.Load(Archive, ItemResources.Items));
         towns = new(() => TownCatalog.Load(Archive));
+        learning = new(() => SkillLearningCatalog.Load(Archive));
     }
 
     public void Dispose()

@@ -1,10 +1,18 @@
 using System.Buffers.Binary;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Skills;
 
 namespace DfoServer.Network.Parsers;
 
 internal readonly record struct SkillPurchaseItem(ushort SkillId, byte Decrease, byte Magnitude);
 
 internal sealed record SkillPurchaseRequest(byte Context, IReadOnlyList<SkillPurchaseItem> Items, byte Mode)
+{
+    public uint? BodyChecksum { get; init; }
+    public bool? ChecksumMatches { get; init; }
+}
+
+internal sealed record SkillSlotChangeRequest(byte Context, byte From, byte To, int ContextIndex, byte Mode)
 {
     public uint? BodyChecksum { get; init; }
     public bool? ChecksumMatches { get; init; }
@@ -20,6 +28,64 @@ internal sealed record SkillUseRequest(byte Unknown0, ushort Unknown1, ushort Un
 
 internal static class SkillRequests
 {
+    public static IReadOnlyList<SkillCommandChange> ParseCommands(ReadOnlySpan<byte> body)
+    {
+        if (body.IsEmpty) throw new InvalidDataException("技能指令缺少记录数");
+        int count = body[0], offset = 1;
+        var records = new SkillCommandChange[count];
+        for (int i = 0; i < count; i++)
+        {
+            if (offset + 3 > body.Length) throw new InvalidDataException("技能指令记录截断");
+            ushort id = BinaryPrimitives.ReadUInt16LittleEndian(body[offset..]);
+            int length = body[offset + 2];
+            offset += 3;
+            if (offset + length > body.Length) throw new InvalidDataException("技能指令字节截断");
+            records[i] = new(id, Convert.ToHexString(body.Slice(offset, length)));
+            offset += length;
+        }
+        if (offset != body.Length) throw new InvalidDataException("技能指令有多余正文");
+        return Array.AsReadOnly(records);
+    }
+
+    public static (byte Context, IReadOnlyList<SkillCombo> Combos, byte Mode) ParseCombo(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 2 || body[1] > 6) throw new InvalidDataException("连招上下文或数量截断");
+        byte context = body[0];
+        int count = body[1], offset = 2;
+        var roots = new SkillCombo[count];
+        for (int i = 0; i < count; i++)
+        {
+            if (offset + 3 > body.Length) throw new InvalidDataException("连招根截断");
+            ushort root = BinaryPrimitives.ReadUInt16LittleEndian(body[offset..]);
+            int children = body[offset + 2];
+            offset += 3;
+            if (children > 6 || offset + children * 2 > body.Length) throw new InvalidDataException("连招子技能截断或超限");
+            var ids = new ushort[children];
+            for (int j = 0; j < children; j++) ids[j] = BinaryPrimitives.ReadUInt16LittleEndian(body[(offset + j * 2)..]);
+            offset += children * 2;
+            roots[i] = new(root, Array.AsReadOnly(ids));
+        }
+        if (offset + 1 != body.Length) throw new InvalidDataException("连招正文缺少尾模式或有多余字段");
+        return (context, Array.AsReadOnly(roots), body[offset]);
+    }
+    public static (byte Context, byte Mode) ParseReset(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 2)
+            throw new InvalidDataException("技能重置正文必须是上下文与模式两个字节");
+        return (body[0], body[1]);
+    }
+    public static SkillSlotChangeRequest ParseSlotChange(ReadOnlySpan<byte> body)
+    {
+        if (body.Length is not (8 or 12))
+            throw new InvalidDataException("技能换槽正文必须为8字节或带4字节检查尾");
+        uint? checksum = body.Length == 12 ? BinaryPrimitives.ReadUInt32LittleEndian(body[8..]) : null;
+        return new(body[0], body[1], body[2], BinaryPrimitives.ReadInt32LittleEndian(body[3..]), body[7])
+        {
+            BodyChecksum = checksum,
+            ChecksumMatches = checksum.HasValue ? checksum.Value == ClientBodyChecksum.Compute(body[..8]) : null
+        };
+    }
+
     public static bool TryParseUse(ReadOnlySpan<byte> body, out SkillUseRequest? request)
     {
         request = null;

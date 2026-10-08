@@ -6,6 +6,7 @@ internal sealed class CharacterGrowthCatalog
 {
     public const int MaximumSupportedLevel = 95;
     private readonly SkillCatalog points;
+    public SkillLearningCatalog? Learning { get; private init; }
 
     private CharacterGrowthCatalog(ulong[] experience, SkillCatalog points)
     {
@@ -16,12 +17,12 @@ internal sealed class CharacterGrowthCatalog
     // 0 是初始经验零，后续项是资源中的累计边界。
     public IReadOnlyList<ulong> CumulativeExperience { get; }
 
-    public static CharacterGrowthCatalog Load(PvfArchive pvf)
+    public static CharacterGrowthCatalog Load(PvfArchive pvf, SkillLearningCatalog? learning = null)
     {
         ulong[] experience = ParseExperienceTable(pvf.ReadTokens("character/exptable.tbl"));
         if (experience.Length != 100)
             throw new InvalidDataException("匹配经验表的99项累计边界改变");
-        return new CharacterGrowthCatalog(experience, SkillCatalog.Load(pvf));
+        return new CharacterGrowthCatalog(experience, SkillCatalog.Load(pvf)) { Learning = learning };
     }
 
     public ulong GetLevelStartExperience(int level)
@@ -51,6 +52,14 @@ internal sealed class CharacterGrowthCatalog
             throw new ArgumentOutOfRangeException(nameof(toLevel), "正常成长的目标等级不能降低");
         // 只查询等级表贡献差值，不修改余额，不包含学习扣点、退点或任务来源。
         return checked(points.GetLevelSpTotal(toLevel) - points.GetLevelSpTotal(fromLevel));
+    }
+
+    public int GetTpDelta(int fromLevel, int toLevel)
+    {
+        ValidateLevel(fromLevel);
+        ValidateLevel(toLevel);
+        if (toLevel < fromLevel) throw new ArgumentOutOfRangeException(nameof(toLevel));
+        return checked(points.GetLevelTpTotal(toLevel) - points.GetLevelTpTotal(fromLevel));
     }
 
     internal static ulong[] ParseExperienceTable(ReadOnlySpan<PvfToken> tokens)

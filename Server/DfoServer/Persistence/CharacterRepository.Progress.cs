@@ -6,7 +6,7 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
-    // 进度编辑只改进度列。不增加 revision，这样城镇里的移动保存仍能按原 revision 提交位置。
+    // 单字段进度编辑保留原合同；GM等级、转职入口使用ResetProgress原子重建并递增revision。
     public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit request) => owner.Execute(() =>
     {
         if (request.Account != owner.Account)
@@ -25,6 +25,18 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("角色 revision 或所有者已变化");
         switch (request.Field)
         {
+            case CharacterProgressField.BonusSp:
+                if (!current.Learning.BonusSp.HasValue)
+                    throw new InvalidDataException("旧角色点数来源尚未接管，请先重新进入角色；不覆盖未知余额");
+                cmd.Parameters.AddWithValue("$bonus", request.Primary);
+                cmd.CommandText = "UPDATE character_skill_point_sources SET bonus_sp=$bonus WHERE character_id=$id";
+                if (cmd.ExecuteNonQuery() != 1) throw new InvalidDataException("额外SP来源缺失");
+                break;
+            case CharacterProgressField.ExpertContract:
+                cmd.Parameters.AddWithValue("$expires", DateTimeOffset.UtcNow.ToUnixTimeSeconds() + (request.Primary == 0 ? -1L : request.Primary));
+                cmd.CommandText = "INSERT INTO account_expert_contracts(account,expires_at) VALUES($account,$expires) ON CONFLICT(account) DO UPDATE SET expires_at=$expires";
+                cmd.ExecuteNonQuery();
+                break;
             case CharacterProgressField.Level:
                 cmd.CommandText = "UPDATE characters SET level=$value WHERE id=$id AND account=$account AND revision=$revision";
                 cmd.Parameters.AddWithValue("$value", request.Primary);
@@ -75,6 +87,16 @@ internal sealed partial class CharacterRepository
                     cmd.ExecuteNonQuery();
                     cmd.CommandText = "DELETE FROM character_skill_bindings WHERE character_id=$id AND skill_id=$skill";
                     cmd.ExecuteNonQuery();
+                    if (current.Learning.Initialized)
+                    {
+                        var learning = current.Learning with { Trees = Array.AsReadOnly(current.Learning.Trees.Select(tree => tree with
+                        {
+                            Skills = Array.AsReadOnly(tree.Skills.Where(skill => skill.Id != request.Primary).ToArray()),
+                            Combos = Array.AsReadOnly(tree.Combos.Where(combo => combo.Root != request.Primary).Select(combo => combo with
+                            { Children = Array.AsReadOnly(combo.Children.Where(id => id != request.Primary).ToArray()) }).ToArray())
+                        }).ToArray()) };
+                        WriteLearning(db, tx, current.Id, learning);
+                    }
                     break;
                 }
 
@@ -97,6 +119,37 @@ internal sealed partial class CharacterRepository
         }
 
         var updated = Require(db, tx, owner.Account, request.Name);
+        tx.Commit();
+        return updated;
+    });
+
+    public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => owner.Execute(() =>
+    {
+        plan.Learning.Validate();
+        if (!plan.Learning.Initialized || plan.Level is < 1 or > 95 || plan.GrowType > 127 ||
+            plan.Learning.BonusSp != (plan.Before.Learning.BonusSp ?? 0) || plan.Learning.BonusTp != (plan.Before.Learning.BonusTp ?? 0) ||
+            plan.Learning.ExpertContractExpiresAt != plan.Before.Learning.ExpertContractExpiresAt)
+            throw new InvalidDataException("技能重置规划或额外来源无效");
+        using var db = database.Open();
+        using var tx = db.BeginTransaction();
+        var current = Require(db, tx, owner.Account, plan.Before.Name);
+        if (current.Id != plan.Before.Id || current.Revision != plan.Before.Revision || current.Job != plan.Before.Job ||
+            current.Level != plan.Before.Level || current.GrowType != plan.Before.GrowType ||
+            !current.Skills.SequenceEqual(plan.Before.Skills) || !SameLearning(current.Learning, plan.Before.Learning))
+            throw new InvalidOperationException("角色或技能快照已变化，请重试");
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "UPDATE characters SET level=$level,grow_type=$grow,experience=$experience,revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        cmd.Parameters.AddWithValue("$id", current.Id);
+        cmd.Parameters.AddWithValue("$account", owner.Account);
+        cmd.Parameters.AddWithValue("$revision", current.Revision);
+        cmd.Parameters.AddWithValue("$level", plan.Level);
+        cmd.Parameters.AddWithValue("$grow", plan.GrowType);
+        cmd.Parameters.AddWithValue("$experience", checked((long)plan.Learning.Experience));
+        if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("角色revision或所有者已变化");
+        WriteLearning(db, tx, current.Id, plan.Learning);
+        WriteCanonicalSkills(db, tx, current.Id, plan.Learning);
+        var updated = Require(db, tx, owner.Account, current.Name);
         tx.Commit();
         return updated;
     });

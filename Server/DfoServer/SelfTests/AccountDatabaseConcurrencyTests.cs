@@ -38,7 +38,7 @@ internal static class AccountDatabaseConcurrencyTests
             await using var sender = new GameConnectionSender(other, stream, stop, 0, (_, _, _, _, _) => { });
             using var external = new SqliteConnection("Data Source=" + path + ";Pooling=False");
             external.Open();
-            foreach (int delay in new[] { 100, 250, 1000 })
+            // writer 保持到健康账号完成读取和发送，同步信号替代重复的定时等待。
             {
                 using var writer = external.BeginTransaction(deferred: false);
                 using var entered = new ManualResetEventSlim();
@@ -60,12 +60,11 @@ internal static class AccountDatabaseConcurrencyTests
                     TestCheck.That(!saving.IsCompleted && first.IsCurrent && !stop.IsCancellationRequested,
                         "writer等待期间健康连接完成回复，原写入未提前报告成功");
                     watch.Stop();
-                    await Task.Delay(delay);
                 }
                 finally { writer.Rollback(); }
                 current = await saving.WaitAsync(TimeSpan.FromSeconds(6));
                 TestCheck.That(repository.LoadCharacter(first, current.Slot).Position == current.Position, "writer释放后原操作正常提交");
-                Console.WriteLine($"账号SQL竞争注入{delay}ms：另一账号读取+构帧发送{watch.Elapsed.TotalMilliseconds:F2}ms");
+                Console.WriteLine($"账号SQL竞争：另一账号读取+构帧发送{watch.Elapsed.TotalMilliseconds:F2}ms");
             }
 
             string original = JsonSerializer.Serialize(current);

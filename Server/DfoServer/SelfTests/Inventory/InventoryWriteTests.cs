@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
@@ -143,10 +144,4 @@ internal static class InventoryWriteTests
     }
     static string? ReferenceHash(InventoryItem? item) => item is null ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
         item.Avatar is null && item.Creature is null ? JsonSerializer.Serialize(item.Core) : JsonSerializer.Serialize(new { item.Core, item.Avatar, item.Creature }))));
-    static void Reject<T>(Action action, string message) where T : Exception
-    {
-        try { action(); }
-        catch (T) { TestCheck.That(true, message); return; }
-        throw new Exception(message);
-    }
 }

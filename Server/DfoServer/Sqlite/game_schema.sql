@@ -356,6 +356,14 @@ CREATE TABLE character_dungeon_pickup_receipts(
   FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_loot_receipts(character_id,event_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
+CREATE TABLE character_skill_point_sources(
+  character_id INTEGER PRIMARY KEY,bonus_sp INTEGER NOT NULL CHECK(bonus_sp BETWEEN 0 AND 65535),
+  FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);
+
+CREATE TABLE account_expert_contracts(
+  account TEXT PRIMARY KEY,expires_at INTEGER NOT NULL CHECK(expires_at>=0),
+  FOREIGN KEY(account) REFERENCES accounts(account_id) ON DELETE CASCADE);
+
 CREATE TABLE character_dungeon_settlement_receipts(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
   instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>0),
@@ -376,3 +384,15 @@ CREATE TABLE character_dungeon_settlement_receipts(
   revision INTEGER NOT NULL CHECK(revision>0),
   PRIMARY KEY(character_id,event_id),UNIQUE(character_id,instance_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE character_tp_sources(
+ character_id INTEGER PRIMARY KEY,bonus_tp INTEGER NOT NULL CHECK(bonus_tp BETWEEN 0 AND 65535),
+ FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);
+CREATE TABLE character_skill_commands(
+ character_id INTEGER NOT NULL,context INTEGER NOT NULL CHECK(context IN(0,1)),skill_id INTEGER NOT NULL CHECK(skill_id BETWEEN 0 AND 65535),
+ keys BLOB NOT NULL CHECK(typeof(keys)='blob' AND length(keys) BETWEEN 1 AND 255),
+ PRIMARY KEY(character_id,context,skill_id),FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);
+CREATE TABLE character_skill_combos(
+ character_id INTEGER NOT NULL,context INTEGER NOT NULL CHECK(context IN(0,1)),root_id INTEGER NOT NULL CHECK(root_id BETWEEN 1 AND 32767),
+ children BLOB NOT NULL CHECK(typeof(children)='blob' AND length(children)<=12 AND length(children)%2=0),
+ PRIMARY KEY(character_id,context,root_id),FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);

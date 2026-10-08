@@ -3,7 +3,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -14,7 +13,7 @@ internal static class RepairTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "repair"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "repair"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -69,7 +68,6 @@ internal static class RepairTcpTests
             peer.Expect(1, 23, [0, 19, 0]);
             peer.Barrier();
         }
-        await fixture.StopAsync();
         That(JsonSerializer.Serialize(fixture.Query("SELECT item_uid,list_type,slot_index FROM character_inventory_slots ORDER BY item_uid")) == initialIds,
             "repair never reallocates or moves instances");
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -79,16 +77,15 @@ internal static class RepairTcpTests
             var after = current.Inventory with { Items = current.Inventory.Items.Replace(target, target with { Core = target.Core with { Durability = 0 } }) };
             repo.CommitInventory(owner, current, new(current.Inventory, after, "repair_fixture_damage"));
         }
-        await fixture.StartAsync("repair-restart");
         using (var peer = Open(fixture))
         {
             peer.Select(inventoryNotices: [(0, 251)]);
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_tcp_repair BEFORE UPDATE ON character_inventory_items BEGIN SELECT RAISE(ABORT,'repair failure'); END");
+            fixture.Sql("CREATE TRIGGER fail_tcp_repair BEFORE UPDATE ON character_inventory_items BEGIN SELECT RAISE(ABORT,'repair failure'); END");
             Send(peer, 0, 9, true);
             peer.Closed();
             That(Snapshot() == before, "database failure closes without success or partial repair/debit");
-            Sql("DROP TRIGGER fail_tcp_repair");
+            fixture.Sql("DROP TRIGGER fail_tcp_repair");
         }
         using (var peer = Open(fixture))
         {
@@ -109,14 +106,6 @@ internal static class RepairTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
     }
 
     static void Send(TcpPeer peer, byte list, short slot, bool quick) => peer.Send(23, Build(w =>

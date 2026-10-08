@@ -4,7 +4,6 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -15,7 +14,7 @@ internal static class DisjointTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "disjoint"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "disjoint"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -60,7 +59,6 @@ internal static class DisjointTcpTests
             Receive(peer, 11, -1, 0, [3037, 3332, 10099775]);
             peer.Barrier();
         }
-        await fixture.StopAsync();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single();
@@ -73,16 +71,15 @@ internal static class DisjointTcpTests
             var after = current.Inventory with { Items = current.Inventory.Items.Add(new(0, Bag(3), coat)).Add(new(0, Bag(4), tool)) };
             repo.CommitInventory(owner, current, new(current.Inventory, after, "disjoint_fixture_restore"));
         }
-        await fixture.StartAsync("disjoint-restart");
         using (var peer = Open(fixture))
         {
             CheckWallet(peer.Select(inventoryNotices: [(0, 251)])[4].Body);
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_tcp_disjoint BEFORE INSERT ON currency_audit_log BEGIN SELECT RAISE(ABORT,'disjoint failure'); END");
+            fixture.Sql("CREATE TRIGGER fail_tcp_disjoint BEFORE INSERT ON currency_audit_log BEGIN SELECT RAISE(ABORT,'disjoint failure'); END");
             Send(peer, 3, 4);
             peer.Closed();
             That(Snapshot() == before, "failure during wallet audit rolls back source, tool, wallet and inventory audit without ACK");
-            Sql("DROP TRIGGER fail_tcp_disjoint");
+            fixture.Sql("DROP TRIGGER fail_tcp_disjoint");
         }
         using (var peer = Open(fixture))
         {
@@ -129,21 +126,13 @@ internal static class DisjointTcpTests
             int epic = Entry(full, 365, true), legendary = Entry(full, 364, true);
             That(U32(full, epic + 2) == 10158124 && U32(full, epic + 6) == totals[10158124] &&
                 U32(full, legendary + 2) == 10099775 && U32(full, legendary + 6) == totals[10099775],
-                "epic and legendary wallet rows retain item identity across restart");
+                "epic and legendary wallet rows retain item identity across reconnect");
         }
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT currency_kind,balance FROM account_currency_balances ORDER BY currency_kind")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     static void Send(TcpPeer peer, short slot, short tool) => peer.Send(26, Build(writer =>

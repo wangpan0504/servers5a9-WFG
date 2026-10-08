@@ -129,9 +129,32 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             Selected = updated;
             completed = updated.CompletedQuests.ToHashSet();
         }
+        else if (request.Field == CharacterProgressField.ExpertContract && Selected is { } selected)
+            Selected = selected with { Learning = selected.Learning with { ExpertContractExpiresAt = updated.Learning.ExpertContractExpiresAt } };
 
         return updated;
     });
+
+    public Character ResetProgress(CharacterProgressEdit request, CharacterProgressReset reset)
+    {
+        var captured = owner.Execute(() =>
+        {
+            if (request.Account != owner.Account) throw new InvalidDataException("账号与当前会话不一致");
+            var target = repository.ListRoster(owner).SingleOrDefault(value => string.Equals(value.Name, request.Name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidDataException("角色不存在");
+            var character = repository.LoadCharacter(owner, target.Slot);
+            return (Character: character, Selected, SelectionEpoch);
+        });
+        var plan = reset.Prepare(captured.Character, request);
+        return owner.Execute(() =>
+        {
+            if (!ReferenceEquals(Selected, captured.Selected) || SelectionEpoch != captured.SelectionEpoch)
+                throw new InvalidOperationException("在线角色快照已变化，请重试");
+            var updated = repository.ResetProgress(owner, plan);
+            if (Selected?.Id == updated.Id) Selected = updated;
+            return updated;
+        });
+    }
 
     void Invalidate(string reason)
     {

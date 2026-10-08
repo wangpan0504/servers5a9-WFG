@@ -10,8 +10,8 @@ internal static class TcpRegressionTests
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
         ("packet-capture", (options, root, _) => PacketCaptureTcpTests.RunAsync(options, root)),
-        ("town", (options, root, resources) => TownProtocolTcpTests.RunAsync(options, root, resources.Towns)),
-        ("dungeon-probe", (options, root, _) => DungeonProbeTcpTests.RunAsync(options, root)),
+        ("town", TownProtocolTcpTests.RunAsync),
+        ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
         ("dungeon-settlement", async (_, _, resources) =>
         {
@@ -23,7 +23,7 @@ internal static class TcpRegressionTests
             await FormalDungeonSessionTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             await FormalDungeonPublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         }),
-        ("jobs", (options, root, _) => TownProtocolTcpTests.JobsAsync(options, root)),
+        ("jobs", TownProtocolTcpTests.JobsAsync),
         ("inventory", InventoryTcpTests.RunAsync),
         ("inventory-persistence", (_, _, resources) =>
         {
@@ -31,7 +31,19 @@ internal static class TcpRegressionTests
             DatabaseSchemaTests.Run();
             return Task.CompletedTask;
         }),
-        ("skills", SkillProtocolTcpTests.RunAsync),
+        ("resource-survey", (_, _, resources) =>
+        {
+            DungeonResourceSurveyTests.RunResources(resources.Archive);
+            return Task.CompletedTask;
+        }),
+        ("skills", async (options, root, resources) =>
+        {
+            await SkillProtocolTcpTests.RunAsync(options, root, resources);
+            await SkillExtendedTcpTests.RunAsync(options, root, resources);
+        }),
+        ("skill-slots", SkillQuickSlotsTcpTests.RunAsync),
+        ("skill-material", SkillMaterialTcpTests.RunAsync),
+        ("gm-progress", CharacterProgressTcpTests.RunAsync),
         ("special-containers", SpecialContainerTcpTests.RunAsync),
         ("guild-medals", GuildMedalTcpTests.RunAsync),
         ("currency", CurrencyTcpTests.RunAsync),
@@ -48,13 +60,15 @@ internal static class TcpRegressionTests
         ("booster", BoosterTcpTests.RunAsync),
         ("booster-selection", BoosterSelectionTcpTests.RunAsync),
         ("booster-equipment", BoosterEquipmentTcpTests.RunAsync),
-        ("authentication", (options, root, _) => AuthenticationTcpTests.RunAsync(options, root)),
-        ("native-login", (options, root, _) => NativeLoginTcpTests.RunAsync(options, root)),
-        ("settings", (options, root, _) => ClientSettingsTcpTests.RunAsync(options, root)),
-        ("presence", (options, root, _) => TownPresenceTcpTests.RunAsync(options, root))
+        ("authentication", AuthenticationTcpTests.RunAsync),
+        ("native-login", NativeLoginTcpTests.RunAsync),
+        ("settings", ClientSettingsTcpTests.RunAsync),
+        ("presence", TownPresenceTcpTests.RunAsync)
     ];
 
     public static IEnumerable<string> GroupNames => Groups.Select(group => group.Name);
+    // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
+    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("dungeon-settlement" or "inventory-persistence" or "resource-survey"));
     public static bool IsValidSelection(string selection)
     {
         string[] names = selection.Split(',');
@@ -69,7 +83,7 @@ internal static class TcpRegressionTests
         Directory.CreateDirectory(root);
         Console.WriteLine("C# TCP fixtures: " + root);
         using var resources = new TcpTestResources(options);
-        string[] selected = selection?.Split(',') ?? GroupNames.ToArray();
+        string[] selected = selection?.Split(',') ?? DefaultGroupNames.ToArray();
         foreach (var group in Groups.Where(group => selected.Contains(group.Name, StringComparer.Ordinal)))
         {
             int before = TestCheck.Count;

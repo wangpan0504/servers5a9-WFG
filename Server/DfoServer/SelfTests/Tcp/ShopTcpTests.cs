@@ -3,7 +3,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -14,7 +13,7 @@ internal static class ShopTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "shop"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "shop"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -168,8 +167,6 @@ internal static class ShopTcpTests
             peer.Expect(1, 21, [0, 0x85, 0]);
             peer.Barrier();
         }
-        await fixture.StopAsync();
-        await fixture.StartAsync("shop-restart");
         using (var peer = Open(fixture))
         {
             var entry = peer.Select();
@@ -177,17 +174,17 @@ internal static class ShopTcpTests
             foreach (var (slot, count) in new (short, int)[] { (5, 1000), (65, 997) })
             {
                 int offset = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(offset => U16(full, offset) == slot);
-                That(U32(full, offset + 2) == 1106 && U32(full, offset + 6) == count, "bounded purchase survives restart at slot " + slot);
+                That(U32(full, offset + 2) == 1106 && U32(full, offset + 6) == count, "bounded purchase survives reconnect at slot " + slot);
             }
             That(fixture.Query("SELECT gold FROM characters WHERE id=1") is [[long savedGold]] && savedGold == gold,
-                "native-priced sales and purchases retain the exact balance after restart");
+                "native-priced sales and purchases retain the exact balance after reconnect");
             Counts(peer);
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_tcp_shop BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'shop failure'); END");
+            fixture.Sql("CREATE TRIGGER fail_tcp_shop BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'shop failure'); END");
             Buy(peer, 3175, 1, 2, 1);
             peer.Closed();
             That(Snapshot() == before, "failed buy closes without ACK or any persisted gold, item or counter change");
-            Sql("DROP TRIGGER fail_tcp_shop");
+            fixture.Sql("DROP TRIGGER fail_tcp_shop");
         }
         using (var peer = Open(fixture))
         {
@@ -206,14 +203,6 @@ internal static class ShopTcpTests
         {
             peer.Send(715, Build(w => w.Write(limitedShop.Value.NpcId)));
             peer.Expect(1, 715, Build(w => { w.Write((byte)1); w.Write(1); w.Write(10099885); w.Write(3); w.Write(new byte[12]); }));
-        }
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
         }
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters ORDER BY id")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +

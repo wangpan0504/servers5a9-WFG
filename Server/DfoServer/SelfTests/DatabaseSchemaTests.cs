@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Persistence;
 using DfoServer.Game.Auth;
 using DfoServer.Testing;
@@ -55,6 +56,7 @@ internal static class DatabaseSchemaTests
                 "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
                 "DROP TABLE character_game_settings",
+                "DROP TABLE character_tp_sources", "DROP TABLE character_skill_commands", "DROP TABLE character_skill_combos",
                 "DROP TABLE character_dungeon_growth_receipts",
                 "ALTER TABLE character_dungeon_growth_receipts DROP COLUMN resource_source",
                 "DROP TABLE character_dungeon_state", "DROP TABLE character_dungeon_loot_receipts",
@@ -108,7 +110,7 @@ internal static class DatabaseSchemaTests
 
     private static void VerifyReleasedMigrations(string root)
     {
-        foreach (int oldVersion in new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 })
+        foreach (int oldVersion in new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 })
         {
             string path = Path.Combine(root, $"released-v{oldVersion}.db");
             _ = new CharacterRepository(path);
@@ -121,7 +123,9 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
-                Execute(db, "DROP TABLE character_dungeon_settlement_receipts");
+                Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
+                if (oldVersion < 11) Execute(db, "DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts");
+                if (oldVersion < 10) Execute(db, "DROP TABLE character_dungeon_settlement_receipts");
                 if (oldVersion < 9)
                     Execute(db, "DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts");
                 if (oldVersion < 8) Execute(db, "DROP TABLE character_dungeon_state");
@@ -149,6 +153,12 @@ internal static class DatabaseSchemaTests
                     receipts == (oldVersion >= 3 ? 1 : 0), "真实旧版连续迁移保留v3已有账本，v1/v2只建立空账本");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_state") is 0L,
                     "旧角色迁移不补造key、attempt或附属成长owner");
+                Check(Query(db, "SELECT count(*) FROM character_skill_point_sources") is 0L &&
+                    Query(db, "SELECT count(*) FROM account_expert_contracts") is 0L,
+                    "v11只增加空来源表，不重算旧SP或授予契约");
+                Check(Query(db, "SELECT count(*) FROM character_tp_sources") is 0L &&
+                    Query(db, "SELECT count(*) FROM character_skill_commands") is 0L && Query(db, "SELECT count(*) FROM character_skill_combos") is 0L,
+                    "v12只增加空TP来源、指令及连招表，保留旧角色原有布局");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts") is 0L,
                     "v1至v9升级只增加空通关账本，不合成历史奖励");
                 Check(Query(db, "SELECT rental_points FROM account_wallets WHERE account='migrated'") is long rental &&
@@ -306,12 +316,6 @@ internal static class DatabaseSchemaTests
         throw new InvalidOperationException("FAIL: 仓储接受了错误数据库");
     }
 
-    private static void Reject<T>(Action action, string message) where T : Exception
-    {
-        try { action(); }
-        catch (T) { Check(true, message); return; }
-        throw new InvalidOperationException("FAIL: " + message);
-    }
 
     private static void Check(bool condition, string message) => TestCheck.That(condition, message);
 }

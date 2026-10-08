@@ -4,6 +4,50 @@ namespace DfoServer.Network.Builders;
 
 internal static class SkillPackets
 {
+    public static byte[] Combos(CharacterLearningState state, bool refresh = false)
+    {
+        state.Validate();
+        using var bytes = new MemoryStream();
+        using var writer = new BinaryWriter(bytes);
+        writer.Write((byte)(refresh ? 1 : 0));
+        writer.Write(checked((byte)state.Trees.Count));
+        foreach (var tree in state.Trees.OrderBy(tree => tree.Context))
+        {
+            writer.Write(tree.Context);
+            writer.Write(checked((byte)tree.Combos.Count));
+            foreach (var combo in tree.Combos)
+            {
+                writer.Write(combo.Root);
+                writer.Write(checked((byte)combo.Children.Count));
+                foreach (ushort child in combo.Children) writer.Write(child);
+            }
+        }
+        return bytes.ToArray();
+    }
+    public static bool BindingsChanged(CharacterLearningState before, CharacterLearningState after) =>
+        before.Trees.Count != after.Trees.Count || before.Trees.OrderBy(tree => tree.Context)
+            .Zip(after.Trees.OrderBy(tree => tree.Context)).Any(pair => !pair.First.Skills.SequenceEqual(pair.Second.Skills));
+
+    public static byte[] Reset(byte context) => context <= 1 ? [1, context, 1] :
+        throw new InvalidDataException("重置上下文非法");
+
+    // NOTI66 type2的剩余秒数，同时驱动客户端达人超等级技能状态。
+    public static byte[] ExpertContract(long expiresAt, long now)
+    {
+        using var bytes = new MemoryStream();
+        using var writer = new BinaryWriter(bytes);
+        writer.Write((ushort)2);
+        writer.Write((byte)27);
+        writer.Write(Math.Max(0, expiresAt - now));
+        return bytes.ToArray();
+    }
+    public static byte[] SlotChanged(byte context, byte from, byte to)
+    {
+        if (context > 1 || from >= 204 || to >= 204)
+            throw new InvalidDataException("换槽回复的上下文或槽位非法");
+        return [1, context, from, to];
+    }
+
     public static byte[] Initialized(CharacterLearningState state)
     {
         Validate(state, requireFullTrees: true);
@@ -27,6 +71,13 @@ internal static class SkillPackets
                             Field(skillWriter, 1, skill.Slot);
                             Field(skillWriter, 2, skill.Id);
                             Field(skillWriter, 3, skill.Level);
+                            if (skill.Command.Length > 0)
+                            {
+                                using var keys = new MemoryStream();
+                                using (var keyWriter = new BinaryWriter(keys, System.Text.Encoding.UTF8, leaveOpen: true))
+                                    foreach (byte key in Convert.FromHexString(skill.Command)) Varint(keyWriter, key);
+                                Message(skillWriter, 4, keys.ToArray());
+                            }
                         }
                         Message(treeWriter, 3, skillBytes.ToArray());
                     }
@@ -46,12 +97,12 @@ internal static class SkillPackets
         Validate(state, requireFullTrees: false);
         ArgumentNullException.ThrowIfNull(changes);
         if (context > 1 || mode > 1 || changes.Count is < 1 or > 255 ||
-            changes.Any(skill => skill is null || skill.Slot == byte.MaxValue || skill.Level == 0) ||
+            changes.Any(skill => skill is null || skill.Slot == byte.MaxValue) ||
             changes.Select(skill => skill.Slot).Distinct().Count() != changes.Count ||
             changes.Select(skill => skill.Id).Distinct().Count() != changes.Count)
             throw new InvalidDataException("学习成功回复的上下文、模式或改变列表非法");
         CharacterSkillTree tree = state.Trees.Single(tree => tree.Context == context);
-        if (changes.Any(change => !tree.Skills.Contains(change)))
+        if (changes.Any(change => change.Level == 0 ? tree.Skills.Any(skill => skill.Id == change.Id) : !tree.Skills.Contains(change)))
             throw new InvalidDataException("学习成功改变不匹配已提交绑定");
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -65,7 +116,9 @@ internal static class SkillPackets
             writer.Write(skill.Slot);
             writer.Write(skill.Id);
             writer.Write(skill.Level);
-            writer.Write((byte)0); // 普通切片不伪造 hasExtra 扩展。
+            byte[] keys = Convert.FromHexString(skill.Command);
+            writer.Write((byte)(keys.Length > 0 ? 1 : 0));
+            if (keys.Length > 0) { writer.Write(checked((byte)keys.Length)); writer.Write(keys); }
         }
         writer.Write(mode);
         return stream.ToArray();
@@ -73,7 +126,7 @@ internal static class SkillPackets
 
     public static byte[] Failure(ushort knownCode)
     {
-        if (knownCode is not (0x12 or 0x15 or 0x16))
+        if (knownCode is not (2 or 0x12 or 0x15 or 0x16 or 0xD9))
             throw new InvalidDataException("学习失败回复只能使用已确认错误码");
         return [0, (byte)knownCode, (byte)(knownCode >> 8)];
     }

@@ -38,13 +38,14 @@ internal static class ServerRuntime
         var projection = new TownProjection(towns, characters, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings));
         var inventoryProjection = new InventoryProjection(characters, projection, itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
+        var growth = CharacterGrowthCatalog.Load(pvf, learning);
+        var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
         IGameCommandModule dungeon;
         IGameCommandModule? settlement = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
             var dungeonCatalog = DungeonCatalog.Load(pvf);
-            var growth = CharacterGrowthCatalog.Load(pvf);
             var rooms = DungeonRoomCatalog.Load(pvf);
             var drops = DungeonMonsterDropCatalog.Load(pvf);
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
@@ -113,7 +114,7 @@ internal static class ServerRuntime
         string DevelopmentCommand(string line)
         {
             string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
-                mailbox, itemResources.Items);
+                mailbox, itemResources.Items, progress);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });
             return result;
         }

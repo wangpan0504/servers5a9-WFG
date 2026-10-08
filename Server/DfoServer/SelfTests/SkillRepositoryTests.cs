@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
@@ -135,17 +136,4 @@ internal static class SkillRepositoryTests
             pair.First.Context == pair.Second.Context && pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
             pair.First.Skills.SequenceEqual(pair.Second.Skills));
 
-    private static void Reject<T>(Action action, string name) where T : Exception
-    {
-        try
-        {
-            action();
-        }
-        catch (T)
-        {
-            TestCheck.That(true, name);
-            return;
-        }
-        throw new InvalidOperationException("FAIL expected " + typeof(T).Name + ": " + name);
-    }
 }

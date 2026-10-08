@@ -132,15 +132,14 @@ internal static class SettingsProtocolTests
                 BinaryPrimitives.WriteUInt16LittleEndian(own.AsSpan(slots[i] * 2), (ushort)(bits * 4 + i));
             byte[] raw = Enumerable.Repeat((byte)255, 512).ToArray();
             var projected = ClientSettingsRules.Project(new(account.ToImmutableArray(), raw.ToImmutableArray(), own.ToImmutableArray()));
-            for (int i = 0; i < 102; i++)
-                That(BinaryPrimitives.ReadUInt16LittleEndian(projected.GameOptions.AsSpan().Slice(i * 2, 2)) ==
-                    BinaryPrimitives.ReadUInt16LittleEndian((slots.Contains(i) ? own : account).AsSpan(i * 2)), "角色八项独立，其他所有账号槽不变");
-            That(BinaryPrimitives.ReadUInt16LittleEndian(projected.CharacterOptions.AsSpan().Slice(46 * 2, 2)) == bits * 4 + 5 &&
-                BinaryPrimitives.ReadUInt16LittleEndian(projected.CharacterOptions.AsSpan().Slice(49 * 2, 2)) == ((bits >> 1) & 1),
-                "390两个已确认槽与173当前角色值一致");
-            for (int i = 0; i < 512; i++)
-                if (i is not (92 or 93 or 98 or 99))
-                    That(projected.CharacterOptions[i] == raw[i], "不改变其余508字节及未知角色槽43/48");
+            byte[] expectedMain = account.ToArray();
+            foreach (int slot in slots)
+                own.AsSpan(slot * 2, 2).CopyTo(expectedMain.AsSpan(slot * 2));
+            Bytes(projected.GameOptions.AsSpan(), expectedMain, "角色八项独立，其他所有账号槽不变");
+            byte[] expectedCharacter = raw.ToArray();
+            BinaryPrimitives.WriteUInt16LittleEndian(expectedCharacter.AsSpan(92), (ushort)(bits * 4 + 5));
+            BinaryPrimitives.WriteUInt16LittleEndian(expectedCharacter.AsSpan(98), (ushort)((bits >> 1) & 1));
+            Bytes(projected.CharacterOptions.AsSpan(), expectedCharacter, "只修改已确认槽，不改变其余508字节及未知角色槽43/48");
             byte expectedFlags = (byte)(4 | ((bits & 1) != 0 ? 2 : 0) | ((bits & 4) == 0 ? 8 : 0) | ((bits & 8) == 0 ? 16 : 0));
             That(ClientSettingsRules.VisibilityFlags(projected.GameOptions) == expectedFlags, "三项外观及无关bits匹配16种开关组合");
             That(account.AsSpan().SequenceEqual(Enumerable.Range(0, 204).Select(index => (byte)index).ToArray()), "回放不就地修改账号存档");
@@ -155,10 +154,4 @@ internal static class SettingsProtocolTests
             BinaryPrimitives.ReadUInt16LittleEndian(migrated.GameOptions.AsSpan().Slice(13 * 2, 2)) == 0, "旧角色已保存两项不被账号数据覆盖");
     }
 
-    static void Reject<T>(Action action, string message) where T : Exception
-    {
-        try { action(); }
-        catch (T) { That(true, message); return; }
-        throw new InvalidOperationException("FAIL: " + message);
-    }
 }

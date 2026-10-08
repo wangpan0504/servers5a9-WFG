@@ -14,8 +14,10 @@ internal interface ICharacterRepository
     bool NameExists(string name);
     Character Create(AccountOwners.Lease owner, NewCharacter character);
     Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint);
-    Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning);
+    Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null);
+    Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning);
     Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit);
+    Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
     DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null);

@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Text.Json;
 using System.Security.Cryptography;
 using DfoServer.Game.Accounts;
@@ -341,12 +342,13 @@ internal static class FormalDungeonSessionTests
         {
             using var f = new Fixture("LegacyFormal", towns, characters, learning);
             var original = f.Read();
-            f.Sql("DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts");
+            f.Sql("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts");
             f.Sql("DROP TABLE character_dungeon_loot_receipts");
             f.Sql("DROP TABLE character_dungeon_state");
             f.Sql("PRAGMA user_version=7");
             var legacy = new CharacterRepository(f.Path).LoadCharacter(f.Owner, f.Created.Slot);
-            Check(legacy.DungeonState is null && Same(original with { DungeonState = null }, legacy) &&
+            Check(legacy.DungeonState is null && Same(original with { DungeonState = null,
+                Learning = original.Learning with { BonusSp = null, BonusTp = null } }, legacy) &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_state")) == 0,
                 "真实v7到v8迁移旧角色保持unknown，不改资产或补aux/key");
             f.SelectEntry();
@@ -559,12 +561,6 @@ internal static class FormalDungeonSessionTests
             checked((uint)monster.CandidateLevel), 504, 620, 3, true, new string('A', 64));
     static bool Same(Character first, Character second) => JsonSerializer.Serialize(first) == JsonSerializer.Serialize(second);
     static void Check(bool condition, string name) => TestCheck.That(condition, name);
-    static void Reject<T>(Action action, string name) where T : Exception
-    {
-        try { action(); }
-        catch (T) { Check(true, name); return; }
-        throw new InvalidOperationException("FAIL expected " + typeof(T).Name + ": " + name);
-    }
 
     sealed class Fixture : IDisposable
     {

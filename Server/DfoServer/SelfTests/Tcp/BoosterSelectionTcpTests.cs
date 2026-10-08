@@ -3,7 +3,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.BoosterTcpTests;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -15,7 +14,7 @@ internal static class BoosterSelectionTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-selection"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-selection"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -130,7 +129,6 @@ internal static class BoosterSelectionTcpTests
             That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[15L, 15L]],
                 "four stackable and eleven complete equipment instances persist once");
         }
-        await fixture.StopAsync();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single();
@@ -144,7 +142,6 @@ internal static class BoosterSelectionTcpTests
                     "repository reopen retains each imported reward's complete core and original expiry");
             InventoryService.Commit(repo, owner, current, InventoryRewardGrantService.TryGrantBatch(current, [new(10161354, 1)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces));
         }
-        await fixture.StartAsync("selection-restart");
         using (var peer = Open(fixture))
         {
             byte[] full = peer.Select()[4].Body;
@@ -157,13 +154,13 @@ internal static class BoosterSelectionTcpTests
             Entry(full, 122, 3311, 88, true);
             for (int i = 0; i < imported.Length; i++)
                 That(EquipmentEntry(full, (short)(16 + i), true).SequenceEqual(importedEntries[i]),
-                    "isolated server restart restores imported equipment without resetting its expiry or duplicating a reward");
+                    "reconnect restores imported equipment without resetting its expiry or duplicating a reward");
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_selection BEFORE INSERT ON character_inventory_slots WHEN NEW.slot_index=21 BEGIN SELECT RAISE(ABORT,'selection rollback'); END");
+            fixture.Sql("CREATE TRIGGER fail_selection BEFORE INSERT ON character_inventory_slots WHEN NEW.slot_index=21 BEGIN SELECT RAISE(ABORT,'selection rollback'); END");
             SendSelect(peer, 67, all);
             peer.Closed();
             That(before == Snapshot(), "later reward failure sends no success and rolls back source, earlier reward, revisions, audit and UID sequence");
-            Sql("DROP TRIGGER fail_selection");
+            fixture.Sql("DROP TRIGGER fail_selection");
         }
         using (var peer = Open(fixture))
         {
@@ -186,14 +183,6 @@ internal static class BoosterSelectionTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT list_type,slot_index,item_uid FROM character_inventory_slots ORDER BY slot_index")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
     }
     internal static byte[] EquipmentEntry(byte[] body, short slot, bool full = false)
     {

@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.GameWorld.Dungeons;
 using PvfLib;
 
@@ -7,31 +8,31 @@ internal static class DungeonClearExperienceCatalogTests
 {
     public static void Run()
     {
-        int checks = 0;
+        int checks = Count;
         var catalog = Catalog();
         var dungeon = Dungeon();
         uint[] expectedDifficulty = [130, 200, 250, 300, 400];
         for (byte i = 0; i < expectedDifficulty.Length; i++)
         {
             var reward = catalog.Calculate(dungeon, i, 0);
-            Check(reward.BaseExperience == expectedDifficulty[i] && reward.RankExperience == 0 &&
+            That(reward.BaseExperience == expectedDifficulty[i] && reward.RankExperience == 0 &&
                 reward.TotalExperience == expectedDifficulty[i] && reward.RankBonusIndex == -1,
                 "五难度直接使用PVF倍率，1.30不受float提升误差少一经验");
         }
 
         var level3 = catalog.Calculate(Dungeon(level: 3), 0, 0);
-        Check(level3.BaseExperience == 1300, "按副本基准等级取整数对首项，不使用第二项");
-        Check(catalog.Calculate(Dungeon(level: 2), 0, 0).BaseExperience == 131,
+        That(level3.BaseExperience == 1300, "按副本基准等级取整数对首项，不使用第二项");
+        That(catalog.Calculate(Dungeon(level: 2), 0, 0).BaseExperience == 131,
             "基础经验先完整乘倍率再向下取整");
-        Check(catalog.Calculate(Dungeon(weight: Floating(-0.5f)), 0, 99) == catalog.Calculate(dungeon, 0, 99),
+        That(catalog.Calculate(Dungeon(weight: Floating(-0.5f)), 0, 99) == catalog.Calculate(dungeon, 0, 99),
             "缺失及负权重均采用中性1，来源及结果稳定");
-        Check(catalog.Calculate(Dungeon(weight: Floating(-float.Epsilon)), 0, 99) == catalog.Calculate(dungeon, 0, 99) &&
+        That(catalog.Calculate(Dungeon(weight: Floating(-float.Epsilon)), 0, 99) == catalog.Calculate(dungeon, 0, 99) &&
             catalog.Calculate(Dungeon(weight: Floating(-float.MaxValue)), 0, 99) == catalog.Calculate(dungeon, 0, 99),
             "有限负权重在数值转换前采用中性1，不被decimal范围改变");
-        Check(catalog.Calculate(Dungeon(weight: Integer(2)), 1, 0).BaseExperience == 400,
+        That(catalog.Calculate(Dungeon(weight: Integer(2)), 1, 0).BaseExperience == 400,
             "显式整数权重参与基础经验计算");
         var fractional = catalog.Calculate(Dungeon(level: 2, weight: Floating(0.5f)), 0, 90);
-        Check(fractional.BaseExperience == 65 && fractional.RankExperience == 9 && fractional.TotalExperience == 74,
+        That(fractional.BaseExperience == 65 && fractional.RankExperience == 9 && fractional.TotalExperience == 74,
             "基础与评分分开取整，评分以已取整基础经验为输入");
 
         uint[] scores = [0, 10, 20, 30, 49, 50, 59, 60, 79, 80, 89, 90, 98, 99, uint.MaxValue];
@@ -40,24 +41,24 @@ internal static class DungeonClearExperienceCatalogTests
         for (int i = 0; i < scores.Length; i++)
         {
             var reward = catalog.Calculate(dungeon, 0, scores[i]);
-            Check(reward.RankBonusIndex == indices[i] && reward.RankExperience == bonuses[i] &&
+            That(reward.RankBonusIndex == indices[i] && reward.RankExperience == bonuses[i] &&
                 reward.TotalExperience == 130 + bonuses[i], "评分各边界对应前五档，低档不误加、高档不丢失");
         }
 
-        Check(catalog.GradeForPoint(255) == 99 && catalog.GradeForPoint(99) == 99 && catalog.GradeForPoint(98) == 90,
+        That(catalog.GradeForPoint(255) == 99 && catalog.GradeForPoint(99) == 99 && catalog.GradeForPoint(98) == 90,
             "评分档位使用首个满足的实际阈值，高档及临界点保留");
-        Check(catalog.GradeForPoint(80) == 80 && catalog.GradeForPoint(73) == 60 && catalog.GradeForPoint(49) == 30,
+        That(catalog.GradeForPoint(80) == 80 && catalog.GradeForPoint(73) == 60 && catalog.GradeForPoint(49) == 30,
             "评分档位查询保留中间档及后三档，不等同经验倍率索引");
-        Check(catalog.GradeForPoint(30) == 30 && catalog.GradeForPoint(20) == 20 && catalog.GradeForPoint(10) == 10 &&
+        That(catalog.GradeForPoint(30) == 30 && catalog.GradeForPoint(20) == 20 && catalog.GradeForPoint(10) == 10 &&
             catalog.GradeForPoint(9) == 0 && catalog.GradeForPoint(0) == 0,
             "低分阈值和未命中档位归零");
 
         var highest = catalog.Calculate(dungeon, 0, 99);
-        Check(highest.RuleId == DungeonClearExperienceCatalog.RuleId &&
+        That(highest.RuleId == DungeonClearExperienceCatalog.RuleId &&
             highest.ResourceSource == $"{DungeonClearExperienceCatalog.QuestParameterPath};" +
                 $"{DungeonClearExperienceCatalog.ServerParameterPath};{DungeonClearExperienceCatalog.RankSystemPath};{dungeon.Path}",
             "奖励保存规则版本及四个资源来源，不依赖资源哈希");
-        Check(Catalog(rank: Enumerable.Repeat(Integer(0), 5).ToArray()).Calculate(dungeon, 0, 99).RankExperience == 0,
+        That(Catalog(rank: Enumerable.Repeat(Integer(0), 5).ToArray()).Calculate(dungeon, 0, 99).RankExperience == 0,
             "显式零评分倍率保留零奖励");
 
         Reject<NotSupportedException>(() => catalog.Calculate(Dungeon(level: null), 0, 0), "缺失基准等级拒绝");
@@ -100,20 +101,8 @@ internal static class DungeonClearExperienceCatalogTests
         Reject<InvalidDataException>(() => DungeonClearExperienceCatalog.Parse([], Server(), Grades(), Resolve), "缺失声明拒绝");
         Reject<InvalidDataException>(() => DungeonClearExperienceCatalog.Parse(
             [new(3, 0), Integer(1), Integer(-1), new(3, 0), Integer(2), Integer(-1)], Server(), Grades(), Resolve), "重复声明拒绝");
-        Console.WriteLine($"PASS {checks} 通关经验资源、评分与边界断言");
+        Console.WriteLine($"PASS {Count - checks} 通关经验资源、评分与边界断言");
 
-        void Check(bool value, string name)
-        {
-            checks++;
-            if (!value)
-                throw new InvalidOperationException("FAIL 通关经验: " + name);
-        }
-        void Reject<T>(Action action, string name) where T : Exception
-        {
-            try { action(); }
-            catch (T) { Check(true, name); return; }
-            throw new InvalidOperationException("FAIL expected " + typeof(T).Name + ": " + name);
-        }
     }
 
     private static DungeonClearExperienceCatalog Catalog(PvfToken[]? quest = null, PvfToken[]? difficulty = null,

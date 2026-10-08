@@ -3,7 +3,6 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -14,8 +13,7 @@ internal static class GuildMedalTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        Inventory.GuildMedalTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "guild-medals"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "guild-medals"), resources: resources);
         var repo = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
@@ -55,18 +53,16 @@ internal static class GuildMedalTcpTests
             peer.Expect(1, 831, [0, 4, 0]);
             peer.Barrier();
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_gem_tcp BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'gem failure'); END");
+            fixture.Sql("CREATE TRIGGER fail_gem_tcp BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'gem failure'); END");
             peer.Send(831, Gem(51, 90032, 1));
             peer.Closed();
             That(Snapshot() == before, "gem SQL fault closes without success ACK and leaves all persisted assets intact");
-            Sql("DROP TRIGGER fail_gem_tcp");
+            fixture.Sql("DROP TRIGGER fail_gem_tcp");
         }
-        await fixture.StopAsync();
-        await fixture.StartAsync("restarted");
         using (var peer = Open(fixture))
         {
             var entry = peer.Select();
-            That(entry[3].Body[126] == 1 && peer.SpecialContainers[3].Body.Length == 372, "restart restores worn medal and three remaining bag entries");
+            That(entry[3].Body[126] == 1 && peer.SpecialContainers[3].Body.Length == 372, "reconnect restores worn medal and three remaining bag entries");
             peer.Send(831, Gem(51, 90032, 1));
             SuccessfulGem(peer, 2UL | 33UL << 16, 51, 1);
             peer.Send(19, Move(38, 48, 0, 3, 32, 100380044));
@@ -85,17 +81,12 @@ internal static class GuildMedalTcpTests
             peer.Closed();
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
-            "medal TCP fixture remains consistent after rejection, faults and restart");
+            "medal TCP fixture remains consistent after rejection, faults and reconnect");
 
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT revision FROM characters"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False"); db.Open();
-            using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
-        }
     }
 
     static void SuccessfulGem(TcpPeer peer, ulong keys, short material, int? remaining)

@@ -28,12 +28,67 @@ internal static class SkillPublicationTests
             await CommittedFailureAsync(towns, catalog, characters, root);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: true);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: false);
+            await CommittedMoveFailureAsync(towns, catalog, characters, root);
+            await QueuedReplyAsync(towns, catalog, characters, root, reselect: true, layout: true);
+            await QueuedReplyAsync(towns, catalog, characters, root, reselect: false, layout: true);
         }
         finally
         {
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 技能提交与发布断言");
+    }
+
+    public static async Task RunLayoutAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
+    {
+        int before = TestCheck.Count;
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-layout-publication-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = SkillLearningCatalog.Load(pvf);
+            await CommittedMoveFailureAsync(towns, catalog, characters, root);
+            await QueuedReplyAsync(towns, catalog, characters, root, reselect: true, layout: true);
+            await QueuedReplyAsync(towns, catalog, characters, root, reselect: false, layout: true);
+        }
+        finally { Directory.Delete(root, true); }
+        Console.WriteLine($"PASS {TestCheck.Count - before} 换槽提交后发送失败与过期ACK断言");
+    }
+
+    private static async Task CommittedMoveFailureAsync(TownCatalog towns, SkillLearningCatalog catalog, CharacterCatalog characters, string root)
+    {
+        string path = Path.Combine(root, "move-failed.db");
+        var repository = new CharacterRepository(path);
+        var owners = new AccountOwners();
+        using var owner = owners.Acquire("layout-publication", () => { });
+        var original = repository.Create(owner, SkillRepositoryTests.Fixture("LayoutSend", towns, characters, catalog));
+        var session = new GameSession(repository, towns, owner);
+        session.Select(original.Slot);
+        session.MarkReady();
+        using var log = new ServerLog(root);
+        var commands = new GameCommandRegistry();
+        new SkillHandler(catalog, log).Register(commands);
+        commands.Seal();
+        using var stop = new CancellationTokenSource();
+        using var stream = new FailedOutput(() =>
+        {
+            using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+            db.Open();
+            using var query = db.CreateCommand();
+            query.CommandText = "SELECT slot FROM character_skill_bindings WHERE character_id=$id AND context=0 AND skill_id=5";
+            query.Parameters.AddWithValue("$id", original.Id);
+            TestCheck.That((long)query.ExecuteScalar()! == 6, "ACK28实际写入时独立SQL已见换槽提交");
+        });
+        await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+        var context = new GameConnectionContext(new(5, IPAddress.Loopback, stream, stop), owner, session, sender);
+        await RejectAsync<IOException>(() => commands.DispatchAsync(context, SlotRequest()), "换槽提交后ACK失败传播");
+        var committed = repository.LoadCharacter(owner, original.Slot);
+        TestCheck.That(stream.Writes == 1 && stop.IsCancellationRequested && committed.Revision == original.Revision + 1 &&
+            committed.Learning.Trees[0].Sp == 60 && committed.Learning.Trees[0].Tp == 0 && committed.Skills.SequenceEqual(original.Skills) &&
+            committed.Learning.Trees[0].Skills.Single(skill => skill.Id == 5) == new LearnedSkill(6, 5, 1),
+            "输出失败保留已提交槽位，未改变点数、主技能等级或重跑事务");
+        using var fresh = owners.Acquire(owner.Account, () => { });
+        TestCheck.That(SkillRepositoryTests.Equal(repository.LoadCharacter(fresh, original.Slot), committed), "重连读取已提交布局，不因发送失败重新交换");
     }
 
     private static async Task CommittedFailureAsync(TownCatalog towns, SkillLearningCatalog catalog, CharacterCatalog characters, string root)
@@ -120,17 +175,17 @@ internal static class SkillPublicationTests
         TestCheck.That(packets.Count == 2 && packets.All(packet => packet.Kind == 1 && packet.Opcode == (ushort)CmdPacketType.BUY_SKILL) &&
             packets[0].Body.SequenceEqual(new byte[] { 0, 0x15, 0 }) && packets[1].Body.SequenceEqual(new byte[] { 0, 0x16, 0 }),
             "两次拒绝均仅完整3字节ACK29，没有伪成功或额外刷新");
-        TestCheck.That(await commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1, 3])) == CommandResult.CloseConnection,
-            "未支持mode3请求关闭且不猜失败码");
+        TestCheck.That(await commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1, 3])) == CommandResult.Handled,
+            "未支持mode3不关闭正常连接且不猜失败码");
         await RejectAsync<InvalidDataException>(() => commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1])), "真实Handler短包抛出协议拒绝");
         await RejectAsync<InvalidDataException>(() => commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1, 0, 0])), "真实Handler长包抛出协议拒绝");
         TestCheck.That(packets.Count == 2 && SkillRepositoryTests.Equal(reopened.List(fresh).Single(character => character.Id == zero.Id), before),
             "失败和非法包不改SQLite事实且不发布未知ACK");
     }
 
-    private static async Task QueuedReplyAsync(TownCatalog towns, SkillLearningCatalog catalog, CharacterCatalog characters, string root, bool reselect)
+    private static async Task QueuedReplyAsync(TownCatalog towns, SkillLearningCatalog catalog, CharacterCatalog characters, string root, bool reselect, bool layout = false)
     {
-        var repository = new CharacterRepository(Path.Combine(root, "queued-" + reselect + ".db"));
+        var repository = new CharacterRepository(Path.Combine(root, "queued-" + reselect + "-" + layout + ".db"));
         var owners = new AccountOwners();
         using var owner = owners.Acquire("skill-queued", () => { });
         var original = repository.Create(owner, SkillRepositoryTests.Fixture("QueuedSkill", towns, characters, catalog));
@@ -152,9 +207,11 @@ internal static class SkillPublicationTests
         try
         {
             long revision = session.Selected!.Revision;
-            publication = commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1, 0]));
+            publication = commands.DispatchAsync(context, layout ? SlotRequest() : Request([0, 1, 5, 0, 0, 1, 0]));
             TestCheck.That(session.Selected!.Revision == revision + 1 && !publication.IsCompleted &&
-                repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Sp == 45, "ACK排队前技能已提交且只扣一次");
+                repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Sp == (layout ? 60 : 45) &&
+                (!layout || repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Skills.Single(skill => skill.Id == 5).Slot == 6),
+                "ACK排队前技能改变已提交，布局不扣点");
             if (reselect)
             {
                 session.ReturnToRoster();
@@ -171,10 +228,13 @@ internal static class SkillPublicationTests
         await first.WaitAsync(TimeSpan.FromSeconds(5));
         TestCheck.That(await publication!.WaitAsync(TimeSpan.FromSeconds(5)) == CommandResult.Handled && sent.SequenceEqual(["held"]),
             "重选或GM替换快照后排队的旧ACK不发布");
-        TestCheck.That(repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Sp == 45 && !stop.IsCancellationRequested,
+        TestCheck.That(repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Sp == (layout ? 60 : 45) && !stop.IsCancellationRequested,
             "过期ACK跳过保留提交且不因跳过重扣费用");
-        await commands.DispatchAsync(context, Request([1, 1, 5, 0, 0, 1, 1]));
-        TestCheck.That(sent.SequenceEqual(["held", "skill_purchase_committed"]), "当前快照的新学习正常通过发布检查");
+        await commands.DispatchAsync(context, layout ? new(1, (ushort)CmdPacketType.CHANGE_SKILLSLOT, [0, 6, 0, 255, 255, 255, 255, 0])
+            : Request([1, 1, 5, 0, 0, 1, 1]));
+        TestCheck.That(sent.SequenceEqual(layout ? ["held", "skill_slot_change_committed"] :
+            reselect ? ["held", "skill_purchase_committed"] : ["held", "skill_purchase_committed", "skill_automatic_synchronized"]),
+            "当前快照的新操作正常通过发布检查");
     }
 
     private sealed class HeldOutput : MemoryStream
@@ -192,6 +252,7 @@ internal static class SkillPublicationTests
     }
 
     private static Packet Request(byte[] body) => new(1, (ushort)CmdPacketType.BUY_SKILL, body);
+    private static Packet SlotRequest() => new(1, (ushort)CmdPacketType.CHANGE_SKILLSLOT, [0, 0, 6, 255, 255, 255, 255, 0]);
 
     private static async Task RejectAsync<T>(Func<Task> action, string name) where T : Exception
     {

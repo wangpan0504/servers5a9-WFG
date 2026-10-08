@@ -10,7 +10,7 @@ namespace DfoServer.Network.Projection.Inventory;
 
 internal sealed class InventoryProjection(CharacterCatalog characters, TownProjection town, EpicPieceCatalog pieces)
 {
-    public async Task RefreshAsync(GameConnectionContext context, InventoryResult result)
+    public async Task RefreshAsync(GameConnectionContext context, InventoryResult result, IReadOnlySet<InventorySlot>? acknowledgedSlots = null)
     {
         if (!result.Accepted || result.Plan is not { Changed: true } plan)
             return;
@@ -20,7 +20,8 @@ internal sealed class InventoryProjection(CharacterCatalog characters, TownProje
             return;
         var current = receipt.Character;
         var slots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
-            .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct().ToArray();
+            .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct()
+            .Where(slot => acknowledgedSlots?.Contains(slot) != true).ToArray();
         if (slots.Any(slot => receipt.Index.Find(slot)?.Creature is not null))
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
         foreach (var list in slots.Select(slot => slot.List).Distinct().Order())
@@ -37,7 +38,7 @@ internal sealed class InventoryProjection(CharacterCatalog characters, TownProje
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, characters), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
-                if (CanSend())
+                if (CanSend() && context.Session.Phase == DfoServer.Game.Session.SessionPhase.Town)
                     town.Refresh(context);
                 return true;
             });

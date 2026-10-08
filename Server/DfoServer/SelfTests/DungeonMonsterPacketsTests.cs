@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Development.Dungeons;
 using System.Buffers.Binary;
 using DfoServer.Game.Characters;
@@ -13,48 +14,43 @@ internal static class DungeonMonsterPacketsTests
 {
     public static void Run(PvfArchive pvf)
     {
-        int checks = 0;
-        void Check(bool ok, string name)
-        {
-            checks++;
-            if (!ok) throw new Exception("FAIL: " + name);
-        }
+        int checks = Count;
         var dungeons = DungeonCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
         var character = new Character(0x100, 0, "Monster", 7, new Location(38, 2, 100, 249, 0), null)
         {
             ActiveMainQuests = [new(0, 3145, 1)]
         };
-        Check(DungeonEntryPlan.TryCreate(dungeons, character, 3, 3145, 0, out var entry, out _), "monster fixture uses the actual task maze");
+        That(DungeonEntryPlan.TryCreate(dungeons, character, 3, 3145, 0, out var entry, out _), "monster fixture uses the actual task maze");
         var approvedEntry = entry ?? throw new InvalidDataException("3145怪物构包缺少准入计划");
         foreach (var map in approvedEntry.Maze.MapSpecification!)
         {
             var plan = approvedEntry with { StartMap = map };
             var monsters = DungeonMonsterPlan.Create(rooms, map, character.Id, 0x100);
             byte[] body = DungeonPackets.StartMap(plan, monsters, 0xF1234567);
-            Check(DungeonEntryProbe.BuildStartMap(plan, monsters, 0xF1234567).SequenceEqual(body),
+            That(DungeonEntryProbe.BuildStartMap(plan, monsters, 0xF1234567).SequenceEqual(body),
                 "诊断调用委托同一正式纯Builder，保持完整怪物字节");
             int expectedCount = map.Id switch { 76121 => 4, 76122 => 5, 76123 => 7, 76124 => 5, 76125 => 6, 76126 => 2,
                 _ => throw new InvalidDataException("3145出现未核验房间") };
-            Check(body.Length == 23 + expectedCount * 22 && body[18] == expectedCount, "Client nonempty rows use 22 bytes without losing the signed field");
-            Check(body[0] == map.Position.X && body[1] == map.Position.Y
+            That(body.Length == 23 + expectedCount * 22 && body[18] == expectedCount, "Client nonempty rows use 22 bytes without losing the signed field");
+            That(body[0] == map.Position.X && body[1] == map.Position.Y
                 && BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(14)) == map.Id, "each room retains its own map and grid position");
             using var reader = new BinaryReader(new MemoryStream(body, 19, body.Length - 19));
             var keys = new HashSet<ushort>();
             for (int index = 0; index < expectedCount; index++)
             {
-                Check(reader.ReadUInt16() == 0 && reader.ReadUInt32() == index, "template ordinal and independent prefix retain source order");
+                That(reader.ReadUInt16() == 0 && reader.ReadUInt32() == index, "template ordinal and independent prefix retain source order");
                 ushort key = reader.ReadUInt16();
-                Check(key != character.Id && keys.Add(key), "monster keys do not alias the character or another row");
+                That(key != character.Id && keys.Add(key), "monster keys do not alias the character or another row");
                 byte expectedLevel = map.Id == 76125 && index == 4 ? (byte)1 : (byte)3;
                 byte expectedType = map.Id == 76126 && index == 0 ? (byte)3 : (byte)0;
-                Check(reader.ReadUInt32() == monsters.Monsters[index].MonsterId && reader.ReadByte() == expectedLevel,
+                That(reader.ReadUInt32() == monsters.Monsters[index].MonsterId && reader.ReadByte() == expectedLevel,
                     "monster code and candidate level come from this room's resource");
-                Check(reader.ReadByte() == expectedType && reader.ReadByte() == 0 && reader.ReadByte() == 0
+                That(reader.ReadByte() == expectedType && reader.ReadByte() == 0 && reader.ReadByte() == 0
                     && reader.ReadSByte() == -1 && reader.ReadUInt32() == 0 && reader.ReadByte() == 0,
                     "candidate flags include the mandatory Client signed byte before the u32");
             }
-            Check(reader.ReadBytes(4).SequenceEqual(new byte[] { 0, 0, 0, 255 }) && reader.BaseStream.Position == reader.BaseStream.Length,
+            That(reader.ReadBytes(4).SequenceEqual(new byte[] { 0, 0, 0, 255 }) && reader.BaseStream.Position == reader.BaseStream.Length,
                 "extra list, fog, ridable list and member tail remain aligned after the last actor");
         }
 
@@ -66,7 +62,7 @@ internal static class DungeonMonsterPacketsTests
         };
         var wideMonster = firstMonster with { SourceOrdinal = int.MaxValue, ObjectKey = 0xFEDC, MonsterId = 0x12345678 };
         byte[] wide = DungeonPackets.StartMap(approvedEntry, Single(wideMonster), uint.MaxValue);
-        Check(wide.Length == 45 && wide[18] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(wide.AsSpan(3)) == uint.MaxValue &&
+        That(wide.Length == 45 && wide[18] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(wide.AsSpan(3)) == uint.MaxValue &&
             BinaryPrimitives.ReadUInt32LittleEndian(wide.AsSpan(21)) == int.MaxValue &&
             BinaryPrimitives.ReadUInt16LittleEndian(wide.AsSpan(25)) == 0xFEDC &&
             BinaryPrimitives.ReadUInt32LittleEndian(wide.AsSpan(27)) == 0x12345678,
@@ -88,8 +84,8 @@ internal static class DungeonMonsterPacketsTests
             { Monsters = Array.AsReadOnly(Enumerable.Repeat(firstMonster, 256).ToArray()) }, 1),
             "超过u8数量容量拒绝整包，不截名单");
         byte[] empty = DungeonPackets.StartMap(approvedEntry, firstMonsters with { Monsters = Array.Empty<DungeonPlannedMonster>() }, 1);
-        Check(empty.SequenceEqual(DungeonPackets.StartMap(approvedEntry, 1)), "真正空怪物计划保持完整23B空名单布局");
-        Console.WriteLine($"PASS {checks} dungeon monster packet assertions");
+        That(empty.SequenceEqual(DungeonPackets.StartMap(approvedEntry, 1)), "真正空怪物计划保持完整23B空名单布局");
+        Console.WriteLine($"PASS {Count - checks} dungeon monster packet assertions");
 
         void Reject<T>(Action action, string name) where T : Exception
         {
@@ -102,7 +98,7 @@ internal static class DungeonMonsterPacketsTests
             {
                 rejected = true;
             }
-            Check(rejected, name);
+            That(rejected, name);
         }
     }
 }

@@ -10,8 +10,8 @@ internal sealed partial class InventoryHandler
     async Task<CommandResult> LockAsync(GameConnectionContext context, Packet packet, InventoryLockOperation operation)
     {
         var slot = InventoryRequests.Lock(packet.Body);
-        var result = context.BlocksTownActions ? InventoryResult.Reject(19) :
-            context.Session.MutateInventory(character => inventory.Lock(character, slot, operation), invalidStateError: 19);
+        var result = context.Session.MutateInventory(character => inventory.Lock(character, slot, operation),
+            invalidStateError: 19, requireTown: IsCargo(slot.List));
         await context.Reply((CmdPacketType)packet.Opcode, InventoryLockPackets.Ack(slot, operation, result),
             result.Accepted ? "item_lock_committed" : "item_lock_rejected");
         if (result.Accepted)

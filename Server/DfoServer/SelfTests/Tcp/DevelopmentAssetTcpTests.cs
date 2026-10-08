@@ -8,7 +8,7 @@ internal static class DevelopmentAssetTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "gm-assets"), gm: true);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "gm-assets"), gm: true, resources: resources);
         await fixture.StartAsync();
         string Gm(string command, bool accepted = true)
         {

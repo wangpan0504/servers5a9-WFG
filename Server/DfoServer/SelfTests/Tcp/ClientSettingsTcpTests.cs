@@ -1,4 +1,3 @@
-using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -7,9 +6,9 @@ namespace DfoServer.Testing;
 
 internal static class ClientSettingsTcpTests
 {
-    public static async Task RunAsync(ServerOptions source, string root)
+    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "settings"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "settings"), resources: resources);
         await fixture.StartAsync();
         const string account = "settingsalice", otherAccount = "settingsbob";
         byte[] initial = Payload(204, 7), shared = Payload(204, 31), first = Payload(512, 63), second = Payload(512, 127);
@@ -95,7 +94,7 @@ internal static class ClientSettingsTcpTests
         await fixture.StopAsync();
         string persisted = Settings(fixture);
         await fixture.StartAsync("restart");
-        That(Settings(fixture) == persisted, "独立服务进程重启保留两账号的完整设置");
+        That(Settings(fixture) == persisted, "重建服务和仓储保留两账号的完整设置");
         using (var peer = Open(fixture, account))
         {
             Select(peer, 0, shared, first);
@@ -137,7 +136,7 @@ internal static class ClientSettingsTcpTests
             using var peer = Open(fixture, account);
             Select(peer, 0, shared, first);
             string assets = Assets(fixture), stored = Settings(fixture);
-            Sql(fixture, $"CREATE TRIGGER fail_settings BEFORE UPDATE ON {table} BEGIN SELECT RAISE(ABORT,'settings rollback'); END");
+            fixture.Sql($"CREATE TRIGGER fail_settings BEFORE UPDATE ON {table} BEGIN SELECT RAISE(ABORT,'settings rollback'); END");
             try
             {
                 Save(peer, opcode, payload);
@@ -149,7 +148,7 @@ internal static class ClientSettingsTcpTests
             }
             finally
             {
-                Sql(fixture, "DROP TRIGGER fail_settings");
+                fixture.Sql("DROP TRIGGER fail_settings");
             }
         }
         using (var peer = Open(fixture, account))
@@ -234,7 +233,8 @@ internal static class ClientSettingsTcpTests
             That(Read(ExpectedMain(mainB, echoedA, roleA), 9) == 4321, "一个角色更新公共槽后另一角色得到新公共值，保留自己的八项");
 
             byte previousFlags = Flags(mainA);
-            for (int mask = 0; mask < 16; mask++)
+            // 全组合由纯规则测试覆盖；TCP 验证各独立开关及全开全关的持久化与回放。
+            foreach (int mask in new[] { 0, 1, 2, 4, 8, 15 })
             {
                 mainA = TypedMain(mask, (ushort)(10 + mask), (ushort)(20 + mask), (ushort)(30 + mask), (ushort)(40 + mask));
                 Write(mainA, 9, 4321);
@@ -249,7 +249,7 @@ internal static class ClientSettingsTcpTests
             ReturnSelection(peer);
             Select(peer, 1, mainA, roleB, mainB);
             That(Read(ExpectedMain(mainA, mainB, roleB), 68) == 90 && Read(ExpectedMain(mainA, mainB, roleB), 94) == 70,
-                "另一角色的队员透明度及字体透明度未被16种复选项组合覆盖");
+                "另一角色的队员透明度及字体透明度不受复选项保存影响");
             Exit(peer);
         }
         using (var peer = Open(fixture, account))
@@ -261,7 +261,7 @@ internal static class ClientSettingsTcpTests
         }
         string saved = Settings(fixture);
         await fixture.StopAsync();
-        await fixture.StartAsync("role-restart");
+        await fixture.StartAsync("role-restart", isolatedProcess: true);
         That(Settings(fixture) == saved, "四复选项及四透明度分角色存档在进程重启后完整保留");
         using (var peer = Open(fixture, account))
         {
@@ -385,12 +385,4 @@ internal static class ClientSettingsTcpTests
     static string Assets(TcpTestFixture fixture) => JsonSerializer.Serialize(fixture.Query(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings') ORDER BY name")
         .Select(row => fixture.Query($"SELECT * FROM [{row[0]}] ORDER BY rowid")));
-    static void Sql(TcpTestFixture fixture, string sql)
-    {
-        using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-        db.Open();
-        using var command = db.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
 }

@@ -15,15 +15,24 @@ internal static class FormalDungeonTcpTests
     {
         var growth = CharacterGrowthCatalog.Load(resources.Archive);
         var kills = DungeonKillExperienceCatalog.Load(resources.Archive);
-        await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"), gm: true);
+        await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"), gm: true, resources: resources);
         await fixture.StartAsync();
         byte[]? oldReport = null;
         ulong experience = 0;
         ushort nextKey;
         int picked = 0;
+        byte automaticLevel = resources.Characters.Get(0).Skills.Single(skill => skill.Id == 174).Level;
         using (var peer = Open(fixture))
         {
             peer.Create("FormalTcp");
+            using (var owner = new DfoServer.Game.Accounts.AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            {
+                var repository = new DfoServer.Persistence.CharacterRepository(fixture.Database);
+                var character = repository.LoadCharacter(owner, 0);
+                var items = resources.ItemResources;
+                var grants = new DfoServer.Game.Inventory.Services.InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
+                DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character, grants.Grant(character, [new(1000, 5)]));
+            }
             peer.Select();
             EntryTown(peer);
             var map = Enter(peer);
@@ -33,6 +42,7 @@ internal static class FormalDungeonTcpTests
             {
                 That(U32(map, 14) == ids[room], "正式TCP依匹配3145六房顺序加载");
                 Load(peer);
+                if (room == 0) VerifyDungeonActions(fixture, peer);
                 string beforeMovement = fixture.Snapshot();
                 peer.Send(35, Move(1000, 249));
                 peer.Barrier();
@@ -82,7 +92,7 @@ internal static class FormalDungeonTcpTests
                     That(U16(deathNotice, 0) == key && dropCount is 0 or 1 && deathNotice.Length == 9 + 131 * dropCount &&
                         deathNotice.AsSpan(deathNotice.Length - 5).SequenceEqual(new byte[] { 0, 0, 255, 0, 0 }),
                         "正式死亡投影保留完整可变掉落行及尾部，不将随机零掉落写死");
-                    byte[] notice = peer.Expect(0, 37).Body;
+                    byte[] notice = ReadGrowth();
                     experience += kills.GetExperience(level);
                     byte expectedLevel = 1;
                     while (experience >= growth.GetCumulativeExperienceBoundary(expectedLevel)) expectedLevel++;
@@ -206,7 +216,7 @@ internal static class FormalDungeonTcpTests
             void ReadClear()
             {
                 byte[] result = peer.Expect(0, 34).Body;
-                byte[] exp = peer.Expect(0, 37).Body;
+                byte[] exp = ReadGrowth();
                 byte[] clear = peer.Expect(0, 35).Body;
                 That(result.Length == 16 && result[6] == 90 && U16(result, 9) == peer.Id && exp.Length == 91 &&
                     U32(exp, 9) == clearReward.TotalExperience && clear.Length == 218 && U32(clear, 0) == clearReward.BaseExperience &&
@@ -226,7 +236,7 @@ internal static class FormalDungeonTcpTests
                         if (U32(startMap, offset + 8) == 107000906) continue;
                         peer.Send(39, Death(U16(startMap, offset + 6), peer.Id, startMap[offset + 12]));
                         peer.Expect(0, 38);
-                        experience = U64(peer.Expect(0, 37).Body, 1);
+                        experience = U64(ReadGrowth(), 1);
                     }
                     if (room == ids.Length - 1)
                     {
@@ -239,13 +249,27 @@ internal static class FormalDungeonTcpTests
                     }
                 }
             }
+
+            byte[] ReadGrowth()
+            {
+                byte[] packet = peer.Expect(0, 37).Body;
+                if (packet[0] > automaticLevel)
+                {
+                    var skills = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
+                    That(skills.All(tree => tree.Skills.Single(skill => skill.Id == 174).Level == packet[0]) &&
+                        skills[0].Skills.Single(skill => skill.Id == 5).Slot == 6,
+                        "升级固定技能时跟随完整技能同步，战斗换槽保持稳定");
+                    automaticLevel = packet[0];
+                }
+                return packet;
+            }
         }
         VerifyEntryRecoveryAndJobs(fixture, kills);
         string persisted = fixture.Snapshot("SELECT level,experience FROM characters");
         string inventory = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
         string points = fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context");
         await fixture.StopAsync();
-        await fixture.StartAsync("actual-restart");
+        await fixture.StartAsync("actual-restart", isolatedProcess: true);
         That(fixture.Snapshot("SELECT level,experience FROM characters") == persisted &&
             fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context") == points &&
             fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == inventory,
@@ -265,6 +289,39 @@ internal static class FormalDungeonTcpTests
         Console.WriteLine($"PASS 正式TCP静默拒绝后回城重进、全部职业和转职加载、原生统计合成击杀、六房升级、真实随机拾取{picked}件、重复拒绝及服务重启（非Windows实机；零样本不作拾取覆盖）");
     }
 
+    static void VerifyDungeonActions(TcpTestFixture fixture, TcpPeer peer)
+    {
+        string progress = fixture.Snapshot("SELECT experience,level FROM characters ORDER BY id") +
+            fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") +
+            fixture.Snapshot("SELECT * FROM character_skill_points ORDER BY character_id,context");
+        peer.Send(28, [0, 0, 6, 255, 255, 255, 255, 0]);
+        peer.Expect(1, 28, [1, 0, 0, 6]);
+        peer.Send(29, [0, 1, 5, 0, 0, 1, 0]);
+        peer.Expect(1, 29, [0, 0xD9, 0]);
+        peer.Send(491, [0, 0]);
+        peer.Expect(1, 491, [1, 0, 1]);
+        peer.Expect(0, 19);
+        var row = fixture.Query("SELECT slot_index FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0", peer.Id).Single();
+        short from = Convert.ToInt16(row[0]);
+        const short to = 3;
+        peer.Send(19, Build(writer =>
+        {
+            writer.Write((byte)0); writer.Write(from); writer.Write(1000); writer.Write(0);
+            writer.Write((byte)0); writer.Write(to); writer.Write(0); writer.Write(0); writer.Write(-1); writer.Write((ushort)0);
+        }));
+        peer.Expect(1, 19, Build(writer => { writer.Write((byte)1); writer.Write((byte)0); writer.Write(from); writer.Write(5); writer.Write((byte)0); writer.Write(to); }));
+        peer.Expect(0, 14);
+        peer.Send(713, [0, 3, 0]); peer.Expect(1, 713, [1, 0, 3, 0]);
+        peer.Send(714, [0, 3, 0]); peer.Expect(1, 714, [1, 0, 3, 0]);
+        peer.Barrier();
+        That(progress == fixture.Snapshot("SELECT experience,level FROM characters ORDER BY id") +
+            fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") +
+            fixture.Snapshot("SELECT * FROM character_skill_points ORDER BY character_id,context"),
+            "战斗中换槽、学习拒绝、洗点和背包移动/锁定不改run、经验或SP，后续击杀与结算继续");
+        That(fixture.Query("SELECT slot FROM character_skill_bindings WHERE character_id=$p0 AND context=0 AND skill_id=5", peer.Id) is [[6L]],
+            "战斗中的快捷栏换槽已持久，洗点保留免费技能的已有槽位");
+    }
+
     static void VerifyEntryRecoveryAndJobs(TcpTestFixture fixture, DungeonKillExperienceCatalog kills)
     {
         ushort slot = 1;
@@ -272,7 +329,7 @@ internal static class FormalDungeonTcpTests
         {
             using var peer = Open(fixture);
             peer.Create("FormalJ" + job, job);
-            peer.Select(slot++);
+            peer.Select(slot++, combos: job == 9 ? TcpPeer.StoredCombos(fixture, peer.Id) : null);
             EntryTown(peer);
             if (job == 14)
             {

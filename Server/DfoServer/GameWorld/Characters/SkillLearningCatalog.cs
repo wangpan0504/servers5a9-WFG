@@ -5,6 +5,13 @@ namespace DfoServer.GameWorld.Characters;
 
 internal readonly record struct SkillPrerequisite(ushort SkillId, int Level);
 
+internal enum SkillType
+{
+    Unknown,
+    Active,
+    Passive
+}
+
 internal sealed class SkillLearningDefinition
 {
     private readonly IReadOnlyList<int>? costs;
@@ -12,12 +19,15 @@ internal sealed class SkillLearningDefinition
     private readonly IReadOnlyList<int>? growtypeMaximumLevels;
     private readonly int? requiredLevel;
     private readonly int? requiredLevelRange;
-    private readonly bool supportedType;
     private readonly IReadOnlyList<int>? growtypeFitness;
 
-    internal SkillLearningDefinition(byte job, ushort skillId, string path, bool supportedType,
+    internal SkillLearningDefinition(byte job, ushort skillId, string path, SkillType type,
         int[]? costs, int[]? maximumLevels, int[]? growtypeMaximumLevels, int? requiredLevel,
-        int? requiredLevelRange, SkillPrerequisite[]? prerequisites, int[]? fitness, bool featureSkill, bool comboDeclared, string[] unsupported)
+        int? requiredLevelRange, SkillPrerequisite[]? prerequisites, int[]? fitness, bool featureSkill, bool comboDeclared,
+        string[] unsupported, int? skillClass = null, int? skillFitnessGrowtypeCount = null,
+        int[]? secondGrowtypeMaximumLevels = null, FixedSkillRule? fixedLevel = null,
+        int[]? skillFitnessGrowtypes = null, int[]? skillFitnessSecondGrowtypes = null,
+        bool guildSkill = false, bool expertSkill = false, int[]? tpCosts = null, ushort[]? comboSkills = null, bool commandCustomizing = true)
     {
         growtypeFitness = fitness is null ? null : Array.AsReadOnly(fitness);
         IsFeatureSkill = featureSkill;
@@ -25,7 +35,18 @@ internal sealed class SkillLearningDefinition
         Job = job;
         SkillId = skillId;
         Path = path;
-        this.supportedType = supportedType;
+        Type = type;
+        SkillClass = skillClass;
+        SkillFitnessGrowtypeCount = skillFitnessGrowtypeCount;
+        SecondGrowtypeMaximumLevels = Array.AsReadOnly(secondGrowtypeMaximumLevels ?? new int[12]);
+        FixedLevel = fixedLevel;
+        SkillFitnessGrowtypes = Array.AsReadOnly(skillFitnessGrowtypes ?? []);
+        SkillFitnessSecondGrowtypes = Array.AsReadOnly(skillFitnessSecondGrowtypes ?? []);
+        IsGuildSkill = guildSkill;
+        IsExpertSkill = expertSkill;
+        TpCosts = Array.AsReadOnly(tpCosts ?? []);
+        ComboSkills = Array.AsReadOnly(comboSkills ?? []);
+        CommandCustomizing = commandCustomizing;
         this.costs = costs is null ? null : Array.AsReadOnly(costs);
         this.maximumLevels = maximumLevels is null ? null : Array.AsReadOnly(maximumLevels);
         this.growtypeMaximumLevels = growtypeMaximumLevels is null ? null : Array.AsReadOnly(growtypeMaximumLevels);
@@ -38,18 +59,69 @@ internal sealed class SkillLearningDefinition
     public byte Job { get; }
     public ushort SkillId { get; }
     public string Path { get; }
+    public SkillType Type { get; }
+    public int? SkillClass { get; }
+    public int? SkillFitnessGrowtypeCount { get; }
+    // 分组元数据与 growtype fitness 费用折扣分别读取；缺少声明不猜普通被动组。
+    public int? SlotGroup => Type switch
+    {
+        SkillType.Active => 3,
+        SkillType.Passive when SkillClass == 4 => 2,
+        SkillType.Passive when SkillClass is >= 0 and <= 3 && SkillFitnessGrowtypeCount is int count => count <= 2 ? 1 : 0,
+        // S4A21 的分组越界回退到普通被动组；V31 第五转职资源使用 class=5。
+        SkillType.Passive when SkillClass is >= 5 => 0,
+        _ => null
+    };
     public IReadOnlyList<int>? DeclaredPointCosts => costs;
     public IReadOnlyList<int>? DeclaredMaximumLevels => maximumLevels;
     public IReadOnlyList<int>? DeclaredGrowtypeMaximumLevels => growtypeMaximumLevels;
     public IReadOnlyList<SkillPrerequisite>? Prerequisites { get; }
     public IReadOnlyList<string> UnsupportedFields { get; }
+    public IReadOnlyList<int> TpCosts { get; }
+    public IReadOnlyList<ushort> ComboSkills { get; }
+    public bool CommandCustomizing { get; }
     public bool IsFeatureSkill { get; }
     public bool HasComboDeclaration { get; }
+    public bool IsGuildSkill { get; }
+    public bool IsExpertSkill { get; }
     public IReadOnlyList<int>? DeclaredGrowtypeFitness => growtypeFitness;
+    public IReadOnlyList<int> SecondGrowtypeMaximumLevels { get; }
+    public FixedSkillRule? FixedLevel { get; }
+    public IReadOnlyList<int> SkillFitnessGrowtypes { get; }
+    public IReadOnlyList<int> SkillFitnessSecondGrowtypes { get; }
+    public int GetMaximum(byte growth)
+    {
+        int first = growth & 15, awakening = growth >> 4;
+        if (first > 5 || awakening > 2 || first == 0 && awakening != 0 && Job is not (9 or 10))
+            throw new NotSupportedException("职业成长索引不在普通技能范围");
+        int second = awakening == 0 ? 0 : SecondGrowtypeMaximumLevels[first * 2 + awakening - 1];
+        return Math.Max(growtypeMaximumLevels?[first] ?? 0, second);
+    }
+    public int GetFixedLevel(int characterLevel, byte growth, int contractLevels)
+    {
+        if (IsGuildSkill || IsExpertSkill || IsFeatureSkill || HasComboDeclaration || FixedLevel is not { } rule || requiredLevel is not int required || maximumLevels is null ||
+            characterLevel < required || GetMaximum(growth) == 0 ||
+            !(SkillFitnessGrowtypes.Contains(growth & 15) || SkillFitnessSecondGrowtypes.Any(value => (growth >> 4) >= value)))
+            return 0;
+        int level = (1 + (characterLevel - required) / rule.Interval) * rule.Add;
+        if (rule.AppliesContract)
+            level += contractLevels / rule.Interval;
+        return Math.Min(level, maximumLevels[growth & 15]);
+    }
     // 04234A70、04234ACD 初始化 feature/combo 为零；特殊职业另有技能管理路径。
-    public bool SupportsOrdinarySpLearning => supportedType && Job is not 9 and not 10 && !IsFeatureSkill &&
-        !HasComboDeclaration && growtypeFitness is not null && costs is not null && maximumLevels is not null &&
+    public bool SupportsOrdinarySpLearning => Type is SkillType.Active or SkillType.Passive &&
+        !IsFeatureSkill &&
+        !HasComboDeclaration && !IsGuildSkill && !IsExpertSkill && growtypeFitness is not null && costs is not null && maximumLevels is not null &&
+        (growtypeMaximumLevels is not null || SecondGrowtypeMaximumLevels.Any(value => value > 0)) &&
+        requiredLevel is not null && requiredLevelRange is not null && Prerequisites is not null;
+
+    public bool SupportsTpLearning => IsFeatureSkill && !IsGuildSkill && !HasComboDeclaration &&
+        Type is SkillType.Active or SkillType.Passive && TpCosts.Count > 0 && maximumLevels is not null &&
         growtypeMaximumLevels is not null && requiredLevel is not null && requiredLevelRange is not null && Prerequisites is not null;
+    public bool SupportsPointLearning => SupportsOrdinarySpLearning || SupportsTpLearning;
+    public int GetPointCost(int rank, byte growth) => IsFeatureSkill
+        ? SupportsTpLearning ? TpCosts[Math.Min(rank, TpCosts.Count - 1)] : throw new NotSupportedException("TP费用缺失")
+        : GetOrdinaryResourceSpCost(rank, growth & 15);
 
     public int GetOrdinaryResourceSpCost(int currentLearnedLevel, int growtype)
     {
@@ -91,14 +163,14 @@ internal sealed class SkillLearningDefinition
         if (growtype is < 0 or > 5)
             throw new ArgumentOutOfRangeException(nameof(growtype));
         if (growtypeMaximumLevels is null)
-            throw new NotSupportedException("缺少已确认形状的 growtype maximum level");
+            throw new NotSupportedException("缺少已确认形状的 growtype maximum level: " + Path);
         // 02D4C470 的单表声明。第二转职上限采用另一个 OR 分支，不能称为最终学习上限。
         return growtypeMaximumLevels[growtype];
     }
 
     private void RequireSupportedType()
     {
-        if (!supportedType)
+        if (Type is not (SkillType.Active or SkillType.Passive))
             throw new NotSupportedException("技能 type 缺失或不是已确认的 active/passive 资源形状");
     }
 }
@@ -115,6 +187,24 @@ internal sealed class SkillLearningCatalog
     private readonly PvfArchive pvf;
     private readonly Dictionary<(byte Job, ushort SkillId), string> paths;
     private readonly ConcurrentDictionary<(byte Job, ushort SkillId), SkillLearningDefinition> definitions = new();
+    private readonly ConcurrentDictionary<byte, IReadOnlyList<SkillLearningDefinition>> fixedSkills = new();
+    private SkillGrantCatalog grants = null!;
+    private SkillCatalog points = null!;
+    public IReadOnlyList<CharacterSkill> FreeSkills(byte job, byte growth) =>
+        Array.AsReadOnly(grants.Get(job, growth).Where(skill => paths.ContainsKey((job, skill.Id))).ToArray());
+    public int TotalSp(byte level) => points.GetLevelSpTotal(level);
+    public int TotalTp(byte level) => points.GetLevelTpTotal(level);
+    public IReadOnlyList<SkillLearningDefinition> FixedSkills(byte job) => fixedSkills.GetOrAdd(job, value =>
+    {
+        var result = new List<SkillLearningDefinition>();
+        foreach (var entry in paths.Where(entry => entry.Key.Job == value))
+        {
+            var tokens = pvf.ReadTokens(entry.Value);
+            if (tokens.Any(token => token.Type == 3 && pvf.ResolveString(token.Value) == "[fixed level skill]"))
+                result.Add(Get(value, entry.Key.SkillId));
+        }
+        return result.AsReadOnly();
+    });
 
     private SkillLearningCatalog(PvfArchive pvf, Dictionary<(byte, ushort), string> paths)
     {
@@ -142,19 +232,28 @@ internal sealed class SkillLearningCatalog
             }
         }
 
-        return new SkillLearningCatalog(pvf, paths);
+        var catalog = new SkillLearningCatalog(pvf, paths) { grants = SkillGrantCatalog.Load(pvf), points = SkillCatalog.Load(pvf) };
+        // 成长提交会引用赠技；在装配阶段解码，SQLite writer 内只访问已缓存的定义。
+        foreach (var key in catalog.grants.SkillIds)
+            if (paths.ContainsKey((key.Job, key.Id))) catalog.Get(key.Job, key.Id);
+        for (byte job = 0; job < Lists.Length; job++)
+            catalog.FixedSkills(job);
+        return catalog;
     }
 
     public SkillLearningDefinition Get(byte job, ushort skillId)
     {
         if (!paths.TryGetValue((job, skillId), out string? path))
-            throw new KeyNotFoundException("职业技能列表没有指定ID");
+            throw new KeyNotFoundException($"职业技能列表没有指定ID: {job}/{skillId}");
         return definitions.GetOrAdd((job, skillId), _ => Parse(job, skillId, path, pvf.ReadTokens(path), pvf.ResolveString));
     }
 
     internal static SkillLearningDefinition Parse(byte job, ushort skillId, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
-        string[] tags = ["type", "purchase cost", "maximum level", "growtype maximum level", "required level", "required level range", "pre required skill", "growtype fitness", "feature skill type", "combo set"];
+        string[] tags = ["type", "skill class", "skill fitness growtype", "purchase cost", "maximum level",
+            "growtype maximum level", "required level", "required level range", "pre required skill", "growtype fitness",
+            "feature skill type", "combo set", "second growtype maximum level", "fixed level skill",
+            "interval level", "add level per interval", "is apply contract skillmaster", "skill fitness second growtype", "guild skill", "expert skill", "special purchase cost", "command customizing"];
         var fields = new Dictionary<string, PvfToken[]>(StringComparer.Ordinal);
         var unsupported = new List<string>();
         for (int i = 0; i < tokens.Length; i++)
@@ -169,8 +268,14 @@ internal sealed class SkillLearningCatalog
             while (i < tokens.Length && tokens[i].Type != 3)
                 i++;
             if (!fields.TryAdd(name, tokens[start..i]))
-                throw new InvalidDataException("重复技能学习标签: " + name);
-            if (name is "purchase cost" or "pre required skill")
+            {
+                // 部分资源重复声明分组元数据；含义未闭合，只禁猜新被动组，不影响原有学习字段。
+                if (name is "skill class" or "skill fitness growtype")
+                    unsupported.Add(name);
+                else
+                    throw new InvalidDataException("重复技能学习标签: " + name);
+            }
+            if (name is "purchase cost" or "special purchase cost" or "pre required skill" or "combo set")
             {
                 if (i >= tokens.Length || resolve(tokens[i].Value) != "[/" + name + "]")
                     throw new InvalidDataException("技能学习标签没有结束块: " + name);
@@ -178,10 +283,17 @@ internal sealed class SkillLearningCatalog
             i--;
         }
 
-        bool supportedType = fields.TryGetValue("type", out PvfToken[]? kind) && kind.Length == 1 && kind[0].Type == 6 &&
-            resolve(kind[0].Value) is "[active]" or "[passive]";
-        if (!supportedType)
+        SkillType type = fields.TryGetValue("type", out PvfToken[]? kind) && kind.Length == 1 && kind[0].Type == 6
+            ? resolve(kind[0].Value) switch { "[active]" => SkillType.Active, "[passive]" => SkillType.Passive, _ => SkillType.Unknown }
+            : SkillType.Unknown;
+        if (type == SkillType.Unknown)
             unsupported.Add("type");
+        int? skillClass = fields.ContainsKey("skill class") && !unsupported.Contains("skill class") ? Scalar("skill class") : null;
+        int? skillFitnessGrowtypeCount = unsupported.Contains("skill fitness growtype") ? null :
+            fields.ContainsKey("skill fitness growtype") ? Integers("skill fitness growtype")?.Length : 0;
+        int[]? skillFitness = fields.ContainsKey("skill fitness growtype") && !unsupported.Contains("skill fitness growtype")
+            ? Integers("skill fitness growtype") : [];
+        int[]? secondFitness = fields.ContainsKey("skill fitness second growtype") ? Integers("skill fitness second growtype") : [];
         int[]? costs = Integers("purchase cost");
         if (costs is { Length: 0 })
         {
@@ -191,7 +303,7 @@ internal sealed class SkillLearningCatalog
         int[]? maximum = Integers("maximum level");
         if (maximum is { Length: 1 })
             maximum = Enumerable.Repeat(maximum[0], 6).ToArray();
-        if (maximum is not null && (maximum.Length != 6 || maximum.Any(value => value == 0)))
+        if (maximum is not null && maximum.Length != 6)
         {
             unsupported.Add("maximum level");
             maximum = null;
@@ -222,8 +334,8 @@ internal sealed class SkillLearningCatalog
             featureSkill = feature[0].Value != 0;
         }
         bool comboDeclared = fields.ContainsKey("combo set");
-        if (comboDeclared)
-            unsupported.Add("combo set");
+        int[] combo = comboDeclared ? Integers("combo set")! : [];
+        if (combo.Any(id => id > ushort.MaxValue) || combo.Length > 6) throw new InvalidDataException("连招默认子技能非法");
         SkillPrerequisite[]? prerequisites = null;
         if (pairs is not null)
         {
@@ -233,8 +345,25 @@ internal sealed class SkillLearningCatalog
                 .Select(i => new SkillPrerequisite((ushort)pairs[i * 2], pairs[i * 2 + 1])).ToArray();
         }
 
-        return new SkillLearningDefinition(job, skillId, path, supportedType, costs, maximum, growtype, basis, range,
-            prerequisites, fitness, featureSkill, comboDeclared, unsupported.ToArray());
+        int[]? second = fields.ContainsKey("second growtype maximum level") ? Integers("second growtype maximum level") : new int[12];
+        if (second is null || second.Length > 12 || second.Length % 2 != 0)
+            throw new InvalidDataException("第二成长上限必须为最多六组整数对: " + path);
+        // 枪剑士资源只声明五组，未使用的第六职业保持零。
+        if (second.Length < 12) Array.Resize(ref second, 12);
+        FixedSkillRule? fixedLevel = null;
+        if (fields.ContainsKey("fixed level skill"))
+        {
+            int interval = Scalar("interval level") ?? 0, add = Scalar("add level per interval") ?? 0;
+            int apply = Scalar("is apply contract skillmaster") ?? 0;
+            if (interval <= 0 || add <= 0 || apply is not (0 or 1))
+                throw new InvalidDataException("固定等级技能参数非法");
+            fixedLevel = new(interval, add, apply == 1);
+        }
+        return new SkillLearningDefinition(job, skillId, path, type, costs, maximum, growtype, basis, range,
+            prerequisites, fitness, featureSkill, comboDeclared, unsupported.ToArray(), skillClass, skillFitnessGrowtypeCount, second, fixedLevel,
+            skillFitness, secondFitness, fields.ContainsKey("guild skill"), fields.ContainsKey("expert skill"),
+            fields.ContainsKey("special purchase cost") ? Integers("special purchase cost") : null,
+            combo.Select(id => (ushort)id).ToArray(), !fields.ContainsKey("command customizing") || Scalar("command customizing") != 0);
 
         int[]? Integers(string tag)
         {

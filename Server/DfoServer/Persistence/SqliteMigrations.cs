@@ -33,7 +33,17 @@ internal static class SqliteMigrations
             Execute(db, tx, DungeonLootSchema);
             Execute(db, tx, DungeonPickupSchema);
         }),
-        new(10, "副本通关经验与冻结报告账本", static (db, tx) => Execute(db, tx, DungeonSettlementSchema))
+        new(10, "副本通关经验与冻结报告账本", static (db, tx) => Execute(db, tx, DungeonSettlementSchema)),
+        new(11, "技能额外SP与达人契约来源", static (db, tx) =>
+        {
+            Execute(db, tx, SkillPointSourceSchema);
+            Execute(db, tx, ExpertContractSchema);
+        }),
+        new(12, "TP来源、技能指令和连招", static (db, tx) =>
+        {
+            foreach (string sql in SkillMetadataSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                Execute(db, tx, sql);
+        })
     ];
 
     // 只新增事实账本，不补发存量角色经验或点数。
@@ -57,6 +67,29 @@ internal static class SqliteMigrations
         FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
         """;
     public static int CurrentVersion => Steps.Length == 0 ? BaselineVersion : Steps[^1].Version;
+    private const string SkillMetadataSchema = """
+        CREATE TABLE character_tp_sources(
+         character_id INTEGER PRIMARY KEY,bonus_tp INTEGER NOT NULL CHECK(bonus_tp BETWEEN 0 AND 65535),
+         FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);
+        CREATE TABLE character_skill_commands(
+         character_id INTEGER NOT NULL,context INTEGER NOT NULL CHECK(context IN(0,1)),skill_id INTEGER NOT NULL CHECK(skill_id BETWEEN 0 AND 65535),
+         keys BLOB NOT NULL CHECK(typeof(keys)='blob' AND length(keys) BETWEEN 1 AND 255),
+         PRIMARY KEY(character_id,context,skill_id),FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);
+        CREATE TABLE character_skill_combos(
+         character_id INTEGER NOT NULL,context INTEGER NOT NULL CHECK(context IN(0,1)),root_id INTEGER NOT NULL CHECK(root_id BETWEEN 1 AND 32767),
+         children BLOB NOT NULL CHECK(typeof(children)='blob' AND length(children)<=12 AND length(children)%2=0),
+         PRIMARY KEY(character_id,context,root_id),FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);
+        """;
+    private const string SkillPointSourceSchema = """
+        CREATE TABLE character_skill_point_sources(
+          character_id INTEGER PRIMARY KEY,bonus_sp INTEGER NOT NULL CHECK(bonus_sp BETWEEN 0 AND 65535),
+          FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);
+        """;
+    private const string ExpertContractSchema = """
+        CREATE TABLE account_expert_contracts(
+          account TEXT PRIMARY KEY,expires_at INTEGER NOT NULL CHECK(expires_at>=0),
+          FOREIGN KEY(account) REFERENCES accounts(account_id) ON DELETE CASCADE);
+        """;
     private const string DungeonSettlementSchema = """
         CREATE TABLE character_dungeon_settlement_receipts(
           character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
@@ -185,6 +218,11 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,bonus_tp FROM character_tp_sources LIMIT 0",
+        "SELECT character_id,context,skill_id,keys FROM character_skill_commands LIMIT 0",
+        "SELECT character_id,context,root_id,children FROM character_skill_combos LIMIT 0",
+        "SELECT character_id,bonus_sp FROM character_skill_point_sources LIMIT 0",
+        "SELECT account,expires_at FROM account_expert_contracts LIMIT 0",
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",

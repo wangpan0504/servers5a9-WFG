@@ -5,9 +5,9 @@ namespace DfoServer.Testing;
 
 internal static class AuthenticationTcpTests
 {
-    public static async Task RunAsync(ServerOptions source, string root)
+    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "authentication"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "authentication"), resources: resources);
         await fixture.StartAsync();
         foreach (ushort opcode in new ushort[] { 171, 1, 4 })
         {

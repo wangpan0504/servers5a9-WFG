@@ -18,7 +18,7 @@ internal static partial class InventoryTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "inventory"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "inventory"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var owners = new AccountOwners();
@@ -174,7 +174,7 @@ internal static partial class InventoryTcpTests
             peer.Expect(0, 14);
         }
         await fixture.StopAsync();
-        await fixture.StartAsync("reopened");
+        await fixture.StartAsync("reopened", isolatedProcess: true);
         using (var peer = Open(fixture))
         {
             var packets = peer.Select(1);
@@ -183,14 +183,14 @@ internal static partial class InventoryTcpTests
         That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=2") is [[4L]], "deleted equipment never returns on restart");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]], "TCP inventory database integrity");
         await fixture.StopAsync();
-        await VerifyRulesAsync(source, Path.Combine(root, "inventory-rules"), characters, towns, stack);
-        await VerifyLocksAsync(source, Path.Combine(root, "inventory-locks"), characters, towns);
+        await VerifyRulesAsync(source, Path.Combine(root, "inventory-rules"), characters, towns, stack, resources);
+        await VerifyLocksAsync(source, Path.Combine(root, "inventory-locks"), characters, towns, resources);
         Console.WriteLine("PASS C# TCP inventory: full list, split, merge, quick slot, equip, sort, discard, replay and restart");
     }
 
-    static async Task VerifyRulesAsync(ServerOptions source, string root, CharacterCatalog characters, TownCatalog towns, ItemTemplate stack)
+    static async Task VerifyRulesAsync(ServerOptions source, string root, CharacterCatalog characters, TownCatalog towns, ItemTemplate stack, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, root);
+        await using var fixture = new TcpTestFixture(source, root, resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {

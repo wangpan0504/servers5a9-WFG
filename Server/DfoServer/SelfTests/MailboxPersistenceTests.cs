@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -209,7 +210,7 @@ internal static class MailboxPersistenceTests
     {
         using var f = new Fixture();
         string character = JsonSerializer.Serialize(f.ReadSender() with { DungeonState = null });
-        const string dropSettings = "DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings;";
+        const string dropSettings = "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings;";
         const string dropMail = dropSettings + "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages;";
         f.Execute(dropMail + "DROP TABLE character_dungeon_growth_receipts; ALTER TABLE account_wallets DROP COLUMN rental_points; PRAGMA user_version=1;");
         var upgraded = new CharacterRepository(f.Path);
@@ -358,10 +359,5 @@ internal static class MailboxPersistenceTests
         }
         public void Integrity() => TestCheck.That(Query("PRAGMA integrity_check") is "ok" && Query("SELECT count(*) FROM pragma_foreign_key_check") is 0L, "邮件资产与数据库外键完整");
         public void Dispose() { OtherOwner.Dispose(); ReceiverOwner.Dispose(); SenderOwner.Dispose(); Directory.Delete(root, true); }
-    }
-    static void Reject<T>(Action action, string reason) where T : Exception
-    {
-        try { action(); } catch (T) { TestCheck.That(true, reason); return; }
-        throw new InvalidOperationException("FAIL: " + reason);
     }
 }

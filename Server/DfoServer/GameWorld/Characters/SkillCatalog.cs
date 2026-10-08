@@ -19,8 +19,13 @@ internal sealed class SkillCatalog
 
     public IReadOnlyList<SkillPointTableEntry> SpTable { get; }
 
-    // TP 仅保留原始资源，不把尚未闭合的累计规则或余额当作客户端合同。
     public IReadOnlyList<SkillPointTableEntry> TpTable { get; }
+
+    public int GetLevelTpTotal(int level)
+    {
+        if (level < 1 || level >= cumulativeSp.Length) throw new ArgumentOutOfRangeException(nameof(level));
+        return TpTable.Where(entry => entry.Level <= level).Sum(entry => entry.Value);
+    }
 
     public int GetLevelSpTotal(int level)
     {

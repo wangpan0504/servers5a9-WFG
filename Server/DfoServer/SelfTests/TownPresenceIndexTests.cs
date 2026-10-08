@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Collections.Concurrent;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -37,12 +38,7 @@ internal static class TownPresenceIndexTests
 
     public static async Task RunAsync(TownCatalog towns)
     {
-        int assertions = 0;
-        void Check(bool value, string reason)
-        {
-            if (!value) throw new Exception(reason);
-            assertions++;
-        }
+        int assertions = Count;
         var owners = new AccountOwners();
         var presence = new TownPresence(towns);
         var first = towns.InitialReturn;
@@ -64,19 +60,19 @@ internal static class TownPresenceIndexTests
             for (int i = 0; i < peers.Length; i++)
                 presence.Join(peers[i].Owner, peers[i].Sender, Role(i, i < 3 ? first : second));
             await Drain();
-            Check(peers.All(peer => peer.Sent.Count(row => row.Opcode == 2) == 2), "each scene receives only its own two peers");
+            That(peers.All(peer => peer.Sent.Count(row => row.Opcode == 2) == 2), "each scene receives only its own two peers");
             Clear();
             var source = Role(0, first with { X = (ushort)(first.X + 1) });
             presence.Move(peers[0].Owner, peers[0].Sender, source);
             await Drain();
-            Check(Body(1, 22).Equals(Body(2, 22)), "one movement shares the same read-only body between recipients");
-            Check(Body(1, 22).Span.SequenceEqual(TownPackets.Position(source.Id, source.Position, false)), "shared movement retains committed coordinates");
-            Check(peers.Where((_, i) => i == 0 || i >= 3).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "movement does not reach self or another scene");
+            That(Body(1, 22).Equals(Body(2, 22)), "one movement shares the same read-only body between recipients");
+            That(Body(1, 22).Span.SequenceEqual(TownPackets.Position(source.Id, source.Position, false)), "shared movement retains committed coordinates");
+            That(peers.Where((_, i) => i == 0 || i >= 3).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "movement does not reach self or another scene");
             Clear();
             presence.Refresh(peers[0].Owner, peers[0].Sender, source);
             await Drain();
-            Check(Body(1, 2).Equals(Body(2, 2)) && Body(1, 2).Span.SequenceEqual(TownPackets.Actor(source)), "appearance shares one complete actor body");
-            Check(peers.Skip(3).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "appearance stays within the indexed scene");
+            That(Body(1, 2).Equals(Body(2, 2)) && Body(1, 2).Span.SequenceEqual(TownPackets.Actor(source)), "appearance shares one complete actor body");
+            That(peers.Skip(3).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "appearance stays within the indexed scene");
             foreach (bool refresh in new[] { false, true })
             {
                 bool rejected = false;
@@ -86,7 +82,7 @@ internal static class TownPresenceIndexTests
                     else presence.Move(peers[0].Owner, peers[0].Sender, source with { Id = 999 });
                 }
                 catch (InvalidOperationException) { rejected = true; }
-                Check(rejected, "a current sender cannot change the indexed character identity");
+                That(rejected, "a current sender cannot change the indexed character identity");
             }
             Clear();
             presence.Remove(peers[0].Sender);
@@ -94,27 +90,27 @@ internal static class TownPresenceIndexTests
             source = source with { Position = second };
             presence.Join(peers[0].Owner, peers[0].Sender, source);
             await Drain();
-            Check(peers.Skip(1).Take(2).All(peer => peer.Sent.Count(row => row.Opcode == 6) == 1 && peer.Sent.All(row => row.Opcode != 2)), "scene transfer removes the old indexed membership once");
-            Check(peers.Skip(3).All(peer => peer.Sent.Where(row => row.Opcode != 1347).Select(row => row.Opcode).SequenceEqual(new ushort[] { 2, 3, 22 })), "new scene receives actor, state and position in order");
-            Check(Body(3, 2).Equals(Body(4, 2)) && Body(4, 2).Equals(Body(5, 2)), "joining actor body is shared across the new scene");
+            That(peers.Skip(1).Take(2).All(peer => peer.Sent.Count(row => row.Opcode == 6) == 1 && peer.Sent.All(row => row.Opcode != 2)), "scene transfer removes the old indexed membership once");
+            That(peers.Skip(3).All(peer => peer.Sent.Where(row => row.Opcode != 1347).Select(row => row.Opcode).SequenceEqual(new ushort[] { 2, 3, 22 })), "new scene receives actor, state and position in order");
+            That(Body(3, 2).Equals(Body(4, 2)) && Body(4, 2).Equals(Body(5, 2)), "joining actor body is shared across the new scene");
             Clear();
             source = source with { Position = second with { X = 451 } };
             presence.Move(peers[0].Owner, peers[0].Sender, source);
             await Drain();
-            Check(peers.Skip(1).Take(2).All(peer => peer.Sent.All(row => row.Opcode == 1347)) && peers.Skip(3).All(peer => peer.Sent.Count(row => row.Opcode == 22) == 1), "movement uses only the new scene after transfer");
+            That(peers.Skip(1).Take(2).All(peer => peer.Sent.All(row => row.Opcode == 1347)) && peers.Skip(3).All(peer => peer.Sent.Count(row => row.Opcode == 22) == 1), "movement uses only the new scene after transfer");
             foreach (var peer in peers) presence.Remove(peer.Sender);
             await Drain();
-            Check(presence.Count == 0, "all indexed memberships leave cleanly");
+            That(presence.Count == 0, "all indexed memberships leave cleanly");
             Clear();
             for (int i = 0; i < peers.Length; i++)
                 presence.Join(peers[i].Owner, peers[i].Sender, Role(i, i < 3 ? first : second));
             await Drain();
-            Check(presence.Count == 6 && peers.All(peer => peer.Sent.Count(row => row.Opcode == 2) == 2), "emptied scenes accept reused actor IDs without stale members");
+            That(presence.Count == 6 && peers.All(peer => peer.Sent.Count(row => row.Opcode == 2) == 2), "emptied scenes accept reused actor IDs without stale members");
         }
         finally
         {
             foreach (var peer in peers) await peer.DisposeAsync();
         }
-        Console.WriteLine($"PASS {assertions} 场景索引、跨场景迁移和只读包体共享断言");
+        Console.WriteLine($"PASS {Count - assertions} 场景索引、跨场景迁移和只读包体共享断言");
     }
 }

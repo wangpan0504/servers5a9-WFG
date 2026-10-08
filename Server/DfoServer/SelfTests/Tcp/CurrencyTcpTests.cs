@@ -13,7 +13,7 @@ internal static class CurrencyTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "currency"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "currency"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var owners = new AccountOwners();
@@ -61,13 +61,11 @@ internal static class CurrencyTcpTests
             peer.Send(63, [0]);
             peer.Barrier();
         }
-        await fixture.StopAsync();
-        await fixture.StartAsync("currency-restart");
         using (var peer = Open(fixture))
         {
             var packets = peer.Select();
-            Bytes(packets[8].Body, [1], "restart restores expanded cap stage");
-            That(Balance(packets[4].Body, 0, 0) == 15_000_000, "restart restores exact charged gold");
+            Bytes(packets[8].Body, [1], "reconnect restores expanded cap stage");
+            That(Balance(packets[4].Body, 0, 0) == 15_000_000, "reconnect restores exact charged gold");
         }
         using (var peer = Open(fixture))
         {

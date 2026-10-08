@@ -36,6 +36,13 @@ internal static class InventoryRequests
 
     public static InventoryDeleteRequest Delete(ReadOnlySpan<byte> body)
     {
+        // 材料扣除路径在protobuf后另写客户端状态u8，不计入length；普通丢弃没有此尾部。
+        byte? clientState = null;
+        if (body.Length >= 5 && BinaryPrimitives.ReadUInt32LittleEndian(body) == body.Length - 5)
+        {
+            clientState = body[^1];
+            body = body[..^1];
+        }
         var fields = Fields(body);
         if (Scalar(fields, 1, 18) != 18 || fields.Any(field => field.Number is < 1 or > 4))
             throw new InvalidDataException("Client丢弃消息字段");
@@ -52,7 +59,7 @@ internal static class InventoryRequests
                 throw new InvalidDataException("Client丢弃槽位");
             entries.Add(new(Byte(Scalar(item, 1)), (short)slot, Scalar(item, 3), Scalar(item, 4)));
         }
-        return new((InventoryListType)Byte(Scalar(fields, 2)), entries.ToArray(), Scalar(fields, 4));
+        return new((InventoryListType)Byte(Scalar(fields, 2)), entries.ToArray(), Scalar(fields, 4)) { ClientState = clientState };
     }
 
     sealed record Field(int Number, int Value, byte[]? Bytes = null);

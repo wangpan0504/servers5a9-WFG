@@ -65,7 +65,11 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
 
             if (starter.Count != 5 || starter.Select(item => item.Slot).Distinct().Count() != 5)
                 throw new InvalidDataException("普通初始装备列表不完整");
-            var profile = new CharacterProfile(job, stats, skills) { Equipment = starter.OrderBy(item => item.Slot).ToArray() };
+            var profile = new CharacterProfile(job, stats, skills)
+            {
+                Equipment = starter.OrderBy(item => item.Slot).ToArray(),
+                GrowthOptions = ParseGrowthOptions(text, job)
+            };
             profile.Validate();
             profiles.Add(job, profile);
             int Scaled(string tag, bool optional = false)
@@ -84,5 +88,25 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
         }
 
         return new CharacterCatalog(profiles);
+    }
+
+    internal static CharacterGrowthOptions ParseGrowthOptions(string text, byte job)
+    {
+        string[] names = ReadNames(Section(text, "growtype name"));
+        var stages = Regex.Matches(text, @"\[growtype (\d+)\]");
+        var options = new List<CharacterGrowthOption>();
+        for (int i = 0; i < stages.Count; i++)
+        {
+            int first = int.Parse(stages[i].Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) - 1;
+            if (first < 0 || first >= names.Length || names[first].Length == 0 || names[first].StartsWith("//", StringComparison.Ordinal))
+                continue;
+            string stage = text[stages[i].Index..(i + 1 < stages.Count ? stages[i + 1].Index : text.Length)];
+            string[] awakeningNames = ReadNames(Section(stage, "awakening name")).Take(2).ToArray();
+            // 普通未转职不显示觉醒；黑暗武士和缔造者的成长段使用first=0。
+            if (first == 0 && job is not (9 or 10)) awakeningNames = [];
+            options.Add(new(checked((byte)first), names[first], Array.AsReadOnly(awakeningNames)));
+        }
+        return new(names.FirstOrDefault() ?? "", options.AsReadOnly());
+        static string[] ReadNames(string value) => Regex.Matches(value, "`([^`]*)`").Select(match => match.Groups[1].Value).ToArray();
     }
 }

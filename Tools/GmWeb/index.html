@@ -15,7 +15,8 @@
   h2 { font-size:15px; margin:0 0 12px; }
   label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
   .row { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
-  input { font:inherit; color:inherit; background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-width:0; }
+  input, select { font:inherit; color:inherit; background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 10px; min-width:0; }
+  select { min-width:180px; max-width:100%; }
   input[type="number"] { width:112px; }
   #account, #name { width:180px; }
   #gold, #item-id { width:160px; }
@@ -63,12 +64,17 @@
     <p class="meta" style="margin:8px 0 0">发放到选中角色：装备按件发放，每封最多 10 件；材料按堆叠数量发放，不能超过该道具上限。</p>
     <div class="row" style="margin-top:12px">
       <div><label for="level">等级 1–95</label><input id="level" type="number" min="1" max="95" value="50"></div>
-      <button id="set-level" type="button">设置等级</button>
+      <button id="set-level" type="button">设置等级并重置技能</button>
       <div><label for="story">剧情接受等级 0–95</label><input id="story" type="number" min="0" max="95" value="50"></div>
       <button id="set-story" type="button">设置剧情</button>
-      <div><label for="grow">觉醒字节 0–127</label><input id="grow" type="number" min="0" max="127" value="0"></div>
-      <button id="set-grow" type="button">设置觉醒</button>
     </div>
+    <div class="row" style="margin-top:12px">
+      <div><label for="grow-first">职业分支</label><select id="grow-first" disabled><option>先选择角色</option></select></div>
+      <div><label for="grow-second">觉醒阶段</label><select id="grow-second" disabled><option>先选择角色</option></select></div>
+      <button id="set-grow" type="button" disabled>设置职业并重置技能</button>
+      <span id="grow-base" class="meta"></span>
+    </div>
+    <p class="meta" style="margin:8px 0 0">调整等级或职业会重建双技能树，清除已加点、快捷栏调整、技能指令和连招；SP/TP恢复为该等级的完整额度，保留额外点数。回到选角并再次进入后生效。</p>
     <div class="row" style="margin-top:12px">
       <div><label for="quest">任务编号</label><input id="quest" type="number" min="1" max="29999" value="10100"></div>
       <button id="quest-add" type="button">完成任务</button>
@@ -90,6 +96,8 @@
 const result = document.querySelector("#result");
 const chars = document.querySelector("#chars");
 let defaultAccount = "";
+let growthChoice = null;
+let growthRequest = 0;
 
 function show(text, kind) {
   result.className = kind || "meta";
@@ -118,7 +126,7 @@ function renderList(text) {
     const role = parseSummary(part);
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = `${role.name}  Lv${role.level || "?"}  觉醒 ${role.grow || "0"}`;
+    button.textContent = `${role.name}  Lv${role.level || "?"}${role.sp === undefined ? "" : `  SP ${role.sp} / TP ${role.tp}`}`;
     button.addEventListener("click", () => selectRole(role, button));
     chars.appendChild(button);
     if (role.name === document.querySelector("#name").value.trim()) selectRole(role, button);
@@ -129,11 +137,58 @@ function selectRole(role, button) {
   document.querySelector("#name").value = role.name;
   if (role.level) document.querySelector("#level").value = role.level;
   if (role.story) document.querySelector("#story").value = role.story;
-  if (role.grow) document.querySelector("#grow").value = role.grow;
   if (role.gold !== undefined) document.querySelector("#gold").value = role.gold;
   for (const item of chars.querySelectorAll("button")) item.classList.remove("selected");
   button.classList.add("selected");
+  loadGrowthOptions(role.name);
 }
+
+function clearGrowthOptions() {
+  growthRequest++;
+  growthChoice = null;
+  for (const id of ["#grow-first", "#grow-second"]) {
+    const input = document.querySelector(id);
+    input.replaceChildren(new Option("先选择角色", ""));
+    input.disabled = true;
+  }
+  document.querySelector("#set-grow").disabled = true;
+  document.querySelector("#grow-base").textContent = "";
+}
+
+async function loadGrowthOptions(role) {
+  clearGrowthOptions();
+  const request = growthRequest;
+  const command = line(`grow-options ${role}`);
+  try {
+    const text = await post(command);
+    if (request !== growthRequest || nameValue() !== role || command !== line(`grow-options ${role}`)) return;
+    if (!text.startsWith("OK ")) throw new Error(text);
+    const choice = JSON.parse(text.slice(3));
+    const first = document.querySelector("#grow-first");
+    first.replaceChildren(...choice.options.growTypes.map(grow => new Option(grow.label, String(grow.value))));
+    growthChoice = choice;
+    first.value = choice.options.growTypes.some(grow => grow.value === choice.first) ? String(choice.first) : first.options[0]?.value || "";
+    first.disabled = !first.options.length;
+    document.querySelector("#grow-base").textContent = `基础职业：${choice.options.baseName}`;
+    renderAwakenings(choice.second);
+  } catch (ex) {
+    if (request === growthRequest) show(`职业选项读取失败：${ex.message}`, "bad");
+  }
+}
+
+function renderAwakenings(current = 0) {
+  const first = Number(document.querySelector("#grow-first").value);
+  const grow = growthChoice?.options.growTypes.find(value => value.value === first);
+  const second = document.querySelector("#grow-second");
+  second.replaceChildren(new Option("未觉醒", "0"));
+  for (const [i, label] of (grow?.awakenings || []).entries())
+    second.add(new Option(`${i === 0 ? "一觉" : "二觉"} · ${label}`, String(i + 1)));
+  second.value = current < second.options.length ? String(current) : "0";
+  second.disabled = !grow;
+  document.querySelector("#set-grow").disabled = !grow;
+}
+
+function nameValue() { return document.querySelector("#name").value.trim(); }
 
 async function post(line) {
   const response = await fetch("/api/command", {
@@ -147,6 +202,7 @@ async function post(line) {
 }
 
 async function refresh() {
+  clearGrowthOptions();
   const text = await post(line("list"));
   show(text, text.startsWith("OK ") ? "ok" : "bad");
   if (text.startsWith("OK ")) renderList(text);
@@ -181,7 +237,7 @@ function guard(work) {
     button.disabled = true;
     try { await work(); }
     catch (ex) { show(ex.message, "bad"); }
-    finally { button.disabled = false; }
+    finally { button.disabled = button.id === "set-grow" && !growthChoice; }
   };
 }
 
@@ -212,7 +268,7 @@ document.querySelector("#give-item").addEventListener("click", guard(async () =>
 }));
 document.querySelector("#set-level").addEventListener("click", guard(async () => {
   const role = name();
-  if (role) await run(`level ${role} ${document.querySelector("#level").value}`, true);
+  if (role) await run(`level ${role} ${number("#level")}`, true);
 }));
 document.querySelector("#set-story").addEventListener("click", guard(async () => {
   const role = name();
@@ -220,8 +276,12 @@ document.querySelector("#set-story").addEventListener("click", guard(async () =>
 }));
 document.querySelector("#set-grow").addEventListener("click", guard(async () => {
   const role = name();
-  if (role) await run(`grow ${role} ${document.querySelector("#grow").value}`, true);
+  if (role && growthChoice) await run(`grow ${role} ${document.querySelector("#grow-first").value} ${document.querySelector("#grow-second").value}`, true);
 }));
+document.querySelector("#grow-first").addEventListener("change", () => renderAwakenings());
+document.querySelector("#account").addEventListener("input", clearGrowthOptions);
+document.querySelector("#name").addEventListener("input", clearGrowthOptions);
+document.querySelector("#name").addEventListener("change", () => { if (nameValue()) loadGrowthOptions(nameValue()); });
 document.querySelector("#quest-add").addEventListener("click", guard(async () => {
   const role = name();
   if (role) await run(`quest-add ${role} ${document.querySelector("#quest").value}`, true);

@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.GameWorld.Quests;
 using PvfLib;
 
@@ -9,7 +10,7 @@ internal static class QuestFixedRewardTests
 
     public static void Run()
     {
-        int checks = 0;
+        int checks = Count;
         QuestRewardToken Int(int value) => new(0, value, null);
         QuestRewardToken Job() => new(6, 1, "[job]");
         QuestFixedRewardDefinition Parse(params QuestRewardToken[] tokens) => QuestFixedRewardDefinition.Parse(Fixture(tokens));
@@ -17,27 +18,27 @@ internal static class QuestFixedRewardTests
         // 形状取自3145 reward int data；编号/数量为明确合成输入，检验交错、重复及大整数数量。
         var definition = Parse(Int(1000), Int(2), Int(101010438), Job(), Int(0), Int(-1), Int(1),
             Int(1004), Int(70_000), Int(102040220), Job(), Int(1), Int(-1), Int(3), Int(1000), Int(4));
-        Check(definition.QuestId == 3145 && definition.Path == FirstQuestPath, "定义保留原任务与路径身份");
-        Check(definition.ForJob(0).SequenceEqual(new QuestFixedItemReward[]
+        That(definition.QuestId == 3145 && definition.Path == FirstQuestPath, "定义保留原任务与路径身份");
+        That(definition.ForJob(0).SequenceEqual(new QuestFixedItemReward[]
             { new(1000, 2), new(101010438, 1), new(1004, 70_000), new(1000, 4) }),
             "job0固定条件筛选保留交错顺序、重复行与完整整数数量");
-        Check(definition.ForJob(1).SequenceEqual(new QuestFixedItemReward[]
+        That(definition.ForJob(1).SequenceEqual(new QuestFixedItemReward[]
             { new(1000, 2), new(1004, 70_000), new(102040220, 3), new(1000, 4) }),
             "另一职业仅保留公共及自己的固定奖励");
-        Check(definition.ForJob(15).SequenceEqual(new QuestFixedItemReward[]
+        That(definition.ForJob(15).SequenceEqual(new QuestFixedItemReward[]
             { new(1000, 2), new(1004, 70_000), new(1000, 4) }), "未列职业仍保留全部公共行");
-        Check(Parse(Int(1000), Job(), Int(0), Int(-1), Int(1)).ForJob(1).IsEmpty,
+        That(Parse(Int(1000), Job(), Int(0), Int(-1), Int(1)).ForJob(1).IsEmpty,
             "资源没有该职业匹配行时合法空结果，不补默认物品");
-        Check(Parse().ForJob(0).IsEmpty, "无固定物品token不伪造奖励");
+        That(Parse().ForJob(0).IsEmpty, "无固定物品token不伪造奖励");
 
         QuestRewardToken[] source = [Int(1000), Int(2), Int(1004), Job(), Int(0), Int(-1), Int(3)];
         var frozen = Parse(source);
         var original = source.ToArray();
         source[0] = Int(1047);
         source[6] = Int(99);
-        Check(frozen.Tokens.SequenceEqual(original) && frozen.ForJob(0).SequenceEqual(new QuestFixedItemReward[]
+        That(frozen.Tokens.SequenceEqual(original) && frozen.ForJob(0).SequenceEqual(new QuestFixedItemReward[]
             { new(1000, 2), new(1004, 3) }), "源token变化不污染完整冻结定义及奖励");
-        Check(frozen.Tokens.Length == 7 && frozen.Tokens[3] == Job(), "职业条件token未被过滤或归一化");
+        That(frozen.Tokens.Length == 7 && frozen.Tokens[3] == Job(), "职业条件token未被过滤或归一化");
 
         Reject(() => definition.ForJob(16), "无效角色职业拒绝");
         Reject(() => Parse(Int(0), Int(1)), "物品零编号拒绝");
@@ -58,14 +59,8 @@ internal static class QuestFixedRewardTests
         Reject(() => Parse(Int(1000), Job(), Int(1), Int(-1), Int(1), Int(1004), new(6, 3, "[choice]"), Int(2)),
             "未选职业的后续未知行也拒绝完整定义，不返回前半奖励");
         Reject(() => Parse(Int(1000), Int(1), Int(1004)), "后续残缺公共行拒绝完整定义");
-        Console.WriteLine($"PASS {checks} 固定任务奖励纯规则断言");
+        Console.WriteLine($"PASS {Count - checks} 固定任务奖励纯规则断言");
 
-        void Check(bool value, string name)
-        {
-            checks++;
-            if (!value)
-                throw new InvalidOperationException("FAIL 固定任务奖励: " + name);
-        }
         void Reject(Action action, string name)
         {
             try
@@ -74,7 +69,7 @@ internal static class QuestFixedRewardTests
             }
             catch (InvalidDataException)
             {
-                Check(true, name);
+                That(true, name);
                 return;
             }
             throw new InvalidOperationException("FAIL 固定任务奖励未拒绝: " + name);

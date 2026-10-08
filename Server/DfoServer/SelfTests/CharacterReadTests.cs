@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -94,10 +95,4 @@ internal static class CharacterReadTests
         Console.WriteLine($"PASS {TestCheck.Count - checks} 名册、按需角色与账号共享读取断言");
     }
 
-    static void Reject<T>(Action action, string reason) where T : Exception
-    {
-        try { action(); }
-        catch (T) { TestCheck.That(true, reason); return; }
-        throw new Exception(reason);
-    }
 }

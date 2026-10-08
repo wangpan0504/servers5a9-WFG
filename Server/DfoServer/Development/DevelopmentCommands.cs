@@ -4,6 +4,8 @@ using DfoServer.Persistence;
 using DfoServer.Infrastructure;
 using DfoServer.Game.Mailbox;
 using PvfLib;
+using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Characters;
 
 namespace DfoServer.Development;
 
@@ -51,9 +53,12 @@ internal static class DevelopmentCommands
             Directory.CreateDirectory(options.DataDirectory);
             using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             var repository = new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"));
-            var resources = request.Action == DevelopmentAction.Item ? new ItemResources(pvf) : null;
-            var mailbox = resources is null ? null : new MailboxService(repository, resources.Items, resources.GoldLimits, resources.EpicPieces);
-            Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items));
+            bool reset = request.Action is DevelopmentAction.Level or DevelopmentAction.Grow or DevelopmentAction.GrowOptions;
+            var resources = request.Action == DevelopmentAction.Item || reset ? new ItemResources(pvf) : null;
+            var mailbox = request.Action == DevelopmentAction.Item ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
+            var learning = reset ? SkillLearningCatalog.Load(pvf) : null;
+            var progress = reset ? new CharacterProgressReset(CharacterCatalog.Load(pvf, resources!.Items), learning!, CharacterGrowthCatalog.Load(pvf, learning)) : null;
+            Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items, progress));
             return 0;
         }
         catch (IOException)

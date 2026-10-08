@@ -3,7 +3,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -16,8 +15,7 @@ internal static class SpecialContainerTcpTests
         var itemResources = resources.ItemResources;
         var characters = resources.Characters;
         var towns = resources.Towns;
-        Inventory.SpecialContainerTests.Run(towns, characters, resources.ItemResources);
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "special-containers"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "special-containers"), resources: resources);
         var repo = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -58,14 +56,12 @@ internal static class SpecialContainerTcpTests
             That(JsonSerializer.Serialize(fixture.Query("SELECT item_uid,json_remove(item_core,'$.SealFlag') FROM character_inventory_items ORDER BY item_uid")) == identities,
                 "TCP equip preserves UID and core fields other than artifact unsealing");
         }
-        await fixture.StopAsync();
-        await fixture.StartAsync("restarted");
         using (var peer = Open(fixture))
         {
             var packets = peer.Select();
             That(peer.SpecialContainers[0].Body[0] == 1 && U16(peer.SpecialContainers[1].Body, 3) == 1 && U16(peer.SpecialContainers[2].Body, 1) == 1,
-                "restart retains worn special items without duplicating bag entries");
-            That(packets[3].Body[126] == 3, "restart Player includes avatar, pet and pet equipment together");
+                "reconnect retains worn special items without duplicating bag entries");
+            That(packets[3].Body[126] == 3, "reconnect Player includes avatar, pet and pet equipment together");
             peer.Send(19, Move(1, 2, 0, 3, 0, 101550507));
             peer.Expect(1, 19, Ack(1, 2, 3, 0));
             var avatar = peer.Expect(0, 14).Body;
@@ -80,11 +76,11 @@ internal static class SpecialContainerTcpTests
             peer.Expect(0, 2); peer.Expect(0, 2);
             peer.Barrier();
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_special_tcp BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'special failure'); END");
+            fixture.Sql("CREATE TRIGGER fail_special_tcp BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'special failure'); END");
             peer.Send(19, Move(1, 2, 101550507, 3, 0, 0));
             peer.Closed();
             That(Snapshot() == before, "late TCP failure publishes no success and rolls back avatar core, detail and position");
-            Sql("DROP TRIGGER fail_special_tcp");
+            fixture.Sql("DROP TRIGGER fail_special_tcp");
         }
         using (var peer = Open(fixture))
         {
@@ -100,11 +96,6 @@ internal static class SpecialContainerTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM inventory_avatar_details ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM inventory_creature_details ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT revision FROM characters"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database); db.Open();
-            using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery();
-        }
     }
 
     static byte[] Move(byte fromList, short fromSlot, int fromId, byte toList, short toSlot, int toId) => Build(writer =>

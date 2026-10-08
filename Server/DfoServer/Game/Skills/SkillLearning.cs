@@ -10,6 +10,7 @@ internal enum SkillLearningFailure
     Unsupported,
     MissingSkill,
     InsufficientSp,
+    InsufficientTp,
     Mastered,
     RequiredLevel,
     Prerequisite,
@@ -18,11 +19,17 @@ internal enum SkillLearningFailure
 
 internal sealed record SkillLearningChangeRequest(ushort Id, bool Decrease, byte Magnitude);
 internal sealed record SkillLearningCommand(byte Context, byte Mode, IReadOnlyList<SkillLearningChangeRequest> Entries);
-internal sealed record SkillLearningReceipt(Character Character, long Generation, long SelectionEpoch);
+internal sealed record SkillLearningReceipt(Character Character, long Generation, long SelectionEpoch)
+{
+    public DfoServer.Game.Session.SessionPhase Phase { get; init; } = DfoServer.Game.Session.SessionPhase.Town;
+}
 internal sealed record SkillLearningResult(SkillLearningFailure Failure, CharacterLearningState? State, IReadOnlyList<LearnedSkill> Changes)
 {
     public bool Success => Failure == SkillLearningFailure.None;
     public SkillLearningReceipt? Receipt { get; init; }
+    public bool RequiresSynchronization { get; init; }
+    public int? TotalSp { get; init; }
+    public int? TotalTp { get; init; }
 }
 
 internal static class SkillLearning
@@ -34,7 +41,13 @@ internal static class SkillLearning
         if (character.Skills.Length == 0)
             return Fail(SkillLearningFailure.Unsupported);
         var result = Initialize(character.Job, character.Skills, definition);
-        return result.Success ? result with { State = result.State! with { Experience = character.Learning.Experience } } : result;
+        return result.Success ? result with { State = result.State! with
+        {
+            Experience = character.Learning.Experience,
+            BonusSp = character.Level == 1 ? 0 : null,
+            BonusTp = character.Level == 1 ? 0 : null,
+            ExpertContractExpiresAt = character.Learning.ExpertContractExpiresAt
+        } } : result;
     }
 
     public static SkillLearningResult Initialize(byte job, IReadOnlyList<CharacterSkill> initial, SkillLearningCatalog catalog)
@@ -52,9 +65,9 @@ internal static class SkillLearning
         if (job > 15 || initial.Count > 255 || initial.Any(skill => skill is null || skill.Level == 0) ||
             initial.Select(skill => skill.Id).Distinct().Count() != initial.Count)
             return Fail(SkillLearningFailure.InvalidRequest);
-        if (job is 9 or 10)
-            return Fail(SkillLearningFailure.Unsupported);
+        if (initial.Count == 0) return Fail(SkillLearningFailure.Unsupported);
         var bindings = new List<LearnedSkill>();
+        var occupied = new HashSet<byte>();
         foreach (CharacterSkill skill in initial)
         {
             SkillLearningDefinition resource;
@@ -67,40 +80,62 @@ internal static class SkillLearning
                 return Fail(SkillLearningFailure.MissingSkill);
             }
 
-            // combo 只有六槽容量已确认，槽位选择规则未闭合，不能用普通空槽冒充。
-            if (resource.Job != job || resource.SkillId != skill.Id || resource.HasComboDeclaration)
+            // 黑暗武士的连招根来自CHR，子技能独立保留等级和绑定。
+            if (resource.Job != job || resource.SkillId != skill.Id || resource.HasComboDeclaration && job != 9 ||
+                resource.Type is not (SkillType.Active or SkillType.Passive))
                 return Fail(SkillLearningFailure.Unsupported);
             // CHR 已有绑定不要求可继续学习；固有已精通技能可缺少费用/等级间隔声明。
-            bindings.Add(new(checked((byte)bindings.Count), skill.Id, skill.Level));
+            int slot = SkillSlotAllocator.Allocate(resource, occupied, initial: true);
+            if (slot < 0)
+                return Fail(SkillLearningFailure.Capacity);
+            occupied.Add((byte)slot);
+            bindings.Add(new((byte)slot, skill.Id, skill.Level));
         }
 
+        var combos = bindings.Where(skill => definition(job, skill.Id).HasComboDeclaration).OrderBy(skill => skill.Id).Select(skill =>
+            new SkillCombo(skill.Id, Array.AsReadOnly(definition(job, skill.Id).ComboSkills.Where(id => bindings.Any(value => value.Id == id)).ToArray()))).ToArray();
+        LearnedSkill[] entries = bindings.OrderBy(skill => skill.Slot).ToArray();
         CharacterSkillTree[] trees =
         [
-            new(0, 0, 0, Array.AsReadOnly(bindings.ToArray())),
-            new(1, 0, 0, Array.AsReadOnly(bindings.Select(skill => skill with { }).ToArray()))
+            new(0, 0, 0, Array.AsReadOnly(entries)) { Combos = Array.AsReadOnly(combos) },
+            new(1, 0, 0, Array.AsReadOnly(entries.Select(skill => skill with { }).ToArray())) { Combos = Array.AsReadOnly(combos) }
         ];
-        return new(SkillLearningFailure.None, new(0, Array.AsReadOnly(trees)), EmptyChanges());
+        return new(SkillLearningFailure.None, new(0, Array.AsReadOnly(trees)) { BonusSp = 0, BonusTp = 0 }, EmptyChanges());
     }
 
     public static SkillLearningResult Plan(byte job, byte growtype, byte characterLevel, CharacterLearningState current,
         SkillLearningCommand command, SkillLearningCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
-        return Plan(job, growtype, characterLevel, current, command, catalog.Get);
+        if (!SkillPointLedger.SupportsGrowth(growtype, job) || !current.Initialized)
+            return Fail(SkillLearningFailure.Unsupported);
+        try
+        {
+            int contractLevels = current.ExpertContractExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds() ? 5 : 0;
+            var synchronized = SkillPointLedger.Synchronize(job, growtype, characterLevel, current, catalog, contractLevels);
+            var result = Plan(job, growtype, characterLevel, synchronized, command, catalog.Get,
+                SkillPointLedger.FreeBaseline(job, growtype, characterLevel, catalog, contractLevels),
+                synchronized.BonusSp is int bonus ? checked(catalog.TotalSp(characterLevel) + bonus) : null, contractLevels, synchronized.BonusTp is int tpBonus ? checked(catalog.TotalTp(characterLevel) + tpBonus) : null);
+            return result with { RequiresSynchronization = synchronized.Trees.Zip(current.Trees).Any(pair =>
+                pair.First.Sp != pair.Second.Sp || pair.First.Tp != pair.Second.Tp || !pair.First.Skills.SequenceEqual(pair.Second.Skills)) };
+        }
+        catch (NotSupportedException) { return Fail(SkillLearningFailure.Unsupported); }
+        catch (KeyNotFoundException) { return Fail(SkillLearningFailure.Unsupported); }
     }
 
     internal static SkillLearningResult Plan(byte job, byte growtype, byte characterLevel, CharacterLearningState current,
-        SkillLearningCommand command, Func<byte, ushort, SkillLearningDefinition> definition)
+        SkillLearningCommand command, Func<byte, ushort, SkillLearningDefinition> definition,
+        IReadOnlyDictionary<ushort, byte>? free = null, int? totalSp = null, int contractLevels = 0, int? totalTp = null)
     {
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(definition);
         if (job > 15 || characterLevel is < 1 or > 95 || command.Context > 1 || command.Mode > 1 ||
             command.Entries is null || command.Entries.Count is < 1 or > 255 ||
-            command.Entries.Any(entry => entry is null || entry.Decrease || entry.Magnitude != 1) ||
+            command.Entries.Any(entry => entry is null || entry.Magnitude == 0) ||
             command.Entries.Select(entry => entry.Id).Distinct().Count() != command.Entries.Count)
             return Fail(SkillLearningFailure.InvalidRequest);
-        if (growtype != 0 || job is 9 or 10 || !current.Initialized)
+        if (!SkillPointLedger.SupportsGrowth(growtype, job) || !current.Initialized)
             return Fail(SkillLearningFailure.Unsupported);
         try
         {
@@ -114,7 +149,8 @@ internal static class SkillLearning
         CharacterSkillTree source = current.Trees.Single(tree => tree.Context == command.Context);
         var working = source.Skills.ToDictionary(skill => skill.Id);
         var changes = new List<LearnedSkill>();
-        int sp = source.Sp;
+        int sp = totalSp is int initialTotal ? Math.Max(0, initialTotal - SkillPointLedger.Spent(working.Values, free!, growtype, id => definition(job, id))) : source.Sp;
+        int tp = totalTp is int initialTp ? Math.Max(0, initialTp - SkillPointLedger.Spent(working.Values, free!, growtype, id => definition(job, id), tp: true)) : source.Tp;
         foreach (SkillLearningChangeRequest entry in command.Entries)
         {
             SkillLearningDefinition resource;
@@ -127,20 +163,21 @@ internal static class SkillLearning
                 return Fail(SkillLearningFailure.MissingSkill);
             }
 
-            if (resource.Job != job || resource.SkillId != entry.Id || !resource.SupportsOrdinarySpLearning)
+            if (resource.Job != job || resource.SkillId != entry.Id || !resource.SupportsPointLearning)
                 return Fail(SkillLearningFailure.Unsupported);
             working.TryGetValue(entry.Id, out LearnedSkill? learned);
             int level = learned?.Level ?? 0;
-            // 当前仅 grow0；二转 OR 上限和其他职业状态不参与猜测。
-            int maximum = resource.GetDeclaredGrowtypeMaximum(0);
-            if (level >= maximum || level == byte.MaxValue)
+            if (resource.FixedLevel is not null)
+                return Fail(SkillLearningFailure.Mastered);
+            int maximum = Math.Min(resource.GetMaximum(growtype), resource.DeclaredMaximumLevels![growtype & 15]);
+            int target = entry.Decrease ? Math.Min(level, Math.Max(free?.GetValueOrDefault(entry.Id) ?? 0, level - entry.Magnitude)) : level + entry.Magnitude;
+            if (entry.Decrease && ((resource.IsFeatureSkill ? totalTp : totalSp) is null || learned is null))
                 return Fail(SkillLearningFailure.Unsupported);
-            if (resource.PointCostLevelCount is not int costCount || level >= costCount ||
-                resource.DeclaredMaximumLevels is null || level >= resource.DeclaredMaximumLevels.Max())
-                return Fail(SkillLearningFailure.Unsupported);
-            if (characterLevel < resource.GetOrdinaryNextRequiredCharacterLevel(level))
+            if (target > maximum || target > byte.MaxValue || !entry.Decrease && target <= level)
+                return Fail(SkillLearningFailure.Mastered);
+            if (!entry.Decrease && characterLevel + (resource.IsFeatureSkill ? 0 : contractLevels) < resource.GetOrdinaryNextRequiredCharacterLevel(target - 1))
                 return Fail(SkillLearningFailure.RequiredLevel);
-            foreach (SkillPrerequisite prerequisite in resource.Prerequisites!)
+            foreach (SkillPrerequisite prerequisite in entry.Decrease ? [] : resource.Prerequisites!)
             {
                 if (prerequisite.Level == 0 && !working.ContainsKey(prerequisite.SkillId))
                 {
@@ -162,9 +199,12 @@ internal static class SkillLearning
             }
 
             // 已确认资源百分比截断；角色 +1100 减免状态当前明确为零，不引入额外状态。
-            int cost = resource.GetOrdinaryResourceSpCost(level, 0);
-            if (cost > sp)
-                return Fail(SkillLearningFailure.InsufficientSp);
+            int cost = 0;
+            if (!entry.Decrease)
+                for (int rank = level; rank < target; rank++)
+                    cost = checked(cost + resource.GetPointCost(rank, growtype));
+            if (cost > (resource.IsFeatureSkill ? tp : sp))
+                return Fail(resource.IsFeatureSkill ? SkillLearningFailure.InsufficientTp : SkillLearningFailure.InsufficientSp);
             byte slot;
             if (learned is not null)
             {
@@ -172,26 +212,45 @@ internal static class SkillLearning
             }
             else
             {
+                if (resource.SlotGroup is null)
+                    return Fail(SkillLearningFailure.Unsupported);
                 var used = working.Values.Select(skill => skill.Slot).ToHashSet();
-                int vacant = Enumerable.Range(0, 255).FirstOrDefault(index => !used.Contains((byte)index), -1);
+                int vacant = SkillSlotAllocator.Allocate(resource, used);
                 if (vacant < 0)
                     return Fail(SkillLearningFailure.Capacity);
                 slot = (byte)vacant;
             }
 
-            sp -= cost;
-            var next = new LearnedSkill(slot, entry.Id, checked((byte)(level + 1)));
-            working[entry.Id] = next;
+            if (resource.IsFeatureSkill) tp -= cost; else sp -= cost;
+            var next = new LearnedSkill(slot, entry.Id, checked((byte)target)) { Command = learned?.Command ?? "" };
+            if (target == 0) working.Remove(entry.Id);
+            else working[entry.Id] = next;
             changes.Add(next);
+            if (totalSp is int total)
+                sp = Math.Max(0, total - SkillPointLedger.Spent(working.Values, free!, growtype, id => definition(job, id)));
+            if (totalTp is int tpTotal)
+                tp = Math.Max(0, tpTotal - SkillPointLedger.Spent(working.Values, free!, growtype, id => definition(job, id), tp: true));
         }
 
+        // 先规划整批，再核对降级是否使仍保留的技能失去前置；失败不提交半批。
+        if (command.Entries.Any(entry => entry.Decrease))
+            foreach (var skill in working.Values)
+            {
+                if (skill.Level <= (free?.GetValueOrDefault(skill.Id) ?? 0)) continue;
+                var prerequisites = definition(job, skill.Id).Prerequisites;
+                if (prerequisites is not null && prerequisites.Any(required => required.Level > 0 &&
+                    (!working.TryGetValue(required.SkillId, out var learned) || learned.Level < required.Level)))
+                    return Fail(SkillLearningFailure.Prerequisite);
+            }
+
         var trees = current.Trees.OrderBy(tree => tree.Context).Select(tree => tree.Context == command.Context
-            ? new CharacterSkillTree(tree.Context, checked((ushort)sp), tree.Tp,
-                Array.AsReadOnly(working.Values.OrderBy(skill => skill.Slot).ToArray()))
-            : new CharacterSkillTree(tree.Context, tree.Sp, tree.Tp, Array.AsReadOnly(tree.Skills.ToArray()))).ToArray();
-        var state = new CharacterLearningState(current.Experience, Array.AsReadOnly(trees));
+            ? tree with { Sp = checked((ushort)sp), Tp = checked((ushort)tp),
+                Skills = Array.AsReadOnly(working.Values.OrderBy(skill => skill.Slot).ToArray()),
+                Combos = Array.AsReadOnly(tree.Combos.Select(combo => combo with { Children = Array.AsReadOnly(combo.Children.Where(working.ContainsKey).ToArray()) }).ToArray()) }
+            : tree.Freeze()).ToArray();
+        var state = current with { Trees = Array.AsReadOnly(trees) };
         state.Validate();
-        return new(SkillLearningFailure.None, state, Array.AsReadOnly(changes.ToArray()));
+        return new(SkillLearningFailure.None, state, Array.AsReadOnly(changes.ToArray())) { TotalSp = totalSp, TotalTp = totalTp };
     }
 
     private static IReadOnlyList<LearnedSkill> EmptyChanges() => Array.AsReadOnly(Array.Empty<LearnedSkill>());

@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -22,13 +23,15 @@ internal static class SessionPlanningTests
         Creation();
         Initialization();
         Learning();
+        Layout();
         await CreationRacesAsync();
         await SkillRacesAsync();
+        await LayoutRacesAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} session planning/commit assertions");
     }
 
     static SkillLearningDefinition Resolve(byte job, ushort id) => id == 5
-        ? new(job, id, "synthetic.skl", true, [5], [10, 10, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10],
+        ? new(job, id, "synthetic.skl", SkillType.Active, [5], [10, 10, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10],
             1, 0, [], [0, 0, 0, 0, 0, 0], false, false, [])
         : throw new KeyNotFoundException();
 
@@ -42,7 +45,9 @@ internal static class SessionPlanningTests
         TestCheck.That(draft.InitialLearning.Trees.All(tree => tree.Sp == 0 && tree.Tp == 0 && tree.Skills.Single() == new LearnedSkill(0, 5, 1)),
             "建角双树绑定原技能且不赠点");
         var special = CharacterCreation.Prepare("Special", Profile with { Job = 9 }, f.Towns.Room, f.Towns.InitialReturn, Resolve);
-        TestCheck.That(!special.InitialLearning.Initialized && special.Skills.SequenceEqual(Profile.Skills), "特殊职业保持原技能和未初始化状态");
+        TestCheck.That(special.InitialLearning.Initialized && special.Skills.SequenceEqual(Profile.Skills) &&
+            special.InitialLearning.Trees.All(tree => tree.Skills.Single().Slot == 150 && tree.Sp == 0 && tree.Tp == 0),
+            "特殊职业建角完整初始化，普通子技能使用连招备用区且不赠点");
         var created = f.Session.CreateCharacter("Created", Profile, Resolve);
         TestCheck.That(created.Id > 0 && created.Learning.Initialized && f.Session.Selected is null && f.Repository.List(f.Owner).Length == 2,
             "建角返回持久结果且不隐式选择角色");
@@ -199,6 +204,58 @@ internal static class SessionPlanningTests
         }
     }
 
+    static void Layout()
+    {
+        using var f = new Fixture();
+        f.Select(ready: false);
+        var move = new SkillSlotChangeCommand(0, 3, 6, -1, 0);
+        TestCheck.That(f.Session.MoveSkillSlot(move, (_, _) => throw new Exception("不应解析")).Failure == SkillLearningFailure.Unsupported,
+            "未Ready不解析或提交槽位");
+        f.Session.MarkReady();
+        var before = f.Session.Selected!;
+        var result = f.Session.MoveSkillSlot(move, Resolve);
+        TestCheck.That(result.Success && result.State!.Trees[0].Skills.Single() == new LearnedSkill(6, 5, 1) &&
+            result.State.Trees[1].Skills.Single() == new LearnedSkill(7, 5, 1) && result.State.Experience == 2035 &&
+            result.State.Trees[0].Sp == 40 && result.State.Trees[0].Tp == 4, "会话换槽保持全部余额、等级、另一树与经验");
+        TestCheck.That(Equal(f.Session.Selected!, f.Read()) && f.Session.Selected!.Revision == before.Revision + 1 &&
+            f.Session.CanPublishLearning(result.Receipt!), "换槽返回实际提交且可发布的快照");
+        var unchanged = f.Session.Selected;
+        var noop = f.Session.MoveSkillSlot(new(0, 6, 6, -1, 0), Resolve);
+        TestCheck.That(noop.Success && ReferenceEquals(unchanged, f.Session.Selected), "同槽确认不写库或换快照");
+        Reject<InvalidDataException>(() => f.Repository.CommitSkillLayout(f.Owner, unchanged!, unchanged!.Learning with
+        {
+            Trees = Array.AsReadOnly(unchanged.Learning.Trees.Select(tree => tree with { Sp = (ushort)(tree.Sp - 1) }).ToArray())
+        }), "换槽仓储拒绝偷改SP");
+        f.FailSkillWrite();
+        Reject<SqliteException>(() => f.Session.MoveSkillSlot(new(0, 6, 0, -1, 0), Resolve), "晚期SQL失败传播");
+        TestCheck.That(ReferenceEquals(unchanged, f.Session.Selected) && Equal(unchanged!, f.Read()), "换槽SQL失败回滚绑定、余额及revision");
+    }
+
+    static async Task LayoutRacesAsync()
+    {
+        foreach (string change in new[] { "gm", "reselect", "takeover", "commit" })
+        {
+            using var f = new Fixture();
+            f.Select();
+            var original = f.Session.Selected!;
+            AccountOwners.Lease? replacement = null;
+            try
+            {
+                await RaceAsync(f, definition => f.Session.MoveSkillSlot(new(0, 3, 6, -1, 0), definition), () =>
+                {
+                    if (change == "gm") f.Session.UpdateProgress(new(CharacterProgressField.Level, f.Owner.Account, original.Name, 11, 0));
+                    if (change == "reselect") { f.Session.ReturnToRoster(); f.Select(); }
+                    if (change == "takeover") replacement = f.Owners.Acquire(f.Owner.Account, () => { });
+                    if (change == "commit") f.Session.LearnSkills(Purchase, Resolve);
+                });
+                var saved = f.Repository.LoadCharacter(replacement ?? f.Owner, original.Slot);
+                TestCheck.That(saved.Learning.Trees[0].Skills.Single().Slot == 3 && saved.Revision == original.Revision + (change == "commit" ? 1 : 0),
+                    "过期换槽规划不能覆盖GM、重选、接管或学习结果：" + change);
+            }
+            finally { replacement?.Dispose(); }
+        }
+    }
+
     static async Task RaceAsync(Fixture f, Action<Func<byte, ushort, SkillLearningDefinition>> operation, Action mutate)
     {
         using var entered = new ManualResetEventSlim();
@@ -239,17 +296,6 @@ internal static class SessionPlanningTests
             return;
         }
         throw new InvalidOperationException("过期规划未被拒绝");
-    }
-
-    static void Reject<T>(Action action, string name) where T : Exception
-    {
-        try { action(); }
-        catch (T)
-        {
-            TestCheck.That(true, name);
-            return;
-        }
-        throw new InvalidOperationException("未拒绝：" + name);
     }
 
     static bool Equal(Character a, Character b) => JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);

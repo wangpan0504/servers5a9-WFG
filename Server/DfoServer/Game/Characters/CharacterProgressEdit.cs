@@ -8,7 +8,9 @@ internal enum CharacterProgressField
     QuestAdd,
     QuestRemove,
     QuestClear,
-    Skill
+    Skill,
+    BonusSp,
+    ExpertContract
 }
 
 internal sealed record CharacterProgressEdit(CharacterProgressField Field, string Account, string Name, int Primary, int Secondary)
@@ -31,6 +33,10 @@ internal sealed record CharacterProgressEdit(CharacterProgressField Field, strin
                 throw new InvalidDataException("任务编号范围是 1-29999");
             case CharacterProgressField.Skill when Primary is < 0 or > 65535 || Secondary is < 0 or > 255:
                 throw new InvalidDataException("技能编号范围是 0-65535，等级范围是 0-255；0 表示删除");
+            case CharacterProgressField.BonusSp when Primary is < 0 or > 50000:
+                throw new InvalidDataException("额外SP范围是0-50000");
+            case CharacterProgressField.ExpertContract when Primary < 0:
+                throw new InvalidDataException("契约剩余秒数不能为负，0表示到期");
         }
 
         if (!Enum.IsDefined(Field))

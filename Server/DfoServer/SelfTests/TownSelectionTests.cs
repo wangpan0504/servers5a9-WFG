@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -171,17 +172,6 @@ internal static class TownSelectionTests
         TestCheck.That(!f.Session.CanPublishTravel(receipt), "另一选角epoch跳过旧旅行发布");
         using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
         Reject<InvalidOperationException>(() => f.Session.CanPublishTravel(receipt), "旧owner不得发布旅行");
-    }
-
-    static void Reject<T>(Action action, string label) where T : Exception
-    {
-        try { action(); }
-        catch (T)
-        {
-            TestCheck.That(true, label);
-            return;
-        }
-        throw new InvalidOperationException("未拒绝：" + label);
     }
 
     static bool Equal(Character left, Character right) => JsonSerializer.Serialize(left) == JsonSerializer.Serialize(right);

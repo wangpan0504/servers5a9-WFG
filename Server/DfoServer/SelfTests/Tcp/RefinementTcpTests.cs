@@ -3,7 +3,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.BoosterSelectionTcpTests;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -17,8 +16,7 @@ internal static class RefinementTcpTests
         var itemResources = resources.ItemResources;
         var characters = resources.Characters;
         var towns = resources.Towns;
-        Inventory.RefinementTests.Run(towns, characters, resources.ItemResources);
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "refinement"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "refinement"), resources: resources);
         var repo = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         var weapon = characters.Get(0).Equipment.Single(item => item.Slot == 12).Template;
@@ -65,11 +63,11 @@ internal static class RefinementTcpTests
             That(U32(EquipmentEntry(delta, 4), 6) == cost.Count * 2, "material delta reports absolute remaining count");
             peer.Barrier();
             before = Snapshot();
-            Sql("CREATE TRIGGER fail_tcp_refinement BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'refinement failure'); END");
+            fixture.Sql("CREATE TRIGGER fail_tcp_refinement BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'refinement failure'); END");
             Send(peer, 0, 9);
             peer.Closed();
             That(Snapshot() == before, "late database failure closes without success and rolls back material, level and audit");
-            Sql("DROP TRIGGER fail_tcp_refinement");
+            fixture.Sql("DROP TRIGGER fail_tcp_refinement");
         }
         using (var peer = Open(fixture))
         {
@@ -94,18 +92,16 @@ internal static class RefinementTcpTests
             peer.Barrier();
             That(Snapshot() == before, "exhausted replay has no delta, charge or new refinement");
         }
-        await fixture.StopAsync();
         string committed = Snapshot();
         That(JsonSerializer.Serialize(fixture.Query("SELECT item_uid,list_type,slot_index FROM character_inventory_slots ORDER BY item_uid")) == targetUids,
             "all target UIDs and positions survive and only the consumed material disappears");
         That(fixture.Query("SELECT gold FROM characters") is [[1234L]] && JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log")) == currencyAudits,
             "NPC refinement never charges gold");
-        await fixture.StartAsync("refinement-restart");
         using (var peer = Open(fixture))
         {
             var full = peer.Select()[4].Body;
-            Bytes(EquipmentEntry(full, 3, true), quickCore, "process restart restores complete quickbar item");
-            Bytes(EquipmentEntry(full, 9, true), bagCore, "process restart restores complete bag item");
+            Bytes(EquipmentEntry(full, 3, true), quickCore, "reconnect restores complete quickbar item");
+            Bytes(EquipmentEntry(full, 9, true), bagCore, "reconnect restores complete bag item");
             That(Snapshot() == committed, "entry does not reroll or rewrite committed refinement");
             peer.Send(438, [0, 3, 0, 128, 62, 0, 0, 4, 0, 255, 255, 255, 127, 65, 0]);
             peer.Closed();
@@ -118,14 +114,6 @@ internal static class RefinementTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,list_type,slot_index FROM character_inventory_slots ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
         void Send(TcpPeer peer, byte list, short slot, int? itemId = null, byte confirmation = 0) => peer.Send(438, Build(w =>
         {
             w.Write(list);

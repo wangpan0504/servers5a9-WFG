@@ -7,24 +7,12 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using DfoServer.Game.Auth;
+using DfoServer.Infrastructure;
+using DfoServer.Persistence;
 
 namespace DfoServer.Testing;
 
-internal static class TestCheck
-{
-    public static int Count { get; private set; }
-
-    public static void That(bool condition, string message)
-    {
-        Count++;
-        if (!condition)
-            throw new InvalidOperationException("FAIL: " + message);
-    }
-
-    public static void Bytes(ReadOnlySpan<byte> actual, ReadOnlySpan<byte> expected, string message) => That(actual.SequenceEqual(expected), message);
-}
-
-// 只复用匹配资源，程序目录、数据库、日志、端口和进程全部由本次测试独占。
+// 业务 TCP 共用只读资源，每组独占数据库、会话、日志和监听；进程入口与重启另用子进程。
 internal sealed class TcpTestFixture : IAsyncDisposable
 {
     public string Root { get; }
@@ -33,11 +21,15 @@ internal sealed class TcpTestFixture : IAsyncDisposable
 
     Process? process;
     Task? output, errors;
+    Task? hosted;
+    CancellationTokenSource? hostStop;
+    readonly TcpTestResources? resources;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
-    public TcpTestFixture(ServerOptions source, string root, bool gm = false)
+    public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null)
     {
+        this.resources = resources;
         Root = Path.GetFullPath(root);
         Directory.CreateDirectory(Root);
         pvfSource = source.PvfPath;
@@ -131,9 +123,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         return File.ReadAllText(prefix + ".stdout.txt").Trim();
     }
 
-    public async Task StartAsync(string phase = "initial", bool packetCapture = false)
+    public async Task StartAsync(string phase = "initial", bool packetCapture = false, bool isolatedProcess = false)
     {
-        if (process is not null)
+        if (process is not null || hosted is not null)
             throw new InvalidOperationException("Fixture already running");
         if (previousPhase is not null && Directory.Exists(Options.LogDirectory))
             Directory.Move(Options.LogDirectory, Path.Combine(Root, previousPhase));
@@ -147,18 +139,39 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(Options.PvfPath)!);
             LinkOrCopy(pvfSource, Options.PvfPath);
         }
-        process = Process.Start(StartInfo(packetCapture ? ["--packet-capture"] : [])) ?? throw new IOException("Server process did not start");
-        output = CopyOutputAsync(process.StandardOutput, Path.Combine(Options.LogDirectory, "stdout.txt"));
-        errors = CopyOutputAsync(process.StandardError, Path.Combine(Options.LogDirectory, "stderr.txt"));
+        if (resources is not null && !isolatedProcess)
+        {
+            hostStop = new();
+            var options = Options with { PacketCaptureDirectory = packetCapture ? Options.LogDirectory : null };
+            hosted = Task.Run(async () =>
+            {
+                Directory.CreateDirectory(options.DataDirectory);
+                using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                using var log = new ServerLog(options.LogDirectory);
+                await ServerRuntime.Create(options, resources.Archive, new CharacterRepository(Database), resources.Towns,
+                    resources.Characters, resources.Learning, resources.ItemResources, log).RunAsync(hostStop.Token);
+            });
+        }
+        else
+        {
+            process = Process.Start(StartInfo(packetCapture ? ["--packet-capture"] : [])) ?? throw new IOException("Server process did not start");
+            output = CopyOutputAsync(process.StandardOutput, Path.Combine(Options.LogDirectory, "stdout.txt"));
+            errors = CopyOutputAsync(process.StandardError, Path.Combine(Options.LogDirectory, "stderr.txt"));
+            process.StandardInput.Close();
+        }
         try
         {
-            process.StandardInput.Close();
             var deadline = Stopwatch.StartNew();
             while (!File.Exists(ready))
             {
-                if (process.HasExited)
+                if (hosted is { IsCompleted: true })
                 {
-                    await errors;
+                    await hosted;
+                    throw new InvalidOperationException("Fixture stopped before ready: " + Root);
+                }
+                if (process is { HasExited: true })
+                {
+                    await errors!;
                     throw new InvalidOperationException("Fixture exited before ready: " + ReadDiagnostic(Path.Combine(Options.LogDirectory, "stderr.txt")));
                 }
                 if (deadline.Elapsed > TimeSpan.FromSeconds(45))
@@ -180,13 +193,16 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                     await Task.Delay(20);
                 }
             }
-            TestCheck.That(pid == process.Id, "ready belongs to this test process");
+            TestCheck.That(pid == (process?.Id ?? Environment.ProcessId), "ready belongs to this test host");
         }
         catch
         {
+            if (hosted is not null)
+                await StopAsync();
             var child = process;
             process = null;
-            await FinishProcessAsync(child);
+            if (child is not null)
+                await FinishProcessAsync(child);
             throw;
         }
     }
@@ -231,6 +247,21 @@ internal sealed class TcpTestFixture : IAsyncDisposable
 
     public async Task StopAsync()
     {
+        if (hosted is not null)
+        {
+            try
+            {
+                hostStop!.Cancel();
+                await hosted.WaitAsync(TimeSpan.FromSeconds(20));
+                TestCheck.That(hosted.IsCompletedSuccessfully, "isolated listeners and sessions stopped cleanly");
+            }
+            finally
+            {
+                hosted = null;
+                hostStop!.Dispose();
+                hostStop = null;
+            }
+        }
         if (process is null)
             return;
         var child = process;
@@ -316,6 +347,14 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     }
 
     public object[][] Query(string sql, params object[] parameters) => Rows(Database, sql, parameters);
+    public void Sql(string sql)
+    {
+        using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Database, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString());
+        db.Open();
+        using var command = db.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
     public string Snapshot(string sql = "SELECT * FROM characters ORDER BY id", params object[] parameters) => JsonSerializer.Serialize(Query(sql, parameters));
     public JsonElement[] Events() => File.ReadLines(Path.Combine(Options.LogDirectory, "server.jsonl")).Select(line =>
     {

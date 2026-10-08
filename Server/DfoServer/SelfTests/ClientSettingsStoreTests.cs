@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -263,7 +264,7 @@ internal static class ClientSettingsStoreTests
     static void Migration()
     {
         using var f = new Fixture();
-        f.Execute("DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5");
+        f.Execute("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5");
         string assets = f.Assets();
         var migrated = new ClientSettingsRepository(f.Path);
         Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.SettingRows() == 0 && f.Assets() == assets,
@@ -276,7 +277,7 @@ internal static class ClientSettingsStoreTests
         Assert(new ClientSettingsRepository(f.Path).Load(f.Owner, f.First.Id), game, character, "升级后重开恢复完整设置");
         f.Integrity();
 
-        f.Execute("DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5; CREATE TABLE character_client_settings(collision INTEGER)");
+        f.Execute("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5; CREATE TABLE character_client_settings(collision INTEGER)");
         assets = f.Assets();
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "v6 第二条 DDL 冲突回滚整个升级");
         Check(f.Query("PRAGMA user_version") is 5L && f.Query("SELECT count(*) FROM sqlite_schema WHERE name='account_client_settings'") is 0L && f.Assets() == assets,
@@ -296,7 +297,7 @@ internal static class ClientSettingsStoreTests
         var character = Pattern(ClientSettingsService.CharacterOptionLength, 79);
         f.Service.SaveGameOptions(f.Owner, game);
         f.Service.SaveCharacterOptions(f.Owner, f.First.Id, character);
-        f.Execute("DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6");
+        f.Execute("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6");
         string assets = f.Assets(), existing = f.ExistingSettings();
         var upgraded = new ClientSettingsRepository(f.Path);
         Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion && f.ExistingSettings() == existing && f.Assets() == assets &&
@@ -307,7 +308,7 @@ internal static class ClientSettingsStoreTests
         Check(Same(new ClientSettingsRepository(f.Path).Load(f.Owner, f.First.Id).CharacterGameOptions, game), "v7角色快照持久化后重开保持");
         f.Integrity();
 
-        f.Execute("DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6; CREATE TABLE character_game_settings(collision INTEGER)");
+        f.Execute("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6; CREATE TABLE character_game_settings(collision INTEGER)");
         assets = f.Assets();
         existing = f.ExistingSettings();
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "v7 DDL冲突不能报告升级成功");
@@ -336,12 +337,6 @@ internal static class ClientSettingsStoreTests
     static void Assert(ClientSettingsSnapshot actual, ImmutableArray<byte> game, ImmutableArray<byte> character, string message) =>
         Check(Same(actual.GameOptions, game) && Same(actual.CharacterOptions, character), message);
     static void Check(bool value, string message) => TestCheck.That(value, message);
-    static void Reject<T>(Action action, string message) where T : Exception
-    {
-        try { action(); }
-        catch (T) { Check(true, message); return; }
-        throw new InvalidOperationException("FAIL: " + message);
-    }
 
     static SqliteConnection Open(string path)
     {

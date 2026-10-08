@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Characters;
@@ -16,16 +17,16 @@ internal static class InventoryCoreGrantTests
 
     public static void RunCore()
     {
-        int checks = 0;
+        int checks = Count;
         var stackTemplate = Template(1000, ItemKind.Consumable, 100);
         var equipmentTemplate = Template(101010438, ItemKind.Equipment, 1);
         var core = FullCore(stackTemplate, 3);
         var empty = CharacterWith([]);
         string coreBefore = JsonSerializer.Serialize(core);
         var fresh = Grant(empty, core, stackTemplate);
-        Check(fresh.Accepted && fresh.Plan!.After.Items.Single() is { Uid: 0, Position.Index: 65 } freshItem &&
+        That(fresh.Accepted && fresh.Plan!.After.Items.Single() is { Uid: 0, Position.Index: 65 } freshItem &&
             freshItem.Core == core, "新堆完整保留全部核心字段与原期限，仅分配临时UID0和普通类别槽");
-        Check(JsonSerializer.Serialize(core) == coreBefore && empty.Inventory.Items.IsEmpty,
+        That(JsonSerializer.Serialize(core) == coreBefore && empty.Inventory.Items.IsEmpty,
             "规划不修改输入核心或角色快照");
 
         var equipment = FullCore(equipmentTemplate, 0) with { EquipmentLockId = 7 };
@@ -33,7 +34,7 @@ internal static class InventoryCoreGrantTests
         var equipmentCharacter = CharacterWith([originalEquipment]);
         var equipmentGrant = Grant(equipmentCharacter, equipment, equipmentTemplate);
         var addedEquipment = equipmentGrant.Plan!.After.Find(new(InventoryListType.Main, 10))!;
-        Check(equipmentGrant.Accepted && addedEquipment.Uid == 0 && addedEquipment.Core == equipment &&
+        That(equipmentGrant.Accepted && addedEquipment.Uid == 0 && addedEquipment.Core == equipment &&
             addedEquipment.Core.Value == 0 && addedEquipment.Core.EquipmentLockId == 7 &&
             equipmentGrant.Plan.After.Find(originalEquipment.Position) == originalEquipment,
             "零品级装备不变空堆；正锁与完整属性不清零，不复制存量UID");
@@ -50,10 +51,10 @@ internal static class InventoryCoreGrantTests
         };
         string mergeBefore = JsonSerializer.Serialize(beforeMerge);
         var merged = Grant(beforeMerge, core, stackTemplate);
-        Check(merged.Accepted && merged.Plan!.After.Find(target.Position) is { Uid: 10 } mergedItem &&
+        That(merged.Accepted && merged.Plan!.After.Find(target.Position) is { Uid: 10 } mergedItem &&
             mergedItem.Core == (target.Core with { Value = 8 }) && merged.Plan.After.Find(later.Position) == later,
             "按槽顺序合入首个完整兼容快捷栏堆，保留目标UID及排序锁");
-        Check(merged.Plan!.After.Gold == 123 && merged.Plan.After.ReviveCoins == 2 && merged.Plan.After.WinPoints == 3 &&
+        That(merged.Plan!.After.Gold == 123 && merged.Plan.After.ReviveCoins == 2 && merged.Plan.After.WinPoints == 3 &&
             merged.Plan.After.AccountWallet.Same(beforeMerge.Inventory.AccountWallet) &&
             JsonSerializer.Serialize(beforeMerge) == mergeBefore, "实体规划保留数量资产且不修改原堆");
 
@@ -64,19 +65,19 @@ internal static class InventoryCoreGrantTests
         })
         {
             var separated = Grant(CharacterWith([different]), core, stackTemplate);
-            Check(separated.Accepted && separated.Plan!.After.Find(different.Position) == different &&
+            That(separated.Accepted && separated.Plan!.After.Find(different.Position) == different &&
                 separated.Plan.After.Find(new(InventoryListType.Main, 65)) is { Uid: 0 } added && added.Core == core,
                 "不同期限或附魔属性不得合并，完整核心进入新槽");
         }
 
         var lockedTarget = target with { Core = target.Core with { EquipmentLockId = 1 } };
         var unlockedAfterLock = Grant(CharacterWith([lockedTarget, later]), core, stackTemplate);
-        Check(unlockedAfterLock.Accepted && unlockedAfterLock.Plan!.After.Find(lockedTarget.Position) == lockedTarget &&
+        That(unlockedAfterLock.Accepted && unlockedAfterLock.Plan!.After.Find(lockedTarget.Position) == lockedTarget &&
             unlockedAfterLock.Plan.After.Find(later.Position)!.Core == (later.Core with { Value = 9 }),
             "安全锁目标不参与合并，继续查下一个兼容堆");
         var lockedSource = core with { EquipmentLockId = 2 };
         var keptSourceLock = Grant(CharacterWith([target]), lockedSource, stackTemplate);
-        Check(keptSourceLock.Accepted && keptSourceLock.Plan!.After.Find(target.Position) == target &&
+        That(keptSourceLock.Accepted && keptSourceLock.Plan!.After.Find(target.Position) == target &&
             keptSourceLock.Plan.After.Find(new(InventoryListType.Main, 65))!.Core == lockedSource,
             "合法锁定来源核心不能通过清锁并入其他堆");
 
@@ -107,69 +108,57 @@ internal static class InventoryCoreGrantTests
             var unsupported = Template(70000 + (int)kind, kind, 1);
             Reject(empty, new(unsupported.Id, kind, 1), unsupported, 1, "非普通装备/堆叠核心不借用此入口: " + kind);
         }
-        Console.WriteLine($"PASS {checks} 完整核心发放纯规则断言");
+        Console.WriteLine($"PASS {Count - checks} 完整核心发放纯规则断言");
 
         InventoryResult Grant(Character character, ItemCore input, ItemTemplate template) =>
             InventoryRewardGrantService.TryGrantCore(character, input, template, Pieces, Now);
-        void Check(bool value, string name)
-        {
-            checks++;
-            if (!value)
-                throw new InvalidOperationException("FAIL 完整核心发放: " + name);
-        }
         void Reject(Character character, ItemCore input, ItemTemplate template, ushort error, string name)
         {
             string snapshot = JsonSerializer.Serialize(character);
             var result = Grant(character, input, template);
-            Check(!result.Accepted && result.Error == error && result.Plan is null &&
+            That(!result.Accepted && result.Error == error && result.Plan is null &&
                 JsonSerializer.Serialize(character) == snapshot, name + "，无计划和输入修改");
         }
     }
 
     public static void Run(ItemResources resources)
     {
-        int checks = 0;
+        int checks = Count;
         var empty = CharacterWith([]);
         foreach (int itemId in new[] { 1000, 1047, 1004, 101010438 })
         {
             var template = resources.Items.Get(itemId);
             var core = FullCore(template, template.Kind == ItemKind.Equipment ? 0 : 3);
             var result = Grant(empty, core, template);
-            Check(result.Accepted && result.Plan!.After.Items.Single() is { Uid: 0 } item && item.Core == core,
+            That(result.Accepted && result.Plan!.After.Items.Single() is { Uid: 0 } item && item.Core == core,
                 "匹配PVF物品完整核心入包: " + itemId);
         }
         var stack = resources.Items.Get(1000);
-        Check(stack.Kind == ItemKind.Consumable && stack.StackLimit == 1000,
+        That(stack.Kind == ItemKind.Consumable && stack.StackLimit == 1000,
             "目标普通掉落野草莓真实模板类别与堆叠上限");
         var source = FullCore(stack, 2);
         var existing = new InventoryItem(88, new(InventoryListType.Main, 3), source with { Value = 9, SortLockFlag = 1 });
         var merged = Grant(CharacterWith([existing]), source, stack);
-        Check(merged.Accepted && merged.Plan!.After.Find(existing.Position) is { Uid: 88 } itemAfter &&
+        That(merged.Accepted && merged.Plan!.After.Find(existing.Position) is { Uid: 88 } itemAfter &&
             itemAfter.Core == (existing.Core with { Value = 11 }), "真实野草莓合并保留期限、完整属性和目标排序锁");
         var nearLimit = existing with { Core = existing.Core with { Value = stack.StackLimit - 1 } };
         var refused = Grant(CharacterWith([nearLimit]), source, stack);
-        Check(!refused.Accepted && refused.Error == 17 && refused.Plan is null, "真实上限不足整条时不创建第二堆");
+        That(!refused.Accepted && refused.Error == 17 && refused.Plan is null, "真实上限不足整条时不创建第二堆");
         var oversized = Grant(empty, source with { Value = stack.StackLimit + 1 }, stack);
-        Check(!oversized.Accepted && oversized.Error == 17, "真实模板超上限拒绝");
+        That(!oversized.Accepted && oversized.Error == 17, "真实模板超上限拒绝");
         var expired = Grant(empty, source with { ExpireTime = checked((int)Now.ToUnixTimeSeconds()) }, stack);
-        Check(!expired.Accepted && expired.Error == 19, "真实模板的已到期实例不重新创建");
+        That(!expired.Accepted && expired.Error == 19, "真实模板的已到期实例不重新创建");
 
         // 共用放置实现仍须保留原批量入口的整批失败；最后装备超页不能留下先前的物品。
         string snapshot = JsonSerializer.Serialize(empty);
         var batch = InventoryRewardGrantService.TryGrantBatch(empty, [new(1000, 1), new(101010438, 57)],
             resources.Items, resources.GoldLimits, resources.EpicPieces, Now);
-        Check(!batch.Accepted && batch.Error == 17 && batch.Plan is null && JsonSerializer.Serialize(empty) == snapshot,
+        That(!batch.Accepted && batch.Error == 17 && batch.Plan is null && JsonSerializer.Serialize(empty) == snapshot,
             "普通批量后续容量失败不返回部分奖励");
-        Console.WriteLine($"PASS {checks} 完整核心发放匹配资源断言");
+        Console.WriteLine($"PASS {Count - checks} 完整核心发放匹配资源断言");
 
         InventoryResult Grant(Character character, ItemCore core, ItemTemplate template) =>
             InventoryRewardGrantService.TryGrantCore(character, core, template, resources.EpicPieces, Now);
-        void Check(bool value, string name)
-        {
-            checks++;
-            if (!value)
-                throw new InvalidOperationException("FAIL 完整核心资源: " + name);
-        }
     }
 
     static Character CharacterWith(ImmutableArray<InventoryItem> items) =>

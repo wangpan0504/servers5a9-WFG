@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
@@ -99,13 +100,7 @@ internal static class TownPresenceTests
 
     public static async Task Run(TownCatalog towns)
     {
-        int assertions = 0;
-        void Check(bool value, string reason)
-        {
-            if (!value)
-                throw new Exception(reason);
-            assertions++;
-        }
+        int assertions = Count;
 
         var owners = new AccountOwners();
         var presence = new TownPresence(towns);
@@ -131,7 +126,7 @@ internal static class TownPresenceTests
             presence.Join(a, aSend, ca);
             presence.Join(b, bSend, cb);
             await bSend.Send(1, 1347, [1], "barrier");
-            Check(Frames(bStream).All(f => f.Opcode == 1347), "different accounts have private rooms");
+            That(Frames(bStream).All(f => f.Opcode == 1347), "different accounts have private rooms");
             presence.Remove(aSend);
             presence.Remove(bSend);
             await bSend.ClearScene();
@@ -158,16 +153,16 @@ internal static class TownPresenceTests
                 presence.Move(b, bSend, cb);
             }
 
-            Check(!blocked.IsCompleted && aSend.PendingMoves == 1, "slow receiver has one coalesced position instead of unbounded movement frames");
+            That(!blocked.IsCompleted && aSend.PendingMoves == 1, "slow receiver has one coalesced position instead of unbounded movement frames");
             await bSend.Send(1, 1347, [1], "unblocked-peer").WaitAsync(TimeSpan.FromSeconds(2));
-            Check(Frames(bStream).Any(f => f.Opcode == 2), "slow recipient does not block other sender or account gate");
+            That(Frames(bStream).Any(f => f.Opcode == 2), "slow recipient does not block other sender or account gate");
             aStream.Release();
             await blocked;
             await aSend.Send(1, 1347, [1], "drain");
             var frames = Frames(aStream);
             var position = frames.Last(f => f.Opcode == 22).Body;
-            Check(BinaryPrimitives.ReadUInt16LittleEndian(position) == cb.Id && BinaryPrimitives.ReadUInt16LittleEndian(position.AsSpan(2)) == 632, "latest committed position projection survives coalescing");
-            Check(frames.Count(f => f.Opcode == 2) == 1, "initial peer actor published once");
+            That(BinaryPrimitives.ReadUInt16LittleEndian(position) == cb.Id && BinaryPrimitives.ReadUInt16LittleEndian(position.AsSpan(2)) == 632, "latest committed position projection survives coalescing");
+            That(frames.Count(f => f.Opcode == 2) == 1, "initial peer actor published once");
             cb = cb with
             {
                 Inventory = new([new(1, new(InventoryListType.Equipment, 12), new(101010912, ItemKind.Equipment, 999999998))])
@@ -175,18 +170,18 @@ internal static class TownPresenceTests
             presence.Refresh(b, bSend, cb);
             await aSend.Send(1, 1347, [1], "after-equipment-refresh");
             var refreshed = Frames(aStream);
-            Check(refreshed.Count(f => f.Opcode == 2) == 2 && refreshed.All(f => f.Opcode != 6), "known peer receives appearance without leave or duplicate join");
-            Check(refreshed.Last(f => f.Opcode == 2).Body.SequenceEqual(TownPackets.Actor(cb)), "public appearance uses current committed worn inventory");
+            That(refreshed.Count(f => f.Opcode == 2) == 2 && refreshed.All(f => f.Opcode != 6), "known peer receives appearance without leave or duplicate join");
+            That(refreshed.Last(f => f.Opcode == 2).Body.SequenceEqual(TownPackets.Actor(cb)), "public appearance uses current committed worn inventory");
             presence.Remove(bSend);
             await aSend.Send(1, 1347, [1], "after-leave");
-            Check(Frames(aStream).Last(f => f.Opcode == 6).Body.SequenceEqual(TownPackets.RemoveActor(cb.Id)), "departure removes actual visible actor");
+            That(Frames(aStream).Last(f => f.Opcode == 6).Body.SequenceEqual(TownPackets.RemoveActor(cb.Id)), "departure removes actual visible actor");
             presence.Remove(bSend);
             await aSend.Send(1, 1347, [1], "duplicate-leave");
-            Check(Frames(aStream).Count(f => f.Opcode == 6) == 1, "duplicate cleanup does not emit extra deletion");
+            That(Frames(aStream).Count(f => f.Opcode == 6) == 1, "duplicate cleanup does not emit extra deletion");
             presence.Join(b, bSend, cb);
             await aSend.Send(1, 1347, [1], "reenter");
             await aSend.ClearScene();
-            Check(Frames(aStream).Count(f => f.Opcode == 6) == 2, "scene clear removes recipient known actors before native transition");
+            That(Frames(aStream).Count(f => f.Opcode == 6) == 2, "scene clear removes recipient known actors before native transition");
             using var replacementCancel = new CancellationTokenSource();
             using var replacement = owners.Acquire("alpha", () => replacementCancel.Cancel());
             using var newStream = new HeldStream();
@@ -195,7 +190,7 @@ internal static class TownPresenceTests
             });
             presence.Join(replacement, next, ca);
             presence.Remove(aSend);
-            Check(presence.Count == 2, "old connection cleanup preserves replacement membership");
+            That(presence.Count == 2, "old connection cleanup preserves replacement membership");
             bool rejected = false;
             try
             {
@@ -206,11 +201,11 @@ internal static class TownPresenceTests
                 rejected = true;
             }
 
-            Check(rejected, "stale generation cannot publish movement");
+            That(rejected, "stale generation cannot publish movement");
             await next.Send(1, 1347, [1], "new-generation-ready");
             presence.Remove(next);
             presence.Remove(bSend);
-            Check(presence.Count == 0, "all members released at connection end");
+            That(presence.Count == 0, "all members released at connection end");
             using var gCancel = new CancellationTokenSource();
             using var dCancel = new CancellationTokenSource();
             using var g = owners.Acquire("gamma", () => gCancel.Cancel());
@@ -242,7 +237,7 @@ internal static class TownPresenceTests
             gStream.Release();
             await waiting;
             await gSend.Send(1, 1347, [1], "drain-expired-source");
-            Check(Frames(gStream).All(f => f.Opcode == 1347), "expired queued source neither creates ghost actor nor deletes an unseen actor");
+            That(Frames(gStream).All(f => f.Opcode == 1347), "expired queued source neither creates ghost actor nor deletes an unseen actor");
             presence.Remove(gSend);
             using var hCancel = new CancellationTokenSource();
             using var h = owners.Acquire("epsilon", () => hCancel.Cancel());
@@ -262,9 +257,9 @@ internal static class TownPresenceTests
             hStream.Release();
             await waiting;
             await cleared;
-            Check(Frames(hStream).All(f => f.Opcode == 1347), "obsolete receiver epoch drops queued peer entry before scene clear");
+            That(Frames(hStream).All(f => f.Opcode == 1347), "obsolete receiver epoch drops queued peer entry before scene clear");
             presence.Remove(next);
-            Check(presence.Count == 0, "adversarial scenarios release membership references");
+            That(presence.Count == 0, "adversarial scenarios release membership references");
             using var flightTargetCancel = new CancellationTokenSource();
             using var flightSourceCancel = new CancellationTokenSource();
             using var flightTarget = owners.Acquire("flight-target", () => flightTargetCancel.Cancel());
@@ -286,7 +281,7 @@ internal static class TownPresenceTests
             presence.Join(flightTarget, flightTargetSend, flightTargetCharacter);
             presence.Join(flightSource, flightSourceSend, flightSourceCharacter);
             await flightTargetStream.WriteStarted.WaitAsync(TimeSpan.FromSeconds(2));
-            Check(flightTargetStream.Bytes().Length == (16 + TownPackets.Actor(flightSourceCharacter).Length) / 2, "remote Actor is already partially written when source becomes stale");
+            That(flightTargetStream.Bytes().Length == (16 + TownPackets.Actor(flightSourceCharacter).Length) / 2, "remote Actor is already partially written when source becomes stale");
             using var flightReplacementCancel = new CancellationTokenSource();
             using var flightReplacement = owners.Acquire("flight-source", () => flightReplacementCancel.Cancel());
             presence.Remove(flightSourceSend);
@@ -299,18 +294,18 @@ internal static class TownPresenceTests
             flightTargetStream.Release();
             await flightTargetSend.Send(1, 1347, [1], "drain-in-flight-replacement").WaitAsync(TimeSpan.FromSeconds(2));
             var flightFrames = Frames(flightTargetStream);
-            Check(flightFrames.Select(f => f.Opcode).SequenceEqual(new ushort[] { 2, 6, 2, 3, 22, 1347 }), "in-flight old Actor is removed without stale State or Position before replacement snapshot");
-            Check(flightFrames[1].Body.SequenceEqual(TownPackets.RemoveActor(flightSourceCharacter.Id)) && flightFrames[4].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter.Id, flightReplacementCharacter.Position, false)), "old Actor cleanup and replacement committed position retain the reused actor id");
+            That(flightFrames.Select(f => f.Opcode).SequenceEqual(new ushort[] { 2, 6, 2, 3, 22, 1347 }), "in-flight old Actor is removed without stale State or Position before replacement snapshot");
+            That(flightFrames[1].Body.SequenceEqual(TownPackets.RemoveActor(flightSourceCharacter.Id)) && flightFrames[4].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter.Id, flightReplacementCharacter.Position, false)), "old Actor cleanup and replacement committed position retain the reused actor id");
             // 旧连接的finally可晚于新成员入场；再次清理不得删除新membership，后续位置仍能送达。
             presence.Remove(flightSourceSend);
             flightReplacementCharacter = repo.Save(flightReplacement, flightReplacementCharacter, flightReplacementCharacter.Position with { X = 634 }, towns.InitialReturn);
             presence.Move(flightReplacement, flightReplacementSend, flightReplacementCharacter);
             await flightTargetSend.Send(1, 1347, [1], "drain-after-old-finally").WaitAsync(TimeSpan.FromSeconds(2));
             flightFrames = Frames(flightTargetStream);
-            Check(flightFrames.Count(f => f.Opcode == 6) == 1 && flightFrames[^2].Opcode == 22 && flightFrames[^2].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter.Id, flightReplacementCharacter.Position, false)), "late old connection cleanup preserves replacement membership and its movement");
+            That(flightFrames.Count(f => f.Opcode == 6) == 1 && flightFrames[^2].Opcode == 22 && flightFrames[^2].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter.Id, flightReplacementCharacter.Position, false)), "late old connection cleanup preserves replacement membership and its movement");
             presence.Remove(flightTargetSend);
             presence.Remove(flightReplacementSend);
-            Check(presence.Count == 0, "in-flight takeover fixture releases all memberships");
+            That(presence.Count == 0, "in-flight takeover fixture releases all memberships");
             using var failedCancel = new CancellationTokenSource();
             using var failedOwner = owners.Acquire("send-failure", () => failedCancel.Cancel());
             using var failedStream = new HeldStream(fail: true);
@@ -327,7 +322,7 @@ internal static class TownPresenceTests
                 failed = true;
             }
 
-            Check(failed && failedCancel.IsCancellationRequested, "unexpected stream failure cancels connection and completes reliable waiter");
+            That(failed && failedCancel.IsCancellationRequested, "unexpected stream failure cancels connection and completes reliable waiter");
             using var fullCancel = new CancellationTokenSource();
             using var fullOwner = owners.Acquire("send-full", () => fullCancel.Cancel());
             using var fullStream = new HeldStream(true);
@@ -343,7 +338,7 @@ internal static class TownPresenceTests
             {
             }
 
-            Check(fullCancel.IsCancellationRequested && pending.All(t => t.IsCompleted), "queue overflow cancels only that receiver and releases every reliable waiter");
+            That(fullCancel.IsCancellationRequested && pending.All(t => t.IsCompleted), "queue overflow cancels only that receiver and releases every reliable waiter");
             // 广播入队触发慢连接取消时，异步清理不能妨碍其他接收者投递。
             using var slowCancel = new CancellationTokenSource();
             using var healthyCancel = new CancellationTokenSource();
@@ -371,13 +366,13 @@ internal static class TownPresenceTests
             try { await slowWrite.WaitAsync(TimeSpan.FromSeconds(2)); }
             catch (Exception error) when (error is IOException or OperationCanceledException) { }
             await slowSend.DisposeAsync();
-            Check(slowCancel.IsCancellationRequested && presence.Count == 2 && !healthyCancel.IsCancellationRequested,
+            That(slowCancel.IsCancellationRequested && presence.Count == 2 && !healthyCancel.IsCancellationRequested,
                 "reentrant cancellation removes only the saturated scene member");
-            Check(Frames(healthyStream).Count(frame => frame.Opcode == 2) == 272,
+            That(Frames(healthyStream).Count(frame => frame.Opcode == 2) == 272,
                 "healthy peer receives initial actors and every appearance update during reentrant removal");
             presence.Remove(sourceSend);
             presence.Remove(healthySend);
-            Check(presence.Count == 0, "reentrant fixture releases scene and actor memberships");
+            That(presence.Count == 0, "reentrant fixture releases scene and actor memberships");
             var phase = towns.Areas.Values.SelectMany(area => area.Shifts.Where(s => s.Quest > 0 && s.Index >= 0 && s.Index < area.Phases.Length).Select(s => new { Area = area, Quest = s.Quest })).First(p => !p.Area.Default.IsRoom && !p.Area.Map(new HashSet<int> { p.Quest }).IsRoom && p.Area.Default.Path != p.Area.Map(new HashSet<int> { p.Quest }).Path);
             using var pCancel = new CancellationTokenSource();
             using var qCancel = new CancellationTokenSource();
@@ -404,10 +399,10 @@ internal static class TownPresenceTests
             presence.Join(q, qSend, cq);
             await pSend.Send(1, 1347, [1], "phase-barrier");
             await qSend.Send(1, 1347, [1], "phase-barrier");
-            Check(Frames(pStream).All(f => f.Opcode == 1347) && Frames(qStream).All(f => f.Opcode == 1347), "same town/area with different PVF phases does not share actors");
+            That(Frames(pStream).All(f => f.Opcode == 1347) && Frames(qStream).All(f => f.Opcode == 1347), "same town/area with different PVF phases does not share actors");
             presence.Remove(pSend);
             presence.Remove(qSend);
-            Check(presence.Count == 0, "phase fixture cleans up both memberships");
+            That(presence.Count == 0, "phase fixture cleans up both memberships");
         }
         finally
         {
@@ -416,6 +411,6 @@ internal static class TownPresenceTests
             Directory.Delete(root, true);
         }
 
-        Console.WriteLine($"PASS {assertions} town presence, queue, epoch and cleanup assertions");
+        Console.WriteLine($"PASS {Count - assertions} town presence, queue, epoch and cleanup assertions");
     }
 }

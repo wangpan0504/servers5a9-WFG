@@ -148,11 +148,15 @@ def self_check():
                 reply = "OK 测角 id=1 gold=12345 该角色金币已设为12345。"
             elif line == "account 10000 item 测角 18400 2":
                 reply = "OK 测角 id=1 item=18400 count=2 mail=1 已发送到该角色邮箱。"
+            elif line == "account 10000 grow-options 测角":
+                reply = "OK " + json.dumps({"job": 0, "first": 1, "second": 0, "options": {"baseName": "鬼剑士", "growTypes": [{"value": 0, "label": "鬼剑士", "awakenings": []}, {"value": 1, "label": "剑魂", "awakenings": ["剑圣", "剑神"]}]}}, ensure_ascii=False)
+            elif line == "account 10000 grow 测角 1 2":
+                reply = "OK 测角 id=1 grow=33 skills=5 sp=5000 tp=7 已写入。双技能树已重建。"
             else:
                 reply = "ERR 未识别"
             conn.sendall((reply + "\n").encode("utf-8"))
 
-    for _ in range(4):
+    for _ in range(6):
         threading.Thread(target=once, daemon=True).start()
     probe = socket.socket()
     probe.bind((BIND, 0))
@@ -171,7 +175,8 @@ def self_check():
         page = urlopen(f"http://{BIND}:{web_port}/", timeout=3).read().decode("utf-8")
         assert "开发 GM" in page
         assert 'id="gold"' in page and 'id="item-id"' in page and 'id="item-count"' in page and "通过邮件发放" in page
-        commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2")
+        assert 'id="grow-first"' in page and 'id="grow-second"' in page and "重置技能" in page
+        commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2", "account 10000 grow-options 测角", "account 10000 grow 测角 1 2")
         for line in commands:
             req = Request(
                 f"http://{BIND}:{web_port}/api/command",
@@ -181,6 +186,8 @@ def self_check():
             )
             body = json.loads(urlopen(req, timeout=3).read().decode("utf-8"))
             assert body["ok"] and body["text"].startswith("OK "), body
+            if "grow-options" in line:
+                assert json.loads(body["text"][3:])["options"]["growTypes"][1]["awakenings"] == ["剑圣", "剑神"]
         assert received == list(commands), received
     finally:
         listener.close()

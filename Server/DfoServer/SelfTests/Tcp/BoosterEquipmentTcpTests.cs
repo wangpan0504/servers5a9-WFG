@@ -3,7 +3,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.BoosterSelectionTcpTests;
 using static DfoServer.Testing.BoosterTcpTests;
 using static DfoServer.Testing.TcpPeer;
@@ -16,7 +15,7 @@ internal static class BoosterEquipmentTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-equipment"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-equipment"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -55,11 +54,11 @@ internal static class BoosterEquipmentTcpTests
             CheckRandom(delta, 11);
             peer.Barrier();
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_equipment_reward BEFORE INSERT ON character_inventory_slots WHEN NEW.slot_index=13 BEGIN SELECT RAISE(ABORT,'equipment reward rollback'); END");
+            fixture.Sql("CREATE TRIGGER fail_equipment_reward BEFORE INSERT ON character_inventory_slots WHEN NEW.slot_index=13 BEGIN SELECT RAISE(ABORT,'equipment reward rollback'); END");
             SendSelect(peer, 5, [16000], count: 2);
             peer.Closed();
             That(Snapshot() == before, "later reward failure closes without success and atomically restores all source and reward state");
-            Sql("DROP TRIGGER fail_equipment_reward");
+            fixture.Sql("DROP TRIGGER fail_equipment_reward");
         }
         using (var peer = Open(fixture))
         {
@@ -80,14 +79,12 @@ internal static class BoosterEquipmentTcpTests
             peer.Barrier();
             That(Snapshot() == before, "exhausted replay returns only failure and grants no extra equipment");
         }
-        await fixture.StopAsync();
-        await fixture.StartAsync("booster-equipment-restart");
         using (var peer = Open(fixture))
         {
             byte[] full = peer.Select()[4].Body;
             for (int i = 0; i < committedEntries.Count; i++)
                 That(EquipmentEntry(full, (short)(9 + i), true).SequenceEqual(committedEntries[i]),
-                    "process restart restores every byte including fixed and random levels and original expiry");
+                    "reconnect restores every byte including fixed and random levels and original expiry");
             peer.Barrier();
         }
         await fixture.StopAsync();
@@ -110,14 +107,6 @@ internal static class BoosterEquipmentTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
 }

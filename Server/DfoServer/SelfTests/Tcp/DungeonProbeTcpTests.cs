@@ -6,12 +6,12 @@ namespace DfoServer.Testing;
 
 internal static class DungeonProbeTcpTests
 {
-    public static async Task RunAsync(ServerOptions source, string root)
+    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(source with
         {
             DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.FinishLoadingMonsters
-        }, Path.Combine(root, "dungeon-probe"));
+        }, Path.Combine(root, "dungeon-probe"), resources: resources);
         await fixture.StartAsync();
         using var peer = Open(fixture);
         peer.Create("ProbeLayers");

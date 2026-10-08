@@ -46,9 +46,9 @@ internal static class NativeLoginTcpTests
         }
     }
 
-    public static async Task RunAsync(ServerOptions source, string root)
+    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "native-login"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "native-login"), resources: resources);
         TestCheck.That(fixture.Options.DuplicateLoginPolicy == Game.Accounts.DuplicateLoginPolicy.ReplaceExisting,
             "native TCP server uses fixed replacement policy");
         await fixture.StartAsync();

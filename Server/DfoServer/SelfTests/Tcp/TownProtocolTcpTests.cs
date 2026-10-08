@@ -7,12 +7,10 @@ namespace DfoServer.Testing;
 
 internal static class TownProtocolTcpTests
 {
-    public static async Task RunAsync(ServerOptions source, string root, TownCatalog towns)
+    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "town"));
-        await fixture.CliAsync(null, 2, "--selftest", "unexpected");
-        await fixture.CliAsync(null, 2, "--selftest-tcp", "unexpected");
-        That(!Directory.Exists(fixture.Options.DataDirectory) && !Directory.Exists(fixture.Options.LogDirectory), "invalid test arguments never start or initialize a server");
+        var towns = resources.Towns;
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "town"), resources: resources);
         await fixture.StartAsync();
         ChannelTcpTests.Run(fixture);
         using (var peer = Open(fixture))
@@ -264,10 +262,11 @@ internal static class TownProtocolTcpTests
                 if (trip.Town == 40 && trip.PreviousTown == 38 && trip.Kind == 5)
                 {
                     string before = fixture.Snapshot();
-                    for (int kind = 0; kind < 256; kind++)
-                        peer.Send(36, Area(255, 250, 1900, 250, 38, 1, (byte)kind));
+                    // 纯规则覆盖完整字节域，TCP 保留房间、菜单和高位 kind 的拒绝链。
+                    foreach (byte kind in new byte[] { 0, 1, 5, 6, 127, 255 })
+                        peer.Send(36, Area(255, 250, 1900, 250, 38, 1, kind));
                     peer.Barrier();
-                    That(fixture.Snapshot() == before, "all256 kind values survive route rejection without writes");
+                    That(fixture.Snapshot() == before, "representative kind values survive route rejection without writes");
                 }
 
                 Travel(peer, trip);
@@ -377,21 +376,23 @@ internal static class TownProtocolTcpTests
     }
 
     static void Travel(TcpPeer peer, Trip t) => peer.Travel(t.Town, t.Area, t.X, t.Y, t.PreviousTown, t.PreviousArea, t.Bottom, t.ReturnTown, t.Kind, t.Npc);
-    public static async Task JobsAsync(ServerOptions source, string root)
+    public static async Task JobsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "jobs"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "jobs"), resources: resources);
         await fixture.StartAsync();
         int[] counts = [6, 6, 6, 6, 6, 6, 6, 6, 8, 21, 8, 7, 6, 6, 6, 6];
         for (byte job = 0; job < 16; job++)
         {
             string name = job == 15 ? "qiangzhansh" : "Class" + job;
             byte[] player;
+            ushort characterId;
             using (var peer = Open(fixture))
             {
                 That(peer.Roster[1] == job, "job roster before create");
                 peer.Send(692, Name(name));
                 peer.Expect(1, 692, [1]);
                 byte[] roster = peer.Create(name, job);
+                characterId = peer.Id;
                 That(roster[1] == job + 1, "job roster after create");
                 string beforeNameCheck = fixture.Snapshot();
                 peer.Send(692, Name(name));
@@ -405,7 +406,7 @@ internal static class TownProtocolTcpTests
                     Bytes(roster.AsSpan(at + 8 + width, 3), [(byte)slot, 0, 1], "job roster identity");
                     at += 70 + width + peer.Roster[at + 21 + width] * 25;
                 }
-                var packets = peer.Select(job);
+                var packets = peer.Select(job, combos: job == 9 ? TcpPeer.StoredCombos(fixture, characterId) : null);
                 That(packets[0].Body[222] == 38 && packets.Single(packet => packet.Kind == 0 && packet.Opcode == 23).Body[2] == 38, "select initial town agrees with USER_AREA for job " + job);
                 That(U16(packets[0].Body, 22) == 3145 && U32(packets[0].Body, 24) == 1, "first main quest");
                 Bytes(packets[1].Body, [1, 0, 0, 0], "accepted story level");
@@ -440,7 +441,7 @@ internal static class TownProtocolTcpTests
 
             using (var peer = Open(fixture))
             {
-                var packets = peer.Select(job);
+                var packets = peer.Select(job, combos: job == 9 ? TcpPeer.StoredCombos(fixture, characterId) : null);
                 That(packets[0].Body[222] == 38 && packets.Single(packet => packet.Kind == 0 && packet.Opcode == 23).Body[2] == 38, "relogin initial town agrees with USER_AREA for job " + job);
                 That(U16(packets[0].Body, 22) == 3145 && U32(packets[0].Body, 24) == 1, "relogin first main quest");
                 Bytes(packets[3].Body, player, "relogin skills and stats");

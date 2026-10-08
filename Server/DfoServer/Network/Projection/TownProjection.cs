@@ -30,6 +30,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterCatalog charact
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(c), "completed_quests");
         if (c.Learning.Initialized)
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(c.Learning), "skill_info");
+        if (c.Learning.ExpertContractExpiresAt > 0)
+            await context.Notify(NotiPacketType.CERA_SPECIALITEM, SkillPackets.ExpertContract(c.Learning.ExpertContractExpiresAt,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds()), "expert_contract_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.PersonalCargo), "personal_cargo_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.AccountCargo), "account_cargo_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Avatar), "avatar_inventory_initialize");
@@ -43,6 +46,11 @@ internal sealed class TownProjection(TownCatalog towns, CharacterCatalog charact
             await mailbox.InitializeAsync(context);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
         await LocationAsync(context, c, initial: true);
+        // 场景绑定可能重建技能管理器；带自定义指令的角色在23/24后补回原字节。
+        if (c.Learning.Initialized && c.Learning.Trees.Any(tree => tree.Skills.Any(skill => skill.Command.Length > 0)))
+            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(c.Learning), "skill_commands_after_scene");
+        if (c.Job == 9 && c.Learning.Initialized)
+            await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(c.Learning), "skill_combo_initialize");
         if (settings is not null && settingReceipt is not null)
             await settings.InitializeAsync(context, settingReceipt);
         await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "enter_gameworld_complete");

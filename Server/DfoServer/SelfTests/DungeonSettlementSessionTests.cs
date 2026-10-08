@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -221,12 +222,6 @@ internal static class DungeonSettlementSessionTests
 
     private static bool Same(Character first, Character second) => JsonSerializer.Serialize(first) == JsonSerializer.Serialize(second);
     private static void Check(bool valid, string name) => TestCheck.That(valid, name);
-    private static void Reject<T>(Action action, string name) where T : Exception
-    {
-        try { action(); }
-        catch (T) { Check(true, name); return; }
-        throw new InvalidOperationException("FAIL expected " + typeof(T).Name + ": " + name);
-    }
 
     private sealed class Fixture : IDisposable
     {

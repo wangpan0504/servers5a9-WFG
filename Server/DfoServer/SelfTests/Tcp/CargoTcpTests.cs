@@ -15,7 +15,7 @@ internal static class CargoTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "cargo"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "cargo"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var owners = new AccountOwners();
@@ -130,12 +130,10 @@ internal static class CargoTcpTests
             That(fixture.Query("SELECT character_id,item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[long id, var core]] &&
                 id == peer.Id && Equals(core, weaponCore), "sibling becomes sole owner of same UID and complete core");
         }
-        await fixture.StopAsync();
-        await fixture.StartAsync("cargo-restart");
         using (var peer = Open(fixture))
         {
             var entry = peer.Select(1);
-            That(U32(entry[4].Body, 376) == weaponId && U16(entry[4].Body, 374) == 3, "restart restores sibling equipment in quick bar");
+            That(U32(entry[4].Body, 376) == weaponId && U16(entry[4].Body, 374) == 3, "reconnect restores sibling equipment in quick bar");
             Cargo(entry[7].Body, 12, 24, 0, 0);
             peer.Barrier();
         }

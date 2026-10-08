@@ -2,7 +2,6 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -13,7 +12,7 @@ internal static class EpicBookTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "epic-book"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "epic-book"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -54,7 +53,6 @@ internal static class EpicBookTcpTests
             CheckFull(peer.Select(1), 0);
             peer.Barrier();
         }
-        await fixture.StopAsync();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var roles = repo.List(owner);
@@ -63,16 +61,15 @@ internal static class EpicBookTcpTests
             InventoryService.Commit(repo, owner, roles[0], InventoryRewardGrantService.TryGrantBatch(roles[0],
                 [new(10300000, 1000), new(10099775, 22), new(10158124, 12)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces));
         }
-        await fixture.StartAsync("epic-book-restart");
         using (var peer = Open(fixture))
         {
             CheckFull(peer.Select(), 1000);
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_tcp_epic BEFORE INSERT ON epic_piece_audit_log BEGIN SELECT RAISE(ABORT,'epic failure'); END");
+            fixture.Sql("CREATE TRIGGER fail_tcp_epic BEFORE INSERT ON epic_piece_audit_log BEGIN SELECT RAISE(ABORT,'epic failure'); END");
             SendCraft(peer);
             peer.Closed();
             That(before == Snapshot(), "book audit failure rolls back output UID, currencies and counts without success ACK");
-            Sql("DROP TRIGGER fail_tcp_epic");
+            fixture.Sql("DROP TRIGGER fail_tcp_epic");
         }
         using (var peer = Open(fixture))
         {
@@ -137,14 +134,6 @@ internal static class EpicBookTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM epic_piece_audit_log"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
     }
     static void SendCraft(TcpPeer peer) => peer.Send(788, Build(writer => writer.Write(450004)));
     static int Entry(byte[] packet, short slot) => Enumerable.Range(0, U16(packet, 1)).Select(index => 3 + 123 * index).Single(at => U16(packet, at) == slot);

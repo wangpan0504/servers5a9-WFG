@@ -78,19 +78,9 @@ internal sealed partial class CharacterRepository
             """;
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("成长revision或账号已变化");
-        // 只更新两树余额；技能绑定、已消费点数、TP和资产保持原值。
-        command.Parameters.AddWithValue("$context", 0);
-        command.Parameters.AddWithValue("$sp", 0);
-        command.CommandText = "UPDATE character_skill_points SET sp=$sp WHERE character_id=$id AND context=$context";
-        foreach (var tree in plan.Learning.Trees)
-        {
-            if (tree.Sp == plan.Before.Trees.Single(before => before.Context == tree.Context).Sp)
-                continue;
-            command.Parameters["$context"].Value = tree.Context;
-            command.Parameters["$sp"].Value = tree.Sp;
-            if (command.ExecuteNonQuery() != 1)
-                throw new InvalidOperationException("成长技能树余额行不完整");
-        }
+        // 自动等级、双树余额和既有主树投影随同一经验事实提交。
+        WriteLearning(db, tx, expected.Id, plan.Learning);
+        WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
         command.Parameters.Clear();
         command.Parameters.AddWithValue("$id", expected.Id);
         command.Parameters.AddWithValue("$account", owner.Account);

@@ -3,7 +3,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -14,10 +13,9 @@ internal static class BoosterTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
-        Inventory.BoosterTests.Run(towns, characters, resources.ItemResources);
         var repo = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -110,13 +108,11 @@ internal static class BoosterTcpTests
             peer.Barrier();
             Console.WriteLine($"Bulk booster TCP ACK and delta: {timer.Elapsed.TotalMilliseconds:F2}ms");
         }
-        await fixture.StopAsync();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single();
             InventoryService.Commit(repo, owner, current, InventoryRewardGrantService.TryGrantBatch(current, [new(2660291, 1)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces));
         }
-        await fixture.StartAsync("booster-restart");
         using (var peer = Open(fixture))
         {
             byte[] full = peer.Select()[4].Body;
@@ -125,11 +121,11 @@ internal static class BoosterTcpTests
             Entry(full, 66, 1108, 40, true);
             Entry(full, 65, 2660291, 1, true);
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_booster BEFORE INSERT ON currency_audit_log BEGIN SELECT RAISE(ABORT,'booster rollback'); END");
+            fixture.Sql("CREATE TRIGGER fail_booster BEFORE INSERT ON currency_audit_log BEGIN SELECT RAISE(ABORT,'booster rollback'); END");
             SendOpen(peer, 65, 1);
             peer.Closed();
             That(before == Snapshot(), "commit failure returns no success and restores source, wallets, revisions, audit and UID sequence");
-            Sql("DROP TRIGGER fail_booster");
+            fixture.Sql("DROP TRIGGER fail_booster");
         }
         using (var peer = Open(fixture))
         {
@@ -160,14 +156,6 @@ internal static class BoosterTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     static void SendOpen(TcpPeer peer, short slot, int count) => peer.Send(160, Build(writer => { writer.Write(slot); writer.Write(count); }));

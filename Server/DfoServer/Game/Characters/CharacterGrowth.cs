@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Characters;
+using DfoServer.Game.Skills;
 
 namespace DfoServer.Game.Characters;
 
@@ -79,8 +80,7 @@ internal sealed class CharacterGrowthPlan
             return Fail(CharacterGrowthFailure.InvalidSnapshot);
         }
 
-        // 沿用普通双树业务范围；特殊职业、转职及未初始化旧角色不自动补点或重建。
-        if (expected.GrowType != 0 || expected.Job is 9 or 10 || !expected.Learning.Initialized)
+        if (!SkillPointLedger.SupportsGrowth(expected.GrowType, expected.Job) || !expected.Learning.Initialized)
             return Fail(CharacterGrowthFailure.Unsupported);
         if (!WithinLevel(expected.Level, expected.Learning.Experience))
             return Fail(CharacterGrowthFailure.InvalidSnapshot);
@@ -89,22 +89,25 @@ internal sealed class CharacterGrowthPlan
             return Fail(CharacterGrowthFailure.InvalidTarget);
 
         int spDelta = catalog.GetSpDelta(expected.Level, targetLevel);
-        if (expected.Learning.Trees.Any(tree => (int)tree.Sp + spDelta > ushort.MaxValue))
+        int tpDelta = catalog.GetTpDelta(expected.Level, targetLevel);
+        if (expected.Learning.Trees.Any(tree => (int)tree.Sp + spDelta > ushort.MaxValue || (int)tree.Tp + tpDelta > ushort.MaxValue))
             return Fail(CharacterGrowthFailure.PointOverflow);
         // 余额加贡献差，保留已消费SP、两树不同余额、TP及所有稳定绑定。
-        var trees = expected.Learning.Trees.OrderBy(tree => tree.Context).Select(tree =>
-            new CharacterSkillTree(tree.Context, checked((ushort)(tree.Sp + spDelta)), tree.Tp,
-                Array.AsReadOnly(tree.Skills.ToArray()))).ToArray();
-        var learning = new CharacterLearningState(targetExperience, Array.AsReadOnly(trees));
+        var trees = expected.Learning.Trees.OrderBy(tree => tree.Context).Select(tree => tree.Freeze()).Select(tree =>
+            tree with { Sp = checked((ushort)(tree.Sp + spDelta)), Tp = checked((ushort)(tree.Tp + tpDelta)), Skills = Array.AsReadOnly(tree.Skills.ToArray()) }).ToArray();
+        var learning = expected.Learning with { Experience = targetExperience, Trees = Array.AsReadOnly(trees) };
+        if (catalog.Learning is { } skills && expected.Learning.BonusSp.HasValue)
+            learning = SkillPointLedger.Synchronize(expected.Job, expected.GrowType, targetLevel, learning, skills,
+                learning.ExpertContractExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds() ? 5 : 0);
         return new(CharacterGrowthFailure.None, new(expected, targetLevel, learning, spDelta));
 
         bool WithinLevel(int level, ulong experience) => experience >= catalog.GetLevelStartExperience(level) &&
             experience < catalog.GetCumulativeExperienceBoundary(level);
     }
 
-    private static CharacterLearningState Freeze(CharacterLearningState state) => new(state.Experience,
+    private static CharacterLearningState Freeze(CharacterLearningState state) => state with { Trees =
         Array.AsReadOnly(state.Trees.OrderBy(tree => tree.Context).Select(tree =>
-            new CharacterSkillTree(tree.Context, tree.Sp, tree.Tp, Array.AsReadOnly(tree.Skills.ToArray()))).ToArray()));
+            tree.Freeze()).ToArray()) };
 
     private static CharacterGrowthResult Fail(CharacterGrowthFailure failure) => new(failure, null);
 }

@@ -25,7 +25,8 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
     async Task<CommandResult> MoveAsync(GameConnectionContext context, Packet packet)
     {
         var request = InventoryRequests.Move(packet.Body);
-        var result = context.BlocksTownActions ? InventoryResult.Reject() : context.Session.MutateInventory(character => inventory.Move(character, request));
+        var result = context.Session.MutateInventory(character => inventory.Move(character, request),
+            requireTown: IsCargo(request.Source.List) || IsCargo(request.Destination.List));
         await context.Reply(CmdPacketType.MOVE_ITEMSPACE, InventoryPackets.Move(request, result), result.Accepted ? "move_item_committed" : "move_item_rejected");
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
@@ -34,8 +35,7 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
     async Task<CommandResult> SortAsync(GameConnectionContext context, Packet packet)
     {
         var request = InventoryRequests.Sort(packet.Body);
-        var result = context.BlocksTownActions ? InventoryResult.Reject() :
-            context.Session.MutateInventory(character => inventory.Sort(character, request));
+        var result = context.Session.MutateInventory(character => inventory.Sort(character, request), requireTown: IsCargo(request.List));
         await context.Reply(CmdPacketType.SORT_ITEM, InventoryPackets.Sort(request, result), result.Accepted ? "sort_item_committed" : "sort_item_rejected");
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
@@ -44,10 +44,17 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
     async Task<CommandResult> DeleteAsync(GameConnectionContext context, Packet packet)
     {
         var request = InventoryRequests.Delete(packet.Body);
-        var result = context.BlocksTownActions ? InventoryResult.Reject() : context.Session.MutateInventory(character => inventory.Delete(character, request));
-        var current = context.Session.Selected?.Inventory ?? InventorySnapshot.Empty;
-        await context.Reply(CmdPacketType.DELETE_ITEM, InventoryPackets.Delete(request, result, current), result.Accepted ? "delete_item_committed" : "delete_item_rejected");
-        await projection.RefreshAsync(context, result);
+        var result = context.Session.MutateInventory(character => inventory.Delete(character, request), requireTown: IsCargo(request.List));
+        var current = result.Receipt?.Character.Inventory ?? InventorySnapshot.Empty;
+        await context.Reply(CmdPacketType.DELETE_ITEM, InventoryPackets.Delete(request, result, current),
+            result.Accepted ? "delete_item_committed" : "delete_item_rejected",
+            result.Receipt is { } receipt ? () => context.Session.CanPublishInventory(receipt) : null);
+        // 材料余额已由 ACK18 更新；重复发送 NOTI14 会把剩余数量显示成获得物品。
+        var acknowledgedSlots = request.Items.Where(item => item.Type == 2)
+            .Select(item => new InventorySlot(request.List, item.Slot)).ToHashSet();
+        await projection.RefreshAsync(context, result, acknowledgedSlots);
         return CommandResult.Handled;
     }
+
+    private static bool IsCargo(InventoryListType list) => list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo;
 }

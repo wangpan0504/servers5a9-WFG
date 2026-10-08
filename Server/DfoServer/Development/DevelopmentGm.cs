@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Mailbox;
 using DfoServer.GameWorld.Items;
+using System.Text.Json;
 
 namespace DfoServer.Development;
 
@@ -11,11 +12,11 @@ internal static partial class DevelopmentGm
 {
     public const string Written = " 已写入。服务端通行校验立即使用新等级和任务。客户端回到选角并再次进入后刷新画面。属性块仍是匹配职业的初始值。";
     public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find,
-        MailboxService? mailbox = null, ItemCatalog? items = null)
+        MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null)
     {
         try
         {
-            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items);
+            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress);
         }
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
         {
@@ -24,7 +25,7 @@ internal static partial class DevelopmentGm
     }
 
     public static string Execute(ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find, DevelopmentRequest request,
-        MailboxService? mailbox = null, ItemCatalog? items = null)
+        MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null)
     {
         try
         {
@@ -33,6 +34,13 @@ internal static partial class DevelopmentGm
                 return SendItem(request, mailbox ?? throw new InvalidOperationException("邮件服务未装配"),
                     items ?? throw new InvalidOperationException("物品资源未装配"));
             var live = find(request.Account);
+            if (request.Action == DevelopmentAction.GrowOptions)
+            {
+                var roster = live is null ? WithLease(owners, request.Account, repository.ListRoster) : live.Roster();
+                var role = roster.SingleOrDefault(value => string.Equals(value.Name, request.Name, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new InvalidDataException("角色不存在");
+                return FormatGrowthOptions(role.Job, role.GrowType, progress ?? throw new InvalidOperationException("职业资源未装配"));
+            }
             if (!request.Writes)
             {
                 var rows = live is null ? WithLease(owners, request.Account, repository.List) : live.QueryCharacters();
@@ -44,6 +52,19 @@ internal static partial class DevelopmentGm
                 var character = live is not null ? live.SetCharacterGold(request.Name, (uint)request.Primary) :
                     WithLease(owners, request.Account, lease => SetGold(repository, lease, request));
                 return "OK " + Summary(character) + " 该角色金币已设为 " + character.Inventory.Gold + "。客户端回到选角并再次进入后刷新。";
+            }
+            if (request.Action is DevelopmentAction.Level or DevelopmentAction.Grow)
+            {
+                var reset = progress ?? throw new InvalidOperationException("等级和职业技能资源未装配");
+                var edit = request.ToProgressEdit();
+                var character = live is not null ? live.ResetProgress(edit, reset) : WithLease(owners, request.Account, lease =>
+                {
+                    var target = repository.ListRoster(lease).SingleOrDefault(value => string.Equals(value.Name, request.Name, StringComparison.OrdinalIgnoreCase))
+                        ?? throw new InvalidDataException("角色不存在");
+                    var before = repository.LoadCharacter(lease, target.Slot);
+                    return repository.ResetProgress(lease, reset.Prepare(before, edit));
+                });
+                return "OK " + Summary(character) + " 已写入。双技能树已重建，SP/TP恢复为当前等级的完整额度，保留已登记的额外点数。客户端回到选角并再次进入后刷新。";
             }
             var updated = live is null ? WithLease(owners, request.Account, lease => repository.UpdateProgress(lease, request.ToProgressEdit())) : live.UpdateProgress(request.ToProgressEdit());
             return "OK " + Summary(updated) + Written;
@@ -63,6 +84,17 @@ internal static partial class DevelopmentGm
             throw new InvalidOperationException(reason == OwnerRejectReason.DuplicateAccountOwner ? "账号正在使用，请重试" : "无法取得账号");
         using (lease)
             return action(lease);
+    }
+
+    static string FormatGrowthOptions(byte job, byte grow, CharacterProgressReset progress)
+    {
+        var options = progress.GetOptions(job);
+        return "OK " + JsonSerializer.Serialize(new
+        {
+            job, first = grow & 15, second = grow >> 4,
+            options = new { baseName = options.BaseName, growTypes = options.GrowTypes.Select(value =>
+                new { value = value.Value, label = value.Label, awakenings = value.Awakenings }) }
+        });
     }
 
     static string FormatQuery(DevelopmentRequest request, Character[] rows)
@@ -89,6 +121,7 @@ internal static partial class DevelopmentGm
             " job=" + character.Job + " grow=" + character.GrowType + " level=" + character.Level +
             " story=" + character.AcceptedStoryLevel + " rev=" + character.Revision +
             " pos=" + character.Position.Town + "/" + character.Position.Area + "/" + character.Position.X + "/" + character.Position.Y +
-            " ret=" + returnPoint + " quests=" + character.CompletedQuests.Length + " skills=" + character.Skills.Length + " gold=" + character.Inventory.Gold;
+            " ret=" + returnPoint + " quests=" + character.CompletedQuests.Length + " skills=" + character.Skills.Length + " gold=" + character.Inventory.Gold +
+            (character.Learning.Initialized ? " sp=" + character.Learning.Trees.Single(tree => tree.Context == 0).Sp + " tp=" + character.Learning.Trees.Single(tree => tree.Context == 0).Tp : "");
     }
 }

@@ -1,3 +1,4 @@
+using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
@@ -10,13 +11,7 @@ internal static class DungeonEntryPlanTests
 {
     public static void Run(PvfArchive pvf)
     {
-        int checks = 0;
-        void Check(bool condition, string name)
-        {
-            checks++;
-            if (!condition)
-                throw new Exception("FAIL: " + name);
-        }
+        int checks = Count;
 
         var catalog = DungeonCatalog.Load(pvf);
         var character = new Character(17, 0, "Plan", 42, new Location(38, 2, 100, 200, 0), null)
@@ -25,17 +20,17 @@ internal static class DungeonEntryPlanTests
             ActiveMainQuests = [new(0, 3145, 1)]
         };
         bool created = DungeonEntryPlan.TryCreate(catalog, character, 3, 3145, 0, out var plan, out string reason);
-        Check(created && plan is not null && reason == "resource-plan-ready", "active 3145 creates a resource plan");
+        That(created && plan is not null && reason == "resource-plan-ready", "active 3145 creates a resource plan");
         var selected = plan ?? throw new Exception("FAIL: missing resource plan");
-        Check(selected.CharacterId == 17 && selected.CharacterRevision == 42 && selected.DungeonId == 3 && selected.QuestId == 3145
+        That(selected.CharacterId == 17 && selected.CharacterRevision == 42 && selected.DungeonId == 3 && selected.QuestId == 3145
             && selected.ActiveQuestSlot == 0 && selected.Difficulty == 0, "plan retains character and request identity");
-        Check(selected.Maze.SourceOrdinal == 1 && selected.Maze.Width == 5 && selected.Maze.Height == 2
+        That(selected.Maze.SourceOrdinal == 1 && selected.Maze.Width == 5 && selected.Maze.Height == 2
             && selected.StartMap.Id == 76121 && selected.StartMap.Position == new DungeonPoint(0, 1)
             && selected.BossMap.Id == 76126 && selected.BossMap.Position == new DungeonPoint(4, 0), "3145 uses its task maze instead of the ordinary maze");
-        Check(character.Revision == 42 && character.Position == new Location(38, 2, 100, 200, 0)
+        That(character.Revision == 42 && character.Position == new Location(38, 2, 100, 200, 0)
             && character.CompletedQuests.Length == 0 && character.ActiveMainQuests.SequenceEqual([new ActiveMainQuest(0, 3145, 1)]),
             "resource selection does not mutate character progress or position");
-        Check(DungeonEntryPlan.TryCreate(catalog, character, 3, 3145, 0, out var repeat, out _) && repeat == selected,
+        That(DungeonEntryPlan.TryCreate(catalog, character, 3, 3145, 0, out var repeat, out _) && repeat == selected,
             "repeated resource selection has no new instance or state transition");
 
         Reject(character with { ActiveMainQuests = [] }, 3, 3145, 0, "quest-not-active");
@@ -80,21 +75,21 @@ internal static class DungeonEntryPlanTests
         var fixtureStart = new DungeonMap("map", new(1, 0), 123, "map/fixture-start.map");
         var fixtureBoss = new DungeonMap("boss", new(0, 0), 456, "map/fixture-boss.map");
         var movedMaze = maze with { SourceOrdinal = 7, Width = 2, Height = 1, Starts = [fixtureStart.Position], Bosses = [fixtureBoss.Position], MapSpecification = [fixtureStart, fixtureBoss] };
-        Check(DungeonEntryPlan.TryCreate(definition with { Mazes = [movedMaze] }, character, 3, 3145, 0, out var moved, out _)
+        That(DungeonEntryPlan.TryCreate(definition with { Mazes = [movedMaze] }, character, 3, 3145, 0, out var moved, out _)
             && moved is not null && moved.StartMap == fixtureStart && moved.BossMap == fixtureBoss && moved.Maze.SourceOrdinal == 7,
             "plan derives map IDs, coordinates and source ordinal from resource definitions");
-        Console.WriteLine($"PASS {checks} dungeon entry plan assertions");
+        Console.WriteLine($"PASS {Count - checks} dungeon entry plan assertions");
 
         void Reject(Character input, uint dungeonId, uint questId, byte difficulty, string expected)
         {
             bool accepted = DungeonEntryPlan.TryCreate(catalog, input, dungeonId, questId, difficulty, out var rejected, out string actual);
-            Check(!accepted && rejected is null && actual == expected, "resource request rejects " + expected);
+            That(!accepted && rejected is null && actual == expected, "resource request rejects " + expected);
         }
 
         void RejectDefinition(DungeonDefinition input, string expected)
         {
             bool accepted = DungeonEntryPlan.TryCreate(input, character, 3, 3145, 0, out var rejected, out string actual);
-            Check(!accepted && rejected is null && actual == expected, "resource definition rejects " + expected);
+            That(!accepted && rejected is null && actual == expected, "resource definition rejects " + expected);
         }
 
         void RejectMaze(DungeonMaze input, string expected) => RejectDefinition(definition with { Mazes = [input] }, expected);

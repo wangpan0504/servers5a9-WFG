@@ -3,7 +3,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
-using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -14,7 +13,7 @@ internal static class MaterialExchangeTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "material-exchange"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "material-exchange"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var catalog = itemResources.Items;
@@ -60,7 +59,6 @@ internal static class MaterialExchangeTcpTests
             peer.Barrier();
             That(before == Snapshot(), "insufficient repeated multi-material requests neither debit nor grant");
         }
-        await fixture.StopAsync();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single();
@@ -69,18 +67,17 @@ internal static class MaterialExchangeTcpTests
             after = after with { Items = after.Items.Add(new(0, Bag(3), Core(10305616, 1) with { EquipmentLockId = 1 })) };
             repo.CommitInventory(owner, current, new(current.Inventory, after, "exchange_fixture_refill"));
         }
-        await fixture.StartAsync("material-exchange-restart");
         using (var peer = Open(fixture))
         {
             var packets = peer.Select(inventoryNotices: [(0, 251)]);
             Entry(packets[4].Body, 9, 101000783, 999999998, full: true);
             Entry(packets[4].Body, 65, 10099377, 3, full: true);
             string before = Snapshot();
-            Sql("CREATE TRIGGER fail_multi BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'multi rollback'); END");
+            fixture.Sql("CREATE TRIGGER fail_multi BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'multi rollback'); END");
             Buy(peer, 101000783, 1, 247, 486);
             peer.Closed();
             That(before == Snapshot(), "failed transaction restores both costs and output, with no ACK or partial notifications");
-            Sql("DROP TRIGGER fail_multi");
+            fixture.Sql("DROP TRIGGER fail_multi");
         }
         using (var peer = Open(fixture))
         {
@@ -122,14 +119,6 @@ internal static class MaterialExchangeTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
-        void Sql(string sql)
-        {
-            using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False");
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
         ItemCore Core(int id, int count) => InventoryRewardGrantService.Create(catalog.Get(id), count);
     }
 
