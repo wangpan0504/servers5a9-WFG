@@ -105,8 +105,6 @@ internal static class DungeonMonsterPlanTests
             bossRoom.Monsters[0].RankKind == "[boss]" && bossRoom.Monsters[1].MonsterId == 107000906 &&
             bossRoom.Monsters[1].RankKind == "[normal]", "76126真实Boss与普通怪物身份分别保留");
         var bossPlan = DungeonMonsterPlan.FromRoom(bossRoom, 99, 100);
-        That(bossPlan.Monsters.Select(monster => monster.Team).SequenceEqual([100, 0]),
-            "Boss与Tobi实际创建team不同，不由normal或名称推定敌方");
         That(bossPlan.Monsters.Count == 2 && bossPlan.Monsters.All(monster => monster.CandidateLevel == 3) &&
             bossPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 3, 0 }),
             "76126完整Boss与普通怪物计划分别保留类型3和0，等级均为资源Lv3");
@@ -125,10 +123,6 @@ internal static class DungeonMonsterPlanTests
 
         var source = first.Room.Monsters[0];
         DungeonRoomDefinition With(DungeonRoomMonster value) => first.Room with { Monsters = Array.AsReadOnly(new[] { value }), MonsterTeams = null };
-        That(DungeonMonsterPlan.FromRoom(With(source with { Team = null }), 99, 10).Monsters[0].Team == 100 &&
-            DungeonMonsterPlan.FromRoom(With(source with { Team = -1 }), 99, 10).Monsters[0].Team == 100 &&
-            DungeonMonsterPlan.FromRoom(With(source with { Team = 0 }), 99, 10).Monsters[0].Team == 0,
-            "缺失或负team按创建默认100，显式0原样保留");
         void Unsupported(DungeonRoomMonster value, string name)
             => Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(With(value), 99, 10), name);
         Unsupported(source with { RawValues = [1, 0, 3, 573, 197, 0, 1] }, "unknown short row stays unsupported");

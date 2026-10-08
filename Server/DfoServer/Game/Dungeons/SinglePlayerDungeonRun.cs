@@ -45,23 +45,15 @@ internal sealed class ConfirmedDungeonMonsterDeath
 }
 
 // 显式连接必须由匹配资源和门/墙规则的资格检查提供；相邻坐标本身不是连接证据。
-internal sealed record DungeonFixedRoute(IReadOnlyList<DungeonMonsterPlan> Rooms, IReadOnlyList<DungeonRouteConnection> Connections)
-{
-    // 由本场景已核验的本人阵营owner提供；缺失时不把team0行自动当作友方。
-    public int? PlayerTeam { get; init; }
-}
+internal sealed record DungeonFixedRoute(IReadOnlyList<DungeonMonsterPlan> Rooms, IReadOnlyList<DungeonRouteConnection> Connections);
 
 internal sealed class SinglePlayerDungeonRun
 {
-    private sealed class Room(DungeonMonsterPlan plan, int? playerTeam)
+    private sealed class Room(DungeonMonsterPlan plan)
     {
         public DungeonMonsterPlan Plan { get; } = plan;
         public HashSet<ushort> Dead { get; } = [];
-        public bool RequiresClear(DungeonPlannedMonster monster) =>
-            monster.IsBlocking && (playerTeam is null || monster.Team != playerTeam.Value);
-        public bool Cleared => Plan.Monsters.All(monster => !RequiresClear(monster) || Dead.Contains(monster.ObjectKey));
-        public bool ClearedAfter(ushort key) => Plan.Monsters.All(monster => !RequiresClear(monster) ||
-            monster.ObjectKey == key || Dead.Contains(monster.ObjectKey));
+        public bool Cleared => Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey));
     }
     private sealed record ActionFact(DungeonRunIdentity Identity, string Kind, DungeonPoint? Target);
     private readonly DungeonEntryPlan entry;
@@ -84,10 +76,9 @@ internal sealed class SinglePlayerDungeonRun
     internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
         Phase == SinglePlayerDungeonPhase.Dungeon && !current.Dead.Contains(key)
-            ? current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key && current.RequiresClear(monster)) : null;
+            ? current.Plan.Monsters.SingleOrDefault(monster => monster.IsBlocking && monster.ObjectKey == key) : null;
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
     public DungeonClearFact? ClearFact { get; private set; }
-    public DungeonClearFact? CommittedClearFact => ClearFact;
     public bool HasPendingSettlement => pendingSettlement is not null;
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()));
@@ -97,7 +88,7 @@ internal sealed class SinglePlayerDungeonRun
         this.entry = entry;
         this.authority = authority;
         rooms = route.Rooms.ToDictionary(plan => plan.Room.Map.Position, plan => new Room(
-            plan with { Monsters = Array.AsReadOnly(plan.Monsters.ToArray()) }, route.PlayerTeam));
+            plan with { Monsters = Array.AsReadOnly(plan.Monsters.ToArray()) }));
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = rooms[entry.StartMap.Position];
         identity = new(entry.CharacterId, entry.QuestId, attempt, Guid.NewGuid(), epoch);
@@ -246,8 +237,7 @@ internal sealed class SinglePlayerDungeonRun
                 ? new(DungeonRunOutcome.Accepted, pendingDeath) : new(DungeonRunOutcome.Rejected);
         if (!Matches(confirmed.Identity) || Phase != SinglePlayerDungeonPhase.Dungeon || confirmed.EventId == Guid.Empty ||
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
-            !current.Plan.Monsters.Any(monster => current.RequiresClear(monster) && monster.ObjectKey == confirmed.MonsterKey) ||
-            current.Dead.Contains(confirmed.MonsterKey))
+            !current.Plan.Monsters.Any(monster => monster.IsBlocking && monster.ObjectKey == confirmed.MonsterKey) || current.Dead.Contains(confirmed.MonsterKey))
             return new(DungeonRunOutcome.Rejected);
         bool settles = TerminalBossCleared(confirmed.MonsterKey);
         DungeonRunIdentity nextIdentity = settles ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
@@ -357,13 +347,13 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (current.Plan.Room.Map != entry.BossMap || rooms.Values.Any(room => room != current && !room.Cleared))
             return false;
-        if (current.Plan.Monsters.All(monster => !current.RequiresClear(monster) || current.Dead.Contains(monster.ObjectKey) ||
+        if (current.Plan.Monsters.All(monster => !monster.IsBlocking || current.Dead.Contains(monster.ObjectKey) ||
             monster.ObjectKey == preparedMonsterKey))
             return true;
         bool hasBlockingBoss = false;
         foreach (var monster in current.Plan.Monsters)
         {
-            if (!current.RequiresClear(monster) || monster.Source.RankKind != "[boss]")
+            if (!monster.IsBlocking || monster.Source.RankKind != "[boss]")
                 continue;
             hasBlockingBoss = true;
             if (!current.Dead.Contains(monster.ObjectKey) && monster.ObjectKey != preparedMonsterKey)

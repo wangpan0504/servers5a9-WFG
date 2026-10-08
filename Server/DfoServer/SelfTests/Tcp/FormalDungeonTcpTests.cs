@@ -22,8 +22,6 @@ internal static class FormalDungeonTcpTests
         ulong experience = 0;
         ushort nextKey;
         int picked = 0;
-        bool learned190 = false;
-        byte previousLevel = 1;
         int upgradedRoomMoves = 0, clearLevelRefreshes = 0;
         byte projectedLevel = 1;
         byte automaticLevel = resources.Characters.Get(0).Skills.Single(skill => skill.Id == 174).Level;
@@ -40,14 +38,6 @@ internal static class FormalDungeonTcpTests
             }
             peer.Select();
             EntryTown(peer);
-            string pendingQuest = fixture.Snapshot();
-            peer.Send(33, Convert.FromHexString("2100490C0000"));
-            peer.Barrier();
-            That(fixture.Snapshot() == pendingQuest, "客户端提前报告清图不产生达成或伪成功ACK33");
-            peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
-            peer.Expect(1, 34, [0, 19, 0]);
-            peer.Barrier();
-            That(fixture.Snapshot() == pendingQuest, "未清图领奖中立19拒绝，同连接无伪成功或资产变化");
             var map = Enter(peer);
             var target = new (byte X, byte Y)[] { (1, 1), (2, 1), (2, 0), (3, 0), (4, 0) };
             int[] ids = [76121, 76122, 76123, 76124, 76125, 76126];
@@ -74,7 +64,7 @@ internal static class FormalDungeonTcpTests
                     ushort key = U16(map, offset + 6);
                     byte level = map[offset + 12];
                     byte[] report = Death(key, peer.Id, level);
-                    if (U32(map, offset + 8) == 107000906)
+                    if (room == ids.Length - 1 && U32(map, offset + 8) == 107000906)
                     {
                         peer.Send(39, report); peer.Barrier();
                         That(Experience(fixture, peer.Id) == experience &&
@@ -111,27 +101,8 @@ internal static class FormalDungeonTcpTests
                     byte expectedLevel = 1;
                     while (experience >= growth.GetCumulativeExperienceBoundary(expectedLevel)) expectedLevel++;
                     That(notice.Length == 91 && notice[0] == expectedLevel && U64(notice, 1) == experience &&
-                        U32(notice, 9) == kills.GetExperience(level) && U16(notice, 13) == growth.GetSpDelta(1, expectedLevel) - (learned190 ? 10 : 0) &&
-                        U16(notice, 15) == growth.GetSpDelta(1, expectedLevel) - (learned190 ? 10 : 0), "完整NOTI37绝对经验等级及已消费两树SP来自已提交角色");
-                    previousLevel = expectedLevel;
-                    if (!learned190 && expectedLevel >= 2)
-                    {
-                        for (byte tree = 0; tree < 2; tree++)
-                        {
-                            peer.Send(29, Learn190(tree));
-                            byte[] ack = peer.Expect(1, 29).Body;
-                            That(ack.Length == 13 && ack[0] == 1 && ack[1] == tree &&
-                                U16(ack, 2) == growth.GetSpDelta(1, expectedLevel) - 10 && U16(ack, 4) == 0 &&
-                                ack[6] == 1 && ack[7] != 255 && U16(ack, 8) == 190 && ack[10] == 1 && ack[11] == 0 && ack[12] == 0,
-                                "正式副本自然升级后11B受身蹲伏首学扣正确树10SP并发布完整ACK");
-                            string learnedState = fixture.Snapshot();
-                            peer.Send(29, Learn190(tree));
-                            peer.Expect(1, 29, [0, 0x12, 0]);
-                            peer.Barrier();
-                            That(fixture.Snapshot() == learnedState, "重复受身蹲伏按已证精通12拒绝，无重复扣费且连接可继续");
-                        }
-                        learned190 = true;
-                    }
+                        U32(notice, 9) == kills.GetExperience(level) && U16(notice, 13) == growth.GetSpDelta(1, expectedLevel) &&
+                        U16(notice, 15) == growth.GetSpDelta(1, expectedLevel), "完整NOTI37绝对经验等级及两树SP来自已提交角色");
                     if (room == ids.Length - 1 && map[offset + 13] == 3)
                     {
                         int bossOffset = 19 + Enumerable.Range(0, count).Single(row => map[19 + row * 22 + 13] == 3) * 22;
@@ -201,10 +172,8 @@ internal static class FormalDungeonTcpTests
                     if (projectedLevel > roomLevel) upgradedRoomMoves++;
                 }
             }
-            That(learned190 && fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id) is [[28L]] &&
-                fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3145", peer.Id) is [[0L]] &&
-                fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0", peer.Id) is [[1L]],
-                "六房28条敌方成长事实、两树学习和唯一接取清图事务，剧情Tobi无需死亡");
+            That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id) is [[28L]],
+                "六房28个敌对对象各一条成长事实，友方托比没有伪造击杀或额外经验");
             That(upgradedRoomMoves > 0, "副本升级只发Player后仍能清完当前房间、成功换房并加载下一房");
             var clearCatalog = DungeonClearExperienceCatalog.Load(resources.Archive);
             var clearReward = clearCatalog.Calculate(DungeonCatalog.Load(resources.Archive).Get(3), 0, 90);
@@ -223,7 +192,112 @@ internal static class FormalDungeonTcpTests
             byte[] changedResult = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99);
             peer.Send(46, changedResult); peer.Barrier();
             That(Experience(fixture, peer.Id) == experience, "改变评分的46不能替换冻结报告");
+            peer.Send(69); peer.Expect(1, 69, [1]);
+            peer.Send(70); That(peer.Expect(1, 70).Body.Length == 17, "70普通八槽完整ACK");
+            peer.Send(71, [0, 0]); That(peer.Expect(1, 71).Body.Length == 33, "71空道具结果保留八槽完整ACK");
+            peer.Send(72, [2, 2]); peer.Expect(1, 72, [1, 2, 2]);
+            peer.Send(72, [1, 2]); peer.Expect(1, 72, [1, 1, 2]);
+            peer.Expect(0, 24);
+            peer.Barrier();
+            That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assetsBeforeClear &&
+                Experience(fixture, peer.Id) == experience, "空翻牌及结果页回城不生成道具或重复经验");
+            ClearAgain(Enter(peer));
+            peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 261, [9]);
+            peer.Expect(0, 28);
+            byte[] retryMap = peer.Expect(0, 29).Body;
+            That(U16(retryMap, 25) > U16(map, 25), "再挑战创建新Run、新尝试及新怪key");
+            ClearAgain(retryMap);
+            peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 1]); peer.Expect(1, 15, [1]);
+            peer.Send(72, [1, 3]); peer.Expect(1, 72, [1, 1, 3]);
+            SelectMap(peer);
+            peer.Send(132); peer.Expect(1, 132, [1]);
+            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]); peer.Expect(0, 23); peer.Expect(0, 24);
+            peer.Barrier();
+            That(Experience(fixture, peer.Id) == experience && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[3L]],
+                "再挑战各一次结算，重选按真实15/132退出，旧报告不跨实例重复发奖");
+            That(clearLevelRefreshes > 0, "真实通关经验跨级实际触发Player刷新，重复报告没有额外刷新");
+            nextKey = checked((ushort)Convert.ToInt64(fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]));
 
+            void ReadClear()
+            {
+                byte[] result = peer.Expect(0, 34).Body;
+                byte previousLevel = projectedLevel;
+                byte[] exp = ReadGrowth();
+                if (exp[0] > previousLevel) clearLevelRefreshes++;
+                byte[] clear = peer.Expect(0, 35).Body;
+                That(result.Length == 16 && result[6] == 90 && U16(result, 9) == peer.Id && exp.Length == 91 &&
+                    U32(exp, 9) == clearReward.TotalExperience && clear.Length == 218 && U32(clear, 0) == clearReward.BaseExperience &&
+                    U32(clear, 4) == clearReward.RankExperience && clear[192] == 1,
+                    "正式结算34→37→35匹配宽度，显示冻结评分及已提交奖励");
+            }
+
+            void ClearAgain(byte[] startMap)
+            {
+                for (int room = 0; room < ids.Length; room++)
+                {
+                    Load(peer);
+                    int count = startMap[18];
+                    for (int index = 0; index < count; index++)
+                    {
+                        int offset = 19 + index * 22;
+                        if (U32(startMap, offset + 8) == 107000906) continue;
+                        peer.Send(39, Death(U16(startMap, offset + 6), peer.Id, startMap[offset + 12]));
+                        peer.Expect(0, 38);
+                        experience = U64(ReadGrowth(), 1);
+                    }
+                    if (room == ids.Length - 1)
+                    {
+                        peer.Expect(0, 115); peer.Expect(0, 31, []);
+                    }
+                    else
+                    {
+                        byte[] move = new byte[100]; move[0] = target[room].X; move[1] = target[room].Y;
+                        peer.Send(45, move); peer.Expect(1, 45, [1]); startMap = peer.Expect(0, 29).Body;
+                    }
+                }
+            }
+
+            byte[] ReadGrowth()
+            {
+                byte[] packet = peer.Expect(0, 37).Body;
+                if (packet[0] > automaticLevel)
+                {
+                    var skills = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
+                    That(skills.All(tree => tree.Skills.Single(skill => skill.Id == 174).Level == packet[0]) &&
+                        skills[0].Skills.Single(skill => skill.Id == 5).Slot == 6,
+                        "升级固定技能时跟随完整技能同步，战斗换槽保持稳定");
+                    automaticLevel = packet[0];
+                }
+                if (packet[0] != projectedLevel)
+                    ExpectLevelRefresh(peer, packet[0], U64(packet, 1));
+                projectedLevel = packet[0];
+                return packet;
+            }
+        }
+        VerifyEntryRecoveryAndJobs(fixture, kills);
+        string persisted = fixture.Snapshot("SELECT level,experience FROM characters");
+        string inventory = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
+        string points = fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context");
+        await fixture.StopAsync();
+        await fixture.StartAsync("actual-restart", isolatedProcess: true);
+        That(fixture.Snapshot("SELECT level,experience FROM characters") == persisted &&
+            fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context") == points &&
+            fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == inventory,
+            "真实停服重启保留经验等级及两树SP");
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            EntryTown(peer);
+            var map = Enter(peer);
+            That(U16(map, 25) >= nextKey, "重登及服务重启不复用旧实例怪key");
+            Load(peer);
+            peer.Send(39, oldReport!);
+            peer.Barrier();
+            That(Experience(fixture, peer.Id) == experience, "新实例拒绝上轮死亡请求，不增加资产经验");
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Barrier();
+            byte previousLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
             string afterClear = fixture.Snapshot();
             for (int replay = 0; replay < 2; replay++)
             {
@@ -275,8 +349,8 @@ internal static class FormalDungeonTcpTests
             var questGrowth = peer.Expect(0, 37).Body;
             if (rewardLevel > previousLevel) peer.Expect(0, 19);
             That(questGrowth.Length == 91 && questGrowth[0] == rewardLevel && U64(questGrowth, 1) == experience &&
-                U32(questGrowth, 9) == 1780 && U16(questGrowth, 13) == growth.GetSpDelta(1, rewardLevel) - 10 &&
-                U16(questGrowth, 15) == growth.GetSpDelta(1, rewardLevel) - 10 &&
+                U32(questGrowth, 9) == 1780 && U16(questGrowth, 13) == growth.GetSpDelta(1, rewardLevel) &&
+                U16(questGrowth, 15) == growth.GetSpDelta(1, rewardLevel) &&
                 fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id) is [[long questRevision]] && questRevision == beforeQuestRevision + 1 &&
                 fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long gold]] && gold == beforeQuestGold &&
                 fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", peer.Id) is [[0L]] &&
@@ -284,7 +358,7 @@ internal static class FormalDungeonTcpTests
                 fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0", peer.Id) is [[1L]],
                 "经验自然跨级/SP/七资产/清槽/完成表/领奖receipt与唯一revision同事务，金币不猜补");
             if (rewardLevel != previousLevel)
-                ExpectLevelRefresh(peer, rewardLevel, experience);
+                ExpectLevelRefresh(peer, rewardLevel, experience, town: true);
             string afterAward = fixture.Snapshot();
             string awardedAssets = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
@@ -292,93 +366,7 @@ internal static class FormalDungeonTcpTests
             peer.Barrier();
             That(fixture.Snapshot() == afterAward && fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == awardedAssets,
                 "同连接重复完成仅中立拒绝，不重发incremental物品或重复经验");
-            peer.Send(69); peer.Expect(1, 69, [1]);
-            peer.Send(70); That(peer.Expect(1, 70).Body.Length == 17, "70普通八槽完整ACK");
-            peer.Send(71, [0, 0]); That(peer.Expect(1, 71).Body.Length == 33, "71空道具结果保留八槽完整ACK");
-            peer.Send(72, [2, 2]); peer.Expect(1, 72, [1, 2, 2]);
-            peer.Send(72, [1, 2]); peer.Expect(1, 72, [1, 1, 2]);
-            peer.Expect(0, 24);
-            peer.Barrier();
-            That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == awardedAssets &&
-                Experience(fixture, peer.Id) == experience, "空翻牌及结果页回城不生成道具或重复经验");
 
-            nextKey = checked((ushort)Convert.ToInt64(fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]));
-
-            void ReadClear()
-            {
-                byte[] result = peer.Expect(0, 34).Body;
-                byte previousLevel = projectedLevel;
-                byte[] exp = ReadGrowth();
-                if (exp[0] > previousLevel) clearLevelRefreshes++;
-                byte[] clear = peer.Expect(0, 35).Body;
-                That(result.Length == 16 && result[6] == 90 && U16(result, 9) == peer.Id && exp.Length == 91 &&
-                    U32(exp, 9) == clearReward.TotalExperience && clear.Length == 218 && U32(clear, 0) == clearReward.BaseExperience &&
-                    U32(clear, 4) == clearReward.RankExperience && clear[192] == 1,
-                    "正式结算34→37→35匹配宽度，显示冻结评分及已提交奖励");
-            }
-
-            byte[] ReadGrowth()
-            {
-                byte[] packet = peer.Expect(0, 37).Body;
-                if (packet[0] > automaticLevel)
-                {
-                    var skills = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
-                    That(skills.All(tree => tree.Skills.Single(skill => skill.Id == 174).Level == packet[0]) &&
-                        skills[0].Skills.Single(skill => skill.Id == 5).Slot == 6,
-                        "升级固定技能时跟随完整技能同步，战斗换槽保持稳定");
-                    automaticLevel = packet[0];
-                }
-                if (packet[0] != projectedLevel)
-                    ExpectLevelRefresh(peer, packet[0], U64(packet, 1));
-                projectedLevel = packet[0];
-                return packet;
-            }
-        }
-        VerifyEntryRecoveryAndJobs(fixture, kills);
-        string persisted = fixture.Snapshot("SELECT level,experience FROM characters");
-        string inventory = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
-        string points = fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context");
-        string skills = fixture.Snapshot("SELECT context,slot,skill_id,level FROM character_skill_bindings ORDER BY context,slot");
-        string quests = fixture.Snapshot("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests ORDER BY slot");
-        string clears = fixture.Snapshot("SELECT acceptance_id,event_id,instance_id,revision FROM character_quest_clear_receipts");
-        string completions = fixture.Snapshot("SELECT acceptance_id,experience_amount,revision,rewards FROM character_quest_completion_receipts");
-        string completed = fixture.Snapshot("SELECT quest_id FROM character_completed_quests ORDER BY quest_id");
-        string fatigueState = fixture.Snapshot("SELECT used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary FROM character_fatigue");
-        string fatigueReceipts = fixture.Snapshot("SELECT instance_id,task_attempt,map_id,before_revision,revision FROM character_dungeon_fatigue_receipts ORDER BY map_id");
-        That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=1") is [[6L, 150L]] &&
-            fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE character_id=1") is [[6L]], "六房真实加载只持久扣六点及六个唯一地图receipt");
-        await fixture.StopAsync();
-        await fixture.StartAsync("actual-restart", isolatedProcess: true);
-        That(fixture.Snapshot("SELECT level,experience FROM characters") == persisted &&
-            fixture.Snapshot("SELECT used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary FROM character_fatigue") == fatigueState &&
-            fixture.Snapshot("SELECT instance_id,task_attempt,map_id,before_revision,revision FROM character_dungeon_fatigue_receipts ORDER BY map_id") == fatigueReceipts &&
-            fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context") == points &&
-            fixture.Snapshot("SELECT context,slot,skill_id,level FROM character_skill_bindings ORDER BY context,slot") == skills &&
-            fixture.Snapshot("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests ORDER BY slot") == quests &&
-            fixture.Snapshot("SELECT acceptance_id,event_id,instance_id,revision FROM character_quest_clear_receipts") == clears &&
-            fixture.Snapshot("SELECT acceptance_id,experience_amount,revision,rewards FROM character_quest_completion_receipts") == completions &&
-            fixture.Snapshot("SELECT quest_id FROM character_completed_quests ORDER BY quest_id") == completed &&
-            fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == inventory,
-            "隔离实际停服重启保留经验等级、资产、两树SP/技能槽及任务接取清图账本");
-        using (var peer = Open(fixture))
-        {
-            peer.Select(prepared: true);
-            EntryTown(peer);
-            peer.Send(33, Convert.FromHexString("2100490C0000"));
-            peer.Barrier();
-            peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
-            peer.Expect(1, 34, [0, 19, 0]);
-            peer.Barrier();
-            That(fixture.Snapshot("SELECT acceptance_id,experience_amount,revision,rewards FROM character_quest_completion_receipts") == completions &&
-                fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == inventory,
-                "重登与实际隔离重启后旧领奖请求拒绝，不重复消耗或增量客户端奖励");
-            SelectMap(peer);
-            peer.Send(16, Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000"));
-            peer.Expect(1, 16, [0, 9, 0, 0]);
-            peer.Barrier();
-            That(Convert.ToInt64(fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]) == nextKey &&
-                fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
-                "已达成3145重登及重启不伪装首次准入或重新消费对象身份");
         }
         await fixture.StopAsync();
         Console.WriteLine($"PASS 正式TCP静默拒绝后回城重进、全部职业和转职加载、原生统计合成击杀、六房升级、真实随机拾取{picked}件、重复拒绝及服务重启（非Windows实机；零样本不作拾取覆盖）");
@@ -451,6 +439,7 @@ internal static class FormalDungeonTcpTests
                 {
                     peer.Send(16, rejection);
                     peer.Expect(1, 16, [0, 9, 0, 0]);
+                    // 下一帧必须直接为屏障ACK；拒绝不附带弹窗、入场或自动回城通知。
                     peer.Barrier();
                     That(fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == before,
                         $"职业{job}重复准入拒绝保留角色revision、attempt与key，不发成功通知");
@@ -508,16 +497,6 @@ internal static class FormalDungeonTcpTests
 
     static ulong Experience(TcpTestFixture fixture, ushort id) => checked((ulong)Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", id)[0][0]));
     static ulong U64(byte[] body, int at) => BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(at));
-    static byte[] Learn190(byte tree)
-    {
-        byte[] bytes = [tree, 1, 190, 0, 0, 1, 0, 0, 0, 0, 0];
-        byte[] digest = MD5.HashData(bytes.AsSpan(0, 7));
-        bytes[7] = (byte)(digest[0] ^ digest[13] ^ digest[8] ^ digest[10] ^ 0x81);
-        bytes[8] = (byte)(digest[1] ^ digest[9] ^ digest[5] ^ digest[12] ^ 0x78);
-        bytes[9] = (byte)(digest[2] ^ digest[6] ^ digest[14] ^ digest[4] ^ 0x1A);
-        bytes[10] = (byte)(digest[3] ^ digest[15] ^ digest[11] ^ digest[7] ^ 0xBF);
-        return bytes;
-    }
     static void EntryTown(TcpPeer peer)
     {
         peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
@@ -549,10 +528,6 @@ internal static class FormalDungeonTcpTests
         peer.Expect(1, 37, [1]);
         peer.Expect(0, 30, new byte[5]);
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-        byte[] fatigue = peer.Expect(0, 36).Body;
-        That(fatigue.Length == 10 && U16(fatigue, 0) + U16(fatigue, 6) == U16(fatigue, 2) &&
-            U16(fatigue, 2) == 156 && U16(fatigue, 4) == 0 && U16(fatigue, 8) == 0,
-            "正式房间加载后完整五u16疲劳来自提交后快照，累积耗用与剩余互相独立");
     }
     // 明确合成的网络统计。独立正文编码/MD5折叠，不调用服务Parser/Builder自证。
     static byte[] Death(ushort key, ushort reporter, byte level, ulong decrease = 600,

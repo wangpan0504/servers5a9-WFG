@@ -18,7 +18,6 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public CharacterLearningState Learning { get; init; } = CharacterLearningState.Uninitialized;
     public InventorySnapshot Inventory { get; init; } = InventorySnapshot.Empty;
     public CharacterDungeonState? DungeonState { get; init; }
-    public CharacterFatigueState? Fatigue { get; init; }
 }
 
 internal sealed record ActiveMainQuest(byte Slot, ushort QuestId, uint ConditionState)

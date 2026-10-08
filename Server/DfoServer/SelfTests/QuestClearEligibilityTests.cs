@@ -15,12 +15,12 @@ internal static class QuestClearEligibilityTests
         var map = new DungeonMap("boss", new(0, 0), 76126, "map/cataclysm/granflores/01_mirkwood/3145_76126.map");
         var maze = new DungeonMaze(0, 1, 1, "fixture-only", [map.Position], [map.Position], [map], []);
         var source = new DungeonRoomMonster(107000903, [107000903, 0, 3, 831, 239, 0, 1, 1],
-            "[fixed]", "[boss]", "monster/fixture.mob") { Team = 100 };
+            "[fixed]", "[boss]", "monster/fixture.mob");
         var room = new DungeonRoomDefinition(map, [source], [], []);
         var monster = new DungeonPlannedMonster(0, 10, 107000903, 3, source) { SpawnType = 3 };
         var entry = new DungeonEntryPlan(99, 17, 3, 3145, 0, 0, maze, map, map) { QuestAcceptanceId = acceptance };
         var authority = new FixtureCombatAuthority();
-        var route = new DungeonFixedRoute([new(room, [monster])], []) { PlayerTeam = 0 };
+        var route = new DungeonFixedRoute([new(room, [monster])], []);
         Check(SinglePlayerDungeonRun.TryCreate(entry, 3, 500, route, authority, out var run, out _), "合成完整正式身份创建");
         run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
         var prepared = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 10)).Pending!;

@@ -27,8 +27,6 @@ internal static class SkillProtocolTcpTests
         const byte characterLevel = 20;
         ushort initialSp = checked((ushort)SkillCatalog.Load(pvf).GetLevelSpTotal(characterLevel));
         ulong initialExperience = growth.GetLevelStartExperience(characterLevel);
-        var ghostDefinition = catalog.Get(0, 5);
-        ushort bulkSp = checked((ushort)Enumerable.Range(1, 3).Sum(level => ghostDefinition.GetOrdinaryResourceSpCost(level, 0)));
         ushort[] passiveIds = [12, 35, 177];
         int passiveCost = passiveIds.Sum(id => catalog.Get(0, id).GetOrdinaryResourceSpCost(0, 0));
         // 预置仅属隔离协议fixture，不替代生产正常升级或Windows发点验收。
@@ -43,20 +41,9 @@ internal static class SkillProtocolTcpTests
                 ActiveMainQuests = [new(0, 3145, 1)],
                 Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(characters.Get(0))
             });
-            var bulk = SkillRepositoryTests.Fixture("TcpBulk", towns, characters, catalog);
-            repository.Create(owner, bulk with
-            {
-                Level = 9,
-                AcceptedStoryLevel = 1,
-                ActiveMainQuests = [new(0, 3145, 1)],
-                InitialLearning = new(growth.GetLevelStartExperience(9), Array.AsReadOnly(bulk.InitialLearning.Trees
-                    .Select(tree => tree with { Sp = bulkSp }).ToArray())),
-                Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(characters.Get(0))
-            });
         }
         await fixture.StartAsync();
         byte ghostSlot;
-        byte quickStandingSlot;
         byte[] player;
         using (var peer = Open(fixture))
         {
@@ -116,58 +103,13 @@ internal static class SkillProtocolTcpTests
             var next = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
             int cost = catalog.Get(0, 46).GetOrdinaryResourceSpCost(1, 0);
             That(next.Sp == initialSp - 15 - cost && next.Skills.Single().Id == 46, "TCP另一真实技能按PVF费用扣SP");
-            peer.Send(29, WithChecksum([0, 1, 190, 0, 0, 1, 0]));
-            var quickStanding = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
-            quickStandingSlot = quickStanding.Skills.Single().Slot;
-            That(quickStanding.Sp == initialSp - 15 - cost - 10 && quickStanding.Skills.Single().Id == 190 &&
-                quickStanding.Skills.Single().Level == 1, "TCP真实11B受身蹲伏首学准确扣10SP并返回新绑定");
-            peer.Send(29, WithChecksum([1, 1, 190, 0, 0, 1, 1]));
-            var alternateQuickStanding = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
-            That(alternateQuickStanding.Sp == initialSp - 15 - 10 && alternateQuickStanding.Skills.Single() ==
-                new LearnedSkill(quickStandingSlot, 190, 1), "另一树独立首学190保持实际slot与对应余额");
             peer.Send(29, WithChecksum([0, 3, 12, 0, 0, 1, 35, 0, 0, 1, 177, 0, 0, 1, 0]));
             var passive = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
-            That(passive.Context == 0 && passive.Sp == initialSp - 15 - cost - 10 - passiveCost && passive.Tp == 0 &&
+            That(passive.Context == 0 && passive.Sp == initialSp - 15 - cost - passiveCost && passive.Tp == 0 &&
                 passive.Skills.SequenceEqual(new LearnedSkill[] { new(12, 12, 1), new(54, 35, 1), new(105, 177, 1) }),
                 "TCP真实新学被动批次按共通、转职和基础组分配，ACK保留请求顺序并按资源扣点");
             foreach (var skill in passive.Skills)
                 CheckDatabase(fixture, 0, passive.Sp, skill.Level, skill.Slot, skill.Id);
-        }
-        using (var peer = Open(fixture))
-        {
-            peer.Select(1);
-            var beforeTrees = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
-            byte slot = beforeTrees[0].Skills.Single(skill => skill.Id == 5).Slot;
-            long beforeRevision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE slot=1")[0][0]);
-            peer.Send(29, WithChecksum([0, 1, 5, 0, 0, 3, 0]));
-            var main = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
-            That(main.Sp == 0 && main.Skills.Single() == new LearnedSkill(slot, 5, 4) &&
-                Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE slot=1")[0][0]) == beforeRevision + 1,
-                "TCP真实11B多级请求逐阶扣45SP，唯一13B ACK及一次revision推进到最终4级");
-            peer.Send(29, [1, 1, 5, 0, 0, 2, 1]);
-            var alternate = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
-            int secondTreeCost = ghostDefinition.GetOrdinaryResourceSpCost(1, 0) + ghostDefinition.GetOrdinaryResourceSpCost(2, 0);
-            That(alternate.Context == 1 && alternate.Mode == 1 && alternate.Sp == bulkSp - secondTreeCost &&
-                alternate.Skills.Single() == new LearnedSkill(slot, 5, 3), "TCP直接7B第二树多级，只ACK最终3级和实际余额");
-            string snapshot = fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY character_id,context") +
-                fixture.Snapshot("SELECT context,slot,skill_id,level FROM character_skill_bindings ORDER BY character_id,context,slot") +
-                fixture.Snapshot("SELECT revision FROM characters WHERE slot=1");
-            peer.Send(29, WithChecksum([1, 1, 5, 0, 0, 2, 0]));
-            peer.Expect(1, 29, [0, 0x16, 0]);
-            peer.Barrier();
-            That(fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY character_id,context") +
-                fixture.Snapshot("SELECT context,slot,skill_id,level FROM character_skill_bindings ORDER BY character_id,context,slot") +
-                fixture.Snapshot("SELECT revision FROM characters WHERE slot=1") == snapshot,
-                "TCP多级末阶SP不足不保存临时4级或部分费用，拒绝后同连接继续");
-            peer.Send(29, [1, 1, 5, 0, 0, 1, 0]);
-            var continuation = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
-            That(continuation.Sp == 0 && continuation.Skills.Single() == new LearnedSkill(slot, 5, 4),
-                "多级拒绝后按原3级一次合法增量仍可学习，不使用已回滚临时等级");
-            peer.Send(29, WithChecksum([0, 1, 190, 0, 0, 2, 0]));
-            peer.Expect(1, 29, [0, 0xD9, 0]);
-            peer.Barrier();
-            That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_skill_bindings WHERE character_id=(SELECT id FROM characters WHERE slot=1) AND skill_id=190")[0][0]) == 0,
-                "TCP未学190请求两级拒绝D9，无临时一级绑定且不伪称原已精通12");
         }
         await fixture.StopAsync();
         await fixture.StartAsync("skill-restart", isolatedProcess: true);
@@ -178,38 +120,15 @@ internal static class SkillProtocolTcpTests
             That(trees[0].Skills.Single(skill => skill.Id == 46).Level == 2 && trees[1].Skills.Single(skill => skill.Id == 46).Level == 1,
                 "重启恢复不同context等级，不把主树重复投影为两树");
             int cost = catalog.Get(0, 46).GetOrdinaryResourceSpCost(1, 0);
-            That(trees[0].Sp == initialSp - 15 - cost - 10 - passiveCost && trees[1].Sp == initialSp - 15 - 10 &&
-                trees.All(tree => tree.Skills.Single(skill => skill.Id == 190) == new LearnedSkill(quickStandingSlot, 190, 1)),
-                "重启保留190及独立余额、slot，不重新发点");
+            That(trees[0].Sp == initialSp - 15 - cost - passiveCost && trees[1].Sp == initialSp - 15, "重启保留独立余额，不重新发点");
             That(trees[0].Skills.Where(skill => passiveIds.Contains(skill.Id)).SequenceEqual(new LearnedSkill[]
                 { new(12, 12, 1), new(54, 35, 1), new(105, 177, 1) }) &&
                 trees[1].Skills.All(skill => !passiveIds.Contains(skill.Id)),
                 "重启后NOTI19恢复新被动的三个分组槽位，另一树不增加技能");
             That(trees.All(tree => tree.Skills.Single(skill => skill.Id == 5) == new LearnedSkill(6, 5, 2)),
                 "重启恢复换槽后的两树绑定，随后学习沿新槽位升级");
-            string beforeDuplicate = fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context") +
-                fixture.Snapshot("SELECT context,slot,skill_id,level FROM character_skill_bindings ORDER BY context,slot") +
-                fixture.Snapshot("SELECT revision FROM characters WHERE slot=0");
-            foreach (byte context in new byte[] { 0, 1 })
-            {
-                peer.Send(29, WithChecksum([context, 1, 190, 0, 0, 1, 0]));
-                peer.Expect(1, 29, [0, 0x12, 0]);
-                peer.Barrier();
-            }
-            That(fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context") +
-                fixture.Snapshot("SELECT context,slot,skill_id,level FROM character_skill_bindings ORDER BY context,slot") +
-                fixture.Snapshot("SELECT revision FROM characters WHERE slot=0") == beforeDuplicate,
-                "重启后重复190目标2精通12拒绝保持连接，两树/slot/等级/revision不变");
             peer.Send(29, [0, 1, 5, 0, 0, 1, 3]);
             peer.Barrier();
-        }
-        using (var peer = Open(fixture))
-        {
-            peer.Select(1);
-            var restored = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
-            That(restored.All(tree => tree.Sp == 0 && tree.Skills.Single(skill => skill.Id == 5).Level == 4) &&
-                restored[0].Skills.Single(skill => skill.Id == 5).Slot == restored[1].Skills.Single(skill => skill.Id == 5).Slot,
-                "TCP重启恢复多级最终结果及独立两树余额，没有中间等级或失败费用");
         }
         foreach (byte[] invalid in new byte[][] { [0, 1, 5, 0, 0, 1], [0, 1, 5, 0, 0, 1, 0, 0] })
         {
@@ -240,7 +159,7 @@ internal static class SkillProtocolTcpTests
         using (var peer = Open(fixture))
         {
             peer.Create("SkillNew", job: 14);
-            peer.Select(2);
+            peer.Select(1);
             var trees = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
             That(trees.All(tree => tree.Sp == 0 && tree.Tp == 0 && tree.Skills.OrderBy(skill => skill.Id)
                 .Select(skill => new CharacterSkill(skill.Id, skill.Level)).SequenceEqual(characters.Get(14).Skills)),
@@ -253,7 +172,7 @@ internal static class SkillProtocolTcpTests
             "隔离fixture设置女圣职者学习等级，重登沿正常来源同步");
         using (var peer = Open(fixture))
         {
-            peer.Select(2);
+            peer.Select(1);
             ushort priestSp = checked((ushort)catalog.TotalSp(6));
             peer.Send(29, WithChecksum([0, 1, 3, 0, 0, 1, 0]));
             var hammer = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
@@ -269,7 +188,7 @@ internal static class SkillProtocolTcpTests
         }
         using (var peer = Open(fixture))
         {
-            peer.Select(2);
+            peer.Select(1);
             var trees = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
             That(trees[0].Skills.Single(skill => skill.Id == 3) == new LearnedSkill(3, 3, 1) &&
                 trees[0].Skills.Single(skill => skill.Id == 2) == new LearnedSkill(0, 2, 1) &&
@@ -282,7 +201,7 @@ internal static class SkillProtocolTcpTests
         {
             peer.Select();
             var initial = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
-            That(initial[0].Sp == initialSp + 137 - 15 - 20 - 10 - passiveCost, "重登按费用扣除派生余额，额外137保留");
+            That(initial[0].Sp == initialSp + 137 - 15 - 20 - passiveCost, "重登按费用扣除派生余额，额外137保留");
             peer.Send(29, [0, 1, 5, 0, 0, 2, 0]);
             var increase = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
             That(increase.Skills.Single().Level == 4 && increase.Sp == initial[0].Sp - 30, "TCP一次加两级逐阶扣点");
@@ -328,7 +247,7 @@ internal static class SkillProtocolTcpTests
         var facts = fixture.Query("""
             SELECT p.sp,b.slot,b.level FROM character_skill_points p JOIN character_skill_bindings b
             ON p.character_id=b.character_id AND p.context=b.context
-            WHERE p.context=$p0 AND b.skill_id=$p1 AND p.character_id=(SELECT id FROM characters WHERE slot=0)
+            WHERE p.context=$p0 AND b.skill_id=$p1
             """, context, id);
         That(facts.Length == 1 && Convert.ToUInt16(facts[0][0]) == sp && Convert.ToByte(facts[0][1]) == slot &&
             Convert.ToByte(facts[0][2]) == level, "ACK后的SQL余额、slot及等级对应同一提交");

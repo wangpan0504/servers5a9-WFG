@@ -1,6 +1,5 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
-using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
 
 namespace DfoServer.Game.Session;
@@ -65,9 +64,7 @@ internal sealed partial class GameSession
     private SkillLearningResult ApplySkillLearning(Func<Character, SkillLearningResult> plan)
     {
         var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
-            SelectionEpoch, Phase, Run: Phase == SessionPhase.Dungeon ? formalDungeon?.Run : null,
-            DungeonIdentity: Phase == SessionPhase.Dungeon ? formalDungeon?.Run.Snapshot.Identity : null,
-            Allowed: CanLearnInCurrentPhase()));
+            SelectionEpoch, Phase, Allowed: Ready));
         if (!captured.Allowed)
             return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
 
@@ -78,36 +75,20 @@ internal sealed partial class GameSession
         catch (KeyNotFoundException) { return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()); }
         return owner.Execute(() =>
         {
-            if (!CanLearnInCurrentPhase() || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch ||
-                !ReferenceEquals(Selected, character) ||
-                (captured.Run is not null && (!ReferenceEquals(formalDungeon?.Run, captured.Run) ||
-                    formalDungeon?.Run.Snapshot.Identity != captured.DungeonIdentity)))
+            if (!Ready || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
                 throw new InvalidOperationException("Stale skill learning state");
             if (!result.Success)
-                return result with { RejectionReceipt = new(character, owner.Generation, SelectionEpoch)
-                {
-                    Phase = Phase,
-                    DungeonIdentity = captured.DungeonIdentity
-                } };
+                return result;
             if (!ReferenceEquals(result.State, character.Learning))
                 Selected = repository.CommitLearning(owner, character, result.State!, result.TotalSp, result.TotalTp);
-            return result with { State = Selected!.Learning, Receipt = new(Selected, owner.Generation, SelectionEpoch)
-            {
-                Phase = Phase,
-                DungeonIdentity = captured.DungeonIdentity
-            } };
+            return result with { State = Selected!.Learning, Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase } };
         });
     }
 
     public bool CanPublishLearning(SkillLearningReceipt receipt) => owner.Execute(() =>
         Ready && receipt.Generation == owner.Generation && Phase == receipt.Phase &&
-        SelectionEpoch == receipt.SelectionEpoch && ReferenceEquals(Selected, receipt.Character) &&
-        (receipt.DungeonIdentity is null || formalDungeon?.Run.Snapshot.Identity == receipt.DungeonIdentity));
-
-    private bool CanLearnInCurrentPhase() => Ready && (Phase == SessionPhase.Town ||
-        Phase == SessionPhase.Dungeon && formalDungeon is { } dungeon && Selected is { Job: 0, GrowType: 0 } &&
-        dungeon.Entry.DungeonId == 3 && dungeon.Entry.QuestId == 3145 &&
-        dungeon.Run.Phase == SinglePlayerDungeonPhase.Dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Ground.HasPendingPickup);
+        SelectionEpoch == receipt.SelectionEpoch && Selected?.Id == receipt.Character.Id &&
+        ReferenceEquals(Selected, receipt.Character));
 
     public SkillLayoutResult MoveSkillSlot(SkillSlotChangeCommand command, SkillLearningCatalog catalog) => MoveSkillSlot(command, catalog.Get);
 

@@ -9,7 +9,6 @@ internal sealed class EquipmentCatalog
     private readonly PvfArchive pvf;
     private readonly IReadOnlyDictionary<int, string> paths;
     private readonly ConcurrentDictionary<int, Lazy<EquipmentFile>> definitions = new();
-    private readonly ConcurrentDictionary<int, Lazy<EquipmentAttributeDefinition>> attributes = new();
 
     private EquipmentCatalog(PvfArchive pvf, Dictionary<int, string> paths)
     {
@@ -33,13 +32,5 @@ internal sealed class EquipmentCatalog
             throw new KeyNotFoundException("装备列表没有指定模板ID");
         return definitions.GetOrAdd(templateId, _ => new(() =>
             EquipmentFile.Parse(templateId, path, pvf.ReadTokens(path), pvf.ResolveString))).Value;
-    }
-
-    public EquipmentAttributeDefinition GetAttributes(int templateId)
-    {
-        if (!paths.TryGetValue(templateId, out string? path))
-            throw new KeyNotFoundException("装备列表没有指定模板ID");
-        return attributes.GetOrAdd(templateId, _ => new(() => EquipmentAttributeDefinition.Parse(templateId, path,
-            EquipmentFile.ReadScript(pvf.ReadText, path)))).Value;
     }
 }

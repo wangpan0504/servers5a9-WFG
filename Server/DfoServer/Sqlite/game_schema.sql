@@ -394,25 +394,6 @@ CREATE TABLE character_dungeon_pickup_receipts(
   FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_loot_receipts(character_id,event_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
-CREATE TABLE character_fatigue(
-  character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,
-  used INTEGER NOT NULL CHECK(used BETWEEN 0 AND maximum),
-  maximum INTEGER NOT NULL CHECK(maximum BETWEEN 1 AND 65535),
-  used_maximum INTEGER NOT NULL CHECK(used_maximum BETWEEN 0 AND 65535),
-  remaining INTEGER NOT NULL CHECK(remaining BETWEEN 0 AND maximum),
-  context_auxiliary INTEGER NOT NULL CHECK(context_auxiliary BETWEEN 0 AND 65535),
-  selection_auxiliary INTEGER NOT NULL CHECK(selection_auxiliary BETWEEN 0 AND 65535),
-  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
-
-CREATE TABLE character_dungeon_fatigue_receipts(
-  character_id INTEGER NOT NULL,account TEXT NOT NULL,instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
-  task_attempt INTEGER NOT NULL CHECK(task_attempt>0),map_id INTEGER NOT NULL CHECK(map_id BETWEEN 76121 AND 76126),
-  epoch INTEGER NOT NULL CHECK(epoch>0),generation INTEGER NOT NULL CHECK(generation>0),rule_id TEXT NOT NULL,
-  before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
-  before_state TEXT NOT NULL CHECK(json_valid(before_state) AND json_type(before_state)='object'),
-  after_state TEXT NOT NULL CHECK(json_valid(after_state) AND json_type(after_state)='object'),
-  PRIMARY KEY(character_id,instance_id,map_id),UNIQUE(character_id,task_attempt,map_id),
-  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
 CREATE TABLE character_skill_point_sources(
   character_id INTEGER PRIMARY KEY,bonus_sp INTEGER NOT NULL CHECK(bonus_sp BETWEEN 0 AND 65535),

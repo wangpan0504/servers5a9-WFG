@@ -60,8 +60,7 @@ internal static class DatabaseSchemaTests
                 "DROP TABLE character_dungeon_growth_receipts",
                 "ALTER TABLE character_dungeon_growth_receipts DROP COLUMN resource_source",
                 "DROP TABLE character_dungeon_state", "DROP TABLE character_dungeon_loot_receipts",
-                "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_pickup_receipts",
-                "DROP TABLE character_dungeon_settlement_receipts",
+                "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts",
                 "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN report_body"
             })
             {
@@ -124,21 +123,13 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
-                Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue");
-                if (oldVersion < 14)
-                    Execute(db, "DROP TABLE character_quest_completion_receipts");
-                if (oldVersion < 13)
-                    Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
-                if (oldVersion < 12)
-                    Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
+                if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
+                if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
+                if (oldVersion < 12) Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
                 if (oldVersion < 11) Execute(db, "DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts");
-                if (oldVersion < 10)
-                    Execute(db, "DROP TABLE character_dungeon_settlement_receipts");
+                if (oldVersion < 10) Execute(db, "DROP TABLE character_dungeon_settlement_receipts");
                 if (oldVersion < 9)
-                {
-                    Execute(db, "DROP TABLE character_dungeon_pickup_receipts");
-                    Execute(db, "DROP TABLE character_dungeon_loot_receipts");
-                }
+                    Execute(db, "DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts");
                 if (oldVersion < 8) Execute(db, "DROP TABLE character_dungeon_state");
                 if (oldVersion < 7) Execute(db, "DROP TABLE character_game_settings");
                 if (oldVersion < 6) Execute(db, "DROP TABLE account_client_settings; DROP TABLE character_client_settings");
@@ -177,12 +168,6 @@ internal static class DatabaseSchemaTests
                     "v12只增加空TP来源、指令及连招表，保留旧角色原有布局");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts") is 0L,
                     "v1至v9升级只增加空通关账本，不合成历史奖励");
-                Check(Query(db, "SELECT length(acceptance_id)=32 AND acceptance_id<>'00000000000000000000000000000000' FROM character_active_main_quests WHERE character_id=1") is 1L &&
-                    Query(db, "SELECT count(*) FROM character_quest_clear_receipts") is 0L &&
-                    Query(db, "SELECT count(*) FROM character_quest_completion_receipts") is 0L,
-                    "v13建立稳定接取身份，未凭历史scalar补造通关账本");
-                Check(oldVersion < 13 || Query(db, "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=1") is "1234567890abcdef1234567890abcdef",
-                    "v13连续升级保留已发布接取身份，不建伪领奖receipt");
                 Check(Query(db, "SELECT rental_points FROM account_wallets WHERE account='migrated'") is long rental &&
                     rental == (oldVersion == 1 ? 0 : 17), "v1租赁默认值与v2既有租赁余额分别保留");
                 Check(Query(db, "SELECT revision||':'||level||':'||experience||':'||gold FROM characters WHERE id=1") is "7:2:60:123" &&
@@ -217,7 +202,8 @@ internal static class DatabaseSchemaTests
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('keep',0,'Rollback',9,38,1,450,234,0,2,60,321)");
             Execute(db, "INSERT INTO account_wallets(account,revision,rental_points) VALUES('keep',6,0)");
             Execute(db, "INSERT INTO character_skill_points VALUES(1,0,12,0),(1,1,34,0)");
-            Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts");
+            Execute(db, "DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts");
+            Execute(db, "DROP TABLE character_dungeon_pickup_receipts");
             Execute(db, "DROP TABLE character_dungeon_loot_receipts");
             Execute(db, "DROP TABLE character_dungeon_state");
             Execute(db, "DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings");
@@ -234,7 +220,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(clearRollback);
         using (var db = Open(clearRollback))
         {
-            Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts; PRAGMA user_version=9; CREATE TABLE character_dungeon_settlement_receipts(collision INTEGER)");
+            Execute(db, "DROP TABLE character_dungeon_settlement_receipts; PRAGMA user_version=9; CREATE TABLE character_dungeon_settlement_receipts(collision INTEGER)");
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,experience,gold) VALUES('keep',0,'ClearKeep',11,38,1,450,234,0,321,456)");
         }
         string clearBefore = Snapshot(clearRollback);
@@ -332,12 +318,9 @@ internal static class DatabaseSchemaTests
             Has("character_skill_points") ? Query(db, "SELECT group_concat(character_id||':'||context||':'||sp||':'||tp,'|') FROM character_skill_points") : null,
             Has("character_active_main_quests") ? Query(db, "SELECT group_concat(character_id||':'||slot||':'||quest_id||':'||condition_state,'|') FROM character_active_main_quests") : null,
             HasColumn("character_active_main_quests", "acceptance_id") ? Query(db, "SELECT group_concat(character_id||':'||slot||':'||acceptance_id,'|') FROM character_active_main_quests") : null,
-            HasColumn("character_quest_clear_receipts", "character_id") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||event_id||':'||instance_id||':'||revision,'|') FROM character_quest_clear_receipts") : null,
-            HasColumn("character_quest_completion_receipts", "character_id") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||experience_amount||':'||revision||':'||rewards,'|') FROM character_quest_completion_receipts") : null,
-            HasColumn("character_dungeon_settlement_receipts", "character_id") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||total_experience||':'||revision,'|') FROM character_dungeon_settlement_receipts") : null,
-            HasColumn("character_dungeon_growth_receipts", "character_id") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||monster_key||':'||combat_sequence||':'||amount||':'||revision,'|') FROM character_dungeon_growth_receipts") : null,
-            HasColumn("character_fatigue", "character_id") ? Query(db, "SELECT group_concat(character_id||':'||used||':'||remaining,'|') FROM character_fatigue") : null,
-            HasColumn("character_dungeon_fatigue_receipts", "character_id") ? Query(db, "SELECT group_concat(character_id||':'||instance_id||':'||map_id||':'||revision,'|') FROM character_dungeon_fatigue_receipts") : null);
+            Has("character_quest_clear_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||event_id||':'||instance_id||':'||revision,'|') FROM character_quest_clear_receipts") : null,
+            Has("character_quest_completion_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||experience_amount||':'||revision||':'||rewards,'|') FROM character_quest_completion_receipts") : null,
+            Has("character_dungeon_growth_receipts") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||monster_key||':'||combat_sequence||':'||amount||':'||revision,'|') FROM character_dungeon_growth_receipts") : null);
         bool Has(string table) => Query(db, $"SELECT count(*) FROM sqlite_schema WHERE name='{table}'") is 1L;
         bool HasColumn(string table, string column) => Query(db,
             $"SELECT count(*) FROM pragma_table_info('{table}') WHERE name='{column}'") is 1L;

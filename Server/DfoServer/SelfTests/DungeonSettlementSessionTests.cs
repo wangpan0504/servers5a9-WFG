@@ -131,9 +131,6 @@ internal static class DungeonSettlementSessionTests
             Check(f.Session.AdvanceFormalDungeonCards(false) is not null && f.Session.AdvanceFormalDungeonCards(false) is not null &&
                 f.Session.AdvanceFormalDungeonCards(true) is not null && f.Session.AdvanceFormalDungeonCards(true) is not null,
                 "69和70合法顺序及精确重复只推进结算展示状态");
-            var rights = f.Session.ReadSettlementCardRights();
-            Check(rights is not null && rights.Count == 8 && rights[0] == 1 && rights[1] == -1,
-                "70结算卡牌权限返回17字节规格8槽快照");
             Check(f.Session.SelectFormalDungeonEmptyCard(1, 0) is null && f.Session.SelectFormalDungeonEmptyCard(0, 8) is null &&
                 f.Session.SelectFormalDungeonEmptyCard(0, 0) is not null && f.Session.SelectFormalDungeonEmptyCard(0, 0) is not null &&
                 f.Session.SelectFormalDungeonEmptyCard(0, 4) is null && f.Session.FormalDungeonResultFocus() is not null,
@@ -141,10 +138,8 @@ internal static class DungeonSettlementSessionTests
             Check(ReferenceEquals(committed, f.Session.Selected) && Same(committed, f.Read()) && f.Settlements == 1 &&
                 f.Kills == completed.Count && f.Session.Phase == SessionPhase.Settlement,
                 "空翻牌全过程不新增物品金币、扣费用或再次写经验");
-            var returned = f.Session.ReturnFromFormalDungeon();
-            Check(returned is not null && f.Session.Phase == SessionPhase.Town && f.Session.DungeonSnapshot is null &&
-                Same(committed with { Revision = returned.Character.Revision, Position = returned.Character.Position }, f.Read()) &&
-                !f.Session.CanPublishFormalDungeon(settled.Receipt!),
+            Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town && f.Session.DungeonSnapshot is null &&
+                Same(committed, f.Read()) && !f.Session.CanPublishFormalDungeon(settled.Receipt!),
                 "空翻牌后42清理实例并保留实际经验，旧结算通知失效");
             Check(Settle(f, frozenReport).Outcome == DungeonRunOutcome.Rejected && f.Session.AdvanceFormalDungeonCards(false) is null &&
                 f.Session.SelectFormalDungeonEmptyCard(0, 3) is null && f.Session.FormalDungeonResultFocus() is null,
@@ -158,11 +153,8 @@ internal static class DungeonSettlementSessionTests
             Enter(f);
             ClearRun(f);
             var killed = f.Session.Selected!;
-            var returned = f.Session.ReturnFromFormalDungeon();
-            Check(returned is not null && f.Session.Phase == SessionPhase.Town &&
-                f.Session.DungeonSnapshot is null &&
-                Same(killed with { Revision = returned.Character.Revision, Position = returned.Character.Position }, f.Read()) &&
-                f.Settlements == 0,
+            Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town &&
+                f.Session.DungeonSnapshot is null && Same(killed, f.Read()) && f.Settlements == 0,
                 "未报告结算的清图实例仍能42返回，只保留已提交击杀经验");
         }
 

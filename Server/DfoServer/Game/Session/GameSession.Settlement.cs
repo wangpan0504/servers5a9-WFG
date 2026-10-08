@@ -121,7 +121,6 @@ internal sealed partial class GameSession
             return null;
         // 当前翻牌没有道具、金币或费用；确认空结果不再写角色资产。
         settlement.SelectedCard = card;
-        formalDungeon.HasSelectedFreeCard = true;
         return FormalReceipt();
     });
 

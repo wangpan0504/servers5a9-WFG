@@ -9,8 +9,6 @@ internal static class TownPackets
 {
     public static byte[] Select(Character character)
     {
-        var fatigue = character.Fatigue ?? CharacterFatigueState.NewOrdinary;
-        fatigue.Validate();
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
@@ -18,9 +16,9 @@ internal static class TownPackets
             writer.Write(0u);
             writer.Write((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             writer.Write(character.Id);
-            writer.Write(fatigue.Used);
-            writer.Write(fatigue.Maximum);
-            writer.Write(fatigue.UsedMaximum);
+            writer.Write((ushort)0);
+            writer.Write((ushort)156);
+            writer.Write((ushort)0);
             writer.Write((byte)0);
             writer.Write(0u);
             for (int i = 0; i < 30; i++)
@@ -44,10 +42,10 @@ internal static class TownPackets
             writer.Write(new byte[16]); // 020296D0: four quest bookmarks.
             writer.Write(character.Position.Town); // 02341BCA 读初始城镇，02341E12 用它切换城镇；此处不是职业。
             writer.Write(new byte[] { 0, 1, 31 }); // 03B32D50: tutorial flag, count, completed step.
-            writer.Write(fatigue.SelectionAuxiliary);
-            writer.Write(fatigue.Remaining);
+            writer.Write((ushort)0);
+            writer.Write((ushort)156);
             writer.Write((byte)0);
-            writer.Write(fatigue.ContextAuxiliary);
+            writer.Write((ushort)0);
             writer.Write((byte)0);
             writer.Write((byte)0); // Tail quest count and premium flag.
             if (stream.Length != 235)

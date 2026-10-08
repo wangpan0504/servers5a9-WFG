@@ -82,23 +82,7 @@ internal static class QuestPackets
         return stream.ToArray();
     }
 
-    // NOTI574清空并恢复全量kind0活动表；调用方不能把单项变化当作全量列表。
-    public static byte[] ActiveQuests(IReadOnlyList<ActiveMainQuest> quests)
-    {
-        if (quests.Count > 30 || quests.Any(quest => quest.Slot > 29 || quest.QuestId is 0 or >= 30000) ||
-            quests.Select(quest => quest.Slot).Distinct().Count() != quests.Count ||
-            quests.Select(quest => quest.QuestId).Distinct().Count() != quests.Count)
-            throw new InvalidDataException("全量活动任务列表存在非法或重复身份");
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream);
-        writer.Write((uint)quests.Count);
-        foreach (var quest in quests.OrderBy(quest => quest.Slot))
-        {
-            writer.Write(quest.QuestId);
-            writer.Write(quest.ConditionState);
-        }
-        return stream.ToArray();
-    }
+
 }
 
 internal sealed record QuestRewardItemProjection(InventoryItem Item, int GrantedCount);

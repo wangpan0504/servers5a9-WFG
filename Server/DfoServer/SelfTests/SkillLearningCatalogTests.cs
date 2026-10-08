@@ -10,7 +10,7 @@ internal static class SkillLearningCatalogTests
     [
         "[type]", "[purchase cost]", "[maximum level]", "[growtype maximum level]", "[required level]",
         "[required level range]", "[pre required skill]", "[/purchase cost]", "[/pre required skill]", "[active]", "[unknown]", "[growtype fitness]", "[feature skill type]", "[combo set]",
-        "[passive]", "[skill class]", "[skill fitness growtype]", "[guild skill]", "[expert skill]", "[growtype 2 maximum level]"
+        "[passive]", "[skill class]", "[skill fitness growtype]", "[guild skill]", "[expert skill]"
     ];
 
     public static void RunCore()
@@ -82,28 +82,6 @@ internal static class SkillLearningCatalogTests
             "后跳满一级且缺 range，不猜默认继续升级");
         That(!ghost.IsFeatureSkill && !ghost.HasComboDeclaration && ghost.DeclaredGrowtypeFitness!.All(value => value == 0),
             "缺少 feature、combo、fitness 使用原生重置默认");
-        var quickStanding = catalog.Get(0, 190);
-        That(quickStanding.Path == "skill/swordman/quickstanding.skl" && !quickStanding.SupportsOrdinarySpLearning &&
-            quickStanding.SupportsOrdinarySpLearningAtLevel(0) && !quickStanding.SupportsOrdinarySpLearningAtLevel(1) &&
-            quickStanding.UnsupportedFields.Contains("required level range") && quickStanding.GetOrdinaryNextRequiredCharacterLevel(0) == 1 &&
-            quickStanding.GetOrdinaryResourceSpCost(0, 0) == 10 && quickStanding.GetDeclaredGrowtypeMaximum(0) == 1 &&
-            quickStanding.ConfirmedGrow0Maximum == 1,
-            "受身蹲伏首学目标1的range乘项为零，保留缺声明及后续边界，不猜range默认");
-        Reject<NotSupportedException>(() => quickStanding.GetOrdinaryNextRequiredCharacterLevel(1));
-        Reject<NotSupportedException>(() => quickStanding.GetOrdinaryResourceSpCost(1, 0));
-        PvfToken[] QuickTokens(int cost = 10, int maximum = 20, int primary = 1, int basis = 1) =>
-            Fixture([cost], [maximum], Enumerable.Repeat(primary, 6).ToArray(), [basis], [], [])
-                .Where(token => token != new PvfToken(3, 5)).ToArray();
-        SkillLearningDefinition Quick(PvfToken[] input, byte job = 0, ushort id = 190,
-            string path = "skill/swordman/quickstanding.skl") => SkillLearningCatalog.Parse(job, id, path, input, index => FixtureStrings[index]);
-        That(Quick(QuickTokens()).ConfirmedGrow0Maximum == 1, "最小合成190完整关键声明保留已证grow0最终cap1");
-        foreach (var changed in new[] { Quick(QuickTokens(cost: 11)), Quick(QuickTokens(maximum: 21)),
-            Quick(QuickTokens(primary: 2)), Quick(QuickTokens(basis: 2)), Quick(QuickTokens(), job: 1),
-            Quick(QuickTokens(), id: 191), Quick(QuickTokens(), path: "skill/swordman/changed.skl"),
-            Quick([.. QuickTokens(), new PvfToken(3, 5), new PvfToken(0, 0)]),
-            Quick([.. QuickTokens(), new PvfToken(3, 19), new PvfToken(0, 20)]),
-            Quick([.. QuickTokens(), new PvfToken(3, 11), .. Enumerable.Repeat(new PvfToken(0, 1), 6)]) })
-            That(changed.ConfirmedGrow0Maximum is null, "关键资源或额外上限变化不靠190编号沿用精通合同");
         Reject<ArgumentOutOfRangeException>(() => ghost.GetBasePointCost(-1));
         Reject<ArgumentOutOfRangeException>(() => ghost.GetBasePointCost(60));
         Reject<ArgumentOutOfRangeException>(() => ghost.GetOrdinaryNextRequiredCharacterLevel(-1));

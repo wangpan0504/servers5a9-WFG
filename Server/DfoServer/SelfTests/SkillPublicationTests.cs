@@ -28,8 +28,6 @@ internal static class SkillPublicationTests
             await CommittedFailureAsync(towns, catalog, characters, root);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: true);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: false);
-            await QueuedReplyAsync(towns, catalog, characters, root, reselect: true, rejection: true);
-            await QueuedReplyAsync(towns, catalog, characters, root, reselect: false, rejection: true);
             await CommittedMoveFailureAsync(towns, catalog, characters, root);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: true, layout: true);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: false, layout: true);
@@ -170,14 +168,6 @@ internal static class SkillPublicationTests
             healthySession.Selected.Learning.Trees.Single(tree => tree.Context == 0).Skills.SequenceEqual(
                 committed.Learning.Trees.Single(tree => tree.Context == 0).Skills), "context1成功发布保持主树技能事实");
         packets.Clear();
-        Character beforeLevelRejection = healthySession.Selected!;
-        TestCheck.That(await commands.DispatchAsync(healthyContext, Request([1, 1, 5, 0, 0, 1, 1])) == CommandResult.Handled &&
-            !freshStop.IsCancellationRequested && packets.Single().Body.SequenceEqual(new byte[] { 0, 0xD9, 0 }),
-            "真实Handler重复增量请求因下一等级门槛明确失败，完整D9恢复路径保持连接");
-        TestCheck.That(ReferenceEquals(healthySession.Selected, beforeLevelRejection) &&
-            SkillRepositoryTests.Equal(reopened.LoadCharacter(fresh, committed.Slot), beforeLevelRejection),
-            "等级拒绝不提交、不扣两树SP、不改技能slot或revision");
-        packets.Clear();
         TestCheck.That(await commands.DispatchAsync(context, Request([0, 1, 255, 255, 0, 1, 0])) == CommandResult.Handled,
             "不存在技能返回已知拒绝且连接可继续");
         TestCheck.That(await commands.DispatchAsync(context, purchase) == CommandResult.Handled && !freshStop.IsCancellationRequested,
@@ -193,10 +183,9 @@ internal static class SkillPublicationTests
             "失败和非法包不改SQLite事实且不发布未知ACK");
     }
 
-    private static async Task QueuedReplyAsync(TownCatalog towns, SkillLearningCatalog catalog, CharacterCatalog characters, string root, bool reselect,
-        bool rejection = false, bool layout = false)
+    private static async Task QueuedReplyAsync(TownCatalog towns, SkillLearningCatalog catalog, CharacterCatalog characters, string root, bool reselect, bool layout = false)
     {
-        var repository = new CharacterRepository(Path.Combine(root, "queued-" + reselect + "-" + rejection + "-" + layout + ".db"));
+        var repository = new CharacterRepository(Path.Combine(root, "queued-" + reselect + "-" + layout + ".db"));
         var owners = new AccountOwners();
         using var owner = owners.Acquire("skill-queued", () => { });
         var original = repository.Create(owner, SkillRepositoryTests.Fixture("QueuedSkill", towns, characters, catalog));
@@ -218,12 +207,11 @@ internal static class SkillPublicationTests
         try
         {
             long revision = session.Selected!.Revision;
-            publication = commands.DispatchAsync(context, layout ? SlotRequest() : Request([0, 1, rejection ? (byte)46 : (byte)5, 0, 0, 1, 0]));
-            int committed = rejection ? 0 : 1;
-            TestCheck.That(session.Selected!.Revision == revision + committed && !publication.IsCompleted &&
-                repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Sp == (rejection || layout ? 60 : 45) &&
+            publication = commands.DispatchAsync(context, layout ? SlotRequest() : Request([0, 1, 5, 0, 0, 1, 0]));
+            TestCheck.That(session.Selected!.Revision == revision + 1 && !publication.IsCompleted &&
+                repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Sp == (layout ? 60 : 45) &&
                 (!layout || repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Skills.Single(skill => skill.Id == 5).Slot == 6),
-                rejection ? "等级拒绝ACK排队期间不提交或扣费" : "ACK排队前技能改变已提交且只扣一次");
+                "ACK排队前技能改变已提交，布局不扣点");
             if (reselect)
             {
                 session.ReturnToRoster();
@@ -233,20 +221,20 @@ internal static class SkillPublicationTests
             else
             {
                 session.UpdateProgress(new(CharacterProgressField.Level, owner.Account, original.Name, 11, 0));
-                TestCheck.That(session.Selected!.Revision == revision + (rejection ? 0 : 1), "排队期间GM保持原revision");
+                TestCheck.That(session.Selected!.Revision == revision + 1, "排队期间GM保持原revision");
             }
         }
         finally { stream.Release(); }
         await first.WaitAsync(TimeSpan.FromSeconds(5));
         TestCheck.That(await publication!.WaitAsync(TimeSpan.FromSeconds(5)) == CommandResult.Handled && sent.SequenceEqual(["held"]),
             "重选或GM替换快照后排队的旧ACK不发布");
-        TestCheck.That(repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Sp == (rejection || layout ? 60 : 45) && !stop.IsCancellationRequested,
+        TestCheck.That(repository.LoadCharacter(owner, original.Slot).Learning.Trees[0].Sp == (layout ? 60 : 45) && !stop.IsCancellationRequested,
             "过期ACK跳过保留提交且不因跳过重扣费用");
         await commands.DispatchAsync(context, layout ? new(1, (ushort)CmdPacketType.CHANGE_SKILLSLOT, [0, 6, 0, 255, 255, 255, 255, 0])
             : Request([1, 1, 5, 0, 0, 1, 1]));
-        var expected = layout ? new[] { "held", "skill_slot_change_committed" } :
-            reselect == rejection ? new[] { "held", "skill_purchase_committed", "skill_automatic_synchronized" } : new[] { "held", "skill_purchase_committed" };
-        TestCheck.That(sent.SequenceEqual(expected), "当前快照的新操作正常通过发布检查");
+        TestCheck.That(sent.SequenceEqual(layout ? ["held", "skill_slot_change_committed"] :
+            reselect ? ["held", "skill_purchase_committed"] : ["held", "skill_purchase_committed", "skill_automatic_synchronized"]),
+            "当前快照的新操作正常通过发布检查");
     }
 
     private sealed class HeldOutput : MemoryStream

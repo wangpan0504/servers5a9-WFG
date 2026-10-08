@@ -38,8 +38,6 @@ internal static class FormalDungeonPublicationTests
         await EntryRejectionAsync();
         await StorageFailureAsync(false);
         await StorageFailureAsync(true);
-        await FatigueStorageFailureAsync(false);
-        await FatigueStorageFailureAsync(true);
         foreach (int packet in new[] { 1, 2 }) await SendFailureAsync(packet);
         await ReselectDuringSendAsync();
         await ReturnDuringSendAsync();
@@ -48,42 +46,6 @@ internal static class FormalDungeonPublicationTests
         await ClearNoticeFailureAsync();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Handler真实文件提交、结果丢失、发送故障及重选隔离断言（合成死亡，非实机）");
 
-        async Task FatigueStorageFailureAsync(bool lostResult)
-        {
-            using var f = new Fixture(towns, characters, learning, lostResult, loseFatigue: true);
-            f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms);
-            var previous = f.Session.Selected!;
-            if (!lostResult)
-                f.Sql("CREATE TRIGGER fatigue_fail BEFORE INSERT ON character_dungeon_fatigue_receipts BEGIN SELECT RAISE(ABORT,'synthetic fatigue receipt failure'); END");
-            var commands = Registry(f);
-            using var stop = new CancellationTokenSource();
-            using var stream = new ControlledOutput();
-            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
-            var context = new GameConnectionContext(new(91, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
-            var loaded = new Packet(1, 37, new byte[8]);
-            await RejectAsync(lostResult ? typeof(IOException) : typeof(SqliteException),
-                () => commands.DispatchAsync(context, loaded), "房间扣点SQL失败或已提交返回值丢失明确失败");
-            Check(stream.Frames.Count == 0 && ReferenceEquals(previous, f.Session.Selected) && f.Session.Phase == SessionPhase.Loading,
-                "房间扣点未确定前保留Loading和原快照，不提前发加载或疲劳成功");
-            Check(f.Session.ReturnFromFormalDungeon() is null && ReferenceEquals(previous, f.Session.Selected),
-                "房间扣点结果不明时不得消费实例退出或发布旧疲劳快照");
-            if (lostResult)
-                Check(f.Read().Revision == previous.Revision + 1 && f.Read().Fatigue is { Used: 1, Remaining: 155 },
-                    "房间结果丢失注入发生在真实SQL提交后");
-            else
-            {
-                Check(Same(previous, f.Read()), "晚期receipt失败回滚疲劳和唯一角色revision");
-                f.Sql("DROP TRIGGER fatigue_fail");
-            }
-            Check(await commands.DispatchAsync(context, loaded) == CommandResult.Handled &&
-                f.Session.Phase == SessionPhase.Dungeon && Same(f.Session.Selected!, f.Read()) &&
-                f.Read().Revision == previous.Revision + 1 && f.Read().Fatigue is { Used: 1, Remaining: 155 },
-                "原Loading精确重试只安装一次疲劳扣点，合法进入Dungeon");
-            Check(stream.Opcodes.SequenceEqual(new ushort[] { 37, 30, 3, 36 }) && stream.Frames[3].AsSpan(16).SequenceEqual(
-                Convert.FromHexString("01009C0000009B000000")), "完整加载包序最后五u16疲劳来自实际提交");
-            await commands.DispatchAsync(context, loaded);
-            Check(stream.Frames.Count == 4 && f.Read().Revision == previous.Revision + 1, "已加载再次请求不扣点或重放通知");
-        }
 
         GameCommandRegistry Registry(Fixture f, TownPresence? presence = null)
         {
@@ -187,7 +149,7 @@ internal static class FormalDungeonPublicationTests
                 var receipt = f.Session.CompleteFormalDungeonLoading()!;
                 if (room == 5)
                     return (receipt, receipt.Monsters.Monsters.Single(monster => monster.MonsterId == 107000903));
-                foreach (var monster in receipt.Monsters.Monsters.Where(monster => monster.Team != 0))
+                foreach (var monster in receipt.Monsters.Monsters.Where(monster => monster.IsBlocking))
                 {
                     var observation = new NativeDungeonDeathObservation(monster.ObjectKey, receipt.Character.Id,
                         0x111, receipt.Character.Id, 600, 1, 0, checked((uint)monster.CandidateLevel), 504, 650, 1,
@@ -255,7 +217,6 @@ internal static class FormalDungeonPublicationTests
                 healthyOutput.Frames.Single().AsSpan(16).SequenceEqual(Convert.FromHexString("01490C00000000")) && Same(reselected, f.Read()),
                 "重选读取同接取持久事实恢复合法7B任务投影，仍不写库或重复发奖");
         }
-
         async Task SendFailureAsync(int failedPacket)
         {
             using var f = new Fixture(towns, characters, learning, false);
@@ -431,12 +392,12 @@ internal static class FormalDungeonPublicationTests
         public Character Created { get; }
         public ServerLog Log { get; }
         public LostResultRepository? LostResult { get; }
-        public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, bool lostResult, bool losePickup = false, bool loseFatigue = false)
+        public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, bool lostResult, bool losePickup = false)
         {
             path = Path.Combine(root, "game.db");
             repository = new(path);
             Owner = new AccountOwners().Acquire("formal-publication", () => { });
-            LostResult = lostResult ? new(repository, loseGrowth: !losePickup && !loseFatigue, losePickup: losePickup, loseFatigue: loseFatigue) : null;
+            LostResult = lostResult ? new(repository, loseGrowth: !losePickup, losePickup: losePickup) : null;
             Session = new(LostResult is null ? repository : LostResult, towns, Owner);
             Created = Session.CreateCharacter("FormalSend", characters.Get(0), learning);
             Session.Select(Created.Slot);
@@ -469,7 +430,7 @@ internal static class FormalDungeonPublicationTests
         }
     }
     // 故障注入只丢弃真实仓储第一次提交后的返回值，不伪造SQL结果或领域确认。
-    sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false, bool loseFatigue = false) : ICharacterRepository
+    sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false) : ICharacterRepository
     {
         PreparedDungeonDeath? first;
         public int Calls { get; private set; }
@@ -500,16 +461,9 @@ internal static class FormalDungeonPublicationTests
         public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
         public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
-        int fatigueCalls;
-        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run)
-        {
-            var result = inner.ConsumeDungeonRoomFatigue(owner, expected, run);
-            if (++fatigueCalls == 1 && loseFatigue)
-                throw new IOException("合成房间扣点已提交但返回值丢失");
-            return result;
-        }
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan) => inner.CommitQuestCompletion(owner, plan);
+
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog);
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);

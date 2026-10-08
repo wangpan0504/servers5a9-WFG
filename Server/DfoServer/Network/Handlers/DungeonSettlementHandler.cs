@@ -68,32 +68,25 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
 
     async Task<CommandResult> ScrollAsync(GameConnectionContext context, Packet request)
     {
-        if (!DungeonSettlementRequests.TryParseScoreScroll(request.Body) || context.Session.AdvanceFormalDungeonCards(false) is not { } receipt)
+        if (request.Body.Length != 0 || context.Session.AdvanceFormalDungeonCards(false) is not { } receipt)
             return CommandResult.Unhandled;
-        await context.Reply(CmdPacketType.SCORE_SCROLL_STATE, DungeonSettlementPackets.ScoreScrollAccepted(), "formal_score_scroll", () => context.Session.CanPublishDungeonSettlement(receipt));
+        await context.Reply(CmdPacketType.SCORE_SCROLL_STATE, [1], "formal_score_scroll", () => context.Session.CanPublishDungeonSettlement(receipt));
         return CommandResult.Handled;
     }
 
     async Task<CommandResult> CardsAsync(GameConnectionContext context, Packet request)
     {
-        if (!DungeonSettlementRequests.TryParseCardRights(request.Body) || context.Session.AdvanceFormalDungeonCards(true) is not { } receipt)
+        if (request.Body.Length != 0 || context.Session.AdvanceFormalDungeonCards(true) is not { } receipt)
             return CommandResult.Unhandled;
-        var rights = context.Session.ReadSettlementCardRights() ?? [1, -1, -1, -1, -1, -1, -1, -1];
-        await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRightsAccepted(rights), "formal_empty_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
+        await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRights(), "formal_empty_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
         return CommandResult.Handled;
     }
 
     async Task<CommandResult> SelectCardAsync(GameConnectionContext context, Packet request)
     {
-        if (!DungeonSettlementRequests.TryParseCardSelection(request.Body, out var parsed) ||
-            context.Session.SelectFormalDungeonEmptyCard(parsed.Type, parsed.MemberIndex) is not { } receipt)
+        if (request.Body.Length != 2 || context.Session.SelectFormalDungeonEmptyCard(request.Body[0], request.Body[1]) is not { } receipt)
             return CommandResult.Unhandled;
-        var rows = Enumerable.Range(0, 8).Select(i => i == parsed.MemberIndex
-            ? new DungeonCardSelectionRow(parsed.Type == 0 ? parsed.MemberIndex : (byte)0,
-                                          parsed.Type == 1 ? parsed.MemberIndex : (byte)0,
-                                          [], false)
-            : new DungeonCardSelectionRow(byte.MaxValue, byte.MaxValue, [], false)).ToArray();
-        await context.Reply(CmdPacketType.SELECT_CARD, DungeonSettlementPackets.CardSelectionAccepted(rows), "formal_card_selected", () => context.Session.CanPublishDungeonSettlement(receipt));
+        await context.Reply(CmdPacketType.SELECT_CARD, DungeonSettlementPackets.EmptyCardSelected(), "formal_empty_card_selected", () => context.Session.CanPublishDungeonSettlement(receipt));
         return CommandResult.Handled;
     }
 
