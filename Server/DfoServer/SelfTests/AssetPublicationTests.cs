@@ -44,7 +44,7 @@ internal static class AssetPublicationTests
         var owners = new AccountOwners();
         using var owner = owners.Acquire("publication", () => { });
         var commands = new GameCommandRegistry();
-        var projection = new TownProjection(towns, characters, null, itemResources.EpicPieces);
+        var projection = new TownProjection(towns, new CharacterStatComputer(characters), null, itemResources.EpicPieces);
         using var log = new ServerLog(root);
         new CharacterHandler(characters, projection, log, itemResources.GoldLimits).Register(commands);
         commands.Seal();

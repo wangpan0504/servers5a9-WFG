@@ -26,6 +26,11 @@ internal static class SelfTestRunner
         DungeonPickupProtocolTests.Run();
         SkillLearningDisconnectTests.Run();
         QuestFixedRewardTests.Run();
+        QuestProtocolTests.Run();
+        QuestClearEligibilityTests.Run();
+        QuestRewardParameterTests.Run();
+        QuestCompletionPlanTests.Run();
+        CharacterAttributeResourceTests.RunCore();
         AuthenticationTests.Run();
         AuthenticationServiceTests.Run();
         AuthenticationRepositoryTests.Run();
@@ -78,6 +83,7 @@ internal static class SelfTestRunner
         SelfTests.Run(towns);
         CharacterPreparationTests.Run(towns, pvf, characters);
         CharacterCreationTests.Run(towns, characters);
+        CharacterAttributeResourceTests.RunResources(characters);
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
@@ -117,6 +123,10 @@ internal static class SelfTestRunner
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
         await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);
         QuestCatalogTests.Run(pvf);
+        QuestRewardParameterTests.RunResources(pvf);
+        QuestCompletionPlanTests.RunResources(pvf, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        QuestCompletionRepositoryTests.Run(towns, pvf, characters, itemResources);
+        await QuestCompletionPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         QuestFixedRewardTests.RunResources(pvf);
         StarterSkillTests.Run(pvf, characters);
         ItemCatalogTests.Run(pvf);

@@ -10,7 +10,15 @@ internal sealed record StoryQuest(
     int Npc, int CompleteNpc, int MinimumLevel, int MaximumLevel,
     IReadOnlyList<int> Prerequisites, int? MainQuest, int? DungeonIndex, int? DungeonParameter,
     IReadOnlyList<QuestRewardToken> Rewards, int? BossTemplate, int? ShowNpcOnClear,
-    IReadOnlyList<int> MapNpcIds);
+    IReadOnlyList<int> MapNpcIds)
+{
+    public string? Grade { get; init; }
+    public string? Difficulty { get; init; }
+    public string? RewardType { get; init; }
+    public int? DeclaredGoldMultiple { get; init; }
+    public int? DeclaredIgnoreLevelForExperience { get; init; }
+    public IReadOnlyList<string> Attributes { get; init; } = Array.Empty<string>();
+}
 
 internal sealed class QuestCatalog
 {
@@ -75,7 +83,8 @@ internal sealed class QuestCatalog
             while (i < tokens.Count && tokens[i].Type != 3) i++;
             if (tag.StartsWith('/')) continue;
             if (tag is not ("type" or "sub type" or "int data" or "npc index" or "complete npc index" or "level"
-                or "pre required quest" or "main quest" or "dungeon info" or "reward int data")) continue;
+                or "pre required quest" or "main quest" or "dungeon info" or "reward int data" or "grade" or "difficulty"
+                or "reward type" or "gold multiple" or "ignore quest level 4 exp" or "attribute")) continue;
             if (!sections.TryAdd(tag, tokens.Skip(start).Take(i - start).ToArray()))
                 throw new InvalidDataException("任务脚本重复标签: " + tag);
         }
@@ -91,7 +100,22 @@ internal sealed class QuestCatalog
             dungeon?[0], dungeon?[1], Rewards(sections, resolve),
             Boss(id, condition, Integers(sections, "int data"), maps, pvf),
             ShowNpc(id, tokens, resolve),
-            MapNpcs(id, condition, Integers(sections, "int data"), maps, pvf));
+            MapNpcs(id, condition, Integers(sections, "int data"), maps, pvf))
+        {
+            Grade = sections.ContainsKey("grade") ? Text(sections, "grade", resolve) : null,
+            Difficulty = sections.ContainsKey("difficulty") ? Text(sections, "difficulty", resolve) : null,
+            RewardType = sections.ContainsKey("reward type") ? Text(sections, "reward type", resolve) : null,
+            DeclaredGoldMultiple = sections.ContainsKey("gold multiple") ? One(sections, "gold multiple") : null,
+            DeclaredIgnoreLevelForExperience = sections.ContainsKey("ignore quest level 4 exp") ? One(sections, "ignore quest level 4 exp") : null,
+            Attributes = sections.TryGetValue("attribute", out var attributes) ? AttributeNames(attributes, resolve) : Array.Empty<string>()
+        };
+    }
+
+    static IReadOnlyList<string> AttributeNames(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
+    {
+        if (tokens.Any(token => token.Type != 6))
+            throw new NotSupportedException("任务attribute包含非字符串，不能推定属性位");
+        return Array.AsReadOnly(tokens.Select(token => resolve(token.Value)).ToArray());
     }
 
     static QuestRewardToken[] Rewards(Dictionary<string, PvfToken[]> sections, Func<int, string> resolve)

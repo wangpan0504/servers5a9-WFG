@@ -20,7 +20,11 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public CharacterDungeonState? DungeonState { get; init; }
 }
 
-internal sealed record ActiveMainQuest(byte Slot, ushort QuestId, uint ConditionState);
+internal sealed record ActiveMainQuest(byte Slot, ushort QuestId, uint ConditionState)
+{
+    // 同一任务重新接取必须拥有新身份，旧副本事实不能推进新的任务槽。
+    public Guid AcceptanceId { get; init; }
+}
 
 // 创建所需的领域数据；数据库不决定出生点，也不区分普通角色和工具准备的角色。
 internal sealed record NewCharacter(string Name, Location Position, Location? Return)
@@ -47,7 +51,9 @@ internal sealed record NewCharacter(string Name, Location Position, Location? Re
         if (Skills.Length > 255 || Skills.Any(skill => skill.Level == 0) || Skills.Select(skill => skill.Id).Distinct().Count() != Skills.Length)
             throw new InvalidDataException("Invalid character skills");
         if (ActiveMainQuests.Length > 30 || ActiveMainQuests.Any(quest => quest.Slot > 29 || quest.QuestId is <= 0 or >= 30000) ||
-            ActiveMainQuests.Select(quest => quest.Slot).Distinct().Count() != ActiveMainQuests.Length)
+            ActiveMainQuests.Select(quest => quest.Slot).Distinct().Count() != ActiveMainQuests.Length ||
+            ActiveMainQuests.Where(quest => quest.AcceptanceId != Guid.Empty).Select(quest => quest.AcceptanceId).Distinct().Count() !=
+                ActiveMainQuests.Count(quest => quest.AcceptanceId != Guid.Empty))
             throw new InvalidDataException("Invalid active main quests");
         InitialLearning.Validate();
         DungeonState?.Validate();

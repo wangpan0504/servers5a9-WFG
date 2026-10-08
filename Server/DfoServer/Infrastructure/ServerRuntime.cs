@@ -17,6 +17,7 @@ using DfoServer.Persistence;
 using DfoServer.GameWorld.Dungeons;
 using PvfLib;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Quests;
 using DfoServer.Game.Rental;
 using DfoServer.Game.Settings;
 
@@ -35,8 +36,12 @@ internal static class ServerRuntime
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")));
-        var projection = new TownProjection(towns, characters, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings));
-        var inventoryProjection = new InventoryProjection(characters, projection, itemResources.EpicPieces);
+        var stats = new Game.Characters.CharacterStatComputer(characters);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings));
+        var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
+        var levelProjection = new CharacterLevelProjection(stats);
+        var quests = QuestCatalog.Load(pvf);
+        var questParameters = QuestRewardParameterCatalog.Load(pvf);
         var commands = new GameCommandRegistry();
         var growth = CharacterGrowthCatalog.Load(pvf, learning);
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
@@ -49,10 +54,10 @@ internal static class ServerRuntime
             var rooms = DungeonRoomCatalog.Load(pvf);
             var drops = DungeonMonsterDropCatalog.Load(pvf);
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
-                growth, DungeonKillExperienceCatalog.Load(pvf), projection,
+                growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
                 drops, itemResources.Items, itemResources.EpicPieces);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
-                rooms, drops, itemResources.Items);
+                rooms, drops, itemResources.Items, levelProjection);
         }
         else
         {
@@ -81,6 +86,9 @@ internal static class ServerRuntime
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new DungeonSelectionHandler(projection, log),
+            new QuestConditionHandler(log),
+            new QuestCompletionHandler(quests, questParameters, itemResources.Items,
+                itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection),
             dungeon,
             new AgitWarHandler(),
             new ClientNoticeHandler(log)

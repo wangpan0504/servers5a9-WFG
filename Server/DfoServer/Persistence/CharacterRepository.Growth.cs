@@ -57,6 +57,7 @@ internal sealed partial class CharacterRepository
         if (duplicate)
         {
             VerifyDungeonLoot(db, tx, owner.Account, expected.Id, prepared.Death.EventId, loot);
+            SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: true);
             tx.Commit();
             return new DungeonGrowthCommit(current, true);
         }
@@ -66,6 +67,7 @@ internal sealed partial class CharacterRepository
         var plan = result.Plan!;
         if (current.Revision != plan.Revision || current.Level != plan.PreviousLevel || current.Job != plan.Job ||
             current.GrowType != plan.GrowType || !SameLearning(current.Learning, plan.Before) ||
+            !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) ||
             !current.Skills.OrderBy(skill => skill.Id).SequenceEqual(expected.Skills.OrderBy(skill => skill.Id)))
             throw new InvalidOperationException("成长revision或完整学习前提已变化");
         command.Parameters.AddWithValue("$account", owner.Account);
@@ -112,6 +114,7 @@ internal sealed partial class CharacterRepository
             """;
         command.ExecuteNonQuery();
         SaveDungeonLoot(db, tx, owner.Account, expected, prepared, loot);
+        SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");

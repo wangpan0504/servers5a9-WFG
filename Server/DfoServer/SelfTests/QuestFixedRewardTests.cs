@@ -89,7 +89,8 @@ internal static class QuestFixedRewardTests
         {
             QuestFixedItemReward[] expected = [new(10165055, 1), new(weapons[job], 1), new(10403, 1),
                 new(12403, 1), new(14403, 1), new(16403, 1), new(18403, 1)];
-            if (!definition.ForJob(job).SequenceEqual(expected))
+            if (!definition.ForJob(job).SequenceEqual(expected) ||
+                !DfoServer.Game.Quests.QuestFixedRewardGrant.ReadRewards(job, quest).SequenceEqual(expected))
                 throw new InvalidOperationException("FAIL 3145固定奖励原顺序或职业条件: job=" + job);
         }
         Console.WriteLine("PASS 17 3145固定奖励资源断言");

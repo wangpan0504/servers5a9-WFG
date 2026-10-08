@@ -11,6 +11,9 @@ internal static class QuestCatalogTests
         void Check(bool ok, string name) { checks++; if (!ok) throw new Exception("FAIL: " + name); }
         var catalog = QuestCatalog.Load(pvf);
         var first = catalog.Get(3145);
+        Check(first.Grade == "[epic]" && first.Difficulty == "1" && first.RewardType == "[item]" &&
+            first.DeclaredGoldMultiple is null && first.DeclaredIgnoreLevelForExperience is null && first.Attributes.Count == 0,
+            "3145完整奖励元数据保留声明与缺项，不能把缺项默默写成XP/Gold零值");
         Check(first.Condition == "[clear map]" && first.SubType == -1 && first.IntData.SequenceEqual([76126])
             && first.Npc == 1 && first.CompleteNpc == 1247 && first.MinimumLevel == 1 && first.MaximumLevel == 99
             && first.Prerequisites.Count == 0 && first.MainQuest is null && first.DungeonIndex == 3 && first.DungeonParameter == -1,
@@ -47,6 +50,8 @@ internal static class QuestCatalogTests
             && catalog.Get(4873).Rewards.SequenceEqual(catalog.Get(3148).Rewards)
             && catalog.Get(4875).Rewards.SequenceEqual(catalog.Get(3148).Rewards), "zero reward pairs do not become item 0");
         Check(catalog.Get(3157).Rewards.Count == 0 && catalog.Get(3054).Rewards.Count == 0, "hunt and linked clear map have no item reward");
+        Check(catalog.Get(3157).Attributes.Contains("not give exp quest") && catalog.Get(3054).Attributes.Contains("not give exp quest"),
+            "子任务禁EXP属性保留原字符串，不能推广到3145");
         Check(first.BossTemplate == 107000903 && catalog.Get(3054).BossTemplate == 107000908
             && catalog.Get(3147).BossTemplate == 107000905 && catalog.Get(3148).BossTemplate == 107000930
             && seria.BossTemplate == 107000910 && meet.BossTemplate is null,

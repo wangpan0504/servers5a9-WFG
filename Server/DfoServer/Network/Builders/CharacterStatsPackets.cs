@@ -19,7 +19,7 @@ internal static class CharacterStatsPackets
         writer.Write(stats.WaterResistance);
         writer.Write(stats.DarkResistance);
         writer.Write(stats.LightResistance);
-        writer.Write(new byte[36]); // 当前 Client 属性块的未填充字段。
+        writer.Write(new byte[36]); // 18个有符号short分量，业务标签未闭合；不能当作9个DWORD总属性。
         writer.Write(stats.InventoryLimit);
         writer.Write((ushort)0);
         writer.Write(stats.MpRecovery);

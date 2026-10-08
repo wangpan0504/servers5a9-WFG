@@ -20,6 +20,7 @@ internal static class TownTravelPublicationTests
     public static async Task RunAsync(TownCatalog towns, CharacterCatalog characters, ItemResources items)
     {
         int before = TestCheck.Count;
+        var computer = new CharacterStatComputer(characters);
         string root = Path.Combine(Path.GetTempPath(), "S5A9-travel-publication-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -42,7 +43,7 @@ internal static class TownTravelPublicationTests
             session.Select(0);
             session.MarkReady();
             var presence = new TownPresence(towns);
-            var projection = new TownProjection(towns, characters, presence, items.EpicPieces);
+            var projection = new TownProjection(towns, computer, presence, items.EpicPieces);
             using var stop = new CancellationTokenSource();
             using var stream = new MemoryStream();
             var sent = new List<string>();
@@ -75,7 +76,7 @@ internal static class TownTravelPublicationTests
             session.Select(0);
             session.MarkReady();
             var presence = new TownPresence(towns);
-            var projection = new TownProjection(towns, characters, presence, items.EpicPieces);
+            var projection = new TownProjection(towns, computer, presence, items.EpicPieces);
             using var log = new ServerLog(root);
             var commands = new GameCommandRegistry();
             new TownHandler(projection, log).Register(commands);

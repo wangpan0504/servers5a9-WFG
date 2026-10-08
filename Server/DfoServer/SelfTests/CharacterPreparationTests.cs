@@ -103,7 +103,7 @@ internal static class CharacterPreparationTests
         byte[] actor = TownPackets.Actor(role);
         int afterName = 121 + 2 + 4 + name.Length;
         That(actor.AsSpan(afterName, 3).SequenceEqual(new byte[] { 0, 0x25, 95 }), "actor matches roster identity");
-        byte[] player = TownPackets.Player(role, characters);
+        byte[] player = TownPackets.Player(role, new CharacterStatComputer(characters).Compute(role));
         That(player.Length == 257 && player[143] == 0 && player[144] == 15 && player[190] == 15, "both native skill lists retain tail alignment");
         byte[] complete = TownPackets.CompletedQuests(role);
         That(complete.Length == 30004 && BinaryPrimitives.ReadInt32LittleEndian(complete) == 30000 && complete.Skip(4).Count(x => x == 1) == definition.CompletedQuests.Length && definition.CompletedQuests.All(q => complete[4 + q] == 1), "bounded complete quest table");

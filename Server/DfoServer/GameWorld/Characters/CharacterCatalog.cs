@@ -7,7 +7,11 @@ namespace DfoServer.GameWorld.Characters;
 
 internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profiles)
 {
+    private readonly Dictionary<byte, CharacterAttributeDefinition> attributeDefinitions = new();
+
     public CharacterProfile Get(byte job) => profiles.GetValueOrDefault(job) ?? throw new InvalidDataException("Ordinary character job is not implemented");
+    public CharacterAttributeDefinition GetAttributeDefinition(byte job) => attributeDefinitions.GetValueOrDefault(job)
+        ?? throw new InvalidDataException("角色属性资源未装载");
     public static CharacterCatalog Load(PvfArchive pvf, ItemCatalog itemCatalog)
     {
 
@@ -15,6 +19,7 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
         if (!list.Keys.Order().SequenceEqual(Enumerable.Range(0, 16)))
             throw new InvalidDataException("Character job list changed");
         var profiles = new Dictionary<byte, CharacterProfile>();
+        var catalog = new CharacterCatalog(profiles);
         foreach (var entry in list.OrderBy(p => p.Key))
         {
             byte job = checked((byte)entry.Key);
@@ -72,6 +77,9 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
             };
             profile.Validate();
             profiles.Add(job, profile);
+            // 资源块编号与实际 GrowType 的消费映射由属性规则解释，不在装载时猜测。
+            catalog.attributeDefinitions.Add(job, CharacterAttributeDefinition.Parse("character/" + path,
+                pvf.ReadTokens("character/" + path), pvf.ResolveString));
             int Scaled(string tag, bool optional = false)
             {
                 string value = Section(initial, tag);
@@ -87,7 +95,7 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
             }
         }
 
-        return new CharacterCatalog(profiles);
+        return catalog;
     }
 
     internal static CharacterGrowthOptions ParseGrowthOptions(string text, byte job)

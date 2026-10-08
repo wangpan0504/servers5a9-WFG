@@ -60,7 +60,7 @@ internal static class DatabaseSchemaTests
                 "DROP TABLE character_dungeon_growth_receipts",
                 "ALTER TABLE character_dungeon_growth_receipts DROP COLUMN resource_source",
                 "DROP TABLE character_dungeon_state", "DROP TABLE character_dungeon_loot_receipts",
-                "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_dungeon_settlement_receipts",
+                "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts",
                 "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN report_body"
             })
             {
@@ -110,7 +110,7 @@ internal static class DatabaseSchemaTests
 
     private static void VerifyReleasedMigrations(string root)
     {
-        foreach (int oldVersion in new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 })
+        foreach (int oldVersion in Enumerable.Range(1, SqliteMigrations.CurrentVersion - 1))
         {
             string path = Path.Combine(root, $"released-v{oldVersion}.db");
             _ = new CharacterRepository(path);
@@ -118,12 +118,14 @@ internal static class DatabaseSchemaTests
             {
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('migrated',0,'Migrated',7,38,1,450,234,0,2,60,123)");
                 Execute(db, "INSERT INTO character_skill_points VALUES(1,0,12,0),(1,1,34,0)");
-                Execute(db, "INSERT INTO character_active_main_quests VALUES(1,0,3145,1)");
+                Execute(db, "INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES(1,0,3145,1,'1234567890abcdef1234567890abcdef')");
                 Execute(db, "INSERT INTO account_wallets(account,revision,rental_points) VALUES('migrated',5,17)");
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
-                Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
+                if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
+                if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
+                if (oldVersion < 12) Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
                 if (oldVersion < 11) Execute(db, "DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts");
                 if (oldVersion < 10) Execute(db, "DROP TABLE character_dungeon_settlement_receipts");
                 if (oldVersion < 9)
@@ -153,6 +155,11 @@ internal static class DatabaseSchemaTests
                     receipts == (oldVersion >= 3 ? 1 : 0), "真实旧版连续迁移保留v3已有账本，v1/v2只建立空账本");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_state") is 0L,
                     "旧角色迁移不补造key、attempt或附属成长owner");
+                Check(Query(db, "SELECT length(acceptance_id)=32 AND acceptance_id<>'00000000000000000000000000000000' FROM character_active_main_quests WHERE character_id=1") is 1L &&
+                    Query(db, "SELECT count(*) FROM character_quest_clear_receipts") is 0L &&
+                    Query(db, "SELECT count(*) FROM character_quest_completion_receipts") is 0L,
+                    "v13建立稳定接取身份，未凭历史scalar补造通关账本");
+
                 Check(Query(db, "SELECT count(*) FROM character_skill_point_sources") is 0L &&
                     Query(db, "SELECT count(*) FROM account_expert_contracts") is 0L,
                     "v11只增加空来源表，不重算旧SP或授予契约");
@@ -195,7 +202,7 @@ internal static class DatabaseSchemaTests
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('keep',0,'Rollback',9,38,1,450,234,0,2,60,321)");
             Execute(db, "INSERT INTO account_wallets(account,revision,rental_points) VALUES('keep',6,0)");
             Execute(db, "INSERT INTO character_skill_points VALUES(1,0,12,0),(1,1,34,0)");
-            Execute(db, "DROP TABLE character_dungeon_settlement_receipts");
+            Execute(db, "DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts");
             Execute(db, "DROP TABLE character_dungeon_pickup_receipts");
             Execute(db, "DROP TABLE character_dungeon_loot_receipts");
             Execute(db, "DROP TABLE character_dungeon_state");
@@ -219,6 +226,17 @@ internal static class DatabaseSchemaTests
         string clearBefore = Snapshot(clearRollback);
         Reject<SqliteException>(() => new CharacterRepository(clearRollback), "v9通关账本迁移撞表时拒绝启动");
         Check(Snapshot(clearRollback) == clearBefore, "v10迁移失败保留v9版本、结构与原角色资产");
+        string questRollback = Path.Combine(root, "quest-upgrade-rollback.db");
+        _ = new CharacterRepository(questRollback);
+        using (var db = Open(questRollback))
+        {
+            Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; PRAGMA user_version=12");
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('keep',0,'QuestKeep',11,38,1,450,234,0)");
+            Execute(db, "INSERT INTO character_active_main_quests VALUES(1,0,3145,1)");
+        }
+        string questBefore = Snapshot(questRollback);
+        Reject<SqliteException>(() => new CharacterRepository(questRollback), "合并v13领奖表撞表回滚接取身份和清图表");
+        Check(Snapshot(questRollback) == questBefore, "合并迁移失败保留v12版本、完整原结构与任务条件");
         using (var db = Open(rollback))
         {
             Check(Query(db, "PRAGMA user_version") is 1L &&
@@ -299,6 +317,9 @@ internal static class DatabaseSchemaTests
             HasColumn("account_wallets", "rental_points") ? Query(db, "SELECT group_concat(account||':'||rental_points,'|') FROM account_wallets") : null,
             Has("character_skill_points") ? Query(db, "SELECT group_concat(character_id||':'||context||':'||sp||':'||tp,'|') FROM character_skill_points") : null,
             Has("character_active_main_quests") ? Query(db, "SELECT group_concat(character_id||':'||slot||':'||quest_id||':'||condition_state,'|') FROM character_active_main_quests") : null,
+            HasColumn("character_active_main_quests", "acceptance_id") ? Query(db, "SELECT group_concat(character_id||':'||slot||':'||acceptance_id,'|') FROM character_active_main_quests") : null,
+            Has("character_quest_clear_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||event_id||':'||instance_id||':'||revision,'|') FROM character_quest_clear_receipts") : null,
+            Has("character_quest_completion_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||experience_amount||':'||revision||':'||rewards,'|') FROM character_quest_completion_receipts") : null,
             Has("character_dungeon_growth_receipts") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||monster_key||':'||combat_sequence||':'||amount||':'||revision,'|') FROM character_dungeon_growth_receipts") : null);
         bool Has(string table) => Query(db, $"SELECT count(*) FROM sqlite_schema WHERE name='{table}'") is 1L;
         bool HasColumn(string table, string column) => Query(db,

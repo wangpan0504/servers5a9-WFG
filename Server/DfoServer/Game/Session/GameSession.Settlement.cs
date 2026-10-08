@@ -69,8 +69,9 @@ internal sealed partial class GameSession
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth) => owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
-            dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingPickup || maximumRankPoint != rankPoint)
+            dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null || maximumRankPoint != rankPoint)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
+        var previous = Selected!;
         var reward = dungeon.Settlement?.Pending.Reward ?? rewards.Calculate(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),
             dungeon.Entry.Difficulty, rankPoint);
         if (dungeon.Settlement is null && !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
@@ -96,7 +97,8 @@ internal sealed partial class GameSession
             Selected = commit.Character;
             settlement.Committed = true;
         }
-        return new FormalDungeonSettlementResult(prepared.Outcome, FormalReceipt(), settlement.Pending.Reward, settlement.Presentation);
+        return new FormalDungeonSettlementResult(prepared.Outcome, FormalReceipt(), settlement.Pending.Reward,
+            settlement.Presentation, previous);
     });
 
     public FormalDungeonReceipt? AdvanceFormalDungeonCards(bool showCards) => owner.Execute(() =>

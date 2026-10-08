@@ -139,7 +139,7 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Player(Character character, CharacterCatalog characters)
+    public static byte[] Player(Character character, CharacterStats attributes)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
@@ -149,7 +149,7 @@ internal static class TownPackets
             writer.Write(new byte[19]);
             writer.Write(character.Id);
             writer.Write(character.Learning.Experience); // 02678520 的完整u64累计经验。
-            byte[] stats = CharacterStatsPackets.Build(characters.Get(character.Job).InitialStats);
+            byte[] stats = CharacterStatsPackets.Build(attributes);
             writer.Write(stats.Length);
             writer.Write(stats); // 03BE25C0: u32 length followed by raw bytes.
             writer.Write((byte)0);

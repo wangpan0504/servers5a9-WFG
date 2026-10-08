@@ -22,6 +22,7 @@ internal static class InventoryReceiptTests
     public static async Task RunAsync(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
         int checks = TestCheck.Count;
+        var computer = new CharacterStatComputer(characters);
         string root = Path.Combine(Path.GetTempPath(), "S5A9-receipts-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -67,7 +68,7 @@ internal static class InventoryReceiptTests
             var sent = new List<string>();
             await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, action) => sent.Add(action));
             var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender);
-            var projection = new InventoryProjection(characters, new TownProjection(towns, characters, null, itemResources.EpicPieces), itemResources.EpicPieces);
+            var projection = new InventoryProjection(computer, new TownProjection(towns, computer, null, itemResources.EpicPieces), itemResources.EpicPieces);
             // 首帧已经开始写，库存通知排队后换角；出队时必须再次验证原 epoch。
             Task first = sender.Send(1, 0, [], "held");
             await stream.Started.WaitAsync(TimeSpan.FromSeconds(5));
@@ -88,6 +89,12 @@ internal static class InventoryReceiptTests
             TestCheck.That(sent.Contains("inventory_committed_delta"), "当前提交正常发布差量");
             session.MutateInventory(c => new(true, 0, new(c.Inventory, c.Inventory with { Gold = 3 }, "receipt_newer")));
             TestCheck.That(!session.CanPublishInventory(next.Receipt!), "新 revision 使旧提交回执失效");
+            var actual = session.Selected!;
+            var currentReceipt = new InventoryCommitReceipt(actual, owner.Generation, session.SelectionEpoch);
+            TestCheck.That(session.CanPublishInventory(currentReceipt), "当前完整快照可发布装备与面板");
+            session.UpdateProgress(new(CharacterProgressField.Level, owner.Account, actual.Name, 2, 0));
+            TestCheck.That(session.Selected!.Revision == actual.Revision && !ReferenceEquals(session.Selected, actual) &&
+                !session.CanPublishInventory(currentReceipt), "同revision GM替换等级不能让旧穿戴Player属性覆盖新快照");
             using var replacement = owners.Acquire(owner.Account, () => { });
             bool expired = false;
             try { session.CanPublishInventory(next.Receipt!); }

@@ -16,7 +16,7 @@ using DfoServer.Network.Builders.Inventory;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
-    CharacterGrowthCatalog growth, DungeonKillExperienceCatalog rewards, TownProjection town,
+    CharacterGrowthCatalog growth, DungeonKillExperienceCatalog rewards, TownProjection town, CharacterLevelProjection levelProjection,
     DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
@@ -99,6 +99,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
         if (previousLearning is not null && SkillPackets.BindingsChanged(previousLearning, receipt.Character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_growth_skills", Guard);
+        await levelProjection.RefreshAsync(context, receipt.Character,
+            result.PreviousLevel ?? throw new InvalidOperationException("已提交死亡缺少原实际等级"), "formal_level_committed", Guard);
         if (result.ClearFact is not null && context.Session.EnableFormalDungeonSettlement(result.MonsterKey) is { } completion)
         {
             bool CompletionGuard() => context.Session.CanPublishDungeonSettlement(completion.Receipt);

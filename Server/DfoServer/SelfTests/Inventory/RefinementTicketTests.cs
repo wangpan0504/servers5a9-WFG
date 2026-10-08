@@ -26,6 +26,7 @@ internal static class RefinementTicketTests
     public static async Task RunAsync(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
         int start = Count;
+        var computer = new CharacterStatComputer(characters);
         var items = itemResources.Items;
         var fixedTicket = items.Get(10007131).RefinementTicket!;
         var additional = items.Get(10007990).RefinementTicket!;
@@ -128,7 +129,7 @@ internal static class RefinementTicketTests
                 That(frames[^1] == (0, 14), "asset ACK and deltas precede optional effects");
             });
             var commands = new GameCommandRegistry();
-            new RefinementHandler(service, new InventoryProjection(characters, new TownProjection(towns, characters, null, itemResources.EpicPieces), itemResources.EpicPieces), effects).Register(commands);
+            new RefinementHandler(service, new InventoryProjection(computer, new TownProjection(towns, computer, null, itemResources.EpicPieces), itemResources.EpicPieces), effects).Register(commands);
             commands.Seal();
             var packet = new Packet(1, 438, Request(weapon.Id));
             await commands.DispatchAsync(context, packet);

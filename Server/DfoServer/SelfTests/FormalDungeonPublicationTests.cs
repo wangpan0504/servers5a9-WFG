@@ -6,6 +6,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
@@ -28,6 +29,7 @@ internal static class FormalDungeonPublicationTests
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items)
     {
         int before = TestCheck.Count;
+        var computer = new CharacterStatComputer(characters);
         var learning = SkillLearningCatalog.Load(pvf);
         var growth = CharacterGrowthCatalog.Load(pvf);
         var kills = DungeonKillExperienceCatalog.Load(pvf);
@@ -40,13 +42,16 @@ internal static class FormalDungeonPublicationTests
         await ReselectDuringSendAsync();
         await ReturnDuringSendAsync();
         await PickupLostResultAsync();
+        await ClearedQuestSendFailureAsync();
+        await ClearNoticeFailureAsync();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Handler真实文件提交、结果丢失、发送故障及重选隔离断言（合成死亡，非实机）");
+
 
         GameCommandRegistry Registry(Fixture f, TownPresence? presence = null)
         {
             var commands = new GameCommandRegistry();
             new DungeonHandler(f.Log, catalog, rooms, growth, kills,
-                new TownProjection(towns, characters, presence, items.EpicPieces),
+                new TownProjection(towns, computer, presence, items.EpicPieces), new CharacterLevelProjection(computer),
                 DungeonMonsterDropCatalog.Load(pvf), items.Items, items.EpicPieces).Register(commands);
             commands.Seal();
             return commands;
@@ -133,6 +138,84 @@ internal static class FormalDungeonPublicationTests
                     "结果不明恢复使用同一候选，命中持久receipt只读重放");
             await commands.DispatchAsync(context, death);
             Check(f.Count() == 1 && stream.Frames.Count == 2, "确认后再次重试没有通知或第二份经验");
+        }
+
+        (FormalDungeonReceipt Receipt, DungeonPlannedMonster Boss) PrepareBoss(Fixture f)
+        {
+            f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms);
+            var targets = new (byte X, byte Y)[] { (1, 1), (2, 1), (2, 0), (3, 0), (4, 0) };
+            for (int room = 0; room < 6; room++)
+            {
+                var receipt = f.Session.CompleteFormalDungeonLoading()!;
+                if (room == 5)
+                    return (receipt, receipt.Monsters.Monsters.Single(monster => monster.MonsterId == 107000903));
+                foreach (var monster in receipt.Monsters.Monsters.Where(monster => monster.IsBlocking))
+                {
+                    var observation = new NativeDungeonDeathObservation(monster.ObjectKey, receipt.Character.Id,
+                        0x111, receipt.Character.Id, 600, 1, 0, checked((uint)monster.CandidateLevel), 504, 650, 1,
+                        true, new string('C', 64));
+                    Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Accepted,
+                        "清图发送故障fixture仅由正式敌方统计/SQL完成死亡（合成输入）");
+                }
+                Check(f.Session.MoveFormalDungeon(targets[room].X, targets[room].Y) is not null,
+                    "清图fixture经实际连续过房资格");
+            }
+            throw new InvalidOperationException("清图fixture未到Boss房");
+        }
+
+        async Task ClearNoticeFailureAsync()
+        {
+            using var f = new Fixture(towns, characters, learning, false);
+            var (receipt, boss) = PrepareBoss(f);
+            var selected = f.Session.Selected!;
+            var commands = Registry(f);
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput { FailOn = 4 };
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(82, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            var death = new Packet(1, 39, Death(boss.ObjectKey, receipt.Character.Id, checked((byte)boss.CandidateLevel)));
+            await RejectAsync(typeof(IOException), () => commands.DispatchAsync(context, death), "末次清图NOTI31写入失败传播");
+            var committed = f.Read();
+            Check(stop.IsCancellationRequested && f.Count() == 28 && committed.Revision == selected.Revision + 1 &&
+                committed.ActiveMainQuests.Single().ConditionState == 0 && Same(committed, f.Session.Selected!) &&
+                f.Session.Phase == SessionPhase.Settlement && stream.Opcodes.SequenceEqual(new ushort[] { 38, 37, 115 }) &&
+                sender.PendingBytes == 0, "31失败保留同事务成长与任务，只写已成功死亡、经验和Boss帧并释放发送预算");
+            Check(await commands.DispatchAsync(context, death) == CommandResult.Handled && f.Count() == 28 &&
+                stream.Frames.Count == 3 && Same(committed, f.Read()), "31通知失败不重跑Boss经验、任务清图或追加奖励");
+        }
+
+        async Task ClearedQuestSendFailureAsync()
+        {
+            using var f = new Fixture(towns, characters, learning, false);
+            var (receipt, boss) = PrepareBoss(f);
+            var observation = new NativeDungeonDeathObservation(boss.ObjectKey, receipt.Character.Id,
+                0x111, receipt.Character.Id, 600, 1, 0, checked((uint)boss.CandidateLevel), 504, 650, 1,
+                true, new string('C', 64));
+            Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Accepted,
+                "任务发送fixture明确提交最后Boss死亡");
+            var completedCondition = f.Read();
+            var commands = new GameCommandRegistry();
+            new QuestConditionHandler(f.Log).Register(commands);
+            commands.Seal();
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput { FailOn = 1 };
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(80, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            var packet = new Packet(1, 33, Convert.FromHexString("2100490C0000"));
+            await RejectAsync(typeof(IOException), () => commands.DispatchAsync(context, packet), "已持久清图ACK33发送故障传播");
+            Check(stop.IsCancellationRequested && Same(completedCondition, f.Read()) && f.Count() == 28,
+                "任务通知失败不重发经验、清图或奖品，不撤销已达成状态");
+            f.Session.ReturnToRoster();
+            f.Session.Select(f.Created.Slot);
+            f.Session.MarkReady();
+            var reselected = f.Read();
+            using var healthyStop = new CancellationTokenSource();
+            using var healthyOutput = new ControlledOutput();
+            await using var healthySender = new GameConnectionSender(f.Owner, healthyOutput, healthyStop, 0, (_, _, _, _, _) => { });
+            var healthy = new GameConnectionContext(new(81, IPAddress.Loopback, healthyOutput, healthyStop), f.Owner, f.Session, healthySender);
+            Check(await commands.DispatchAsync(healthy, packet) == CommandResult.Handled && !healthyStop.IsCancellationRequested &&
+                healthyOutput.Frames.Single().AsSpan(16).SequenceEqual(Convert.FromHexString("01490C00000000")) && Same(reselected, f.Read()),
+                "重选读取同接取持久事实恢复合法7B任务投影，仍不写库或重复发奖");
         }
         async Task SendFailureAsync(int failedPacket)
         {
@@ -378,6 +461,9 @@ internal static class FormalDungeonPublicationTests
         public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
         public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
+        public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
+        public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan) => inner.CommitQuestCompletion(owner, plan);
+
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog);
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);

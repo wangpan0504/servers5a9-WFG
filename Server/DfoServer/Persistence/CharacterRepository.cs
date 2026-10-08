@@ -96,12 +96,18 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
         command.Parameters.AddWithValue("$slot", 0);
         command.Parameters.AddWithValue("$quest", 0);
         command.Parameters.AddWithValue("$state", 0);
-        command.CommandText = "INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state) VALUES($id,$slot,$quest,$state)";
-        foreach (var quest in character.ActiveMainQuests)
+        command.Parameters.AddWithValue("$acceptance", "");
+        var activeQuests = character.ActiveMainQuests.Select(quest => quest with
+        {
+            AcceptanceId = quest.AcceptanceId == Guid.Empty ? Guid.NewGuid() : quest.AcceptanceId
+        }).ToArray();
+        command.CommandText = "INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES($id,$slot,$quest,$state,$acceptance)";
+        foreach (var quest in activeQuests)
         {
             command.Parameters["$slot"].Value = quest.Slot;
             command.Parameters["$quest"].Value = quest.QuestId;
             command.Parameters["$state"].Value = quest.ConditionState;
+            command.Parameters["$acceptance"].Value = quest.AcceptanceId.ToString("N");
             command.ExecuteNonQuery();
         }
 
@@ -125,7 +131,7 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
             AcceptedStoryLevel = character.AcceptedStoryLevel,
             CompletedQuests = [.. character.CompletedQuests],
             Skills = [.. character.Skills],
-            ActiveMainQuests = [.. character.ActiveMainQuests],
+            ActiveMainQuests = activeQuests,
             Learning = learning,
             Inventory = inventory,
             DungeonState = character.DungeonState
@@ -211,12 +217,15 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
                 skills.Add(new(checked((ushort)reader.GetInt32(0)), checked((byte)reader.GetInt32(1))));
         }
 
-        query.CommandText = "SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$id ORDER BY slot";
+        query.CommandText = "SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$id ORDER BY slot";
         var active = new List<ActiveMainQuest>();
         using (var reader = query.ExecuteReader())
         {
             while (reader.Read())
-                active.Add(new(checked((byte)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), checked((uint)reader.GetInt64(2))));
+                active.Add(new(checked((byte)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), checked((uint)reader.GetInt64(2)))
+                {
+                    AcceptanceId = Guid.ParseExact(reader.GetString(3), "N")
+                });
         }
 
         query.CommandText = """

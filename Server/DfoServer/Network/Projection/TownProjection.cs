@@ -1,5 +1,4 @@
 using DfoServer.GameWorld.Items;
-using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Protocol;
@@ -11,7 +10,7 @@ using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class TownProjection(TownCatalog towns, CharacterCatalog characters, TownPresence? presence, EpicPieceCatalog pieces,
+internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null)
 {
     public async Task EnterAsync(GameConnectionContext context)
@@ -23,7 +22,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterCatalog charact
             await context.Notify(NotiPacketType.STORY_DIGEST_INFO, TownPackets.StoryLevel(c), "accepted_story_level");
         await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(c.Inventory), "creature_details_initialize");
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(c), "actor");
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, characters), "player");
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c)), "player");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
         await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
         if (c.CompletedQuests.Length > 0)

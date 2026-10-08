@@ -8,7 +8,10 @@ internal sealed record DungeonRunIdentity(ushort CharacterId, uint QuestId, long
 internal sealed record DungeonRouteConnection(DungeonPoint First, DungeonPoint Second);
 internal sealed record DungeonRunSnapshot(DungeonRunIdentity Identity, SinglePlayerDungeonPhase Phase, DungeonMap CurrentMap,
     IReadOnlyList<ushort> LivingMonsters);
-internal sealed record DungeonClearFact(DungeonRunIdentity Identity, uint DungeonId, IReadOnlyList<Guid> ConfirmedDeathEvents);
+internal sealed record DungeonClearFact(DungeonRunIdentity Identity, uint DungeonId, IReadOnlyList<Guid> ConfirmedDeathEvents)
+{
+    public DungeonMap? ClearMap { get; init; }
+}
 internal sealed record DungeonRunResult(DungeonRunOutcome Outcome, DungeonRunSnapshot Snapshot, DungeonClearFact? ClearFact = null);
 internal sealed record DungeonDeathPreparation(DungeonRunOutcome Outcome, PreparedDungeonDeath? Pending = null);
 
@@ -67,6 +70,8 @@ internal sealed class SinglePlayerDungeonRun
     private Room current;
     private DungeonRunIdentity identity;
     public long StartCharacterRevision => entry.CharacterRevision;
+    internal DungeonEntryPlan Entry => entry;
+    internal bool HasPendingDeath => pendingDeath is not null;
     internal uint DungeonId => entry.DungeonId;
     internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
@@ -82,7 +87,8 @@ internal sealed class SinglePlayerDungeonRun
     {
         this.entry = entry;
         this.authority = authority;
-        rooms = route.Rooms.ToDictionary(plan => plan.Room.Map.Position, plan => new Room(plan with { Monsters = Array.AsReadOnly(plan.Monsters.ToArray()) }));
+        rooms = route.Rooms.ToDictionary(plan => plan.Room.Map.Position, plan => new Room(
+            plan with { Monsters = Array.AsReadOnly(plan.Monsters.ToArray()) }));
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = rooms[entry.StartMap.Position];
         identity = new(entry.CharacterId, entry.QuestId, attempt, Guid.NewGuid(), epoch);
@@ -240,7 +246,7 @@ internal sealed class SinglePlayerDungeonRun
             Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
                 monster.ObjectKey != confirmed.MonsterKey).Select(monster => monster.ObjectKey).ToArray()));
         DungeonClearFact? clear = settles
-            ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) : null;
+            ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = entry.BossMap } : null;
         pendingDeath = new(confirmed, current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey),
             new(DungeonRunOutcome.Accepted, nextSnapshot, clear));
         return new(DungeonRunOutcome.Accepted, pendingDeath);
@@ -331,7 +337,7 @@ internal sealed class SinglePlayerDungeonRun
         {
             Phase = SinglePlayerDungeonPhase.Settlement;
             Advance();
-            ClearFact = new(identity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.ToArray()));
+            ClearFact = new(identity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.ToArray())) { ClearMap = entry.BossMap };
             return new(DungeonRunOutcome.Accepted, Snapshot, ClearFact);
         }
         return Result(DungeonRunOutcome.Accepted);

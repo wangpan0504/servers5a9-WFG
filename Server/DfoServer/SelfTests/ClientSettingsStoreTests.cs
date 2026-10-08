@@ -264,12 +264,15 @@ internal static class ClientSettingsStoreTests
     static void Migration()
     {
         using var f = new Fixture();
-        f.Execute("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5");
-        string assets = f.Assets();
+        f.Execute("DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5");
+        string assets = f.Assets(includeAcceptance: false);
         var migrated = new ClientSettingsRepository(f.Path);
-        Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.SettingRows() == 0 && f.Assets() == assets,
+        Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.SettingRows() == 0 && f.Assets(includeAcceptance: false) == assets,
             "v5 连续升级当前版本只创建空设置表，原账号角色资产逐行保持");
         Check(migrated.Load(f.Owner, f.First.Id).IsDefault, "升级不继承旧版本默认设置");
+        Check(f.Query("SELECT count(*) FROM character_active_main_quests WHERE length(acceptance_id)=32 AND acceptance_id<>'00000000000000000000000000000000'") is 3L &&
+            f.Query("SELECT count(*) FROM character_quest_clear_receipts") is 0L,
+            "v13迁移为原三角色任务建立稳定接取身份，不凭旧条件值生成通关事实");
         var game = Pattern(ClientSettingsService.GameOptionLength, 53);
         var character = Pattern(ClientSettingsService.CharacterOptionLength, 71);
         Check(migrated.SaveGameOptions(f.Owner, game) && migrated.SaveCharacterOptions(f.Owner, f.First.Id, character),
@@ -277,15 +280,15 @@ internal static class ClientSettingsStoreTests
         Assert(new ClientSettingsRepository(f.Path).Load(f.Owner, f.First.Id), game, character, "升级后重开恢复完整设置");
         f.Integrity();
 
-        f.Execute("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5; CREATE TABLE character_client_settings(collision INTEGER)");
-        assets = f.Assets();
+        f.Execute("DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5; CREATE TABLE character_client_settings(collision INTEGER)");
+        assets = f.Assets(includeAcceptance: false);
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "v6 第二条 DDL 冲突回滚整个升级");
-        Check(f.Query("PRAGMA user_version") is 5L && f.Query("SELECT count(*) FROM sqlite_schema WHERE name='account_client_settings'") is 0L && f.Assets() == assets,
+        Check(f.Query("PRAGMA user_version") is 5L && f.Query("SELECT count(*) FROM sqlite_schema WHERE name='account_client_settings'") is 0L && f.Assets(includeAcceptance: false) == assets,
             "失败升级不留下第一张设置表、不推进版本或修改原表");
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "失败库重开再次明确拒绝而非假成功");
         f.Execute("DROP TABLE character_client_settings");
         var retried = new ClientSettingsRepository(f.Path);
-        Check(f.Query("PRAGMA user_version") is long retriedVersion && retriedVersion == SqliteMigrations.CurrentVersion && retried.Load(f.Owner, f.First.Id).IsDefault && f.Assets() == assets,
+        Check(f.Query("PRAGMA user_version") is long retriedVersion && retriedVersion == SqliteMigrations.CurrentVersion && retried.Load(f.Owner, f.First.Id).IsDefault && f.Assets(includeAcceptance: false) == assets,
             "移除冲突后可重新完整升级并重开");
         f.Integrity();
         MigrationFromSix(f);
@@ -297,10 +300,10 @@ internal static class ClientSettingsStoreTests
         var character = Pattern(ClientSettingsService.CharacterOptionLength, 79);
         f.Service.SaveGameOptions(f.Owner, game);
         f.Service.SaveCharacterOptions(f.Owner, f.First.Id, character);
-        f.Execute("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6");
-        string assets = f.Assets(), existing = f.ExistingSettings();
+        f.Execute("DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6");
+        string assets = f.Assets(includeAcceptance: false), existing = f.ExistingSettings();
         var upgraded = new ClientSettingsRepository(f.Path);
-        Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion && f.ExistingSettings() == existing && f.Assets() == assets &&
+        Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion && f.ExistingSettings() == existing && f.Assets(includeAcceptance: false) == assets &&
             upgraded.Load(f.Owner, f.First.Id).CharacterGameOptions.IsDefault,
             "v6升级v7保持原两设置表逐字节和全部资产，新角色主设置表为空");
         Assert(upgraded.Load(f.Owner, f.First.Id), game, character, "v7不把账号设置伪装成角色历史快照");
@@ -308,17 +311,17 @@ internal static class ClientSettingsStoreTests
         Check(Same(new ClientSettingsRepository(f.Path).Load(f.Owner, f.First.Id).CharacterGameOptions, game), "v7角色快照持久化后重开保持");
         f.Integrity();
 
-        f.Execute("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6; CREATE TABLE character_game_settings(collision INTEGER)");
-        assets = f.Assets();
+        f.Execute("DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6; CREATE TABLE character_game_settings(collision INTEGER)");
+        assets = f.Assets(includeAcceptance: false);
         existing = f.ExistingSettings();
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "v7 DDL冲突不能报告升级成功");
-        Check(f.Query("PRAGMA user_version") is 6L && f.ExistingSettings() == existing && f.Assets() == assets &&
+        Check(f.Query("PRAGMA user_version") is 6L && f.ExistingSettings() == existing && f.Assets(includeAcceptance: false) == assets &&
             f.Query("SELECT count(*) FROM pragma_table_info('character_game_settings') WHERE name='collision'") is 1L,
             "v7失败保留版本、冲突原表、两份已存设置及全部资产");
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "v7失败库重开仍明确拒绝");
         f.Execute("DROP TABLE character_game_settings");
         var retried = new ClientSettingsRepository(f.Path);
-        Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion && f.ExistingSettings() == existing && f.Assets() == assets &&
+        Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion && f.ExistingSettings() == existing && f.Assets(includeAcceptance: false) == assets &&
             retried.Load(f.Owner, f.First.Id).CharacterGameOptions.IsDefault,
             "清除v7冲突后完整重开升级且不迁入其他角色的主设置");
         f.Integrity();
@@ -395,7 +398,7 @@ internal static class ClientSettingsStoreTests
             command.ExecuteNonQuery();
         }
 
-        public string Assets()
+        public string Assets(bool includeAcceptance = true)
         {
             using var db = Open(Path);
             using var tables = db.CreateCommand();
@@ -408,6 +411,8 @@ internal static class ClientSettingsStoreTests
             {
                 using var query = db.CreateCommand();
                 query.CommandText = "SELECT * FROM \"" + name.Replace("\"", "\"\"") + "\" ORDER BY rowid";
+                if (!includeAcceptance && name == "character_active_main_quests")
+                    query.CommandText = "SELECT character_id,slot,quest_id,condition_state FROM character_active_main_quests ORDER BY rowid";
                 using var reader = query.ExecuteReader();
                 while (reader.Read())
                 {

@@ -9,7 +9,7 @@ internal sealed class ClientNoticeHandler(ServerLog log) : IGameCommandModule
     {
         foreach (var opcode in new[]
         {
-            CmdPacketType.SET_QUEST_TRIGGER, CmdPacketType.FINISH_QUEST, CmdPacketType.USE_SKILL,
+            CmdPacketType.USE_SKILL,
             CmdPacketType.REQUEST_BLACKLIST,
             CmdPacketType.GUILD_ALL_MEMBER_LIST, CmdPacketType.MERCENARY_INFO, CmdPacketType.SECURITY_STATUS,
             CmdPacketType.FPS_PERFORMANCE_STATISTIC, CmdPacketType.SEARCH_GUILD_RANKING

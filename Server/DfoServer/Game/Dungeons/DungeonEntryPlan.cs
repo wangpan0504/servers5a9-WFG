@@ -16,11 +16,13 @@ internal sealed record DungeonEntryPlan(
     DungeonMap StartMap,
     DungeonMap BossMap)
 {
+    public Guid QuestAcceptanceId { get; init; }
+
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
-        byte difficulty, out DungeonEntryPlan? plan, out string reason)
+        byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false)
     {
         plan = null;
-        reason = ValidateRequest(character, dungeonId, questId, difficulty);
+        reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest);
         if (reason != "resource-request-ready")
             return false;
         DungeonDefinition definition;
@@ -34,14 +36,14 @@ internal sealed record DungeonEntryPlan(
             return false;
         }
 
-        return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason);
+        return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
-        byte difficulty, out DungeonEntryPlan? plan, out string reason)
+        byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false)
     {
         plan = null;
-        reason = ValidateRequest(character, dungeonId, questId, difficulty);
+        reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest);
         if (reason != "resource-request-ready")
             return false;
         if (definition.Id != dungeonId)
@@ -96,12 +98,15 @@ internal sealed record DungeonEntryPlan(
 
         // SourceOrdinal 仅保留资源顺序，不能直接作为 NOTI28 的 wire 枚举。
         var active = character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
-        plan = new(character.Id, character.Revision, dungeonId, questId, active.Slot, difficulty, maze, starts[0], bosses[0]);
+        plan = new(character.Id, character.Revision, dungeonId, questId, active.Slot, difficulty, maze, starts[0], bosses[0])
+        {
+            QuestAcceptanceId = active.AcceptanceId
+        };
         reason = "resource-plan-ready";
         return true;
     }
 
-    private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty)
+    private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty, bool allowClearedQuest)
     {
         if (dungeonId != 3)
             return "dungeon-unsupported";
@@ -121,8 +126,8 @@ internal sealed record DungeonEntryPlan(
         if (active.Length != 1 || active[0].Slot > 29
             || character.ActiveMainQuests.Count(quest => quest.Slot == active[0].Slot) != 1)
             return "quest-active-conflict";
-        // 3145 的单个清图条件以 1 表示尚未达成；0 已达成，不能伪装成首次进图。
-        if (active[0].ConditionState != 1)
+        // 已达成条件只有持久清图资格才能继续挑战；裸条件值不能伪装正式通关。
+        if (active[0].ConditionState != 1 && !(allowClearedQuest && active[0].ConditionState == 0))
             return "quest-condition-not-pending";
         return "resource-request-ready";
     }

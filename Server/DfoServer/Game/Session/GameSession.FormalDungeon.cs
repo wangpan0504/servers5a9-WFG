@@ -29,10 +29,16 @@ internal sealed partial class GameSession
         Func<int, int>? draw = null)
     {
         var (expected, epoch) = owner.Execute(() => (Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect && formalDungeon is null ? Selected : null, SelectionEpoch));
-        if (expected is null || expected.DungeonState is not { } state ||
-            !DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _))
+        if (expected is null ||
+            expected.DungeonState is not { } state)
+            return null;
+        bool allowClearedQuest = questId == 3145 &&
+            repository.LoadQuestClear(owner, expected, 3145) is not null;
+        if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _, allowClearedQuest))
             return null;
         state.Validate();
+        if (entry!.QuestAcceptanceId == Guid.Empty)
+            return null;
         if (state.NextObjectKey > ushort.MaxValue || state.LastAttempt == long.MaxValue)
             return null;
         var topology = entry!.Maze.StaticTopology;
@@ -87,7 +93,8 @@ internal sealed partial class GameSession
 
     public FormalDungeonReceipt? CompleteFormalDungeonLoading() => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || Phase != SessionPhase.Loading || formalDungeon is not { } dungeon) return null;
+        if (!Ready || Selected is null || Phase != SessionPhase.Loading || formalDungeon is not { } dungeon ||
+            dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || dungeon.Run.Snapshot.Identity.Epoch == long.MaxValue) return null;
         var result = dungeon.Run.CompleteLoading(dungeon.Run.Snapshot.Identity, Guid.NewGuid());
         if (result.Outcome != DungeonRunOutcome.Accepted) return null;
         Phase = dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon;
@@ -124,6 +131,7 @@ internal sealed partial class GameSession
                     dungeon.Draw(DungeonExplicitDropPolicy.TriggerDenominator), dungeon.Draw(DungeonExplicitDropPolicy.SelectionDenominator));
                 return choice is null ? null : InventoryRewardGrantService.Create(choice.Template, choice.Count);
             });
+        byte previousLevel = Selected.Level;
         var committed = CommitDungeonGrowth(SelectionEpoch, Selected, dungeon.Run, pending, reward, growth, loot);
         if (loot is not null && !dungeon.Ground.PublishCommitted(pending, loot))
             throw new InvalidOperationException("已提交掉落的原准备不能发布");
@@ -131,7 +139,7 @@ internal sealed partial class GameSession
         dungeon.KillExperienceTotal = checked(dungeon.KillExperienceTotal + reward.Amount);
         if (committed.Death.ClearFact is not null)
             dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
-        return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward, committed.Death.ClearFact, loot?.Ground);
+        return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward, committed.Death.ClearFact, loot?.Ground, previousLevel);
     });
 
     public FormalDungeonPickupResult PickFormalDungeonItem(uint groundKey, ItemCatalog items, EpicPieceCatalog pieces) => owner.Execute(() =>
@@ -160,7 +168,7 @@ internal sealed partial class GameSession
 
     public TownTravelReceipt? ReturnFromFormalDungeon() => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup) return null;
+        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null) return null;
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRoom();
         formalDungeon = null;

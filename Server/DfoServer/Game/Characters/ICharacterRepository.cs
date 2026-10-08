@@ -3,6 +3,7 @@ using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
+using DfoServer.Game.Quests;
 namespace DfoServer.Game.Characters;
 // 角色用例依赖的持久化边界；SQLite、迁移与离线导入细节不进入 Game。
 internal interface ICharacterRepository
@@ -19,6 +20,8 @@ internal interface ICharacterRepository
     Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit);
     Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
+    QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);
+    QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan);
     DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null);
     DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,

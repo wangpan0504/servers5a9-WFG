@@ -1,14 +1,14 @@
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
-using DfoServer.GameWorld.Characters;
+using DfoServer.Game.Characters;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection.Inventory;
 
-internal sealed class InventoryProjection(CharacterCatalog characters, TownProjection town, EpicPieceCatalog pieces)
+internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces)
 {
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result, IReadOnlySet<InventorySlot>? acknowledgedSlots = null)
     {
@@ -35,7 +35,7 @@ internal sealed class InventoryProjection(CharacterCatalog characters, TownProje
         if (slots.Any(slot => slot.List == InventoryListType.Equipment))
         {
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(current), "equipment_actor", CanSend);
-            await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, characters), "equipment_player", CanSend);
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current)), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
                 if (CanSend() && context.Session.Phase == DfoServer.Game.Session.SessionPhase.Town)

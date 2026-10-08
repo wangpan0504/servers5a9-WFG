@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using DfoServer.GameWorld.Characters;
@@ -21,6 +22,8 @@ internal static class FormalDungeonTcpTests
         ulong experience = 0;
         ushort nextKey;
         int picked = 0;
+        int upgradedRoomMoves = 0, clearLevelRefreshes = 0;
+        byte projectedLevel = 1;
         byte automaticLevel = resources.Characters.Get(0).Skills.Single(skill => skill.Id == 174).Level;
         using (var peer = Open(fixture))
         {
@@ -40,6 +43,7 @@ internal static class FormalDungeonTcpTests
             int[] ids = [76121, 76122, 76123, 76124, 76125, 76126];
             for (int room = 0; room < ids.Length; room++)
             {
+                byte roomLevel = projectedLevel;
                 That(U32(map, 14) == ids[room], "正式TCP依匹配3145六房顺序加载");
                 Load(peer);
                 if (room == 0) VerifyDungeonActions(fixture, peer);
@@ -165,10 +169,12 @@ internal static class FormalDungeonTcpTests
                     peer.Send(45, move);
                     peer.Expect(1, 45, [1]);
                     map = peer.Expect(0, 29).Body;
+                    if (projectedLevel > roomLevel) upgradedRoomMoves++;
                 }
             }
             That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id) is [[28L]],
                 "六房28个敌对对象各一条成长事实，友方托比没有伪造击杀或额外经验");
+            That(upgradedRoomMoves > 0, "副本升级只发Player后仍能清完当前房间、成功换房并加载下一房");
             var clearCatalog = DungeonClearExperienceCatalog.Load(resources.Archive);
             var clearReward = clearCatalog.Calculate(DungeonCatalog.Load(resources.Archive).Get(3), 0, 90);
             byte[] reportResult = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 90);
@@ -211,12 +217,15 @@ internal static class FormalDungeonTcpTests
             peer.Barrier();
             That(Experience(fixture, peer.Id) == experience && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[3L]],
                 "再挑战各一次结算，重选按真实15/132退出，旧报告不跨实例重复发奖");
+            That(clearLevelRefreshes > 0, "真实通关经验跨级实际触发Player刷新，重复报告没有额外刷新");
             nextKey = checked((ushort)Convert.ToInt64(fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]));
 
             void ReadClear()
             {
                 byte[] result = peer.Expect(0, 34).Body;
+                byte previousLevel = projectedLevel;
                 byte[] exp = ReadGrowth();
+                if (exp[0] > previousLevel) clearLevelRefreshes++;
                 byte[] clear = peer.Expect(0, 35).Body;
                 That(result.Length == 16 && result[6] == 90 && U16(result, 9) == peer.Id && exp.Length == 91 &&
                     U32(exp, 9) == clearReward.TotalExperience && clear.Length == 218 && U32(clear, 0) == clearReward.BaseExperience &&
@@ -261,6 +270,9 @@ internal static class FormalDungeonTcpTests
                         "升级固定技能时跟随完整技能同步，战斗换槽保持稳定");
                     automaticLevel = packet[0];
                 }
+                if (packet[0] != projectedLevel)
+                    ExpectLevelRefresh(peer, packet[0], U64(packet, 1));
+                projectedLevel = packet[0];
                 return packet;
             }
         }
@@ -284,9 +296,96 @@ internal static class FormalDungeonTcpTests
             peer.Send(39, oldReport!);
             peer.Barrier();
             That(Experience(fixture, peer.Id) == experience, "新实例拒绝上轮死亡请求，不增加资产经验");
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Barrier();
+            byte previousLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            string afterClear = fixture.Snapshot();
+            for (int replay = 0; replay < 2; replay++)
+            {
+                peer.Send(33, Convert.FromHexString("2100490C0000"));
+                peer.Expect(1, 33, Convert.FromHexString("01490C00000000"));
+                peer.Barrier();
+                That(fixture.Snapshot() == afterClear, "本次权威清图ACK33精确7B重复只投影，不再次写库或发奖");
+            }
+            long beforeQuestRevision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            uint beforeQuestGold = Convert.ToUInt32(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
+            byte[] questAck = peer.Expect(1, 34).Body;
+            int[] rewards = [10165055, 101010438, 10403, 12403, 14403, 16403, 18403];
+            var rewardSlots = new Dictionary<ushort, int>();
+            That(questAck.Length == 143 && questAck[0] == 1 && U16(questAck, 1) == 3145 && questAck[3] == 3 &&
+                U32(questAck, 4) == 1780 && questAck[8] == 0 && questAck[9] == 7,
+                "本服实际任务EXP1780与清图类型3/item模式0构成完整143B领奖ACK");
+            for (int index = 0; index < rewards.Length; index++)
+            {
+                int at = 10 + 19 * index;
+                ushort slot = U16(questAck, at);
+                That(rewardSlots.TryAdd(slot, rewards[index]) && U32(questAck, at + 2) == rewards[index] &&
+                    U32(questAck, at + 6) == (index == 0 ? 1u : 999999998u), "七项任务奖励原序/实际槽/数量或特殊品级来源");
+                var row = fixture.Query("""
+                    SELECT i.item_uid,i.item_core FROM character_inventory_items i JOIN character_inventory_slots s ON s.item_uid=i.item_uid
+                    WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1
+                    """, peer.Id, slot).Single();
+                using var core = JsonDocument.Parse((string)row[1]);
+                That(Convert.ToInt64(row[0]) > 0 && core.RootElement.GetProperty("ItemId").GetInt32() == rewards[index] &&
+                    core.RootElement.GetProperty("AmplifyType").GetByte() == questAck[at + 10] &&
+                    core.RootElement.GetProperty("AmplifyValue").GetUInt16() == U16(questAck, at + 11) &&
+                    core.RootElement.GetProperty("ExpireTime").GetInt32() == U32(questAck, at + 13) &&
+                    core.RootElement.GetProperty("SortLockFlag").GetByte() == questAck[at + 17] &&
+                    core.RootElement.GetProperty("RemainUseCount").GetByte() == questAck[at + 18],
+                    "ACK奖励发布已持久UID/完整Core对应字段，不能拿规划临时UID充当提交");
+            }
+            byte[] rewardInventory = peer.Expect(0, 14).Body;
+            That(rewardInventory.Length == 3 + 7 * 123 && rewardInventory[0] == 0 && U16(rewardInventory, 1) == 7,
+                "领奖增量消费后完整123B Core校准七个目的槽，未混用奖励简表");
+            for (int index = 0; index < 7; index++)
+            {
+                int at = 3 + index * 123;
+                That(rewardSlots.TryGetValue(U16(rewardInventory, at), out int itemId) && U32(rewardInventory, at + 2) == itemId,
+                    "完整库存通知与实际领奖七个目的槽一致");
+            }
+            experience += 1780;
+            byte rewardLevel = 1;
+            while (experience >= growth.GetCumulativeExperienceBoundary(rewardLevel)) rewardLevel++;
+            var questGrowth = peer.Expect(0, 37).Body;
+            if (rewardLevel > previousLevel) peer.Expect(0, 19);
+            That(questGrowth.Length == 91 && questGrowth[0] == rewardLevel && U64(questGrowth, 1) == experience &&
+                U32(questGrowth, 9) == 1780 && U16(questGrowth, 13) == growth.GetSpDelta(1, rewardLevel) &&
+                U16(questGrowth, 15) == growth.GetSpDelta(1, rewardLevel) &&
+                fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id) is [[long questRevision]] && questRevision == beforeQuestRevision + 1 &&
+                fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long gold]] && gold == beforeQuestGold &&
+                fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", peer.Id) is [[0L]] &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0", peer.Id) is [[3145L]] &&
+                fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0", peer.Id) is [[1L]],
+                "经验自然跨级/SP/七资产/清槽/完成表/领奖receipt与唯一revision同事务，金币不猜补");
+            if (rewardLevel != previousLevel)
+                ExpectLevelRefresh(peer, rewardLevel, experience, town: true);
+            string afterAward = fixture.Snapshot();
+            string awardedAssets = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
+            peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
+            peer.Expect(1, 34, [0, 19, 0]);
+            peer.Barrier();
+            That(fixture.Snapshot() == afterAward && fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == awardedAssets,
+                "同连接重复完成仅中立拒绝，不重发incremental物品或重复经验");
+
         }
         await fixture.StopAsync();
         Console.WriteLine($"PASS 正式TCP静默拒绝后回城重进、全部职业和转职加载、原生统计合成击杀、六房升级、真实随机拾取{picked}件、重复拒绝及服务重启（非Windows实机；零样本不作拾取覆盖）");
+    }
+
+    static void ExpectLevelRefresh(TcpPeer peer, byte level, ulong experience, bool town = false)
+    {
+        if (town)
+        {
+            var actor = peer.Expect(0, 2).Body;
+            int nameLength = BinaryPrimitives.ReadInt32LittleEndian(actor.AsSpan(123));
+            That(actor[0] == 0 && U16(actor, 121) == peer.Id && actor[129 + nameLength] == level,
+                "城镇升级仍同步Actor实际等级");
+        }
+        var player = peer.Expect(0, 2).Body;
+        That(player[0] == 1 && U16(player, 22) == peer.Id && U64(player, 24) == experience && U32(player, 32) == 89 &&
+            U32(player, 40) == 1400 + 250 * (level - 1) &&
+            BinaryPrimitives.ReadInt16LittleEndian(player.AsSpan(44)) == 75 + 48 * (level - 1),
+            "副本与结算升级只发Player，当前CHR基础/完整Core/双树来自实际提交角色");
     }
 
     static void VerifyDungeonActions(TcpTestFixture fixture, TcpPeer peer)

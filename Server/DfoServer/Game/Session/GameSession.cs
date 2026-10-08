@@ -160,6 +160,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     {
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         formalDungeon = null;
+        pendingQuestCompletion = null;
         SelectionEpoch++;
         Selected = null;
         completed = new HashSet<int>();

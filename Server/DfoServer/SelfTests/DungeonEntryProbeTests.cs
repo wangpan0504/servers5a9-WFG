@@ -27,6 +27,7 @@ internal static class DungeonEntryProbeTests
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         int checks = Count;
+        var computer = new CharacterStatComputer(characters);
 
         string root = Path.Combine(Path.GetTempPath(), "S5A9-dungeon-probe-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -43,12 +44,12 @@ internal static class DungeonEntryProbeTests
             var probe = new DungeonProbeState(session);
             var context = new GameConnectionContext(new(1, IPAddress.Loopback, bytes, lifetime), owner, session, sender, probe);
             using var log = new ServerLog(Path.Combine(root, "logs"));
-            var projection = new TownProjection(towns, characters, null, itemResources.EpicPieces);
+            var projection = new TownProjection(towns, computer, null, itemResources.EpicPieces);
             var formalHandler = new DungeonHandler(log, catalog, DungeonRoomCatalog.Load(pvf),
-                CharacterGrowthCatalog.Load(pvf), DungeonKillExperienceCatalog.Load(pvf), projection);
+                CharacterGrowthCatalog.Load(pvf), DungeonKillExperienceCatalog.Load(pvf), projection, new CharacterLevelProjection(computer));
             var disabled = Registry(formalHandler);
             var information = Registry(new DungeonProbeModule(log, catalog, DungeonEntryProbeMode.Information));
-            var town = Registry(new TownHandler(new TownProjection(towns, characters, null, itemResources.EpicPieces), log));
+            var town = Registry(new TownHandler(new TownProjection(towns, computer, null, itemResources.EpicPieces), log));
             byte[] selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
             var request = new Packet(1, (ushort)CmdPacketType.SELECT_DUNGEON, selection);
             var finishRequest = new Packet(1, (ushort)CmdPacketType.FINISH_LOADING, new byte[8]);
@@ -96,7 +97,7 @@ internal static class DungeonEntryProbeTests
             }
             That(missingState && bytes.Length == 0, "diagnostic module rejects mismatched connection wiring");
             var mixed = new GameCommandRegistry();
-            new DungeonSelectionHandler(new TownProjection(towns, characters, null, itemResources.EpicPieces), log).Register(mixed);
+            new DungeonSelectionHandler(new TownProjection(towns, computer, null, itemResources.EpicPieces), log).Register(mixed);
             formalHandler.Register(mixed);
             bool duplicate = false;
             try

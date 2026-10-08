@@ -27,7 +27,7 @@ internal sealed partial class GameSession
     public bool CanPublishInventory(InventoryCommitReceipt receipt) => owner.Execute(() =>
         Ready && receipt.Generation == owner.Generation && Phase == receipt.Phase &&
         SelectionEpoch == receipt.SelectionEpoch && Selected?.Id == receipt.Character.Id &&
-        Selected!.Revision == receipt.Character.Revision);
+        ReferenceEquals(Selected, receipt.Character));
 
     public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1)
     {

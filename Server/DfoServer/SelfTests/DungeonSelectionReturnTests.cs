@@ -82,6 +82,7 @@ internal static class DungeonSelectionReturnTests
     public static async Task RunAsync(TownCatalog towns, CharacterCatalog characters, ItemResources items)
     {
         int checks = Count;
+        var computer = new CharacterStatComputer(characters);
         That(towns.Areas[(38, 2)].Default.DungeonGates.Single().Bounds == new Rectangle(1, 193, 80, 160), "资源解析保留左入口-1/-1触发区");
         That(towns.SelectionReturn(new(38, 2, 90, 249)) == new Location(38, 2, 89, 249), "实际左入口边界外请求回到可走安全点，保持Y");
         That(towns.SelectionReturn(new(38, 4, 1065, 239)) == new Location(38, 4, 1052, 239), "实际右入口使用自身资源，向内返回");
@@ -100,7 +101,7 @@ internal static class DungeonSelectionReturnTests
                 session.MarkReady();
                 That(session.LeaveRoom() && session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "协议fixture进入实际选图入口");
                 var presence = new TownPresence(towns);
-                var projection = new TownProjection(towns, characters, presence, items.EpicPieces);
+                var projection = new TownProjection(towns, computer, presence, items.EpicPieces);
                 using var log = new ServerLog(Path.Combine(root, scenario));
                 using var stop = new CancellationTokenSource();
                 using var stream = new HeldOutput();
