@@ -46,6 +46,15 @@ internal static class DungeonCatalogTests
             && QuestMaps(catalog.Get(9), 3148).SequenceEqual([76151, 76152, 76153, 76154, 76155, 76156])
             && QuestMaps(catalog.Get(7), 3149).SequenceEqual([76161, 76162, 76163, 76164, 76165, 76166]),
             "story mazes keep their own maps and boss rooms");
+        foreach (int id in new[] { 8, 1000 })
+        {
+            var mixedRoutes = catalog.Get(id);
+            That(mixedRoutes.Mazes[0].QuestConnectionTokens.Count == 0 && mixedRoutes.Mazes[0].StaticTopology.Supported,
+                $"普通Dungeon{id}不被任务叠层变体阻断");
+            var layered = mixedRoutes.Mazes.Where(maze => maze.LayeredMaps.Count > 0).ToArray();
+            That(layered.Length > 0 && layered.All(maze => maze.LayeredMaps.All(map => map.Kind == "layered") &&
+                maze.MapSpecification!.All(map => map.Kind != "layered")), "普通主层与任务叠层原行分别保留，互不替换路线");
+        }
         var questList = dungeon.RawSections.Single(s => s.Tag == "quest list").Tokens;
         That(questList.Count(t => t.Type == 7) == 2 && questList.Where(t => t.Type == 0).Select(t => t.Value).SequenceEqual([3145, 3146, 7939, 7940]), "story quest list keeps type7 opaque tokens");
         var lorien = catalog.Get(1);

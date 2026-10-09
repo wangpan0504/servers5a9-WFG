@@ -94,6 +94,21 @@ internal static class DungeonMonsterPacketsTests
             "超过u8数量容量拒绝整包，不截名单");
         byte[] empty = DungeonPackets.StartMap(approvedEntry, firstMonsters with { Monsters = Array.Empty<DungeonPlannedMonster>() }, 1);
         That(empty.SequenceEqual(DungeonPackets.StartMap(approvedEntry, 1)), "真正空怪物计划保持完整23B空名单布局");
+        var ordinaryMaze = dungeons.Get(3).Mazes[0];
+        var ordinaryMap = ordinaryMaze.MapSpecification!.Single(map => map.Id == 58550);
+        var ordinaryMonsters = DungeonMonsterPlan.Create(rooms, ordinaryMap, character.Id, 256, 5, includeSpecialObjects: true);
+        var ordinaryEntry = approvedEntry with { QuestId = 0, ActiveQuestSlot = byte.MaxValue, Maze = ordinaryMaze, StartMap = ordinaryMap,
+            BossMap = ordinaryMaze.MapSpecification!.Single(map => map.Kind == "boss"), QuestAcceptanceId = Guid.Empty, MonsterBasisLevel = 5 };
+        byte[] specialBody = DungeonPackets.StartMap(ordinaryEntry, ordinaryMonsters, 1);
+        That(specialBody[18] == 8 && specialBody.Length == 23 + 8 * 22, "58550五只静态怪物、两个机关子怪与一个父对象完整22B行");
+        int firstChild = 19 + 5 * 22;
+        That(specialBody[firstChild + 14] == 1 && specialBody[firstChild + 15] == 1 && specialBody[firstChild + 16] == 0 &&
+            specialBody[firstChild + 21] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(specialBody.AsSpan(firstChild + 2)) == 0,
+            "机关子怪显式父关联和非阻塞位，原子行索引保持独立于对象key");
+        int passive = 19 + 7 * 22;
+        That(BinaryPrimitives.ReadUInt32LittleEndian(specialBody.AsSpan(passive + 8)) == 109006903 && specialBody[passive + 12] == 0 &&
+            specialBody[passive + 13] == 9 && specialBody[passive + 16] == 255 && specialBody[passive + 21] == 1,
+            "机关父对象保留真实模板，类型9独立于普通怪物等级和死亡资格");
         Console.WriteLine($"PASS {Count - checks} dungeon monster packet assertions");
 
         void Reject<T>(Action action, string name) where T : Exception

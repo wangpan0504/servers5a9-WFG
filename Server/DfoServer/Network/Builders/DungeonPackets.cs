@@ -67,13 +67,14 @@ internal static class DungeonPackets
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(monsters);
-        if (monsters.Room.Map != plan.StartMap || monsters.Monsters.Count > byte.MaxValue)
+        int actorCount = checked(monsters.Monsters.Count + monsters.SpecialObjects.Count);
+        if (monsters.Room.Map != plan.StartMap || actorCount > byte.MaxValue)
             throw new InvalidDataException("怪物计划与房间不匹配或超过通知数量范围");
         byte[] empty = StartMap(plan, seed);
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write(empty.AsSpan(0, 18));
-        writer.Write(checked((byte)monsters.Monsters.Count));
+        writer.Write(checked((byte)actorCount));
         foreach (var monster in monsters.Monsters)
         {
             if (monster.CandidateLevel is < 1 or > byte.MaxValue)
@@ -81,17 +82,32 @@ internal static class DungeonPackets
             if (monster.SpawnType is not (<= 3 or >= 5 and <= 8))
                 throw new NotSupportedException("演员生成类型不是已核验的怪物或APC类型");
             writer.Write((ushort)0);
-            writer.Write(checked((uint)monster.SourceOrdinal));
+            writer.Write(checked((uint)(monster.Source?.SpecialChild?.SourceOrdinal ?? monster.SourceOrdinal)));
             writer.Write(monster.ObjectKey);
             writer.Write(checked((uint)monster.MonsterId));
             writer.Write(checked((byte)monster.CandidateLevel));
             writer.Write(monster.SpawnType);
-            writer.Write((byte)0);
-            writer.Write((byte)0);
+            writer.Write(monster.IsSpecialChild ? (byte)1 : (byte)0);
+            writer.Write(monster.IsSpecialChild ? (byte)1 : (byte)0);
             // 行offset16为必读有符号创建组，FF对应-1，不能省略或挪作等级/类型。
+            writer.Write(monster.IsSpecialChild ? checked((byte)(monster.Source?.SpecialParent?.SourceOrdinal ??
+                throw new InvalidDataException("特殊子actor缺少父资源索引"))) : byte.MaxValue);
+            writer.Write(0u);
+            writer.Write(monster.IsSpecialChild ? (byte)1 : (byte)0);
+        }
+        foreach (var actor in monsters.SpecialObjects)
+        {
+            writer.Write((ushort)0);
+            writer.Write(checked((uint)actor.Source.SourceOrdinal));
+            writer.Write(actor.ObjectKey);
+            writer.Write(checked((uint)actor.Source.ObjectId));
+            writer.Write((byte)0); // 父被动对象没有普通怪物等级。
+            writer.Write((byte)9);
+            writer.Write((byte)0);
+            writer.Write((byte)0);
             writer.Write(byte.MaxValue);
             writer.Write(0u);
-            writer.Write((byte)0);
+            writer.Write((byte)1); // 不参与普通活怪清房扫描。
         }
         writer.Write(empty.AsSpan(19));
         return stream.ToArray();

@@ -131,7 +131,23 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (process is not null || hosted is not null)
             throw new InvalidOperationException("Fixture already running");
         if (previousPhase is not null && Directory.Exists(Options.LogDirectory))
-            Directory.Move(Options.LogDirectory, Path.Combine(Root, previousPhase));
+        {
+            var archiveWait = Stopwatch.StartNew();
+            while (true)
+            {
+                try
+                {
+                    Directory.Move(Options.LogDirectory, Path.Combine(Root, previousPhase));
+                    break;
+                }
+                catch (IOException error) when (OperatingSystem.IsWindows() &&
+                    (error.HResult & 0xFFFF) is 5 or 32 && archiveWait.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    // 原服务已完成退出；仅等待Windows短时访问/共享冲突，归档成功前不启动下一实例。
+                    await Task.Delay(25);
+                }
+            }
+        }
         previousPhase = phase;
         Directory.CreateDirectory(Options.LogDirectory);
         string ready = Path.Combine(Options.LogDirectory, "ready.json");

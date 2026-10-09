@@ -442,6 +442,8 @@ internal static class FormalDungeonPublicationTests
     sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false) : ICharacterRepository
     {
         public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => inner.AdvanceQuestCycle(owner, expected, day);
+        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) =>
+            inner.ConsumeDungeonRoomFatigue(owner, expected, run);
         PreparedDungeonDeath? first;
         public int Calls { get; private set; }
         public bool LastDuplicate { get; private set; }

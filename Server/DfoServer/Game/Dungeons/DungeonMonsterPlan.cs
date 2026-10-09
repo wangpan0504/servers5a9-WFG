@@ -12,23 +12,32 @@ internal sealed record DungeonPlannedMonster(
     public DungeonRoomAiCharacter? AiCharacter { get; init; }
     public byte SpawnType { get; init; }
     public bool IsBlocking { get; init; } = true;
+    public bool IsSpecialChild => Source?.SpecialChild is not null;
     public int EnemyType => AiCharacter is null ? 1 : 2;
     public bool CanReportDeath => AiCharacter is null ? IsBlocking : AiCharacter.Faction == "[monster]";
     public bool IsBoss => CanReportDeath && (Source?.RankKind == "[boss]" || AiCharacter?.RankKind == "[boss]");
     public byte ExperienceType => AiCharacter is null ? SpawnType : checked((byte)(SpawnType - 5));
     public bool IsScriptedBoss => Source?.RankKind == "[boss]" && Source.Modifiers.SequenceEqual(new[] { "[dummy]" });
 }
+internal sealed record DungeonPlannedSpecialObject(ushort ObjectKey, DungeonRoomSpecialObject Source);
 
 // 此计划只分配房间对象身份；不建立战斗、死亡、清房或奖励状态。
 internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyList<DungeonPlannedMonster> Monsters)
 {
+    public IReadOnlyList<DungeonPlannedSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonPlannedSpecialObject>();
+    public uint NextObjectKey => (uint)Monsters.Select(monster => (int)monster.ObjectKey)
+        .Concat(SpecialObjects.Select(actor => (int)actor.ObjectKey)).DefaultIfEmpty(0).Max() + 1;
     public int? BasisLevel { get; init; }
 
-    public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey, int? basisLevel = null)
-        => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel);
+    public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
+        bool includeSpecialObjects = false)
+        => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel, includeSpecialObjects);
 
-    internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null)
+    internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
+        bool includeSpecialObjects = false)
     {
+        if (basisLevel is < 1 or > byte.MaxValue)
+            throw new InvalidDataException("副本基准等级超出演员创建范围");
         if (room.MonsterTeams is { } teams && teams.Count > room.Monsters.Count)
             throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
         var result = new List<DungeonPlannedMonster>();
@@ -86,6 +95,34 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             });
         }
 
-        return new(room, Array.AsReadOnly(result.ToArray())) { BasisLevel = basisLevel };
+        var objects = new List<DungeonPlannedSpecialObject>();
+        if (includeSpecialObjects)
+        {
+            foreach (var parent in room.SpecialObjects)
+            {
+                if (parent.SourceOrdinal is < 0 or > sbyte.MaxValue || parent.RawValues.Count != 5 || parent.RawValues[0] != parent.ObjectId ||
+                    parent.RawValues[4] != parent.Children.Count)
+                    throw new NotSupportedException("特殊父对象身份或关联范围未支持");
+                objects.Add(new(Allocate(), parent));
+                foreach (var child in parent.Children)
+                {
+                    if (child.Kind != "[monster]") continue; // 其他子规则由实际父脚本消费，保留原声明、不冒充怪物。
+                    if (child.Path is null || child.RawValues.Count != 5 || child.RawValues[0] <= 0 || child.RawValues[1] is < 1 or > byte.MaxValue)
+                        throw new NotSupportedException("特殊怪物缺少已确认资源、显式等级或完整子声明");
+                    var source = new DungeonRoomMonster(child.RawValues[0], child.RawValues, "[special passive object]", "[normal]", child.Path)
+                        { SpecialParent = parent, SpecialChild = child };
+                    // 子actor仅通过父对象产生，不作为普通清房阻塞目标；原生报告仍绑定同一key与实例核验。
+                    result.Add(new(result.Count, Allocate(), source.MonsterId, child.RawValues[1], source) { IsBlocking = false });
+                }
+            }
+        }
+        return new(room, Array.AsReadOnly(result.ToArray())) { SpecialObjects = Array.AsReadOnly(objects.ToArray()), BasisLevel = basisLevel };
+
+        ushort Allocate()
+        {
+            if (nextKey == characterId) nextKey++;
+            if (nextKey > ushort.MaxValue) throw new InvalidDataException("特殊actor的对象key耗尽");
+            return checked((ushort)nextKey++);
+        }
     }
 }

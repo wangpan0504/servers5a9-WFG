@@ -49,7 +49,29 @@ internal static class DungeonEntryPlanTests
         Reject(character with { Level = 96 }, 3, 3145, 0, "character-level-invalid");
         Reject(character, 0, 3145, 0, "dungeon-unsupported");
         Reject(character, uint.MaxValue, 3145, 0, "dungeon-unsupported");
-        Reject(character, 3, 0, 0, "quest-route-definition-unavailable");
+        foreach (var ordinaryCharacter in new[]
+        {
+            character,
+            character with { ActiveMainQuests = [], CompletedQuests = [3145] },
+            character with { ActiveMainQuests = [] }
+        })
+        {
+            That(DungeonEntryPlan.TryCreate(catalog, ordinaryCharacter, 3, 0, 0, out var normalPlan, out _) &&
+                normalPlan is { IsOrdinary: true, QuestAcceptanceId: var acceptance, ActiveQuestSlot: byte.MaxValue } &&
+                acceptance == Guid.Empty && normalPlan.Maze.SourceOrdinal == 0 && normalPlan.StartMap.Id == 58548 && normalPlan.BossMap.Id == 58553,
+                "未完成、已完成和无活动主线均选择真正普通maze，不伪造任务身份");
+        }
+        foreach (int id in new[] { 3, 5, 6, 7, 8, 9, 1000 })
+        {
+            var resource = catalog.Get(id);
+            var eligible = character with { Level = checked((byte)resource.MinimumLevel!.Value), ActiveMainQuests = [] };
+            That(DungeonEntryPlan.TryCreate(catalog, eligible, checked((uint)id), 0, 0, out var normalPlan, out _) &&
+                normalPlan!.Maze.StaticTopology.Supported && normalPlan.Maze.QuestConnectionTokens.Count == 0 &&
+                normalPlan.MonsterBasisLevel == resource.BasisLevel, "左入口各普通图使用其资源等级、路线和难度");
+            Reject(eligible, checked((uint)id), 0, 1, "difficulty-unsupported");
+            if (eligible.Level > 1)
+                Reject(eligible with { Level = (byte)(eligible.Level - 1) }, checked((uint)id), 0, 0, "dungeon-level-too-low");
+        }
         Reject(character, 3, 3146, 0, "quest-not-active");
         Reject(character, 3, 3145, 1, "difficulty-unsupported");
         Reject(character, 3, 3145, byte.MaxValue, "difficulty-unsupported");

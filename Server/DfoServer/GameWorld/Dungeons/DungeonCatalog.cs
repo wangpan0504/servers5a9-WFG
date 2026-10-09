@@ -38,6 +38,16 @@ internal sealed record DungeonMaze(
 
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
+    public bool TryGetDesignatedDifficulty(out byte difficulty)
+    {
+        difficulty = 0;
+        var sections = RawSections.Where(section => section.Tag == "designate dungeon difficulty").ToArray();
+        if (sections.Length != 1 || sections[0].Tokens.Count != 1 || sections[0].Tokens[0] is not { Type: 0, Value: >= 0 and <= 4 } value)
+            return false;
+        difficulty = checked((byte)value.Value);
+        return true;
+    }
+
     public bool AllowsDifficulty(byte difficulty, bool story)
     {
         if (difficulty > 4) return false;
@@ -207,6 +217,8 @@ internal sealed class DungeonCatalog
                 throw new InvalidDataException("map specification 记录不完整");
             var items = new List<DungeonMap>();
             var positions = new HashSet<DungeonPoint>();
+            bool hasLayered = Enumerable.Range(0, values.Count / 4)
+                .Any(index => values[index * 4].Type == 6 && resolve(values[index * 4].Value) == "layered");
             for (int i = 0; i < values.Count; i += 4)
             {
                 if (values[i].Type != 6)

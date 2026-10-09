@@ -71,6 +71,9 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         await context.Reply(CmdPacketType.FINISH_LOADING, [1], "formal_loading_ack", Guard);
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
+        if (receipt.Entry.IsOrdinary)
+            await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(receipt.Character.Fatigue ??
+                throw new InvalidOperationException("已提交普通房间缺少疲劳owner")), "formal_room_fatigue", Guard);
         return CommandResult.Handled;
     }
 
@@ -120,6 +123,12 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, result.Receipt?.Snapshot.Identity, result.Reward, result.ClearFact });
         if (result.Outcome == DungeonRunOutcome.Duplicate) return CommandResult.Handled;
         if (result.Outcome != DungeonRunOutcome.Accepted || result.Receipt is not { } receipt) return CommandResult.Unhandled;
+        if (result.SpecialChildRetired)
+        {
+            await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, []),
+                "formal_special_child_retired", () => context.Session.CanPublishFormalDungeon(receipt));
+            return CommandResult.Handled;
+        }
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints), state.GrowthCapsuleExperience,
             state.ProficiencyLevel, state.ProficiencyExperience);

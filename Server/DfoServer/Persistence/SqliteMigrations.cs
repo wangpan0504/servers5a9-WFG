@@ -53,19 +53,131 @@ internal static class SqliteMigrations
             Execute(db, tx, QuestClearSchema);
             Execute(db, tx, QuestCompletionSchema);
         }),
-        new(14, "完整任务状态及原子回执", UpgradeQuestSystem),
+        // PR12保留了v13的完整领奖表；v14已在现场发布，兼容升级只确认原表，不再重复建表。
+        new(14, "已发布完整领奖结构兼容", static (db, tx) =>
+            Execute(db, tx, "SELECT character_id,acceptance_id,event_id,rewards,revision FROM character_quest_completion_receipts LIMIT 0")),
+        new(15, "已发布疲劳owner兼容", static (db, tx) =>
+        {
+            Execute(db, tx, FatigueSchema);
+            // 接管此前对正式owner实际固定投影的0/156，未知旧角色不补记录、不推进revision。
+            Execute(db, tx, "INSERT INTO character_fatigue SELECT c.id,c.account,0,156,0,156,0,0 FROM characters c JOIN character_dungeon_state d ON d.character_id=c.id AND d.account=c.account");
+        }),
+        new(16, "普通副本独立身份与房间账本", UpgradeNormalDungeonReceipts),
+        new(17, "任务系统与已发布普通副本兼容", UpgradeQuestSystem),
     ];
+
+    internal const string FatigueSchema = """
+        CREATE TABLE character_fatigue(
+          character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,
+          used INTEGER NOT NULL CHECK(used BETWEEN 0 AND maximum),
+          maximum INTEGER NOT NULL CHECK(maximum BETWEEN 1 AND 65535),
+          used_maximum INTEGER NOT NULL CHECK(used_maximum BETWEEN 0 AND 65535),
+          remaining INTEGER NOT NULL CHECK(remaining BETWEEN 0 AND maximum),
+          context_auxiliary INTEGER NOT NULL CHECK(context_auxiliary BETWEEN 0 AND 65535),
+          selection_auxiliary INTEGER NOT NULL CHECK(selection_auxiliary BETWEEN 0 AND 65535),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        CREATE TABLE character_dungeon_fatigue_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+          task_attempt INTEGER NOT NULL CHECK(task_attempt>0),map_id INTEGER NOT NULL CHECK(map_id BETWEEN 76121 AND 76126),
+          epoch INTEGER NOT NULL CHECK(epoch>0),generation INTEGER NOT NULL CHECK(generation>0),rule_id TEXT NOT NULL,
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          before_state TEXT NOT NULL CHECK(json_valid(before_state) AND json_type(before_state)='object'),
+          after_state TEXT NOT NULL CHECK(json_valid(after_state) AND json_type(after_state)='object'),
+          PRIMARY KEY(character_id,instance_id,map_id),UNIQUE(character_id,task_attempt,map_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        """;
+
+    static void UpgradeNormalDungeonReceipts(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 成长的子账本须一起保留并重建外键，不能关外键、删历史奖励或修改已发布迁移。
+        var tables = new List<string> { "character_dungeon_growth_receipts", "character_dungeon_loot_receipts",
+            "character_dungeon_pickup_receipts", "character_quest_clear_receipts", "character_quest_completion_receipts",
+            "character_dungeon_settlement_receipts", "character_dungeon_fatigue_receipts" };
+        // 集合账本由掉落模块登记；已存在时必须连同成长父表重建，保持原字段、数据及外键。
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = tx;
+            query.CommandText = """
+                SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN
+                  ('character_dungeon_drop_batches','character_dungeon_drop_objects','character_dungeon_drop_pickups')
+                """;
+            int count = Convert.ToInt32(query.ExecuteScalar());
+            if (count is not (0 or 3))
+                throw new InvalidDataException("普通副本升级需要完整的已有掉落集合外键依赖");
+            if (count == 3)
+                tables.AddRange(["character_dungeon_drop_batches", "character_dungeon_drop_objects", "character_dungeon_drop_pickups"]);
+        }
+        var schemas = new Dictionary<string, string>();
+        var secondary = new List<string>();
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = tx;
+            query.CommandText = "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL";
+            using var reader = query.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!tables.Contains(reader.GetString(2))) continue;
+                if (reader.GetString(0) == "table") schemas.Add(reader.GetString(1), reader.GetString(3));
+                else if (reader.GetString(0) is "index" or "trigger") secondary.Add(reader.GetString(3));
+            }
+        }
+        foreach (string table in tables)
+        {
+            if (!schemas.TryGetValue(table, out string? sql))
+                throw new InvalidDataException("普通副本迁移缺少原账本：" + table);
+            if (table is "character_dungeon_growth_receipts" or "character_dungeon_settlement_receipts")
+            {
+                if (!sql.Contains("CHECK(quest_id>0)", StringComparison.Ordinal) && !sql.Contains("CHECK(quest_id>=0)", StringComparison.Ordinal))
+                    throw new InvalidDataException("普通副本迁移的原任务身份约束不匹配");
+                sql = sql.Replace("CHECK(quest_id>0)", "CHECK(quest_id>=0)", StringComparison.Ordinal);
+            }
+            if (table == "character_dungeon_fatigue_receipts")
+            {
+                if (!sql.Contains("CHECK(map_id BETWEEN 76121 AND 76126)", StringComparison.Ordinal) && !sql.Contains("CHECK(map_id>0)", StringComparison.Ordinal))
+                    throw new InvalidDataException("普通副本迁移的原地图约束不匹配");
+                sql = sql.Replace("CHECK(map_id BETWEEN 76121 AND 76126)", "CHECK(map_id>0)", StringComparison.Ordinal);
+            }
+            foreach (string name in tables)
+                sql = sql.Replace(name, name + "_normal", StringComparison.Ordinal);
+            Execute(db, tx, sql);
+            using var columnsQuery = db.CreateCommand();
+            columnsQuery.Transaction = tx;
+            columnsQuery.CommandText = $"PRAGMA table_info({table})";
+            var columns = new List<string>();
+            using (var reader = columnsQuery.ExecuteReader())
+                while (reader.Read()) columns.Add('"' + reader.GetString(1).Replace("\"", "\"\"") + '"');
+            Execute(db, tx, $"INSERT INTO {table}_normal(rowid,{string.Join(',', columns)}) SELECT rowid,* FROM {table}");
+        }
+        foreach (string table in Enumerable.Reverse(tables)) Execute(db, tx, $"DROP TABLE {table}");
+        foreach (string table in tables) Execute(db, tx, $"ALTER TABLE {table}_normal RENAME TO {table}");
+        foreach (string sql in secondary) Execute(db, tx, sql);
+        using var integrity = db.CreateCommand();
+        integrity.Transaction = tx;
+        integrity.CommandText = "PRAGMA foreign_key_check";
+        using var failures = integrity.ExecuteReader();
+        if (failures.Read()) throw new InvalidDataException("普通副本迁移破坏原账本外键");
+    }
 
     static void UpgradeQuestSystem(SqliteConnection db, SqliteTransaction tx)
     {
+        // master已发布的任务v14与普通分支的v14..v16结构不同，按实际字段辨认；两路均升级到17。
+        using (var existing = db.CreateCommand())
+        {
+            existing.Transaction = tx;
+            existing.CommandText = """
+                SELECT (SELECT count(*) FROM pragma_table_info('characters') WHERE name IN ('quest_cycle_day','equipment_slot_flags')) +
+                  (SELECT count(*) FROM pragma_table_info('character_completed_quests') WHERE name IN ('daily_period','answer'))
+                """;
+            int columns = Convert.ToInt32(existing.ExecuteScalar());
+            if (columns == 4) return;
+            if (columns != 0) throw new InvalidDataException("已有任务结构不完整，拒绝兼容升级");
+        }
         // 直接从已发布v13建立本版最终结构；已有账本最多重建一次，不改历史规则或回执内容。
         Execute(db, tx, "PRAGMA defer_foreign_keys=ON");
         Execute(db, tx, "ALTER TABLE characters ADD COLUMN quest_cycle_day INTEGER NOT NULL DEFAULT 0 CHECK(quest_cycle_day=0 OR quest_cycle_day BETWEEN 19000101 AND 99991231)");
         Execute(db, tx, "ALTER TABLE characters ADD COLUMN equipment_slot_flags INTEGER NOT NULL DEFAULT 0 CHECK(equipment_slot_flags BETWEEN 0 AND 255)");
         Execute(db, tx, "ALTER TABLE character_completed_quests ADD COLUMN daily_period INTEGER NOT NULL DEFAULT 0 CHECK(daily_period=0 OR daily_period BETWEEN 19000101 AND 99991231)");
         Execute(db, tx, "ALTER TABLE character_completed_quests ADD COLUMN answer INTEGER CHECK(answer BETWEEN 0 AND 254)");
-        RebuildReceipt(db, tx, "character_dungeon_growth_receipts", DungeonGrowthSchema.Replace("resource_sha256", "resource_source").Replace("CHECK(quest_id>0)", "CHECK(quest_id>=0)"));
-        RebuildReceipt(db, tx, "character_dungeon_settlement_receipts", DungeonSettlementSchema.Replace("CHECK(quest_id>0)", "CHECK(quest_id>=0)"));
         RebuildReceipt(db, tx, "character_quest_clear_receipts", QuestClearSchemaV14);
         RebuildReceipt(db, tx, "character_quest_completion_receipts", QuestCompletionSchemaV14, "clear_acceptance_id", "acceptance_id");
         Execute(db, tx, QuestLifecycleSchema);
@@ -421,6 +533,8 @@ internal static class SqliteMigrations
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",
         "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience FROM character_dungeon_state LIMIT 0",
+        "SELECT character_id,account,used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary FROM character_fatigue LIMIT 0",
+        "SELECT character_id,account,instance_id,task_attempt,map_id,epoch,generation,rule_id,before_revision,revision,before_state,after_state FROM character_dungeon_fatigue_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts LIMIT 0",
         "SELECT [account_id],[salt],[password_hash],[iterations],[disabled],[revision] FROM [accounts] LIMIT 0",
         "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",

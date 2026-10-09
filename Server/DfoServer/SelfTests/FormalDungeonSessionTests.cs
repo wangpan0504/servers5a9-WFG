@@ -43,8 +43,211 @@ internal static class FormalDungeonSessionTests
         Invalidation();
         RecordedNormalStatistics();
         FrozenLootTransaction();
+        OrdinaryLifecycle();
+        OrdinaryRoutes();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Session文件库、六房合成击杀、身份及回滚断言（非实机）");
         return Task.CompletedTask;
+
+        void OrdinaryRoutes()
+        {
+            var clearRewards = DungeonClearExperienceCatalog.Load(pvf);
+            foreach (int dungeonId in new[] { 5, 6, 7, 8, 9, 1000 })
+            {
+                using var f = new Fixture("Map" + dungeonId, towns, characters, learning, quests);
+                var definition = catalog.Get(dungeonId);
+                byte level = checked((byte)definition.MinimumLevel!.Value);
+                f.Sql($"DELETE FROM character_active_main_quests; UPDATE characters SET level={level},experience={growth.GetLevelStartExperience(level)}; " +
+                    $"UPDATE character_skill_points SET sp=sp+{growth.GetSpDelta(1, level)}");
+                f.SelectEntry();
+                var entry = f.Session.EnterFormalDungeon(checked((uint)dungeonId), 0, 0, catalog, rooms);
+                Check(entry is not null && entry.Entry.Maze.SourceOrdinal == 0 && entry.Entry.Maze.QuestConnectionTokens.Count == 0,
+                    "全部普通路线使用各自完整资源maze，不被客户端本地缺失装饰阻断");
+                var current = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("普通路线不能首次加载");
+                ClearCurrent();
+                var maze = entry!.Entry.Maze;
+                foreach (var target in maze.MapSpecification!.Where(map => map != entry.Entry.StartMap && map != entry.Entry.BossMap)
+                    .Concat([entry.Entry.BossMap]))
+                {
+                    var queue = new Queue<DungeonPoint>();
+                    var from = new Dictionary<DungeonPoint, DungeonPoint?> { [current.Snapshot.CurrentMap.Position] = null };
+                    queue.Enqueue(current.Snapshot.CurrentMap.Position);
+                    while (queue.TryDequeue(out var point) && !from.ContainsKey(target.Position))
+                    foreach (var link in maze.StaticTopology.Links!)
+                    {
+                        DungeonPoint? next = link.First == point ? link.Second : link.Second == point ? link.First : null;
+                        if (next is not { } adjacent || from.ContainsKey(adjacent) || adjacent == entry.Entry.BossMap.Position && adjacent != target.Position) continue;
+                        from.Add(adjacent, point); queue.Enqueue(adjacent);
+                    }
+                    var path = new Stack<DungeonPoint>();
+                    for (var point = target.Position; from[point] is { } parent; point = parent) path.Push(point);
+                    while (path.TryPop(out var next))
+                    {
+                        Check(f.Session.MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null,
+                            "普通路线每次过房沿资源真实连接且前房阻塞目标已清");
+                        current = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("普通路线过房不能加载");
+                        ClearCurrent();
+                    }
+                }
+                var settled = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [1, 2, 3, 4], catalog, clearRewards, growth);
+                Check(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt!.Snapshot.CurrentMap == entry.Entry.BossMap &&
+                    Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts")) == maze.MapSpecification!.Count &&
+                    f.Session.ReturnFromFormalDungeon() is not null, "各普通地图完整静态敌人、资源房间费用、通关与返回通过真实SQL调用");
+
+                void ClearCurrent()
+                {
+                    foreach (var monster in current.Monsters.Monsters.Where(monster => monster.IsBlocking).OrderBy(monster => monster.SpawnType == 3).ToArray())
+                    {
+                        var observation = Observation(current, monster);
+                        if (monster.SpawnType == 3) observation = observation with { RewriteFlag = 1, Unknown18 = 9000, Unknown26 = 30 };
+                        var killed = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                        Check(killed.Outcome == DungeonRunOutcome.Accepted && killed.Receipt is not null && killed.Reward is not null,
+                            "全房普通资源怪物使用实际计划等级和原生Boss统计核验授予成长");
+                        current = killed.Receipt!;
+                    }
+                }
+            }
+        }
+
+        void OrdinaryLifecycle()
+        {
+            var clearRewards = DungeonClearExperienceCatalog.Load(pvf);
+            var drops = DungeonMonsterDropCatalog.Load(pvf);
+            foreach (int state in new[] { 0, 1, 2 })
+            {
+                using var f = new Fixture("Normal" + state, towns, characters, learning, quests);
+                if (state != 0) f.Sql("DELETE FROM character_active_main_quests");
+                if (state == 1) f.Sql($"INSERT INTO character_completed_quests(character_id,quest_id) VALUES({f.Created.Id},3145)");
+                if (state == 1)
+                {
+                    int actors = catalog.Get(3).Mazes[0].MapSpecification!.Sum(map =>
+                    {
+                        var plan = DungeonMonsterPlan.Create(rooms, map, f.Created.Id, 1, 5, includeSpecialObjects: true);
+                        return plan.Monsters.Count + plan.SpecialObjects.Count;
+                    });
+                    f.Sql($"UPDATE character_dungeon_state SET next_object_key={65536 - actors}");
+                }
+                if (state == 2) f.Sql("UPDATE character_fatigue SET remaining=1");
+                f.SelectEntry();
+                var before = f.Read();
+                Check(f.Session.EnterFormalDungeon(3, 0, 1, catalog, rooms) is null && Same(before, f.Read()),
+                    "普通非法难度拒绝不扣疲劳、不预留身份、不改任务资产");
+                var entry = f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) ?? throw new InvalidOperationException("普通资源实例未建立");
+                Check(entry.Entry.IsOrdinary && entry.Entry.Maze.SourceOrdinal == 0 && entry.Snapshot.Identity.QuestId == 0 &&
+                    entry.Entry.QuestAcceptanceId == Guid.Empty && entry.Entry.StartMap.Id == 58548 && entry.Entry.BossMap.Id == 58553 &&
+                    f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is null, "普通独立身份使用真实普通六房，重复进入不预留新尝试");
+                var route = new (byte X, byte Y)[] { (0, 1), (1, 1), (1, 0), (1, 1), (2, 1), (2, 0), (3, 0) };
+                if (state == 0)
+                {
+                    var loading = f.Session.Selected!;
+                    f.Sql("CREATE TRIGGER fail_normal_fatigue AFTER UPDATE ON character_fatigue BEGIN SELECT RAISE(ABORT,'fatigue fixture rollback'); END");
+                    Reject<SqliteException>(() => f.Session.CompleteFormalDungeonLoading(), "普通加载扣点SQL故障不宣布完成");
+                    Check(Same(loading, f.Read()) && ReferenceEquals(loading, f.Session.Selected) &&
+                        f.Session.Phase == SessionPhase.Loading && f.Session.ReturnFromFormalDungeon() is null &&
+                        Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts")) == 0,
+                        "费用与revision回滚，结果未决时不能退出丢弃原加载上下文");
+                    f.Sql("DROP TRIGGER fail_normal_fatigue");
+                }
+                FormalDungeonReceipt current = entry;
+                uint totalExperience = 0;
+                DungeonClearFact? clear = null;
+                for (int index = 0; index < route.Length; index++)
+                {
+                    if (index > 0) current = f.Session.MoveFormalDungeon(route[index].X, route[index].Y) ?? throw new InvalidOperationException("普通真实通路不能过房");
+                    current = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("普通加载不能完成");
+                    Check(f.Session.CompleteFormalDungeonLoading() is null, "普通重复加载不重复扣点");
+                    if (index == 3)
+                        Check(current.Snapshot.LivingMonsters.Count == 0 && current.Character.Fatigue!.Used == 3, "普通支路回访不重生、不重复收疲劳");
+                    foreach (var monster in current.Monsters.Monsters.OrderBy(monster => monster.SpawnType == 3))
+                    {
+                        if (monster.IsSpecialChild && index == 2)
+                        {
+                            var unchanged = f.Session.Selected!;
+                            long receipts = f.Count();
+                            var observation = Observation(current, monster);
+                            Check(f.Session.ObserveFormalDungeonDeath(observation with { ChecksumMatches = false }, kills, growth).Outcome == DungeonRunOutcome.Rejected,
+                                "未核验的机关子怪报告不能收尾");
+                            var retirement = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                            Check(retirement.SpecialChildRetired && retirement.Reward is null && retirement.ClearFact is null &&
+                                f.Count() == receipts && ReferenceEquals(unchanged, f.Session.Selected) && Same(unchanged, f.Read()) &&
+                                f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate,
+                                "机关子actor经原生统计核验只收尾，不借此伪造普通经验、任务或重复通知");
+                            current = retirement.Receipt!;
+                            continue;
+                        }
+                        if (!current.Snapshot.LivingMonsters.Contains(monster.ObjectKey) || !monster.IsBlocking) continue;
+                        var native = Observation(current, monster);
+                        if (monster.SpawnType == 3)
+                        {
+                            Check(f.Session.ObserveFormalDungeonDeath(native with { ChecksumMatches = false }, kills, growth)
+                                .Outcome == DungeonRunOutcome.Rejected, "普通Boss报告仍须通过正文检查和当前实例资格");
+                            native = native with { RewriteFlag = 1, Unknown18 = 9000, Unknown26 = 30 };
+                        }
+                        var death = f.Session.ObserveFormalDungeonDeath(native, kills, growth);
+                        Check(death.Outcome == DungeonRunOutcome.Accepted && death.Receipt is not null, "普通全资源怪物通过正式死亡/成长事务");
+                        totalExperience = checked(totalExperience + death.Reward!.Amount);
+                        current = death.Receipt!;
+                        clear = death.ClearFact ?? clear;
+                    }
+                }
+                var killed = f.Read();
+                Check(clear is { DungeonId: 3 } && clear.Identity.QuestId == 0 && clear.ClearMap!.Id == 58553 &&
+                    killed.Fatigue!.Used == 6 && killed.Fatigue.Remaining == (state == 2 ? 0 : 150) &&
+                    killed.Learning.Experience == before.Learning.Experience + totalExperience &&
+                    killed.ActiveMainQuests.SequenceEqual(before.ActiveMainQuests) && killed.CompletedQuests.SequenceEqual(before.CompletedQuests) &&
+                    Convert.ToInt64(f.Query("SELECT count(*) FROM character_quest_clear_receipts")) == 0 &&
+                    Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts")) == 6,
+                    "普通ClearFact进入原结算合同，六个首次房间费用、成长与任务隔离真实落库");
+                var settled = f.Session.SettleFormalDungeon(killed.Id, 99, 99, [1, 2, 3, 4], catalog, clearRewards, growth);
+                Check(settled.Outcome == DungeonRunOutcome.Accepted && Same(f.Session.Selected!, f.Read()) &&
+                    Convert.ToInt64(f.Query("SELECT quest_id FROM character_dungeon_settlement_receipts")) == 0,
+                    "普通结算保存零任务身份及完整经验，不伪造任务或奖励资格");
+                Check(f.Session.RetryFormalDungeon(settled.Receipt! with { Entry = settled.Receipt.Entry with { Difficulty = 1 } },
+                    catalog, rooms, drops, itemResources.Items) is null && f.Session.Phase == SessionPhase.Settlement,
+                    "篡改再挑战的原路线回执不能先消费已提交结算上下文");
+                if (state == 1)
+                {
+                    var last = f.Session.Selected!;
+                    Check(last.DungeonState!.NextObjectKey == 65536 && f.Session.RetryFormalDungeon(settled.Receipt!, catalog, rooms, drops, itemResources.Items) is null &&
+                        f.Session.Phase == SessionPhase.Settlement && f.Session.CanPublishFormalDungeon(settled.Receipt!) && Same(last, f.Read()),
+                        "对象key耗尽拒绝新尝试但保留原结算实例、身份和资产");
+                    Check(f.Session.ReturnFromFormalDungeon() is not null, "再挑战身份耗尽拒绝后仍可合法返回城镇");
+                }
+                else if (state == 2)
+                {
+                    Check(f.Session.RetryFormalDungeon(settled.Receipt!, catalog, rooms, drops, itemResources.Items) is null &&
+                        f.Session.Phase == SessionPhase.Settlement, "疲劳耗尽再挑战拒绝保留原结算页");
+                    Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is null,
+                        "已开始普通实例可完成，返回后疲劳零禁止新挑战");
+                }
+                else
+                {
+                    var beforeRetry = f.Session.Selected!;
+                    f.Sql("CREATE TRIGGER fail_normal_retry AFTER UPDATE ON character_dungeon_state BEGIN SELECT RAISE(ABORT,'retry fixture rollback'); END");
+                    Reject<SqliteException>(() => f.Session.RetryFormalDungeon(settled.Receipt!, catalog, rooms, drops, itemResources.Items),
+                        "新尝试预留SQL失败不结束原结算或宣布加载成功");
+                    Check(ReferenceEquals(beforeRetry, f.Session.Selected) && Same(beforeRetry, f.Read()) &&
+                        f.Session.Phase == SessionPhase.Settlement && f.Session.CanPublishFormalDungeon(settled.Receipt!) &&
+                        f.Session.DungeonSnapshot!.Identity == settled.Receipt!.Snapshot.Identity,
+                        "再挑战SQL回滚保留原结算、角色revision、费用和完整实例身份");
+                    f.Sql("DROP TRIGGER fail_normal_retry");
+                    var repeated = f.Session.RetryFormalDungeon(settled.Receipt!, catalog, rooms, drops, itemResources.Items);
+                    Check(repeated is not null && repeated.Snapshot.Identity.InstanceId != entry.Snapshot.Identity.InstanceId &&
+                        repeated.Snapshot.Identity.TaskAttempt == 2 && repeated.Entry.IsOrdinary, "普通再挑战预留新独立身份，仍沿普通maze");
+                    Check(f.Session.CompleteFormalDungeonLoading() is not null && f.Session.ReturnFromFormalDungeon() is not null,
+                        "普通再挑战加载后返回保留成长、资产与疲劳");
+                }
+                var final = f.Read();
+                Check(final.Position == towns.SelectionReturn(before.Position, before.CompletedQuests.ToHashSet()) &&
+                    JsonSerializer.Serialize(final.Inventory) == JsonSerializer.Serialize(before.Inventory),
+                    "普通退出返回入口外安全点，完整资产不被位置保存覆盖");
+                f.Session.ReturnToRoster();
+                var reopened = new GameSession(new CharacterRepository(f.Path), towns, f.Owner);
+                reopened.Select(f.Created.Slot);
+                reopened.MarkReady();
+                Check(reopened.Selected!.Fatigue == final.Fatigue && reopened.Selected.Learning.Experience == final.Learning.Experience &&
+                    reopened.Selected.CompletedQuests.SequenceEqual(before.CompletedQuests), "普通断线式重建会话恢复成长、任务和已扣疲劳");
+            }
+        }
 
         void Lifecycle(byte job)
         {
@@ -393,7 +596,7 @@ internal static class FormalDungeonSessionTests
             f.Sql("PRAGMA user_version=7");
             var legacy = new CharacterRepository(f.Path).LoadCharacter(f.Owner, f.Created.Slot);
             Check(legacy.DungeonState is null &&
-                Same(original with { DungeonState = null, ActiveMainQuests = legacy.ActiveMainQuests, Learning = original.Learning with { BonusSp = null, BonusTp = null } }, legacy) &&
+                Same(original with { DungeonState = null, Fatigue = null, ActiveMainQuests = legacy.ActiveMainQuests, Learning = original.Learning with { BonusSp = null, BonusTp = null } }, legacy) &&
                 original.ActiveMainQuests.Single().ConditionState == legacy.ActiveMainQuests.Single().ConditionState &&
                 legacy.ActiveMainQuests.Single().AcceptanceId != Guid.Empty &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_state")) == 0,
@@ -431,6 +634,8 @@ internal static class FormalDungeonSessionTests
             using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
             Reject<InvalidOperationException>(() => f.Session.CanPublishFormalDungeon(second), "旧generation不能发布正式回执");
             Reject<InvalidOperationException>(() => f.Session.CompleteFormalDungeonLoading(), "旧generation不能完成新加载");
+            Reject<InvalidOperationException>(() => f.Session.EnterFormalDungeon(3, 3145, 1, catalog, rooms, retry: second),
+                "再挑战参数不匹配的零变化拒绝仍校验原lease，旧generation不能绕过owner");
             f.Session.End();
             Check(new CharacterRepository(f.Path).LoadCharacter(replacement, f.Created.Slot).DungeonState == second.Character.DungeonState,
                 "旧Session结束不回退已预留身份或释放新owner");

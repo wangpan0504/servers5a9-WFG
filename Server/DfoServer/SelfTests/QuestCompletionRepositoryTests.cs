@@ -267,6 +267,8 @@ internal static class QuestCompletionRepositoryTests
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
         public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => inner.AdvanceQuestCycle(owner, expected, day);
+        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) =>
+            inner.ConsumeDungeonRoomFatigue(owner, expected, run);
         QuestCompletionPlan? first;
         public int Calls { get; private set; }
         public bool SamePlan { get; private set; }

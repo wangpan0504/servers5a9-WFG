@@ -13,6 +13,19 @@ internal static class DungeonRoomCatalogTests
     {
         int checks = Count;
         var fixture = new Fixture();
+        var special = fixture.Block("special passive object", [new(0, 3), new(0, -20), new(0, 150), new(0, 0), new(0, 2),
+            fixture.String("[trap]"), new(0, 40002), new(0, 40), new(0, 1), new(0, 10), new(0, -1),
+            fixture.String("[monster]"), new(0, 1), new(0, 5), new(0, 3), new(0, 10), new(0, -1)]);
+        var parsedSpecial = fixture.Parse(special).SpecialObjects;
+        That(parsedSpecial.Count == 1 && parsedSpecial[0].SourceOrdinal == 0 && parsedSpecial[0].RawValues.SequenceEqual([3, -20, 150, 0, 2]) &&
+            parsedSpecial[0].Children.Select(child => child.Kind).SequenceEqual(["[trap]", "[monster]"]) &&
+            parsedSpecial[0].Children[1].SourceOrdinal == 1 && parsedSpecial[0].Children[1].Path == "monster/fixture.mob" &&
+            parsedSpecial[0].Children[0].RawValues.SequenceEqual([40002, 40, 1, 10, -1]), "特殊对象保留父位置、原序与所有子规则，不遗漏非怪物机关");
+        special[2] = new(0, 99);
+        That(parsedSpecial[0].RawValues[1] == -20 && parsedSpecial is IList specialList && specialList.IsReadOnly,
+            "特殊对象父子集合独立冻结原输入");
+        var wrongCount = (PvfToken[])special.Clone(); wrongCount[5] = new(0, 3);
+        Reject(wrongCount, "特殊对象数量越界拒绝，不发布局部子集合");
         void Reject(PvfToken[] tokens, string name)
         {
             bool rejected = false;
@@ -21,6 +34,12 @@ internal static class DungeonRoomCatalogTests
             That(rejected, name);
         }
         var row = fixture.Monster()[1..^1];
+        var champion = fixture.Monster(rank: "[champion]")[1..^1];
+        var withChampion = fixture.Parse(fixture.Block("monster", [.. champion, new(0, 0), .. row]));
+        That(withChampion.Monsters.Count == 2 && withChampion.Monsters[0].RankParameterCount == 0 &&
+            withChampion.Monsters[1].RankKind == "[normal]", "冠军空附加数量不吃掉下一行模板，不遗漏普通怪物");
+        Reject(fixture.Block("monster", [.. champion, new(0, 1), .. row]), "未恢复的非空冠军附加不能被截断");
+        Reject(fixture.Block("monster", champion), "冠军缺少数量字段不能当普通行");
         var monsters = fixture.Block("monster", [.. row, .. row]);
         var teamTokens = fixture.Block("monster team", [new(0, 100), new(0, 0)]);
         var parsed = fixture.Parse([.. monsters, .. teamTokens]);
@@ -158,7 +177,16 @@ internal static class DungeonRoomCatalogTests
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, -1), new(0, 1), new(0, 2), new(0, 0)])), "negative object ID rejected");
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, 99), new(0, 1), new(0, 2), new(0, 0)])), "unlisted object ID rejected");
         That(fixture.Parse(fixture.Block("passive object", [new(0,99),new(0,1),new(0,2),new(0,0)]),requirePassiveDefinitions: false)
-            .PassiveObjects.Single() is { ObjectId: 99, Path: "" },"无关装饰保留原始行和缺失引用，不伪造任务脚本");
+            .PassiveObjects.Single() is { ObjectId: 99, Path: null },"无关装饰保留原始行和缺失引用，不伪造任务脚本");
+        var unlisted = fixture.Parse(fixture.Block("passive object", [new(0, 99), new(0, 1), new(0, 2), new(0, 0)]), requirePassiveDefinitions: false).PassiveObjects.Single();
+        That(unlisted.ObjectId == 99 && unlisted.Path is null && unlisted.UnresolvedReason == "passive-object-unlisted" &&
+            unlisted.RawValues.SequenceEqual([99, 1, 2, 0]), "客户端本地未知装饰保留全部原行和未解析原因，不换ID或伪造资源路径");
+        foreach (var missingObject in new[] { (Dungeon: 7, Map: 58581, Object: 2109006955), (Dungeon: 8, Map: 58589, Object: 89092) })
+        {
+            var actual = catalog.Get(dungeons.Get(missingObject.Dungeon).Mazes[0].MapSpecification!.Single(map => map.Id == missingObject.Map), requirePassiveDefinitions: false);
+            That(actual.PassiveObjects.Any(actor => actor.ObjectId == missingObject.Object && actor.Path is null && actor.RawValues.Count == 4) &&
+                actual.Monsters.Count > 0 && actual.SpecialObjects.Count > 0, "真实普通图未列入目录的装饰与完整怪物、机关同时保留");
+        }
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, 3), new(0, 1), new(0, 2), new(0, 0)]), exists: false), "missing object script rejected");
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, 3), new(5, 1), new(0, 2), new(0, 0)])), "object numeric reference rejected");
         That(fixture.Parse(fixture.Block("buff", [new(0, -1), new(0, int.MaxValue)])).Buffs.SequenceEqual([-1, int.MaxValue]),

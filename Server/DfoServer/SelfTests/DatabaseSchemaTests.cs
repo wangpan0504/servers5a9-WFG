@@ -99,6 +99,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(failed);
 
             VerifyReleasedMigrations(root);
+            VerifyMasterQuest14Compatibility(root);
             VerifyQuestSystemMigration(root);
             VerifyQuestSkipConstraints(root);
             VerifyFutureMigrations(path);
@@ -147,7 +148,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
-            That(Query(db, "PRAGMA user_version") is 14L && tables.Select((table, index) => Rows(db, table, columns[index])).SequenceEqual(previous),
+            That(Query(db, "PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion && tables.Select((table, index) => Rows(db, table, columns[index])).SequenceEqual(previous),
                 "单次v14保存v13所有旧表原列、rowid、序列、接取身份和领奖规则原值");
             That(Query(db, "SELECT clear_acceptance_id=acceptance_id AND condition_type=3 AND selector=65535 AND multiplier=1 AND consumed='[]' AND changed_items='[]' AND plan_snapshot IS NULL FROM character_quest_completion_receipts WHERE rowid=47") is 1L,
                 "旧领奖回执仅补来源关联和默认元数据，不重写旧JSON或规则版本");
@@ -184,6 +185,28 @@ internal static class DatabaseSchemaTests
         That(Snapshot(rollback) == before, "v14失败保留v13版本、全部原表定义、rowid和角色资产");
     }
 
+    private static void VerifyMasterQuest14Compatibility(string root)
+    {
+        string path = Path.Combine(root, "master-quest-v14.db");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            // master的任务v14已有完整任务结构，但尚未拥有普通分支疲劳表。
+            Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; PRAGMA user_version=14");
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,quest_cycle_day,equipment_slot_flags) VALUES('master-quest',0,'MasterQuest',9,38,1,450,234,0,20261009,7)");
+            Execute(db, "INSERT INTO character_completed_quests VALUES(1,6217,20261009,2)");
+            Execute(db, "INSERT INTO accounts(account_id,salt,password_hash,iterations) VALUES('master-quest',x'01',x'02',1)");
+            Execute(db, "INSERT INTO account_completed_quests VALUES('master-quest',6217,1,'1234567890abcdef1234567890abcdef',20261009,2)");
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+            Check(Query(db, "PRAGMA user_version") is 17L && Query(db, "SELECT revision||':'||quest_cycle_day||':'||equipment_slot_flags FROM characters") is "9:20261009:7" &&
+                Query(db, "SELECT daily_period||':'||answer FROM character_completed_quests") is "20261009:2" &&
+                Query(db, "SELECT daily_period||':'||answer FROM account_completed_quests") is "20261009:2" &&
+                Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "master已发布任务v14升级17不重复建任务结构、不改周期答案、资产或revision");
+    }
+
     private static void VerifyQuestSkipConstraints(string root)
     {
         string path = Path.Combine(root, "quest-skip-constraints.db");
@@ -217,7 +240,9 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
-                RewindQuestSystemToV13(db);
+                if (oldVersion < 15)
+                    Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
+                RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
                 if (oldVersion < 12) Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
@@ -235,11 +260,32 @@ internal static class DatabaseSchemaTests
                 if (oldVersion == 1)
                     Execute(db, "ALTER TABLE account_wallets DROP COLUMN rental_points");
                 Execute(db, $"PRAGMA user_version={oldVersion}");
+                if (oldVersion == 13)
+                    AddDropDependencyFixture(db);
                 Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='character_dungeon_state'") is long ownerTables && ownerTables == (oldVersion >= 8 ? 1 : 0) &&
                     Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='character_dungeon_growth_receipts'") is long growthTables &&
                     growthTables == (oldVersion >= 3 ? 1 : 0) &&
                     Query(db, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='rental_points'") is long columns &&
                     columns == (oldVersion == 1 ? 0 : 1), "真实旧版模拟按v1/v2/v3保留已发布结构，移除后续副本owner表");
+            }
+            if (oldVersion == 13)
+            {
+                foreach (bool incomplete in new[] { false, true })
+                {
+                    string failedDependency = Path.Combine(root, incomplete ? "partial-drop-dependency.db" : "drop-dependency-rollback.db");
+                    using (var source = Open(path))
+                    using (var target = Open(failedDependency))
+                    {
+                        source.BackupDatabase(target);
+                        Execute(target, incomplete ? "DROP TABLE character_dungeon_drop_pickups" : "ALTER TABLE accounts DROP COLUMN disabled");
+                    }
+                    string oldSnapshot = Snapshot(failedDependency);
+                    if (incomplete)
+                        Reject<InvalidDataException>(() => new CharacterRepository(failedDependency), "集合外键依赖不完整拒绝普通升级");
+                    else
+                        Reject<SqliteException>(() => new CharacterRepository(failedDependency), "复制完整集合依赖后必需结构失败回滚整链");
+                    Check(Snapshot(failedDependency) == oldSnapshot, "拒绝或晚期失败保留旧版本、成长、集合行、索引和角色资产");
+                }
             }
             _ = new AuthenticationRepository(path);
             _ = new CharacterRepository(path);
@@ -285,6 +331,18 @@ internal static class DatabaseSchemaTests
                     "迁移账本保留角色账号归属外键");
                 Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                     "真实连续迁移后数据库与外键完整");
+                if (oldVersion == 13)
+                {
+                    Check(Query(db, "SELECT payload FROM character_dungeon_drop_batches") is "原批次" &&
+                        Query(db, "SELECT payload FROM character_dungeon_drop_objects") is "完整Core" &&
+                        Query(db, "SELECT payload FROM character_dungeon_drop_pickups") is "已到账凭据" &&
+                        Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN ('drop_dependency_index','drop_dependency_guard')") is 2L,
+                        "普通账本重建保留外部完整集合三层引用、全部行及附属索引触发器");
+                    Reject<SqliteException>(() => Execute(db, "UPDATE character_dungeon_drop_objects SET event_id='missing'"),
+                        "集合外键在重建及重命名后仍拒绝不存在的原成长来源");
+                    Reject<SqliteException>(() => Execute(db, "INSERT INTO character_dungeon_drop_objects VALUES(1,'legacy',513,'')"),
+                        "集合附属触发器在重建后仍生效");
+                }
             }
             string migrated = Snapshot(path);
             _ = new CharacterRepository(path);
@@ -387,8 +445,10 @@ internal static class DatabaseSchemaTests
     }
 
     // 成功迁移夹具恢复完整已发布v13结构，不以改版本号冒充旧库。
-    internal static void RewindQuestSystemToV13(SqliteConnection db)
+    internal static void RewindQuestSystemToV13(SqliteConnection db, bool keepFatigue = false)
     {
+        if (!keepFatigue)
+            Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
         Execute(db, "PRAGMA foreign_keys=OFF");
         Execute(db, "DROP TABLE character_quest_skip_receipts; DROP TABLE character_quest_drop_receipts; DROP TABLE account_completed_quests; DROP TABLE character_quest_lifecycle_receipts");
         Execute(db, "ALTER TABLE characters DROP COLUMN equipment_slot_flags; ALTER TABLE characters DROP COLUMN quest_cycle_day; ALTER TABLE character_completed_quests DROP COLUMN answer; ALTER TABLE character_completed_quests DROP COLUMN daily_period");
@@ -472,6 +532,22 @@ internal static class DatabaseSchemaTests
         return db;
     }
 
+    // 只模拟三层成长外键，避免在普通图测试中重复实现掉落模块的业务DDL；完整DDL另由依赖组合验证。
+    private static void AddDropDependencyFixture(SqliteConnection db) => Execute(db, """
+        CREATE TABLE character_dungeon_drop_batches(character_id INTEGER,event_id TEXT,payload TEXT NOT NULL,
+          PRIMARY KEY(character_id,event_id),FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id));
+        CREATE TABLE character_dungeon_drop_objects(character_id INTEGER,event_id TEXT,ground_key INTEGER,payload TEXT NOT NULL,
+          PRIMARY KEY(character_id,ground_key),FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_drop_batches(character_id,event_id));
+        CREATE TABLE character_dungeon_drop_pickups(character_id INTEGER,ground_key INTEGER,payload TEXT NOT NULL,
+          PRIMARY KEY(character_id,ground_key),FOREIGN KEY(character_id,ground_key) REFERENCES character_dungeon_drop_objects(character_id,ground_key));
+        CREATE INDEX drop_dependency_index ON character_dungeon_drop_objects(payload);
+        CREATE TRIGGER drop_dependency_guard BEFORE INSERT ON character_dungeon_drop_objects
+          WHEN NEW.payload='' BEGIN SELECT RAISE(ABORT,'空集合测试载荷'); END;
+        INSERT INTO character_dungeon_drop_batches VALUES(1,'legacy','原批次');
+        INSERT INTO character_dungeon_drop_objects VALUES(1,'legacy',512,'完整Core');
+        INSERT INTO character_dungeon_drop_pickups VALUES(1,512,'已到账凭据');
+        """);
+
     private static object? Query(SqliteConnection db, string sql)
     {
         using var query = db.CreateCommand();
@@ -505,7 +581,10 @@ internal static class DatabaseSchemaTests
             Has("character_quest_clear_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||event_id||':'||instance_id||':'||revision,'|') FROM character_quest_clear_receipts") : null,
             Has("character_quest_completion_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||experience_amount||':'||revision||':'||rewards,'|') FROM character_quest_completion_receipts") : null,
             HasColumn("character_quest_skip_receipts","plan_snapshot") ? Query(db,"SELECT group_concat(character_id||':'||acceptance_id||':'||parent_key||':'||question_quest||':'||before_revision||':'||revision||':'||plan_snapshot,'|') FROM character_quest_skip_receipts") : null,
-            Has("character_dungeon_growth_receipts") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||monster_key||':'||combat_sequence||':'||amount||':'||revision,'|') FROM character_dungeon_growth_receipts") : null);
+            Has("character_dungeon_growth_receipts") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||monster_key||':'||combat_sequence||':'||amount||':'||revision,'|') FROM character_dungeon_growth_receipts") : null,
+            HasColumn("character_dungeon_drop_batches", "payload") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||payload,'|') FROM character_dungeon_drop_batches") : null,
+            HasColumn("character_dungeon_drop_objects", "payload") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||ground_key||':'||payload,'|') FROM character_dungeon_drop_objects") : null,
+            HasColumn("character_dungeon_drop_pickups", "payload") ? Query(db, "SELECT group_concat(character_id||':'||ground_key||':'||payload,'|') FROM character_dungeon_drop_pickups") : null);
         bool Has(string table) => Query(db, $"SELECT count(*) FROM sqlite_schema WHERE name='{table}'") is 1L;
         bool HasColumn(string table, string column) => Query(db,
             $"SELECT count(*) FROM pragma_table_info('{table}') WHERE name='{column}'") is 1L;

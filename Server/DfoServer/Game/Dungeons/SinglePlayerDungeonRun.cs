@@ -92,7 +92,7 @@ internal sealed class SinglePlayerDungeonRun
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
         Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
         !current.Dead.Contains(key) && !current.Culled.Contains(key)
-            ? current.Plan.Monsters.SingleOrDefault(monster => monster.CanReportDeath && monster.ObjectKey == key) : null;
+            ? current.Plan.Monsters.SingleOrDefault(monster => (monster.CanReportDeath || monster.IsSpecialChild) && monster.ObjectKey == key) : null;
     internal bool IsCulledMonster(ushort key) => Phase == SinglePlayerDungeonPhase.Settlement && ClearFact is not null && current.Culled.Contains(key);
     // 友方APC跟随过房时保留首次发布key；只有本实例已完成加载的MAP声明能确认来源，未来房间与旧实例不能借用。
     internal bool IsPublishedFriendlyAiCharacter(ushort key) => Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
@@ -104,6 +104,16 @@ internal sealed class SinglePlayerDungeonRun
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
             !current.Culled.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()));
+
+    // 父脚本子actor的收尾不进入普通击杀集合，不能借此触发清图、经验或任务事实。
+    public DungeonRunOutcome RetireSpecialChild(ConfirmedDungeonMonsterDeath death)
+    {
+        if (!ReferenceEquals(death.Authority, authority) || death.Identity != identity || Phase != SinglePlayerDungeonPhase.Dungeon ||
+            death.EventId == Guid.Empty || death.CombatSequence <= 0 || pendingDeath is not null || pendingSettlement is not null ||
+            !current.Plan.Monsters.Any(monster => monster.IsSpecialChild && !monster.IsBlocking && monster.ObjectKey == death.MonsterKey))
+            return DungeonRunOutcome.Rejected;
+        return current.Dead.Add(death.MonsterKey) ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate;
+    }
 
     private SinglePlayerDungeonRun(DungeonEntryPlan entry, long attempt, long epoch, DungeonFixedRoute route, DungeonCombatAuthority authority)
     {
@@ -149,7 +159,7 @@ internal sealed class SinglePlayerDungeonRun
             DungeonMonsterPlan resourcePlan;
             try
             {
-                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel);
+                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel, entry.IsOrdinary);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException)
             {
@@ -165,6 +175,10 @@ internal sealed class SinglePlayerDungeonRun
                 reason = "invalid: 房间怪物身份不完整或重复";
                 return false;
             }
+            if (plan.SpecialObjects.Count != resourcePlan.SpecialObjects.Count || plan.SpecialObjects.Any(actor => actor.ObjectKey == entry.CharacterId ||
+                !keys.Add(actor.ObjectKey) || !resourcePlan.SpecialObjects.Any(expected => expected.Source == actor.Source)) ||
+                plan.SpecialObjects.Select(actor => actor.Source.SourceOrdinal).Distinct().Count() != plan.SpecialObjects.Count)
+                return false;
         }
         var points = maps.Select(map => map.Position).ToHashSet();
         var edges = new HashSet<(DungeonPoint, DungeonPoint)>();

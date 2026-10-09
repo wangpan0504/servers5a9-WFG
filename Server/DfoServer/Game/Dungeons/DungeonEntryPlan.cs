@@ -6,8 +6,8 @@ using System.Collections.Immutable;
 
 namespace DfoServer.Game.Dungeons;
 
-// 这里只选择已确认任务的资源，不代表完整入场资格、实例建立或客户端加载成功。
-// 调用方仍须在有效账号 owner 下绑定会话 epoch，并在实际进入时重验任务与 revision。
+// 普通请求的任务字段为0，与任务专用maze分别准入；计划不建立实例或证明客户端加载。
+// 调用方仍须在有效账号owner下绑定epoch，并在提交时复验原角色快照。
 internal sealed record DungeonEntryPlan(
     ushort CharacterId,
     long CharacterRevision,
@@ -21,6 +21,8 @@ internal sealed record DungeonEntryPlan(
 {
     public int? BasisLevel { get; init; }
     public Guid QuestAcceptanceId { get; init; }
+    public bool IsOrdinary => QuestId == 0 && RouteQuestId == 0;
+    public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public uint RouteQuestId { get; init; } = QuestId;
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
@@ -79,7 +81,7 @@ internal sealed record DungeonEntryPlan(
         // 仅识别匹配 PVF 已确认的三个整数；未知引用和其他条件形状不能变成默认迷宫。
         uint routeQuest = quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
         var candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)).ToArray();
-        if (questId == 0)
+        if (questId == 0 && quests is not null)
         {
             candidates = definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active => maze.ConnectsQuest(active.QuestId,difficulty))).ToArray();
             if (candidates.Length == 0)
@@ -103,10 +105,12 @@ internal sealed record DungeonEntryPlan(
         }
         else if (candidates.Length == 0 && routeQuest != questId)
             candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(routeQuest,difficulty)).ToArray();
+        else if (questId == 0) candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
         else routeQuest = questId;
         if (candidates.Length != 1)
         {
-            reason = candidates.Length == 0 ? "quest-maze-unavailable" : "quest-maze-ambiguous";
+            reason = candidates.Length == 0 ? "route-maze-unavailable" : "route-maze-ambiguous";
+            if (questId != 0 || quests is not null) reason = candidates.Length == 0 ? "quest-maze-unavailable" : "quest-maze-ambiguous";
             return false;
         }
 
@@ -155,6 +159,7 @@ internal sealed record DungeonEntryPlan(
         plan = new(character.Id, character.Revision, dungeonId, questId, active?.Slot ?? byte.MaxValue, difficulty, maze, starts[0], terminal)
         {
             BasisLevel = definition.BasisLevel,
+            MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],
             RouteQuestId = routeQuest,
@@ -172,7 +177,7 @@ internal sealed record DungeonEntryPlan(
             return "dungeon-unsupported";
         if (questId >= 30000)
             return "quest-unsupported";
-        if (difficulty > 4)
+        if (difficulty > 4 || questId == 0 && dungeonId is 3 or 5 or 6 or 7 or 8 or 9 or 1000 && difficulty != 0)
             return "difficulty-unsupported";
         if (character.Level is < 1 or > 95)
             return "character-level-invalid";

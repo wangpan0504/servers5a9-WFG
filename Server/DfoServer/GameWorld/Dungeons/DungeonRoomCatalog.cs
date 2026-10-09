@@ -5,9 +5,19 @@ namespace DfoServer.GameWorld.Dungeons;
 // 只保存匹配地图的资源行；整数和标记尚未全部映射到生成规则、战斗状态或 wire 字段。
 internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string RankKind, string Path)
 {
+    // 冠军/命名品级的附加数量独立于八整数；当前只恢复空附加集合，不截断未知正数量。
     public IReadOnlyList<string> Modifiers { get; init; } = Array.Empty<string>();
+    public int? RankParameterCount { get; init; }
+    public DungeonRoomSpecialObject? SpecialParent { get; init; }
+    public DungeonRoomSpecialChild? SpecialChild { get; init; }
 }
-internal sealed record DungeonRoomPassiveObject(int ObjectId, IReadOnlyList<int> RawValues, string Path);
+internal sealed record DungeonRoomPassiveObject(int ObjectId, IReadOnlyList<int> RawValues, string? Path)
+{
+    public string? UnresolvedReason => Path is null ? "passive-object-unlisted" : null;
+}
+internal sealed record DungeonRoomSpecialChild(int SourceOrdinal, string Kind, IReadOnlyList<int> RawValues, string? Path);
+internal sealed record DungeonRoomSpecialObject(int SourceOrdinal, int ObjectId, IReadOnlyList<int> RawValues,
+    string Path, IReadOnlyList<DungeonRoomSpecialChild> Children);
 internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level);
 internal sealed record DungeonRoomDefinition(
     DungeonMap Map,
@@ -16,6 +26,7 @@ internal sealed record DungeonRoomDefinition(
     IReadOnlyList<int> Buffs,
     IReadOnlyList<int>? MonsterTeams = null)
 {
+    public IReadOnlyList<DungeonRoomSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonRoomSpecialObject>();
     public IReadOnlyList<DungeonRoomAiCharacter> AiCharacters { get; init; } = Array.Empty<DungeonRoomAiCharacter>();
 }
 
@@ -105,7 +116,7 @@ internal sealed class DungeonRoomCatalog
             }
 
             string tag = resolve(tokens[i++].Value).ToLowerInvariant();
-            if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]" or "[ai character]"))
+            if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]" or "[ai character]" or "[special passive object]"))
                 continue;
             if (sections.ContainsKey(tag))
                 throw new NotSupportedException("unsupported: 房间重复资源块 " + tag);
@@ -146,7 +157,8 @@ internal sealed class DungeonRoomCatalog
                 monsterRows.Add(new(values[0], values, labels[0], labels[^1], path)
                 {
                     // 76155真实行含[fixed] [dummy] [boss]；保留中间标记，生成层逐项确认后启用。
-                    Modifiers = Freeze(labels.Skip(1).Take(labels.Count - 2))
+                    Modifiers = Freeze(labels.Skip(1).Take(labels.Count - 2)),
+                    RankParameterCount = labels[^1] is "[champion]" or "[super champion]" ? 0 : null
                 });
             }
         }
@@ -161,13 +173,40 @@ internal sealed class DungeonRoomCatalog
                 var values = Integers(objectTokens.Skip(at).Take(4));
                 if (values[0] < 0) throw new InvalidDataException("被动物件ID不能为负数");
                 // 装饰物由客户端地图装载；服务端只为任务权威事件验证脚本，不修补无关旧装饰引用。
-                string path = requirePassiveDefinitions ? Resolve(values[0], objectPaths, "passive object")
-                    : objectPaths.GetValueOrDefault(values[0]) ?? "";
+                string? path = requirePassiveDefinitions ? Resolve(values[0], objectPaths, "passive object")
+                    : objectPaths.GetValueOrDefault(values[0]);
                 objectRows.Add(new(values[0], values, path));
             }
         }
 
         var buffs = sections.TryGetValue("[buff]", out var buffTokens) ? Integers(buffTokens) : Freeze(Array.Empty<int>());
+        var specialObjects = new List<DungeonRoomSpecialObject>();
+        if (sections.TryGetValue("[special passive object]", out var specialTokens))
+        {
+            for (int at = 0; at < specialTokens.Count;)
+            {
+                if (specialTokens.Count - at < 5)
+                    throw new NotSupportedException("unsupported: 特殊被动对象缺少完整父行与子数量");
+                var raw = Integers(specialTokens.Skip(at).Take(5));
+                if (raw[4] < 0 || raw[4] > (specialTokens.Count - at - 5) / 6)
+                    throw new InvalidDataException("特殊被动对象的子数量越过资源块");
+                string path = Resolve(raw[0], objectPaths, "special passive object");
+                at += 5;
+                var children = new List<DungeonRoomSpecialChild>();
+                for (int index = 0; index < raw[4]; index++)
+                {
+                    if (specialTokens[at].Type != 6)
+                        throw new NotSupportedException("unsupported: 特殊对象子类型不是字符串");
+                    string kind = resolve(specialTokens[at++].Value);
+                    var values = Integers(specialTokens.Skip(at).Take(5));
+                    at += 5;
+                    string? childPath = kind == "[monster]" ? Resolve(values[0], monsterPaths, "special monster") : null;
+                    // 未解释的机关/奖励原整数仍完整保留；解析不授予生成、掉落或任务资格。
+                    children.Add(new(index, kind, values, childPath));
+                }
+                specialObjects.Add(new(specialObjects.Count, raw[0], raw, path, Freeze(children)));
+            }
+        }
         var teams = sections.TryGetValue("[monster team]", out var teamTokens) ? Integers(teamTokens) : Freeze(Array.Empty<int>());
         if (teams.Count > monsterRows.Count)
             throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
@@ -175,7 +214,7 @@ internal sealed class DungeonRoomCatalog
         if (sections.TryGetValue("[ai character]",out var actorTokens))
             foreach (var row in PvfAiCharacterScript.MapRows(actorTokens,resolve))
                 actors.Add(resolveAiCharacter?.Invoke(row) ?? throw new InvalidDataException("房间APC定义解析依赖缺失"));
-        return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams) { AiCharacters = Freeze(actors) };
+        return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams) { AiCharacters = Freeze(actors), SpecialObjects = Freeze(specialObjects) };
 
         string Resolve(int id, IReadOnlyDictionary<int, string> paths, string kind)
         {

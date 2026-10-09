@@ -68,6 +68,8 @@ internal sealed class DungeonGroundState
         var occupied = new HashSet<uint> { observed.Identity.CharacterId };
         foreach (var plan in routePlans)
         {
+            foreach (var actor in plan.SpecialObjects)
+                if (!occupied.Add(actor.ObjectKey)) throw new InvalidDataException("特殊父对象key重复或碰撞角色");
             foreach (var monster in plan.Monsters)
             {
                 if (!occupied.Add(monster.ObjectKey) || !monsters.TryAdd(monster.ObjectKey, monster))
