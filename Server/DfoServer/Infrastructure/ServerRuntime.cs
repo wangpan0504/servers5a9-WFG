@@ -26,7 +26,7 @@ namespace DfoServer.Infrastructure;
 internal static class ServerRuntime
 {
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
-        SkillLearningCatalog learning, ItemResources itemResources, ServerLog log)
+        SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests)
     {
         var owners = new AccountOwners();
         var online = new OnlineSessionDirectory();
@@ -36,14 +36,16 @@ internal static class ServerRuntime
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")));
-        var stats = new Game.Characters.CharacterStatComputer(characters);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings));
-        var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
-        var levelProjection = new CharacterLevelProjection(stats);
-        var quests = QuestCatalog.Load(pvf);
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
-        var commands = new GameCommandRegistry();
+        var questConnections = QuestConnectionCatalog.Load(pvf);
         var growth = CharacterGrowthCatalog.Load(pvf, learning);
+        var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
+        var stats = new Game.Characters.CharacterStatComputer(characters);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection);
+        var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
+        var levelProjection = new CharacterLevelProjection(stats, questProjection);
+        var commands = new GameCommandRegistry();
+        DungeonRoomCatalog? questRooms = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
         IGameCommandModule dungeon;
         IGameCommandModule? settlement = null;
@@ -52,12 +54,13 @@ internal static class ServerRuntime
         {
             var dungeonCatalog = DungeonCatalog.Load(pvf);
             var rooms = DungeonRoomCatalog.Load(pvf);
+            questRooms = rooms;
             var drops = DungeonMonsterDropCatalog.Load(pvf);
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
-                drops, itemResources.Items, itemResources.EpicPieces);
+                drops, itemResources.Items, itemResources.EpicPieces,questProjection);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
-                rooms, drops, itemResources.Items, levelProjection);
+                rooms, drops, itemResources.Items, levelProjection,itemResources.EpicPieces);
         }
         else
         {
@@ -86,9 +89,11 @@ internal static class ServerRuntime
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new DungeonSelectionHandler(projection, log),
-            new QuestConditionHandler(log),
+            new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
+            new QuestQuickClearHandler(quests,questConnections,questProjection,log),
+            new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
-                itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection),
+                itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection),
             dungeon,
             new AgitWarHandler(),
             new ClientNoticeHandler(log)
@@ -98,7 +103,7 @@ internal static class ServerRuntime
         settlement?.Register(commands);
         commands.Seal();
         var login = new LoginHandler(options, owners, accounts, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests);
         var channel = new ChannelProtocolHandler(options, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         return new ServerHost(options, channel, game, management, Started, log);

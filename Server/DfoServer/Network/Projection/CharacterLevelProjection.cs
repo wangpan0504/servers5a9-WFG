@@ -5,19 +5,25 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class CharacterLevelProjection(CharacterStatComputer stats)
+internal sealed class CharacterLevelProjection(CharacterStatComputer stats, QuestProjection? quests = null)
 {
+    public Task PlayerAsync(GameConnectionContext context, Character committed, string action, Func<bool> canSend) =>
+        context.Notify(NotiPacketType.USERINFO,TownPackets.Player(committed,stats.Compute(committed)),action,canSend);
+
     public async Task RefreshAsync(GameConnectionContext context, Character committed, byte previousLevel,
-        string action, Func<bool> canSend)
+        string action, Func<bool> canSend, byte? previousGrowType = null)
     {
         if (previousLevel is < 1 or > 95 || committed.Level < previousLevel)
             throw new InvalidDataException("等级刷新必须使用真实提交前后等级");
-        if (committed.Level == previousLevel || !canSend())
+        if (committed.Level == previousLevel && (previousGrowType is null || previousGrowType == committed.GrowType) || !canSend())
             return;
-        // 沿S4A21：副本/结算只追加Player，避免升级时重走Actor路径。
-        // 城镇升级仍同步Actor等级；89B仅携带CHR基础，不重复累计装备和技能。
-        if (context.Owner.Execute(() => context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect))
+        // 普通副本升级只追加Player；职业变化必须同步Actor，Player不携带job/grow字段。
+        // 沿两端的职业重建链刷新真实分支；89B仅携带CHR基础，不重复累计装备和技能。
+        if (previousGrowType is { } grow && grow != committed.GrowType ||
+            context.Owner.Execute(() => context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect))
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(committed), action + "_actor", canSend);
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(committed, stats.Compute(committed)), action + "_player", canSend);
+        await PlayerAsync(context,committed,action + "_player",canSend);
+        if (quests is not null)
+            await quests.RefreshAsync(context, committed, canSend);
     }
 }

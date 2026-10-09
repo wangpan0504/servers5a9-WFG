@@ -1,17 +1,25 @@
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Inventory.Models;
+using System.Collections.Immutable;
 namespace DfoServer.Game.Characters;
 
 internal sealed record Character(ushort Id, ushort Slot, string Name, long Revision, Location Position, Location? Return)
 {
     public byte Job { get; init; }
     public byte GrowType { get; init; }
+    public byte EquipmentSlotFlags { get; init; }
     // 来自角色设置的场景显示位，不改写位置、进度或资产revision。
     public byte VisibilityFlags { get; init; } = 6;
     public byte Level { get; init; } = 1;
     public uint AcceptedStoryLevel { get; init; }
     public int[] CompletedQuests { get; init; } = [];
+    public ImmutableDictionary<int,byte> QuestAnswers { get; init; } = ImmutableDictionary<int,byte>.Empty;
+    public int QuestCycleDay { get; init; }
+    public ImmutableDictionary<int, int> QuestDailyClaims { get; init; } = ImmutableDictionary<int, int>.Empty;
+    public int[] AccountCompletedQuests { get; init; } = [];
+    public ImmutableDictionary<int,byte> AccountQuestAnswers { get; init; } = ImmutableDictionary<int,byte>.Empty;
+    public ImmutableDictionary<int, int> AccountQuestDailyClaims { get; init; } = ImmutableDictionary<int, int>.Empty;
     public CharacterSkill[] Skills { get; init; } = [];
     // 进行中的主要任务。槽位 0–29 对应 ACK4 的 30 组；空槽不入库。
     public ActiveMainQuest[] ActiveMainQuests { get; init; } = [];
@@ -31,6 +39,7 @@ internal sealed record NewCharacter(string Name, Location Position, Location? Re
 {
     public byte Job { get; init; }
     public byte GrowType { get; init; }
+    public byte EquipmentSlotFlags { get; init; }
     public byte Level { get; init; } = 1;
     public uint AcceptedStoryLevel { get; init; }
     public int[] CompletedQuests { get; init; } = [];

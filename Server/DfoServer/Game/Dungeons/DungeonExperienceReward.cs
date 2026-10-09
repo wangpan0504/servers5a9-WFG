@@ -11,14 +11,44 @@ internal sealed record DungeonGrowthCommit(Character Character, bool Duplicate);
 
 internal static class DungeonKillExperiencePolicy
 {
-    public static DungeonExperienceReward Plan(SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonKillExperienceCatalog catalog)
+    public static DungeonExperienceReward Plan(SinglePlayerDungeonRun run, PreparedDungeonDeath prepared,
+        DungeonKillExperienceCatalog catalog, byte characterLevel)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(catalog);
         if (!run.IsPendingDeath(prepared))
             throw new InvalidOperationException("击杀经验只能规划当前待提交死亡");
-        return new(DungeonKillExperienceCatalog.RuleId, DungeonKillExperienceCatalog.ResourcePath, prepared.Monster.MonsterId,
-            prepared.Monster.CandidateLevel, catalog.GetExperience(prepared.Monster.CandidateLevel));
+        var monster = prepared.Monster;
+        uint amount = Calculate(catalog.GetExperience(monster.CandidateLevel), run.Entry.ExperienceWeight,
+            catalog.GetDifficultyRate(run.Entry.Difficulty),
+            // 参考S4A21以APC自身等级和对应品级计算；怪物named目录不套到同号APC。
+            catalog.GetMonsterRate(monster.ExperienceType, monster.AiCharacter is null && run.Entry.NamedMonsters.Contains(monster.MonsterId)),
+            characterLevel, monster.CandidateLevel);
+        return new(DungeonKillExperienceCatalog.RuleId, DungeonKillExperienceCatalog.ResourcePath, monster.MonsterId,
+            monster.CandidateLevel, amount);
     }
+
+    internal static uint Calculate(uint basic, float weight, float difficulty, float monsterRate, int characterLevel, int monsterLevel)
+    {
+        if (characterLevel <= 0 || monsterLevel <= 0 || !float.IsFinite(weight) || weight < 0 ||
+            !float.IsFinite(difficulty) || difficulty < 0 || !float.IsFinite(monsterRate) || monsterRate < 0)
+            throw new InvalidDataException("击杀经验计算前提无效");
+        // external的float32三阶段：权重后截整数、难度/品级后截整数、最后应用等级差。
+        int weighted = TruncateInt(basic * weight);
+        int beforePenalty = TruncateInt(weighted * difficulty * monsterRate);
+        float penalty = ((long)monsterLevel - characterLevel) switch
+        {
+            <= -7 => .05f, -6 => .20f, -5 => .50f, -4 => .75f,
+            <= 0 => 1f, <= 3 => 1.12f, <= 5 => 1f,
+            6 => .75f, 7 => .70f, 8 => .60f, 9 => .50f, _ => .05f
+        };
+        float gain = beforePenalty * penalty;
+        if (!float.IsFinite(gain) || gain < 0 || (double)gain > uint.MaxValue)
+            throw new InvalidDataException("击杀经验超出u32范围");
+        return (uint)gain;
+    }
+
+    private static int TruncateInt(float value) => float.IsFinite(value) && value >= 0 && (double)value <= int.MaxValue
+        ? (int)value : throw new InvalidDataException("击杀经验中间值超出i32范围");
 }

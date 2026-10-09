@@ -75,6 +75,9 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("通关成长revision或账号已变化");
         WriteLearning(db, tx, expected.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
+        if (quests is not null)
+            WriteQuestConditions(db,tx,current.Id,current.ActiveMainQuests,DfoServer.Game.Quests.QuestStateProgress.Refresh(
+                current.ActiveMainQuests,current with { Level = plan.TargetLevel, Learning = plan.Learning },quests));
         command.Parameters.Clear();
         command.Parameters.AddWithValue("$id", expected.Id);
         command.Parameters.AddWithValue("$account", owner.Account);

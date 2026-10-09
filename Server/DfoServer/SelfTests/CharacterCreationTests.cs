@@ -68,14 +68,14 @@ internal static class CharacterCreationTests
                 var parsed = CharacterRequests.ParseCreate(body);
                 var profile = characters.Get(parsed.Job);
                 var created = new GameSession(repo, towns, owner).CreateCharacter(parsed.Name, profile);
-                That(created.Slot == job && created.Job == job && created.Level == 1 && created.GrowType == 0 && created.AcceptedStoryLevel == 1 && created.CompletedQuests.Length == 0 && HasInitialQuest(created) && created.Revision == 0 && created.Skills.Length == skillCounts[job], "ordinary job " + job + " persisted with its own profile");
+                That(created.Slot == job && created.Job == job && created.Level == 1 && created.GrowType == 0 && created.AcceptedStoryLevel == 1 && created.CompletedQuests.Length == 0 && created.ActiveMainQuests.Length == 0 && created.Revision == 0 && created.Skills.Length == skillCounts[job], "ordinary job " + job + " persisted with its own profile");
                 byte[] select = TownPackets.Select(created), actor = TownPackets.Actor(created), player = TownPackets.Player(created, computer.Compute(created));
-                That(select.Length == 235 && select[222] == 38 && BinaryPrimitives.ReadUInt16LittleEndian(select.AsSpan(22)) == 3145 && BinaryPrimitives.ReadUInt32LittleEndian(select.AsSpan(24)) == 1 && actor[127 + name.Length] == job && player.Length == 622 + 6 * skillCounts[job] && player.AsSpan(36, 89).SequenceEqual(CharacterStatsPackets.Build(profile.InitialStats)), "job " + job + " selects initial town 38 and retains actor identity, quest and equipment");
+                That(select.Length == 235 && select[222] == 38 && BinaryPrimitives.ReadUInt16LittleEndian(select.AsSpan(22)) == ushort.MaxValue && BinaryPrimitives.ReadUInt32LittleEndian(select.AsSpan(24)) == 0 && actor[127 + name.Length] == job && player.Length == 622 + 6 * skillCounts[job] && player.AsSpan(36, 89).SequenceEqual(CharacterStatsPackets.Build(profile.InitialStats)), "job " + job + " selects initial town 38 and retains actor identity, quest and equipment");
             }
 
             var reopened = new CharacterRepository(path);
             var rows = reopened.List(owner);
-            That(rows.Length == 16 && rows.Select(c => (int)c.Job).SequenceEqual(Enumerable.Range(0, 16)) && rows.All(c => c.AcceptedStoryLevel == 1 && c.CompletedQuests.Length == 0 && HasInitialQuest(c)) && rows.Select(c => c.ActiveMainQuests.Single().AcceptanceId).Distinct().Count() == 16, "all job identities and distinct first quest acceptances survive database reopen");
+            That(rows.Length == 16 && rows.Select(c => (int)c.Job).SequenceEqual(Enumerable.Range(0, 16)) && rows.All(c => c.AcceptedStoryLevel == 1 && c.CompletedQuests.Length == 0 && c.ActiveMainQuests.Length == 0) , "all job identities and distinct first quest acceptances survive database reopen");
             byte[] roster = CharacterPackets.Roster(rows.Select(CharacterRosterEntry.FromCharacter).ToArray());
             int at = 15;
             foreach (var row in rows)
@@ -138,6 +138,4 @@ internal static class CharacterCreationTests
         Console.WriteLine($"PASS {Count - checks} ordinary character creation assertions; jobs=16");
     }
 
-    private static bool HasInitialQuest(Character character) => character.ActiveMainQuests is
-        [{ Slot: 0, QuestId: 3145, ConditionState: 1, AcceptanceId: var id }] && id != Guid.Empty;
 }

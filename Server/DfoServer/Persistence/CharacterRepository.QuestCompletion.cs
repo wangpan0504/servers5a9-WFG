@@ -1,10 +1,13 @@
-using DfoServer.GameWorld.Characters;
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Quests;
+using DfoServer.GameWorld.Quests;
+using DfoServer.GameWorld.Characters;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
@@ -13,152 +16,206 @@ internal sealed partial class CharacterRepository
 {
     public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan) => owner.Execute(() =>
     {
-        ArgumentNullException.ThrowIfNull(plan);
-        var expected = plan.Expected;
-        var clear = plan.Clear;
-        var reward = plan.ExperienceReward;
-        if (!QuestCompletionPlan.MatchesClearedActiveQuest(expected, clear) || expected.Job > 15 ||
-            reward.RuleId != QuestExperiencePolicy.RuleId || reward.ResourcePath != GameWorld.Quests.QuestRewardParameterCatalog.ResourcePath ||
-            reward.QuestPath != QuestExperiencePolicy.QuestPath || reward.NativeIndex != 1 || reward.BaseExperience <= 0 ||
-            reward.RawAdditionalPercent > 0 || reward.DifficultyKey != "1" || reward.DifficultyWeight <= 0 ||
-            reward.Amount != checked((ulong)reward.BaseExperience * (ulong)reward.DifficultyWeight) / 100 || plan.GoldAmount != 0 ||
-            plan.Growth.CharacterId != expected.Id || plan.Growth.Revision != expected.Revision ||
-            plan.Growth.Learning.Experience != expected.Learning.Experience + reward.Amount ||
-            plan.Rewards.Length != 7 || plan.Inventory.ChangedSlots.Length != 7 ||
-            !plan.ActiveAfter.SequenceEqual(expected.ActiveMainQuests.Where(active => active.AcceptanceId != clear.AcceptanceId)) ||
-            !plan.CompletedAfter.SequenceEqual(expected.CompletedQuests.Append(3145).Order()))
-            throw new InvalidDataException("3145领奖必须使用完整匹配接取、本服资源规则及七项固定奖励计划");
-        using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        var expected = plan.Expected; var clear = plan.AuthoritativeClear; var reward = plan.ExperienceReward;
+        var active = expected.ActiveMainQuests.SingleOrDefault(row => row.AcceptanceId == plan.AcceptanceId);
+        var newCompleted = new[] { (int)plan.QuestId }.Concat(plan.CascadeMarkerQuestId is { } marker ? new[] { marker } : [])
+            .Except(QuestEligibility.Completed(expected)).Order().ToArray();
+        if (expected.Id == 0 || expected.Job > 15 || plan.AcceptanceId == Guid.Empty || active is null ||
+            active.QuestId != plan.QuestId || active.Slot != plan.QuestSlot || expected.CompletedQuests.Contains(plan.QuestId) ||
+            plan.CascadeMarkerQuestId is { } cascade && (cascade is <= 0 or >= 30000 || cascade == plan.QuestId) ||
+            reward.ResourcePath != QuestRewardParameterCatalog.ResourcePath ||
+            plan.TargetLearning.Experience != expected.Learning.Experience + reward.Amount ||
+            !plan.ActiveAfter.Select(row => (row.Slot, row.QuestId, row.AcceptanceId)).SequenceEqual(
+                expected.ActiveMainQuests.Where(row => row.AcceptanceId != plan.AcceptanceId).Select(row => (row.Slot, row.QuestId, row.AcceptanceId))) ||
+            !plan.NewCompletedQuestIds.SequenceEqual(newCompleted) ||
+            !plan.CompletedAfter.SequenceEqual(expected.CompletedQuests.Concat(newCompleted).Distinct().Order()) ||
+            !plan.AccountCompletedAfter.SequenceEqual((plan.AccountQuest ? expected.AccountCompletedQuests.Append((int)plan.QuestId) : expected.AccountCompletedQuests).Order()))
+            throw new InvalidDataException("领奖必须使用原接取、完整资产和成长规划");
+        if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 25 or 31 or 39 or 40 or 42 or 44 or 64 or 65) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
+            plan.Snapshot is null || plan.ConditionType is not (0 or 42) && active.ConditionState != 0 ||
+            reward.Amount == 0 && plan.GrowthPlan is not null || reward.Amount != 0 && plan.GrowthPlan is null ||
+            plan.GrowthPlan is { } growth && (growth.CharacterId != expected.Id || growth.Revision != expected.Revision) ||
+            (plan.ConditionType is 1 or 3) != (clear is not null) || clear is not null && !QuestCompletionPlan.MatchesClearedActiveQuest(expected, clear))
+            throw new InvalidDataException("任务交付需要已确认类型、权威条件与一致成长规划");
+        ValidateInventoryPlan(expected, plan.Inventory);
+        using var db = database.Open(); using var tx = db.BeginTransaction(deferred: true);
         var current = Require(db, tx, owner.Account, expected.Name);
-        if (current.Id != expected.Id)
-            throw new InvalidOperationException("领奖角色或账号已变化");
-        using var command = db.CreateCommand();
-        command.Transaction = tx;
-        command.Parameters.AddWithValue("$id", current.Id);
-        command.Parameters.AddWithValue("$account", owner.Account);
-        command.Parameters.AddWithValue("$acceptance", clear.AcceptanceId.ToString("N"));
-        command.CommandText = """
-            SELECT event_id,instance_id,task_attempt,epoch,quest_slot,revision
-            FROM character_quest_clear_receipts
-            WHERE character_id=$id AND account=$account AND acceptance_id=$acceptance AND quest_id=3145 AND dungeon_id=3 AND map_id=76126
-            """;
-        using (var reader = command.ExecuteReader())
+        if (current.Id != expected.Id) throw new InvalidOperationException("领奖角色或账号已变化");
+        using var command = db.CreateCommand(); command.Transaction = tx;
+        command.Parameters.AddWithValue("$id", expected.Id); command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$acceptance", plan.AcceptanceId.ToString("N"));
+        command.Parameters.AddWithValue("$quest", plan.QuestId);
+        if (clear is not null)
         {
-            if (!reader.Read() || reader.GetString(0) != clear.EventId.ToString("N") ||
-                reader.GetString(1) != clear.InstanceId.ToString("N") || reader.GetInt64(2) != clear.TaskAttempt ||
-                reader.GetInt64(3) != clear.Epoch || reader.GetInt64(4) != clear.QuestSlot || reader.GetInt64(5) != clear.Revision)
+            command.CommandText = """
+                SELECT event_id,instance_id,task_attempt,epoch,quest_slot,revision,dungeon_id,map_id FROM character_quest_clear_receipts
+                WHERE character_id=$id AND account=$account AND acceptance_id=$acceptance AND quest_id=$quest
+                """;
+            using var reader = command.ExecuteReader();
+            if (!reader.Read() || reader.GetString(0) != clear.EventId.ToString("N") || reader.GetString(1) != clear.InstanceId.ToString("N") ||
+                reader.GetInt64(2) != clear.TaskAttempt || reader.GetInt64(3) != clear.Epoch || reader.GetInt32(4) != clear.QuestSlot || reader.GetInt64(5) != clear.Revision ||
+                reader.GetInt32(6) != clear.DungeonId || reader.GetInt32(7) != clear.MapId)
                 throw new InvalidDataException("领奖资格不是原持久接取的权威清图事实");
         }
-        command.CommandText = """
-            SELECT event_id,instance_id,task_attempt,epoch,rule_id,resource_source,quest_source,native_index,
-              base_experience,raw_additional_percent,difficulty_key,difficulty_weight,experience_amount,gold_amount,
-              before_revision,revision,rewards,after_level,after_experience,before_level
-            FROM character_quest_completion_receipts WHERE character_id=$id AND account=$account AND acceptance_id=$acceptance
-            """;
+        string consumed = JsonSerializer.Serialize(plan.Consumed);
+        command.CommandText = "SELECT * FROM character_quest_completion_receipts WHERE character_id=$id AND account=$account AND acceptance_id=$acceptance";
         using (var reader = command.ExecuteReader())
         {
             if (reader.Read())
             {
-                if (reader.GetString(0) != clear.EventId.ToString("N") || reader.GetString(1) != clear.InstanceId.ToString("N") ||
-                    reader.GetInt64(2) != clear.TaskAttempt || reader.GetInt64(3) != clear.Epoch || reader.GetString(4) != reward.RuleId ||
-                    reader.GetString(5) != reward.ResourcePath || reader.GetString(6) != reward.QuestPath || reader.GetInt64(7) != reward.NativeIndex ||
-                    reader.GetInt64(8) != reward.BaseExperience || reader.GetInt64(9) != reward.RawAdditionalPercent ||
-                    reader.GetString(10) != reward.DifficultyKey || reader.GetInt64(11) != reward.DifficultyWeight ||
-                    reader.GetInt64(12) != reward.Amount || reader.GetInt64(13) != 0 || reader.GetInt64(14) != expected.Revision ||
-                    reader.GetInt32(19) != expected.Level ||
-                    !current.CompletedQuests.Contains(3145) || current.ActiveMainQuests.Any(active => active.AcceptanceId == clear.AcceptanceId))
-                    throw new InvalidDataException("相同领奖身份的规则、接取或持久结果发生变化");
-                var granted = JsonSerializer.Deserialize<ImmutableArray<QuestGrantedItem>>(reader.GetString(16));
+                long I(string column) => reader.GetInt64(reader.GetOrdinal(column));
+                string? S(string column) { int at = reader.GetOrdinal(column); return reader.IsDBNull(at) ? null : reader.GetString(at); }
+                if (I("quest_id") != plan.QuestId || S("event_id") != clear?.EventId.ToString("N") || S("instance_id") != clear?.InstanceId.ToString("N") ||
+                    clear is not null && (I("task_attempt") != clear.TaskAttempt || I("epoch") != clear.Epoch) ||
+                    S("resource_source") != reward.ResourcePath || S("quest_source") != reward.QuestPath ||
+                    I("native_index") != reward.NativeIndex || I("base_experience") != reward.BaseExperience || I("raw_additional_percent") != reward.RawAdditionalPercent ||
+                    S("difficulty_key") != reward.DifficultyKey || I("difficulty_weight") != reward.DifficultyWeight || I("experience_amount") != reward.Amount ||
+                    I("gold_amount") != plan.GoldAmount || I("before_revision") != expected.Revision || I("before_level") != expected.Level ||
+                    I("before_experience") != checked((long)expected.Learning.Experience) || I("condition_type") != plan.ConditionType ||
+                    I("selector") != plan.RewardSelector || I("multiplier") != plan.Multiplier || S("consumed") != consumed ||
+                    S("plan_snapshot") is { } snapshot && snapshot != plan.Snapshot)
+                    throw new InvalidDataException("相同领奖身份的规则、请求或持久结果发生变化");
+                var granted = JsonSerializer.Deserialize<ImmutableArray<QuestGrantedItem>>(S("rewards")!);
                 VerifyQuestGrantedItems(plan, granted);
-                long revision = reader.GetInt64(15);
-                bool projectionCurrent = current.Revision == revision && current.Job == expected.Job && current.GrowType == expected.GrowType &&
-                    current.Level == reader.GetInt32(17) && current.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) &&
-                    current.CompletedQuests.SequenceEqual(plan.CompletedAfter) &&
-                    current.Learning.Experience == checked((ulong)reader.GetInt64(18)) &&
-                    SameLearning(current.Learning, plan.Growth.Learning) &&
-                    current.Skills.SequenceEqual(plan.Growth.Learning.Trees.Single(tree => tree.Context == 0).Skills
-                        .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id)) && granted.All(row =>
-                    current.Inventory.Find(row.Item.Position) is { } item && item == row.Item);
-                // 只对原未安装旧快照的精确恢复提供增量。新会话已装载完整库存不能重复ACK34。
-                return new QuestCompletionCommit(current, clear, reward, granted, true, projectionCurrent, checked((byte)reader.GetInt32(19)), expected.Learning);
+                var changed = JsonSerializer.Deserialize<ImmutableArray<InventoryItem>>(S("changed_items")!);
+                // 已发布v13只改变七个奖励槽；保留旧回执，不补写新的来源。
+                if (clear is not null && changed.Length == 0) changed = granted.Select(row => row.Item).ToImmutableArray();
+                var index = changed.ToDictionary(item => item.Position);
+                var after = plan.Inventory.After with { Items = plan.Inventory.After.Items.Select(item => index.GetValueOrDefault(item.Position, item)).ToImmutableArray() };
+                if (plan.Inventory.ChangedCurrencies.Any(CurrencyWallet.IsAccount))
+                    after = after with { AccountWallet = after.AccountWallet with { Revision = checked(expected.Inventory.AccountWallet.Revision + 1) } };
+                bool projection = current.Revision == I("revision") && current.Level == I("after_level") && current.Level == plan.TargetLevel &&
+                    current.Job == expected.Job && current.GrowType == plan.TargetGrowType && current.Position == expected.Position &&
+                    current.EquipmentSlotFlags == plan.TargetEquipmentSlotFlags &&
+                    current.AcceptedStoryLevel == expected.AcceptedStoryLevel && current.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) &&
+                    current.CompletedQuests.SequenceEqual(plan.CompletedAfter) && current.Learning.Experience == (ulong)I("after_experience") &&
+                    current.AccountCompletedQuests.SequenceEqual(plan.AccountCompletedAfter) && QuestCycle.SameClaims(current.AccountQuestDailyClaims,plan.AccountDailyClaimsAfter) &&
+                    QuestCycle.SameAnswers(current.QuestAnswers,plan.AnswersAfter) && QuestCycle.SameAnswers(current.AccountQuestAnswers,plan.AccountAnswersAfter) &&
+                    SameLearning(current.Learning, plan.TargetLearning) &&
+                    current.Skills.SequenceEqual(!plan.UpdatesLearning ? expected.Skills : plan.TargetLearning.Trees.Single(tree => tree.Context == 0).Skills
+                        .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id)) &&
+                    SameInventory(current.Inventory, new(after, after, "quest_receipt_projection"));
+                return Result(current, granted, true, projection);
             }
         }
         if (current.Revision != expected.Revision || current.Level != expected.Level || current.Job != expected.Job ||
-            current.GrowType != expected.GrowType || !SameLearning(current.Learning, expected.Learning) ||
-            !current.Skills.SequenceEqual(expected.Skills) || !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) ||
-            !current.CompletedQuests.SequenceEqual(expected.CompletedQuests))
-            throw new InvalidOperationException("领奖规划的等级、两树、技能、任务或revision已变化");
-        // 复用现有资产事务，绝不另开内部写事务；其revision+1也是整个领奖唯一的revision推进。
+            current.GrowType != expected.GrowType || current.Position != expected.Position || current.AcceptedStoryLevel != expected.AcceptedStoryLevel ||
+            current.EquipmentSlotFlags != expected.EquipmentSlotFlags ||
+            !SameLearning(current.Learning, expected.Learning) || !current.Skills.SequenceEqual(expected.Skills) ||
+            !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) || !current.CompletedQuests.SequenceEqual(expected.CompletedQuests) ||
+            !QuestCycle.Same(current, expected))
+            throw new InvalidOperationException("领奖原角色、场景、两树、任务或revision已变化");
+        if (plan.DailyPeriod != 0 && (plan.DailyPeriod != expected.QuestCycleDay || plan.DailyPeriod != QuestCycle.Day(DateTimeOffset.UtcNow)))
+            throw new InvalidOperationException("每日领奖规划已经跨过游戏日边界");
+        if (plan.Consumed.Any(row => row.Uid == 0 ? CurrencyWallet.RewardKind(row.ItemId) is not { } kind ||
+                ItemSlotBoundService.CurrencySlot(kind) != row.Position.Index || row.Position.List != InventoryListType.Main ||
+                row.Count <= 0 || CurrencyWallet.Get(expected.Inventory,kind) < row.Count :
+            expected.Inventory.Find(row.Position)?.IsExpired(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) != false))
+            throw new InvalidOperationException("交付材料在规划后已经过期");
         var inventoryCommit = CommitInventoryInTransaction(db, tx, owner, expected, plan.Inventory);
-        command.Parameters.AddWithValue("$level", plan.Growth.TargetLevel);
-        command.Parameters.AddWithValue("$experience", checked((long)plan.Growth.Learning.Experience));
-        command.Parameters.AddWithValue("$revision", inventoryCommit.Revision);
-        command.CommandText = "UPDATE characters SET level=$level,experience=$experience WHERE id=$id AND account=$account AND revision=$revision";
-        if (command.ExecuteNonQuery() != 1)
-            throw new InvalidOperationException("领奖成长的原资产提交revision已变化");
-        WriteLearning(db, tx, current.Id, plan.Growth.Learning);
-        WriteCanonicalSkills(db, tx, current.Id, plan.Growth.Learning);
-        command.Parameters.AddWithValue("$slot", clear.QuestSlot);
-        command.CommandText = """
-            DELETE FROM character_active_main_quests
-            WHERE character_id=$id AND slot=$slot AND quest_id=3145 AND condition_state=0 AND acceptance_id=$acceptance
-            """;
-        if (command.ExecuteNonQuery() != 1)
-            throw new InvalidOperationException("原已达成活动任务不能原子清槽");
-        command.CommandText = "INSERT INTO character_completed_quests(character_id,quest_id) VALUES($id,3145)";
+        if (!plan.Inventory.Changed)
+        {
+            command.Parameters.AddWithValue("$beforeRevision", expected.Revision);
+            command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$beforeRevision";
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("领奖revision已变化");
+            command.Parameters.RemoveAt("$beforeRevision");
+        }
+        command.Parameters.AddWithValue("$level", plan.TargetLevel);
+        command.Parameters.AddWithValue("$experience", checked((long)plan.TargetLearning.Experience));
+        command.Parameters.AddWithValue("$revision", expected.Revision + 1);
+        command.Parameters.AddWithValue("$grow", plan.TargetGrowType);
+        command.Parameters.AddWithValue("$equipmentSlots",plan.TargetEquipmentSlotFlags);
+        command.CommandText = "UPDATE characters SET level=$level,experience=$experience,grow_type=$grow,equipment_slot_flags=$equipmentSlots WHERE id=$id AND account=$account AND revision=$revision";
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("领奖资产提交revision已变化");
+        if (plan.UpdatesLearning) { WriteLearning(db, tx, current.Id, plan.TargetLearning); WriteCanonicalSkills(db, tx, current.Id, plan.TargetLearning); }
+        command.Parameters.AddWithValue("$slot", plan.QuestSlot);
+        command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND slot=$slot AND quest_id=$quest AND acceptance_id=$acceptance";
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("原接取活动任务不能原子清槽");
+        WriteQuestConditions(db, tx, current.Id, expected.ActiveMainQuests, plan.ActiveAfter);
+        command.Parameters.AddWithValue("$period", plan.DailyPeriod);
+        command.Parameters.AddWithValue("$answer",(object?)plan.Answer ?? DBNull.Value);
+        command.CommandText = "INSERT INTO character_completed_quests(character_id,quest_id,daily_period,answer) VALUES($id,$quest,$period,$answer)";
         command.ExecuteNonQuery();
+        if (plan.CascadeMarkerQuestId is { } markerQuest && plan.NewCompletedQuestIds.Contains(markerQuest))
+        {
+            command.Parameters.AddWithValue("$marker",markerQuest);
+            command.CommandText = "INSERT INTO character_completed_quests(character_id,quest_id,daily_period,answer) VALUES($id,$marker,0,NULL)";
+            command.ExecuteNonQuery();
+            command.Parameters.RemoveAt("$marker");
+        }
+        if (plan.AccountQuest)
+        {
+            command.CommandText = "INSERT INTO account_completed_quests(account,quest_id,character_id,acceptance_id,daily_period,answer) VALUES($account,$quest,$id,$acceptance,$period,$answer)";
+            command.ExecuteNonQuery();
+            // 同账号只有一个在线owner；另一角色留下的同任务槽在这一事务结束，不能再领取账号奖励。
+            command.CommandText = "SELECT DISTINCT q.character_id FROM character_active_main_quests q JOIN characters c ON c.id=q.character_id WHERE c.account=$account AND q.quest_id=$quest AND c.id<>$id";
+            var otherCharacters = new List<int>();
+            using (var reader = command.ExecuteReader()) while (reader.Read()) otherCharacters.Add(reader.GetInt32(0));
+            foreach (int id in otherCharacters)
+            {
+                command.Parameters.AddWithValue("$other",id);
+                command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$other AND quest_id=$quest";
+                command.ExecuteNonQuery();
+                command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$other AND account=$account";
+                if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("账号任务的关联角色已变化");
+                command.Parameters.RemoveAt("$other");
+            }
+        }
         var grantedItems = plan.Rewards.Select(row => new QuestGrantedItem(
-            inventoryCommit.Inventory.Find(row.Position) ?? throw new InvalidOperationException("持久奖励缺少实际目的槽"), row.GrantedCount)).ToImmutableArray();
+            inventoryCommit.Inventory.Find(row.Position) ?? throw new InvalidOperationException("奖励缺少实际目的槽"), row.GrantedCount)).ToImmutableArray();
         VerifyQuestGrantedItems(plan, grantedItems);
-        command.Parameters.AddWithValue("$event", clear.EventId.ToString("N"));
-        command.Parameters.AddWithValue("$instance", clear.InstanceId.ToString("N"));
-        command.Parameters.AddWithValue("$attempt", clear.TaskAttempt);
-        command.Parameters.AddWithValue("$epoch", clear.Epoch);
-        command.Parameters.AddWithValue("$generation", owner.Generation);
-        command.Parameters.AddWithValue("$rule", reward.RuleId);
-        command.Parameters.AddWithValue("$resource", reward.ResourcePath);
-        command.Parameters.AddWithValue("$quest", reward.QuestPath);
-        command.Parameters.AddWithValue("$index", reward.NativeIndex);
-        command.Parameters.AddWithValue("$basis", reward.BaseExperience);
-        command.Parameters.AddWithValue("$additional", reward.RawAdditionalPercent);
-        command.Parameters.AddWithValue("$difficulty", reward.DifficultyKey);
-        command.Parameters.AddWithValue("$weight", reward.DifficultyWeight);
-        command.Parameters.AddWithValue("$amount", reward.Amount);
-        command.Parameters.AddWithValue("$beforeLevel", expected.Level);
-        command.Parameters.AddWithValue("$beforeExperience", checked((long)expected.Learning.Experience));
-        command.Parameters.AddWithValue("$beforeRevision", expected.Revision);
-        command.Parameters.AddWithValue("$rewards", JsonSerializer.Serialize(grantedItems));
+        var changedItems = plan.Inventory.ChangedSlots.Select(inventoryCommit.Inventory.Find).Where(item => item is not null).Cast<InventoryItem>().ToImmutableArray();
+        foreach (var (name, value) in new (string, object?)[] {
+            ("$event", clear?.EventId.ToString("N")), ("$instance", clear?.InstanceId.ToString("N")), ("$attempt", clear?.TaskAttempt), ("$epoch", clear?.Epoch),
+            ("$clear", clear?.AcceptanceId.ToString("N")), ("$generation", owner.Generation), ("$rule", ""), ("$resource", reward.ResourcePath),
+            ("$questPath", reward.QuestPath), ("$index", reward.NativeIndex), ("$basis", reward.BaseExperience), ("$additional", reward.RawAdditionalPercent),
+            ("$difficulty", reward.DifficultyKey), ("$weight", reward.DifficultyWeight), ("$amount", reward.Amount), ("$gold", plan.GoldAmount),
+            ("$beforeLevel", expected.Level), ("$beforeExperience", checked((long)expected.Learning.Experience)), ("$beforeRevision", expected.Revision),
+            ("$rewards", JsonSerializer.Serialize(grantedItems)), ("$condition", plan.ConditionType), ("$selector", plan.RewardSelector), ("$multiplier",plan.Multiplier),
+            ("$consumed", consumed), ("$changed", JsonSerializer.Serialize(changedItems)), ("$snapshot", plan.Snapshot)
+        }) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         command.CommandText = """
             INSERT INTO character_quest_completion_receipts(character_id,account,acceptance_id,quest_id,event_id,instance_id,
               task_attempt,epoch,generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,
               difficulty_key,difficulty_weight,experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,
-              before_revision,revision,rewards)
-            VALUES($id,$account,$acceptance,3145,$event,$instance,$attempt,$epoch,$generation,$rule,$resource,$quest,$index,$basis,$additional,
-              $difficulty,$weight,$amount,0,$beforeLevel,$level,$beforeExperience,$experience,$beforeRevision,$revision,$rewards)
+              before_revision,revision,rewards,clear_acceptance_id,condition_type,selector,multiplier,consumed,changed_items,plan_snapshot)
+            VALUES($id,$account,$acceptance,$quest,$event,$instance,$attempt,$epoch,$generation,$rule,$resource,$questPath,$index,$basis,$additional,
+              $difficulty,$weight,$amount,$gold,$beforeLevel,$level,$beforeExperience,$experience,$beforeRevision,$revision,$rewards,
+              $clear,$condition,$selector,$multiplier,$consumed,$changed,$snapshot)
             """;
         command.ExecuteNonQuery();
         var committed = Require(db, tx, owner.Account, expected.Name);
-        if (committed.Revision != expected.Revision + 1 || committed.Level != plan.Growth.TargetLevel ||
-            !SameLearning(committed.Learning, plan.Growth.Learning) ||
-            !committed.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) || !committed.CompletedQuests.SequenceEqual(plan.CompletedAfter))
-            throw new InvalidOperationException("持久领奖结果与原完整规划不同");
+        if (committed.Revision != expected.Revision + 1 || committed.Level != plan.TargetLevel || committed.GrowType != plan.TargetGrowType ||
+            committed.EquipmentSlotFlags != plan.TargetEquipmentSlotFlags ||
+            !SameLearning(committed.Learning, plan.TargetLearning) || !committed.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) ||
+            !committed.CompletedQuests.SequenceEqual(plan.CompletedAfter) || !committed.AccountCompletedQuests.SequenceEqual(plan.AccountCompletedAfter) ||
+            !QuestCycle.SameAnswers(committed.QuestAnswers,plan.AnswersAfter) || !QuestCycle.SameAnswers(committed.AccountQuestAnswers,plan.AccountAnswersAfter) ||
+            !QuestCycle.SameClaims(committed.AccountQuestDailyClaims,plan.AccountDailyClaimsAfter))
+            throw new InvalidOperationException("持久领奖结果与完整规划不同");
         tx.Commit();
-        return new QuestCompletionCommit(committed, clear, reward, grantedItems, false, true, expected.Level, expected.Learning);
+        return Result(committed, grantedItems, false, true);
+
+        QuestCompletionCommit Result(Character character, ImmutableArray<QuestGrantedItem> rows, bool duplicate, bool projection) =>
+            new(character, clear, reward, rows, duplicate, projection, expected.Level, expected.Learning) {
+                QuestId = plan.QuestId, AcceptanceId = plan.AcceptanceId, ConditionType = plan.ConditionType,
+                GoldAmount = plan.GoldAmount, Consumed = plan.Consumed, Currencies = plan.Currencies,
+                ChangedSlots = plan.Inventory.ChangedSlots.Concat(plan.Inventory.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
+                    .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main,slot!.Value)))
+                    .Concat(plan.Consumed.Where(row => row.Uid == 0).Select(row => row.Position)).Distinct().ToImmutableArray(), PreviousQuests = expected.ActiveMainQuests,
+                PreviousGrowType = expected.GrowType, ProfessionGrowType = plan.ProfessionGrowType,
+                PreviousEquipmentSlotFlags = expected.EquipmentSlotFlags
+            };
     });
 
     private static void VerifyQuestGrantedItems(QuestCompletionPlan plan, ImmutableArray<QuestGrantedItem> rewards)
     {
-        if (rewards.IsDefault || rewards.Length != 7 || rewards.Select(row => row.Item.Uid).Distinct().Count() != 7)
+        if (rewards.IsDefault || rewards.Length != plan.Rewards.Length || rewards.Select(row => row.Item.Uid).Distinct().Count() != rewards.Length)
             throw new InvalidDataException("领奖账本奖励缺失或UID重复");
-        for (int index = 0; index < rewards.Length; index++)
-        {
-            var actual = rewards[index];
-            var expected = plan.Rewards[index];
+        for (int index = 0; index < rewards.Length; index++) {
+            var actual = rewards[index]; var expected = plan.Rewards[index];
             if (actual.Item.Uid <= 0 || actual.Item.Position != expected.Position || actual.Item.Core != expected.Core ||
-                actual.GrantedCount != expected.GrantedCount ||
-                expected.ExpectedDestinationUid != 0 && actual.Item.Uid != expected.ExpectedDestinationUid)
-                throw new InvalidDataException("实际领奖UID、完整Core、槽位或原序增量与规划不同");
+                actual.GrantedCount != expected.GrantedCount || expected.ExpectedDestinationUid != 0 && actual.Item.Uid != expected.ExpectedDestinationUid)
+                throw new InvalidDataException("实际领奖UID、完整Core、槽位或增量与规划不同");
         }
     }
 }

@@ -1,0 +1,125 @@
+using System.Collections.Immutable;
+using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Quests;
+
+namespace DfoServer.Game.Quests;
+
+internal sealed record QuestEligibilityResult(bool Eligible, bool Visible, string Reason);
+internal enum QuestResourceEntry { Ordinary, Dialogue, Dedicated, OutsideLevels, Event, Creature, Profession, Hardcore, Invalid }
+internal sealed record QuestResourceAccess(QuestResourceEntry Entry, string Reason);
+
+// 仅从已装载的领域快照与共享资源计算，不拥有在线角色或访问数据库。
+internal static class QuestEligibility
+{
+    private static readonly string[] Jobs =
+    [
+        "[swordman]", "[fighter]", "[gunner]", "[mage]", "[priest]", "[at gunner]", "[thief]", "[at fighter]",
+        "[at mage]", "[demonic swordman]", "[creator mage]", "[at swordman]", "[knight]", "[demonic lancer]",
+        "[at priest]", "[gun blader]"
+    ];
+
+    // 两端普通列表的分类合同；本版新增专用分类仍保留定义，等待对应入口确认。
+    public static QuestResourceAccess InspectResource(StoryQuest quest)
+    {
+        if (quest.Definition is not { } definition || definition.Diagnostics.Length != 0)
+            return new(QuestResourceEntry.Invalid, "资源声明存在未确认项");
+        if (quest.MinimumLevel < 1 || quest.MinimumLevel > 95 || quest.MaximumLevel < quest.MinimumLevel)
+            return new(QuestResourceEntry.OutsideLevels, "原始等级不属于Lv1–95普通任务；保留特殊标记");
+        if (definition.IsEvent)
+            return new(QuestResourceEntry.Event, "活动任务需要本版活动启用与期限配置");
+        if (definition.HardcoreOnly)
+            return new(QuestResourceEntry.Hardcore, "任务需要尚未具备的极限模式");
+        if (definition.CreatureKind >= 0)
+            return new(QuestResourceEntry.Creature, "任务需要匹配宠物状态");
+        if (definition.ExpertJobLevel.Length != 0)
+            return new(QuestResourceEntry.Profession, "任务需要副职业状态");
+        if (!QuestCoverage.HasOrdinaryFilter(quest))
+            return new(QuestResourceEntry.Dedicated, "exception filter需要已确认的单字符串character声明");
+        if (quest.MainQuest is not null)
+            return new(QuestResourceEntry.Dialogue, "子任务需要父任务及资源顺序的真实入口");
+        if (!definition.ExposedByNpc || !OrdinaryGrade(quest.Grade))
+            return new(QuestResourceEntry.Dedicated, "隐藏或专用分类任务需要对应入口");
+        return new(QuestResourceEntry.Ordinary, "普通任务候选；仍须核对角色、前置及完成状态");
+    }
+
+    private static bool OrdinaryGrade(string? grade) => grade is null or "" or "[normal]" or "[side]" or "[sub]" or "[epic]" or
+        "[realization]" or "[training]" or "[achievement]" or "[mission]" or "[daily]" or "[daily random]" or
+        "[normaly repeat]" or "[special daily]" or "[common unique]" or "[system]";
+
+    public static ImmutableArray<int> Visible(Character character, QuestCatalog catalog)
+    {
+        var completed = Completed(character);
+        var active = character.ActiveMainQuests.Select(quest => (int)quest.QuestId).ToHashSet();
+        return catalog.All.Where(quest => Evaluate(character, quest, catalog, completed, active, includeActive: true).Visible)
+            .Select(quest => quest.Id).ToImmutableArray();
+    }
+
+    public static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog) =>
+        Evaluate(character, quest, catalog, Completed(character),
+            character.ActiveMainQuests.Select(active => (int)active.QuestId).ToHashSet());
+
+    public static HashSet<int> Completed(Character character) => character.CompletedQuests.Concat(character.AccountCompletedQuests).ToHashSet();
+
+    private static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
+        IReadOnlySet<int> completed, IReadOnlySet<int> active, bool includeActive = false)
+    {
+        var access = InspectResource(quest);
+        if (access.Entry is QuestResourceEntry.Invalid or QuestResourceEntry.OutsideLevels or QuestResourceEntry.Event or
+            QuestResourceEntry.Creature or QuestResourceEntry.Profession)
+            return Reject(access.Reason);
+        if (access.Entry == QuestResourceEntry.Hardcore) return Reject(access.Reason);
+        var definition = quest.Definition!;
+        if (quest.Grade is "[training]" or "[daily random]")
+            return Reject("任务需要对应每日专用列表");
+        if (character.Job >= Jobs.Length || character.Level is < 1 or > 95)
+            return Reject("角色等级或职业无效");
+        // 特殊等级标记保留原值，不能截为1或95后成为普通可接任务。
+        if (quest.MinimumLevel < 1 || quest.MaximumLevel < quest.MinimumLevel ||
+            character.Level < quest.MinimumLevel || character.Level > quest.MaximumLevel)
+            return Reject("等级不符");
+        if (definition.Job is not (null or "[all]") && definition.Job != Jobs[character.Job])
+            return Reject("职业不符");
+        int grow = character.GrowType & 15, awakening = character.GrowType >> 4;
+        if (definition.TargetCharacters.Length != 0 && !definition.TargetCharacters.Any(target =>
+            (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
+            (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening)))
+            return Reject("目标转职或觉醒不符");
+        if (definition.NonTargetCharacters.Any(target => (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
+            (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening)))
+            return Reject("角色符合任务排除职业条件");
+        bool selfAwakening = character.Job is 9 or 10 && quest.Grade == "[realization]";
+        if (definition.JobChange == 1 && quest.RewardType == "[grow type]" && grow != 0 ||
+            definition.JobChange == 2 && ((!selfAwakening && grow == 0) || awakening != 0) ||
+            definition.JobChange == 3 && ((!selfAwakening && grow == 0) || awakening != 1) ||
+            definition.GrowType != -1 && definition.JobChange is not (1 or 10 or 20) &&
+            definition.GrowType != (definition.JobChange is 2 or 3 ? grow : character.GrowType))
+            return Reject("转职阶段不符");
+        if (completed.Contains(quest.Id) && !QuestCycle.Repeat(quest) || !includeActive && active.Contains(quest.Id))
+            return Reject("已完成或已接取");
+        if (definition.PrerequisiteGroups.Length != 0 && !definition.PrerequisiteGroups.Any(group =>
+            group.Length != 0 && group.All(id => catalog.TryGet(id, out _) && completed.Contains(id))))
+            return Reject("前置组未达成");
+        if (definition.Collisions.Any(id => completed.Contains(id) || active.Contains(id)))
+            return Reject("冲突任务已完成或进行中");
+        if (definition.AccountCollisions.Any(character.AccountCompletedQuests.Contains))
+            return Reject("冲突账号任务已完成");
+        if (definition.RequiredAnswers.Any(required => !completed.Contains(required.QuestId) || required.Answer is < 0 or > 254 ||
+            !(character.AccountQuestAnswers.TryGetValue(required.QuestId,out byte answer) || character.QuestAnswers.TryGetValue(required.QuestId,out answer)) ||
+            answer != required.Answer))
+            return Reject("持久前置回答不符");
+        if (quest.MainQuest is { } parentId)
+        {
+            if (!active.Contains(parentId) || !catalog.TryGet(parentId, out var parent) ||
+                parent.Condition is not ("[quest clear]" or "[clear quest]" or "[clear multi quest]"))
+                return Reject("父任务未接取");
+            int next = parent.IntData.FirstOrDefault(id => !completed.Contains(id));
+            if (next != quest.Id)
+                return Reject("尚未到本子任务的资源顺序");
+            return new(true, includeActive && active.Contains(quest.Id), "等待父任务对话入口");
+        }
+        bool visible = access.Entry == QuestResourceEntry.Ordinary && !definition.HideOnCompletedQuests.Any(completed.Contains);
+        return new(true, visible, visible ? "资格满足" : "需要专用任务入口");
+    }
+
+    private static QuestEligibilityResult Reject(string reason) => new(false, false, reason);
+}

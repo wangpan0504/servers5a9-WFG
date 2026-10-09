@@ -26,6 +26,7 @@ internal static class DungeonSettlementSessionTests
         var kills = DungeonKillExperienceCatalog.Load(pvf);
         var dungeons = DungeonCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
+        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
         var clear = DungeonClearExperienceCatalog.Load(pvf);
         var definition = dungeons.Get(3);
         var maps = definition.Mazes.Single(maze => maze.ConnectsQuest(3145)).MapSpecification!;
@@ -37,15 +38,12 @@ internal static class DungeonSettlementSessionTests
 
         void CommittedSettlement()
         {
-            using var f = new Fixture("ClearSession", towns, characters, learning);
-            uint expectedKills = 0;
-            foreach (var map in maps)
-            foreach (var monster in DungeonMonsterPlan.Create(rooms, map, f.Created.Id, 256).Monsters.Where(monster => monster.IsBlocking))
-                expectedKills = checked(expectedKills + kills.GetExperience(monster.CandidateLevel));
+            using var f = new Fixture("ClearSession", towns, characters, learning, quests);
+            const uint expectedKills = 27 * 93 + 137;
             // 选择合法角色初值，使结算而非最后一次击杀跨越等级边界。
             ulong midpoint = expectedKills + expectedReward.TotalExperience / 2UL;
             ulong boundary = growth.CumulativeExperience.Skip(1).Take(CharacterGrowthCatalog.MaximumSupportedLevel - 1)
-                .First(value => value >= midpoint);
+                .First(value => value >= growth.GetLevelStartExperience(3) + midpoint);
             ulong initialExperience = boundary - midpoint;
             byte initialLevel = checked((byte)growth.CumulativeExperience.Take(CharacterGrowthCatalog.MaximumSupportedLevel)
                 .TakeWhile(value => value <= initialExperience).Count());
@@ -65,15 +63,15 @@ internal static class DungeonSettlementSessionTests
             Check(completed.Experience == expectedKills && killed.Learning.Experience == initialExperience + expectedKills &&
                 f.Kills == completed.Count && f.Settlements == 0 && f.Session.Phase == SessionPhase.Settlement,
                 "六房正式确认只落击杀经验，通关奖励等待结果报告");
-            Check(f.Session.ConfirmFormalDungeonBoss((ushort)(f.Created.Id + 1), completed.Boss.ObjectKey, 3, 504) is null &&
-                f.Session.ConfirmFormalDungeonBoss(f.Created.Id, (ushort)(completed.Boss.ObjectKey + 1), 3, 504) is null &&
-                f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 4, 504) is null &&
-                f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 3, 0) is null,
-                "Boss协调绑定当前角色、已死亡Boss key、生成等级及正HP");
-            var bossReceipt = f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 3, 504);
-            Check(bossReceipt is not null && f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 3, 504) is not null &&
+            Check(f.Session.ConfirmFormalDungeonBoss((ushort)(f.Created.Id + 1), completed.Boss.ObjectKey, 6, 0) is null &&
+                f.Session.ConfirmFormalDungeonBoss(f.Created.Id, (ushort)(completed.Boss.ObjectKey + 1), 6, 0) is null &&
+                f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 4, 0) is null &&
+                f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 6, 1) is null,
+                "Boss协调绑定当前角色、已死亡Boss key及已接受报告的等级/HP原值");
+            var bossReceipt = f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 6, 0);
+            Check(bossReceipt is not null && f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 6, 0) is not null &&
                 ReferenceEquals(killed, f.Session.Selected) && Same(killed, f.Read()) && f.Settlements == 0,
-                "正确及重复Boss协调不重复击杀、不加经验或写通关账本");
+                "不同生成等级及零HP的已接受报告可协调Boss，重复不击杀、不加经验或写通关账本");
             var enable = f.Session.EnableFormalDungeonSettlement(completed.Boss.ObjectKey);
             Check(enable is { } accepted && accepted.BossKey == completed.Boss.ObjectKey &&
                 accepted.Receipt.Snapshot.LivingMonsters.Count == 1 && f.Kills == completed.Count,
@@ -93,7 +91,7 @@ internal static class DungeonSettlementSessionTests
                 f.Kills == completed.Count && f.Session.ReturnFromFormalDungeon() is null &&
                 f.Session.PickFormalDungeonItem(ushort.MaxValue, itemResources.Items, itemResources.EpicPieces).Outcome == DungeonRunOutcome.Rejected,
                 "结算存储失败不提前更新角色，待提交阶段拒绝退出及拾取");
-            Check(f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 3, 504) is null &&
+            Check(f.Session.ConfirmFormalDungeonBoss(f.Created.Id, completed.Boss.ObjectKey, 6, 0) is null &&
                 f.Session.AdvanceFormalDungeonCards(false) is null && f.Session.AdvanceFormalDungeonCards(true) is null &&
                 f.Session.SelectFormalDungeonEmptyCard(0, 0) is null && f.Session.FormalDungeonResultFocus() is null &&
                 Settle(f, [9, 2, 3, 4]).Outcome == DungeonRunOutcome.Rejected,
@@ -148,7 +146,7 @@ internal static class DungeonSettlementSessionTests
 
         void ReturnWithoutSettlement()
         {
-            using var f = new Fixture("ClearReturn", towns, characters, learning);
+            using var f = new Fixture("ClearReturn", towns, characters, learning, quests);
             f.SelectEntry();
             Enter(f);
             ClearRun(f);
@@ -160,7 +158,7 @@ internal static class DungeonSettlementSessionTests
 
         void PublicationGuard()
         {
-            using var f = new Fixture("ClearGuard", towns, characters, learning);
+            using var f = new Fixture("ClearGuard", towns, characters, learning, quests);
             f.SelectEntry(); Enter(f); ClearRun(f);
             var result = Settle(f, [1, 2, 3]);
             var receipt = result.Receipt!;
@@ -193,12 +191,14 @@ internal static class DungeonSettlementSessionTests
                         Check(f.Session.ConfirmFormalDungeonBoss(f.Created.Id, monster.ObjectKey, (uint)monster.CandidateLevel, 504) is null,
                             "活Boss或未全清房间不接受117协调");
                     }
+                    uint expectedGain = monster.CandidateLevel == 5 ? 137u : f.Session.Selected!.Level < 3 ? 104u : 93u;
                     var death = f.Session.ObserveFormalDungeonDeath(new(monster.ObjectKey, f.Created.Id, 0x0111, f.Created.Id,
-                        600, 3, 0, (uint)monster.CandidateLevel, 504, 620, 3, true, new string('A', 64)), kills, growth);
+                        600, 3, 0, monster.SpawnType == 3 ? 6u : (uint)monster.CandidateLevel,
+                        monster.SpawnType == 3 ? 0UL : 504UL, 620, 3, true, new string('A', 64)), kills, growth);
                     Check(death.Outcome == DungeonRunOutcome.Accepted && death.Receipt is not null,
                         "合成死亡经正式权威、准备、存储和确认完成");
                     final = death.Receipt!;
-                    experience = checked(experience + kills.GetExperience(monster.CandidateLevel));
+                    experience = checked(experience + expectedGain);
                     count++;
                     if (death.ClearFact is not null)
                         Check(i == maps.Count - 1 && death.ClearFact.ConfirmedDeathEvents.Count == count,
@@ -235,13 +235,14 @@ internal static class DungeonSettlementSessionTests
         public long Kills => Count("character_dungeon_growth_receipts");
         public long Settlements => Count("character_dungeon_settlement_receipts");
 
-        public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning)
+        public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests)
         {
             database = Path.Combine(root, "game.db");
-            repository = new(database);
+            repository = new(database, quests);
             owner = new AccountOwners().Acquire("clear-session", () => { });
             Session = new(repository, towns, owner);
-            Created = Session.CreateCharacter(name, characters.Get(0), learning);
+            Created = repository.Create(owner,CharacterCreation.Prepare(name,characters.Get(0),towns.Room,towns.InitialReturn,learning.Get)
+                with { ActiveMainQuests = [new(0,3145,1)] });
         }
 
         public void SelectEntry()

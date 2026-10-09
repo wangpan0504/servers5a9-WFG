@@ -17,7 +17,7 @@ internal sealed partial class CharacterRepository
         if (!ReferenceEquals(loot.Death, prepared.Death) || loot.Identity.CharacterId != expected.Id ||
             loot.CommittedIdentity != prepared.Result.Snapshot.Identity || loot.Map != prepared.Result.Snapshot.CurrentMap ||
             prepared.Monster.MonsterId is not (1 or 2) || prepared.Monster.SpawnType != 0 ||
-            loot.Identity.QuestId != 3145 || expected.DungeonState is not { } state || state.LastAttempt != loot.Identity.TaskAttempt)
+            expected.DungeonState is not { } state || state.LastAttempt != loot.Identity.TaskAttempt)
             throw new InvalidDataException("冻结掉落不属于本次合法普通死亡");
         if (loot.Ground is { } ground)
         {
@@ -60,7 +60,7 @@ internal sealed partial class CharacterRepository
         if (!found || reader.GetString(0) != account || reader.GetString(1) != loot.Identity.InstanceId.ToString("N") ||
             reader.GetInt64(2) != loot.Identity.TaskAttempt || reader.GetInt64(3) != loot.Identity.Epoch ||
             reader.GetInt64(4) != loot.Map.Id || reader.GetInt64(5) != loot.Death.MonsterKey ||
-            reader.GetString(6) != DungeonExplicitDropPolicy.RuleId || reader.GetString(7) != loot.ResourceIdentity)
+            reader.GetString(7) != loot.ResourceIdentity)
             throw new InvalidDataException("冻结掉落的事件、规则或归属变化");
         if (loot.Ground is not { } ground)
         {
@@ -84,7 +84,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$epoch", loot.Identity.Epoch);
         command.Parameters.AddWithValue("$map", loot.Map.Id);
         command.Parameters.AddWithValue("$monster", loot.Death.MonsterKey);
-        command.Parameters.AddWithValue("$rule", DungeonExplicitDropPolicy.RuleId);
+        command.Parameters.AddWithValue("$rule", "");
         command.Parameters.AddWithValue("$hash", loot.ResourceIdentity);
         command.Parameters.AddWithValue("$key", (object?)ground?.Reservation.GroundKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$core", ground is null ? DBNull.Value : JsonSerializer.Serialize(ground.Core));
@@ -106,7 +106,7 @@ internal sealed partial class CharacterRepository
         var ground = prepared.Ground;
         ValidateLootCore(ground.Core);
         if (prepared.Identity.CharacterId != expected.Id || prepared.Identity.InstanceId != ground.DeathIdentity.InstanceId ||
-            prepared.Identity.QuestId != 3145 || prepared.Identity.TaskAttempt != ground.DeathIdentity.TaskAttempt)
+            prepared.Identity.TaskAttempt != ground.DeathIdentity.TaskAttempt)
             throw new InvalidDataException("拾取准备不属于本角色实例");
         using var db = database.Open();
         using var tx = db.BeginTransaction(deferred: true);
@@ -158,6 +158,9 @@ internal sealed partial class CharacterRepository
         command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("拾取revision冲突");
         var inventory = WriteInventory(db, tx, owner, current.Id, plan, plan.After);
+        var active = quests is null ? current.ActiveMainQuests : DfoServer.Game.Quests.QuestInventoryProgress.Refresh(
+            current.ActiveMainQuests, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds()).ToArray();
+        WriteQuestConditions(db, tx, current.Id, current.ActiveMainQuests, active);
         var actual = inventory.Find(slot) ?? throw new InvalidOperationException("已提交拾取缺目标槽");
         command.Parameters.AddWithValue("$key", ground.Reservation.GroundKey);
         command.Parameters.AddWithValue("$instance", prepared.Identity.InstanceId.ToString("N"));
@@ -174,7 +177,7 @@ internal sealed partial class CharacterRepository
             VALUES($id,$account,$event,$key,$instance,$attempt,$epoch,$list,$slot,$uid,$core,$afterRevision)
             """;
         command.ExecuteNonQuery();
-        var character = current with { Revision = current.Revision + 1, Inventory = inventory };
+        var character = current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active };
         tx.Commit();
         return new DungeonPickupCommit(character, false, slot, actual.Uid, true);
     });
@@ -194,7 +197,7 @@ internal sealed partial class CharacterRepository
         if (!reader.Read() || reader.GetString(0) != account || reader.GetString(1) != ground.DeathIdentity.InstanceId.ToString("N") ||
             reader.GetInt64(2) != ground.DeathIdentity.TaskAttempt || reader.GetInt64(3) != ground.DeathIdentity.Epoch ||
             reader.GetInt64(4) != ground.Reservation.Map.Id || reader.GetInt64(5) != ground.Reservation.MonsterKey ||
-            reader.GetString(6) != DungeonExplicitDropPolicy.RuleId || reader.GetString(7) != ground.ResourceIdentity ||
+            reader.GetString(7) != ground.ResourceIdentity ||
             reader.IsDBNull(8) || reader.GetInt64(8) != ground.Reservation.GroundKey || reader.GetString(9) != JsonSerializer.Serialize(ground.Core) ||
             reader.GetInt64(10) != ground.Reservation.X || reader.GetInt64(11) != ground.Reservation.Y ||
             reader.GetInt64(12) != ground.Reservation.RecordSlot)

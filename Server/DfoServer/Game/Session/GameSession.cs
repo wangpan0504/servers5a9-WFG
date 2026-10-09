@@ -18,7 +18,7 @@ internal enum SessionPhase : byte
     Settlement
 }
 
-internal sealed partial class GameSession(ICharacterRepository repository, TownCatalog towns, AccountOwners.Lease owner, AuthenticatedIdentity? identity = null)
+internal sealed partial class GameSession(ICharacterRepository repository, TownCatalog towns, AccountOwners.Lease owner, AuthenticatedIdentity? identity = null, DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null)
 {
     public AuthenticatedIdentity? Identity { get; } = identity;
     public Character? Selected { get; private set; }
@@ -95,7 +95,9 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (Selected is not null)
                 throw new InvalidDataException("Invalid selection state");
             var character = repository.LoadCharacter(owner, slot);
-            var quests = character.CompletedQuests.ToHashSet();
+            if (questCatalog is not null && character.QuestCycleDay != DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow))
+                character = repository.AdvanceQuestCycle(owner, character, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow));
+            var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
             character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits);
             Selected = character;
             completed = quests;
@@ -127,7 +129,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         if (Selected?.Id == updated.Id)
         {
             Selected = updated;
-            completed = updated.CompletedQuests.ToHashSet();
+            completed = DfoServer.Game.Quests.QuestEligibility.Completed(updated);
         }
         else if (request.Field == CharacterProgressField.ExpertContract && Selected is { } selected)
             Selected = selected with { Learning = selected.Learning with { ExpertContractExpiresAt = updated.Learning.ExpertContractExpiresAt } };
@@ -160,7 +162,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     {
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         formalDungeon = null;
+        pendingDungeonContinuation = null;
         pendingQuestCompletion = null;
+        pendingQuestLifecycle = null;
+        pendingQuestQuickClear = null;
         SelectionEpoch++;
         Selected = null;
         completed = new HashSet<int>();

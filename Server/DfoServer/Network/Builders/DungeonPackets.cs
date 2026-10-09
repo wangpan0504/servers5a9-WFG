@@ -52,6 +52,7 @@ internal static class DungeonPackets
         byte[] body = new byte[23];
         body[0] = checked((byte)plan.StartMap.Position.X);
         body[1] = checked((byte)plan.StartMap.Position.Y);
+        body[2] = plan.StartMap.Kind == "layered" ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(3), seed);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), 1);
         body[13] = 1;
@@ -77,8 +78,8 @@ internal static class DungeonPackets
         {
             if (monster.CandidateLevel is < 1 or > byte.MaxValue)
                 throw new NotSupportedException("怪物生成等级超出单字节范围");
-            if (monster.SpawnType is not (0 or 3))
-                throw new NotSupportedException("怪物生成类型不是已核验的普通或Boss类型");
+            if (monster.SpawnType is not (<= 3 or >= 5 and <= 8))
+                throw new NotSupportedException("演员生成类型不是已核验的怪物或APC类型");
             writer.Write((ushort)0);
             writer.Write(checked((uint)monster.SourceOrdinal));
             writer.Write(monster.ObjectKey);

@@ -11,7 +11,7 @@ internal sealed partial class GameSession
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
     {
-        if (!Ready || requireTown && Phase != SessionPhase.Town || Selected is null)
+        if (!Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingQuestScene)
             return InventoryResult.Reject(invalidStateError);
         var result = operation(Selected);
         return CommitInventory(Selected, result);
@@ -21,7 +21,7 @@ internal sealed partial class GameSession
     {
         Selected = InventoryService.Commit(repository, owner, character, result);
         return result with { Receipt = result.Accepted && result.Plan is not null
-            ? new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase } : null };
+            ? new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase, PreviousQuests = character.ActiveMainQuests } : null };
     }
 
     public bool CanPublishInventory(InventoryCommitReceipt receipt) => owner.Execute(() =>

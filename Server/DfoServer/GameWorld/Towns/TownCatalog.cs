@@ -24,6 +24,7 @@ internal sealed record TownPhase(int Index, int Quest);
 internal sealed record RoomPortal(byte Town, byte Area, Rectangle Bounds, int Level, int Quest);
 internal sealed record TownArea(byte Town, byte Area, int Level, int[] Quests, int[] AnyQuests, int[] ExceptQuests, Location? Gate, TownMap Default, TownMap[] Phases, TownPhase[] Shifts)
 {
+    public int? DungeonWorldMap { get; init; }
     public TownMap Map(IReadOnlySet<int> completed)
     {
         int phase = -1;
@@ -43,8 +44,10 @@ internal sealed class TownCatalog
     public TownDock Dock { get; }
     public RoomPortal[] RoomPortals { get; }
     public IReadOnlyDictionary<uint, uint[]> NpcMoves { get; }
+    public IReadOnlyDictionary<int, TownDungeonMap> DungeonMaps { get; }
 
-    internal TownCatalog(Dictionary<(byte, byte), TownArea> areas, Location room, Location initialReturn, TownDock dock, RoomPortal[] portals, IReadOnlyDictionary<uint, uint[]> npcMoves)
+    internal TownCatalog(Dictionary<(byte, byte), TownArea> areas, Location room, Location initialReturn, TownDock dock, RoomPortal[] portals, IReadOnlyDictionary<uint, uint[]> npcMoves,
+        IReadOnlyDictionary<int,TownDungeonMap>? dungeonMaps = null)
     {
         Areas = areas;
         Room = room;
@@ -52,6 +55,7 @@ internal sealed class TownCatalog
         Dock = dock;
         RoomPortals = portals;
         NpcMoves = npcMoves;
+        DungeonMaps = dungeonMaps ?? new Dictionary<int,TownDungeonMap>();
     }
 
     static bool Allowed(int[] required, int[] conditions, IReadOnlySet<int> completed) => required.All(completed.Contains) && conditions.Length == 0;
@@ -281,7 +285,8 @@ internal sealed class TownCatalog
                     Gate: gate.Success ? new(town, id, ushort.Parse(gate.Groups[1].Value), ushort.Parse(gate.Groups[2].Value)) : null,
                     Default: LoadMap("map/" + m.Groups[2].Value),
                     Phases: phases,
-                    Shifts: shifts));
+                    Shifts: shifts) { DungeonWorldMap = Regex.Match(body,@"`\[dungeon gate\]`\s+(\d+)") is { Success: true } dungeonGate
+                        ? int.Parse(dungeonGate.Groups[1].Value) : null });
             }
         }
 
@@ -303,7 +308,16 @@ internal sealed class TownCatalog
                 npcMoves.Add(id, targets);
         }
 
-        var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves);
+        var worldPaths = List(pvf.ReadText("worldmap/worldmap.lst"));
+        var dungeonMaps = new Dictionary<int,TownDungeonMap>();
+        foreach (int id in areas.Values.Select(area => area.DungeonWorldMap).OfType<int>().Distinct())
+        {
+            string path = worldPaths.TryGetValue(id,out var relative) ? PvfArchive.NormalizePath("worldmap/" + relative) : "";
+            try { dungeonMaps.Add(id,TownDungeonMap.Read(id,path,pvf.ReadTokens(path),pvf.ResolveString)); }
+            catch (Exception error) when (error is FileNotFoundException or InvalidDataException or NotSupportedException)
+            { dungeonMaps.Add(id,new(id,path,[],error.Message)); }
+        }
+        var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps);
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
             throw new InvalidDataException("PVF initial position outside native movable regions");
         return catalog;

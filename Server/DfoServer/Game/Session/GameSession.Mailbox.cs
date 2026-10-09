@@ -66,11 +66,12 @@ internal sealed partial class GameSession
 
     MailboxResult InstallMailResult(MailboxResult result, InventoryPlan? plan)
     {
+        var previous = Selected!.ActiveMainQuests;
         if (result.Accepted && result.Character is not null)
             Selected = result.Character;
         var receipt = new MailboxReceipt(Selected!, owner.Generation, SelectionEpoch);
         return result with { Receipt = receipt, Inventory = result.Accepted && plan is not null ?
-            new InventoryResult(true, 0, plan) { Receipt = new(Selected!, owner.Generation, SelectionEpoch) } : null };
+            new InventoryResult(true, 0, plan) { Receipt = new(Selected!, owner.Generation, SelectionEpoch) { PreviousQuests = previous } } : null };
     }
 
     public bool CanPublishMailbox(MailboxReceipt receipt, bool initializing = false) => owner.Execute(() =>

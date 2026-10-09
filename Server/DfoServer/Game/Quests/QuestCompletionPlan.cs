@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
@@ -14,89 +17,307 @@ internal sealed record QuestCompletionPreparation(QuestCompletionOutcome Outcome
     public QuestCompletionFailure Failure { get; init; }
 }
 internal sealed record QuestPlannedItemReward(InventorySlot Position, ItemCore Core, int GrantedCount, long ExpectedDestinationUid);
+internal sealed record QuestConsumedItem(InventorySlot Position, long Uid, int ItemId, int Count);
+internal sealed record QuestCurrencyReward(CurrencyKind Kind,int ItemId,int Count);
 
 // 没有在线状态或提交能力；原角色、稳定clear和全部奖励候选由同一Session/Repository事务接管。
 internal sealed class QuestCompletionPlan
 {
-    QuestCompletionPlan(Character expected, QuestClearReceipt clear, QuestExperienceReward experience, InventoryPlan inventory,
-        CharacterGrowthPlan growth, ImmutableArray<QuestPlannedItemReward> rewards, DateTimeOffset frozenAt)
+    QuestCompletionPlan(Character expected, ActiveMainQuest active, StoryQuest quest, ushort selector,
+        QuestExperienceReward experience, InventoryPlan inventory, CharacterGrowthPlan? growth,
+        ImmutableArray<QuestPlannedItemReward> rewards, ImmutableArray<QuestConsumedItem> consumed,
+        uint gold, int goldBase, int goldMultiple, int penalty, DateTimeOffset now, QuestCatalog quests, QuestClearReceipt? clear,
+        byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
+        byte equipmentSlots)
     {
-        Expected = expected;
-        Clear = clear;
-        ExperienceReward = experience;
-        Inventory = inventory;
-        Growth = growth;
-        Rewards = rewards;
-        FrozenAt = frozenAt;
-        ActiveAfter = expected.ActiveMainQuests.Where(active => active.AcceptanceId != clear.AcceptanceId).ToImmutableArray();
-        CompletedAfter = expected.CompletedQuests.Append(clear.QuestId).Order().ToImmutableArray();
+        Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
+        AuthoritativeClear = clear;
+        ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
+            "[quest clear]" => 44, "[question]" => 42, "[reach the range]" => 64, "[look cinematic]" => 65,
+            _ => QuestStateProgress.Type(quest) ?? (byte)4 }; RewardSelector = selector;
+        ExperienceReward = experience; Inventory = inventory; GrowthPlan = growth; Rewards = rewards; Consumed = consumed;
+        Multiplier = multiplier;
+        Currencies = currencies;
+        GoldAmount = gold; FrozenAt = now;
+        DailyPeriod = QuestCycle.Daily(quest) ? QuestCycle.Day(now) : 0;
+        AccountQuest = quest.Definition!.AccountQuest;
+        AccountCompletedAfter = (AccountQuest ? expected.AccountCompletedQuests.Append(quest.Id) : expected.AccountCompletedQuests).Order().ToImmutableArray();
+        AccountDailyClaimsAfter = AccountQuest && DailyPeriod != 0 ? expected.AccountQuestDailyClaims.SetItem(quest.Id,DailyPeriod) : expected.AccountQuestDailyClaims;
+        Answer = quest.Condition == "[question]" ? checked((byte)active.ConditionState) : null;
+        AnswersAfter = Answer is { } answer ? expected.QuestAnswers.SetItem(quest.Id,answer) : expected.QuestAnswers;
+        AccountAnswersAfter = AccountQuest && Answer is { } accountAnswer ? expected.AccountQuestAnswers.SetItem(quest.Id,accountAnswer) : expected.AccountQuestAnswers;
+        ProfessionGrowType = profession; RewardLearning = rewardLearning; TargetEquipmentSlotFlags = equipmentSlots;
+        CascadeMarkerQuestId = QuestRelationProgress.CascadeMarker(quest,quests);
+        NewCompletedQuestIds = new[] { (int)quest.Id }.Concat(CascadeMarkerQuestId is { } marker ? new[] { marker } : [])
+            .Except(QuestEligibility.Completed(expected)).Order().ToImmutableArray();
+        CompletedAfter = expected.CompletedQuests.Concat(NewCompletedQuestIds).Distinct().Order().ToImmutableArray();
+        var activeAfter = QuestRelationProgress.Refresh(QuestInventoryProgress.Refresh(
+            expected.ActiveMainQuests.Where(row => row.AcceptanceId != active.AcceptanceId).ToArray(), inventory.After, quests, now.ToUnixTimeSeconds()),
+            CompletedAfter.Concat(AccountCompletedAfter).ToArray(), quests);
+        ActiveAfter = QuestStateProgress.Refresh(activeAfter,expected with { Inventory = inventory.After, Level = TargetLevel,
+            GrowType = TargetGrowType, CompletedQuests = CompletedAfter.ToArray(), AccountCompletedQuests = AccountCompletedAfter.ToArray() },quests);
+        Snapshot = JsonSerializer.Serialize(new { QuestId, AcceptanceId, QuestSlot, ConditionType, RewardSelector, Multiplier,
+            ExperienceReward, GoldAmount, goldBase, goldMultiple, penalty, Consumed, Rewards, Currencies, FrozenAt, DailyPeriod, AccountQuest,
+            AuthoritativeClear, Answer, Learning = TargetLearning, Level = TargetLevel, GrowType = TargetGrowType, EquipmentSlotFlags = TargetEquipmentSlotFlags });
+        if (CascadeMarkerQuestId is { } cascade)
+        {
+            // 普通任务保持历史Snapshot原字节；仅真实cascade规划追加已确认的关联ID。
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot[nameof(CascadeMarkerQuestId)] = cascade;
+            Snapshot = snapshot.ToJsonString();
+        }
     }
 
     public Character Expected { get; }
-    public QuestClearReceipt Clear { get; }
+    public QuestClearReceipt? AuthoritativeClear { get; }
+    public QuestClearReceipt Clear => AuthoritativeClear ?? throw new InvalidOperationException("此任务不使用清图凭据");
+    public ushort QuestId { get; }
+    public Guid AcceptanceId { get; }
+    public byte QuestSlot { get; }
+    public byte ConditionType { get; }
+    public ushort RewardSelector { get; } = ushort.MaxValue;
+    public ushort Multiplier { get; }
+    public string? Snapshot { get; }
     public QuestExperienceReward ExperienceReward { get; }
     public InventoryPlan Inventory { get; }
-    public CharacterGrowthPlan Growth { get; }
+    public CharacterGrowthPlan? GrowthPlan { get; }
+    public CharacterGrowthPlan Growth => GrowthPlan ?? throw new InvalidOperationException("零经验任务不需要成长规划");
+    public byte? ProfessionGrowType { get; }
+    private CharacterLearningState? RewardLearning { get; }
+    public bool UpdatesLearning => GrowthPlan is not null || RewardLearning is not null;
+    public byte TargetEquipmentSlotFlags { get; }
+    public byte TargetGrowType => ProfessionGrowType ?? Expected.GrowType;
+    public CharacterLearningState TargetLearning => RewardLearning ?? GrowthPlan?.Learning ?? Expected.Learning;
+    public byte TargetLevel => GrowthPlan?.TargetLevel ?? Expected.Level;
     public ImmutableArray<QuestPlannedItemReward> Rewards { get; }
+    public ImmutableArray<QuestConsumedItem> Consumed { get; } = [];
+    public ImmutableArray<QuestCurrencyReward> Currencies { get; }
     public ImmutableArray<ActiveMainQuest> ActiveAfter { get; }
     public ImmutableArray<int> CompletedAfter { get; }
+    public int? CascadeMarkerQuestId { get; }
+    public ImmutableArray<int> NewCompletedQuestIds { get; }
     public DateTimeOffset FrozenAt { get; }
-    // native3145固定奖励没有item0行；不从Gold参数表补一个原资源未声明的币种。
-    public uint GoldAmount => 0;
+    public int DailyPeriod { get; }
+    public bool AccountQuest { get; }
+    public ImmutableArray<int> AccountCompletedAfter { get; }
+    public ImmutableDictionary<int,int> AccountDailyClaimsAfter { get; }
+    public byte? Answer { get; }
+    public ImmutableDictionary<int,byte> AnswersAfter { get; }
+    public ImmutableDictionary<int,byte> AccountAnswersAfter { get; }
+    // 只在任务资源声明金币时计算。
+    public uint GoldAmount { get; }
 
-    public static QuestCompletionPreparation Prepare(Character expected, QuestClearReceipt clear, StoryQuest quest,
-        QuestRewardParameterCatalog parameters, ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-        CharacterGrowthCatalog growthCatalog, DateTimeOffset utcNow)
+    public static QuestCompletionPreparation Prepare(Character expected, StoryQuest quest, ushort selector,
+        QuestCatalog quests, QuestRewardParameterCatalog parameters, ItemCatalog items, GoldLimitCatalog goldLimits,
+        EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1)
     {
-        ArgumentNullException.ThrowIfNull(expected);
-        ArgumentNullException.ThrowIfNull(clear);
-        if (!MatchesClearedActiveQuest(expected, clear))
-            return new(QuestCompletionOutcome.Rejected, null, "原3145接取/clear/活动槽或完成表已变化")
-                { Failure = QuestCompletionFailure.EligibilityChanged };
-        QuestExperienceReward experience;
-        InventoryResult inventory;
         try
         {
-            experience = QuestExperiencePolicy.Prepare(expected, quest, parameters);
-            inventory = QuestFixedRewardGrant.Prepare(expected, quest, items, goldLimits, pieces, utcNow);
+            QuestCoverage.RequireOrdinaryDeclarations(quest);
+            // 参考两端的批量合同只用于普通重复寻物；一次接取、一次事务，不循环签发清图或职业奖励。
+            if (multiplier == 0 || multiplier != 1 && !(QuestCycle.Repeat(quest) && quest.Condition == "[seeking]" &&
+                QuestLifecyclePlan.ValidSeeking(quest) && quest.RewardType == "[item]"))
+                throw new InvalidDataException("交付倍数只适用于具有实际材料的普通重复寻物任务");
+            var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id);
+            if (active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
+                QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
+                QuestEligibility.InspectResource(quest).Entry != QuestResourceEntry.Ordinary && !QuestRelationProgress.DialogueChild(quest, quests) ||
+                !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests).Eligible)
+                throw new InvalidDataException("任务接取身份、完成位或当前资格不符");
+            bool parent = QuestRelationProgress.SequentialParent(quest,quests);
+            byte? profession = quest.RewardType is "[grow type]" or "[awakening type]"
+                ? QuestProfessionReward.Target(expected, quest, growthCatalog.Learning ?? throw new NotSupportedException("职业变化技能资源未装配")) : null;
+            bool characterReward = QuestCharacterReward.TryScalar(quest,out _);
+            bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out var dungeonTarget);
+            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear || quest.RewardType != "[item]" && profession is null && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
+                !QuestCoverage.HasOrdinaryAttributes(quest) ||
+                quest.Definition!.Has("send postal"))
+                throw new NotSupportedException("任务需要尚未具备的周期、特殊奖励或附属交付规则");
+            if (QuestCycle.Daily(quest) && expected.QuestCycleDay != QuestCycle.Day(now))
+                throw new InvalidDataException("每日任务交付需要当前游戏日快照");
+            if (quest.Condition == "[clear map]")
+            {
+                if (!QuestClearEligibility.IsSingleMap(quest) || clear is null || !MatchesClearedActiveQuest(expected, clear) ||
+                    clear.QuestId != quest.Id || clear.MapId != quest.IntData[0] ||
+                    quest.DungeonIndex is >= 0 && clear.DungeonId != quest.DungeonIndex)
+                    throw new InvalidDataException("清图交付必须使用当前接取及目标地图的权威凭据");
+            }
+            else if (dungeonClear)
+            {
+                if (clear is null || !MatchesClearedActiveQuest(expected,clear) || clear.QuestId != quest.Id ||
+                    clear.DungeonId != dungeonTarget.DungeonId || clear.MapId <= 0)
+                    throw new InvalidDataException("条件通关交付需要当前接取次数归零及最后达成的权威凭据");
+            }
+            else if (clear is not null) throw new InvalidDataException("此任务条件不能使用清图凭据");
+            else if (QuestStateProgress.Type(quest) is not null)
+            {
+                if (active.ConditionState != 0 || QuestStateProgress.Scalar(expected,quest) != 0)
+                    throw new InvalidDataException("角色的实际等级、职业或任务完成记录尚未满足目标");
+            }
+            else if (quest.Condition == "[meet npc]")
+            {
+                if (active.ConditionState != 0 || quest.IntData.Count != 1 || quest.IntData[0] <= 0)
+                    throw new InvalidDataException("会面尚未由当前场景完成");
+            }
+            else if (quest.Condition == "[question]")
+            {
+                if (!QuestQuestionProgress.OrdinaryChoice(quest,active.ConditionState,quests))
+                    throw new InvalidDataException("回答尚未从当前NPC选定，或选项需要专用跳过入口");
+            }
+            else if (quest.Condition is "[hunt enemy]" or "[hunt monster]")
+            {
+                if (active.ConditionState != 0 || !QuestHuntProgress.TryTargets(quest,out _))
+                    throw new InvalidDataException("猎杀尚未由本次接取的权威死亡事实达成");
+            }
+            else if (quest.Condition == "[quest clear]")
+            {
+                if (!parent || active.ConditionState != 0 || !quest.IntData.All(expected.CompletedQuests.Contains))
+                    throw new InvalidDataException("父任务必须具有全部真实子任务完成记录");
+            }
+            else if (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _))
+            {
+                if (active.ConditionState != 0) throw new InvalidDataException("范围或演出的原生终末事件尚未达成");
+            }
+            else if (quest.Condition is not ("[seeking]" or "[seek n meet npc]") || !QuestLifecyclePlan.ValidSeeking(quest))
+                throw new NotSupportedException("此交付条件尚未接入权威事件");
+            else if (quest.Condition == "[seek n meet npc]" && active.ConditionState != 0)
+                throw new InvalidDataException("寻物会面必须同时满足实际材料和会面通道");
+
+            var paid = expected.Inventory;
+            var consumed = ImmutableArray.CreateBuilder<QuestConsumedItem>();
+            if (quest.Condition is "[seeking]" or "[seek n meet npc]")
+            {
+                var wanted = new Dictionary<int, long>();
+                for (int at = 0; at < QuestLifecyclePlan.MaterialLength(quest); at += 2)
+                    wanted[quest.IntData[at]] = checked(wanted.GetValueOrDefault(quest.IntData[at]) + (long)quest.IntData[at + 1]*multiplier);
+                foreach (var requirement in wanted)
+                {
+                    if (CurrencyWallet.RewardKind(requirement.Key) is { } kind)
+                    {
+                        if (ItemSlotBoundService.CurrencySlot(kind) is not { } slot)
+                            throw new NotSupportedException("此任务材料没有本版背包持有域");
+                        var spend = CurrencyService.Spend(paid,kind,checked((int)requirement.Value));
+                        if (!spend.Accepted) throw new InvalidDataException("任务钱包材料余额不足");
+                        paid = spend.Plan!.After;
+                        consumed.Add(new(new(InventoryListType.Main,slot),0,requirement.Key,checked((int)requirement.Value)));
+                        continue;
+                    }
+                    long remaining = requirement.Value;
+                    foreach (var item in paid.Items.Where(item => item.Position.List == InventoryListType.Main &&
+                        item.Core.ItemId == requirement.Key && !item.Core.IsExpired(now.ToUnixTimeSeconds()) && item.Core.EquipmentLockId == 0)
+                        .OrderBy(item => item.Position.Index).ToArray())
+                    {
+                        int count = (int)Math.Min(remaining, item.Core.Count);
+                        var deletion = InventoryDeleteService.Plan(paid, item.Position, item.Core.Value, count);
+                        if (!deletion.Accepted) throw new InvalidDataException("任务消耗实例不能扣除");
+                        paid = deletion.Plan!.After; consumed.Add(new(item.Position, item.Uid, item.Core.ItemId, count));
+                        remaining -= count;
+                        if (remaining == 0) break;
+                    }
+                    if (remaining != 0) throw new InvalidDataException("实际未锁定、未过期库存不足");
+                }
+                if (consumed.Count > byte.MaxValue) throw new NotSupportedException("任务消耗数组超过本版容量");
+            }
+            var definition = QuestFixedRewardDefinition.Parse(profession is not null || characterReward ? quest with { Rewards = [] } : quest, allowGold: true);
+            var requested = definition.ForJob(expected.Job,expected.GrowType).ToBuilder();
+            var selected = QuestFixedRewardDefinition.Parse(quest with { Rewards = quest.Definition!.SelectRewards }).ForJob(expected.Job,expected.GrowType);
+            if (selected.Length == 0 ? selector != ushort.MaxValue : selector >= selected.Length)
+                throw new InvalidDataException("选择奖励索引不属于当前职业候选");
+            if (selected.Length != 0) requested.Add(selected[selector]);
+            var experience = QuestExperiencePolicy.Prepare(expected, quest, parameters, out int penalty);
+            ulong scaledExperience = checked((ulong)experience.Amount*multiplier);
+            if (scaledExperience > int.MaxValue) throw new InvalidDataException("批量任务经验超出本版范围");
+            experience = experience with { Amount = (uint)scaledExperience };
+            for (int at = 0; at < requested.Count; at++) requested[at] = requested[at] with { Count = checked(requested[at].Count*multiplier) };
+            int goldBase = 0, goldMultiple = quest.DeclaredGoldMultiple ?? 100;
+            uint gold = 0;
+            if (definition.HasGoldMarker || quest.DeclaredGoldMultiple > 0)
+            {
+                if (definition.FixedGoldAmount > 0 && quest.DeclaredGoldMultiple is not > 0)
+                    gold = definition.FixedGoldAmount;
+                else
+                {
+                    if (experience.NativeIndex >= parameters.Gold.Length || goldMultiple <= 0)
+                        throw new NotSupportedException("金币声明需要完整表索引及正倍率");
+                    goldBase = parameters.Gold[experience.NativeIndex];
+                    if (goldBase < 0) throw new InvalidDataException("任务Gold基础不能为负");
+                    ulong amount = checked((ulong)goldBase * (ulong)goldMultiple) / 100;
+                    amount = checked(amount * (ulong)penalty) / 100;
+                    if (amount > int.MaxValue) throw new NotSupportedException("任务金币超出本版额度");
+                    gold = (uint)amount;
+                }
+            }
+            ulong scaledGold = checked((ulong)gold*multiplier);
+            if (scaledGold > int.MaxValue) throw new InvalidDataException("批量任务金币超出本版范围");
+            gold = (uint)scaledGold;
+            var grant = InventoryRewardGrantService.TryGrantBatch(expected with { Inventory = paid },
+                requested.Select(row => new InventoryReward(row.ItemId, row.Count)).ToArray(), items, goldLimits, pieces, now);
+            if (!grant.Accepted || grant.Plan is null)
+                return new(QuestCompletionOutcome.InsufficientSpace, null, "奖励无法整批进入持有域")
+                    { Failure = grant.Error == 17 ? QuestCompletionFailure.InventoryCapacity : QuestCompletionFailure.InventoryUnsupported };
+            var after = grant.Plan.After;
+            if (grant.Plan.ChangedCurrencies.Any(kind => ItemSlotBoundService.CurrencySlot(kind) is null) || grant.Plan.ChangedEpicPieces.Length != 0 ||
+                grant.Plan.ChangedSlots.Any(slot => slot.List != InventoryListType.Main))
+                throw new NotSupportedException("任务特殊持有域奖励尚未确认");
+            if (gold != 0)
+            {
+                var currency = new CurrencyService(goldLimits).Grant(expected with { Inventory = after }, CurrencyKind.Gold, checked((int)gold));
+                if (!currency.Accepted || currency.Plan is null || currency.Plan.After.Gold - after.Gold != gold)
+                    throw new InvalidDataException("任务金币无法完整接纳");
+                after = currency.Plan.After;
+            }
+            var rewards = ImmutableArray.CreateBuilder<QuestPlannedItemReward>();
+            var currencies = ImmutableArray.CreateBuilder<QuestCurrencyReward>();
+            foreach (int id in requested.Select(row => row.ItemId).Distinct())
+            {
+                if (CurrencyWallet.RewardKind(id) is { } currency)
+                {
+                    if (currencies.Any(row => row.Kind == currency)) continue;
+                    int amount = requested.Where(row => CurrencyWallet.RewardKind(row.ItemId) == currency).Sum(row => row.Count);
+                    if (ItemSlotBoundService.CurrencySlot(currency) is null || CurrencyWallet.Get(after,currency)-CurrencyWallet.Get(paid,currency) != amount)
+                        throw new InvalidDataException("任务钱包奖励无法完整接纳");
+                    currencies.Add(new(currency,currency == CurrencyKind.ReviveCoin ? 1 : id,amount));
+                    continue;
+                }
+                int total = 0;
+                foreach (var item in after.Items.Where(item => item.Core.ItemId == id).OrderBy(item => item.Position.Index))
+                {
+                    var old = paid.Find(item.Position);
+                    int delta = item.Core.IsStackable ? item.Core.Count - (old?.Core.ItemId == id ? old.Core.Count : 0) : old == item ? 0 : 1;
+                    if (delta <= 0) continue;
+                    rewards.Add(new(item.Position, item.Core, delta, item.Uid)); total = checked(total + delta);
+                }
+                if (total != requested.Where(row => row.ItemId == id).Sum(row => row.Count))
+                    throw new InvalidDataException("奖励增量与资源整批数量不同");
+            }
+            if (rewards.Count + currencies.Count + (gold == 0 ? 0 : 1) > byte.MaxValue)
+                throw new NotSupportedException("任务奖励投影超过本版容量");
+            CharacterGrowthPlan? growth = null;
+            if (experience.Amount != 0)
+            {
+                if (expected.DungeonState is null) throw new InvalidDataException("任务经验缺少现有成长附属状态");
+                var result = CharacterGrowthPlan.AddExperience(expected, experience.Amount, growthCatalog);
+                if (!result.Success || result.Plan is null) throw new InvalidDataException("任务成长被拒绝: " + result.Failure);
+                growth = result.Plan;
+            }
+            var rewardLearning = profession is { } target ? QuestProfessionReward.Prepare(expected,target,
+                growth?.TargetLevel ?? expected.Level, growth?.Learning ?? expected.Learning, growthCatalog.Learning!, now) : null;
+            return new(QuestCompletionOutcome.Accepted, new(expected, active, quest, selector, experience,
+                new(expected.Inventory, after, "quest_complete"), growth, rewards.ToImmutable(), consumed.ToImmutable(),
+                gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, rewardLearning, multiplier, currencies.ToImmutable(),
+                QuestCharacterReward.EquipmentSlots(expected,quest)), "通用领奖计划已冻结");
         }
-        catch (NotSupportedException error)
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException or ArgumentOutOfRangeException)
         {
-            return new(QuestCompletionOutcome.Unsupported, null, error.Message) { Failure = QuestCompletionFailure.ResourceUnsupported };
+            return new(QuestCompletionOutcome.Rejected, null, error.Message) { Failure = QuestCompletionFailure.ResourceUnsupported };
         }
-        if (!inventory.Accepted || inventory.Plan is null || !inventory.Plan.Changed)
-            return new(QuestCompletionOutcome.InsufficientSpace, null, "七项固定奖励无法完整进入实际背包")
-                { Failure = inventory.Error == 17 ? QuestCompletionFailure.InventoryCapacity : QuestCompletionFailure.InventoryUnsupported };
-        var growth = CharacterGrowthPlan.AddExperience(expected, experience.Amount, growthCatalog);
-        if (!growth.Success || growth.Plan is null)
-            return new(QuestCompletionOutcome.Rejected, null, "本次任务成长资格无效: " + growth.Failure)
-                { Failure = QuestCompletionFailure.GrowthRejected };
-        var rewards = ImmutableArray.CreateBuilder<QuestPlannedItemReward>();
-        foreach (var resourceReward in QuestFixedRewardDefinition.Parse(quest).ForJob(expected.Job))
-        {
-            var destinations = inventory.Plan.ChangedSlots.Select(inventory.Plan.AfterIndex.Find)
-                .Where(item => item is not null && item.Core.ItemId == resourceReward.ItemId).ToArray();
-            if (destinations.Length != 1 || destinations[0] is not { } destination || destination.Position.List != InventoryListType.Main)
-                throw new InvalidDataException("任务奖励没有唯一实际背包目的槽");
-            var before = inventory.Plan.BeforeIndex.Find(destination.Position);
-            int actualCount = destination.Core.IsStackable ? destination.Core.Count - (before?.Core.Count ?? 0) : 1;
-            if (actualCount != resourceReward.Count)
-                throw new InvalidDataException("固定任务奖励规划的实际增量与资源不同");
-            rewards.Add(new(destination.Position, destination.Core, actualCount, before?.Uid ?? 0));
-        }
-        if (rewards.Count != 7 || rewards.Select(reward => reward.Position).Distinct().Count() != rewards.Count ||
-            inventory.Plan.After.Gold != expected.Inventory.Gold || inventory.Plan.ChangedCurrencies.Length != 0 ||
-            inventory.Plan.ChangedEpicPieces.Length != 0)
-            throw new InvalidDataException("3145计划不能缩减固定奖励或夹带货币/碎片变化");
-        return new(QuestCompletionOutcome.Accepted, new(expected, clear, experience, inventory.Plan, growth.Plan,
-            rewards.ToImmutable(), utcNow), "3145完整领奖计划已冻结，尚未提交");
     }
 
     public static bool MatchesClearedActiveQuest(Character character, QuestClearReceipt clear)
     {
-        if (character.Id == 0 || character.Revision < clear.Revision || clear.Revision <= 0 || clear.QuestId != 3145 || clear.QuestSlot > 29 ||
+        if (character.Id == 0 || character.Revision < clear.Revision || clear.Revision <= 0 || clear.QuestId is 0 or >= 30000 || clear.QuestSlot > 29 ||
             clear.AcceptanceId == Guid.Empty || clear.EventId == Guid.Empty || clear.InstanceId == Guid.Empty ||
-            clear.TaskAttempt <= 0 || clear.Epoch <= 0 || character.CompletedQuests.Contains(3145) ||
+            clear.TaskAttempt <= 0 || clear.Epoch <= 0 || character.CompletedQuests.Contains(clear.QuestId) ||
             character.CompletedQuests.Distinct().Count() != character.CompletedQuests.Length)
             return false;
         var matches = character.ActiveMainQuests.Where(active => active.QuestId == clear.QuestId || active.Slot == clear.QuestSlot ||

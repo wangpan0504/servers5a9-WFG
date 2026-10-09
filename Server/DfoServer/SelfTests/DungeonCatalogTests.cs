@@ -1,4 +1,6 @@
 using static DfoServer.Testing.TestCheck;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
 using System.Collections;
 using System.Text.Json;
@@ -63,28 +65,42 @@ internal static class DungeonCatalogTests
         That(parsed.MinimumLevel is null && parsed.BasisLevel is null, "absent level metadata remains unknown");
         valid[1] = new(0, 99);
         That(parsed.Mazes[0].Width == 1, "published result does not retain caller token array");
-        Reject(() => fixture.Parse(fixture.Maze(width: 0)), "zero size rejected");
-        Reject(() => fixture.Parse(fixture.Maze(startX: -1)), "negative start coordinate rejected");
-        Reject(() => fixture.Parse(fixture.Maze(startX: 1)), "out of bounds start coordinate rejected");
+        Unsupported(fixture.Maze(width: 0),"size","零尺寸路线保留诊断");
+        Unsupported(fixture.Maze(height: 0),"size","零高度路线保留诊断");
+        Unsupported(fixture.Maze(startX: -1),"坐标超出","负起点路线保留诊断");
+        Unsupported(fixture.Maze(startX: 1),"坐标超出","越界起点路线保留诊断");
         That(!fixture.Parse(fixture.Maze(greed: "BBBB")).Mazes[0].GreedGrid.Supported, "过量Greed格保留为Unsupported而不阻断定义");
         That(!fixture.Parse(fixture.Maze(height: 2, greed: "BBB\nB")).Mazes[0].GreedGrid.Supported, "跨换行拆开的字母对Unsupported，不先抹空白");
         That(fixture.Parse(fixture.Maze(height: 2, greed: "BBBB")).Mazes[0].GreedGrid.Supported, "线性两个格不要求原文必须含两行");
         var mixed = fixture.Parse(fixture.Maze(greed: "QQ").Concat(fixture.Maze()).ToArray());
         That(mixed.Mazes.Count == 2 && !mixed.Mazes[0].GreedGrid.Supported && mixed.Mazes[0].GreedGrid.UnsupportedReason is not null &&
             mixed.Mazes[1].GreedGrid.Supported, "一个未知Greed不阻断同副本后续合法maze");
-        Reject(() => fixture.Parse(fixture.Maze(kind: "random")), "unknown map specification keyword unsupported");
-        Reject(() => fixture.Parse(fixture.Maze(mapId: 99)), "unlisted map reference rejected");
-        Reject(() => fixture.Parse(fixture.Maze(), exists: false), "missing mapped archive file rejected");
+        Unsupported(fixture.Maze(kind: "random"),"类型 random","未知地图种类保留诊断");
+        Unsupported(fixture.Maze(mapId: 99),"地图不存在: 99","未列入目录的地图引用保留诊断");
+        Unsupported(fixture.Maze(),"地图不存在: 1","缺失地图文件保留诊断",exists: false);
         Reject(() => fixture.Parse(fixture.Maze().Concat(fixture.Tag("size", fixture.Int(1), fixture.Int(1))).ToArray()), "duplicate size in same maze rejected");
-        Reject(() => fixture.Parse(fixture.Maze(duplicateMap: true)), "duplicate map coordinate rejected");
-        Reject(() => fixture.Parse(fixture.Maze(duplicateStart: true)), "duplicate start coordinate rejected");
+        Unsupported(fixture.Maze(duplicateMap: true),"重复 map specification 坐标","重复地图坐标保留诊断");
+        Unsupported(fixture.Maze(duplicateStart: true),"重复 start/boss map 坐标","重复起点坐标保留诊断");
         Reject(() => fixture.Parse(fixture.Maze(closeMap: false)), "unclosed map specification rejected");
         Reject(() => fixture.Parse(fixture.Tag("minimum required level", fixture.Int(1)).Concat(fixture.Tag("minimum required level", fixture.Int(2))).Concat(fixture.Maze()).ToArray()), "duplicate minimum level rejected");
         Reject(() => fixture.Parse(fixture.Tag("minimum required level", new PvfToken(7, 123)).Concat(fixture.Maze()).ToArray()), "unresolved level reference cannot become default level");
         var connection = fixture.Tag("quest connection", fixture.Int(0), new(7, 987), fixture.Int(-1));
         var opaque = fixture.Parse(fixture.Maze().Concat(connection).ToArray());
         That(opaque.Mazes[0].QuestConnectionTokens.SequenceEqual([new PvfToken(0, 0), new(7, 987), new(0, -1)]), "quest connection raw reference tokens retained");
-        Reject(() => fixture.Parse(fixture.Maze().Concat(fixture.Tag("maze info")).Concat(fixture.Tag("size", fixture.Int(1), fixture.Int(1))).ToArray()), "later malformed maze rejects entire definition");
+        var later = fixture.Parse(fixture.Maze().Concat(fixture.Tag("maze info"))
+            .Concat(fixture.Tag("size",fixture.Int(1),fixture.Int(1))).ToArray());
+        That(later.Mazes is [{ ResourceError: null, MapSpecification.Count: 1 },{ SourceOrdinal: 1, ResourceError: not null, MapSpecification: null }] &&
+            later.Mazes[1].ResourceError!.Contains("缺少字段: greed",StringComparison.Ordinal) && !later.Mazes[1].StaticTopology.Supported,
+            "后续缺字段路线单独记录诊断，前一合法资源不被阻断");
+        var badConnection = fixture.Tag("quest connection",fixture.Int(0),fixture.Int(29880),fixture.Int(-1));
+        var broken = fixture.Parse(fixture.Maze(width: 0).Concat(badConnection).ToArray()).Mazes[0];
+        var retained = dungeon with { Mazes = new[] { broken,dungeon.Mazes.Single(maze => maze.ConnectsQuest(3145)) } };
+        var character = new Character(99,0,"MazeFixture",0,new(38,2,1085,249),null)
+        { ActiveMainQuests = [new(0,29880,1) { AcceptanceId = Guid.NewGuid() },new(1,3145,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(broken.ConnectsQuest(29880) && broken.QuestConnectionTokens.SequenceEqual([new PvfToken(0,0),new(0,29880),new(0,-1)]) &&
+            !DungeonEntryPlan.TryCreate(retained,character,3,29880,0,out _,out var brokenReason) && brokenReason == "quest-maze-layout-unsupported" &&
+            DungeonEntryPlan.TryCreate(retained,character,3,3145,0,out var supported,out _) && supported!.StartMap.Id == 76121,
+            "坏路线保留自身任务关联但准入仍拒绝，同副本真实3145路线可继续使用");
         var goodDirectory = new PvfToken[]
         {
             fixture.Int(3),
@@ -96,6 +112,14 @@ internal static class DungeonCatalogTests
         Reject(() => DungeonCatalog.ParseDirectory([fixture.Int(1), fixture.String("../map/a.map")], fixture.Resolve, "dungeon"), "directory path escape rejected");
         Reject(() => DungeonCatalog.ParseDirectory([fixture.Int(1)], fixture.Resolve, "dungeon"), "truncated directory rejected");
         Console.WriteLine($"PASS {Count - checks} dungeon resource assertions");
+
+        void Unsupported(PvfToken[] tokens,string diagnostic,string name,bool exists = true)
+        {
+            var maze = fixture.Parse(tokens,exists).Mazes.Single();
+            That(maze.ResourceError is not null && maze.ResourceError.Contains(diagnostic,StringComparison.Ordinal) &&
+                maze.MapSpecification is null && maze.MapStructure == "unsupported" && maze.UnsupportedReason == maze.ResourceError &&
+                !maze.GreedGrid.Supported && !maze.StaticTopology.Supported,name + "，不计作支持或生成通路");
+        }
     }
 
     static IEnumerable<int> QuestMaps(DungeonDefinition dungeon, int questId)

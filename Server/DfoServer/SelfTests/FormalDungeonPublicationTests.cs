@@ -14,6 +14,7 @@ using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
@@ -35,6 +36,7 @@ internal static class FormalDungeonPublicationTests
         var kills = DungeonKillExperienceCatalog.Load(pvf);
         var catalog = DungeonCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
+        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
         await EntryRejectionAsync();
         await StorageFailureAsync(false);
         await StorageFailureAsync(true);
@@ -66,7 +68,7 @@ internal static class FormalDungeonPublicationTests
         }
         async Task EntryRejectionAsync()
         {
-            using var f = new Fixture(towns, characters, learning, false);
+            using var f = new Fixture(towns, characters, learning, quests, false);
             f.Session.BeginDungeonSelection();
             var previous = f.Session.Selected!;
             var selection = f.Session.CurrentDungeonSelection;
@@ -105,7 +107,7 @@ internal static class FormalDungeonPublicationTests
         }
         async Task StorageFailureAsync(bool lostResult)
         {
-            using var f = new Fixture(towns, characters, learning, lostResult);
+            using var f = new Fixture(towns, characters, learning, quests, lostResult);
             var (entry, death) = Enter(f);
             var previous = f.Session.Selected!;
             var commands = Registry(f);
@@ -121,7 +123,7 @@ internal static class FormalDungeonPublicationTests
                 f.Session.DungeonSnapshot!.LivingMonsters.Contains(entry.Monsters.Monsters[0].ObjectKey),
                 "存储返回前失败不发死亡/经验，也不提前确认内存死亡");
             if (lostResult)
-                Check(f.Count() == 1 && f.Read().Learning.Experience == kills.GetExperience(3) && f.LostResult!.Calls == 1,
+                Check(f.Count() == 1 && f.Read().Learning.Experience == 104 && f.LostResult!.Calls == 1,
                     "模拟SQL已提交但返回结果丢失，持久角色与receipt真实存在");
             else
             {
@@ -130,7 +132,7 @@ internal static class FormalDungeonPublicationTests
             }
             Check(await commands.DispatchAsync(context, death) == CommandResult.Handled, "原正文重试恢复原待提交事实");
             Check(f.Count() == 1 && Same(f.Session.Selected!, f.Read()) && f.Read().Revision == previous.Revision + 1 &&
-                f.Read().Learning.Experience == kills.GetExperience(3), "重试不重复经验revision，只安装实际持久角色");
+                f.Read().Learning.Experience == 104, "重试不重复经验revision，只安装实际持久角色");
             Check(stream.Opcodes.SequenceEqual(new ushort[] { 38, 37 }) && stream.Frames[1].Length == 16 + 91,
                 "明确提交/确认后仅发一次完整死亡与经验通知");
             if (lostResult)
@@ -165,28 +167,32 @@ internal static class FormalDungeonPublicationTests
 
         async Task ClearNoticeFailureAsync()
         {
-            using var f = new Fixture(towns, characters, learning, false);
+            using var f = new Fixture(towns, characters, learning, quests, false);
             var (receipt, boss) = PrepareBoss(f);
             var selected = f.Session.Selected!;
             var commands = Registry(f);
             using var stop = new CancellationTokenSource();
-            using var stream = new ControlledOutput { FailOn = 4 };
+            using var stream = new ControlledOutput { FailOnOpcode = 31 };
             await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
             var context = new GameConnectionContext(new(82, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
             var death = new Packet(1, 39, Death(boss.ObjectKey, receipt.Character.Id, checked((byte)boss.CandidateLevel)));
             await RejectAsync(typeof(IOException), () => commands.DispatchAsync(context, death), "末次清图NOTI31写入失败传播");
             var committed = f.Read();
+            var expectedOpcodes = new List<ushort> { 38, 37, 574 };
+            if (SkillPackets.BindingsChanged(selected.Learning, committed.Learning)) expectedOpcodes.Add(19);
+            if (committed.Level != selected.Level) expectedOpcodes.Add(2);
+            expectedOpcodes.Add(115);
             Check(stop.IsCancellationRequested && f.Count() == 28 && committed.Revision == selected.Revision + 1 &&
                 committed.ActiveMainQuests.Single().ConditionState == 0 && Same(committed, f.Session.Selected!) &&
-                f.Session.Phase == SessionPhase.Settlement && stream.Opcodes.SequenceEqual(new ushort[] { 38, 37, 115 }) &&
+                f.Session.Phase == SessionPhase.Settlement && stream.Opcodes.SequenceEqual(expectedOpcodes) &&
                 sender.PendingBytes == 0, "31失败保留同事务成长与任务，只写已成功死亡、经验和Boss帧并释放发送预算");
             Check(await commands.DispatchAsync(context, death) == CommandResult.Handled && f.Count() == 28 &&
-                stream.Frames.Count == 3 && Same(committed, f.Read()), "31通知失败不重跑Boss经验、任务清图或追加奖励");
+                stream.Frames.Count == expectedOpcodes.Count && Same(committed, f.Read()), "31通知失败不重跑Boss经验、任务清图或追加奖励");
         }
 
         async Task ClearedQuestSendFailureAsync()
         {
-            using var f = new Fixture(towns, characters, learning, false);
+            using var f = new Fixture(towns, characters, learning, quests, false);
             var (receipt, boss) = PrepareBoss(f);
             var observation = new NativeDungeonDeathObservation(boss.ObjectKey, receipt.Character.Id,
                 0x111, receipt.Character.Id, 600, 1, 0, checked((uint)boss.CandidateLevel), 504, 650, 1,
@@ -219,7 +225,7 @@ internal static class FormalDungeonPublicationTests
         }
         async Task SendFailureAsync(int failedPacket)
         {
-            using var f = new Fixture(towns, characters, learning, false);
+            using var f = new Fixture(towns, characters, learning, quests, false);
             var (entry, death) = Enter(f);
             var previous = f.Session.Selected!;
             var commands = Registry(f);
@@ -244,7 +250,7 @@ internal static class FormalDungeonPublicationTests
         }
         async Task ReselectDuringSendAsync()
         {
-            using var f = new Fixture(towns, characters, learning, false);
+            using var f = new Fixture(towns, characters, learning, quests, false);
             var (_, death) = Enter(f);
             var commands = Registry(f);
             using var stop = new CancellationTokenSource();
@@ -270,7 +276,7 @@ internal static class FormalDungeonPublicationTests
         }
         async Task ReturnDuringSendAsync()
         {
-            using var f = new Fixture(towns, characters, learning, false);
+            using var f = new Fixture(towns, characters, learning, quests, false);
             var (first, _) = Enter(f);
             var presence = new TownPresence(towns);
             var commands = Registry(f, presence);
@@ -304,7 +310,7 @@ internal static class FormalDungeonPublicationTests
         }
         async Task PickupLostResultAsync()
         {
-            using var f = new Fixture(towns, characters, learning, true, losePickup: true);
+            using var f = new Fixture(towns, characters, learning, quests, true, losePickup: true);
             var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, DungeonMonsterDropCatalog.Load(pvf), items.Items, bound => 0)!;
             f.Session.CompleteFormalDungeonLoading();
             var commands = Registry(f);
@@ -364,6 +370,7 @@ internal static class FormalDungeonPublicationTests
     sealed class ControlledOutput : MemoryStream
     {
         public int FailOn { get; init; }
+        public ushort? FailOnOpcode { get; init; }
         public int HoldOn { get; init; }
         int writes;
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -378,7 +385,8 @@ internal static class FormalDungeonPublicationTests
                 Started.TrySetResult();
                 await Release.Task.WaitAsync(cancellationToken);
             }
-            if (number == FailOn) throw new IOException("合成正式副本通知写入故障");
+            if (number == FailOn || BinaryPrimitives.ReadUInt16LittleEndian(buffer.Span[1..]) == FailOnOpcode)
+                throw new IOException("合成正式副本通知写入故障");
             Frames.Add(buffer.ToArray());
         }
     }
@@ -392,14 +400,15 @@ internal static class FormalDungeonPublicationTests
         public Character Created { get; }
         public ServerLog Log { get; }
         public LostResultRepository? LostResult { get; }
-        public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, bool lostResult, bool losePickup = false)
+        public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool lostResult, bool losePickup = false)
         {
             path = Path.Combine(root, "game.db");
-            repository = new(path);
+            repository = new(path, quests);
             Owner = new AccountOwners().Acquire("formal-publication", () => { });
             LostResult = lostResult ? new(repository, loseGrowth: !losePickup, losePickup: losePickup) : null;
             Session = new(LostResult is null ? repository : LostResult, towns, Owner);
-            Created = Session.CreateCharacter("FormalSend", characters.Get(0), learning);
+            Created = repository.Create(Owner, CharacterCreation.Prepare("FormalSend", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get)
+                with { ActiveMainQuests = [new(0,3145,1)] });
             Session.Select(Created.Slot);
             Session.MarkReady();
             Check(Session.LeaveRoom() && Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "通知fixture由合法城镇入口准备");
@@ -432,6 +441,7 @@ internal static class FormalDungeonPublicationTests
     // 故障注入只丢弃真实仓储第一次提交后的返回值，不伪造SQL结果或领域确认。
     sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false) : ICharacterRepository
     {
+        public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => inner.AdvanceQuestCycle(owner, expected, day);
         PreparedDungeonDeath? first;
         public int Calls { get; private set; }
         public bool LastDuplicate { get; private set; }
@@ -439,12 +449,12 @@ internal static class FormalDungeonPublicationTests
         public int PickupCalls { get; private set; }
         public bool PickupDuplicate { get; private set; }
         public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
-            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null)
+            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, DfoServer.Game.Quests.QuestDropPlan? questDrops = null)
         {
             Calls++;
             first ??= prepared;
             SamePrepared = ReferenceEquals(first, prepared);
-            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot);
+            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops);
             LastDuplicate = result.Duplicate;
             if (Calls == 1 && loseGrowth) throw new IOException("合成SQL已提交但结果丢失");
             return result;
@@ -463,6 +473,8 @@ internal static class FormalDungeonPublicationTests
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan) => inner.CommitQuestCompletion(owner, plan);
+        public QuestLifecycleCommit CommitQuestLifecycle(AccountOwners.Lease owner, QuestLifecyclePlan plan) => inner.CommitQuestLifecycle(owner, plan);
+        public QuestQuickClearCommit CommitQuestQuickClear(AccountOwners.Lease owner, QuestQuickClearPlan plan) => inner.CommitQuestQuickClear(owner, plan);
 
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog);

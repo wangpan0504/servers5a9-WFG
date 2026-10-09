@@ -26,7 +26,7 @@ internal static class DungeonMonsterPacketsTests
         foreach (var map in approvedEntry.Maze.MapSpecification!)
         {
             var plan = approvedEntry with { StartMap = map };
-            var monsters = DungeonMonsterPlan.Create(rooms, map, character.Id, 0x100);
+            var monsters = DungeonMonsterPlan.Create(rooms, map, character.Id, 0x100, approvedEntry.BasisLevel);
             byte[] body = DungeonPackets.StartMap(plan, monsters, 0xF1234567);
             That(DungeonEntryProbe.BuildStartMap(plan, monsters, 0xF1234567).SequenceEqual(body),
                 "诊断调用委托同一正式纯Builder，保持完整怪物字节");
@@ -42,7 +42,7 @@ internal static class DungeonMonsterPacketsTests
                 That(reader.ReadUInt16() == 0 && reader.ReadUInt32() == index, "template ordinal and independent prefix retain source order");
                 ushort key = reader.ReadUInt16();
                 That(key != character.Id && keys.Add(key), "monster keys do not alias the character or another row");
-                byte expectedLevel = map.Id == 76125 && index == 4 ? (byte)1 : (byte)3;
+                byte expectedLevel = map.Id == 76125 && index == 4 ? (byte)5 : (byte)3;
                 byte expectedType = map.Id == 76126 && index == 0 ? (byte)3 : (byte)0;
                 That(reader.ReadUInt32() == monsters.Monsters[index].MonsterId && reader.ReadByte() == expectedLevel,
                     "monster code and candidate level come from this room's resource");
@@ -70,7 +70,16 @@ internal static class DungeonMonsterPacketsTests
         foreach (int level in new[] { 0, -1, 256, int.MaxValue })
             Reject<NotSupportedException>(() => DungeonPackets.StartMap(approvedEntry, Single(firstMonster with { CandidateLevel = level }), 1),
                 "等级超出已核验wire范围时拒绝 " + level);
-        foreach (byte type in new byte[] { 1, 2, 4, 255 })
+        foreach (byte type in new byte[] { 0,1,2,3,5,6,7,8 })
+        {
+            var actor = wideMonster with { CandidateLevel = 255, SpawnType = type };
+            byte[] encoded = DungeonPackets.StartMap(approvedEntry,Single(actor),uint.MaxValue);
+            byte[] expectedRow = [0,0,255,255,255,127,220,254,120,86,52,18,255,type,0,0,255,0,0,0,0,0];
+            That(encoded.Length == 45 && encoded[18] == 1 && encoded.AsSpan(19,22).SequenceEqual(expectedRow) &&
+                encoded.AsSpan(41).SequenceEqual(new byte[] { 0,0,0,255 }),
+                "已确认怪物0–3/APC5–8按独立固定22B行编码，完整保留索引、key、模板、等级和有符号组 " + type);
+        }
+        foreach (byte type in new byte[] { 4,9,255 })
             Reject<NotSupportedException>(() => DungeonPackets.StartMap(approvedEntry, Single(firstMonster with { SpawnType = type }), 1),
                 "未核验怪物类型不能由Builder猜造 " + type);
         Reject<OverflowException>(() => DungeonPackets.StartMap(approvedEntry, Single(firstMonster with { SourceOrdinal = -1 }), 1),

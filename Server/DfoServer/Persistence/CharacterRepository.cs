@@ -7,7 +7,7 @@ using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Persistence;
 
-internal sealed partial class CharacterRepository(string path) : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore
+internal sealed partial class CharacterRepository(string path, DfoServer.GameWorld.Quests.QuestCatalog? quests = null) : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore
 {
     readonly SqliteGameDatabase database = new(path);
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>
@@ -28,7 +28,8 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
         if (rows.Count == 0)
             return [];
         var shared = ReadAccountInventory(db, owner.Account, transaction);
-        return rows.Select(character => ReadProgress(db, character, transaction, shared)).ToArray();
+        var accountQuests = ReadAccountQuests(db, rows[0].Id, transaction);
+        return rows.Select(character => ReadProgress(db, character, transaction, shared, accountQuests)).ToArray();
     });
     public bool NameExists(string name)
     {
@@ -53,14 +54,15 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
             throw new InvalidDataException("Character slots full");
         command.CommandText = """
             INSERT INTO characters(account,slot,name,town,area,x,y,direction,
-              return_town,return_area,return_x,return_y,return_direction,job,grow_type,level,accepted_story_level,inventory_expansion,gold,experience)
+              return_town,return_area,return_x,return_y,return_direction,job,grow_type,level,accepted_story_level,inventory_expansion,gold,experience,equipment_slot_flags)
             VALUES($account,$slot,$name,$town,$area,$x,$y,$direction,
-              $rtown,$rarea,$rx,$ry,$rdirection,$job,$grow,$level,$story,$expansion,$gold,$experience) RETURNING id;
+              $rtown,$rarea,$rx,$ry,$rdirection,$job,$grow,$level,$story,$expansion,$gold,$experience,$equipmentSlots) RETURNING id;
             """;
         command.Parameters.AddWithValue("$slot", slot);
         command.Parameters.AddWithValue("$name", character.Name);
         command.Parameters.AddWithValue("$job", character.Job);
         command.Parameters.AddWithValue("$grow", character.GrowType);
+        command.Parameters.AddWithValue("$equipmentSlots",character.EquipmentSlotFlags);
         command.Parameters.AddWithValue("$level", character.Level);
         command.Parameters.AddWithValue("$story", character.AcceptedStoryLevel);
         command.Parameters.AddWithValue("$experience", checked((long)character.InitialLearning.Experience));
@@ -72,7 +74,7 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
         command.Parameters.Clear();
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$quest", 0);
-        command.CommandText = "INSERT INTO character_completed_quests VALUES($id,$quest)";
+        command.CommandText = "INSERT INTO character_completed_quests(character_id,quest_id) VALUES($id,$quest)";
         foreach (int quest in character.CompletedQuests)
         {
             command.Parameters["$quest"].Value = quest;
@@ -122,6 +124,7 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
         var inventory = WriteInventory(db, transaction, owner, id, plan, initial);
         inventory = WriteWallet(db, transaction, owner, id, plan, inventory);
         inventory = WriteCargo(db, transaction, owner, id, plan, inventory);
+        var accountQuests = ReadAccountQuests(db, id, transaction);
         transaction.Commit();
         return new Character(id, checked((ushort)slot), character.Name, 0, character.Position, character.Return)
         {
@@ -130,6 +133,9 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
             Level = character.Level,
             AcceptedStoryLevel = character.AcceptedStoryLevel,
             CompletedQuests = [.. character.CompletedQuests],
+            AccountCompletedQuests = accountQuests.Completed,
+            AccountQuestAnswers = accountQuests.Answers,
+            AccountQuestDailyClaims = accountQuests.Daily,
             Skills = [.. character.Skills],
             ActiveMainQuests = activeQuests,
             Learning = learning,
@@ -194,19 +200,28 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
         Job = checked((byte)reader.GetInt32(15)),
         GrowType = checked((byte)reader.GetInt32(16)),
         Level = checked((byte)reader.GetInt32(17)),
-        AcceptedStoryLevel = checked((uint)reader.GetInt32(18))
+        AcceptedStoryLevel = checked((uint)reader.GetInt32(18)),
+        QuestCycleDay = reader.GetInt32(reader.GetOrdinal("quest_cycle_day")),
+        EquipmentSlotFlags = checked((byte)reader.GetInt32(reader.GetOrdinal("equipment_slot_flags")))
     };
-    static Character ReadProgress(SqliteConnection db, Character character, SqliteTransaction? transaction = null, AccountInventory? shared = null)
+    static Character ReadProgress(SqliteConnection db, Character character, SqliteTransaction? transaction = null, AccountInventory? shared = null,
+        (int[] Completed, System.Collections.Immutable.ImmutableDictionary<int,int> Daily, System.Collections.Immutable.ImmutableDictionary<int,byte> Answers)? accountQuests = null)
     {
         using var query = db.CreateCommand();
         query.Transaction = transaction;
         query.Parameters.AddWithValue("$id", character.Id);
-        query.CommandText = "SELECT quest_id FROM character_completed_quests WHERE character_id=$id ORDER BY quest_id";
+        query.CommandText = "SELECT quest_id,daily_period,answer FROM character_completed_quests WHERE character_id=$id ORDER BY quest_id";
         var quests = new List<int>();
+        var claims = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<int, int>();
+        var answers = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<int,byte>();
         using (var reader = query.ExecuteReader())
         {
             while (reader.Read())
+            {
                 quests.Add(reader.GetInt32(0));
+                if (reader.GetInt32(1) != 0) claims.Add(reader.GetInt32(0), reader.GetInt32(1));
+                if (!reader.IsDBNull(2)) answers.Add(reader.GetInt32(0),checked((byte)reader.GetInt32(2)));
+            }
         }
 
         query.CommandText = "SELECT skill_id,level FROM character_skills WHERE character_id=$id ORDER BY skill_id";
@@ -236,9 +251,15 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
             """;
         byte flags = DfoServer.Game.Settings.ClientSettingsRules.VisibilityFlags(
             query.ExecuteScalar() is byte[] options ? [.. options] : default);
+        var accountProgress = accountQuests ?? ReadAccountQuests(db, character.Id, transaction);
         return character with
         {
             CompletedQuests = quests.ToArray(),
+            QuestDailyClaims = claims.ToImmutable(),
+            QuestAnswers = answers.ToImmutable(),
+            AccountCompletedQuests = accountProgress.Completed,
+            AccountQuestDailyClaims = accountProgress.Daily,
+            AccountQuestAnswers = accountProgress.Answers,
             VisibilityFlags = flags,
             Skills = skills.ToArray(),
             ActiveMainQuests = active.ToArray(),
@@ -246,5 +267,23 @@ internal sealed partial class CharacterRepository(string path) : ICharacterRepos
             Inventory = ReadInventory(db, character.Id, transaction, shared),
             DungeonState = ReadDungeonState(db, character.Id, transaction)
         };
+    }
+
+    static (int[] Completed, System.Collections.Immutable.ImmutableDictionary<int,int> Daily, System.Collections.Immutable.ImmutableDictionary<int,byte> Answers) ReadAccountQuests(SqliteConnection db,
+        ushort characterId, SqliteTransaction? transaction)
+    {
+        using var command = db.CreateCommand(); command.Transaction = transaction;
+        command.Parameters.AddWithValue("$id", characterId);
+        command.CommandText = "SELECT q.quest_id,q.daily_period,q.answer FROM account_completed_quests q JOIN characters c ON c.account=q.account WHERE c.id=$id ORDER BY q.quest_id";
+        using var reader = command.ExecuteReader();
+        var completed = new List<int>(); var daily = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<int,int>();
+        var answers = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<int,byte>();
+        while (reader.Read())
+        {
+            int id = reader.GetInt32(0), period = reader.GetInt32(1);
+            completed.Add(id); if (period != 0) daily.Add(id, period);
+            if (!reader.IsDBNull(2)) answers.Add(id,checked((byte)reader.GetInt32(2)));
+        }
+        return (completed.ToArray(), daily.ToImmutable(),answers.ToImmutable());
     }
 }

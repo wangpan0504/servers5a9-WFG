@@ -1,18 +1,22 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Quests;
 
 namespace DfoServer.Game.Quests;
 
 internal static class QuestClearEligibility
 {
-    // 3145资源：[clear map]、sub type=-1、单int data76126。候选仍须在死亡/成长同事务核验完整事件账本。
+    public static bool IsSingleMap(StoryQuest quest) => quest.Condition == "[clear map]" && quest.SubType == -1 &&
+        quest.IntData.Count == 1 && quest.IntData[0] > 0;
+
+    // 候选仍须在死亡/成长同事务核验完整事件账本，不使用客户端清图上报生成事实。
     public static bool TryValidate(DungeonEntryPlan entry, PreparedDungeonDeath prepared)
     {
         var clear = prepared.Result.ClearFact;
         var death = prepared.Death;
-        return clear is not null && entry.CharacterId != 0 && entry.QuestId == 3145 && entry.DungeonId == 3 &&
-            entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty && entry.BossMap.Kind == "boss" &&
-            entry.BossMap.Id == 76126 && entry.BossMap.Path == "map/cataclysm/granflores/01_mirkwood/3145_76126.map" &&
+        return clear is not null && entry.CharacterId != 0 && entry.DungeonId > 0 &&
+            (entry.QuestId == 0 ? entry.ActiveQuestSlot == byte.MaxValue && entry.QuestAcceptanceId == Guid.Empty : entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty) &&
+            entry.BaseBossMap.Kind == "boss" &&
             clear.DungeonId == entry.DungeonId && clear.ClearMap == entry.BossMap &&
             prepared.Result.Snapshot.CurrentMap == entry.BossMap &&
             prepared.Result.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement &&
@@ -28,7 +32,7 @@ internal static class QuestClearEligibility
     public static bool MatchesActiveQuest(DungeonEntryPlan entry, Character character)
     {
         if (character.Id != entry.CharacterId || character.Revision < entry.CharacterRevision || entry.QuestAcceptanceId == Guid.Empty ||
-            character.CompletedQuests.Contains(3145))
+            character.CompletedQuests.Contains((int)entry.QuestId))
             return false;
         var matches = character.ActiveMainQuests.Where(quest => quest.Slot == entry.ActiveQuestSlot || quest.QuestId == entry.QuestId).ToArray();
         return matches.Length == 1 && matches[0].Slot == entry.ActiveQuestSlot && matches[0].QuestId == entry.QuestId &&

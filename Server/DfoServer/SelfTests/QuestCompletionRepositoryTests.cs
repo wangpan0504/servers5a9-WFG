@@ -32,7 +32,7 @@ internal static class QuestCompletionRepositoryTests
             Check(!commit.Duplicate && commit.ProjectionCurrent && commit.PreviousLevel == expected.Level && commit.ExperienceReward.Amount == 1780 &&
                 commit.Character.Revision == expected.Revision + 1 && commit.Character.Learning.Experience == expected.Learning.Experience + 1780 &&
                 commit.Character.Level == plan.Growth.TargetLevel && commit.Character.Level == 4,
-                "真实六房合成统计后任务1780使1974自然到3754/Lv4，revision只推进一次");
+                "真实六房合成统计后任务经验按统一规则自然成长，revision只推进一次");
             Check(commit.Character.Learning.Trees.Zip(plan.Growth.Learning.Trees).All(pair => pair.First == pair.Second ||
                 pair.First.Context == pair.Second.Context && pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
                 pair.First.Skills.SequenceEqual(pair.Second.Skills)) && commit.Character.Skills.SequenceEqual(expected.Skills),
@@ -63,6 +63,18 @@ internal static class QuestCompletionRepositoryTests
             Check(changed.Duplicate && !changed.ProjectionCurrent && fixture.Count() == 1,
                 "已提交后同revision身份改变只读账本但增量投影失效");
             fixture.Sql($"UPDATE characters SET job=0 WHERE id={fixture.Created.Id}");
+            // 真实已领奖3145数据退回已发布表形状后升级；保留原26列、非连续rowid、规则和实际七UID/Core。
+            fixture.Sql("UPDATE character_quest_completion_receipts SET rowid=17; UPDATE character_quest_clear_receipts SET rowid=29");
+            string clearRows = JsonSerializer.Serialize(Testing.TcpTestFixture.Rows(fixture.Path,"SELECT rowid,* FROM character_quest_clear_receipts"));
+            var receiptColumns = "rowid,character_id,account,acceptance_id,quest_id,event_id,instance_id,task_attempt,epoch,generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards";
+            string ReceiptRows() => JsonSerializer.Serialize(Testing.TcpTestFixture.Rows(fixture.Path, "SELECT " + receiptColumns + " FROM character_quest_completion_receipts"));
+            string originalReceipt = ReceiptRows();
+            using (var db = fixture.Open()) DatabaseSchemaTests.RewindQuestSystemToV13(db);
+            var migrated = new CharacterRepository(fixture.Path);
+            var oldReplay = migrated.CommitQuestCompletion(fixture.Owner, plan);
+            Check(ReceiptRows() == originalReceipt && clearRows == JsonSerializer.Serialize(Testing.TcpTestFixture.Rows(fixture.Path,"SELECT rowid,* FROM character_quest_clear_receipts")) && Same(migrated.LoadCharacter(fixture.Owner, fixture.Created.Slot), commit.Character) &&
+                oldReplay is { Duplicate: true, ProjectionCurrent: true } && oldReplay.Rewards.SequenceEqual(commit.Rewards),
+                "真实v13非空领奖迁移逐列保留旧规则/rowid/EXP/七UID/Core，原计划仍精确只读重放");
         }
         using (var fixture = new Fixture(towns, characters, resources))
         {
@@ -90,6 +102,39 @@ internal static class QuestCompletionRepositoryTests
                 "过期generation不能写本次领奖");
             Check(fixture.Count() == 0, "旧owner拒绝不产生新receipt");
         }
+        // 合成其它编号及奖励声明，验证与3145共用同次真实清图，而非给测试写完成位。
+        var variable = resources.Quests.Get(3145) with { Id = 29997, Path = "n_quest/selftest-variable-clear.qst",
+            Attributes = ["not give exp quest"], Rewards = [new(0,2058,null),new(0,3,null)],
+            Definition = resources.Quests.Get(3145).Definition! with { CannotGiveup = false,
+                SelectRewards = [new(0,10403,null),new(0,1,null),new(0,2058,null),new(0,2,null)] } };
+        var empty = variable with { Id = 29998, Path = "n_quest/selftest-empty-clear.qst", Rewards = [],
+            Definition = variable.Definition! with { SelectRewards = [] } };
+        var invalid = empty with { Id = 29996, Path = "n_quest/selftest-invalid-old-clear.qst",
+            Definition = empty.Definition! with { Diagnostics = ["旧脚本定义无效"] } };
+        var definitions = resources.Quests.All.ToDictionary(row => row.Id); definitions.Add(variable.Id,variable); definitions.Add(empty.Id,empty); definitions.Add(invalid.Id,invalid);
+        var common = new Resources(pvf,items,new(definitions));
+        using (var fixture = new Fixture(towns,characters,common,additional: [29997,29998],legacy: [29996]))
+        {
+            Check(fixture.Scalar("SELECT count(*) FROM character_quest_clear_receipts") == 3 &&
+                fixture.Scalar("SELECT count(DISTINCT event_id) FROM character_quest_clear_receipts") == 1 &&
+                fixture.Scalar("SELECT count(DISTINCT instance_id) FROM character_quest_clear_receipts") == 1,
+                "同次权威通关推进三个匹配任务，分别保存接取凭据，不按任务编号或事件唯一性截断");
+            Check(fixture.Read().ActiveMainQuests.Single(row => row.QuestId == 29996).ConditionState == 1 &&
+                fixture.Session.ReadClearedQuest(29996) is null,
+                "旧存档中的失效定义不推进、不补清图账本，也不阻断本次有效任务");
+            var prior = fixture.Read();
+            var result = fixture.Session.FinishQuest(29997,1,common.Quests,common.Parameters,items.Items,items.GoldLimits,items.EpicPieces,common.Growth);
+            Check(result.Receipt?.Commit is { ConditionType: 3, ExperienceReward.Amount: 0, Rewards.Length: 1 } commit &&
+                commit.Rewards[0].Item.Core.ItemId == 2058 && commit.Rewards[0].GrantedCount == 5 &&
+                commit.Character.Level == prior.Level && JsonSerializer.Serialize(commit.Character.Learning) == JsonSerializer.Serialize(prior.Learning) && commit.Character.Inventory.Gold == prior.Inventory.Gold,
+                "其它清图任务按固定3件及选择2件合并真实增量，零经验不改变成长，不按七项领奖限制");
+            result = fixture.Session.FinishQuest(29998,ushort.MaxValue,common.Quests,common.Parameters,items.Items,items.GoldLimits,items.EpicPieces,common.Growth);
+            Check(result.Receipt?.Commit is { ConditionType: 3, Rewards.Length: 0, ExperienceReward.Amount: 0 } &&
+                fixture.Scalar("SELECT count(*) FROM character_quest_completion_receipts WHERE rule_id<>''") == 0,
+                "空奖励清图正常交付，新回执不写奖励规则特殊标识");
+            Check(fixture.Session.FinishQuest(29998,ushort.MaxValue,common.Quests,common.Parameters,items.Items,items.GoldLimits,items.EpicPieces,common.Growth).Outcome ==
+                QuestFinishOutcome.AlreadyCompleted && fixture.Count() == 2,"零奖励任务重复交付不重写完成回执");
+        }
         Console.WriteLine($"PASS {TestCheck.Count - before} 3145领奖真实SQLite原子提交/回滚/重放/恢复断言（合成战斗，非实机）");
     }
 
@@ -109,7 +154,7 @@ internal static class QuestCompletionRepositoryTests
         throw new InvalidOperationException("FAIL 未遇到预期领奖故障: " + name);
     }
 
-    internal sealed class Resources(PvfArchive archive, ItemResources items)
+    internal sealed class Resources(PvfArchive archive, ItemResources items, QuestCatalog? questCatalog = null)
     {
         public ItemResources Items { get; } = items;
         public SkillLearningCatalog Learning { get; } = SkillLearningCatalog.Load(archive);
@@ -117,7 +162,7 @@ internal static class QuestCompletionRepositoryTests
         public DungeonKillExperienceCatalog Kills { get; } = DungeonKillExperienceCatalog.Load(archive);
         public DungeonCatalog Dungeons { get; } = DungeonCatalog.Load(archive);
         public DungeonRoomCatalog Rooms { get; } = DungeonRoomCatalog.Load(archive);
-        public QuestCatalog Quests { get; } = QuestCatalog.Load(archive);
+        public QuestCatalog Quests { get; } = questCatalog ?? QuestCatalog.Load(archive);
         public QuestRewardParameterCatalog Parameters { get; } = QuestRewardParameterCatalog.Load(archive);
     }
 
@@ -134,19 +179,28 @@ internal static class QuestCompletionRepositoryTests
         public ServerLog Log { get; }
         public LostResultRepository? LostResult { get; }
         public Fixture(TownCatalog towns, CharacterCatalog characters, Resources resources, bool loseResult = false,
-            byte job = 0, byte growType = 0)
+            byte job = 0, byte growType = 0, ushort[]? additional = null, ushort[]? legacy = null)
         {
             Resources = resources;
             Path = System.IO.Path.Combine(root, "game.db");
-            Repository = new(Path);
+            Repository = new(Path, Resources.Quests);
             Owner = Owners.Acquire("quest-completion", () => { });
             LostResult = loseResult ? new(Repository) : null;
             Session = new(LostResult is null ? Repository : LostResult, towns, Owner);
             Created = Session.CreateCharacter("QuestAward", characters.Get(job), resources.Learning);
+            for (int at = 0; at < (legacy?.Length ?? 0); at++)
+                Sql($"INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES({Created.Id},{29-at},{legacy![at]},1,'{Guid.NewGuid():N}')");
             if (growType != 0)
                 Sql("UPDATE characters SET grow_type=" + growType);
             Session.Select(Created.Slot);
             Session.MarkReady();
+            Check(Session.ChangeQuest(3145, QuestLifecycleAction.Accept, resources.Quests, resources.Items.Items,
+                resources.Items.GoldLimits, resources.Items.EpicPieces)?.Outcome == QuestLifecycleOutcome.Committed,
+                "领奖fixture通过通用接取事务，不依赖建角特例");
+            foreach (ushort id in additional ?? [])
+                Check(Session.ChangeQuest(id,QuestLifecycleAction.Accept,resources.Quests,resources.Items.Items,
+                    resources.Items.GoldLimits,resources.Items.EpicPieces)?.Outcome == QuestLifecycleOutcome.Committed,
+                    "额外清图定义通过相同接取事务");
             Check(Session.LeaveRoom() && Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "领奖fixture沿合法入场准备");
             Log = new(System.IO.Path.Combine(root, "logs"));
             Clear();
@@ -175,9 +229,8 @@ internal static class QuestCompletionRepositoryTests
                 "真正末次敌方事务产生本接取的稳定clear receipt");
         }
         public Character Read() => Repository.LoadCharacter(Owner, Created.Slot);
-        public QuestCompletionPlan Plan() => QuestCompletionPlan.Prepare(Session.Selected!, Session.ReadClearedQuest(3145)!.Clear,
-            Resources.Quests.Get(3145), Resources.Parameters, Resources.Items.Items, Resources.Items.GoldLimits,
-            Resources.Items.EpicPieces, Resources.Growth, DateTimeOffset.UtcNow).Plan ??
+        public QuestCompletionPlan Plan() => QuestCompletionPlan.Prepare(Session.Selected!, Resources.Quests.Get(3145), ushort.MaxValue, Resources.Quests, Resources.Parameters, Resources.Items.Items, Resources.Items.GoldLimits,
+            Resources.Items.EpicPieces, Resources.Growth, DateTimeOffset.UtcNow, Session.ReadClearedQuest(3145)!.Clear).Plan ??
                 throw new InvalidOperationException("FAIL 领奖fixture未生成完整计划");
         public QuestFinishResult Finish() => Session.FinishSingleClearQuest(3145, Resources.Quests, Resources.Parameters,
             Resources.Items.Items, Resources.Items.GoldLimits, Resources.Items.EpicPieces, Resources.Growth);
@@ -213,10 +266,32 @@ internal static class QuestCompletionRepositoryTests
     // 真实提交结果丢失，仅在第一次返回之后注入；保存原计划引用用于精确重试检查。
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
+        public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => inner.AdvanceQuestCycle(owner, expected, day);
         QuestCompletionPlan? first;
         public int Calls { get; private set; }
         public bool SamePlan { get; private set; }
         public bool LastDuplicate { get; private set; }
+        public bool LoseLifecycleResult { get; init; }
+        public bool LoseSceneResult { get; init; }
+        public bool LoseGrowthResult { get; init; }
+        public bool LoseCompletionResult { get; init; } = true;
+        public bool SameLifecyclePlan { get; private set; }
+        QuestLifecyclePlan? firstLifecycle;
+        int lifecycleCalls;
+        int sceneCalls;
+        public QuestQuickClearCommit CommitQuestQuickClear(AccountOwners.Lease owner, QuestQuickClearPlan plan) => inner.CommitQuestQuickClear(owner, plan);
+        int growthCalls;
+        public QuestLifecycleCommit CommitQuestLifecycle(AccountOwners.Lease owner, QuestLifecyclePlan plan)
+        {
+            firstLifecycle ??= plan;
+            SameLifecyclePlan = ReferenceEquals(firstLifecycle, plan);
+            var result = inner.CommitQuestLifecycle(owner, plan);
+            if (LoseLifecycleResult && ++lifecycleCalls == 1)
+                throw new IOException("合成任务SQL已提交但返回值丢失");
+            if (LoseSceneResult && plan.SceneEvent is not null && ++sceneCalls == 1)
+                throw new IOException("合成场景SQL已提交但返回值丢失");
+            return result;
+        }
         public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan)
         {
             Calls++;
@@ -224,7 +299,7 @@ internal static class QuestCompletionRepositoryTests
             SamePlan = ReferenceEquals(first, plan);
             var result = inner.CommitQuestCompletion(owner, plan);
             LastDuplicate = result.Duplicate;
-            if (Calls == 1)
+            if (LoseCompletionResult && Calls == 1)
                 throw new IOException("合成领奖SQL已提交但返回值丢失");
             return result;
         }
@@ -243,8 +318,12 @@ internal static class QuestCompletionRepositoryTests
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
-            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null) =>
-                inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot);
+            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null)
+        {
+            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops);
+            if (LoseGrowthResult && ++growthCalls == 1) throw new IOException("合成死亡事务已提交但返回值丢失");
+            return result;
+        }
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected, DungeonGroundPickupPreparation prepared, InventoryPlan plan) =>
             inner.CommitDungeonPickup(owner, expected, prepared, plan);
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);

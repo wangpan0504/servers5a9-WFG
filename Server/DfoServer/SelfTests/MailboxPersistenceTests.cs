@@ -212,6 +212,7 @@ internal static class MailboxPersistenceTests
         string character = JsonSerializer.Serialize(f.ReadSender() with { DungeonState = null });
         const string dropSettings = "DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings;";
         const string dropMail = dropSettings + "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages;";
+        DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
         f.Execute(dropMail + "DROP TABLE character_dungeon_growth_receipts; ALTER TABLE account_wallets DROP COLUMN rental_points; PRAGMA user_version=1;");
         var upgraded = new CharacterRepository(f.Path);
         TestCheck.That(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion &&
@@ -219,11 +220,13 @@ internal static class MailboxPersistenceTests
             "v1升级完整结构保留全部原角色、库存、UID及详情");
         f.Execute("INSERT INTO account_wallets(account,rental_points) VALUES('sender',123);");
         character = JsonSerializer.Serialize(f.ReadSender() with { DungeonState = null });
+        DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
         f.Execute(dropMail + "DROP TABLE character_dungeon_growth_receipts; PRAGMA user_version=2;");
         upgraded = new CharacterRepository(f.Path);
         TestCheck.That(JsonSerializer.Serialize(upgraded.LoadCharacter(f.SenderOwner, 0) with { DungeonState = null }) == character &&
             f.Query("SELECT rental_points FROM account_wallets WHERE account='sender'") is 123L,
             "master v2升级保留租赁点数及原资产");
+        DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
         f.Execute(dropMail + "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_source TO resource_sha256; PRAGMA user_version=3;");
         f.Execute("""
             INSERT INTO character_dungeon_growth_receipts VALUES(
@@ -237,6 +240,7 @@ internal static class MailboxPersistenceTests
         string before = f.Snapshot();
         _ = new CharacterRepository(f.Path);
         TestCheck.That(f.Snapshot() == before, "重开当前版本不重复迁移或赠送");
+        DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
         f.Execute(dropMail + "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_source TO resource_sha256; PRAGMA user_version=3; CREATE TABLE mailbox_attachments(collision INTEGER);");
         before = f.Snapshot();
         Reject<SqliteException>(() => new CharacterRepository(f.Path), "迁移中途 DDL 冲突");
@@ -248,6 +252,7 @@ internal static class MailboxPersistenceTests
         f.Sender = f.ReadSender();
         f.Send([f.Sender.Inventory.Items[0]], 100);
         before = f.Snapshot();
+        DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
         f.Execute(dropSettings + "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_source TO resource_sha256; PRAGMA user_version=4;");
         _ = new CharacterRepository(f.Path);
         TestCheck.That(f.Snapshot() == before, "v4来源列迁移保留邮件、托管UID、金币、租赁点数及成长账本");

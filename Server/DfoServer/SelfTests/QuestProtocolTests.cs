@@ -11,6 +11,54 @@ internal static class QuestProtocolTests
     public static void Run()
     {
         int checks = 0;
+        Check(QuestPackets.Finish(100,3,0,[],0,[],1).SequenceEqual(Convert.FromHexString("016400030000000001010000")),
+            "首次转职mode1携带实际分支与两树页空计数，完整12B");
+        Check(QuestPackets.Finish(100,4,30,[],101,[],5).SequenceEqual(Convert.FromHexString("016400041E00000001050000")),
+            "转职模式不借用物品数组；声明金币另按绝对钱包通知校准");
+        Reject(() => QuestPackets.Finish(100,3,0,[],0,[],0), "转职分支0不得编码首次转职成功");
+        Check(QuestPackets.Finish(100,44,0,[],0,[]).SequenceEqual(Convert.FromHexString("0164002C000000000000")),
+            "顺序父任务分类44沿无材料奖励正文，不伪造清图分类3");
+        Check(QuestPackets.Finish(100,2,0,[],0,[]).SequenceEqual(Convert.FromHexString("01640002000000000000")),
+            "猎杀怪物分类2没有寻物消耗段，使用独立零奖励成功头");
+        Check(QuestPackets.Finish(100,1,0,[],0,[]).SequenceEqual(Convert.FromHexString("01640001000000000000")),
+            "普通计数清图分类1跳过寻物消耗段，沿通用奖励正文");
+        Check(QuestPackets.Finish(100,6,0,[],0,[]).SequenceEqual(Convert.FromHexString("01640006000000000000")),
+            "猎杀分类6沿已确认的无材料可变奖励正文，零奖励完整10B");
+        Check(QuestRequests.TryAccept(Convert.FromHexString("1F00490C"), out var acceptedId) && acceptedId == 3145 &&
+            QuestRequests.TryGiveup(Convert.FromHexString("2000490C"), out var giveupId) && giveupId == 3145,
+            "接取、放弃独立echo与u16编号形状");
+        Check(!QuestRequests.TryAccept(Convert.FromHexString("2000490C"), out _) &&
+            !QuestRequests.TryGiveup(Convert.FromHexString("2000490C00"), out _), "接取放弃拒绝错echo与额外尾部");
+        Check(QuestRequests.TryTrigger(Convert.FromHexString("2100490C100000"), out var multi) &&
+            multi == new QuestClientTriggerRequest(3145, 0x10, 0, 0) &&
+            QuestRequests.TryTrigger(Convert.FromHexString("2100490C0000"), out var single) && single.Channel is null,
+            "V31原生产器分开保留6B普通与7B三通道条件");
+        Check(!QuestRequests.TryTrigger(Convert.FromHexString("2100490C110000"), out _) &&
+            !QuestRequests.TryTrigger(Convert.FromHexString("2100490C10000000"), out _), "未知通道和附加尾部拒绝");
+        Check(QuestPackets.AvailableList(95, [1, 3145, 29999]).SequenceEqual(Convert.FromHexString("0E00000008151000185F220601C918AFEA01")),
+            "NOTI21 length与protobuf required0、guide等级和packed编号独立金字节");
+        Check(QuestPackets.AvailableList(1, []).SequenceEqual(Convert.FromHexString("06000000081510001801")),
+            "空可见列表仍携带required字段，不写入伪任务");
+        Check(QuestPackets.Accepted(3145, 1, []).SequenceEqual(Convert.FromHexString("01490C0100000000")) &&
+            QuestPackets.GivenUp(3145).SequenceEqual(Convert.FromHexString("01490C")), "ACK31完整8B与ACK32完整3B无赠品形状");
+        Check(QuestPackets.ActiveList([new(29, 100, 0), new(0, 3145, 1)]).SequenceEqual(Convert.FromHexString("02000000490C01000000640000000000")),
+            "NOTI574保持槽位顺序与全宽条件状态");
+        Check(QuestPackets.Finish(100, 4, 0, [], 0, []).SequenceEqual(Convert.FromHexString("01640004000000000000")),
+            "普通会面零经验、零物品完整10B成功合同");
+        Check(QuestPackets.Finish(100, 0, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640000000000000100B100030000000000")),
+            "普通寻物先读本次扣除7B行，再读mode0和奖励数，不填剩余库存");
+        Check(QuestPackets.Finish(100, 25, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640019000000000100B100030000000000")),
+            "寻物会面分类25按V31原码读取同一7B材料数组，再读奖励mode");
+        Check(QuestPackets.Finish(100,64,0,[],0,[]).SequenceEqual(Convert.FromHexString("01640040000000000000")) &&
+            QuestPackets.Finish(100,65,0,[],0,[]).SequenceEqual(Convert.FromHexString("01640041000000000000")),
+            "范围64和演出65跳过材料数组，保留真实分类和零奖励完整正文");
+        Check(QuestPackets.Finish(100,4,0,[],0,[],17).SequenceEqual(Convert.FromHexString("016400040000000002010000")) &&
+            QuestPackets.Finish(100,4,0,[],0,[],33).SequenceEqual(Convert.FromHexString("016400040000000002020000")),
+            "一觉、二觉使用mode2和真实stage，不把packed growtype当转职branch写入");
+        byte[] goldOnly = QuestPackets.Finish(100, 4, 0, [], 101, []);
+        Check(goldOnly.Length == 29 && goldOnly[9] == 1 &&
+            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(goldOnly.AsSpan(16)) == 101 &&
+            goldOnly.AsSpan(20).ToArray().All(value => value == 0), "金币占完整19B虚拟持有域行，不伪造UID或实体Core");
         byte[] finish = Convert.FromHexString("2200490CFFFF0100FFFF");
         Check(QuestRequests.TryFinish(finish, out var request) && request == new QuestFinishRequest(3145, 65535, 1, 65535),
             "实收10B完成形状完整保留，不把FFFF固定奖励筛掉");
@@ -60,7 +108,7 @@ internal static class QuestProtocolTests
             {
                 AmplifyType = 0x81, AmplifyValue = 0xABCD, ExpireTime = 0x12345678, SortLockFlag = 1, RemainUseCount = 0x92
             }), 1)).ToArray();
-        byte[] complete = QuestPackets.FinishSingleClearMap(3145, 1780, fixedRewards);
+        byte[] complete = QuestPackets.Finish(3145, 3, 1780, [], 0, fixedRewards);
         using (var stream = new MemoryStream(complete))
         using (var reader = new BinaryReader(stream))
         {
@@ -76,11 +124,26 @@ internal static class QuestProtocolTests
             }
             Check(stream.Position == stream.Length, "完整奖励数组后没有猜造金币或额外收尾字段");
         }
-        Reject(() => QuestPackets.FinishSingleClearMap(3145, 0, fixedRewards), "没有已证零EXP领奖规则时不能发零成功");
-        Reject(() => QuestPackets.FinishSingleClearMap(3146, 1780, fixedRewards), "其他任务不能借3145窄成功头");
-        Reject(() => QuestPackets.FinishSingleClearMap(3145, 1780, fixedRewards[..^1]), "少发一件不能领成功");
-        Reject(() => QuestPackets.FinishSingleClearMap(3145, 1780, fixedRewards.Reverse().ToArray()), "奖励不可重排");
-        Reject(() => QuestPackets.FinishSingleClearMap(3145, 1780,
+        Check(QuestPackets.Finish(3145,3,0,[],0,[]).SequenceEqual(Convert.FromHexString("01490C03000000000000")),
+            "单清图允许资源零经验、零奖励，不按3145设置正经验门禁");
+        Check(QuestPackets.Finish(100,3,17,[],0,fixedRewards[..2]).Length == 48,
+            "其他清图任务沿同一编码，奖励数量由已提交投影提供");
+        byte[] countedClear = QuestPackets.Finish(100,1,17,[],0,fixedRewards[..2]);
+        Check(countedClear[3] == 1 && countedClear.AsSpan(4).SequenceEqual(QuestPackets.Finish(100,3,17,[],0,fixedRewards[..2]).AsSpan(4)),
+            "计数清图与单清图共用完整奖励行，保留真实条件分类");
+        foreach (byte branch in Enumerable.Range(1,5).Select(value => (byte)value))
+            foreach (byte stage in Enumerable.Range(0,3).Select(value => (byte)value))
+            {
+                byte target = (byte)(branch | stage << 4);
+                byte[] career = QuestPackets.Finish(100,3,0,[],0,[],target);
+                using var stream = new MemoryStream(career); using var reader = new BinaryReader(stream);
+                Check(reader.ReadByte() == 1 && reader.ReadUInt16() == 100 && reader.ReadByte() == 3 && reader.ReadUInt32() == 0 &&
+                    reader.ReadByte() == (stage == 0 ? 1 : 2) && reader.ReadByte() == (stage == 0 ? branch : stage),
+                    "转职与两级觉醒响应写入实际branch/stage " + target);
+                Check(reader.ReadByte() == 0 && reader.ReadByte() == 0 && stream.Position == stream.Length,
+                    "V31职业响应独立读器完整读取两树页，不以提前19替代第二页count " + target);
+            }
+        Reject(() => QuestPackets.Finish(3145,3,1780,[],0,
             [fixedRewards[0] with { Item = fixedRewards[0].Item with { Uid = 0 } }, .. fixedRewards.Skip(1)]), "临时UID不能领成功");
         Console.WriteLine($"PASS {checks} 任务与结算独立协议断言");
 

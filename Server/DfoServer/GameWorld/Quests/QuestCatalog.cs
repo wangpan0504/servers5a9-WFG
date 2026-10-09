@@ -2,7 +2,7 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Quests;
 
-// 只保存匹配 PVF 里已核对的艾尔文主线资源。不是接取、通关或领奖合同。
+// 完整任务目录；资源定义不等于接取、通关或领奖资格。
 internal readonly record struct QuestRewardToken(byte Type, int Value, string? Text);
 
 internal sealed record StoryQuest(
@@ -18,25 +18,66 @@ internal sealed record StoryQuest(
     public int? DeclaredGoldMultiple { get; init; }
     public int? DeclaredIgnoreLevelForExperience { get; init; }
     public IReadOnlyList<string> Attributes { get; init; } = Array.Empty<string>();
+    public QuestDefinition? Definition { get; init; }
+    public string? CinematicPath { get; init; }
 }
 
 internal sealed class QuestCatalog
 {
-    static readonly int[] Chain = [3145, 4873, 3146, 3157, 3054, 3147, 3148, 4875, 3149];
+    // 既有地图字段回归；不限制任务目录或可接任务。
+    static readonly int[] VerifiedMapQuests = [3145, 4873, 3146, 3157, 3054, 3147, 3148, 4875, 3149];
     readonly Dictionary<int, StoryQuest> quests;
 
-    QuestCatalog(Dictionary<int, StoryQuest> quests) => this.quests = quests;
+    internal QuestCatalog(Dictionary<int, StoryQuest> quests) => this.quests = quests;
+    public IReadOnlyCollection<StoryQuest> All => quests.Values;
+    public bool TryGet(int id, out StoryQuest quest) => quests.TryGetValue(id, out quest!);
 
     public StoryQuest Get(int id) => quests.TryGetValue(id, out var quest)
-        ? quest : throw new InvalidDataException("主线目录没有这个任务: " + id);
+        ? quest : throw new InvalidDataException("任务目录没有这个任务: " + id);
 
     public static QuestCatalog Load(PvfArchive pvf)
     {
 
         var paths = Index(pvf);
-        var quests = new Dictionary<int, StoryQuest>();
         var maps = MapIndex(pvf);
-        foreach (int id in Chain) quests.Add(id, Parse(id, paths[id], pvf.ReadTokens(paths[id]), pvf.ResolveString, maps, pvf));
+        var cinematicTokens = pvf.ReadTokens("cinematic/cinematic.lst");
+        var cinematics = new Dictionary<int,string>();
+        for (int at = 0; at + 1 < cinematicTokens.Length; at += 2)
+            if (cinematicTokens[at].Type == 0 && cinematicTokens[at + 1].Type == 6)
+                cinematics[cinematicTokens[at].Value] = PvfArchive.NormalizePath("cinematic/" + pvf.ResolveString(cinematicTokens[at + 1].Value));
+        return LoadDefinitions(paths, (id,path) =>
+        {
+            var tokens = pvf.ReadTokens(path);
+            var definition = QuestDefinitionReader.Read(id, path, tokens, pvf.ResolveString);
+            if (definition.Condition == "[look cinematic]" && definition.IntData is [> 0] &&
+                cinematics.TryGetValue(definition.IntData[0],out string? cinematicPath))
+            {
+                // 只读取声明的演出；坏的废弃资源由LoadDefinitions隔离，不替换成其他演出。
+                _ = pvf.ReadTokens(cinematicPath);
+                definition = definition with { CinematicPath = cinematicPath };
+            }
+            if (VerifiedMapQuests.Contains(id))
+                definition = Parse(id, path, tokens, pvf.ResolveString, maps, pvf) with { Definition = definition.Definition };
+            return definition;
+        });
+    }
+
+    internal static QuestCatalog LoadDefinitions(IReadOnlyDictionary<int,string> paths, Func<int,string,StoryQuest> read)
+    {
+        var quests = new Dictionary<int, StoryQuest>();
+        foreach (var (id,path) in paths)
+        {
+            try { quests.Add(id, read(id,path)); }
+            catch (Exception error) when (!VerifiedMapQuests.Contains(id) &&
+                error is InvalidDataException or NotSupportedException or FileNotFoundException)
+            {
+                // 失效旧脚本不修补，也不阻断有效任务；已使用的新手资源仍要求真实完整装载。
+                quests.Add(id, new(id,path,"",-1,[],0,0,0,0,[],null,null,null,[],null,null,[])
+                {
+                    Definition = new([]) { Diagnostics = ["任务脚本不可用: " + error.Message] }
+                });
+            }
+        }
         return new(quests);
     }
 
@@ -51,8 +92,8 @@ internal sealed class QuestCatalog
             string path = PvfArchive.NormalizePath("n_quest/" + pvf.ResolveString(tokens[i + 1].Value));
             if (!paths.TryAdd(tokens[i].Value, path)) throw new InvalidDataException("重复任务 ID: " + tokens[i].Value);
         }
-        foreach (int id in Chain)
-            if (!paths.ContainsKey(id) || !pvf.Contains(paths[id])) throw new InvalidDataException("主线脚本不存在: " + id);
+        foreach (var (id, path) in paths)
+            if (id is <= 0 or >= 30000) throw new InvalidDataException("任务编号越界: " + id);
         return paths;
     }
 

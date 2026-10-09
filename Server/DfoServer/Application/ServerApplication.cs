@@ -89,6 +89,15 @@ internal static class ServerApplication
             output.WriteByte((byte)'\n');
             return 0;
         }
+        if (command.Kind == ServerCommandKind.ScanQuests)
+        {
+            using var output = Console.OpenStandardOutput();
+            var scanItems = new ItemResources(pvf);
+            JsonSerializer.Serialize(output, DfoServer.Game.Quests.QuestCoverage.Scan(DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf),
+                scanItems.Items, scanItems.EpicPieces, DfoServer.GameWorld.Quests.QuestRewardParameterCatalog.Load(pvf)));
+            output.WriteByte((byte)'\n');
+            return 0;
+        }
         if (command.Kind == ServerCommandKind.InspectPreparation)
         {
             Console.WriteLine(JsonSerializer.Serialize(CharacterPreparation.Load(pvf)));
@@ -121,7 +130,8 @@ internal static class ServerApplication
             return 0;
         }
 
-        var repository = new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"));
+        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
+        var repository = new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests);
         if (command.Kind == ServerCommandKind.ImportCharacters)
         {
             using var owner = new AccountOwners().Acquire(options.DevelopmentAccount, () =>
@@ -131,7 +141,7 @@ internal static class ServerApplication
             return 0;
         }
 
-        await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, SkillLearningCatalog.Load(pvf), itemResources);
+        await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, SkillLearningCatalog.Load(pvf), itemResources, quests);
         return 0;
     }
 

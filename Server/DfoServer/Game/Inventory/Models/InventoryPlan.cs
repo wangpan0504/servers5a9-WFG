@@ -53,6 +53,7 @@ internal sealed class InventoryCommitReceipt(Character character, long generatio
     public long Generation { get; } = generation;
     public long SelectionEpoch { get; } = selectionEpoch;
     public DfoServer.Game.Session.SessionPhase Phase { get; init; } = DfoServer.Game.Session.SessionPhase.Town;
+    public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
     readonly Lazy<InventoryIndex> index = new(() => new(character.Inventory));
     public InventoryIndex Index => index.Value;
 }

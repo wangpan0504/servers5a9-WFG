@@ -12,6 +12,7 @@ internal enum ServerCommandKind
     InspectTowns,
     InspectDungeon,
     ScanDungeons,
+    ScanQuests,
     InspectPreparation,
     SelfTest,
     SelfTestCore,
@@ -38,6 +39,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --selftest-core            基础自测，无需 PVF
           --selftest                 完整服务端自测
           --selftest-tcp [测试组]    隔离 TCP 回归
+          --scan-quests              只读任务覆盖与依赖检查，输出JSON
           --gm [命令]               开发管理命令
           --help                    显示帮助，不读取资源或创建数据库
         默认路径以服务端程序所在目录为基准；运行参数放在命令之前。
@@ -81,6 +83,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
             "--inspect" => (ServerCommandKind.InspectTowns, 0),
             "--inspect-dungeon" => (ServerCommandKind.InspectDungeon, 1),
             "--scan-dungeons" => (ServerCommandKind.ScanDungeons, 0),
+            "--scan-quests" => (ServerCommandKind.ScanQuests, 0),
             "--inspect-jianying" => (ServerCommandKind.InspectPreparation, 0),
             "--selftest-core" => (ServerCommandKind.SelfTestCore, 0),
             "--selftest" => (ServerCommandKind.SelfTest, 0),

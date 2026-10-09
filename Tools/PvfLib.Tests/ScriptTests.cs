@@ -23,5 +23,45 @@ internal static class ScriptTests
         Reject<InvalidDataException>(() => PvfScript.List("1 `a` 1 `b`"));
         Reject<InvalidDataException>(() => PvfScript.Block("[x]a[/x][x]b[/x]", "x"));
         That(PvfScript.Block("[x]a", "x") == "", "incomplete block is absent");
+        TokenDocument();
+        AiCharacter();
+    }
+
+    private static void AiCharacter()
+    {
+        string[] strings = ["[monster]","[boss]","[minimum info]","名字","[other]"];
+        string Resolve(int at) => strings[at];
+        PvfToken[] row = [new(0,2004),new(0,810),new(0,264),new(0,0),new(6,0),new(6,1),new(0,0),new(0,0)];
+        var parsed = PvfAiCharacterScript.MapRows([.. row,.. row],Resolve);
+        That(parsed is [{ Faction: "[monster]", Rank: "[boss]" },{ Faction: "[monster]" }] &&
+            parsed[0].Values.SequenceEqual([2004,810,264,0,0,0]),"APC行保留独立整数和字符串顺序");
+        Reject<InvalidDataException>(() => PvfAiCharacterScript.MapRows(row[..^1],Resolve));
+        row[4] = new(0,0);
+        Reject<InvalidDataException>(() => PvfAiCharacterScript.MapRows(row,Resolve));
+        PvfToken[] info = [new(3,2),new(6,3),new(0,0),new(0,2),new(0,1),new(0,1),new(0,32),new(3,4),new(0,999)];
+        That(PvfAiCharacterScript.MinimumInfo(info,Resolve)[5] == new PvfToken(0,32),"AIC最低信息独立保留，不吞后续字段");
+        Reject<InvalidDataException>(() => PvfAiCharacterScript.MinimumInfo([.. info,.. info],Resolve));
+    }
+
+    private static void TokenDocument()
+    {
+        string[] names = ["[level]", "[pre]", "[/pre]", "[dialog depend on job]", "[/dialog]", "[/dialog depend on job]", "[text]", "[/bad]"];
+        PvfToken Tag(int at) => new(3, at);
+        PvfToken Int(int value) => new(0, value);
+        string Resolve(int at) => names[at];
+        var document = new PvfTokenDocument([Tag(0), Int(1), Int(99), Tag(1), Int(10), Tag(2), Tag(1), Int(20), Tag(2)], Resolve);
+        That(document.Sections.Length == 3 && document.Sections[1].Values.Single().Value == 10 &&
+            document.Sections[2].Values.Single().Value == 20, "token document preserves repeated prerequisite alternatives");
+        var aliases = new Dictionary<string, string> { ["dialog depend on job"] = "dialog" };
+        document = new PvfTokenDocument([Tag(3), Tag(6), Int(1), Tag(4), Tag(3), Tag(6), Int(2), Tag(5)], Resolve, aliases);
+        That(document.Sections.Length == 2 && document.Sections[1].Children.Single().Values.Single().Value == 2,
+            "qualified block supports alias and qualified closing tags in the same script");
+        Reject<InvalidDataException>(() => new PvfTokenDocument([Tag(7)], Resolve));
+        Reject<InvalidDataException>(() => new PvfTokenDocument([Int(1)], Resolve));
+        Reject<InvalidDataException>(() => new PvfTokenDocument([Tag(3), Tag(7)], Resolve, aliases));
+        document = new PvfTokenDocument([Tag(7)], Resolve, preserveExtraEndTags: true);
+        That(document.Diagnostics.Length == 1 && document.Sections.Single().Name == "/bad", "extra closing tag is retained as a diagnostic");
+        var deep = Enumerable.Repeat(Tag(1), 34).Concat(Enumerable.Repeat(Tag(2), 34)).ToArray();
+        Reject<InvalidDataException>(() => new PvfTokenDocument(deep, Resolve));
     }
 }

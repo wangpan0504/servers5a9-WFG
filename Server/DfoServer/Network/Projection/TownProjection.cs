@@ -11,7 +11,7 @@ using DfoServer.Game.Dungeons;
 namespace DfoServer.Network.Projection;
 
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
-    MailboxProjection? mailbox = null, SettingsProjection? settings = null)
+    MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null)
 {
     public async Task EnterAsync(GameConnectionContext context)
     {
@@ -25,7 +25,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c)), "player");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
         await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
-        if (c.CompletedQuests.Length > 0)
+        if (c.CompletedQuests.Length > 0 || c.AccountCompletedQuests.Length > 0)
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(c), "completed_quests");
         if (c.Learning.Initialized)
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(c.Learning), "skill_info");
@@ -52,8 +52,12 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(c.Learning), "skill_combo_initialize");
         if (settings is not null && settingReceipt is not null)
             await settings.InitializeAsync(context, settingReceipt);
+        if (quests is not null)
+            await quests.InitializeAsync(context, c);
         await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "enter_gameworld_complete");
     }
+
+    public Task ReconcileQuestsAsync(GameConnectionContext context) => quests?.CloseReadyChildrenAsync(context,refreshList: true) ?? Task.CompletedTask;
 
     async Task LocationAsync(GameConnectionContext context, Character c, bool initial = false, Func<bool>? canSend = null)
     {
@@ -62,7 +66,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await context.Notify(NotiPacketType.USER_POSITION, TownPackets.Position(c.Id, c.Position, false), "position", canSend);
         await context.Notify(NotiPacketType.USER_AREA, TownPackets.Position(c.Id, c.Position, true), "area", canSend);
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c.Id, c.Position), "transition", canSend);
-        var completed = c.CompletedQuests.ToHashSet();
+        var completed = DfoServer.Game.Quests.QuestEligibility.Completed(c);
         if (towns.IsRoom(c.Position, completed) && (c.Return ?? towns.DefaultReturn(c.Position, completed)) is { } back)
             await context.Notify(NotiPacketType.PREV_VILLAGE, TownPackets.RoomReturnTown(back), "room_return_town", canSend);
     }
@@ -121,6 +125,20 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         {
             if (CanSend())
                 presence?.Join(context.Owner, context.Sender, receipt.Character);
+            return true;
+        });
+    }
+
+    public async Task ReturnFromFormalDungeonAsync(GameConnectionContext context, TownTravelReceipt receipt, string action)
+    {
+        bool CanSend() => context.Session.CanPublishTravel(receipt);
+        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character.Id, receipt.Character.Position), action, CanSend);
+        // 城镇场景绑定后重新投影当前任务，不依赖重新选角。
+        if (quests is not null)
+            await quests.RefreshAsync(context, receipt.Character, CanSend);
+        context.Owner.Execute(() =>
+        {
+            if (CanSend()) Join(context);
             return true;
         });
     }

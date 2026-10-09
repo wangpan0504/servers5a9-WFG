@@ -1,10 +1,42 @@
 using DfoServer.GameWorld.Quests;
 using PvfLib;
+using DfoServer.Game.Quests;
+using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Testing;
 
 namespace DfoServer;
 
 internal static class QuestCatalogTests
 {
+    public static void RunCore()
+    {
+        int checks = TestCheck.Count;
+        var paths = new Dictionary<int,string> { [100] = "valid.qst", [101] = "missing.qst", [102] = "invalid.qst", [103] = "obsolete.qst" };
+        var catalog = QuestCatalog.LoadDefinitions(paths, (id,path) => id switch
+        {
+            100 => QuestEligibilityTests.Quest(id) with { Path = path },
+            101 => throw new FileNotFoundException(path), 102 => throw new InvalidDataException(path),
+            _ => throw new NotSupportedException(path)
+        });
+        var character = new Character(1,0,"Quest",1,new Location(38,2,450,240),null);
+        TestCheck.That(catalog.All.Count == 4 && QuestEligibility.Visible(character,catalog).SequenceEqual([100]) &&
+            catalog.All.Where(quest => quest.Id != 100).All(quest => quest.Definition is { Diagnostics.Length: 1 } &&
+                QuestEligibility.InspectResource(quest).Entry == QuestResourceEntry.Invalid),
+            "旧脚本缺失或定义损坏只保留不可用原因，不阻断有效任务，不修补后取得资格");
+        TestCheck.Reject<InvalidDataException>(() => QuestCatalog.LoadDefinitions(new Dictionary<int,string> { [3145] = "used.qst" },
+            (_,_) => throw new InvalidDataException("used resource")), "已使用的新手资源损坏不能用空定义继续运行");
+        var alternative = catalog.Get(100) with { Definition = catalog.Get(100).Definition! with
+            { PrerequisiteGroups = [[100],[99999]], Collisions = [99998], HideOnCompletedQuests = [99997] } };
+        TestCheck.That(QuestCoverage.HasRequiredReferences(alternative,catalog) &&
+            !QuestCoverage.HasRequiredReferences(alternative with { Definition = alternative.Definition! with { PrerequisiteGroups = [[99999]] } },catalog) &&
+            !QuestCoverage.HasRequiredReferences(alternative with { Definition = alternative.Definition! with { RequiredAnswers = [new(99999,0)] } },catalog),
+            "废弃的OR分支和冲突引用不阻断有效资源；必需前置及回答引用缺失仍明确限制");
+        TestCheck.Reject<IOException>(() => QuestCatalog.LoadDefinitions(paths, (_,_) => throw new IOException("storage failure")),
+            "存储故障不误当失效旧任务吞掉");
+        Console.WriteLine($"PASS {TestCheck.Count - checks} 失效旧任务资源隔离与已用资源严格校验断言");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = 0;
@@ -24,6 +56,9 @@ internal static class QuestCatalogTests
         var goblin = catalog.Get(3146);
         Check(goblin.Condition == "[quest clear]" && goblin.SubType == 2 && goblin.IntData.SequenceEqual([3157, 3054])
             && goblin.Prerequisites.SequenceEqual([4873]), "3146 aggregates 3157 and 3054");
+        Check(QuestRelationProgress.Initial(goblin,catalog,[]) == 2 &&
+            QuestRelationProgress.Initial(goblin,catalog,[3157]) == 1 && QuestRelationProgress.Initial(goblin,catalog,[3157,3054]) == 0,
+            "真实3146按完整未完成子列表初始化；编码合同不证明剧情事件或原服初值公式");
         Check(catalog.Get(3157).Condition == "[hunt enemy]" && catalog.Get(3157).MainQuest == 3146
             && catalog.Get(3157).IntData.SequenceEqual([3, -1, 13099, 3, 1]), "3157 keeps the raw hunt tuple");
         Check(catalog.Get(3054).Condition == "[clear map]" && catalog.Get(3054).IntData.SequenceEqual([76136])
@@ -37,9 +72,7 @@ internal static class QuestCatalogTests
         var seria = catalog.Get(3149);
         Check(seria.IntData.SequenceEqual([76166]) && seria.CompleteNpc == 2 && seria.MinimumLevel == 11
             && seria.Prerequisites.SequenceEqual([4875]) && seria.DungeonIndex == 7, "3149 rescues Seria in dungeon 7");
-        bool rejected = false;
-        try { catalog.Get(3150); } catch (InvalidDataException) { rejected = true; }
-        Check(rejected, "quest after 3149 is outside this catalog");
+        Check(catalog.All.Count > 2500 && catalog.TryGet(3150, out _), "完整目录保留3149之后的剧情，不再按九项白名单过滤");
         Check(first.Rewards.Count > 2 && first.Rewards[0] == new QuestRewardToken(0, 10165055, null) && first.Rewards[1] == new QuestRewardToken(0, 1, null),
             "3145 public reward is one bracelet");
         Check(first.Rewards.Contains(new QuestRewardToken(6, first.Rewards.First(t => t.Text == "[job]").Value, "[job]"))

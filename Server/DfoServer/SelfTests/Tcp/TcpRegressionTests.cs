@@ -11,6 +11,7 @@ internal static class TcpRegressionTests
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
         ("packet-capture", (options, root, _) => PacketCaptureTcpTests.RunAsync(options, root)),
         ("town", TownProtocolTcpTests.RunAsync),
+        ("quests", QuestLifecycleTcpTests.RunAsync),
         ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
         ("dungeon-settlement", async (_, _, resources) =>

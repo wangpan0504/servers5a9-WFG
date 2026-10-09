@@ -18,7 +18,6 @@ internal static class CharacterCreation
             Job = profile.Job,
             Skills = skills,
             AcceptedStoryLevel = 1,
-            ActiveMainQuests = [new(0, 3145, 1)],
             InitialLearning = initialization?.State ?? CharacterLearningState.Uninitialized,
             DungeonState = CharacterDungeonState.NewOrdinary,
             Inventory = InventoryRewardGrantService.CreateStarter(profile)

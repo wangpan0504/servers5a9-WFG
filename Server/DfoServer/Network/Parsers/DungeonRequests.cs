@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 
 namespace DfoServer.Network.Parsers;
 
@@ -8,11 +9,18 @@ internal sealed record DungeonMoveRequest(byte X, byte Y, uint Unknown2, uint Un
 internal sealed record DungeonDeathParticipant(ushort Kind, ushort ObjectKey, ulong CumulativeHpDecrease, ushort PositiveHpDecreaseCount);
 internal sealed record DungeonSinglePlayerDeathStatistics(ulong Unknown6, uint Unknown14, ulong Unknown18, uint Unknown26,
     DungeonDeathParticipant Participant, byte RewriteFlag, uint SpawnLevel, ulong SpawnHpSnapshot,
-    uint BodyChecksum, bool ChecksumMatches, IReadOnlyList<byte> RemainingFields);
+    uint BodyChecksum, bool ChecksumMatches, IReadOnlyList<byte> RemainingFields)
+{
+    public ImmutableArray<DungeonDeathParticipant> Participants { get; init; } = [Participant];
+}
 internal sealed record DungeonDeathRequest(uint ObjectKey, ushort Reporter, IReadOnlyList<byte> RemainingFields)
 {
     public DungeonSinglePlayerDeathStatistics? SinglePlayerStatistics { get; init; }
 }
+// 02A787A0独立发送分支；+1754来自构造参数及资源查询，不是普通怪物对象key。
+internal sealed record DungeonPassiveDeathRequest(uint ObjectIdentifier, uint ActorFlags, byte Unknown36,
+    ushort Unknown39, byte UnknownLast, bool ChecksumMatches, IReadOnlyList<byte> ContextFields);
+internal sealed record DungeonScriptedDeathRequest(uint ObjectKey, byte RewriteFlag, bool ChecksumMatches);
 
 // Unknown 后的数字为正文偏移；保留未确认字段，不推断常量域或业务枚举。
 internal readonly record struct DungeonSelectionRequest(
@@ -36,31 +44,62 @@ internal static class DungeonRequests
     public static bool TryParseDeath(ReadOnlySpan<byte> body, out DungeonDeathRequest? request)
     {
         request = null;
-        // 诊断仍保留整个88B样本；统计布局另按已核对的单参与者形状识别，不据此签发死亡事实。
-        if (body.Length != 88) return false;
-        TryParseSinglePlayerDeathStatistics(body, out var statistics);
+        // 旧88B诊断合同保留；Full03动态writer和友方APC实收另确认74+14*count，无额外前缀。
+        bool parsed = TryParseSinglePlayerDeathStatistics(body, out var statistics);
+        if (body.Length != 88 && !parsed) return false;
         request = new(BinaryPrimitives.ReadUInt32LittleEndian(body), BinaryPrimitives.ReadUInt16LittleEndian(body[4..]),
             Array.AsReadOnly(body[6..].ToArray())) { SinglePlayerStatistics = statistics };
+        return true;
+    }
+
+    public static bool TryParsePassiveDeath(ReadOnlySpan<byte> body, out DungeonPassiveDeathRequest? request)
+    {
+        request = null;
+        // 直接writer共43B，029083A0另写5B或27B，通用发送追加4B：总长52B或74B。
+        // 常量域来自该生产者；公共helper的22B上下文原样保留，不套用普通怪物HP统计。
+        if (body.Length is not (52 or 74) || BinaryPrimitives.ReadUInt16LittleEndian(body[4..]) != ushort.MaxValue ||
+            body[6..36].ContainsAnyExcept((byte)0) || body[37] != 1 || body[38] != 0 || body[41] != 0 || body[^6] != 0)
+            return false;
+        uint checksum = BinaryPrimitives.ReadUInt32LittleEndian(body[^4..]);
+        request = new(BinaryPrimitives.ReadUInt32LittleEndian(body), BinaryPrimitives.ReadUInt32LittleEndian(body[42..]),
+            body[36], BinaryPrimitives.ReadUInt16LittleEndian(body[39..]), body[^5],
+            checksum == ClientBodyChecksum.Compute(body[..^4]), Array.AsReadOnly(body[46..^6].ToArray()));
+        return true;
+    }
+
+    public static bool TryParseScriptedDeath(ReadOnlySpan<byte> body, out DungeonScriptedDeathRequest? request)
+    {
+        request = null;
+        // 02B52E30普通对象生产者的count=0分支；参与者少14B，共74B。独立于被动物件生产者。
+        // reporter可为实际角色号或FFFF；zz的3151撤退演员实际回报角色号，不能把FFFF当资格。
+        if (body.Length != 74 || body[30] != 0)
+            return false;
+        // 与单参与者形状相比少14B；改写标志在偏移31，不能借用被动物件格式的偏移42。
+        request = new(BinaryPrimitives.ReadUInt32LittleEndian(body),body[31],
+            BinaryPrimitives.ReadUInt32LittleEndian(body[70..]) == ClientBodyChecksum.Compute(body[..70]));
         return true;
     }
 
     internal static bool TryParseSinglePlayerDeathStatistics(ReadOnlySpan<byte> body, out DungeonSinglePlayerDeathStatistics? statistics)
     {
         statistics = null;
-        // 02B52FE6/02C5AA0B的公共前缀为u32/u16/u64/u32/u64/u32；随后u8数量及14B参与者。
-        // 本次普通单人实收只有count=1、总长88B。其他数量和发送分支不能借此偏移解析。
-        if (body.Length != 88 || body[30] != 1)
+        // 02B533D0写u8 count，02B533F0..02B53493逐行写u16/u16/u64/u16；最多254行，顺序不是killer顺序。
+        if (body.Length < 88 || body[30] is 0 or 255 || body.Length != 74 + 14*body[30])
             return false;
-        var participant = new DungeonDeathParticipant(BinaryPrimitives.ReadUInt16LittleEndian(body[31..]),
-            BinaryPrimitives.ReadUInt16LittleEndian(body[33..]), BinaryPrimitives.ReadUInt64LittleEndian(body[35..]),
-            BinaryPrimitives.ReadUInt16LittleEndian(body[43..]));
-        uint checksum = BinaryPrimitives.ReadUInt32LittleEndian(body[84..]);
+        var participants = ImmutableArray.CreateBuilder<DungeonDeathParticipant>(body[30]);
+        for (int at = 31; at < 31 + 14*body[30]; at += 14)
+            participants.Add(new(BinaryPrimitives.ReadUInt16LittleEndian(body[at..]),
+                BinaryPrimitives.ReadUInt16LittleEndian(body[(at+2)..]), BinaryPrimitives.ReadUInt64LittleEndian(body[(at+4)..]),
+                BinaryPrimitives.ReadUInt16LittleEndian(body[(at+12)..])));
+        int tail = 31 + 14*body[30];
+        uint checksum = BinaryPrimitives.ReadUInt32LittleEndian(body[^4..]);
         // 029083A0写改写标志、等级getter及this+1140的创建HP快照；快照不是新恢复的原版maxHP公式。
         // 末4B由通用发送前处理追加。这里只报告检查结果，原诊断长度接受行为不据此改变。
         statistics = new(BinaryPrimitives.ReadUInt64LittleEndian(body[6..]), BinaryPrimitives.ReadUInt32LittleEndian(body[14..]),
             BinaryPrimitives.ReadUInt64LittleEndian(body[18..]), BinaryPrimitives.ReadUInt32LittleEndian(body[26..]),
-            participant, body[55], BinaryPrimitives.ReadUInt32LittleEndian(body[56..]), BinaryPrimitives.ReadUInt64LittleEndian(body[60..]),
-            checksum, checksum == ClientBodyChecksum.Compute(body[..84]), Array.AsReadOnly(body[45..].ToArray()));
+            participants[0], body[tail+10], BinaryPrimitives.ReadUInt32LittleEndian(body[(tail+11)..]), BinaryPrimitives.ReadUInt64LittleEndian(body[(tail+15)..]),
+            checksum, checksum == ClientBodyChecksum.Compute(body[..^4]), Array.AsReadOnly(body[tail..].ToArray()))
+        { Participants = participants.ToImmutable() };
         return true;
     }
     public static bool TryParseMove(ReadOnlySpan<byte> body, out DungeonMoveRequest? request)

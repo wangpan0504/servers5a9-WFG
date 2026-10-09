@@ -30,6 +30,10 @@ internal static class QuestFixedRewardTests
         That(Parse(Int(1000), Job(), Int(0), Int(-1), Int(1)).ForJob(1).IsEmpty,
             "资源没有该职业匹配行时合法空结果，不补默认物品");
         That(Parse().ForJob(0).IsEmpty, "无固定物品token不伪造奖励");
+        var branches = Parse(Int(1000),Job(),Int(0),Int(0),Int(1),Int(1004),Job(),Int(0),Int(1),Int(2),Int(1047),Job(),Int(0),Int(-1),Int(3));
+        That(branches.ForJob(0,0).Select(row => row.ItemId).SequenceEqual(new[]{1000,1047}) &&
+            branches.ForJob(0,0x21).Select(row => row.ItemId).SequenceEqual(new[]{1004,1047}),
+            "奖励按基础转职分支筛选，觉醒位不改变分支，-1保留全部分支");
 
         QuestRewardToken[] source = [Int(1000), Int(2), Int(1004), Job(), Int(0), Int(-1), Int(3)];
         var frozen = Parse(source);
@@ -89,8 +93,7 @@ internal static class QuestFixedRewardTests
         {
             QuestFixedItemReward[] expected = [new(10165055, 1), new(weapons[job], 1), new(10403, 1),
                 new(12403, 1), new(14403, 1), new(16403, 1), new(18403, 1)];
-            if (!definition.ForJob(job).SequenceEqual(expected) ||
-                !DfoServer.Game.Quests.QuestFixedRewardGrant.ReadRewards(job, quest).SequenceEqual(expected))
+            if (!definition.ForJob(job).SequenceEqual(expected))
                 throw new InvalidOperationException("FAIL 3145固定奖励原顺序或职业条件: job=" + job);
         }
         Console.WriteLine("PASS 17 3145固定奖励资源断言");

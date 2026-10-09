@@ -106,8 +106,52 @@ internal static class SinglePlayerDungeonRunTests
         var multiClear = multiRun.AcceptConfirmedDeath(finalBossDeath);
         That(multiClear.ClearFact!.ConfirmedDeathEvents.SequenceEqual(new[] { firstBossDeath.EventId, finalBossDeath.EventId }) &&
             multiClear.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement &&
-            multiClear.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 22, 23 }),
-            "all blocking bosses clear despite living normal enemies and friendly bosses without fabricating their deaths");
+            multiClear.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 23 }) && multiClear.CulledMonsterKeys.SequenceEqual(new ushort[] { 22 }),
+            "全部敌对Boss死亡后清除剩余阻塞小怪，友方Boss保留且通关凭据不增加虚构击杀");
+        That(multiRun.IsCulledMonster(22) && multiRun.CurrentLivingMonster(22) is null &&
+            multiRun.AcceptConfirmedDeath(authority.Death(multiRun.Snapshot.Identity,22,3)).Outcome == DungeonRunOutcome.Rejected &&
+            multiRun.ClearFact!.ConfirmedDeathEvents.Count == 2,
+            "清場小怪不能再次签发击杀、经验或新的通关凭据");
+        var native = new NativeDungeonCombatAuthority();
+        That(SinglePlayerDungeonRun.TryCreate(terminalEntry,7,700,new([multiBoss],[]),native,out var nativeRun,out _) &&
+            native.BindTo(nativeRun!),"复用多Boss夹具验证原生迟到报告入口");
+        nativeRun!.CompleteLoading(nativeRun.Snapshot.Identity,Guid.NewGuid());
+        ushort reporter = checked((ushort)nativeRun.Snapshot.Identity.CharacterId);
+        NativeDungeonDeathObservation Report(ushort key) => new(key,reporter,0x0111,reporter,0,0,0,0,0,0,0,true,new string('A',64));
+        var firstNative = native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(20)).Death!;
+        nativeRun.AcceptConfirmedDeath(firstNative);
+        var lastNative = native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(21)).Death!;
+        var preparedNative = nativeRun.PrepareConfirmedDeath(lastNative).Pending!;
+        That(!nativeRun.IsCulledMonster(22) && nativeRun.Snapshot.LivingMonsters.Contains((ushort)22) &&
+            preparedNative.Result.CulledMonsterKeys.SequenceEqual(new ushort[] { 22 }),"原生Boss死亡提交前仅规划清场");
+        nativeRun.ConfirmCommittedDeath(preparedNative);
+        var nativeClear = nativeRun.ClearFact;
+        for (int repeat = 0; repeat < 2; repeat++)
+            That(native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(22)) is { Outcome: DungeonRunOutcome.Duplicate, Death: null } &&
+                ReferenceEquals(nativeRun.ClearFact,nativeClear) && nativeClear!.ConfirmedDeathEvents.Count == 2,
+                "Boss后小怪合法迟到报告作为清场重复处理，不新增死亡或通关事实");
+        That(native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(22) with { ChecksumMatches = false }).Outcome == DungeonRunOutcome.Rejected &&
+            native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(22) with { ReporterKey = checked((ushort)(reporter+1)) }).Outcome == DungeonRunOutcome.Rejected,
+            "清场迟到报告仍复验检查值和真实上报角色");
+        nativeRun.Return(nativeRun.Snapshot.Identity,Guid.NewGuid());
+        That(native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(22)).Outcome == DungeonRunOutcome.Rejected,
+            "退出实例后不能再使用清场重放入口");
+        var ai = new DungeonRoomAiCharacter(2004,[2004,810,264,0,0,0],"[monster]","[boss]","aicharacter/fixture.aic",32);
+        var apcPlan = DungeonMonsterPlan.FromRoom(new(boss,[],[],[]) { AiCharacters = [ai,ai with { Id = 2010, RawValues = [2010,500,264,0,0,0], Faction = "[character]" }] },99,30);
+        That(SinglePlayerDungeonRun.TryCreate(terminalEntry,6,600,new([apcPlan],[]),authority,out var apcRun,out _),
+            "纯APC终点保留敌对和友方演员，使用既有正式实例");
+        var apcLoaded = apcRun!.CompleteLoading(apcRun.Snapshot.Identity,Guid.NewGuid());
+        That(apcLoaded.ClearFact is null && apcRun.Phase == SinglePlayerDungeonPhase.Dungeon && apcRun.CurrentLivingMonster(30) is not null &&
+            apcRun.CurrentLivingMonster(31) is null,"敌对APC Boss存活时不能把终点误判为空房清图，友方不具有死亡资格");
+        var apcDeath = authority.Death(apcRun.Snapshot.Identity,30,1);
+        var apcPending = apcRun.PrepareConfirmedDeath(apcDeath).Pending!;
+        That(apcPending.Result.ClearFact is { ConfirmedDeathEvents.Count: 1 } && apcRun.ClearFact is null &&
+            apcRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 30,31 }),"APC末次死亡提交前不提前修改演员或清图事实");
+        var apcClear = apcRun.ConfirmCommittedDeath(apcPending);
+        That(apcClear.ClearFact!.ConfirmedDeathEvents.SequenceEqual(new[] { apcDeath.EventId }) &&
+            apcRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 31 }) &&
+            apcRun.AcceptConfirmedDeath(apcDeath).Outcome == DungeonRunOutcome.Duplicate,
+            "APC真实死亡仅确认一次，友方仍在场，清图事件与普通事务共用同一事实");
         var side = new DungeonMap("map", new(0, 1), 4, "map/fixture-side.map");
         var sideMaze = new DungeonMaze(0, 3, 2, "fixture-uncleared-side", [start.Position], [boss.Position], [start, friendly, boss, side], []);
         var sideRoute = route with
@@ -123,26 +167,13 @@ internal static class SinglePlayerDungeonRunTests
         sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
         sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), boss.Position);
         sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
-        var prematureBoss = sideRun.AcceptConfirmedDeath(authority.Death(sideRun.Snapshot.Identity, 13, 2));
-        That(prematureBoss.ClearFact is null && sideRun.Phase == SinglePlayerDungeonPhase.Dungeon &&
-            sideRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 14 }), "an uncleared earlier room prevents terminal boss settlement");
-        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
-        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
-        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), start.Position);
-        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
-        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), side.Position);
-        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
-        sideRun.AcceptConfirmedDeath(authority.Death(sideRun.Snapshot.Identity, 15, 3));
-        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), start.Position);
-        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
-        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
-        sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
-        sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), boss.Position);
-        var delayedClear = sideRun.CompleteLoading(sideRun.Snapshot.Identity, Guid.NewGuid());
-        That(delayedClear.ClearFact is { ConfirmedDeathEvents.Count: 3 } &&
-            delayedClear.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement &&
-            delayedClear.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 14 }),
-            "loading uses the same boss predicate once all prior blocking actors are actually dead");
+        var branchClear = sideRun.AcceptConfirmedDeath(authority.Death(sideRun.Snapshot.Identity, 13, 2));
+        That(branchClear.ClearFact is { ConfirmedDeathEvents.Count: 2 } && sideRun.Phase == SinglePlayerDungeonPhase.Settlement &&
+            sideRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 14 }),
+            "terminal boss death settles without visiting an optional branch or fabricating its deaths");
+        That(sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position).Outcome == DungeonRunOutcome.Rejected &&
+            sideRun.ClearFact == branchClear.ClearFact,
+            "settlement cannot resume room traversal or add an optional branch to the committed clear fact");
         Console.WriteLine($"PASS {Count - checks} dungeon nonblocking actor lifecycle assertions");
     }
 

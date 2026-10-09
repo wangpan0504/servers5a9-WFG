@@ -32,6 +32,7 @@ internal static class FormalDungeonSessionTests
         var kills = DungeonKillExperienceCatalog.Load(pvf);
         var catalog = DungeonCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
+        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
         Lifecycle(0);
         Lifecycle(14);
         OrdinaryJobs();
@@ -47,10 +48,10 @@ internal static class FormalDungeonSessionTests
 
         void Lifecycle(byte job)
         {
-            using var f = new Fixture("FormalJ" + job, towns, characters, learning, job: job);
+            using var f = new Fixture("FormalJ" + job, towns, characters, learning, quests, job: job);
             Check(f.Created.DungeonState == CharacterDungeonState.NewOrdinary && f.Created.Learning.Initialized &&
                 f.Created.Learning.Trees.Count == 2, "正常建角明确初始化副本owner与两树绑定");
-            ulong startExperience = growth.GetCumulativeExperienceBoundary(1) - kills.GetExperience(3);
+            ulong startExperience = growth.GetCumulativeExperienceBoundary(1) - 104;
             f.Sql($"UPDATE characters SET experience={startExperience} WHERE id={f.Created.Id}");
             f.Sql("UPDATE character_dungeon_state SET capsule_experience=11,proficiency_level=2,proficiency_experience=33");
             f.SelectEntry();
@@ -153,7 +154,9 @@ internal static class FormalDungeonSessionTests
                     Check(result.Outcome == DungeonRunOutcome.Accepted && result.Receipt is not null && result.MonsterKey == monster.ObjectKey,
                         "Session私有Native权威经过Prepare/SQL/Confirm发布实际回执");
                     finalReceipt = result.Receipt!;
-                    total += kills.GetExperience(monster.CandidateLevel);
+                    uint expectedGain = monster.CandidateLevel == 5 ? 137u : selectedBefore.Level < 3 ? 104u : 93u;
+                    Check(result.Reward!.Amount == expectedGain, "六房逐次使用击杀前等级及真实怪物等级计算经验");
+                    total += expectedGain;
                     Check(f.Count() == count + 1 && Same(finalReceipt.Character, f.Read()) &&
                         finalReceipt.Character.DungeonState == preservedState && f.Session.CanPublishFormalDungeon(finalReceipt) &&
                         !f.Session.CanPublishFormalDungeon(receipt), "成长只落一条并保留副本附属owner，旧角色回执失效");
@@ -232,7 +235,7 @@ internal static class FormalDungeonSessionTests
         {
             foreach (byte job in new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 15 })
             {
-                using var f = new Fixture("FormalJ" + job, towns, characters, learning, job: job);
+                using var f = new Fixture("FormalJ" + job, towns, characters, learning, quests, job: job);
                 Check(f.Created.Job == job && f.Created.GrowType == 0 && f.Created.Learning.Initialized &&
                     f.Created.Learning.Trees.Count == 2 && f.Created.DungeonState == CharacterDungeonState.NewOrdinary,
                     $"普通职业{job}真实建角初始化双树与副本owner");
@@ -246,7 +249,7 @@ internal static class FormalDungeonSessionTests
                 var monster = loaded.Monsters.Monsters[0];
                 var death = f.Session.ObserveFormalDungeonDeath(Observation(loaded, monster), kills, growth);
                 Check(death.Outcome == DungeonRunOutcome.Accepted && f.Count() == 1 &&
-                    f.Session.Selected!.Learning.Experience == before.Learning.Experience + kills.GetExperience(monster.CandidateLevel) &&
+                    f.Session.Selected!.Learning.Experience == before.Learning.Experience + 104 &&
                     Same(f.Session.Selected, f.Read()) && entry.Character.DungeonState!.LastAttempt == 1,
                     $"普通职业{job}正式入场加载及一次死亡成长成功");
                 var final = f.Session.Selected;
@@ -260,7 +263,7 @@ internal static class FormalDungeonSessionTests
         {
             foreach (var identity in new[] { (Job: (byte)9, Grow: 0), (Job: (byte)10, Grow: 0), (Job: (byte)14, Grow: 1), (Job: (byte)0, Grow: 37) })
             {
-                using var f = new Fixture("EntryJ" + identity.Job, towns, characters, learning, job: identity.Job);
+                using var f = new Fixture("EntryJ" + identity.Job, towns, characters, learning, quests, job: identity.Job);
                 if (identity.Grow != 0)
                     f.Session.UpdateProgress(new(CharacterProgressField.Grow, f.Owner.Account, f.Created.Name, identity.Grow, 0));
                 f.SelectEntry();
@@ -281,7 +284,7 @@ internal static class FormalDungeonSessionTests
 
         void RejectedEntry()
         {
-            using var ordinary = new Fixture("RejectRoute", towns, characters, learning, job: 14);
+            using var ordinary = new Fixture("RejectRoute", towns, characters, learning, quests, job: 14);
             ordinary.SelectEntry();
             var current = ordinary.Session.BeginDungeonSelection();
             var selected = ordinary.Session.Selected!;
@@ -293,7 +296,7 @@ internal static class FormalDungeonSessionTests
                     "放开普通职业仍保留副本/任务/难度资格，拒绝不预留attempt或key");
             foreach (bool missing in new[] { false, true })
             {
-                using var f = new Fixture(missing ? "TaskMissing" : "TaskReached", towns, characters, learning, job: 14);
+                using var f = new Fixture(missing ? "TaskMissing" : "TaskReached", towns, characters, learning, quests, job: 14);
                 f.Sql(missing ? "DELETE FROM character_active_main_quests" : "UPDATE character_active_main_quests SET condition_state=0");
                 f.SelectEntry();
                 var selection = f.Session.BeginDungeonSelection();
@@ -308,7 +311,7 @@ internal static class FormalDungeonSessionTests
 
         void Reservation()
         {
-            using (var f = new Fixture("CreateAtomic", towns, characters, learning))
+            using (var f = new Fixture("CreateAtomic", towns, characters, learning, quests))
             {
                 var original = f.Read();
                 var itemCount = f.Query("SELECT count(*) FROM character_inventory_items");
@@ -323,7 +326,7 @@ internal static class FormalDungeonSessionTests
             }
             foreach (string table in new[] { "characters", "character_dungeon_state" })
             {
-                using var f = new Fixture(table == "characters" ? "ReserveRole" : "ReserveOwner", towns, characters, learning);
+                using var f = new Fixture(table == "characters" ? "ReserveRole" : "ReserveOwner", towns, characters, learning, quests);
                 f.SelectEntry();
                 var selected = f.Session.Selected!;
                 f.Sql($"CREATE TRIGGER reserve_fail AFTER UPDATE ON {table} BEGIN SELECT RAISE(ABORT,'reservation failure'); END");
@@ -336,7 +339,7 @@ internal static class FormalDungeonSessionTests
                 Reject<InvalidOperationException>(() => f.Repository.ReserveDungeonAttempt(f.Owner, selected, success.Character.DungeonState.NextObjectKey + 1),
                     "旧revision及旧owner快照不能再次预留");
             }
-            using (var f = new Fixture("ReserveCAS", towns, characters, learning))
+            using (var f = new Fixture("ReserveCAS", towns, characters, learning, quests))
             {
                 f.SelectEntry();
                 var selected = f.Session.Selected!;
@@ -346,7 +349,7 @@ internal static class FormalDungeonSessionTests
                 Check(f.Read().DungeonState == selected.DungeonState && f.Read().Revision == selected.Revision,
                     "任务CAS拒绝不消费attempt或key");
             }
-            using (var f = new Fixture("ReserveFull", towns, characters, learning))
+            using (var f = new Fixture("ReserveFull", towns, characters, learning, quests))
             {
                 f.Sql("UPDATE character_dungeon_state SET next_object_key=65536");
                 f.SelectEntry();
@@ -354,7 +357,7 @@ internal static class FormalDungeonSessionTests
                 Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null && Same(selected, f.Read()),
                     "对象key耗尽拒绝完整路线，不回绕");
             }
-            using (var f = new Fixture("ResAttempt", towns, characters, learning))
+            using (var f = new Fixture("ResAttempt", towns, characters, learning, quests))
             {
                 f.Sql($"UPDATE character_dungeon_state SET last_attempt={long.MaxValue}");
                 f.SelectEntry();
@@ -362,13 +365,16 @@ internal static class FormalDungeonSessionTests
                 Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null && Same(selected, f.Read()),
                     "尝试号耗尽拒绝，不发生加法回绕");
             }
-            using (var f = new Fixture("ReserveLast", towns, characters, learning))
+            using (var f = new Fixture("ReserveLast", towns, characters, learning, quests))
             {
                 f.Sql("UPDATE character_dungeon_state SET next_object_key=65535");
                 f.SelectEntry();
                 var selected = f.Session.Selected!;
-                Reject<InvalidDataException>(() => Enter(f), "剩余单个key不能部分预留完整3145路线");
-                Check(Same(selected, f.Read()) && f.Session.DungeonSnapshot is null, "路线容量拒绝不留下部分预留或run");
+                Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null,
+                    "剩余单个key不能部分预留完整3145路线");
+                Check(ReferenceEquals(selected, f.Session.Selected) && Same(selected, f.Read()) &&
+                    f.Session.DungeonSnapshot is null && f.Session.Phase == SessionPhase.Town,
+                    "锁外路线容量拒绝不留下角色revision、owner预留或run");
                 var last = f.Repository.ReserveDungeonAttempt(f.Owner, selected, 65536);
                 Check(last.DungeonState!.NextObjectKey == 65536 && last.DungeonState.LastAttempt == 1 && Same(last, f.Read()),
                     "仓储最后key区间可保存65536高水位哨兵");
@@ -378,8 +384,9 @@ internal static class FormalDungeonSessionTests
 
         void UnknownOwner()
         {
-            using var f = new Fixture("LegacyFormal", towns, characters, learning);
+            using var f = new Fixture("LegacyFormal", towns, characters, learning, quests);
             var original = f.Read();
+            DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
             f.Sql("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_pickup_receipts");
             f.Sql("DROP TABLE character_dungeon_loot_receipts");
             f.Sql("DROP TABLE character_dungeon_state");
@@ -404,7 +411,7 @@ internal static class FormalDungeonSessionTests
 
         void Invalidation()
         {
-            using var f = new Fixture("FormalEpoch", towns, characters, learning);
+            using var f = new Fixture("FormalEpoch", towns, characters, learning, quests);
             f.SelectEntry();
             var first = Enter(f);
             f.Session.ReturnToRoster();
@@ -431,7 +438,7 @@ internal static class FormalDungeonSessionTests
 
         void RecordedNormalStatistics()
         {
-            using var f = new Fixture("RecordedKill", towns, characters, learning, secondCharacter: true);
+            using var f = new Fixture("RecordedKill", towns, characters, learning, quests, secondCharacter: true);
             f.SelectEntry();
             var entry = Enter(f);
             Check(entry.Character.Id == 2 && entry.Monsters.Monsters.Select(monster => monster.ObjectKey).SequenceEqual(new ushort[] { 256, 257, 258, 259 }),
@@ -459,7 +466,7 @@ internal static class FormalDungeonSessionTests
                     Convert.ToHexString(SHA256.HashData(bytes)));
                 var committed = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
                 Check(committed.Outcome == DungeonRunOutcome.Accepted && committed.ClearFact is null &&
-                    f.Count() == ++index && f.Session.Selected!.Learning.Experience == (ulong)index * kills.GetExperience(3),
+                    f.Count() == ++index && f.Session.Selected!.Learning.Experience == (ulong)index * 104,
                     "正式Native合同接受不同计数/前缀，每key仅落一次真实成长事务");
                 Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate && f.Count() == index,
                     "不同真实形状的精确重放也不重复经验");
@@ -471,7 +478,7 @@ internal static class FormalDungeonSessionTests
 
         void FrozenLootTransaction()
         {
-            using var f = new Fixture("LootReceipt", towns, characters, learning, job: 14);
+            using var f = new Fixture("LootReceipt", towns, characters, learning, quests, job: 14);
             f.SelectEntry();
             f.Session.BeginDungeonSelection();
             var drops = DungeonMonsterDropCatalog.Load(pvf);
@@ -501,12 +508,12 @@ internal static class FormalDungeonSessionTests
             var death = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
             var ground = death.Drop ?? throw new InvalidOperationException("FAIL 明确合成命中没有地面对象");
             Check(calls == 2 && death.Outcome == DungeonRunOutcome.Accepted && ground.Core.ItemId == 1000 && ground.Core.Count == 1 &&
-                f.Count() == 1 && f.Read().Learning.Experience == 72 &&
+                f.Count() == 1 && f.Read().Learning.Experience == 104 &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 1,
                 "原事实重试只复用冻结结果，一次提交XP及完整地面核心");
             Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate &&
                 f.Session.ObserveFormalDungeonDeath(changedObservation, kills, growth).Outcome == DungeonRunOutcome.Rejected && calls == 2 &&
-                f.Count() == 1 && f.Read().Learning.Experience == 72 &&
+                f.Count() == 1 && f.Read().Learning.Experience == 104 &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 1,
                 "控制死亡提交后精确重复与相容改包均不再次发经验、抽奖或增发地面");
             uint key = ground.Reservation.GroundKey;
@@ -542,11 +549,11 @@ internal static class FormalDungeonSessionTests
             f.Session.ReturnToRoster();
             f.Session.Select(f.Created.Slot);
             f.Session.MarkReady();
-            Check(f.Session.Selected!.Learning.Experience == 288 && f.Session.Selected.Inventory.Items.Single(item => item.Uid == uid).Core.Value == 2 &&
+            Check(f.Session.Selected!.Learning.Experience == 416 && f.Session.Selected.Inventory.Items.Single(item => item.Uid == uid).Core.Value == 2 &&
                 f.Session.Selected.DungeonState!.NextObjectKey == entry.Character.DungeonState.NextObjectKey &&
                 new CharacterRepository(f.Path).LoadCharacter(f.Owner, f.Created.Slot).Inventory.Items.Single(item => item.Uid == uid).Core.Value == 2,
                 "重选/仓储重开保留拾取资产、XP和不回绕高水位；非实机重启替代");
-            using var miss = new Fixture("LootMiss", towns, characters, learning);
+            using var miss = new Fixture("LootMiss", towns, characters, learning, quests);
             miss.SelectEntry();
             int missCalls = 0;
             var missEntry = miss.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
@@ -557,7 +564,7 @@ internal static class FormalDungeonSessionTests
                 Convert.ToInt64(miss.Query("SELECT count(*) FROM character_dungeon_loot_receipts WHERE core IS NULL")) == 1 &&
                 miss.Session.ObserveFormalDungeonDeath(missObservation, kills, growth).Outcome == DungeonRunOutcome.Duplicate && missCalls == 2,
                 "未命中也保存冻结事实，精确重放不能改成物品或再次抽奖");
-            using var full = new Fixture("LootFull", towns, characters, learning);
+            using var full = new Fixture("LootFull", towns, characters, learning, quests);
             var empty = full.Read();
             var range = ItemSlotBoundService.Range(DfoServer.GameWorld.Items.ItemKind.Consumable, empty.Inventory.Expansion);
             var fullCore = InventoryRewardGrantService.Create(itemResources.Items.Get(1047), 1000);
@@ -596,7 +603,7 @@ internal static class FormalDungeonSessionTests
             "重新选角后经合法出房旅行到左入口");
     }
 
-    static NativeDungeonDeathObservation Observation(FormalDungeonReceipt receipt, DungeonPlannedMonster monster) =>
+    internal static NativeDungeonDeathObservation Observation(FormalDungeonReceipt receipt, DungeonPlannedMonster monster) =>
         new(monster.ObjectKey, receipt.Character.Id, 0x0111, receipt.Character.Id, 600, 3, 0,
             checked((uint)monster.CandidateLevel), 504, 620, 3, true, new string('A', 64));
     static bool Same(Character first, Character second) => JsonSerializer.Serialize(first) == JsonSerializer.Serialize(second);
@@ -611,14 +618,15 @@ internal static class FormalDungeonSessionTests
         public AccountOwners.Lease Owner { get; }
         public GameSession Session { get; }
         public Character Created { get; }
-        public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, bool secondCharacter = false, byte job = 0)
+        public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool secondCharacter = false, byte job = 0)
         {
             Path = System.IO.Path.Combine(root, "game.db");
-            Repository = new(Path);
+            Repository = new(Path, quests);
             Owner = Owners.Acquire("formal-session", () => { });
             Session = new(Repository, towns, Owner);
             if (secondCharacter) Session.CreateCharacter("RecordDummy", characters.Get(0), learning);
-            Created = Session.CreateCharacter(name, characters.Get(job), learning);
+            Created = Repository.Create(Owner, CharacterCreation.Prepare(name, characters.Get(job), towns.Room, towns.InitialReturn, learning.Get)
+                with { ActiveMainQuests = [new(0,3145,1)] });
         }
         public void SelectEntry()
         {

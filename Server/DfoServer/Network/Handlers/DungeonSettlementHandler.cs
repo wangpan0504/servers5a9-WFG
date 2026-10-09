@@ -14,7 +14,7 @@ namespace DfoServer.Network.Handlers;
 internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dungeons,
     DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth, TownProjection town,
     DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items,
-    CharacterLevelProjection levelProjection) : IGameCommandModule
+    CharacterLevelProjection levelProjection, EpicPieceCatalog? pieces = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -59,6 +59,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
+        if (!previous.ActiveMainQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
+                "formal_clear_quest_conditions",Guard);
         if (SkillPackets.BindingsChanged(previous.Learning, receipt.Character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_clear_skills", Guard);
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard);
@@ -92,10 +95,27 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
 
     async Task<CommandResult> ResultCommandAsync(GameConnectionContext context, Packet request)
     {
-        if (request.Body.Length != 2 || request.Body[0] is not (1 or 2) || request.Body[1] > 3 ||
-            context.Session.FormalDungeonResultFocus() is not { } current)
+        if (request.Body.Length != 2 || request.Body[0] is not (1 or 2) || request.Body[1] > 3)
             return CommandResult.Unhandled;
         byte state = request.Body[0], option = request.Body[1];
+        if (state == 1 && option == 3)
+        {
+            var boundary = context.Session.ConfirmFormalDungeonContinuationBoundary();
+            if (boundary.Receipt is { } returning)
+            {
+                await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,option),
+                    "formal_next_quest_boundary_confirm",() => context.Session.CanPublishTravel(returning));
+                if (!boundary.Duplicate)
+                    await town.ReturnFromFormalDungeonAsync(context,returning,"formal_next_quest_town_boundary");
+                else
+                    // ACK3会再次写入场景选项；重发同一24保持退场状态，不重复回城业务或任务刷新。
+                    await context.Notify(NotiPacketType.AREA_USERS,TownPackets.Transition(returning.Character.Id,returning.Character.Position),
+                        "formal_next_quest_town_boundary_replay",() => context.Session.CanPublishTravel(returning));
+                return CommandResult.Handled;
+            }
+        }
+        if (context.Session.FormalDungeonResultFocus() is not { } current)
+            return CommandResult.Unhandled;
         if (state == 2)
         {
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_focus", () => context.Session.CanPublishDungeonSettlement(current));
@@ -103,7 +123,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         if (option == 0)
         {
-            var retry = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items);
+            var retry = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items,pieces);
             if (retry is null) return CommandResult.Unhandled;
             bool RetryGuard() => context.Session.CanPublishDungeonSettlement(retry);
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_retry", RetryGuard);
@@ -114,6 +134,21 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         if (option == 1)
         {
+            var continuation = context.Session.BeginFormalDungeonQuestContinuation(current,dungeons,rooms,drops,items,pieces,out string reason);
+            if (continuation is not null)
+            {
+                log.Write("formal_quest_continuation",new { Connection = context.Id, Accepted = true, Reason = reason, current.Entry.RouteQuestId });
+                await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,option),
+                    "formal_result_next_quest",() => context.Session.CanPublishDungeonSettlement(continuation));
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),
+                    "formal_next_quest_selector_wake",() => context.Session.CanPublishDungeonSettlement(continuation));
+                return CommandResult.Handled;
+            }
+            if (reason != "no-accepted-successor")
+            {
+                log.Write("formal_quest_continuation",new { Connection = context.Id, Accepted = false, Reason = reason, current.Entry.RouteQuestId });
+                return CommandResult.Handled;
+            }
             var opening = context.Session.BeginFormalDungeonOtherSelection();
             if (opening is null) return CommandResult.Unhandled;
             bool OpeningGuard() => context.Session.CanPublishDungeonSettlement(opening);
@@ -133,12 +168,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (receipt is null) return CommandResult.Unhandled;
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_return", Guard);
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character.Id, receipt.Character.Position), "formal_result_town", Guard);
-        context.Owner.Execute(() =>
-        {
-            if (Guard()) town.Join(context);
-            return true;
-        });
+        await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_result_town");
         return CommandResult.Handled;
     }
 }

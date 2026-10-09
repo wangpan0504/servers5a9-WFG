@@ -1,0 +1,233 @@
+using System.Collections.Immutable;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Quests;
+
+namespace DfoServer.Game.Quests;
+
+internal enum QuestLifecycleAction { Accept, Giveup, Condition }
+internal enum QuestLifecycleOutcome { Rejected, Committed, Unchanged }
+internal readonly record struct QuestClientCondition(byte? Channel, byte Value, byte Reserved);
+internal sealed record QuestLifecycleCommit(Character Character, QuestLifecyclePlan Plan, bool Duplicate, bool ProjectionCurrent);
+internal sealed record QuestSceneEvent(Guid OperationId, DfoServer.Game.Dungeons.DungeonRunIdentity Identity,
+    int DungeonId, int MapId, int TemplateId, int SourceOrdinal, string Fingerprint)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? DropSnapshot { get; init; }
+}
+
+internal sealed class QuestLifecyclePlan
+{
+    private QuestLifecyclePlan(Character expected, QuestLifecycleAction action, ushort questId, Guid acceptance,
+        ImmutableArray<ActiveMainQuest> active, InventoryPlan inventory, QuestSceneEvent? sceneEvent = null)
+    {
+        Expected = expected; Action = action; QuestId = questId; AcceptanceId = acceptance;
+        ActiveAfter = active; Inventory = inventory; SceneEvent = sceneEvent; OperationId = sceneEvent?.OperationId ?? Guid.NewGuid();
+        CompletedAfter = expected.CompletedQuests.ToImmutableArray();
+        AccountCompletedAfter = expected.AccountCompletedQuests.ToImmutableArray();
+    }
+
+    public Character Expected { get; }
+    public QuestLifecycleAction Action { get; }
+    public ushort QuestId { get; }
+    public Guid AcceptanceId { get; }
+    public Guid OperationId { get; }
+    public ImmutableArray<ActiveMainQuest> ActiveAfter { get; }
+    public InventoryPlan Inventory { get; }
+    public QuestSceneEvent? SceneEvent { get; }
+    public ImmutableArray<int> CompletedAfter { get; private init; }
+    public ImmutableArray<int> AccountCompletedAfter { get; private init; }
+
+    internal static QuestLifecyclePlan? ObservePassive(Character expected, QuestCatalog quests,
+        DfoServer.Game.Dungeons.DungeonEntryPlan entry, QuestSceneEvent sceneEvent, QuestDropPlan? drops = null)
+    {
+        if (sceneEvent.OperationId == Guid.Empty || sceneEvent.Identity.CharacterId != expected.Id ||
+            sceneEvent.Identity.QuestId != entry.QuestId || sceneEvent.DungeonId != entry.DungeonId ||
+            sceneEvent.MapId <= 0 || sceneEvent.TemplateId <= 0 || sceneEvent.SourceOrdinal < 0 || sceneEvent.Fingerprint.Length != 64)
+            throw new InvalidDataException("被动物件事件需要真实实例、地图和资源行身份");
+        var after = QuestHuntProgress.PassiveDeath(expected.ActiveMainQuests,entry,quests,sceneEvent.TemplateId);
+        var inventory = drops?.Inventory ?? new(expected.Inventory,expected.Inventory,"quest_passive_death");
+        if (drops is not null)
+        {
+            if (!ReferenceEquals(drops.Expected,expected) || drops.EventId != sceneEvent.OperationId || drops.Identity != sceneEvent.Identity ||
+                drops.MapId != sceneEvent.MapId) throw new InvalidDataException("被动物件掉落不是原场景事件");
+            after = QuestInventoryProgress.Refresh(after,inventory.After,quests,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            sceneEvent = sceneEvent with { DropSnapshot = drops.Snapshot };
+        }
+        var changed = after.FirstOrDefault(row => expected.ActiveMainQuests.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState));
+        if (changed is null && drops?.Outcomes.Length > 0)
+            changed = after.First(row => row.AcceptanceId == drops.Outcomes[0].AcceptanceId);
+        return changed is null ? null : new(expected,QuestLifecycleAction.Condition,changed.QuestId,changed.AcceptanceId,
+            after,inventory,sceneEvent);
+    }
+
+    public static QuestLifecyclePlan Accept(Character expected, StoryQuest quest, QuestCatalog catalog,
+        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now)
+    {
+        var eligibility = QuestEligibility.Evaluate(expected, quest, catalog);
+        if (!eligibility.Eligible || !eligibility.Visible && !QuestRelationProgress.DialogueChild(quest, catalog))
+            throw new InvalidDataException("任务当前不可从普通接取入口接取");
+        QuestCoverage.RequireOrdinaryDeclarations(quest);
+        if (QuestCycle.Daily(quest) && expected.QuestCycleDay != QuestCycle.Day(now))
+            throw new InvalidDataException("每日任务需要当前游戏日快照");
+        if (expected.ActiveMainQuests.Length >= 30)
+            throw new InvalidDataException("30个任务槽已满");
+        uint initial = quest.Condition switch
+        {
+            "[meet npc]" when quest.SubType == -1 && quest.IntData.Count == 1 && quest.IntData[0] > 0 => 1,
+            "[reach the range]" when QuestClientSceneProgress.TownRange(quest) => 1,
+            "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) => 1,
+            "[question]" when QuestQuestionProgress.TryCount(quest,out _) => QuestQuestionProgress.Unanswered,
+            "[seeking]" when quest.SubType == -1 && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
+            "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u + MissingMaterials(expected.Inventory, quest, now.ToUnixTimeSeconds()),
+            "[clear map]" when QuestClearEligibility.IsSingleMap(quest) => 1,
+            "[condition under clear]" when QuestDungeonClearProgress.TryTarget(quest,out _) => QuestDungeonClearProgress.Initial(quest),
+            "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.Initial(quest),
+            "[quest clear]" when QuestRelationProgress.SequentialParent(quest,catalog) => QuestRelationProgress.Initial(quest,catalog,expected.CompletedQuests),
+            _ when QuestStateProgress.Type(quest) is not null => QuestStateProgress.Scalar(expected,quest),
+            _ => throw new NotSupportedException("任务条件初值尚未确认: " + quest.Condition)
+        };
+        var gifts = quest.Definition!.AcceptanceRewards;
+        var rows = gifts.Length == 0 ? [] : QuestFixedRewardDefinition.Parse(quest with { Rewards = gifts }).ForJob(expected.Job,expected.GrowType);
+        var grant = InventoryRewardGrantService.TryGrantBatch(expected,
+            rows.Select(row => new InventoryReward(row.ItemId, row.Count)).ToArray(), items, goldLimits, pieces, now);
+        if (!grant.Accepted || grant.Plan is null)
+            throw new InvalidDataException("接取赠品无法整批进入背包");
+        if (grant.Plan.ChangedSlots.Length > byte.MaxValue || grant.Plan.ChangedSlots.Any(slot => slot.List != InventoryListType.Main) || grant.Plan.ChangedCurrencies.Length != 0 ||
+            grant.Plan.ChangedEpicPieces.Length != 0)
+            throw new NotSupportedException("接取赠品需要尚未确认的持有域投影");
+        if (quest.Condition is "[seeking]" or "[seek n meet npc]")
+            initial = quest.Condition == "[seek n meet npc]" ? 512u + MissingMaterials(grant.Plan.After, quest, now.ToUnixTimeSeconds())
+                : HasMaterials(expected with { Inventory = grant.Plan.After }, quest, now.ToUnixTimeSeconds()) ? 0u : 1u;
+        byte free = Enumerable.Range(0, 30).Select(at => (byte)at).First(slot => expected.ActiveMainQuests.All(active => active.Slot != slot));
+        var activeQuest = new ActiveMainQuest(free, checked((ushort)quest.Id), initial) { AcceptanceId = Guid.NewGuid() };
+        return new(expected, QuestLifecycleAction.Accept, activeQuest.QuestId, activeQuest.AcceptanceId,
+            QuestInventoryProgress.Refresh(expected.ActiveMainQuests.Append(activeQuest).OrderBy(active => active.Slot).ToArray(),
+                grant.Plan.After, catalog, now.ToUnixTimeSeconds()), new(expected.Inventory, grant.Plan.After, "quest_accept"))
+        {
+            // 两端接取重复任务时清当前完成投影；领奖历史仍按独立接取身份保留。
+            CompletedAfter = expected.CompletedQuests.Where(id => !QuestCycle.Repeat(quest) || id != quest.Id).ToImmutableArray(),
+            AccountCompletedAfter = expected.AccountCompletedQuests.Where(id => !QuestCycle.Repeat(quest) || !quest.Definition.AccountQuest || id != quest.Id).ToImmutableArray()
+        };
+    }
+
+    public static QuestLifecyclePlan Giveup(Character expected, StoryQuest quest, QuestCatalog catalog, DateTimeOffset now)
+    {
+        var accepted = expected.ActiveMainQuests.SingleOrDefault(active => active.QuestId == quest.Id)
+            ?? throw new InvalidDataException("任务未接取");
+        var remove = new HashSet<int> { quest.Id };
+        bool added;
+        do
+        {
+            added = false;
+            foreach (var active in expected.ActiveMainQuests)
+                if (catalog.TryGet(active.QuestId, out var child) && child.MainQuest is { } parent && remove.Contains(parent))
+                    added |= remove.Add(active.QuestId);
+        } while (added);
+        var definitions = remove.Select(catalog.Get).ToArray();
+        if (definitions.Any(value => value.Definition is null || value.Definition.Diagnostics.Length != 0 ||
+            value.Definition.CannotGiveup && !(value.Definition.GiveupRule == 2 && value.Definition.JobChange == 1 && value.RewardType == "[grow type]")))
+            throw new InvalidDataException("任务或关联子任务禁止放弃");
+        var activeAfter = expected.ActiveMainQuests.Where(active => !remove.Contains(active.QuestId)).ToImmutableArray();
+        var collect = new HashSet<int>();
+        foreach (var value in definitions)
+        {
+            if (value.Condition is "[seeking]" or "[seek n meet npc]" && ValidSeeking(value))
+                foreach (int id in value.IntData.Take(MaterialLength(value)).Where((_, at) => at % 2 == 0)) collect.Add(id);
+            if (value.Definition!.AcceptanceRewards.Length != 0)
+                foreach (var gift in QuestFixedRewardDefinition.Parse(value with { Rewards = value.Definition.AcceptanceRewards }).ForJob(expected.Job,expected.GrowType))
+                    collect.Add(gift.ItemId);
+        }
+        var retained = new Dictionary<int, long>();
+        foreach (var active in activeAfter)
+        {
+            var other = catalog.Get(active.QuestId);
+            if (other.Condition is "[seeking]" or "[seek n meet npc]" && ValidSeeking(other))
+            {
+                var requirements = new Dictionary<int, long>();
+                for (int at = 0; at < MaterialLength(other); at += 2)
+                    requirements[other.IntData[at]] = requirements.GetValueOrDefault(other.IntData[at]) + other.IntData[at + 1];
+                foreach (var requirement in requirements)
+                    retained[requirement.Key] = Math.Max(retained.GetValueOrDefault(requirement.Key), requirement.Value);
+            }
+            else
+                foreach (int id in other.IntData.Where(collect.Contains))
+                    retained[id] = long.MaxValue;
+        }
+        var planned = expected.Inventory.Items.ToBuilder();
+        foreach (int id in collect)
+        {
+            long total = planned.Where(item => item.Position.List == InventoryListType.Main && item.Core.Kind == ItemKind.Quest && item.Core.ItemId == id)
+                .Where(item => !item.Core.IsExpired(now.ToUnixTimeSeconds())).Sum(item => (long)item.Core.Count);
+            long remaining = Math.Max(0, total - retained.GetValueOrDefault(id));
+            for (int at = planned.Count - 1; at >= 0; at--)
+            {
+                var item = planned[at];
+                if (item.Position.List != InventoryListType.Main || item.Core.Kind != ItemKind.Quest || item.Core.ItemId != id)
+                    continue;
+                bool expired = item.Core.IsExpired(now.ToUnixTimeSeconds());
+                int count = expired ? item.Core.Count : (int)Math.Min(remaining, item.Core.Count);
+                if (count == 0) continue;
+                if (!expired) remaining -= count;
+                if (count == item.Core.Count) planned.RemoveAt(at);
+                else planned[at] = item with { Core = item.Core with { Value = item.Core.Count - count } };
+            }
+        }
+        var inventory = expected.Inventory with { Items = planned.ToImmutable() };
+        return new(expected, QuestLifecycleAction.Giveup, accepted.QuestId, accepted.AcceptanceId,
+            QuestInventoryProgress.Refresh(activeAfter, inventory, catalog, now.ToUnixTimeSeconds()), new(expected.Inventory, inventory, "quest_giveup"));
+    }
+
+    public static QuestLifecyclePlan SetCondition(Character expected, StoryQuest quest, uint scalar)
+    {
+        var active = expected.ActiveMainQuests.SingleOrDefault(value => value.QuestId == quest.Id)
+            ?? throw new InvalidDataException("任务未接取");
+        bool observedHunt = quest.Condition is "[hunt enemy]" or "[hunt monster]" && scalar == active.ConditionState && QuestHuntProgress.ValidScalar(quest,scalar);
+        bool seekMeet = quest.Condition == "[seek n meet npc]" && ValidSeeking(quest) && scalar <= 1023;
+        bool parent = quest.Condition == "[quest clear]" && quest.SubType == 2 && scalar <= quest.IntData.Count;
+        bool scene = scalar <= 1 && (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _));
+        bool question = QuestQuestionProgress.TryCount(quest,out int answers) && scalar < answers;
+        bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest);
+        bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
+        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !question && !state && !observedClear && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
+            throw new InvalidDataException("条件类型或接取身份不符");
+        return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
+            expected.ActiveMainQuests.Select(value => value.AcceptanceId == active.AcceptanceId ? value with { ConditionState = scalar } : value).ToImmutableArray(),
+            new(expected.Inventory, expected.Inventory, "quest_condition"));
+    }
+
+    internal static int MaterialLength(StoryQuest quest) => quest.IntData.Count - (quest.Condition == "[seek n meet npc]" ? 1 : 0);
+
+    internal static bool ValidSeeking(StoryQuest quest)
+    {
+        int length = MaterialLength(quest);
+        return length > 0 && length % 2 == 0 && quest.IntData.Take(length).Where((_,at) => at % 2 == 0).All(value => value >= 0) &&
+            quest.IntData.Take(length).Where((_,at) => at % 2 != 0).All(value => value > 0) &&
+            (quest.Condition != "[seek n meet npc]" || quest.IntData[^1] > 0 &&
+                quest.IntData.Take(length).Where((_, at) => at % 2 != 0).Sum(value => (long)value) <= 511);
+    }
+
+    internal static bool HasMaterials(Character character, StoryQuest quest, long utcSeconds)
+    {
+        return ValidSeeking(quest) && MissingMaterials(character.Inventory, quest, utcSeconds) == 0;
+    }
+
+    internal static uint MissingMaterials(InventorySnapshot inventory, StoryQuest quest, long utcSeconds)
+    {
+        if (!ValidSeeking(quest)) throw new InvalidDataException("寻物目标不是完整物品/数量对或超出9位通道");
+        var wanted = new Dictionary<int, long>();
+        for (int at = 0; at < MaterialLength(quest); at += 2)
+            wanted[quest.IntData[at]] = wanted.GetValueOrDefault(quest.IntData[at]) + quest.IntData[at + 1];
+        var counts = new Dictionary<int, long>();
+        foreach (var item in inventory.Items)
+            if (item.Position.List == InventoryListType.Main && !item.Core.IsExpired(utcSeconds) && wanted.ContainsKey(item.Core.ItemId))
+                counts[item.Core.ItemId] = counts.GetValueOrDefault(item.Core.ItemId) + item.Core.Count;
+        foreach (int id in wanted.Keys)
+            if (CurrencyWallet.RewardKind(id) is { } kind)
+                counts[id] = CurrencyWallet.Get(inventory, kind);
+        return checked((uint)wanted.Sum(pair => Math.Max(0, pair.Value - counts.GetValueOrDefault(pair.Key))));
+    }
+}

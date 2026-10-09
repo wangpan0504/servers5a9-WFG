@@ -23,7 +23,7 @@ internal static class TownPackets
             writer.Write(0u);
             for (int i = 0; i < 30; i++)
             {
-                // 任务条件编码为 0 时客户端视为达成；3145 单清图条件初始为 1，空槽仍为 FFFF/0。
+                // 任务条件编码为 0 时客户端视为达成；单地图清图条件初始为 1，空槽仍为 FFFF/0。
                 ushort quest = ushort.MaxValue;
                 uint conditionState = 0;
                 foreach (var active in character.ActiveMainQuests)
@@ -152,7 +152,7 @@ internal static class TownPackets
             byte[] stats = CharacterStatsPackets.Build(attributes);
             writer.Write(stats.Length);
             writer.Write(stats); // 03BE25C0: u32 length followed by raw bytes.
-            writer.Write((byte)0);
+            writer.Write(character.EquipmentSlotFlags); // Full03 0267D0A9/0267D0CB：装备槽标志写本人容器+1AC。
             EquipmentProtocolWriter.Player(writer, character.Inventory);
             writer.Write(0u);
             writer.Write((byte)0); // 023C3A90: equipment count, scalar, extra list count.
@@ -191,11 +191,17 @@ internal static class TownPackets
         // 0/356 -> 023A0000 reads a raw 30000-byte table through 03BE25C0.
         byte[] body = new byte[30004];
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, 30000);
-        foreach (int id in character.CompletedQuests)
+        foreach (int id in character.CompletedQuests.Concat(character.AccountCompletedQuests))
         {
             if (id is <= 0 or >= 30000)
                 throw new InvalidDataException("Client quest table bounds");
             body[4 + id] = 1;
+        }
+        foreach (var (id,answer) in character.QuestAnswers.Concat(character.AccountQuestAnswers))
+        {
+            if (id is <= 0 or >= 30000 || body[4+id] == 0 || answer == byte.MaxValue)
+                throw new InvalidDataException("任务回答没有对应持久完成记录");
+            body[4+id] = checked((byte)(answer+1));
         }
 
         return body;

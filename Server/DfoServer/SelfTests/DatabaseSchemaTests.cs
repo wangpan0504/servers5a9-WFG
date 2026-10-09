@@ -26,6 +26,8 @@ internal static class DatabaseSchemaTests
                     "当前完整结构包含空成长账本，不补发历史奖励");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts") is 0L,
                     "当前完整结构包含空通关账本，不补发历史经验");
+                Check(Query(db,"SELECT count(*) FROM character_quest_skip_receipts") is 0L,
+                    "当前完整结构包含空跳过回执，不补造旧角色完成记录");
                 Check(Query(db, "SELECT value FROM schema_metadata WHERE key='baseline_id'") is SqliteMigrations.BaselineId,
                     "统一数据库保存独立基线标识");
                 Check(Query(db, "SELECT count(*) FROM accounts") is 0L && Query(db, "SELECT count(*) FROM characters") is 0L,
@@ -56,11 +58,13 @@ internal static class DatabaseSchemaTests
                 "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
                 "DROP TABLE character_game_settings",
+                "DROP TABLE character_quest_lifecycle_receipts",
+                "DROP TABLE character_quest_skip_receipts", "ALTER TABLE character_quest_skip_receipts DROP COLUMN plan_snapshot",
                 "DROP TABLE character_tp_sources", "DROP TABLE character_skill_commands", "DROP TABLE character_skill_combos",
                 "DROP TABLE character_dungeon_growth_receipts",
                 "ALTER TABLE character_dungeon_growth_receipts DROP COLUMN resource_source",
                 "DROP TABLE character_dungeon_state", "DROP TABLE character_dungeon_loot_receipts",
-                "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts",
+                "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_quest_lifecycle_receipts; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts",
                 "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN report_body"
             })
             {
@@ -95,6 +99,8 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(failed);
 
             VerifyReleasedMigrations(root);
+            VerifyQuestSystemMigration(root);
+            VerifyQuestSkipConstraints(root);
             VerifyFutureMigrations(path);
             string concurrent = Path.Combine(root, "concurrent.db");
             Task.WaitAll(Task.Run(() => new CharacterRepository(concurrent)), Task.Run(() => new AuthenticationRepository(concurrent)));
@@ -106,6 +112,94 @@ internal static class DatabaseSchemaTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
+    }
+
+    private static void VerifyQuestSystemMigration(string root)
+    {
+        string path = Path.Combine(root, "quest-system-v13.db");
+        _ = new CharacterRepository(path);
+        string[] tables; string[][] columns; string[] previous;
+        using (var db = Open(path))
+        {
+            RewindQuestSystemToV13(db);
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,experience,gold) VALUES('history',0,'History',7,38,1,450,234,0,60,123)");
+            Execute(db, "INSERT INTO character_skill_points VALUES(1,0,45,6),(1,1,78,9)");
+            Execute(db, "INSERT INTO character_active_main_quests VALUES(1,2,6217,255,'1234567890abcdef1234567890abcdef')");
+            Execute(db, "INSERT INTO character_completed_quests VALUES(1,3145)");
+            Execute(db, "INSERT INTO character_dungeon_growth_receipts(rowid,character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES(41,1,'history','1234567890abcdef1234567890abcdef','old-run',3145,1,1,76126,1,1,1,20,'legacy-rule','legacy-source',1,1,1,1,40,60,7)");
+            Execute(db, "INSERT INTO character_dungeon_settlement_receipts VALUES(1,'history','old-settlement','old-run',3145,1,1,3,76126,zeroblob(16),x'01',1,20,0,20,-1,'legacy-rule','legacy-source',1,1,60,80,8)");
+            Execute(db, "INSERT INTO character_dungeon_loot_receipts VALUES(1,'history','1234567890abcdef1234567890abcdef','old-run',1,1,76126,1,'legacy-rule','legacy-source',9,'{}',100,200,0)");
+            Execute(db, "INSERT INTO character_dungeon_pickup_receipts VALUES(1,'history','1234567890abcdef1234567890abcdef',9,'old-run',1,1,0,177,1,'{}',8)");
+            Execute(db, "INSERT INTO character_quest_clear_receipts(rowid,character_id,account,acceptance_id,quest_id,quest_slot,event_id,instance_id,task_attempt,epoch,dungeon_id,map_id,generation,revision) VALUES(43,1,'history','234567890abcdef1234567890abcdef1',3145,0,'1234567890abcdef1234567890abcdef','old-run',1,1,3,76126,1,7)");
+            Execute(db, """
+                INSERT INTO character_quest_completion_receipts(rowid,character_id,account,acceptance_id,quest_id,event_id,instance_id,task_attempt,epoch,generation,
+                  rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,experience_amount,gold_amount,
+                  before_level,after_level,before_experience,after_experience,before_revision,revision,rewards)
+                VALUES(47,1,'history','234567890abcdef1234567890abcdef1',3145,'1234567890abcdef1234567890abcdef','old-run',1,1,1,
+                  'legacy-rule-v0','legacy-source','legacy-quest',2,20,-15,'old difficulty',9,20,0,1,1,60,80,7,8,'[{"legacy":1},{},{},{},{},{},{}]');
+                """);
+            Execute(db, "CREATE INDEX ordinary_history_index ON character_dungeon_growth_receipts(rule_id)");
+            Execute(db, "CREATE TABLE ordinary_history_trigger_calls(value INTEGER)");
+            Execute(db, "CREATE TRIGGER ordinary_history_trigger AFTER INSERT ON character_dungeon_growth_receipts BEGIN INSERT INTO ordinary_history_trigger_calls VALUES(1); END");
+            tables = TableNames(db); columns = tables.Select(table => ColumnNames(db, table)).ToArray();
+            previous = tables.Select((table, index) => Rows(db, table, columns[index])).ToArray();
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            That(Query(db, "PRAGMA user_version") is 14L && tables.Select((table, index) => Rows(db, table, columns[index])).SequenceEqual(previous),
+                "单次v14保存v13所有旧表原列、rowid、序列、接取身份和领奖规则原值");
+            That(Query(db, "SELECT clear_acceptance_id=acceptance_id AND condition_type=3 AND selector=65535 AND multiplier=1 AND consumed='[]' AND changed_items='[]' AND plan_snapshot IS NULL FROM character_quest_completion_receipts WHERE rowid=47") is 1L,
+                "旧领奖回执仅补来源关联和默认元数据，不重写旧JSON或规则版本");
+            That(Query(db, "SELECT quest_cycle_day||':'||equipment_slot_flags FROM characters") is "0:0" &&
+                Query(db, "SELECT daily_period FROM character_completed_quests") is 0L && Query(db, "SELECT answer IS NULL FROM character_completed_quests") is 1L &&
+                new[] { "character_quest_lifecycle_receipts", "account_completed_quests", "character_quest_drop_receipts", "character_quest_skip_receipts" }
+                    .All(table => Query(db, "SELECT count(*) FROM " + table) is 0L),
+                "v14一次建立四张空账本及四个默认列，不补造任务、回答、周期或解锁");
+            That(Query(db, "SELECT count(*) FROM ordinary_history_trigger_calls") is 0L &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN('ordinary_history_index','ordinary_history_trigger')") is 2L,
+                "迁移保留附加索引与触发器，恢复历史行时不重新执行触发器");
+            That(Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L && Query(db, "PRAGMA integrity_check") is "ok",
+                "有历史父子账本的v13直接迁移仍保持完整外键");
+            Execute(db, "INSERT INTO character_dungeon_growth_receipts SELECT character_id,account,'ordinary','new-run',0,task_attempt,epoch,map_id,2,2,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts WHERE rowid=41");
+            Execute(db, "INSERT INTO character_dungeon_settlement_receipts SELECT character_id,account,'ordinary-settlement','new-run',0,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts WHERE event_id='old-settlement'");
+            That(Query(db, "SELECT count(*) FROM character_dungeon_growth_receipts WHERE quest_id=0") is 1L &&
+                Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE quest_id=0") is 1L,
+                "普通无任务副本可保存成长与结算，不生成任务完成记录");
+        }
+        string migrated = Snapshot(path);
+        _ = new CharacterRepository(path); _ = new AuthenticationRepository(path);
+        That(Snapshot(path) == migrated, "合并迁移重开不重复修改历史任务或账本");
+
+        string rollback = Path.Combine(root, "quest-system-v14-rollback.db");
+        _ = new CharacterRepository(rollback);
+        using (var db = Open(rollback))
+        {
+            RewindQuestSystemToV13(db);
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,experience,gold) VALUES('keep',0,'V14Rollback',9,38,1,450,234,0,321,456)");
+            Execute(db, "CREATE TABLE character_quest_skip_receipts(collision INTEGER)");
+        }
+        string before = Snapshot(rollback);
+        Reject<SqliteException>(() => new CharacterRepository(rollback), "v14末段跳过账本撞表时回滚此前全部DDL及数据恢复");
+        That(Snapshot(rollback) == before, "v14失败保留v13版本、全部原表定义、rowid和角色资产");
+    }
+
+    private static void VerifyQuestSkipConstraints(string root)
+    {
+        string path = Path.Combine(root, "quest-skip-constraints.db");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('skip-history',0,'SkipHistory',19,38,1,450,234,0)");
+            const string receipt = "INSERT INTO character_quest_skip_receipts VALUES(1,'skip-history','234567890abcdef1234567890abcdef1',19,6217,19,20,'{}')";
+            Execute(db, receipt);
+            Reject<SqliteException>(() => Execute(db, receipt), "跳过回执按角色和接取身份唯一");
+            Reject<SqliteException>(() => Execute(db, receipt.Replace("234567890abcdef1234567890abcdef1", "34567890abcdef1234567890abcdef12").Replace("19,20,'{}'", "19,21,'{}'")), "跳过回执revision只增加一次");
+            Reject<SqliteException>(() => Execute(db, receipt.Replace("'skip-history'", "'wrong-owner'").Replace("234567890abcdef1234567890abcdef1", "4567890abcdef1234567890abcdef123")), "跳过回执保留角色账号归属外键");
+        }
+        string committed = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == committed, "v14再次初始化保留已有跳过回执，不重复迁移");
     }
 
     private static void VerifyReleasedMigrations(string root)
@@ -123,6 +217,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
+                RewindQuestSystemToV13(db);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
                 if (oldVersion < 12) Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
@@ -168,6 +263,8 @@ internal static class DatabaseSchemaTests
                     "v12只增加空TP来源、指令及连招表，保留旧角色原有布局");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts") is 0L,
                     "v1至v9升级只增加空通关账本，不合成历史奖励");
+                Check(Query(db,"SELECT equipment_slot_flags FROM characters WHERE id=1") is 0L,
+                    "v14保留旧角色资产，不因等级、GM跳过或旧任务完成位补造装备槽解锁");
                 Check(Query(db, "SELECT rental_points FROM account_wallets WHERE account='migrated'") is long rental &&
                     rental == (oldVersion == 1 ? 0 : 17), "v1租赁默认值与v2既有租赁余额分别保留");
                 Check(Query(db, "SELECT revision||':'||level||':'||experience||':'||gold FROM characters WHERE id=1") is "7:2:60:123" &&
@@ -202,7 +299,9 @@ internal static class DatabaseSchemaTests
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('keep',0,'Rollback',9,38,1,450,234,0,2,60,321)");
             Execute(db, "INSERT INTO account_wallets(account,revision,rental_points) VALUES('keep',6,0)");
             Execute(db, "INSERT INTO character_skill_points VALUES(1,0,12,0),(1,1,34,0)");
+            RewindQuestSystemToV13(db);
             Execute(db, "DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts");
+            Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts");
             Execute(db, "DROP TABLE character_dungeon_pickup_receipts");
             Execute(db, "DROP TABLE character_dungeon_loot_receipts");
             Execute(db, "DROP TABLE character_dungeon_state");
@@ -281,6 +380,91 @@ internal static class DatabaseSchemaTests
         Check(Snapshot(path) == futureSnapshot, "拒绝未来版本时保留其完整结构与数据");
     }
 
+    internal static void RewindQuestSystemToV13(string path)
+    {
+        using var db = Open(path);
+        RewindQuestSystemToV13(db);
+    }
+
+    // 成功迁移夹具恢复完整已发布v13结构，不以改版本号冒充旧库。
+    internal static void RewindQuestSystemToV13(SqliteConnection db)
+    {
+        Execute(db, "PRAGMA foreign_keys=OFF");
+        Execute(db, "DROP TABLE character_quest_skip_receipts; DROP TABLE character_quest_drop_receipts; DROP TABLE account_completed_quests; DROP TABLE character_quest_lifecycle_receipts");
+        Execute(db, "ALTER TABLE characters DROP COLUMN equipment_slot_flags; ALTER TABLE characters DROP COLUMN quest_cycle_day; ALTER TABLE character_completed_quests DROP COLUMN answer; ALTER TABLE character_completed_quests DROP COLUMN daily_period");
+        RewindQuestCompletionToV13(db);
+        foreach (string table in new[] { "character_dungeon_growth_receipts", "character_dungeon_settlement_receipts", "character_quest_clear_receipts" })
+        {
+            string source = (string)Query(db, "SELECT sql FROM sqlite_schema WHERE name='" + table + "'")!;
+            string old = table == "character_quest_clear_receipts"
+                ? source.Replace("PRIMARY KEY(character_id,acceptance_id),", "PRIMARY KEY(character_id,acceptance_id),UNIQUE(character_id,event_id),UNIQUE(character_id,instance_id),", StringComparison.Ordinal)
+                : source.Replace("CHECK(quest_id>=0)", "CHECK(quest_id>0)", StringComparison.Ordinal);
+            Execute(db, "CREATE TEMP TABLE old_receipts AS SELECT rowid AS old_rowid,* FROM " + table);
+            Execute(db, "DROP TABLE " + table); Execute(db, old);
+            string columns = string.Join(',', ColumnNames(db, table));
+            Execute(db, "INSERT INTO " + table + "(rowid," + columns + ") SELECT old_rowid," + columns + " FROM temp.old_receipts");
+            Execute(db, "DROP TABLE temp.old_receipts");
+        }
+        Execute(db, "PRAGMA user_version=13; PRAGMA foreign_keys=ON");
+    }
+
+    private static string[] TableNames(SqliteConnection db)
+    {
+        using var command = db.CreateCommand(); command.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name";
+        using var reader = command.ExecuteReader(); var names = new List<string>();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names.ToArray();
+    }
+
+    private static string[] ColumnNames(SqliteConnection db, string table)
+    {
+        using var command = db.CreateCommand(); command.CommandText = "PRAGMA table_info(" + table + ")";
+        using var reader = command.ExecuteReader(); var names = new List<string>();
+        while (reader.Read()) names.Add('"' + reader.GetString(1).Replace("\"", "\"\"") + '"');
+        return names.ToArray();
+    }
+
+    private static string Rows(SqliteConnection db, string table, string[] columns)
+    {
+        using var command = db.CreateCommand(); command.CommandText = "SELECT rowid," + string.Join(',', columns) + " FROM " + table + " ORDER BY rowid";
+        using var reader = command.ExecuteReader(); var rows = new List<object[]>();
+        while (reader.Read()) { var values = new object[reader.FieldCount]; reader.GetValues(values); rows.Add(values); }
+        return System.Text.Json.JsonSerializer.Serialize(rows);
+    }
+
+    // 冻结已发布v13的26列和约束，不能以v14表仅改user_version冒充旧库。
+    internal static void RewindQuestCompletionToV13(SqliteConnection db)
+    {
+        Execute(db, """
+            CREATE TABLE character_quest_completion_receipts_v13(
+              character_id INTEGER NOT NULL,account TEXT NOT NULL,acceptance_id TEXT NOT NULL,
+              quest_id INTEGER NOT NULL CHECK(quest_id=3145),event_id TEXT NOT NULL,instance_id TEXT NOT NULL,
+              task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+              generation INTEGER NOT NULL CHECK(generation>0),rule_id TEXT NOT NULL,
+              resource_source TEXT NOT NULL,quest_source TEXT NOT NULL,
+              native_index INTEGER NOT NULL CHECK(native_index>=0),base_experience INTEGER NOT NULL CHECK(base_experience>0),
+              raw_additional_percent INTEGER NOT NULL,difficulty_key TEXT NOT NULL,difficulty_weight INTEGER NOT NULL CHECK(difficulty_weight>0),
+              experience_amount INTEGER NOT NULL CHECK(experience_amount BETWEEN 1 AND 2147483647),gold_amount INTEGER NOT NULL CHECK(gold_amount=0),
+              before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),
+              before_experience INTEGER NOT NULL CHECK(before_experience>=0),after_experience INTEGER NOT NULL CHECK(after_experience=before_experience+experience_amount),
+              before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+              rewards TEXT NOT NULL CHECK(json_valid(rewards) AND json_type(rewards)='array' AND json_array_length(rewards)=7),
+              PRIMARY KEY(character_id,acceptance_id),UNIQUE(character_id,quest_id),
+              FOREIGN KEY(character_id,acceptance_id) REFERENCES character_quest_clear_receipts(character_id,acceptance_id),
+              FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+            INSERT INTO character_quest_completion_receipts_v13(rowid,character_id,account,acceptance_id,quest_id,event_id,instance_id,
+              task_attempt,epoch,generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,
+              difficulty_key,difficulty_weight,experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,
+              before_revision,revision,rewards)
+            SELECT rowid,character_id,account,acceptance_id,quest_id,event_id,instance_id,task_attempt,epoch,generation,rule_id,
+              resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,
+              experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards
+              FROM character_quest_completion_receipts;
+            DROP TABLE character_quest_completion_receipts;
+            ALTER TABLE character_quest_completion_receipts_v13 RENAME TO character_quest_completion_receipts;
+            """);
+    }
+
     private static SqliteConnection Open(string path)
     {
         var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
@@ -320,6 +504,7 @@ internal static class DatabaseSchemaTests
             HasColumn("character_active_main_quests", "acceptance_id") ? Query(db, "SELECT group_concat(character_id||':'||slot||':'||acceptance_id,'|') FROM character_active_main_quests") : null,
             Has("character_quest_clear_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||event_id||':'||instance_id||':'||revision,'|') FROM character_quest_clear_receipts") : null,
             Has("character_quest_completion_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||experience_amount||':'||revision||':'||rewards,'|') FROM character_quest_completion_receipts") : null,
+            HasColumn("character_quest_skip_receipts","plan_snapshot") ? Query(db,"SELECT group_concat(character_id||':'||acceptance_id||':'||parent_key||':'||question_quest||':'||before_revision||':'||revision||':'||plan_snapshot,'|') FROM character_quest_skip_receipts") : null,
             Has("character_dungeon_growth_receipts") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||monster_key||':'||combat_sequence||':'||amount||':'||revision,'|') FROM character_dungeon_growth_receipts") : null);
         bool Has(string table) => Query(db, $"SELECT count(*) FROM sqlite_schema WHERE name='{table}'") is 1L;
         bool HasColumn(string table, string column) => Query(db,

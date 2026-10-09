@@ -41,12 +41,8 @@ internal static class SkillMaterialTcpTests
                 "实体技能材料同样只回ACK，实际数量足额扣除");
             peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
             peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);
-            peer.Send(15, new byte[4]); peer.Expect(1, 15, [1]);
-            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]); peer.Expect(0, 27, new byte[42]);
-            peer.Send(16, Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000"));
-            peer.Expect(0, 28); peer.Expect(0, 29);
-            peer.Send(37, new byte[8]); peer.Expect(1, 37, [1]); peer.Expect(0, 30, new byte[5]);
-            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+            FormalDungeonTcpTests.Enter(peer);
+            FormalDungeonTcpTests.Load(peer);
             Spend(peer, 10);
             peer.Send(38, Convert.FromHexString("004C007017096C00150053FDD425")); peer.Barrier();
             That(Progress() == skills, "城镇和地下城扣无色不修改等级、经验或双技能树");

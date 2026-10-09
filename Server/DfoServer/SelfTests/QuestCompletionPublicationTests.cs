@@ -9,6 +9,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Handlers;
 using DfoServer.Network.Projection;
@@ -30,9 +31,9 @@ internal static class QuestCompletionPublicationTests
             await ClassClearAndAwardAsync(identity.Job, identity.Grow, identity.Weapon);
         await StorageFailureAsync(false);
         await StorageFailureAsync(true);
-        foreach (int packet in new[] { 1, 2, 3, 4 })
+        foreach (int packet in new[] { 1, 2, 3, 4, 5, 6 })
             await SendFailureAsync(packet);
-        foreach (int packet in new[] { 1, 2, 3, 4 })
+        foreach (int packet in new[] { 1, 2, 3, 4, 5, 6 })
             await ReselectDuringSendAsync(packet);
         await PendingReselectAsync();
         await FullBagAsync();
@@ -41,9 +42,13 @@ internal static class QuestCompletionPublicationTests
         GameCommandRegistry Registry(QuestCompletionRepositoryTests.Fixture fixture)
         {
             var commands = new GameCommandRegistry();
+            var quests = new QuestProjection(resources.Quests);
+            var levels = new CharacterLevelProjection(computer, quests);
             new QuestConditionHandler(fixture.Log).Register(commands);
             new QuestCompletionHandler(resources.Quests, resources.Parameters, items.Items, items.GoldLimits,
-                items.EpicPieces, resources.Growth, fixture.Log, new CharacterLevelProjection(computer)).Register(commands);
+                items.EpicPieces, resources.Growth, fixture.Log, levels, quests).Register(commands);
+            new DungeonHandler(fixture.Log, resources.Dungeons, resources.Rooms, resources.Growth, resources.Kills,
+                new TownProjection(towns, computer, null, items.EpicPieces, quests: quests), levels).Register(commands);
             commands.Seal();
             return commands;
         }
@@ -81,6 +86,13 @@ internal static class QuestCompletionPublicationTests
                 stream.Frames.Count == 1 && stream.Frames[0].AsSpan(16).SequenceEqual(Convert.FromHexString("001300")) &&
                 fixture.Read().Revision == revision && fixture.Read().Inventory.Items.Length == itemCount && fixture.Count() == 1,
                 "全职业重复领奖返回静默拒绝，不重发经验/物品或改变revision");
+            stream.Frames.Clear();
+            Check(await commands.DispatchAsync(context, new Packet(1, 42, [])) == CommandResult.Handled &&
+                stream.Opcodes.SequenceEqual(new ushort[] { 42, 24, 21 }) && fixture.Session.Phase == SessionPhase.Town,
+                "副本领奖后的回城ACK42和场景24之后校准任务列表21");
+            var available = QuestLifecycleTcpTests.List(stream.Frames[2][16..], committed.Level);
+            Check(available.Contains(4873) && !available.Contains(3145) && fixture.Read().Revision == revision,
+                "同一选角和连接领奖回城后直接看见后续4873，刷新不重复提交或发奖");
         }
 
         async Task StorageFailureAsync(bool lostResult)
@@ -192,7 +204,7 @@ internal static class QuestCompletionPublicationTests
                 stream.Release.TrySetResult();
             }
             Check(await publication.WaitAsync(TimeSpan.FromSeconds(5)) == CommandResult.Handled && stream.Frames.Count == packet &&
-                stream.Opcodes.SequenceEqual(new ushort[] { 34, 14, 37, 2 }.Take(packet)) && !stop.IsCancellationRequested && sender.PendingBytes == 0,
+                stream.Opcodes.SequenceEqual(new ushort[] { 34, 14, 37, 2, 21, 356 }.Take(packet)) && !stop.IsCancellationRequested && sender.PendingBytes == 0,
                 "允许已在途帧完成，拦截旧epoch后续奖励通知 " + packet);
             Check(fixture.Session.Phase == SessionPhase.Town && fixture.Count() == 1 &&
                 QuestCompletionRepositoryTests.Same(fixture.Session.Selected!, fixture.Read()),
@@ -250,9 +262,13 @@ internal static class QuestCompletionPublicationTests
     static void ValidateSuccess(IReadOnlyList<byte[]> frames, Character committed, Character before, int weapon = 101010438,
         CharacterStats? expectedStats = null)
     {
-        Check(frames.Count == 4 && frames.Select(frame => BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)))
-            .SequenceEqual(new ushort[] { 34, 14, 37, 2 }) && frames[0][0] == 1 && frames.Skip(1).All(frame => frame[0] == 0),
-            "结算阶段成功完整包序ACK34增量→14最终Core→37绝对成长→实际升级Player，不追加Actor");
+        Check(frames.Count == 6 && frames.Select(frame => BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)))
+            .SequenceEqual(new ushort[] { 34, 14, 37, 2, 21, 356 }) && frames[0][0] == 1 && frames.Skip(1).All(frame => frame[0] == 0),
+            "结算阶段成功完整包序ACK34→14最终Core→37绝对成长→实际升级Player→任务列表→356完成记录");
+        Check(frames[5].AsSpan(16).SequenceEqual(TownPackets.CompletedQuests(committed)) && frames[5][20 + 3145] != 0,
+            "普通交付也发布实际完成记录，任务面板无须重登刷新");
+        var available = QuestLifecycleTcpTests.List(frames[4][16..], committed.Level);
+        Check(available.Contains(4873) && !available.Contains(3145), "结算领奖后立即发布后继，不等回城或重新选角");
         using var ack = new BinaryReader(new MemoryStream(frames[0], 16, frames[0].Length - 16));
         Check(frames[0].Length == 159 && ack.ReadByte() == 1 && ack.ReadUInt16() == 3145 && ack.ReadByte() == 3 &&
             ack.ReadUInt32() == 1780 && ack.ReadByte() == 0 && ack.ReadByte() == 7, "真实Handler发送精确143B已提交EXP/模式头");

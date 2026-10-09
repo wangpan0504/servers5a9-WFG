@@ -1,0 +1,302 @@
+using System.Collections.Immutable;
+using DfoServer.GameWorld.Quests;
+using DfoServer.GameWorld.Items;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Currency;
+
+namespace DfoServer.Game.Quests;
+
+internal sealed record QuestCoverageRow(int Id, string Path, string? Grade, string Condition, int SubType,
+    QuestResourceEntry Entry, bool ImplementedPath, ImmutableArray<string> Restrictions,
+    ImmutableArray<string> UnconfirmedDeclarations, ImmutableArray<int> MissingReferences);
+internal sealed record QuestCoverageReport(int Definitions, int ImplementedPaths, ImmutableArray<QuestCoverageRow> Quests,
+    ImmutableArray<ImmutableArray<int>> PrerequisiteCycles, ImmutableArray<ImmutableArray<int>> ParentCycles);
+
+// 覆盖状态是当前可用合同，不是“脚本存在即支持”，也不把专用入口分类命名为废弃。
+internal static class QuestCoverage
+{
+    static readonly HashSet<string> KnownFields = new(StringComparer.Ordinal)
+    {
+        "grade", "difficulty", "npc index", "complete npc index", "job", "grow type", "target character", "non target character",
+        "level", "type", "sub type", "int data", "reward type", "reward int data", "reward selection int data", "depend give item",
+        "pre required quest", "pre required quest answer", "collision quest", "account collision quest", "account quest", "main quest",
+        "dungeon info", "job change quest", "cant giveup", "exposed by npc", "event", "creature kind", "creature level", "expertjob level",
+        "first exposed by npc", "relation quest", "exception quest", "exception filter", "multi condition min clear", "hardcore mode only", "condition quest hide",
+        "gold multiple", "ignore quest level 4 exp", "attribute", "imagine level", "grow number", "disable quest clear", "npc visibility",
+        "reward item trade instance", "go area guide", "auto accept", "monster reward item", "enemy reward item", "clear reward item", "question info", "casecade clear",
+        // 下列文字/演出描述由匹配客户端读取；不据此签发服务器进度或奖励。
+        "name", "name depend on job", "depend message", "condition message", "solve message", "substitutive names", "dialog", "dialog depend on job",
+        "depend message depend on job", "condition message depend on job", "solve message depend on job", "quest item noti", "get quest item noti", "go guide",
+        "quest title noti", "solve video",
+        // Full03 04194292只写Quest文字区的职业描述选择，不承担接取、进度或奖励条件。
+        "change depend on grow job"
+    };
+
+    public static ImmutableArray<string> Unconfirmed(StoryQuest quest) => quest.Definition?.Fields
+        .Where(field => !KnownFields.Contains(field.Name)).Select(field => field.Name).Distinct().Order().ToImmutableArray() ?? [];
+
+    // OR前置只需一组完整引用；废弃冲突任务和隐藏条件仍报告，但不阻断有效入口。
+    internal static bool HasRequiredReferences(StoryQuest quest, QuestCatalog catalog)
+    {
+        bool Exists(int id) => id <= 0 || catalog.TryGet(id,out _);
+        var definition = quest.Definition;
+        if (definition is null) return false;
+        try { _ = QuestRelationProgress.CascadeMarker(quest,catalog); }
+        catch (InvalidDataException) { return false; }
+        return
+            (definition.PrerequisiteGroups.Length == 0 || definition.PrerequisiteGroups.Any(group => group.All(Exists))) &&
+            definition.RequiredAnswers.All(answer => Exists(answer.QuestId)) &&
+            (quest.MainQuest is not { } parent || Exists(parent)) &&
+            (quest.Condition is not ("[quest clear]" or "[clear quest]" or "[clear multi quest]") || quest.IntData.All(Exists));
+    }
+
+    // Full03 02917540→0434CB20把character映射为任务分类3，不读取角色装备槽资格。
+    public static bool HasOrdinaryFilter(StoryQuest quest) => quest.Definition is { } definition &&
+        definition.Fields.Where(field => field.Name == "exception filter").All(field =>
+            field.Children.Length == 0 && field.Values is [{ Type: 6, Text: "character" }]);
+
+    // Full03 04199CDB将urgent写入QST+648例外枚举0；020130C0仅在任务脚本谓词中消费，不改变普通接取资格。
+    public static bool HasOrdinaryExceptions(StoryQuest quest) => quest.Definition is { } definition &&
+        (definition.Exceptions.Length == 0 && !definition.Has("exception quest") ||
+            definition.Exceptions is [{ Type: 6, Text: "[urgent]" }] && definition.Has("exception quest") &&
+            definition.Fields.Where(field => field.Name == "exception quest").All(field =>
+                field.Children.Length == 0 && field.Values is [{ Type: 6, Text: "[urgent]" }]));
+
+    // Full03 04181940的magic stone/slot expansion为属性28/29，02A36D52复制到客户端任务属性区。
+    public static bool HasOrdinaryAttributes(StoryQuest quest) => quest.Definition is { } definition &&
+        quest.Attributes.All(SupportedAttribute) && definition.Fields.Where(field => field.Name == "attribute").All(field =>
+            field.Children.Length == 0 && field.Values.All(value => value.Type == 6 && SupportedAttribute(value.Text)));
+
+    static bool SupportedAttribute(string? value) => value is "not give exp quest" or "slot expansion" or "magic stone";
+
+    public static bool HasOrdinaryDisplay(StoryQuest quest) => quest.Definition is { } definition &&
+        // Full03 04195F2F读取可见性；clear/delete同样由真实完成投影触发客户端显示，不签发额外进度或奖励。
+        definition.NpcVisibility.All(row => row.Condition is "[accept]" or "[clear]" && row.Visibility is "[show]" or "[hide]" ||
+            row.Condition == "[clear]" && row.Visibility == "[delete]") &&
+        definition.Fields.Where(field => field.Name is "quest title noti" or "solve video").All(field => field.Name switch
+        {
+            "quest title noti" => IsTitleNotification(field),
+            "solve video" => field.Children.Length == 0 && field.Values is [{ Type: 6, Text: not null }],
+            _ => false
+        });
+
+    public static bool IsTitleNotification(QuestField field)
+    {
+        // 已核真实标题由动画路径和五整数fade参数组成；只声明显示，保留原序和值。
+        if (field.Values.Length != 0 || field.Children.Length != 2 || field.Children.Any(child => child.Children.Length != 0))
+            return false;
+        var path = field.Children.FirstOrDefault(child => child.Name is "accept ani path" or "clear ani path");
+        var fade = field.Children.FirstOrDefault(child => child.Name is "accept ani fade option" or "clear ani fade option");
+        return path is not null && fade is not null &&
+            (path.Name,fade.Name) is ("accept ani path","accept ani fade option") or ("clear ani path","clear ani fade option") &&
+            path.Values is [{ Type: 6, Text: not null }] && fade.Values.Length == 5 &&
+            fade.Values.All(value => value.Type == 0 && value.Text is null);
+    }
+
+    public static bool HasOrdinaryCascade(StoryQuest quest)
+    {
+        if (quest.Definition is not { } definition) return false;
+        var fields = definition.Fields.Where(field => field.Name == "casecade clear").ToArray();
+        // Full03 0419C64D将真实marker ID读入QST+918；不将它解释成自动完成任意依赖链。
+        return fields.Length == 0 || fields is [{ Children.Length: 0, Values: [{ Type: 0, Text: null, Value: >= 1 and < 30000 }] }];
+    }
+
+    public static bool HasOrdinaryDeclarations(StoryQuest quest) => Unconfirmed(quest).Length == 0 &&
+        quest.Grade != "[daily random]" &&
+        quest.Definition is { Diagnostics.Length: 0, GradeModifiers.Length: 0, FirstExposedByNpc: null, MinimumClearCount: null } &&
+        (!quest.Definition.Has("auto accept") || QuestClientSceneProgress.Cinematic(quest,out _,out _)) &&
+        HasOrdinaryFilter(quest) && HasOrdinaryExceptions(quest) && HasOrdinaryAttributes(quest) &&
+        HasOrdinaryDisplay(quest) && HasOrdinaryCascade(quest);
+
+    public static void RequireOrdinaryDeclarations(StoryQuest quest)
+    {
+        var pending = Unconfirmed(quest);
+        if (pending.Length != 0) throw new NotSupportedException("任务声明尚未确认: " + string.Join(",", pending));
+        if (quest.Grade == "[daily random]")
+            throw new NotSupportedException("任务需要对应随机每日列表入口");
+        if (!HasOrdinaryFilter(quest))
+            throw new NotSupportedException("任务exception filter需要已确认的单字符串character声明");
+        if (!HasOrdinaryExceptions(quest))
+            throw new NotSupportedException("任务exception quest需要已确认的单字符串[urgent]声明");
+        if (!HasOrdinaryAttributes(quest))
+            throw new NotSupportedException("任务attribute包含未确认的值或声明形状");
+        if (!HasOrdinaryDisplay(quest))
+            throw new NotSupportedException("任务npc visibility、quest title noti或solve video显示声明形状尚未确认");
+        if (!HasOrdinaryCascade(quest))
+            throw new NotSupportedException("任务casecade clear需要1..29999的单整数marker声明");
+        if (!HasOrdinaryDeclarations(quest))
+            throw new NotSupportedException("任务需要尚未确认的分类修饰、例外、首次NPC、阈值或特殊属性");
+    }
+
+    public static QuestCoverageReport Scan(QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces, QuestRewardParameterCatalog parameters)
+    {
+        var prerequisite = catalog.All.ToDictionary(quest => quest.Id, quest => (quest.Definition?.PrerequisiteGroups.SelectMany(group => group) ?? [])
+            .Concat(quest.Definition?.RequiredAnswers.Select(answer => answer.QuestId) ?? []).Where(id => id > 0).Distinct().ToArray());
+        var parents = catalog.All.ToDictionary(quest => quest.Id, quest => quest.MainQuest is { } id ? new[] { id } : []);
+        var rows = ImmutableArray.CreateBuilder<QuestCoverageRow>();
+        foreach (var quest in catalog.All.OrderBy(quest => quest.Id))
+        {
+            var access = QuestEligibility.InspectResource(quest);
+            var reasons = ImmutableArray.CreateBuilder<string>();
+            var pending = Unconfirmed(quest);
+            var definition = quest.Definition;
+            var references = prerequisite[quest.Id].Concat(parents[quest.Id])
+                .Concat(definition?.Collisions ?? []).Concat(definition?.AccountCollisions ?? [])
+                .Concat(definition?.RelationQuests ?? []).Concat(definition?.HideOnCompletedQuests ?? [])
+                .Concat(definition?.Values("casecade clear").Where(value => value.Type == 0).Select(value => value.Value) ?? []);
+            if (quest.Condition is "[quest clear]" or "[clear quest]" or "[clear multi quest]") references = references.Concat(quest.IntData);
+            var missing = references.Where(id => id > 0 && !catalog.TryGet(id, out _)).Distinct().Order().ToImmutableArray();
+            if (access.Entry != QuestResourceEntry.Ordinary && !(access.Entry == QuestResourceEntry.Dialogue && QuestRelationProgress.DialogueChild(quest,catalog)))
+                reasons.Add(access.Reason);
+            if (definition is null || definition.Diagnostics.Length != 0) reasons.AddRange(definition?.Diagnostics ?? ["缺少完整定义"]);
+            if (pending.Length != 0) reasons.Add("存在未确认声明");
+            if (!HasRequiredReferences(quest,catalog)) reasons.Add("必需任务引用缺失、级联marker不可用或无完整的可选前置组");
+            try { _ = QuestRelationProgress.CascadeMarker(quest,catalog); }
+            catch (InvalidDataException error) { reasons.Add(error.Message); }
+            if (quest.Grade is "[daily random]" or "[training]") reasons.Add("对应每日专用列表未接入");
+            if (definition?.GradeModifiers.Length > 0 || definition?.FirstExposedByNpc is not null ||
+                definition?.MinimumClearCount is not null) reasons.Add("分类修饰、例外、首次NPC或多条件阈值尚未接入");
+            if (!HasOrdinaryFilter(quest)) reasons.Add("exception filter需要已确认的单字符串character声明");
+            if (!HasOrdinaryExceptions(quest)) reasons.Add("exception quest需要已确认的单字符串[urgent]声明");
+            if (!HasOrdinaryDisplay(quest)) reasons.Add("npc visibility、quest title noti或solve video显示声明形状尚未确认");
+            if (!HasOrdinaryCascade(quest)) reasons.Add("casecade clear需要1..29999的单整数marker声明");
+            {
+                bool parent = QuestRelationProgress.SequentialParent(quest,catalog);
+                bool range = QuestClientSceneProgress.TownRange(quest);
+                bool cinematic = QuestClientSceneProgress.Cinematic(quest,out _,out _);
+                bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
+                if (quest.SubType != -1 && !parent && !range && !dungeonClear) reasons.Add("目标子类型尚未接入");
+                if (quest.MainQuest is not null && !QuestRelationProgress.DialogueChild(quest,catalog))
+                    reasons.Add("隐藏子任务的实际对话及交付入口未接入");
+                bool target = quest.Condition switch
+                {
+                    "[meet npc]" => quest.SubType == -1 && quest.IntData.Count == 1 && quest.IntData[0] > 0,
+                    "[seeking]" or "[seek n meet npc]" => quest.SubType == -1 && QuestLifecyclePlan.ValidSeeking(quest),
+                    "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.TryTargets(quest,out _),
+                    "[quest clear]" => parent,
+                    "[clear map]" => QuestClearEligibility.IsSingleMap(quest),
+                    "[condition under clear]" => dungeonClear,
+                    "[reach the range]" => range,
+                    "[look cinematic]" => cinematic,
+                    "[question]" => QuestQuestionProgress.TryCount(quest,out _),
+                    _ => QuestStateProgress.Type(quest) is not null
+                };
+                if (!target) reasons.Add(TargetRestriction(quest));
+                if (QuestQuestionProgress.TryCount(quest,out int options) && Enumerable.Range(0,options)
+                    .Any(answer => !QuestQuestionProgress.OrdinaryChoice(quest,checked((uint)answer),catalog)))
+                    reasons.Add("部分回答需要专用旅程跳过或回放入口，普通回答分支可用");
+                bool profession = quest.RewardType == "[grow type]" && definition?.JobChange == 1 &&
+                    quest.Rewards is [{ Type: 0, Value: >= 1 and <= 5 }] ||
+                    quest.RewardType == "[awakening type]" && quest.Rewards is [{ Type: 0, Value: >= 1 and <= 2 }] &&
+                    definition?.JobChange == quest.Rewards[0].Value + 1;
+                bool characterReward = QuestCharacterReward.TryScalar(quest,out _);
+                if (quest.RewardType != "[item]" && !profession && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest))
+                    reasons.Add(RewardRestriction(quest));
+                if (quest.CompleteNpc <= 0 && quest.Condition != "[clear map]" && !dungeonClear &&
+                    !(quest.CompleteNpc == -1 && (parent || range || cinematic || quest.Condition is "[meet npc]" or "[seek n meet npc]" or "[question]" or
+                        "[seeking]" or "[hunt monster]" or "[hunt enemy]" || QuestStateProgress.Type(quest) is not null)))
+                    reasons.Add("此自动交付入口尚未确认");
+                if (!quest.Attributes.Contains("not give exp quest") && (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))
+                    reasons.Add("奖励缺少合法difficulty键");
+                if (!HasOrdinaryAttributes(quest)) reasons.Add("attribute包含未确认的值或声明形状");
+                try
+                {
+                    var rewards = QuestFixedRewardDefinition.Parse(profession || characterReward ? quest with { Rewards = [] } : quest, allowGold: true);
+                    var selection = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition?.SelectRewards ?? [] });
+                    var gifts = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition?.AcceptanceRewards ?? [] });
+                    foreach (int id in Enumerable.Range(0, 16).SelectMany(job => Enumerable.Range(0,6).SelectMany(grow =>
+                        rewards.ForJob((byte)job,(byte)grow).Concat(selection.ForJob((byte)job,(byte)grow))))
+                        .Select(row => row.ItemId).Distinct()) CheckItem(id, false);
+                    foreach (int id in Enumerable.Range(0,16).SelectMany(job => Enumerable.Range(0,6)
+                        .SelectMany(grow => gifts.ForJob((byte)job,(byte)grow))).Select(row => row.ItemId).Distinct()) CheckItem(id,false,true);
+                    if (quest.Condition is "[seeking]" or "[seek n meet npc]" && QuestLifecyclePlan.ValidSeeking(quest))
+                        foreach (int id in quest.IntData.Take(QuestLifecyclePlan.MaterialLength(quest)).Where((_, at) => at % 2 == 0).Distinct()) CheckItem(id, true);
+                    void CheckItem(int id, bool consume, bool gift = false)
+                    {
+                        if (CurrencyWallet.RewardKind(id) is { } kind)
+                        {
+                            if (gift || ItemSlotBoundService.CurrencySlot(kind) is null)
+                                reasons.Add(gift ? "钱包接取赠品投影尚未接入" : "此钱包没有已确认的普通背包持有域");
+                            return;
+                        }
+                        if (pieces.ByPiece.ContainsKey(id))
+                        { reasons.Add(consume ? "碎片材料的交付消费尚未确认" : "特殊持有域奖励投影尚未接入"); return; }
+                        if (ItemSlotBoundService.List(items.Get(id).Kind) != InventoryListType.Main)
+                            reasons.Add(consume ? "材料不属于普通背包持有域" : "特殊持有域奖励投影尚未接入");
+                    }
+                }
+                catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException or FileNotFoundException) { reasons.Add(error.Message); }
+            }
+            rows.Add(new(quest.Id, quest.Path, quest.Grade, quest.Condition, quest.SubType, access.Entry,
+                reasons.Count == 0, reasons.Distinct().ToImmutableArray(), pending, missing));
+        }
+        var result = rows.ToImmutable();
+        return new(result.Length, result.Count(row => row.ImplementedPath), result, Cycles(prerequisite), Cycles(parents));
+    }
+
+    // 说明实际依赖；报告不解锁入口，也不把普通客户端通知充当这些玩法的完成事实。
+    static string TargetRestriction(StoryQuest quest) => quest.Condition switch
+    {
+        "[pvp match]" or "[pvp quest]" or "[pvp rank]" => "目标依赖决斗比赛、结果或段位状态；决斗领域尚未接入",
+        "[raid phase clear]" => "目标依赖团本阶段、队伍和参与身份；团本领域尚未接入",
+        "[custom multi condition]" when quest.SubType == 1 => "目标依赖特殊塔场景及多条件事件；对应塔流程尚未接入",
+        "[custom multi condition]" when quest.Path.Contains("/pvp/",StringComparison.Ordinal) => "目标依赖决斗训练场多条件事件；对应场景及条件通道尚未接入",
+        "[custom multi condition]" => "本版多条件类型60已确认；实际场景、条件通道和进度保存尚未接入",
+        "[clear multi quest]" => "本版类型70按真实完成记录与最小阈值聚合；专用隐藏入口及标量投影尚未接入",
+        "[clear a dungeon]" => "目标要求副本集合与子类型条件；普通清图凭据尚未接入此类型的进度编码",
+        "[condition under clear]" => "目标要求带条件通关；本版子类型及相应服务端结算统计尚未接入",
+        "[play only]" => "目标要求游玩条件；本版条件与副本统计的对应关系尚未接入",
+        "[get score]" => "目标依赖指定场景的真实评分；评分统计尚未接入任务进度",
+        "[use skill]" => "目标依赖真实技能使用事实；施法确认及本版进度编码尚未接入",
+        "[use item]" or "[use fortune coin]" => "目标依赖实际道具使用或幸运币结果；对应消费事件尚未接入任务进度",
+        "[disjoint item]" or "[self disjoint item]" => "目标依赖分解结果及分解者身份；对应领域事务尚未接入任务进度",
+        "[equipped item]" => "目标依赖资源指定的装备属性；本版子类型及槽位条件尚未接入",
+        "[get item]" => "目标依赖实际取得道具事件；不能用当前库存替代取得历史",
+        "[amplify item]" => "目标依赖增幅结果；增幅领域尚未接入任务进度",
+        "[epic production]" => "目标依赖史诗制作结果；史诗制作领域尚未接入",
+        "[send chatting]" => "目标依赖聊天场景及内容事件；对应任务条件尚未接入",
+        "[ui click]" => "目标依赖本版界面事件；对应33通道及场景校验尚未接入",
+        "[check time]" => "目标依赖时间与场景记录；本版计时起止及进度编码尚未接入",
+        "[custom quest]" => "目标依赖自定义场景事件；本版子类型及场景流程尚未接入",
+        _ => "目标需要尚未确认的事件或编码: " + quest.Condition + "/" + quest.SubType
+    };
+
+    static string RewardRestriction(StoryQuest quest) => quest.RewardType switch
+    {
+        "[tp]" => "V31固定展示2TP已确认；决斗目标及真实额外TP奖励事务入口尚未接入",
+        "[creature evolution]" => "奖励依赖宠物进化状态；宠物领域尚未接入",
+        "[expert job]" => "奖励依赖副职业状态；副职业领域尚未接入",
+        "[ridable]" => "奖励依赖坐骑状态；坐骑领域尚未接入",
+        "[cosmo challenge]" or "[hell challenge]" or "[hell legend]" or "[inferno challenge]" => "奖励依赖对应挑战或深渊资格；专用领域状态及通知尚未接入",
+        "[operation hope]" => "奖励依赖代号希望玩法状态；对应领域尚未接入",
+        "[grow type]" or "[awakening type]" => "职业奖励声明不属于已接入的合法正常转职或觉醒组合",
+        "[slot expansion]" => "装备槽奖励需要本版0/1/2合法索引及无选择奖励的声明",
+        _ => "特殊奖励尚未接入: " + quest.RewardType
+    };
+
+    // 两种关系独立检查，避免把“父任务等子任务完成、子任务需父任务接取”当作完成前置循环。
+    // OR组存在环也只报告结构，不能据此推断所有入口不可达。
+    static ImmutableArray<ImmutableArray<int>> Cycles(Dictionary<int, int[]> graph)
+    {
+        int next = 0;
+        var ids = new Dictionary<int, int>(); var low = new Dictionary<int, int>();
+        var stack = new Stack<int>(); var active = new HashSet<int>();
+        var cycles = ImmutableArray.CreateBuilder<ImmutableArray<int>>();
+        foreach (int id in graph.Keys.Order()) if (!ids.ContainsKey(id)) Visit(id);
+        return cycles.ToImmutable();
+        void Visit(int id)
+        {
+            ids[id] = low[id] = next++; stack.Push(id); active.Add(id);
+            foreach (int target in graph[id].Where(graph.ContainsKey))
+            {
+                if (!ids.ContainsKey(target)) { Visit(target); low[id] = Math.Min(low[id], low[target]); }
+                else if (active.Contains(target)) low[id] = Math.Min(low[id], ids[target]);
+            }
+            if (low[id] != ids[id]) return;
+            var component = ImmutableArray.CreateBuilder<int>(); int member;
+            do { member = stack.Pop(); active.Remove(member); component.Add(member); } while (member != id);
+            if (component.Count > 1 || graph[id].Contains(id)) cycles.Add(component.Order().ToImmutableArray());
+        }
+    }
+}

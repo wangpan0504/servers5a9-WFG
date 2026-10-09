@@ -19,8 +19,7 @@ internal static class DungeonExplicitDropPolicyTests
         var declaration = new DungeonMonsterDropDeclaration(1, GoblinPath, source, []);
         var pool = Create(declaration, Resolve);
         var thrower = Create(declaration with { MonsterId = 2, Path = ThrowerPath }, Resolve);
-        That(DungeonExplicitDropPolicy.RuleId == "local-3145-explicit-consumables-10pct-v1" &&
-            DungeonExplicitDropPolicy.TriggerDenominator == 10000 && DungeonExplicitDropPolicy.TriggerThreshold == 1000 &&
+        That(DungeonExplicitDropPolicy.TriggerDenominator == 10000 && DungeonExplicitDropPolicy.TriggerThreshold == 1000 &&
             DungeonExplicitDropPolicy.SelectionDenominator == 350, "只使用已批准本服规则的完整常量");
         That(pool.MonsterId == 1 && pool.Path == GoblinPath && thrower.MonsterId == 2 && thrower.Path == ThrowerPath,
             "仅两个模板保持各自规范路径");

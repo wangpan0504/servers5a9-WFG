@@ -129,6 +129,8 @@ internal static class InventoryMoveService
         if (position.List != InventoryListType.Equipment)
             return true;
         var template = catalog.Get(core.ItemId);
+        int unlock = position.Index switch { 22 => 1, 23 => 2, 25 => 16, _ => 0 };
+        if (unlock != 0 && (character.EquipmentSlotFlags & unlock) == 0) return false;
         // 女鬼剑流浪武士的副武器栏接受普通武器；觉醒位不改变基础转职。
         bool matchesSlot = template.EquipmentSlot == position.Index ||
             core.Kind == ItemKind.Avatar && template.EquipmentSlot == 9 && position.Index == 11 ||

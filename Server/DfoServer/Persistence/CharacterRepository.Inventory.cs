@@ -63,8 +63,33 @@ internal sealed partial class CharacterRepository
         inventory = WriteCargo(db, transaction, owner, expected.Id, plan, inventory);
         WriteShopPurchases(db, transaction, owner.Account, expected.Id, plan.Before, inventory);
         inventory = WriteEpicPieces(db, transaction, owner, expected.Id, plan.Before, inventory, plan.Reason);
+        var active = current.ActiveMainQuests;
+        if (quests is not null && !plan.Reason.StartsWith("quest_", StringComparison.Ordinal))
+        {
+            var refreshed = DfoServer.Game.Quests.QuestInventoryProgress.Refresh(active, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            WriteQuestConditions(db, transaction, current.Id, active, refreshed);
+            active = refreshed.ToArray();
+        }
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
-        return current with { Revision = current.Revision + 1, Inventory = inventory };
+        return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active };
+    }
+
+    static void WriteQuestConditions(SqliteConnection db, SqliteTransaction transaction, ushort characterId,
+        IReadOnlyList<ActiveMainQuest> before, IReadOnlyList<ActiveMainQuest> after)
+    {
+        using var command = db.CreateCommand(); command.Transaction = transaction;
+        command.CommandText = "UPDATE character_active_main_quests SET condition_state=$scalar WHERE character_id=$id AND slot=$slot AND quest_id=$quest AND acceptance_id=$acceptance AND condition_state=$before";
+        foreach (var row in after)
+        {
+            var old = before.Single(value => value.AcceptanceId == row.AcceptanceId);
+            if (old == row) continue;
+            if (old.Slot != row.Slot || old.QuestId != row.QuestId) throw new InvalidDataException("库存不能替换任务接取身份");
+            command.Parameters.Clear(); command.Parameters.AddWithValue("$id", characterId);
+            command.Parameters.AddWithValue("$slot", row.Slot); command.Parameters.AddWithValue("$quest", row.QuestId);
+            command.Parameters.AddWithValue("$acceptance", row.AcceptanceId.ToString("N"));
+            command.Parameters.AddWithValue("$before", (long)old.ConditionState); command.Parameters.AddWithValue("$scalar", (long)row.ConditionState);
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("库存关联任务状态已变化");
+        }
     }
 
     static bool SameInventory(InventorySnapshot left, InventoryPlan plan)

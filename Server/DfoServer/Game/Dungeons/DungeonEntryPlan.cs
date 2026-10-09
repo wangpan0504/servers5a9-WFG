@@ -1,5 +1,8 @@
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Quests;
+using DfoServer.Game.Quests;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Dungeons;
 
@@ -16,13 +19,20 @@ internal sealed record DungeonEntryPlan(
     DungeonMap StartMap,
     DungeonMap BossMap)
 {
+    public int? BasisLevel { get; init; }
     public Guid QuestAcceptanceId { get; init; }
+    public DungeonMap BaseBossMap { get; init; } = BossMap;
+    public uint RouteQuestId { get; init; } = QuestId;
+    public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
+    public float ExperienceWeight { get; init; } = 1;
+    public IReadOnlyList<int> NamedMonsters { get; init; } = Array.Empty<int>();
 
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
-        byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false)
+        byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
+        Func<int,int>? draw = null, QuestCatalog? quests = null)
     {
         plan = null;
-        reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest);
+        reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
         if (reason != "resource-request-ready")
             return false;
         DungeonDefinition definition;
@@ -36,14 +46,16 @@ internal sealed record DungeonEntryPlan(
             return false;
         }
 
-        return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest);
+        return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
+            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw));
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
-        byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false)
+        byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
+        Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null)
     {
         plan = null;
-        reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest);
+        reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
         if (reason != "resource-request-ready")
             return false;
         if (definition.Id != dungeonId)
@@ -65,14 +77,42 @@ internal sealed record DungeonEntryPlan(
         }
 
         // 仅识别匹配 PVF 已确认的三个整数；未知引用和其他条件形状不能变成默认迷宫。
-        var candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(questId)).ToArray();
+        uint routeQuest = quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
+        var candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)).ToArray();
+        if (questId == 0)
+        {
+            candidates = definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active => maze.ConnectsQuest(active.QuestId,difficulty))).ToArray();
+            if (candidates.Length == 0)
+                candidates = definition.Mazes.Where(maze => QuestEligibility.Completed(character).Any(id => maze.ConnectsQuest((uint)id,difficulty,1))).ToArray();
+            if (candidates.Length == 0)
+            {
+                candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
+                if (candidates.Length > 0)
+                {
+                    int index = (draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32)(candidates.Length);
+                    if (index < 0 || index >= candidates.Length) throw new InvalidDataException("迷宫随机索引越界");
+                    candidates = [candidates[index]];
+                }
+            }
+            else if (candidates.Length == 1)
+            {
+                routeQuest = checked((uint)candidates[0].ConnectionQuestId!.Value);
+                if (quests is null || !quests.TryGet((int)routeQuest,out quest) || !QuestCoverage.HasOrdinaryDeclarations(quest))
+                { reason = "quest-route-definition-unavailable"; return false; }
+            }
+        }
+        else if (candidates.Length == 0 && routeQuest != questId)
+            candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(routeQuest,difficulty)).ToArray();
+        else routeQuest = questId;
         if (candidates.Length != 1)
         {
             reason = candidates.Length == 0 ? "quest-maze-unavailable" : "quest-maze-ambiguous";
             return false;
         }
 
-        var maze = candidates[0];
+        var maze = resolveMaze is null ? candidates[0] : resolveMaze(candidates[0]);
+        if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0))
+        { reason = "difficulty-unsupported"; return false; }
         if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 || maze.Bosses.Count != 1
             || maze.MapSpecification is not { Count: > 0 } maps)
         {
@@ -96,29 +136,48 @@ internal sealed record DungeonEntryPlan(
             return false;
         }
 
-        // SourceOrdinal 仅保留资源顺序，不能直接作为 NOTI28 的 wire 枚举。
-        var active = character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
-        plan = new(character.Id, character.Revision, dungeonId, questId, active.Slot, difficulty, maze, starts[0], bosses[0])
+        var terminal = bosses[0];
+        if (quest is not null && QuestClearEligibility.IsSingleMap(quest) && quest.IntData[0] != terminal.Id)
         {
-            QuestAcceptanceId = active.AcceptanceId
+            var layers = maze.LayeredMaps.Where(map => map.Position == boss && map.Id == quest.IntData[0]).ToArray();
+            if (layers.Length != 1) { reason = "quest-terminal-map-unavailable"; return false; }
+            terminal = layers[0];
+        }
+        if (quest is not null && (quest.Id != (questId == 0 ? routeQuest : questId) || quest.Definition is null ||
+            quest.Definition.Dungeons.Length != 0 && !quest.Definition.Dungeons.Any(row => row.DungeonId == dungeonId)))
+        {
+            reason = "quest-dungeon-mismatch";
+            return false;
+        }
+
+        // SourceOrdinal 仅保留资源顺序，不能直接作为 NOTI28 的 wire 枚举。
+        var active = questId == 0 ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
+        plan = new(character.Id, character.Revision, dungeonId, questId, active?.Slot ?? byte.MaxValue, difficulty, maze, starts[0], terminal)
+        {
+            BasisLevel = definition.BasisLevel,
+            QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
+            BaseBossMap = bosses[0],
+            RouteQuestId = routeQuest,
+            QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(),
+            ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
+            NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition)
         };
         reason = "resource-plan-ready";
         return true;
     }
 
-    private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty, bool allowClearedQuest)
+    private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty, bool allowClearedQuest, StoryQuest? quest)
     {
-        if (dungeonId != 3)
+        if (dungeonId is 0 or > int.MaxValue)
             return "dungeon-unsupported";
-        if (questId != 3145)
+        if (questId >= 30000)
             return "quest-unsupported";
-        if (difficulty != 0)
+        if (difficulty > 4)
             return "difficulty-unsupported";
-        if (character.Position.Town != 38 || character.Position.Area != 2)
-            return "dungeon-entry-mismatch";
         if (character.Level is < 1 or > 95)
             return "character-level-invalid";
-        if (character.CompletedQuests.Contains((int)questId))
+        if (questId == 0) return "resource-request-ready";
+        if (QuestEligibility.Completed(character).Contains((int)questId))
             return "quest-already-completed";
         var active = character.ActiveMainQuests.Where(quest => quest.QuestId == questId).ToArray();
         if (active.Length == 0)
@@ -127,7 +186,11 @@ internal sealed record DungeonEntryPlan(
             || character.ActiveMainQuests.Count(quest => quest.Slot == active[0].Slot) != 1)
             return "quest-active-conflict";
         // 已达成条件只有持久清图资格才能继续挑战；裸条件值不能伪装正式通关。
-        if (active[0].ConditionState != 1 && !(allowClearedQuest && active[0].ConditionState == 0))
+        if ((quest is null || QuestClearEligibility.IsSingleMap(quest)) && active[0].ConditionState != 1 &&
+            !(allowClearedQuest && active[0].ConditionState == 0) ||
+            quest?.Condition == "[condition under clear]" && (!QuestDungeonClearProgress.ValidScalar(quest,active[0].ConditionState) ||
+                active[0].ConditionState == 0 && !allowClearedQuest) ||
+            quest?.Condition is "[hunt enemy]" or "[hunt monster]" && !QuestHuntProgress.ValidScalar(quest, active[0].ConditionState))
             return "quest-condition-not-pending";
         return "resource-request-ready";
     }

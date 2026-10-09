@@ -3,36 +3,47 @@ using DfoServer.GameWorld.Quests;
 
 namespace DfoServer.Game.Quests;
 
-internal sealed record QuestExperienceReward(string RuleId, string ResourcePath, string QuestPath, int NativeIndex,
+internal sealed record QuestExperienceReward(string ResourcePath, string QuestPath, int NativeIndex,
     int BaseExperience, int RawAdditionalPercent, string DifficultyKey, int DifficultyWeight, uint Amount);
 
 internal static class QuestExperiencePolicy
 {
-    public const string RuleId = "local-3145-quest-parameter-exp-v1";
-    public const string QuestPath = "n_quest/quest_renewal/epic_quest/elvengard/elvengard_epic_01.qst";
-
-    // 本服明确采用difficulty百分比及原生直接index；不是已还原的原服普通任务经验公式。
-    public static QuestExperienceReward Prepare(Character character, StoryQuest quest, QuestRewardParameterCatalog parameters)
+    public static QuestExperienceReward Prepare(Character character, StoryQuest quest, QuestRewardParameterCatalog parameters,
+        out int penalty)
     {
-        ArgumentNullException.ThrowIfNull(character);
-        ArgumentNullException.ThrowIfNull(quest);
-        ArgumentNullException.ThrowIfNull(parameters);
-        if (character.Job > 15 || quest.Id != 3145 || quest.Path != QuestPath ||
-            quest.Grade != "[epic]" || quest.Difficulty != "1" || quest.Condition != "[clear map]" || quest.SubType != -1 ||
-            !quest.IntData.SequenceEqual([76126]) || quest.MinimumLevel != 1 || quest.MaximumLevel != 99 || quest.DungeonIndex != 3 ||
-            quest.DungeonParameter != -1 || quest.Npc != 1 || quest.CompleteNpc != 1247 || quest.MainQuest is not null || quest.Prerequisites.Count != 0 ||
-            quest.BossTemplate != 107000903 || quest.RewardType != "[item]" ||
-            quest.Attributes.Contains("not give exp quest") || quest.DeclaredIgnoreLevelForExperience is not (null or 0))
-            throw new NotSupportedException("任务经验仅支持已批准的全职业普通3145资源合同");
-        _ = QuestFixedRewardGrant.ReadRewards(character.Job, quest);
-        int index = quest.MinimumLevel;
+        if (character.Job > 15 || character.Level is < 1 or > 95)
+            throw new InvalidDataException("任务奖励角色等级或职业无效");
+        if (quest.MinimumLevel is < 1 or > 95 || quest.DeclaredIgnoreLevelForExperience is not (null or 0 or 1) ||
+            quest.Difficulty is null || !parameters.Difficulty.TryGetValue(quest.Difficulty, out int weight) || weight < 0)
+            throw new NotSupportedException("本服通用任务经验需要完整原始difficulty和等级声明");
+        bool ignore = quest.DeclaredIgnoreLevelForExperience == 1;
+        int index = ignore ? character.Level : quest.MinimumLevel;
         var row = parameters.GetExperienceAtNativeIndex(index);
-        if (row.Base <= 0 || row.NativeAdditionalPercent != 0 || !parameters.Difficulty.TryGetValue(quest.Difficulty, out int weight) || weight <= 0)
-            throw new NotSupportedException("本服3145任务经验不使用缺失difficulty、非正基础或未批准的追加倍率");
-        ulong computed = checked((ulong)row.Base * (ulong)weight) / 100;
-        if (computed is 0 or > int.MaxValue)
-            throw new InvalidDataException("本服3145任务EXP超出匹配显示及成长提交范围");
-        return new(RuleId, QuestRewardParameterCatalog.ResourcePath, quest.Path, index,
-            row.Base, row.RawAdditionalPercent, quest.Difficulty, weight, checked((uint)computed));
+        if (row.Base < 0) throw new NotSupportedException("本服任务EXP基础不能为负");
+        penalty = LevelPenalty(character.Level - quest.MinimumLevel, quest.Grade == "[epic]", ignore, parameters);
+        // 本服逐步向下取整：difficulty百分比 → 正追加百分比 → 原三元组等级百分比。
+        ulong amount = quest.Attributes.Contains("not give exp quest") ? 0 :
+            checked((ulong)row.Base * (ulong)weight) / 100;
+        amount = checked(amount * (ulong)(100L + row.NativeAdditionalPercent)) / 100;
+        amount = checked(amount * (ulong)penalty) / 100;
+        if (amount > int.MaxValue) throw new InvalidDataException("本服任务EXP超出显示范围");
+        return new(QuestRewardParameterCatalog.ResourcePath, quest.Path, index,
+            row.Base, row.RawAdditionalPercent, quest.Difficulty, weight, (uint)amount);
     }
+
+    internal static int LevelPenalty(int difference, bool epic, bool ignore, QuestRewardParameterCatalog parameters)
+    {
+        if (ignore) return 100;
+        var green = parameters.Penalty(epic, false);
+        var grey = parameters.Penalty(epic, true);
+        // 本服将灰色区间上界之后延续为灰色比例；不改变或截断资源三元组。
+        if (difference >= grey.MinimumDifference) return grey.Percent;
+        if (difference >= green.MinimumDifference && difference <= green.MaximumDifference) return green.Percent;
+        if (parameters.BasicPenalty < 0) throw new InvalidDataException("基础等级惩罚不能为负");
+        return parameters.BasicPenalty;
+    }
+
+    // 共用同一计算；不按任务编号选择经验规则。
+    public static QuestExperienceReward Prepare(Character character, StoryQuest quest, QuestRewardParameterCatalog parameters)
+        => Prepare(character, quest, parameters, out _);
 }

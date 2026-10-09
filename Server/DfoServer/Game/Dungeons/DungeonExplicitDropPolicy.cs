@@ -64,12 +64,11 @@ internal sealed class DungeonExplicitDropPool
 // 用户批准的本服规则，不表示恢复S5A9原版随机公式。资格、熵、事件冻结与提交归调用方。
 internal static class DungeonExplicitDropPolicy
 {
-    public const string RuleId = "local-3145-explicit-consumables-10pct-v1";
     public const int TriggerDenominator = 10000;
     public const int TriggerThreshold = 1000;
     public const int SelectionDenominator = 350;
 
-    // 仅验证资源池；普通单人Dungeon3/3145、难度及固定普通生成资格由Session准入核对。
+    // 仅验证资源池；普通单人副本、难度及固定普通生成资格由Session准入核对。
     public static DungeonExplicitDropPool CreatePool(string resourceSource, DungeonMonsterDropDeclaration declaration,
         Func<int, ItemTemplate> resolveItem) => new(resourceSource, declaration, resolveItem);
 

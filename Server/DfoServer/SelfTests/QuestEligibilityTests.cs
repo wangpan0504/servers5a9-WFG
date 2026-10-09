@@ -1,0 +1,112 @@
+using System.Collections.Immutable;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Quests;
+using DfoServer.GameWorld.Quests;
+using DfoServer.GameWorld.Towns;
+using static DfoServer.Testing.TestCheck;
+
+namespace DfoServer;
+
+internal static class QuestEligibilityTests
+{
+    public static void Run()
+    {
+        int checks = Count;
+        var origin = new Character(1, 0, "Quest", 1, new Location(38, 2, 450, 240), null);
+        var first = Quest(100);
+        var next = Quest(101) with { Definition = new QuestDefinition([]) { PrerequisiteGroups = [[100, 102], [103]] } };
+        var catalog = new QuestCatalog(new[] { first, next, Quest(102), Quest(103) }.ToDictionary(quest => quest.Id));
+        That(QuestEligibility.Evaluate(origin, first, catalog).Visible, "普通资格允许Lv1未完成任务");
+        That(!QuestEligibility.Evaluate(origin, next, catalog).Eligible, "前置组不以任意单个前置代替整组");
+        That(!QuestEligibility.Evaluate(origin with { CompletedQuests = [100] }, next, catalog).Eligible,
+            "AND组缺一个前置仍拒绝");
+        That(QuestEligibility.Evaluate(origin with { CompletedQuests = [100, 102] }, next, catalog).Eligible &&
+            QuestEligibility.Evaluate(origin with { CompletedQuests = [103] }, next, catalog).Eligible, "前置组内AND、组间OR");
+        for (byte job = 0; job < 16; job++)
+            That(QuestEligibility.Evaluate(origin with { Job = job }, first, catalog).Eligible, "all职业资格 " + job);
+        That(!QuestEligibility.Evaluate(origin, first with { MinimumLevel = 9999 }, catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin, first with { MinimumLevel = -1 }, catalog).Eligible, "特殊等级不截为普通等级");
+        var target = first with { Definition = new QuestDefinition([]) { TargetCharacters = [new("[at priest]", 2, 1)] } };
+        That(QuestEligibility.Evaluate(origin with { Job = 14, GrowType = 18 }, target, catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin with { Job = 14, GrowType = 2 }, target, catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin with { Job = 0, GrowType = 18 }, target, catalog).Eligible,
+            "目标职业三元组同时限制职业、转职与觉醒");
+        var conflict = first with { Definition = new QuestDefinition([]) { Collisions = [101] } };
+        That(!QuestEligibility.Evaluate(origin with { ActiveMainQuests = [new(0, 101, 1)] }, conflict, catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin with { CompletedQuests = [101] }, conflict, catalog).Eligible, "冲突检查覆盖接取与完成");
+        That(QuestEligibility.Evaluate(origin, first with { Definition = new QuestDefinition([]) { AccountQuest = true } }, catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin with { AccountCompletedQuests = [100] }, first, catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin, first with { Definition = new QuestDefinition([]) { RequiredAnswers = [new(103, 1)] } }, catalog).Eligible,
+            "账号未完成允许普通资格，账号已完成阻止重复；未实现回答不能按答案0放行");
+        That(QuestEligibility.Evaluate(origin with { AccountCompletedQuests = [103] },next,catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin with { AccountCompletedQuests = [103] },first with { Definition = new([]) { AccountCollisions = [103] } },catalog).Eligible,
+            "账号完成位参与前置组与账号冲突判断");
+        var parent = Quest(200) with { Condition = "[quest clear]", IntData = new[] { 202, 201 } };
+        var child1 = Quest(201) with { MainQuest = 200 };
+        var child2 = Quest(202) with { MainQuest = 200 };
+        catalog = new QuestCatalog(new[] { parent, child1, child2 }.ToDictionary(quest => quest.Id));
+        var inParent = origin with { ActiveMainQuests = [new(0, 200, 2)] };
+        That(!QuestEligibility.Evaluate(origin, child2, catalog).Eligible &&
+            QuestEligibility.Evaluate(inParent, child2, catalog) is { Eligible: true, Visible: false } &&
+            !QuestEligibility.Evaluate(inParent, child1, catalog).Eligible, "隐藏子任务按资源顺序等待父任务真实入口");
+        That(QuestEligibility.Evaluate(inParent with { CompletedQuests = [202] }, child1, catalog).Eligible,
+            "完成首个子任务后才开放后一个");
+        var sequential = parent with { SubType = 2 };
+        var related = new QuestCatalog(new[] { sequential, child1, child2 }.ToDictionary(quest => quest.Id));
+        That(QuestRelationProgress.DialogueChild(child2, related), "确认的顺序父任务允许城镇子任务入口");
+        That(QuestRelationProgress.Initial(sequential,related,[]) == 2 &&
+            QuestRelationProgress.Initial(sequential,related,[202]) == 1 &&
+            QuestRelationProgress.Initial(sequential,related,[201,202]) == 0,
+            "新父任务按实际未完成子项初始化；已有完成记录不被重置或伪造");
+        foreach (var unsupported in new[]
+        {
+            sequential with { SubType = 1 }, sequential with { IntData = [202,202] },
+            sequential with { IntData = [202,29999] }, sequential with { Grade = "[daily]" },
+            sequential with { Definition = sequential.Definition! with { AccountQuest = true } },
+            sequential with { Definition = sequential.Definition! with { RequiredAnswers = [new(100,1)] } },
+            sequential with { Definition = sequential.Definition! with { Exceptions = [new(0,1,null)] } },
+            sequential with { Definition = sequential.Definition! with { MinimumClearCount = 1 } },
+            sequential with { Definition = sequential.Definition! with { FirstExposedByNpc = 1 } },
+            sequential with { Definition = sequential.Definition! with { GradeModifiers = ["[urgent]"] } }
+        })
+        {
+            var pending = new QuestCatalog(new[] { unsupported, child1, child2 }.ToDictionary(quest => quest.Id));
+            That(!QuestRelationProgress.DialogueChild(child2, pending) &&
+                QuestRelationProgress.Refresh([new(0,200,17) { AcceptanceId = Guid.NewGuid() }], [201,202], pending)[0].ConditionState == 17,
+                "未确认父任务规则、重复引用或缺失引用不能签发子任务入口及父归零");
+        }
+        That(QuestEligibility.InspectResource(first with { MinimumLevel = 254, MaximumLevel = 255 }).Entry == QuestResourceEntry.OutsideLevels &&
+            QuestEligibility.InspectResource(first with { Definition = first.Definition! with { IsEvent = true } }).Entry == QuestResourceEntry.Event,
+            "资源级排除分别记录原始特殊等级与活动启用限制");
+        var hidden = first with { Definition = first.Definition! with { ExposedByNpc = false } };
+        That(QuestEligibility.Evaluate(origin, hidden, catalog) is { Eligible: true, Visible: false } &&
+            QuestEligibility.InspectResource(hidden).Entry == QuestResourceEntry.Dedicated,
+            "隐藏入口保留定义和业务资格，不误认废弃或自动展示");
+        That(!QuestEligibility.Evaluate(origin, first with { Definition = first.Definition! with { CreatureKind = 13 } }, catalog).Eligible,
+            "宠物前提缺失不能当普通任务下发");
+        var transferred = first with { RewardType = "[grow type]", Definition = first.Definition! with { JobChange = 1, GrowType = 1 } };
+        That(QuestEligibility.Evaluate(origin, transferred, catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin with { GrowType = 1 }, transferred, catalog).Eligible,
+            "转职任务的目标分支不冒充当前资格，已转职不能再接最终转职");
+        var selfAwake = first with { Grade = "[realization]", Definition = first.Definition! with { JobChange = 2, GrowType = 0 } };
+        That(QuestEligibility.Evaluate(origin with { Job = 9 }, selfAwake, catalog).Eligible &&
+            !QuestEligibility.Evaluate(origin with { Job = 0 }, selfAwake, catalog).Eligible,
+            "外传职业低位0的一觉资格与普通职业分开");
+        var excluded = first with { Definition = first.Definition! with { NonTargetCharacters = [new("[at swordman]", -1, -1)] } };
+        That(!QuestEligibility.Evaluate(origin with { Job = 11 }, excluded, catalog).Eligible &&
+            QuestEligibility.Evaluate(origin, excluded, catalog).Eligible, "排除职业三元组不能反向当允许列表");
+        var hardcore = first with { Definition = first.Definition! with { HardcoreOnly = true } };
+        That(QuestEligibility.InspectResource(hardcore).Entry == QuestResourceEntry.Hardcore &&
+            !QuestEligibility.Evaluate(origin, hardcore, catalog).Eligible, "尚未具备的极限模式不放行");
+        var hide = first with { Definition = first.Definition! with { HideOnCompletedQuests = [202] } };
+        That(QuestEligibility.Evaluate(origin with { CompletedQuests = [202] }, hide, catalog) is { Eligible: true, Visible: false },
+            "资源隐藏条件影响展示，不冒充完成或废弃任务");
+        Console.WriteLine($"PASS {Count - checks} 任务资源入口、等级/职业及前置/子任务资格断言");
+    }
+
+    internal static StoryQuest Quest(int id) => new(id, "fixture/" + id + ".qst", "[meet npc]", -1, [1], 1, 1,
+        1, 99, [], null, null, null, [], null, null, [])
+    {
+        Grade = "[epic]", RewardType = "[item]", Difficulty = "1", Definition = new QuestDefinition([]) { Job = "[all]" }
+    };
+}

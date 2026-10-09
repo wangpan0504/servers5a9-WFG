@@ -21,6 +21,7 @@ internal sealed class TcpPeer : IDisposable
     ushort sequence;
     public byte[] Roster { get; private set; } = [];
     public byte[] SkillInfo { get; private set; } = [];
+    public byte[] AvailableQuests { get; private set; } = [];
     public ushort Id { get; private set; }
     public WirePacket[] SpecialContainers { get; private set; } = [];
     public byte[][] Mailbox { get; private set; } = [];
@@ -240,6 +241,7 @@ internal sealed class TcpPeer : IDisposable
                         w.Write(U16(prefix[0].Body, 9));
                         w.Write(appearanceFlags.Value);
                     }));
+                AvailableQuests = Expect(0, 21).Body;
             }
             if (notice == ((byte)0, (ushort)3))
             {

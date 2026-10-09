@@ -9,12 +9,16 @@ internal readonly record struct QuestExperienceParameter(int Base, int RawAdditi
     public int NativeAdditionalPercent => Math.Max(0, RawAdditionalPercent);
 }
 
-// 读取3145本服经验规则所需的EXP/difficulty参数，不计算或授予通用金币奖励。
+internal readonly record struct QuestLevelPenalty(int MinimumDifference, int MaximumDifference, int Percent);
+
+// 保留本版原始字符串键、直接表索引和完整惩罚声明，资源层不计算奖励。
 internal sealed class QuestRewardParameterCatalog
 {
     public const string ResourcePath = "n_quest/questparameter.etc";
     public ImmutableDictionary<string, int> Difficulty { get; }
     public ImmutableArray<QuestExperienceParameter> Experience { get; }
+    public ImmutableArray<int> Gold { get; private init; } = [];
+    public ImmutableArray<QuestField> Fields { get; private init; } = [];
     QuestRewardParameterCatalog(ImmutableDictionary<string, int> difficulty, ImmutableArray<QuestExperienceParameter> experience)
         => (Difficulty, Experience) = (difficulty, experience);
 
@@ -58,7 +62,17 @@ internal sealed class QuestRewardParameterCatalog
         var experience = ImmutableArray.CreateBuilder<QuestExperienceParameter>();
         for (int at = 0; at < experienceValues.Length; at += 2)
             experience.Add(new(experienceValues[at], experienceValues[at + 1]));
-        return new(difficulty.ToImmutable(), experience.ToImmutable());
+        var document = new PvfTokenDocument(tokens, resolve);
+        return new(difficulty.ToImmutable(), experience.ToImmutable())
+        {
+            Fields = document.Sections.Select(Convert).ToImmutableArray(),
+            Gold = document.Sections.FirstOrDefault(section => section.Name == "gold reward table")?.Values
+                .Select(token => token.Type == 0 ? token.Value : throw new InvalidDataException("Gold表含非整数")).ToImmutableArray() ?? []
+        };
+
+        QuestField Convert(PvfTokenSection section) => new(section.Name,
+            section.Values.Select(token => new QuestRewardToken(token.Type, token.Value, token.Type == 6 ? resolve(token.Value) : null)).ToImmutableArray(),
+            section.Children.Select(Convert).ToImmutableArray());
 
         PvfToken[] Required(string tag) => sections.TryGetValue(tag, out var value) ? value :
             throw new InvalidDataException("缺少任务奖励参数字段: " + tag);
@@ -74,4 +88,20 @@ internal sealed class QuestRewardParameterCatalog
     // 04333680/6B0/E0真实getter直接使用index，不把资源第0项自动改名Lv1。
     public QuestExperienceParameter GetExperienceAtNativeIndex(int index) => index >= 0 && index < Experience.Length
         ? Experience[index] : throw new ArgumentOutOfRangeException(nameof(index), "任务EXP参数原生索引越界");
+
+    public int BasicPenalty => Integers("basic level penalty", 1)[0];
+    public QuestLevelPenalty Penalty(bool epic, bool grey)
+    {
+        var values = Integers((epic ? "epic " : "") + (grey ? "grey" : "green") + " level penalty", 3);
+        if (values[0] < 0 || values[1] < values[0] || values[2] < 0)
+            throw new InvalidDataException("任务等级惩罚三元组无效");
+        return new(values[0], values[1], values[2]);
+    }
+    int[] Integers(string name, int count)
+    {
+        var values = Fields.SingleOrDefault(field => field.Name == name)?.Values ?? [];
+        if (values.Length != count || values.Any(value => value.Type != 0))
+            throw new NotSupportedException("任务参数缺少完整声明: " + name);
+        return values.Select(value => value.Value).ToArray();
+    }
 }

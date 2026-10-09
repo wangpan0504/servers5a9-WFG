@@ -34,6 +34,7 @@ internal static class CommandLineTests
             (["--inspect"], ServerCommandKind.InspectTowns),
             (["--inspect-dungeon", "0"], ServerCommandKind.InspectDungeon),
             (["--scan-dungeons"], ServerCommandKind.ScanDungeons),
+            (["--scan-quests"], ServerCommandKind.ScanQuests),
             (["--inspect-jianying"], ServerCommandKind.InspectPreparation),
             (["--selftest-core"], ServerCommandKind.SelfTestCore),
             (["--selftest"], ServerCommandKind.SelfTest),

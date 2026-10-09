@@ -24,12 +24,15 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     Task? hosted;
     CancellationTokenSource? hostStop;
     readonly TcpTestResources? resources;
+    readonly DfoServer.GameWorld.Quests.QuestCatalog? questCatalog;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
-    public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null)
+    public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null,
+        DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null)
     {
         this.resources = resources;
+        this.questCatalog = questCatalog;
         Root = Path.GetFullPath(root);
         Directory.CreateDirectory(Root);
         pvfSource = source.PvfPath;
@@ -141,6 +144,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         }
         if (resources is not null && !isolatedProcess)
         {
+            var quests = questCatalog ?? resources.Quests;
             hostStop = new();
             var options = Options with { PacketCaptureDirectory = packetCapture ? Options.LogDirectory : null };
             hosted = Task.Run(async () =>
@@ -148,12 +152,13 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 Directory.CreateDirectory(options.DataDirectory);
                 using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
                 using var log = new ServerLog(options.LogDirectory);
-                await ServerRuntime.Create(options, resources.Archive, new CharacterRepository(Database), resources.Towns,
-                    resources.Characters, resources.Learning, resources.ItemResources, log).RunAsync(hostStop.Token);
+                await ServerRuntime.Create(options, resources.Archive, new CharacterRepository(Database, quests), resources.Towns,
+                    resources.Characters, resources.Learning, resources.ItemResources, log, quests).RunAsync(hostStop.Token);
             });
         }
         else
         {
+            if (questCatalog is not null) throw new InvalidOperationException("合成任务目录不能由真实子进程悄然替换");
             process = Process.Start(StartInfo(packetCapture ? ["--packet-capture"] : [])) ?? throw new IOException("Server process did not start");
             output = CopyOutputAsync(process.StandardOutput, Path.Combine(Options.LogDirectory, "stdout.txt"));
             errors = CopyOutputAsync(process.StandardError, Path.Combine(Options.LogDirectory, "stderr.txt"));
@@ -347,12 +352,14 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     }
 
     public object[][] Query(string sql, params object[] parameters) => Rows(Database, sql, parameters);
-    public void Sql(string sql)
+    public void Sql(string sql, params object[] parameters)
     {
         using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Database, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString());
         db.Open();
         using var command = db.CreateCommand();
         command.CommandText = sql;
+        for (int i = 0; i < parameters.Length; i++)
+            command.Parameters.AddWithValue("$p" + i, parameters[i]);
         command.ExecuteNonQuery();
     }
     public string Snapshot(string sql = "SELECT * FROM characters ORDER BY id", params object[] parameters) => JsonSerializer.Serialize(Query(sql, parameters));

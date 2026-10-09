@@ -13,11 +13,13 @@ internal sealed class TcpTestResources : IDisposable
     readonly Lazy<ItemResources> items;
     readonly Lazy<TownCatalog> towns;
     readonly Lazy<SkillLearningCatalog> learning;
+    readonly Lazy<DfoServer.GameWorld.Quests.QuestCatalog> quests;
     public PvfArchive Archive => archive.Value;
     public ItemResources ItemResources => items.Value;
     public CharacterCatalog Characters => characters.Value;
     public TownCatalog Towns => towns.Value;
     public SkillLearningCatalog Learning => learning.Value;
+    public DfoServer.GameWorld.Quests.QuestCatalog Quests => quests.Value;
     public bool IsLoaded => archive.IsValueCreated;
 
     public TcpTestResources(ServerOptions options)
@@ -33,6 +35,7 @@ internal sealed class TcpTestResources : IDisposable
         characters = new(() => CharacterCatalog.Load(Archive, ItemResources.Items));
         towns = new(() => TownCatalog.Load(Archive));
         learning = new(() => SkillLearningCatalog.Load(Archive));
+        quests = new(() => DfoServer.GameWorld.Quests.QuestCatalog.Load(Archive));
     }
 
     public void Dispose()

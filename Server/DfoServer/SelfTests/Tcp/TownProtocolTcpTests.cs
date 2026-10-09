@@ -356,6 +356,7 @@ internal static class TownProtocolTcpTests
                     string active = fixture.Snapshot("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", id);
                     string done = fixture.Snapshot("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0", id);
                     peer.Send(33, [0x21, 0x00, 0x49, 0x0C, 0x00, 0x00]);
+                    peer.Expect(1, 33, [0, 19, 0]);
                     peer.Barrier();
                     peer.Send(33, new byte[7]);
                     peer.Barrier();
@@ -408,7 +409,7 @@ internal static class TownProtocolTcpTests
                 }
                 var packets = peer.Select(job, combos: job == 9 ? TcpPeer.StoredCombos(fixture, characterId) : null);
                 That(packets[0].Body[222] == 38 && packets.Single(packet => packet.Kind == 0 && packet.Opcode == 23).Body[2] == 38, "select initial town agrees with USER_AREA for job " + job);
-                That(U16(packets[0].Body, 22) == 3145 && U32(packets[0].Body, 24) == 1, "first main quest");
+                That(U16(packets[0].Body, 22) == ushort.MaxValue && U32(packets[0].Body, 24) == 0, "新角色没有按固定编号自动接取的任务");
                 Bytes(packets[1].Body, [1, 0, 0, 0], "accepted story level");
                 Bytes(packets[2].Body.AsSpan(127 + NameWidth(name), 3), [job, 0, 1], "actor job");
                 AssetWireResult actorEquipment = AssetWireChecks.ActorEntries(packets[2].Body, 133 + NameWidth(name));
@@ -443,7 +444,7 @@ internal static class TownProtocolTcpTests
             {
                 var packets = peer.Select(job, combos: job == 9 ? TcpPeer.StoredCombos(fixture, characterId) : null);
                 That(packets[0].Body[222] == 38 && packets.Single(packet => packet.Kind == 0 && packet.Opcode == 23).Body[2] == 38, "relogin initial town agrees with USER_AREA for job " + job);
-                That(U16(packets[0].Body, 22) == 3145 && U32(packets[0].Body, 24) == 1, "relogin first main quest");
+                That(U16(packets[0].Body, 22) == ushort.MaxValue && U32(packets[0].Body, 24) == 0, "重登保留空任务槽，不自动接取任务");
                 Bytes(packets[3].Body, player, "relogin skills and stats");
             }
 

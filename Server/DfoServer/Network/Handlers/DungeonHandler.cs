@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
@@ -17,7 +18,7 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
     CharacterGrowthCatalog growth, DungeonKillExperienceCatalog rewards, TownProjection town, CharacterLevelProjection levelProjection,
-    DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null) : IGameCommandModule
+    DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null, QuestProjection? quests = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -38,11 +39,11 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (character is null || !before.Ready || before.Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
             context.BlocksTownActions)
             return CommandResult.Unhandled;
-        // 匹配普通单人3145形状；未知模式和费用资格不套用该入口。
+        // 匹配普通单人入场形状；未知模式和费用资格不套用该入口。
         if (selection.Unknown5 != 0 || selection.Unknown7 != 0 || selection.Unknown8 != 0 || selection.Unknown9 != ushort.MaxValue ||
             selection.Unknown11 != 0 || selection.Unknown15 != 0 || selection.Unknown20 != 0 || selection.Unknown21 != 0)
             return await RejectAsync();
-        var receipt = context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms, drops, items);
+        var receipt = context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms, drops, items, pieces: pieces);
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Request = selection, receipt?.Snapshot.Identity });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
@@ -75,16 +76,48 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
 
     async Task<CommandResult> DeathAsync(GameConnectionContext context, Packet request)
     {
-        if (!DungeonRequests.TryParseDeath(request.Body, out var parsed) || parsed!.SinglePlayerStatistics is not { } statistics)
-            return CommandResult.Unhandled;
-        var part = statistics.Participant;
-        var observation = new NativeDungeonDeathObservation(parsed.ObjectKey, parsed.Reporter, part.Kind, part.ObjectKey,
-            part.CumulativeHpDecrease, part.PositiveHpDecreaseCount, statistics.RewriteFlag, statistics.SpawnLevel,
-            statistics.SpawnHpSnapshot, statistics.Unknown18, statistics.Unknown26, statistics.ChecksumMatches,
-            Convert.ToHexString(SHA256.HashData(request.Body)));
+        if (DungeonRequests.TryParsePassiveDeath(request.Body, out var passive))
+        {
+            if (!context.Session.Ready || context.Session.DungeonSnapshot is not { Phase: SinglePlayerDungeonPhase.Dungeon })
+                return CommandResult.Unhandled;
+            var progress = context.Session.ObserveFormalPassiveDeath(passive!.ObjectIdentifier,passive.ActorFlags,
+                passive.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body)),rooms);
+            log.Write("formal_passive_death", new { Connection = context.Id, Accepted = progress?.Commit is not null, Request = passive });
+            if (progress?.Commit is not null)
+            {
+                if (progress.Commit.Plan.Inventory.ChangedSlots.Length > 0)
+                    await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(progress.Character.Inventory,
+                        InventoryListType.Main,[.. progress.Commit.Plan.Inventory.ChangedSlots]),"formal_passive_quest_items",
+                        () => context.Session.CanPublishQuestLifecycle(progress));
+                await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(progress.Character.ActiveMainQuests),
+                    "formal_passive_quest_conditions",() => context.Session.CanPublishQuestLifecycle(progress));
+            }
+            return CommandResult.Handled;
+        }
         var previousLearning = context.Session.Selected?.Learning;
-        var result = context.Session.ObserveFormalDungeonDeath(observation, rewards, growth);
-        log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, parsed.ObjectKey, result.Receipt?.Snapshot.Identity, result.Reward, result.ClearFact });
+        FormalDungeonDeathResult result;
+        uint objectKey;
+        if (DungeonRequests.TryParseScriptedDeath(request.Body,out var scripted))
+        {
+            objectKey = scripted!.ObjectKey;
+            result = context.Session.ObserveFormalDungeonScriptedDeath(new NativeDungeonScriptedDeathObservation(objectKey,scripted.RewriteFlag,
+                scripted.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body))),rewards,growth);
+        }
+        else
+        {
+            if (!DungeonRequests.TryParseDeath(request.Body,out var parsed) || parsed!.SinglePlayerStatistics is not { } statistics)
+                return CommandResult.Unhandled;
+            objectKey = parsed.ObjectKey;
+            var part = statistics.Participant;
+            var observation = new NativeDungeonDeathObservation(objectKey,parsed.Reporter,part.Kind,part.ObjectKey,
+                part.CumulativeHpDecrease,part.PositiveHpDecreaseCount,statistics.RewriteFlag,statistics.SpawnLevel,
+                statistics.SpawnHpSnapshot,statistics.Unknown18,statistics.Unknown26,statistics.ChecksumMatches,
+                Convert.ToHexString(SHA256.HashData(request.Body)))
+            { Participants = statistics.Participants.Select(value => new NativeDungeonDeathParticipant(value.Kind,value.ObjectKey,
+                value.CumulativeHpDecrease,value.PositiveHpDecreaseCount)).ToImmutableArray() };
+            result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
+        }
+        log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, result.Receipt?.Snapshot.Identity, result.Reward, result.ClearFact });
         if (result.Outcome == DungeonRunOutcome.Duplicate) return CommandResult.Handled;
         if (result.Outcome != DungeonRunOutcome.Accepted || result.Receipt is not { } receipt) return CommandResult.Unhandled;
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
@@ -96,11 +129,19 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         DungeonDropPacketItem[] dropRows = result.Drop is { } drop ?
             [new(drop.Reservation.GroundKey, drop.Reservation.RecordSlot, drop.Core, drop.Reservation.X, drop.Reservation.Y)] : [];
         await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, dropRows), "formal_monster_death", Guard);
+        foreach (ushort key in result.CulledMonsterKeys)
+            await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(key, []), "formal_clear_room_cull", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
+        if (result.QuestDropSlots.Count > 0)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main,[.. result.QuestDropSlots]),"formal_quest_drop_items",Guard);
         if (previousLearning is not null && SkillPackets.BindingsChanged(previousLearning, receipt.Character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_growth_skills", Guard);
         await levelProjection.RefreshAsync(context, receipt.Character,
             result.PreviousLevel ?? throw new InvalidOperationException("已提交死亡缺少原实际等级"), "formal_level_committed", Guard);
+        bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);
+        if (!closed && result.PreviousQuests is { } previous && receipt.Character.ActiveMainQuests.Any(row => previous.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
         if (result.ClearFact is not null && context.Session.EnableFormalDungeonSettlement(result.MonsterKey) is { } completion)
         {
             bool CompletionGuard() => context.Session.CanPublishDungeonSettlement(completion.Receipt);
@@ -116,6 +157,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
     {
         if (items is null || pieces is null || !DungeonPickupRequests.TryParseOrdinary(request.Body, out var parsed))
             return CommandResult.Unhandled;
+        var previousQuests = context.Owner.Execute(() => context.Session.Selected?.ActiveMainQuests);
         var result = context.Session.PickFormalDungeonItem(parsed.GroundObjectKey, items, pieces);
         if (result.Outcome != DungeonRunOutcome.Accepted || result.Receipt is not { } receipt || result.Commit is not { } commit)
         {
@@ -131,13 +173,15 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
             InventoryListType.Main, [commit.Destination]), "formal_pickup_inventory", Guard);
         await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "formal_pickup_ack", Guard);
+        if (previousQuests is not null && !previousQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_pickup_quest_conditions", Guard);
         return CommandResult.Handled;
     }
 
     async Task<CommandResult> MoveAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonRequests.TryParseMove(request.Body, out var move)) return CommandResult.Unhandled;
-        var receipt = context.Session.MoveFormalDungeon(move!.X, move.Y);
+        var receipt = context.Session.MoveFormalDungeon(move!.X, move.Y, move.Unknown10);
         if (receipt is null) return CommandResult.Unhandled;
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "formal_move_ack", Guard);
@@ -152,12 +196,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (receipt is null) return CommandResult.Unhandled;
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack", Guard);
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character.Id, receipt.Character.Position), "formal_return_town", Guard);
-        context.Owner.Execute(() =>
-        {
-            if (Guard()) town.Join(context);
-            return true;
-        });
+        await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_return_town");
         return CommandResult.Handled;
     }
 }

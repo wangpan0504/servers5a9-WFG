@@ -9,6 +9,9 @@ using DfoServer.Persistence;
 using PvfLib;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Session;
+using DfoServer.Game.Quests;
+using DfoServer.GameWorld.Quests;
+using System.Collections.Immutable;
 
 namespace DfoServer;
 
@@ -35,6 +38,34 @@ internal static class DungeonGrowthRepositoryTests
                 ActiveMainQuests = [new(0, 3145, 1)]
             };
             var initial = repository.Create(owner, fixture);
+            var hunt = QuestEligibilityTests.Quest(100) with { Condition = "[hunt enemy]", IntData = [3,-1,1,1,2] };
+            string huntPath = Path.Combine(root,"hunt.db");
+            var huntRepository = new CharacterRepository(huntPath,new QuestCatalog(new() { [100] = hunt }));
+            var huntBefore = huntRepository.Create(owner,fixture with { Name = "HuntTxn", ActiveMainQuests = [new(0,3145,1),new(1,100,2)] });
+            var (huntRun,huntAuthority) = CreateRun(huntBefore);
+            var huntPending = huntRun.PrepareConfirmedDeath(huntAuthority.Death(huntRun.Snapshot.Identity,20,1)).Pending!;
+            HuntSql("CREATE TRIGGER fail_hunt AFTER UPDATE ON character_active_main_quests WHEN NEW.quest_id=100 BEGIN SELECT RAISE(ABORT,'hunt rollback'); END");
+            Reject<SqliteException>(() => huntRepository.CommitDungeonGrowth(owner,huntBefore,huntRun,huntPending,Reward(72,huntPending),growth),
+                "猎杀条件更新末段SQL失败");
+            That(SkillRepositoryTests.Equal(huntBefore,huntRepository.LoadCharacter(owner,huntBefore.Slot)) && huntRun.IsPendingDeath(huntPending),
+                "猎杀、经验、两树、revision与死亡账本整体回滚，原事件可恢复");
+            HuntSql("DROP TRIGGER fail_hunt");
+            var huntCommitted = huntRepository.CommitDungeonGrowth(owner,huntBefore,huntRun,huntPending,Reward(72,huntPending),growth);
+            var huntReplay = huntRepository.CommitDungeonGrowth(owner,huntBefore,huntRun,huntPending,Reward(72,huntPending),growth);
+            That(huntCommitted.Character.ActiveMainQuests.Single(row => row.QuestId == 100).ConditionState == 1 &&
+                huntReplay.Duplicate && SkillRepositoryTests.Equal(huntReplay.Character,huntCommitted.Character),
+                "提交返回丢失按原死亡账本恢复，猎杀通道只减少一次");
+            huntRun.ConfirmCommittedDeath(huntPending);
+            var lastHunt = huntRun.PrepareConfirmedDeath(huntAuthority.Death(huntRun.Snapshot.Identity,21,2)).Pending!;
+            var huntFinished = huntRepository.CommitDungeonGrowth(owner,huntCommitted.Character,huntRun,lastHunt,Reward(72,lastHunt),growth);
+            That(huntFinished.Character.ActiveMainQuests.Single(row => row.QuestId == 100).ConditionState == 0 &&
+                huntFinished.Character.Learning.Experience == 144 && !huntFinished.Character.CompletedQuests.Contains(100),
+                "第二次真实死亡达成猎杀，进度归零不自动领奖或写完成位");
+            void HuntSql(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + huntPath + ";Pooling=False"); db.Open();
+                using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
+            }
             // 测试显式给定1000；该数字只用于跨Lv2边界，不是怪物奖励规则。
             var (run, authority) = CreateRun(initial);
             var death = authority.Death(run.Snapshot.Identity, 20, 1);
@@ -129,18 +160,19 @@ internal static class DungeonGrowthRepositoryTests
             var (localRun, localAuthority) = CreateRun(localCharacter);
             var localPending = localRun.PrepareConfirmedDeath(localAuthority.Death(localRun.Snapshot.Identity, 20, 1)).Pending!;
             var rewardTable = DungeonKillExperienceCatalog.Load(pvf);
-            var localReward = DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable);
+            var localReward = DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable, localCharacter.Level);
             var localCommit = repository.CommitDungeonGrowth(replacement, localCharacter, localRun, localPending, localReward, growth);
             That(localReward.RuleId == DungeonKillExperienceCatalog.RuleId && localReward.ResourceSource == DungeonKillExperienceCatalog.ResourcePath &&
-                localReward.Amount == 72 && localReward.MonsterLevel == 3 && localCommit.Character.Level == 2 &&
-                localCommit.Character.Learning.Experience == 1022 && localCommit.Character.Learning.Trees.All(tree => tree.Sp == 30),
-                "本服真实Lv3表值72通过规则规划与原子事务，跨级自动发SP");
-            That((string?)Query("SELECT rule_id FROM character_dungeon_growth_receipts WHERE amount=72") == DungeonKillExperienceCatalog.RuleId,
+                localReward.Amount == 104 && localReward.MonsterLevel == 3 && localCommit.Character.Level == 2 &&
+                localCommit.Character.Learning.Experience == 1054 && localCommit.Character.Learning.Trees.All(tree => tree.Sp == 30),
+                "Lv3基础72经难度和等级差得到104，原子跨级自动发SP");
+            That((string?)Query("SELECT rule_id FROM character_dungeon_growth_receipts WHERE amount=104") == DungeonKillExperienceCatalog.RuleId,
                 "持久receipt保留明确本服规则版本");
             localRun.ConfirmCommittedDeath(localPending);
-            Reject<InvalidOperationException>(() => DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable),
+            Reject<InvalidOperationException>(() => DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable, localCommit.Character.Level),
                 "已确认死亡不能重新规划本服奖励");
             // 模拟已发布 v2 库；迁移只建空账本，不赠送经验、点数或事件。
+            DatabaseSchemaTests.RewindQuestSystemToV13(path);
             Execute("DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts");
             Execute("DROP TABLE character_dungeon_loot_receipts");
             Execute("DROP TABLE character_dungeon_state");
@@ -213,7 +245,7 @@ internal static class DungeonGrowthRepositoryTests
             var before = session.Selected!;
             var (run, authority) = CreateRun(before);
             var pending = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 20, 1)).Pending!;
-            var reward = DungeonKillExperiencePolicy.Plan(run, pending, rewards);
+            var reward = DungeonKillExperiencePolicy.Plan(run, pending, rewards, before.Level);
             long epoch = session.SelectionEpoch;
             Reject<InvalidOperationException>(() => session.CommitDungeonGrowth(epoch, before, run, pending, reward, catalog),
                 "未Ready时不能提交成长或提前消费死亡");
@@ -235,7 +267,7 @@ internal static class DungeonGrowthRepositoryTests
             var result = session.CommitDungeonGrowth(epoch, before, run, pending, reward, catalog);
             That(!result.Commit.Duplicate && result.Death.Outcome == DungeonRunOutcome.Accepted &&
                 ReferenceEquals(session.Selected, result.Commit.Character) && session.Selected.Level == 2 &&
-                session.Selected.Learning.Experience == 1022 && session.Selected.Learning.Trees.All(tree => tree.Sp == 30) &&
+                session.Selected.Learning.Experience == 1054 && session.Selected.Learning.Trees.All(tree => tree.Sp == 30) &&
                 session.Selected.Revision == before.Revision + 1 && ReceiptCount() == 1,
                 "SQL成功后才消费死亡并发布真实经验、等级、两树SP和revision");
             That(!run.IsPendingDeath(pending) && !run.Snapshot.LivingMonsters.Contains((ushort)20) &&
@@ -243,25 +275,25 @@ internal static class DungeonGrowthRepositoryTests
                 "领域死亡、在线角色与持久结果在提交后保持一致");
             Reject<InvalidOperationException>(() => session.CommitDungeonGrowth(epoch, session.Selected!, run, pending, reward, catalog),
                 "已确认死亡不能再次进入成长提交");
-            That(ReceiptCount() == 1 && repository.List(owner).Single().Learning.Experience == 1022,
+            That(ReceiptCount() == 1 && repository.List(owner).Single().Learning.Experience == 1054,
                 "重复调用不增发资产");
 
             // 模拟SQL成功但原调用方未安装在线结果，重读同一receipt后才确认原候选。
             var recoveryBefore = session.Selected!;
             var recoveryPending = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 21, 2)).Pending!;
-            var recoveryReward = DungeonKillExperiencePolicy.Plan(run, recoveryPending, rewards);
+            var recoveryReward = DungeonKillExperiencePolicy.Plan(run, recoveryPending, rewards, recoveryBefore.Level);
             var saved = repository.CommitDungeonGrowth(owner, recoveryBefore, run, recoveryPending, recoveryReward, catalog);
             That(ReferenceEquals(session.Selected, recoveryBefore) && run.IsPendingDeath(recoveryPending) && ReceiptCount() == 2,
                 "存储已提交但未发布的现场保持原候选");
             var restored = session.CommitDungeonGrowth(epoch, recoveryBefore, run, recoveryPending, recoveryReward, catalog);
             That(restored.Commit.Duplicate && SkillRepositoryTests.Equal(saved.Character, session.Selected!) &&
-                session.Selected!.Learning.Experience == 1094 && restored.Death.ClearFact is not null &&
+                session.Selected!.Learning.Experience == 1158 && restored.Death.ClearFact is not null &&
                 run.Phase == SinglePlayerDungeonPhase.Settlement && ReceiptCount() == 2,
                 "精确重放安装当前持久结果并确认唯一清图，不再次加经验或SP");
 
             var (oldRun, oldAuthority) = CreateRun(session.Selected!);
             var oldPending = oldRun.PrepareConfirmedDeath(oldAuthority.Death(oldRun.Snapshot.Identity, 20, 1)).Pending!;
-            var oldReward = DungeonKillExperiencePolicy.Plan(oldRun, oldPending, rewards);
+            var oldReward = DungeonKillExperiencePolicy.Plan(oldRun, oldPending, rewards, session.Selected!.Level);
             var oldSelected = session.Selected!;
             session.ReturnToRoster();
             session.Select(created.Slot);
@@ -299,7 +331,8 @@ internal static class DungeonGrowthRepositoryTests
     {
         var map = new DungeonMap("boss", new(0, 0), 76126, "map/growth-fixture.map");
         var maze = new DungeonMaze(0, 1, 1, "fixture-only", [map.Position], [map.Position], [map], []);
-        var entry = new DungeonEntryPlan(character.Id, character.Revision, 3, 3145, 0, 0, maze, map, map);
+        var entry = new DungeonEntryPlan(character.Id, character.Revision, 3, 3145, 0, 0, maze, map, map)
+        { QuestAcceptances = character.ActiveMainQuests.ToImmutableArray() };
         var sources = new ushort[] { 20, 21 }.Select(_ => new DungeonRoomMonster(1,
             Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }), "[fixed]", "[normal]", "monster/growth-fixture.mob")).ToArray();
         var room = new DungeonRoomDefinition(map, Array.AsReadOnly(sources), [], []);

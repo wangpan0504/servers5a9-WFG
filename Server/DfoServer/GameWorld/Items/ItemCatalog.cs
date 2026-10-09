@@ -39,8 +39,7 @@ internal sealed class ItemCatalog
         ["support"] = 22,
         ["magic stone"] = 23,
         ["support weapon"] = 24,
-        // 耳环可作为普通装备入包；穿戴槽尚未核实，0不映射到任何已支持的穿戴位置。
-        ["earring"] = 0
+        ["earring"] = 25
     };
 
     readonly int equipmentSellRate;

@@ -37,6 +37,19 @@ internal static class DungeonMonsterPlanTests
         That(rejected, "synthetic metadata cannot add team indices beyond the resource roster");
         That(new DungeonPlannedMonster(0, 10, 1, 3, source).IsBlocking,
             "existing fixture constructors keep ordinary blocking behavior");
+        var apcs = new[] { "[normal]", "[champion]", "[super champion]", "[boss]" }.Select((rank,index) =>
+            new DungeonRoomAiCharacter(2000+index,[2000+index,100,200,0,0,0],"[monster]",rank,"aicharacter/fixture.aic",32)).ToArray();
+        var mixed = DungeonMonsterPlan.FromRoom(room with { AiCharacters = apcs },99,10);
+        That(mixed.Monsters.Select(row => row.SourceOrdinal).SequenceEqual([0,1,0,1,2,3]) &&
+            mixed.Monsters.Skip(2).Select(row => row.SpawnType).SequenceEqual(new byte[] { 5,6,7,8 }) &&
+            mixed.Monsters.Select(row => row.ObjectKey).SequenceEqual(new ushort[] { 10,11,12,13,14,15 }),
+            "APC独立资源行索引和四种类型保留，全部演员共享唯一对象key空间");
+        That(mixed.Monsters.Skip(2).All(row => row.Source is null && row.AiCharacter is not null && row.CanReportDeath && !row.IsBlocking) &&
+            mixed.Monsters.Skip(2).Select(row => row.ExperienceType).SequenceEqual(new byte[] { 0,1,2,3 }) && mixed.Monsters[^1].IsBoss,
+            "敌对APC拥有真实死亡资格和自身经验品级，同时保持普通门不阻塞合同");
+        foreach (string faction in new[] { "[character]", "[neutral]" })
+            That(!DungeonMonsterPlan.FromRoom(room with { AiCharacters = [apcs[^1] with { Faction = faction }] },99,10).Monsters[^1].CanReportDeath,
+                "友方和中立APC不能通过死亡报告生成奖励或Boss通关事实");
         Console.WriteLine($"PASS {Count - checks} dungeon blocking monster plan assertions");
     }
 
@@ -59,9 +72,15 @@ internal static class DungeonMonsterPlanTests
             That(rejected, name);
         }
 
-        var maze = DungeonCatalog.Load(pvf).Get(3).Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3
+        var definition = DungeonCatalog.Load(pvf).Get(3);
+        var maze = definition.Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3
             && candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
         var catalog = DungeonRoomCatalog.Load(pvf);
+        var apcBoss = catalog.Get(new("boss",new(0,0),53529,"map/Cataclysm/Behemoth/07_2ndBackbone/3213_53529.map"),requirePassiveDefinitions: false);
+        var apcPlan = DungeonMonsterPlan.FromRoom(apcBoss,99,200);
+        That(apcBoss.Monsters.Count == 0 && apcPlan.Monsters is [{ MonsterId: 2004, SourceOrdinal: 0, CandidateLevel: 32, SpawnType: 8,
+            IsBlocking: false, CanReportDeath: true, IsBoss: true, AiCharacter.Faction: "[monster]" }],
+            "53529真实敌对阿甘左APC Boss使用AIC声明Lv32，没有普通怪物替身或空房间冒充通关");
         var firstMap = maze.MapSpecification!.Single(map => map.Id == 76121);
         var first = DungeonMonsterPlan.Create(catalog, firstMap, 11, 10);
         That(first.Room.Map == firstMap && first.Monsters.Count == 4, "matching first room produces all four monsters");
@@ -71,7 +90,7 @@ internal static class DungeonMonsterPlanTests
             && first.Monsters.All(item => item.MonsterId == 1 && item.CandidateLevel == 3),
             "source ordinals template IDs and candidate levels remain separate");
         That(first.Monsters.Select((item, index) => ReferenceEquals(item.Source, first.Room.Monsters[index])).All(value => value)
-            && first.Monsters[0].Source.RawValues.SequenceEqual([1, 0, 3, 573, 197, 0, 1, 1]),
+            && first.Monsters[0].Source!.RawValues.SequenceEqual([1, 0, 3, 573, 197, 0, 1, 1]),
             "plan retains the original resource reference and complete row");
         That(first.Monsters is IList list && list.IsReadOnly, "planned monster collection is read only");
 
@@ -81,8 +100,8 @@ internal static class DungeonMonsterPlanTests
             && next.Monsters.Select(item => item.MonsterId).SequenceEqual([1, 1, 1, 1, 2])
             && next.Monsters.Select(item => item.ObjectKey).SequenceEqual(new ushort[] { 20, 21, 22, 23, 24 }),
             "next room uses its own five source rows rather than the first room roster");
-        That(next.Monsters[^1].Source.Path == "monster/goblin/goblinthrower.mob"
-            && next.Monsters[^1].Source.RawValues.SequenceEqual([2, 0, 3, 522, 244, 0, 1, 1]),
+        That(next.Monsters[^1].Source!.Path == "monster/goblin/goblinthrower.mob"
+            && next.Monsters[^1].Source!.RawValues.SequenceEqual([2, 0, 3, 522, 244, 0, 1, 1]),
             "next room thrower keeps its resource identity and full placement row");
         foreach (var expected in new[] { (Map: 76123, Count: 7), (Map: 76124, Count: 5) })
         {
@@ -94,12 +113,12 @@ internal static class DungeonMonsterPlanTests
         var fifth = catalog.Get(maze.MapSpecification!.Single(map => map.Id == 76125));
         That(fifth.Monsters.Count == 6 && fifth.Monsters[4].RawValues.SequenceEqual([1, 1, 0, 503, 233, 0, 1, 1]),
             "76125第五行特殊整数原样保留，不替换为前三整数1/0/3");
-        var fifthPlan = DungeonMonsterPlan.FromRoom(fifth, 99, 100);
-        That(fifthPlan.Monsters.Count == 6 && fifthPlan.Monsters[4].CandidateLevel == 1 &&
+        var fifthPlan = DungeonMonsterPlan.FromRoom(fifth, 99, 100, definition.BasisLevel);
+        That(fifthPlan.Monsters.Count == 6 && fifthPlan.Monsters[4].CandidateLevel == definition.BasisLevel &&
             fifthPlan.Monsters[4].SourceOrdinal == 4 && fifthPlan.Monsters[4].SpawnType == 0 &&
             ReferenceEquals(fifthPlan.Monsters[4].Source, fifth.Monsters[4]) &&
             fifthPlan.Monsters.Where(monster => monster.SourceOrdinal != 4).All(monster => monster.CandidateLevel == 3),
-            "76125完整六行保留，精确特殊资源行使用已指定的本服Lv1");
+            "76125完整六行保留，相对等级资源行按副本basis5加偏移0生成Lv5");
         var bossRoom = catalog.Get(maze.MapSpecification!.Single(map => map.Id == 76126));
         That(bossRoom.Monsters.Count == 2 && bossRoom.Monsters[0].MonsterId == 107000903 &&
             bossRoom.Monsters[0].RankKind == "[boss]" && bossRoom.Monsters[1].MonsterId == 107000906 &&
@@ -134,9 +153,12 @@ internal static class DungeonMonsterPlanTests
         foreach (int field in new[] { 1, 6, 7 })
         {
             int[] raw = source.RawValues.ToArray();
-            raw[field]++;
+            raw[field] = field == 1 ? 2 : 256;
             Unsupported(source with { RawValues = Array.AsReadOnly(raw) }, "unknown monster condition " + field + " stays unsupported");
         }
+        int[] counts = source.RawValues.ToArray(); counts[6] = 2; counts[7] = 2;
+        That(DungeonMonsterPlan.FromRoom(With(source with { RawValues = counts }),99,10).Monsters.Count == 1,
+            "资源尾部掉落数量2保留，不能误解释成未知创建条件而拒绝合法怪物");
 
         Unsupported(source with { MonsterId = 2 }, "inconsistent resource template ID stays unsupported");
         var special = fifth.Monsters[4];
@@ -144,23 +166,18 @@ internal static class DungeonMonsterPlanTests
         {
             Monsters = Array.AsReadOnly(fifth.Monsters.Select((monster, index) => index == 4 ? changed : monster).ToArray())
         };
-        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(fifth with
-            { Map = fifth.Map with { Id = 76124 } }, 99, 100), "特殊Lv1规则不能移到其他地图");
-        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(fifth with
-            { Map = fifth.Map with { Path = "map/fixture.map" } }, 99, 100), "特殊Lv1规则要求匹配地图路径");
-        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(fifth with
-            { Monsters = Array.AsReadOnly(fifth.Monsters.Reverse().ToArray()) }, 99, 100), "特殊Lv1规则不能改变资源行顺序");
-        foreach (int field in new[] { 1, 2, 3, 4, 5 })
-        {
-            int[] raw = special.RawValues.ToArray();
-            raw[field]++;
-            Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ChangedSpecial(special with
-                { RawValues = Array.AsReadOnly(raw) }), 99, 100), "篡改特殊完整资源行不能借本服Lv1例外 " + field);
-        }
-        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ChangedSpecial(special with
-            { Path = "monster/fixture.mob" }), 99, 100), "特殊Lv1规则要求匹配怪物资源路径");
-        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ChangedSpecial(special with
-            { RankKind = "[boss]" }), 99, 100), "特殊Lv1规则不能把普通资源行改成Boss");
+        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(fifth,99,100), "相对等级缺少副本基础时整批拒绝");
+        var relocated = fifth with { Map = fifth.Map with { Id = 100, Path = "map/fixture.map" },
+            Monsters = Array.AsReadOnly(fifth.Monsters.Reverse().ToArray()) };
+        That(DungeonMonsterPlan.FromRoom(relocated,99,100,7).Monsters.Single(row => row.Source!.RawValues[1] == 1).CandidateLevel == 7,
+            "相对等级按副本基础计算，和地图编号、路径、模板及资源顺序无关");
+        int[] relative = special.RawValues.ToArray(); relative[2] = -2;
+        That(DungeonMonsterPlan.FromRoom(ChangedSpecial(special with { RawValues = relative }),99,100,7).Monsters[4].CandidateLevel == 5,
+            "相对等级保留有符号偏移，不把负偏移截断");
+        relative = special.RawValues.ToArray(); relative[1] = 2;
+        Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ChangedSpecial(special with { RawValues = relative }),99,100,7),
+            "未知相对等级标志拒绝");
+        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(fifth,99,100,0),"相对等级计算为零时拒绝生成");
         var mixed = first.Room with { Monsters = Array.AsReadOnly(new[] { source, source with { RankKind = "[future]" } }), MonsterTeams = null };
         Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(mixed, 99, 10),
             "mixed supported and unknown rows reject the whole plan rather than publishing a partial roster");

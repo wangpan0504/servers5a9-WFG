@@ -12,7 +12,10 @@ internal sealed record DungeonClearFact(DungeonRunIdentity Identity, uint Dungeo
 {
     public DungeonMap? ClearMap { get; init; }
 }
-internal sealed record DungeonRunResult(DungeonRunOutcome Outcome, DungeonRunSnapshot Snapshot, DungeonClearFact? ClearFact = null);
+internal sealed record DungeonRunResult(DungeonRunOutcome Outcome, DungeonRunSnapshot Snapshot, DungeonClearFact? ClearFact = null)
+{
+    public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
+}
 internal sealed record DungeonDeathPreparation(DungeonRunOutcome Outcome, PreparedDungeonDeath? Pending = null);
 
 // 只代表已核验的待提交候选。数据库结果确定之前，死亡集和清图状态保持原样。
@@ -53,12 +56,16 @@ internal sealed class SinglePlayerDungeonRun
     {
         public DungeonMonsterPlan Plan { get; } = plan;
         public HashSet<ushort> Dead { get; } = [];
-        public bool Cleared => Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey));
+        public HashSet<ushort> Culled { get; } = [];
+        public bool Loaded { get; set; }
+        public bool Cleared => Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey) || Culled.Contains(monster.ObjectKey));
     }
     private sealed record ActionFact(DungeonRunIdentity Identity, string Kind, DungeonPoint? Target);
-    private readonly DungeonEntryPlan entry;
+    private DungeonEntryPlan entry;
     private readonly DungeonCombatAuthority authority;
     private readonly Dictionary<DungeonPoint, Room> rooms;
+    private readonly Dictionary<DungeonMap, Room> layeredRooms;
+    private readonly HashSet<DungeonMap> enteredLayers = [];
     private readonly HashSet<(DungeonPoint, DungeonPoint)> connections;
     private readonly Dictionary<Guid, ActionFact> acceptedActions = [];
     private readonly Dictionary<Guid, ConfirmedDungeonMonsterDeath> deaths = [];
@@ -74,21 +81,37 @@ internal sealed class SinglePlayerDungeonRun
     internal bool HasPendingDeath => pendingDeath is not null;
     internal uint DungeonId => entry.DungeonId;
     internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
+    // 原生顺序入口可在同一父剧情实例中接取下一子任务，仅绑定此后发生的事件。
+    internal void BindQuestAcceptance(DfoServer.Game.Characters.ActiveMainQuest active)
+    {
+        if (active.AcceptanceId == Guid.Empty || pendingDeath is not null || pendingSettlement is not null ||
+            entry.QuestAcceptances.Any(row => row.QuestId == active.QuestId))
+            throw new InvalidOperationException("子任务不能复用本实例已绑定的旧接取");
+        entry = entry with { QuestAcceptances = entry.QuestAcceptances.Add(active) };
+    }
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
-        Phase == SinglePlayerDungeonPhase.Dungeon && !current.Dead.Contains(key)
-            ? current.Plan.Monsters.SingleOrDefault(monster => monster.IsBlocking && monster.ObjectKey == key) : null;
+        Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
+        !current.Dead.Contains(key) && !current.Culled.Contains(key)
+            ? current.Plan.Monsters.SingleOrDefault(monster => monster.CanReportDeath && monster.ObjectKey == key) : null;
+    internal bool IsCulledMonster(ushort key) => Phase == SinglePlayerDungeonPhase.Settlement && ClearFact is not null && current.Culled.Contains(key);
+    // 友方APC跟随过房时保留首次发布key；只有本实例已完成加载的MAP声明能确认来源，未来房间与旧实例不能借用。
+    internal bool IsPublishedFriendlyAiCharacter(ushort key) => Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
+        rooms.Values.Concat(layeredRooms.Values).Any(room => room.Loaded && room.Plan.Monsters.Any(monster =>
+            monster.ObjectKey == key && monster.AiCharacter?.Faction == "[character]"));
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
     public DungeonClearFact? ClearFact { get; private set; }
     public bool HasPendingSettlement => pendingSettlement is not null;
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
-        Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()));
+        Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
+            !current.Culled.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()));
 
     private SinglePlayerDungeonRun(DungeonEntryPlan entry, long attempt, long epoch, DungeonFixedRoute route, DungeonCombatAuthority authority)
     {
         this.entry = entry;
         this.authority = authority;
-        rooms = route.Rooms.ToDictionary(plan => plan.Room.Map.Position, plan => new Room(
+        rooms = route.Rooms.Where(plan => plan.Room.Map.Kind != "layered").ToDictionary(plan => plan.Room.Map.Position, plan => new Room(
             plan with { Monsters = Array.AsReadOnly(plan.Monsters.ToArray()) }));
+        layeredRooms = route.Rooms.Where(plan => plan.Room.Map.Kind == "layered").ToDictionary(plan => plan.Room.Map,plan => new Room(plan));
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = rooms[entry.StartMap.Position];
         identity = new(entry.CharacterId, entry.QuestId, attempt, Guid.NewGuid(), epoch);
@@ -101,17 +124,23 @@ internal sealed class SinglePlayerDungeonRun
         reason = "unsupported: 需要正式战斗权威及已确认门墙连接";
         if (approvedRoute is null || combatAuthority is null)
             return false;
-        if (entry.CharacterId == 0 || entry.CharacterRevision < 0 || entry.QuestId == 0 || taskAttempt <= 0 || initialEpoch <= 0 || initialEpoch >= long.MaxValue - 2)
+        if (entry.CharacterId == 0 || entry.CharacterRevision < 0 || entry.QuestId >= 30000 ||
+            entry.QuestId == 0 && (entry.ActiveQuestSlot != byte.MaxValue || entry.QuestAcceptanceId != Guid.Empty) ||
+            taskAttempt <= 0 || initialEpoch <= 0 || initialEpoch >= long.MaxValue - 2)
         {
             reason = "invalid: 实例身份或任务尝试无效";
             return false;
         }
-        if (entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BossMap.Kind != "boss" ||
+        if (entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" ||
             entry.Maze.MapSpecification is not { Count: > 0 } maps ||
             maps.Any(map => map.Position.X < 0 || map.Position.Y < 0 || map.Position.X >= entry.Maze.Width || map.Position.Y >= entry.Maze.Height ||
                 map.Kind is not ("map" or "boss")) || approvedRoute.Rooms.Count == 0 ||
-            approvedRoute.Rooms.Count != maps.Count || approvedRoute.Rooms.Select(plan => plan.Room.Map.Position).Distinct().Count() != maps.Count ||
-            approvedRoute.Rooms.Any(plan => !maps.Contains(plan.Room.Map)) || !maps.Contains(entry.StartMap) || !maps.Contains(entry.BossMap))
+            approvedRoute.Rooms.Count != maps.Count + entry.Maze.LayeredMaps.Count ||
+            approvedRoute.Rooms.Select(plan => plan.Room.Map).Distinct().Count() != approvedRoute.Rooms.Count ||
+            approvedRoute.Rooms.Any(plan => !maps.Contains(plan.Room.Map) && !entry.Maze.LayeredMaps.Contains(plan.Room.Map)) ||
+            !maps.Contains(entry.StartMap) || !maps.Contains(entry.BaseBossMap) ||
+            !maps.Contains(entry.BossMap) && !entry.Maze.LayeredMaps.Contains(entry.BossMap) ||
+            entry.Maze.LayeredMaps.Any(map => map.Kind != "layered" || !maps.Any(baseMap => baseMap.Position == map.Position)))
             return false;
         var keys = new HashSet<ushort>();
         foreach (DungeonMonsterPlan plan in approvedRoute.Rooms)
@@ -120,21 +149,18 @@ internal sealed class SinglePlayerDungeonRun
             DungeonMonsterPlan resourcePlan;
             try
             {
-                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1);
+                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException)
             {
                 reason = "unsupported: 房间怪物生成规则未闭合";
                 return false;
             }
-            if (plan.Monsters.Count != plan.Room.Monsters.Count || plan.Monsters.Any(monster => monster.SourceOrdinal < 0 ||
-                monster.SourceOrdinal >= plan.Room.Monsters.Count || monster.Source != plan.Room.Monsters[monster.SourceOrdinal] ||
-                monster.MonsterId != monster.Source.MonsterId ||
-                monster.CandidateLevel != resourcePlan.Monsters[monster.SourceOrdinal].CandidateLevel ||
-                monster.SpawnType != resourcePlan.Monsters[monster.SourceOrdinal].SpawnType ||
-                monster.IsBlocking != resourcePlan.Monsters[monster.SourceOrdinal].IsBlocking ||
-                monster.ObjectKey == entry.CharacterId || !keys.Add(monster.ObjectKey)) ||
-                plan.Monsters.Select(monster => monster.SourceOrdinal).Distinct().Count() != plan.Monsters.Count)
+            if (plan.Monsters.Count != resourcePlan.Monsters.Count || plan.Monsters.Zip(resourcePlan.Monsters).Any(pair =>
+                pair.First.SourceOrdinal != pair.Second.SourceOrdinal || pair.First.Source != pair.Second.Source ||
+                pair.First.AiCharacter != pair.Second.AiCharacter || pair.First.MonsterId != pair.Second.MonsterId ||
+                pair.First.CandidateLevel != pair.Second.CandidateLevel || pair.First.SpawnType != pair.Second.SpawnType ||
+                pair.First.IsBlocking != pair.Second.IsBlocking || pair.First.ObjectKey == entry.CharacterId || !keys.Add(pair.First.ObjectKey)))
             {
                 reason = "invalid: 房间怪物身份不完整或重复";
                 return false;
@@ -179,6 +205,7 @@ internal sealed class SinglePlayerDungeonRun
         if (pendingDeath is not null || !Matches(expected) || Phase != SinglePlayerDungeonPhase.Loading || actionId == Guid.Empty || !CanAdvance())
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "loaded", null));
+        current.Loaded = true;
         Phase = SinglePlayerDungeonPhase.Dungeon;
         Advance();
         return SettleIfCleared();
@@ -198,6 +225,31 @@ internal sealed class SinglePlayerDungeonRun
         Phase = SinglePlayerDungeonPhase.Loading;
         Advance();
         return Result(DungeonRunOutcome.Accepted);
+    }
+
+    public DungeonRunResult MoveLayer(DungeonRunIdentity expected, Guid actionId, DungeonPoint target, bool nextLayer)
+    {
+        string kind = nextLayer ? "layer" : "base";
+        if (Replay(expected,actionId,kind,target) is { } replay) return replay;
+        if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
+            pendingDeath is not null || pendingSettlement is not null || current.Plan.Room.Map.Position != target)
+            return Result(DungeonRunOutcome.Rejected);
+        Room next;
+        if (nextLayer)
+        {
+            var layers = entry.Maze.LayeredMaps.Where(map => map.Position == target).ToArray();
+            int at = current.Plan.Room.Map.Kind == "layered" ? Array.IndexOf(layers,current.Plan.Room.Map)+1 : 0;
+            if (at >= layers.Length || at > 0 && !current.Cleared || enteredLayers.Contains(layers[at]))
+                return Result(DungeonRunOutcome.Rejected);
+            enteredLayers.Add(layers[at]); next = layeredRooms[layers[at]];
+        }
+        else
+        {
+            if (current.Plan.Room.Map.Kind != "layered" || !current.Cleared) return Result(DungeonRunOutcome.Rejected);
+            next = rooms[target];
+        }
+        acceptedActions.Add(actionId,new(expected,kind,target)); current = next;
+        Phase = SinglePlayerDungeonPhase.Loading; Advance(); return Result(DungeonRunOutcome.Accepted);
     }
 
     public DungeonRunResult Return(DungeonRunIdentity expected, Guid actionId)
@@ -235,20 +287,25 @@ internal sealed class SinglePlayerDungeonRun
         if (pendingDeath is not null)
             return SameDeath(pendingDeath.Death, confirmed)
                 ? new(DungeonRunOutcome.Accepted, pendingDeath) : new(DungeonRunOutcome.Rejected);
-        if (!Matches(confirmed.Identity) || Phase != SinglePlayerDungeonPhase.Dungeon || confirmed.EventId == Guid.Empty ||
+        if (!Matches(confirmed.Identity) || Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement) ||
+            pendingSettlement is not null || confirmed.EventId == Guid.Empty ||
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
-            !current.Plan.Monsters.Any(monster => monster.IsBlocking && monster.ObjectKey == confirmed.MonsterKey) || current.Dead.Contains(confirmed.MonsterKey))
+            CurrentLivingMonster(confirmed.MonsterKey) is null)
             return new(DungeonRunOutcome.Rejected);
-        bool settles = TerminalBossCleared(confirmed.MonsterKey);
+        bool settles = Phase == SinglePlayerDungeonPhase.Dungeon && TerminalBossCleared(confirmed.MonsterKey);
+        // 清场是首次通关的场景效果，不签发额外击杀经验、任务进度或掉落。
+        ushort[] culled = settles ? current.Plan.Monsters.Where(monster => monster.IsBlocking && !monster.IsBoss &&
+            monster.ObjectKey != confirmed.MonsterKey && !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray() : [];
         DungeonRunIdentity nextIdentity = settles ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
         var nextSnapshot = new DungeonRunSnapshot(nextIdentity,
             settles ? SinglePlayerDungeonPhase.Settlement : Phase, current.Plan.Room.Map,
             Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
+                !current.Culled.Contains(monster.ObjectKey) && !culled.Contains(monster.ObjectKey) &&
                 monster.ObjectKey != confirmed.MonsterKey).Select(monster => monster.ObjectKey).ToArray()));
         DungeonClearFact? clear = settles
             ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = entry.BossMap } : null;
         pendingDeath = new(confirmed, current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey),
-            new(DungeonRunOutcome.Accepted, nextSnapshot, clear));
+            new(DungeonRunOutcome.Accepted, nextSnapshot, clear) { CulledMonsterKeys = Array.AsReadOnly(culled) });
         return new(DungeonRunOutcome.Accepted, pendingDeath);
     }
 
@@ -268,6 +325,7 @@ internal sealed class SinglePlayerDungeonRun
         }
         ConfirmedDungeonMonsterDeath confirmed = prepared.Death;
         current.Dead.Add(confirmed.MonsterKey);
+        current.Culled.UnionWith(prepared.Result.CulledMonsterKeys);
         combatSequences.Add(confirmed.CombatSequence);
         deaths.Add(confirmed.EventId, confirmed);
         committedPreparations.Add(prepared);
@@ -345,15 +403,18 @@ internal sealed class SinglePlayerDungeonRun
 
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null)
     {
-        if (current.Plan.Room.Map != entry.BossMap || rooms.Values.Any(room => room != current && !room.Cleared))
+        // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。
+        if (current.Plan.Room.Map != entry.BossMap)
             return false;
+        if (current.Plan.Monsters.Any(monster => monster.AiCharacter is not null && monster.IsBoss &&
+            !current.Dead.Contains(monster.ObjectKey) && monster.ObjectKey != preparedMonsterKey)) return false;
         if (current.Plan.Monsters.All(monster => !monster.IsBlocking || current.Dead.Contains(monster.ObjectKey) ||
             monster.ObjectKey == preparedMonsterKey))
             return true;
         bool hasBlockingBoss = false;
         foreach (var monster in current.Plan.Monsters)
         {
-            if (!monster.IsBlocking || monster.Source.RankKind != "[boss]")
+            if (!monster.IsBoss)
                 continue;
             hasBlockingBoss = true;
             if (!current.Dead.Contains(monster.ObjectKey) && monster.ObjectKey != preparedMonsterKey)

@@ -7,7 +7,12 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed);
 internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,
-    DungeonGroundObject? Drop = null, byte? PreviousLevel = null);
+    DungeonGroundObject? Drop = null, byte? PreviousLevel = null)
+{
+    public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
+    public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];
+    public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
+}
 internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
     bool ProjectionCurrent);
 internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,

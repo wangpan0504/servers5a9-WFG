@@ -1,6 +1,8 @@
 using static DfoServer.Testing.TestCheck;
 using System.Collections;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.Game.Dungeons;
+using DfoServer.Testing;
 using PvfLib;
 
 namespace DfoServer;
@@ -41,6 +43,19 @@ internal static class DungeonRoomCatalogTests
         Reject([.. monsters, .. fixture.Block("monster team", []), .. fixture.Block("monster team", [])], "duplicate team sections rejected");
         That(fixture.Parse([.. monsters, .. fixture.Block("future room data", [new(6, fixture.String("opaque").Value)])]).Monsters.Count == 2,
             "unrelated unknown metadata keeps existing parsing behavior");
+        var flags = fixture.Block("monster", [.. row[..^1], fixture.String("[dummy]"), row[^1], .. row]);
+        var flagged = fixture.Parse(flags);
+        That(flagged.Monsters is [{ PlacementKind: "[fixed]", RankKind: "[normal]", Modifiers: ["[dummy]"] }, { Modifiers.Count: 0 }] &&
+            flagged.Monsters[0].Modifiers is IList modifiers && modifiers.IsReadOnly,
+            "可变标记保留中间dummy与末尾品级，不吞掉下一行，也不暴露可写集合");
+        TestCheck.Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(flagged,1,100),
+            "未确认的dummy标记不能因资源解析成功而生成普通怪物");
+        var elite = fixture.Parse(fixture.Block("monster",[.. row[..^1],fixture.String("[champion]"),new(0,0),.. row]));
+        That(elite.Monsters is [{ RankKind: "[champion]" },{ MonsterId: 1, RankKind: "[normal]" }] &&
+            DungeonMonsterPlan.FromRoom(elite,1,100).Monsters is [{ SpawnType: 1 },{ SpawnType: 0 }],
+            "精英行后的空效果数量独立消费，下一怪物行及品级保持完整");
+        Reject(fixture.Block("monster",[.. row[..^1],fixture.String("[champion]"),new(0,1),.. row]),
+            "非空未知精英效果不能丢弃或吞掉下一怪物行");
         Console.WriteLine($"PASS {Count - checks} dungeon room team metadata assertions");
     }
 
@@ -69,6 +84,12 @@ internal static class DungeonRoomCatalogTests
         var first = maze.MapSpecification!.Single(map => map.Position == maze.Starts.Single());
         var catalog = DungeonRoomCatalog.Load(pvf);
         var room = catalog.Get(first);
+        var storyMap = dungeons.Get(9).Mazes.SelectMany(candidate => candidate.MapSpecification ?? []).Single(map => map.Id == 76155);
+        var story = catalog.Get(storyMap);
+        That(story.Monsters is [{ MonsterId: 107000909, PlacementKind: "[fixed]", RankKind: "[boss]", Modifiers: ["[dummy]"] }] &&
+            story.Monsters[0].RawValues.SequenceEqual([107000909,1,0,855,233,0,1,1]),
+            "Lv8真实76155保留完整八整数及fixed/dummy/boss声明");
+        Reject(() => DungeonMonsterPlan.FromRoom(story,1,100), "76155未知dummy/相对等级生成规则仍拒绝，不能补普通Boss冒充剧情");
         That(room.Map.Id == 76121 && room.Map.Path == "map/cataclysm/granflores/01_mirkwood/3145_76121.map",
             "room resolves the matching task first-map path");
         int[][] expected = [[1, 0, 3, 573, 197, 0, 1, 1], [1, 0, 3, 557, 280, 0, 1, 1],
@@ -136,6 +157,8 @@ internal static class DungeonRoomCatalogTests
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, 3), new(0, 1), new(0, 2)])), "incomplete object row rejected");
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, -1), new(0, 1), new(0, 2), new(0, 0)])), "negative object ID rejected");
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, 99), new(0, 1), new(0, 2), new(0, 0)])), "unlisted object ID rejected");
+        That(fixture.Parse(fixture.Block("passive object", [new(0,99),new(0,1),new(0,2),new(0,0)]),requirePassiveDefinitions: false)
+            .PassiveObjects.Single() is { ObjectId: 99, Path: "" },"无关装饰保留原始行和缺失引用，不伪造任务脚本");
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, 3), new(0, 1), new(0, 2), new(0, 0)]), exists: false), "missing object script rejected");
         Reject(() => fixture.Parse(fixture.Block("passive object", [new(0, 3), new(5, 1), new(0, 2), new(0, 0)])), "object numeric reference rejected");
         That(fixture.Parse(fixture.Block("buff", [new(0, -1), new(0, int.MaxValue)])).Buffs.SequenceEqual([-1, int.MaxValue]),
@@ -159,9 +182,9 @@ internal static class DungeonRoomCatalogTests
         public PvfToken[] Block(string tag, PvfToken[] values) => [Tag(tag), .. values, Tag("/" + tag)];
         public PvfToken[] Monster(int[]? values = null, string placement = "[fixed]", string rank = "[normal]") =>
             Block("monster", [.. (values ?? [1, 0, 3, 573, 197, 0, 1, 1]).Select(value => new PvfToken(0, value)), String(placement), String(rank)]);
-        public DungeonRoomDefinition Parse(PvfToken[] tokens, bool exists = true) => DungeonRoomCatalog.ParseResource(
+        public DungeonRoomDefinition Parse(PvfToken[] tokens, bool exists = true, bool requirePassiveDefinitions = true) => DungeonRoomCatalog.ParseResource(
             new("map", new(0, 0), 1, "map/fixture.map"), tokens, id => strings[id],
             new Dictionary<int, string> { [1] = "monster/fixture.mob" },
-            new Dictionary<int, string> { [3] = "passiveobject/fixture.obj" }, _ => exists);
+            new Dictionary<int, string> { [3] = "passiveobject/fixture.obj" }, _ => exists,requirePassiveDefinitions);
     }
 }

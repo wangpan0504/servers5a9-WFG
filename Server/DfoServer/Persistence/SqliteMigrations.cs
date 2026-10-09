@@ -53,7 +53,152 @@ internal static class SqliteMigrations
             Execute(db, tx, QuestClearSchema);
             Execute(db, tx, QuestCompletionSchema);
         }),
+        new(14, "完整任务状态及原子回执", UpgradeQuestSystem),
     ];
+
+    static void UpgradeQuestSystem(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 直接从已发布v13建立本版最终结构；已有账本最多重建一次，不改历史规则或回执内容。
+        Execute(db, tx, "PRAGMA defer_foreign_keys=ON");
+        Execute(db, tx, "ALTER TABLE characters ADD COLUMN quest_cycle_day INTEGER NOT NULL DEFAULT 0 CHECK(quest_cycle_day=0 OR quest_cycle_day BETWEEN 19000101 AND 99991231)");
+        Execute(db, tx, "ALTER TABLE characters ADD COLUMN equipment_slot_flags INTEGER NOT NULL DEFAULT 0 CHECK(equipment_slot_flags BETWEEN 0 AND 255)");
+        Execute(db, tx, "ALTER TABLE character_completed_quests ADD COLUMN daily_period INTEGER NOT NULL DEFAULT 0 CHECK(daily_period=0 OR daily_period BETWEEN 19000101 AND 99991231)");
+        Execute(db, tx, "ALTER TABLE character_completed_quests ADD COLUMN answer INTEGER CHECK(answer BETWEEN 0 AND 254)");
+        RebuildReceipt(db, tx, "character_dungeon_growth_receipts", DungeonGrowthSchema.Replace("resource_sha256", "resource_source").Replace("CHECK(quest_id>0)", "CHECK(quest_id>=0)"));
+        RebuildReceipt(db, tx, "character_dungeon_settlement_receipts", DungeonSettlementSchema.Replace("CHECK(quest_id>0)", "CHECK(quest_id>=0)"));
+        RebuildReceipt(db, tx, "character_quest_clear_receipts", QuestClearSchemaV14);
+        RebuildReceipt(db, tx, "character_quest_completion_receipts", QuestCompletionSchemaV14, "clear_acceptance_id", "acceptance_id");
+        Execute(db, tx, QuestLifecycleSchema);
+        Execute(db, tx, AccountQuestSchema);
+        Execute(db, tx, QuestDropSchema);
+        Execute(db, tx, QuestSkipSchema);
+        using var check = db.CreateCommand(); check.Transaction = tx; check.CommandText = "PRAGMA foreign_key_check";
+        using var rows = check.ExecuteReader();
+        if (rows.Read()) throw new InvalidDataException("任务系统迁移后的历史外键不完整");
+    }
+
+    static void RebuildReceipt(SqliteConnection db, SqliteTransaction tx, string table, string schema,
+        string? addedColumn = null, string? addedValue = null)
+    {
+        using var command = db.CreateCommand(); command.Transaction = tx;
+        var columns = new List<string>(); var dependencies = new List<string>();
+        command.CommandText = "PRAGMA table_info(" + table + ")";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) columns.Add('"' + reader.GetString(1).Replace("\"", "\"\"") + '"');
+        if (columns.Count == 0) throw new InvalidDataException("缺少已发布任务或副本账本: " + table);
+        command.Parameters.AddWithValue("$table", table);
+        command.CommandText = "SELECT sql FROM sqlite_schema WHERE tbl_name=$table AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY name";
+        using (var reader = command.ExecuteReader()) while (reader.Read()) dependencies.Add(reader.GetString(0));
+        string backup = table + "_quest_migration";
+        Execute(db, tx, "CREATE TEMP TABLE " + backup + " AS SELECT rowid AS migration_rowid,* FROM " + table);
+        Execute(db, tx, "DROP TABLE " + table);
+        Execute(db, tx, schema);
+        string selected = string.Join(',', columns);
+        Execute(db, tx, "INSERT INTO " + table + "(rowid," + selected + (addedColumn is null ? "" : "," + addedColumn) + ") SELECT migration_rowid," +
+            selected + (addedValue is null ? "" : "," + addedValue) + " FROM temp." + backup);
+        Execute(db, tx, "DROP TABLE temp." + backup);
+        // 历史行恢复之后才重建触发器，避免重放已提交事件。
+        foreach (string dependency in dependencies) Execute(db, tx, dependency);
+    }
+
+    private const string QuestSkipSchema = """
+        CREATE TABLE character_quest_skip_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,
+          acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          parent_key INTEGER NOT NULL CHECK(parent_key BETWEEN 0 AND 2147483647),question_quest INTEGER NOT NULL CHECK(question_quest BETWEEN 1 AND 29999),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot) AND json_type(plan_snapshot)='object'),
+          PRIMARY KEY(character_id,acceptance_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    private const string QuestLifecycleSchema = """
+        CREATE TABLE character_quest_lifecycle_receipts(
+          character_id INTEGER NOT NULL, account TEXT NOT NULL, operation_id TEXT NOT NULL CHECK(length(operation_id)=32 AND operation_id NOT GLOB '*[^0-9a-f]*' AND operation_id<>'00000000000000000000000000000000'),
+          action TEXT NOT NULL CHECK(action IN ('Accept','Giveup','Condition')),
+          quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+          acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0), revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          before_active TEXT NOT NULL CHECK(json_valid(before_active) AND json_type(before_active)='array'),
+          after_active TEXT NOT NULL CHECK(json_valid(after_active) AND json_type(after_active)='array'),
+          changed_items TEXT NOT NULL CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+          scene_event TEXT CHECK(scene_event IS NULL OR json_valid(scene_event)),
+          before_completed TEXT CHECK(before_completed IS NULL OR (json_valid(before_completed) AND json_type(before_completed)='array')),
+          after_completed TEXT CHECK(after_completed IS NULL OR (json_valid(after_completed) AND json_type(after_completed)='array')),
+          PRIMARY KEY(character_id,operation_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    private const string QuestDropSchema = """
+        CREATE TABLE character_quest_drop_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL CHECK(length(event_id)=32 AND event_id NOT GLOB '*[^0-9a-f]*'),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot)),
+          changed_items TEXT NOT NULL CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+          PRIMARY KEY(character_id,event_id),
+          FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    private const string AccountQuestSchema = """
+        CREATE TABLE account_completed_quests(
+          account TEXT NOT NULL REFERENCES accounts(account_id),
+          quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+          character_id INTEGER NOT NULL,
+          acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          daily_period INTEGER NOT NULL DEFAULT 0 CHECK(daily_period=0 OR daily_period BETWEEN 19000101 AND 99991231),
+          answer INTEGER CHECK(answer BETWEEN 0 AND 254),
+          PRIMARY KEY(account,quest_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    private const string QuestClearSchemaV14 = """
+        CREATE TABLE character_quest_clear_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,
+          acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+          quest_slot INTEGER NOT NULL CHECK(quest_slot BETWEEN 0 AND 29),
+          event_id TEXT NOT NULL,instance_id TEXT NOT NULL,
+          task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+          dungeon_id INTEGER NOT NULL,map_id INTEGER NOT NULL,
+          generation INTEGER NOT NULL CHECK(generation>0),revision INTEGER NOT NULL CHECK(revision>0),
+          PRIMARY KEY(character_id,acceptance_id),
+
+          FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    private const string QuestCompletionSchemaV14 = """
+        CREATE TABLE character_quest_completion_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,
+          acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),event_id TEXT,instance_id TEXT,
+          task_attempt INTEGER CHECK(task_attempt>0),epoch INTEGER CHECK(epoch>0),
+          generation INTEGER NOT NULL CHECK(generation>0),rule_id TEXT NOT NULL,
+          resource_source TEXT NOT NULL,quest_source TEXT NOT NULL,
+          native_index INTEGER NOT NULL CHECK(native_index>=0),base_experience INTEGER NOT NULL CHECK(base_experience>=0),
+          raw_additional_percent INTEGER NOT NULL,difficulty_key TEXT NOT NULL,difficulty_weight INTEGER NOT NULL CHECK(difficulty_weight>=0),
+          experience_amount INTEGER NOT NULL CHECK(experience_amount BETWEEN 0 AND 2147483647),
+          gold_amount INTEGER NOT NULL CHECK(gold_amount BETWEEN 0 AND 2147483647),
+          before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),
+          before_experience INTEGER NOT NULL CHECK(before_experience>=0),after_experience INTEGER NOT NULL CHECK(after_experience=before_experience+experience_amount),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          rewards TEXT NOT NULL CHECK(json_valid(rewards) AND json_type(rewards)='array' AND json_array_length(rewards)<=255),
+          clear_acceptance_id TEXT,condition_type INTEGER NOT NULL DEFAULT 3 CHECK(condition_type IN(0,1,2,3,4,6,12,25,31,39,40,42,44,64,65,67)),
+          selector INTEGER NOT NULL DEFAULT 65535 CHECK(selector BETWEEN 0 AND 65535),multiplier INTEGER NOT NULL DEFAULT 1 CHECK(multiplier BETWEEN 1 AND 65535),
+          consumed TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(consumed) AND json_type(consumed)='array' AND json_array_length(consumed)<=255),
+          changed_items TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+          plan_snapshot TEXT CHECK(plan_snapshot IS NULL OR (json_valid(plan_snapshot) AND json_type(plan_snapshot)='object')),
+          CHECK((condition_type IN(1,3) AND clear_acceptance_id=acceptance_id AND event_id IS NOT NULL AND instance_id IS NOT NULL AND task_attempt IS NOT NULL AND epoch IS NOT NULL)
+            OR (condition_type IN(0,2,4,6,12,25,31,39,40,42,44,64,65,67) AND clear_acceptance_id IS NULL AND event_id IS NULL AND instance_id IS NULL AND task_attempt IS NULL AND epoch IS NULL AND plan_snapshot IS NOT NULL)),
+          PRIMARY KEY(character_id,acceptance_id),
+          FOREIGN KEY(character_id,clear_acceptance_id) REFERENCES character_quest_clear_receipts(character_id,acceptance_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        """;
 
     // 只新增事实账本，不补发存量角色经验或点数。
     private const string DungeonGrowthSchema = """
@@ -262,6 +407,10 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot FROM character_quest_skip_receipts LIMIT 0",
+        "SELECT character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items FROM character_quest_drop_receipts LIMIT 0",
+        "SELECT account,quest_id,character_id,acceptance_id,daily_period,answer FROM account_completed_quests LIMIT 0",
+        "SELECT character_id,account,operation_id,action,quest_id,acceptance_id,before_revision,revision,before_active,after_active,changed_items,scene_event,before_completed,after_completed FROM character_quest_lifecycle_receipts LIMIT 0",
         "SELECT character_id,bonus_tp FROM character_tp_sources LIMIT 0",
         "SELECT character_id,context,skill_id,keys FROM character_skill_commands LIMIT 0",
         "SELECT character_id,context,root_id,children FROM character_skill_combos LIMIT 0",
@@ -277,12 +426,12 @@ internal static class SqliteMigrations
         "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",
         "SELECT [character_id],[account],[character_options] FROM [character_client_settings] LIMIT 0",
         "SELECT [character_id],[account],[game_options] FROM [character_game_settings] LIMIT 0",
-        "SELECT [id],[account],[slot],[name],[revision],[town],[area],[x],[y],[direction],[return_town],[return_area],[return_x],[return_y],[return_direction],[job],[grow_type],[level],[accepted_story_level],[gold],[experience],[inventory_expansion],[revive_coins],[win_points],[gold_carry_limit],[auction_gold_limit],[cargo_capacity] FROM [characters] LIMIT 0",
-        "SELECT [character_id],[quest_id] FROM [character_completed_quests] LIMIT 0",
+        "SELECT [id],[account],[slot],[name],[revision],[town],[area],[x],[y],[direction],[return_town],[return_area],[return_x],[return_y],[return_direction],[job],[grow_type],[level],[accepted_story_level],[gold],[experience],[inventory_expansion],[revive_coins],[win_points],[gold_carry_limit],[auction_gold_limit],[cargo_capacity],[quest_cycle_day],[equipment_slot_flags] FROM [characters] LIMIT 0",
+        "SELECT [character_id],[quest_id],[daily_period],[answer] FROM [character_completed_quests] LIMIT 0",
         "SELECT [character_id],[skill_id],[level] FROM [character_skills] LIMIT 0",
         "SELECT [character_id],[slot],[quest_id],[condition_state],[acceptance_id] FROM [character_active_main_quests] LIMIT 0",
         "SELECT character_id,account,acceptance_id,quest_id,quest_slot,event_id,instance_id,task_attempt,epoch,dungeon_id,map_id,generation,revision FROM character_quest_clear_receipts LIMIT 0",
-        "SELECT character_id,account,acceptance_id,quest_id,event_id,instance_id,task_attempt,epoch,generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards FROM character_quest_completion_receipts LIMIT 0",
+        "SELECT character_id,account,acceptance_id,quest_id,event_id,instance_id,task_attempt,epoch,generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards,clear_acceptance_id,condition_type,selector,multiplier,consumed,changed_items,plan_snapshot FROM character_quest_completion_receipts LIMIT 0",
         "SELECT [character_id],[context],[sp],[tp] FROM [character_skill_points] LIMIT 0",
         "SELECT [character_id],[context],[slot],[skill_id],[level] FROM [character_skill_bindings] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[list_type],[slot_index],[item_uid_before],[item_uid_after],[item_id_before],[item_id_after],[value_before],[value_after],[item_kind_before],[item_kind_after],[count_before],[count_after],[count_delta],[core_hash_before],[core_hash_after] FROM [inventory_audit_log] LIMIT 0",

@@ -34,6 +34,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         log.Write("selected", new { Connection = context.Id, Character = c.Id, c.Position, c.Return, c.Revision });
         await projection.EnterAsync(context);
         context.Session.MarkReady();
+        await projection.ReconcileQuestsAsync(context);
         projection.Join(context);
         return CommandResult.Handled;
     }

@@ -18,6 +18,31 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
     async Task<CommandResult> EnterAsync(GameConnectionContext context, Packet request)
     {
         var entry = DungeonRequests.ParseEntry(request.Body);
+        if (context.Activity?.BlocksTownActions == true)
+            return CommandResult.Unhandled;
+        var continuation = context.Session.CompleteFormalDungeonContinuation();
+        if (continuation.Pending)
+        {
+            if (continuation.Dungeon is { } entered)
+            {
+                await projection.DetachAsync(context);
+                bool Guard() => context.Session.CanPublishFormalDungeon(entered);
+                log.Write("formal_quest_continuation_enter",new { Connection = context.Id, entered.Entry.QuestId,
+                    entered.Entry.DungeonId, entered.Snapshot.Identity });
+                // 真实15沿普通入口确认和角色状态同步，再发布新副本；不能按过房只推28/29。
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_confirm",Guard);
+                await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(entered.Character.Id),"formal_next_quest_entry_state",Guard);
+                await context.Notify(NotiPacketType.DUNGEON_INFO,DungeonPackets.Information(entered.Entry),"formal_next_quest_information",Guard);
+                await context.Notify(NotiPacketType.START_MAP,DungeonPackets.StartMap(entered.Entry,entered.Monsters,entered.MapSeed),"formal_next_quest_start_map",Guard);
+            }
+            else if (continuation.Town is { } town)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_town_finalizer",
+                    () => context.Session.CanPublishTravel(town));
+            else if (continuation.Replay is { } replay)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_replay",
+                    () => context.Session.CanPublishFormalDungeon(replay));
+            return CommandResult.Handled;
+        }
         if (context.BlocksTownActions)
             return CommandResult.Unhandled;
         var receipt = context.Session.BeginDungeonSelection();

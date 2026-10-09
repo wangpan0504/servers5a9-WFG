@@ -26,10 +26,14 @@ internal sealed partial class GameSession
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
             dungeon.SettlementEnabled || dungeon.Run.ClearFact is null)
             return ((FormalDungeonReceipt, ushort)?)null;
-        var bosses = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Entry.BossMap).Monsters
-            .Where(monster => monster.IsBlocking && monster.Source.RankKind == "[boss]" &&
-                !dungeon.Run.Snapshot.LivingMonsters.Contains(monster.ObjectKey));
-        var boss = bosses.FirstOrDefault(monster => monster.ObjectKey == reportedBossKey) ?? bosses.FirstOrDefault();
+        var snapshot = dungeon.Run.Snapshot;
+        if (snapshot.CurrentMap != dungeon.Entry.BossMap) return ((FormalDungeonReceipt, ushort)?)null;
+        // 剧情终点可以只有普通阻挡敌人；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。
+        var terminal = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Entry.BossMap).Monsters
+            .Where(monster => (monster.IsBoss || monster.IsBlocking && monster.CanReportDeath) &&
+                !snapshot.LivingMonsters.Contains(monster.ObjectKey) && !dungeon.Run.IsCulledMonster(monster.ObjectKey)).ToArray();
+        var boss = terminal.FirstOrDefault(monster => monster.ObjectKey == reportedBossKey) ??
+            terminal.FirstOrDefault(monster => monster.IsBoss) ?? terminal.FirstOrDefault();
         if (boss is null) return ((FormalDungeonReceipt, ushort)?)null;
         return (FormalReceipt(), boss.ObjectKey);
     });
@@ -59,8 +63,8 @@ internal sealed partial class GameSession
             dungeon.Run.ClearFact is null || dungeon.Run.HasPendingSettlement || dungeon.Run.Snapshot.CurrentMap != dungeon.Entry.BossMap)
             return null;
         var boss = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Entry.BossMap).Monsters
-            .SingleOrDefault(monster => monster.IsBlocking && monster.ObjectKey == bossKey && monster.Source.RankKind == "[boss]");
-        return boss is not null && spawnLevel == boss.CandidateLevel &&
+            .SingleOrDefault(monster => monster.IsBoss && monster.ObjectKey == bossKey);
+        return boss is not null &&
             dungeon.Authority.MatchesIssuedSpawn(dungeon.Run, bossKey, spawnLevel, spawnHp) &&
             !dungeon.Run.Snapshot.LivingMonsters.Contains(bossKey) ? FormalReceipt() : null;
     });
@@ -69,7 +73,7 @@ internal sealed partial class GameSession
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth) => owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
-            dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null || maximumRankPoint != rankPoint)
+            dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var previous = Selected!;
         var reward = dungeon.Settlement?.Pending.Reward ?? rewards.Calculate(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),
@@ -139,12 +143,11 @@ internal sealed partial class GameSession
         formalDungeon?.Settlement is { Committed: true, OtherSelectionRequested: true } ? ReturnFromFormalDungeon() : null);
 
     public FormalDungeonReceipt? RetryFormalDungeon(FormalDungeonReceipt expected, DungeonCatalog dungeons,
-        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items) => owner.Execute(() =>
+        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces = null)
     {
-        if (!CanPublishFormalDungeon(expected) || formalDungeon?.Settlement is not { Committed: true } ||
-            ReturnFromFormalDungeon() is null)
-            return null;
-        return EnterFormalDungeon(expected.Entry.DungeonId, expected.Entry.QuestId, expected.Entry.Difficulty,
-            dungeons, rooms, drops, items) ?? throw new InvalidOperationException("结算再挑战无法建立新实例");
-    });
+        uint quest = DfoServer.Game.Quests.QuestEligibility.Completed(expected.Character).Contains((int)expected.Entry.QuestId) ? 0 : expected.Entry.QuestId;
+        // 资源规划失败保留原结算实例；新尝试持久预留成功后才替换旧实例。
+        return EnterFormalDungeon(expected.Entry.DungeonId,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,pieces: pieces,
+            requiredCharacter: expected.Character,retry: expected);
+    }
 }

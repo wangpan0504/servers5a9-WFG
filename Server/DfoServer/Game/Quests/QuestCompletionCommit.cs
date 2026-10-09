@@ -2,18 +2,38 @@ using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Session;
 
 namespace DfoServer.Game.Quests;
 
 internal sealed record QuestGrantedItem(InventoryItem Item, int GrantedCount);
-internal sealed record QuestCompletionCommit(Character Character, QuestClearReceipt Clear,
+internal sealed record QuestCompletionCommit(Character Character, QuestClearReceipt? Clear,
     QuestExperienceReward ExperienceReward, ImmutableArray<QuestGrantedItem> Rewards, bool Duplicate, bool ProjectionCurrent,
-    byte PreviousLevel, CharacterLearningState? PreviousLearning = null);
+    byte PreviousLevel, CharacterLearningState? PreviousLearning = null)
+{
+    public ushort QuestId { get; init; } = Clear?.QuestId ?? 0;
+    public Guid AcceptanceId { get; init; } = Clear?.AcceptanceId ?? Guid.Empty;
+    public byte ConditionType { get; init; } = 3;
+    public uint GoldAmount { get; init; }
+    public ImmutableArray<QuestConsumedItem> Consumed { get; init; } = [];
+    public ImmutableArray<QuestCurrencyReward> Currencies { get; init; } = [];
+    public ImmutableArray<InventorySlot> ChangedSlots { get; init; } = [];
+    public IReadOnlyList<ActiveMainQuest> PreviousQuests { get; init; } = [];
+    public byte PreviousGrowType { get; init; }
+    public byte? ProfessionGrowType { get; init; }
+    public byte PreviousEquipmentSlotFlags { get; init; }
+}
 
 internal sealed record QuestCompletionReceipt(QuestCompletionCommit Commit, long Generation, long SelectionEpoch,
-    DungeonRunIdentity? DungeonIdentity);
+    DungeonRunIdentity? DungeonIdentity)
+{
+    public SessionPhase Phase { get; init; } = DungeonIdentity is null ? SessionPhase.Town : SessionPhase.Settlement;
+}
 
 internal enum QuestFinishOutcome { Committed, Rejected, InsufficientSpace, AlreadyCompleted, Unsupported }
-internal sealed record QuestRefusalReceipt(Character Character, long Generation, long SelectionEpoch, DungeonRunIdentity? DungeonIdentity);
+internal sealed record QuestRefusalReceipt(Character Character, long Generation, long SelectionEpoch, DungeonRunIdentity? DungeonIdentity)
+{
+    public SessionPhase Phase { get; init; } = DungeonIdentity is null ? SessionPhase.Town : SessionPhase.Settlement;
+}
 internal sealed record QuestFinishResult(QuestFinishOutcome Outcome, QuestCompletionReceipt? Receipt = null,
     QuestRefusalReceipt? RejectionReceipt = null);

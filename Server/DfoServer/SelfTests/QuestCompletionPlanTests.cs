@@ -20,9 +20,9 @@ internal static class QuestCompletionPlanTests
         var quest = QuestFixture();
         var parameters = Parameters();
         var reward = QuestExperiencePolicy.Prepare(character, quest, parameters);
-        Check(reward.RuleId == QuestExperiencePolicy.RuleId && reward.NativeIndex == 1 && reward.BaseExperience == 100 &&
+        Check(reward.NativeIndex == 1 && reward.BaseExperience == 100 &&
             reward.DifficultyKey == "1" && reward.DifficultyWeight == 1780 && reward.Amount == 1780 && reward.RawAdditionalPercent == -1 &&
-            reward.ResourcePath == QuestRewardParameterCatalog.ResourcePath && reward.QuestPath == QuestExperiencePolicy.QuestPath,
+            reward.ResourcePath == QuestRewardParameterCatalog.ResourcePath && reward.QuestPath == "n_quest/quest_renewal/epic_quest/elvengard/elvengard_epic_01.qst",
             "明确本服规则保存完整来源与原生index1，值1780由资源参数计算");
         Check(QuestExperiencePolicy.Prepare(character, quest, Parameters(101, 1781)).Amount == 1798,
             "独立合成参数检验整数乘积向下截断，不写死1780");
@@ -32,12 +32,14 @@ internal static class QuestCompletionPlanTests
             "3145声明grow type=-1，不按转职或觉醒拒绝任务经验");
         Reject(() => QuestExperiencePolicy.Prepare(character with { Job = 16 }, quest, parameters), "无效职业仍拒绝");
         Reject(() => QuestExperiencePolicy.Prepare(character, quest with { Difficulty = "G" }, parameters), "其他difficulty不沿用规则");
-        Reject(() => QuestExperiencePolicy.Prepare(character, quest with { CompleteNpc = 1 }, parameters), "不能将Tobi剧情交付换成城镇NPC");
-        Reject(() => QuestExperiencePolicy.Prepare(character, quest with { Attributes = ["not give exp quest"] }, parameters), "禁EXP属性拒绝");
-        Reject(() => QuestExperiencePolicy.Prepare(character, quest with { Rewards = quest.Rewards.Skip(2).ToArray() }, parameters), "漏固定物品不能只发EXP");
-        Reject(() => QuestExperiencePolicy.Prepare(character, quest, Parameters(additional: 1)), "未批准额外EXP倍率拒绝");
-        Reject(() => QuestExperiencePolicy.Prepare(character, quest, Parameters(0, 1780)), "非正基础EXP不伪造成功");
-        Reject(() => QuestExperiencePolicy.Prepare(character, quest, Parameters(100, 0)), "非正difficulty不伪造成功");
+        Check(QuestExperiencePolicy.Prepare(character, quest with { Id = 100, Path = "n_quest/fixture.qst", CompleteNpc = 1 }, parameters).Amount == reward.Amount,
+            "任务编号、脚本路径、NPC和奖励项数不改变同一经验计算");
+        Check(QuestExperiencePolicy.Prepare(character, quest with { Attributes = ["not give exp quest"] }, parameters).Amount == 0,
+            "资源禁经验属性返回零，不拒绝任务交付");
+        Check(QuestExperiencePolicy.Prepare(character, quest, Parameters(additional: 1)).Amount == 1797,
+            "正追加百分比按相同取整顺序计算");
+        Check(QuestExperiencePolicy.Prepare(character, quest, Parameters(0,1780)).Amount == 0 &&
+            QuestExperiencePolicy.Prepare(character, quest, Parameters(100,0)).Amount == 0,"零基础与零倍率使用同一计算");
         var clear = ClearFixture(character);
         Check(QuestCompletionPlan.MatchesClearedActiveQuest(character, clear), "活动槽已达成且稳定接取/clear匹配");
         Check(!QuestCompletionPlan.MatchesClearedActiveQuest(character with { CompletedQuests = [3145] }, clear), "重复已领奖拒绝");
@@ -72,13 +74,14 @@ internal static class QuestCompletionPlanTests
     public static void RunResources(PvfArchive archive, ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces)
     {
         var character = CharacterFixture();
-        var quest = QuestCatalog.Load(archive).Get(3145);
+        var quests = QuestCatalog.Load(archive);
+        var quest = quests.Get(3145);
         var parameters = QuestRewardParameterCatalog.Load(archive);
         var growth = CharacterGrowthCatalog.Load(archive);
         var clear = ClearFixture(character);
         var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
-        QuestCompletionPreparation Prepare(Character expected) => QuestCompletionPlan.Prepare(expected, clear, quest, parameters,
-            items, goldLimits, pieces, growth, now);
+        QuestCompletionPreparation Prepare(Character expected) => QuestCompletionPlan.Prepare(expected, quest, ushort.MaxValue, quests, parameters,
+            items, goldLimits, pieces, growth, now, clear);
         var result = Prepare(character);
         if (result.Outcome != QuestCompletionOutcome.Accepted || result.Plan is not { } plan ||
             !ReferenceEquals(plan.Expected, character) || !ReferenceEquals(plan.Inventory.Before, character.Inventory) ||
@@ -111,6 +114,7 @@ internal static class QuestCompletionPlanTests
     static Character CharacterFixture() => new(99, 0, "QuestPlan", 17, new Location(38, 2, 100, 100), null)
     {
         Job = 0,
+        DungeonState = CharacterDungeonState.NewOrdinary,
         Level = 1,
         ActiveMainQuests = [new(0, 3145, 0) { AcceptanceId = Guid.NewGuid() }],
         CompletedQuests = [3000],
@@ -119,9 +123,9 @@ internal static class QuestCompletionPlanTests
     };
 
     static QuestClearReceipt ClearFixture(Character character) => new(character.ActiveMainQuests[0].AcceptanceId, 3145, 0,
-        Guid.NewGuid(), Guid.NewGuid(), 1, 3, 16);
+        Guid.NewGuid(), Guid.NewGuid(), 1, 3, 16) { DungeonId = 3, MapId = 76126 };
 
-    static StoryQuest QuestFixture(int weapon = 101010438) => new(3145, QuestExperiencePolicy.QuestPath, "[clear map]", -1, [76126], 1, 1247,
+    static StoryQuest QuestFixture(int weapon = 101010438) => new(3145, "n_quest/quest_renewal/epic_quest/elvengard/elvengard_epic_01.qst", "[clear map]", -1, [76126], 1, 1247,
         1, 99, [], null, 3, -1, new[] { 10165055, weapon, 10403, 12403, 14403, 16403, 18403 }
             .SelectMany(id => new[] { new QuestRewardToken(0, id, null), new QuestRewardToken(0, 1, null) }).ToArray(),
         107000903, null, [1000]) { Grade = "[epic]", Difficulty = "1", RewardType = "[item]" };
@@ -146,6 +150,9 @@ internal static class QuestCompletionPlanTests
         tokens.Add(new(0, difficulty));
         tokens.Add(Text("[/difficulty]", 3));
         Integers("[exp reward table]", 12345, -1, basis, additional);
+        Integers("[basic level penalty]",100);
+        foreach(string tag in new[] { "[green level penalty]","[epic green level penalty]" }) Integers(tag,6,10,50);
+        foreach(string tag in new[] { "[grey level penalty]","[epic grey level penalty]" }) Integers(tag,11,255,0);
         return QuestRewardParameterCatalog.Parse(tokens, id => strings[id]);
     }
 }

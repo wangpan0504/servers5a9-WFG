@@ -19,6 +19,12 @@ internal static class DungeonProbeTcpTests
         for (int selection = 0; selection < 2; selection++)
         {
             peer.Select();
+            if (selection == 0)
+            {
+                peer.Send(31, Convert.FromHexString("1F00490C"));
+                peer.Expect(1, 31);
+                peer.Expect(0, 21);
+            }
             peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
             peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);
             string before = fixture.Snapshot();

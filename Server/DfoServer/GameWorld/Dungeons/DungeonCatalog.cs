@@ -16,26 +16,62 @@ internal sealed record DungeonMaze(
     IReadOnlyList<DungeonMap>? MapSpecification,
     IReadOnlyList<PvfToken> QuestConnectionTokens)
 {
+    public IReadOnlyList<DungeonMap> LayeredMaps { get; init; } = Array.Empty<DungeonMap>();
+    public string? ResourceError { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
-    public bool ConnectsQuest(uint questId) => QuestConnectionTokens.Count == 3 &&
-        QuestConnectionTokens.All(token => token.Type == 0) && QuestConnectionTokens[0].Value == 0 &&
-        QuestConnectionTokens[1].Value == questId && QuestConnectionTokens[2].Value == -1;
+    public bool ConnectsQuest(uint questId, byte difficulty = 0, int state = 0) => QuestConnectionTokens.Count == 3 &&
+        QuestConnectionTokens.All(token => token.Type == 0) &&
+        QuestConnectionTokens[0].Value == state && QuestConnectionTokens[1].Value == questId &&
+        (QuestConnectionTokens[2].Value == -1 || QuestConnectionTokens[2].Value == difficulty);
+    public int? ConnectionQuestId => QuestConnectionTokens.Count == 3 && QuestConnectionTokens.All(token => token.Type == 0) &&
+        QuestConnectionTokens[0].Value is 0 or 1 && QuestConnectionTokens[1].Value is > 0 and < 30000 && QuestConnectionTokens[2].Value is >= -1 and <= 4
+            ? QuestConnectionTokens[1].Value : null;
+    public bool HasActiveQuestConnection(int questId) => ConnectionQuestId == questId && QuestConnectionTokens[0].Value == 0;
 
     // 只描述资源结构，不表示准入通过或可以向客户端发布初始化通知。
     public string MapStructure => MapSpecification is null ? "unsupported" : "explicit";
-    public string? UnsupportedReason => MapSpecification is null ? "缺少显式 map specification，地图生成合同未实现" : null;
+    public string? UnsupportedReason => ResourceError ?? (MapSpecification is null ? "缺少显式 map specification，地图生成合同未实现" : null);
     // 资源查询及inspect JSON提供整数索引；未知格式不会阻断其他maze或生成已批准通路。
     public DungeonGreedGrid GreedGrid => DungeonGreedGrid.Read(Width, Height, Greed);
     public DungeonStaticTopology StaticTopology => DungeonStaticTopology.Read(this);
 }
 
-internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections);
+internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
+{
+    public bool AllowsDifficulty(byte difficulty, bool story)
+    {
+        if (difficulty > 4) return false;
+        var designated = RawSections.Where(section => section.Tag == "designate dungeon difficulty").ToArray();
+        if (designated.Length > 1 || designated.Length == 1 && (designated[0].Tokens is not [{ Type: 0, Value: >= -1 and <= 4 }] ||
+            designated[0].Tokens[0].Value >= 0 && designated[0].Tokens[0].Value != difficulty)) return false;
+        if (story)
+        {
+            int start = RawSections.ToList().FindIndex(section => section.Tag == "story mode");
+            if (start >= 0)
+            {
+                var size = RawSections.Skip(start + 1).TakeWhile(section => section.Tag != "/story mode")
+                    .Where(section => section.Tag == "difficulty size").ToArray();
+                if (size.Length != 1 || size[0].Tokens is not [{ Type: 0, Value: >= 1 and <= 5 }] || difficulty >= size[0].Tokens[0].Value)
+                    return false;
+            }
+        }
+        var levels = RawSections.Where(section => section.Tag == "difficulty level").ToArray();
+        if (levels.Length == 0) return difficulty == 0;
+        return levels.Length == 1 && levels[0].Tokens.Count == 5 && levels[0].Tokens.All(token => token.Type == 0 && token.Value is 0 or 1) &&
+            levels[0].Tokens[difficulty].Value != 0;
+    }
+}
 internal sealed class DungeonCatalog
 {
     private readonly PvfArchive archive;
     private readonly IReadOnlyDictionary<int, string> dungeons, maps;
     private readonly ConcurrentDictionary<int, Lazy<DungeonDefinition>> definitions = new();
-    private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps) => (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
+    private readonly Lazy<DungeonMapPool> mapPool;
+    private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
+    {
+        (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
+        mapPool = new(() => DungeonMapPool.Load(archive,maps),LazyThreadSafetyMode.ExecutionAndPublication);
+    }
     public int DungeonCount => dungeons.Count;
 
     public static DungeonCatalog Load(PvfArchive pvf)
@@ -53,6 +89,13 @@ internal sealed class DungeonCatalog
             throw new InvalidDataException("副本索引不存在: " + id);
         // Lazy 在完整解析成功后才发布 Definition；失败缓存为异常，不发布局部 maze。
         return definitions.GetOrAdd(id, _ => new(() => ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+    }
+
+    public DungeonMaze ResolveOrdinaryMaze(DungeonDefinition definition, DungeonMaze maze, Func<int,int>? draw = null)
+    {
+        // 剧情缺图不能套普通池，显式完整路线也不改随机结果或房间身份。
+        if (maze.ResourceError is not null || maze.QuestConnectionTokens.Count != 0 || maze.StaticTopology.Supported) return maze;
+        return mapPool.Value.Resolve(definition,maze,draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32);
     }
 
     internal static IReadOnlyDictionary<int, string> ParseDirectory(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, string root)
@@ -131,7 +174,13 @@ internal sealed class DungeonCatalog
         {
             if (current is null)
                 return;
-            mazes.Add(ParseMaze(mazes.Count, current, resolve, mapPaths, exists));
+            try { mazes.Add(ParseMaze(mazes.Count, current, resolve, mapPaths, exists)); }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+            {
+                // 每条路线独立装载；未使用的旧路线不能阻断同副本的有效剧情路线。
+                var connection = current.TryGetValue("quest connection", out var section) ? section.Tokens : Array.Empty<PvfToken>();
+                mazes.Add(new(mazes.Count,0,0,"",[],[],null,connection) { ResourceError = error.Message });
+            }
             current = null;
         }
     }
@@ -150,6 +199,7 @@ internal sealed class DungeonCatalog
         var starts = Points(Required("start map"));
         var bosses = Points(Required("boss map"));
         IReadOnlyList<DungeonMap>? specification = null;
+        var layered = new List<DungeonMap>();
         if (sections.TryGetValue("map specification", out var mapSection))
         {
             var values = mapSection.Tokens;
@@ -162,27 +212,27 @@ internal sealed class DungeonCatalog
                 if (values[i].Type != 6)
                     throw new NotSupportedException("unsupported: map specification 的类型标记未实现");
                 string kind = resolve(values[i].Value);
-                if (kind is not ("map" or "boss"))
+                if (kind is not ("map" or "boss" or "layered"))
                     throw new NotSupportedException("unsupported: map specification 类型 " + kind);
                 int[] numbers = Integers(values.Skip(i + 1).Take(3).ToArray());
                 var position = new DungeonPoint(numbers[0], numbers[1]);
                 ValidatePoint(position);
-                if (!positions.Add(position))
+                if (kind != "layered" && !positions.Add(position))
                     throw new InvalidDataException("重复 map specification 坐标");
                 if (numbers[2] < 0 || !mapPaths.TryGetValue(numbers[2], out var mapPath) || !exists(mapPath))
                     throw new InvalidDataException("map specification 引用的地图不存在: " + numbers[2]);
-                items.Add(new(kind, position, numbers[2], mapPath));
+                var map = new DungeonMap(kind,position,numbers[2],mapPath);
+                if (kind == "layered") layered.Add(map); else items.Add(map);
             }
 
-            if (starts.Any(p => !positions.Contains(p)) || bosses.Any(p => !items.Any(m => m.Position == p && m.Kind == "boss")))
-                throw new InvalidDataException("start/boss map 没有对应的 map specification");
+            // 普通迷宫可只声明部分房间，其余由地图池生成；完整性在所选路线规划时检查。
             specification = Freeze(items);
         }
 
         var quest = sections.TryGetValue("quest connection", out var connection) ? connection.Tokens : Freeze(Array.Empty<PvfToken>());
         if (connection is not null && quest.Count == 0)
             throw new InvalidDataException("quest connection 不能为空");
-        return new(ordinal, width, height, greed, starts, bosses, specification, quest);
+        return new(ordinal, width, height, greed, starts, bosses, specification, quest) { LayeredMaps = Freeze(layered) };
         IReadOnlyList<PvfToken> Required(string tag) => sections.TryGetValue(tag, out var value) ? value.Tokens : throw new InvalidDataException("maze 缺少字段: " + tag);
         IReadOnlyList<DungeonPoint> Points(IReadOnlyList<PvfToken> values)
         {

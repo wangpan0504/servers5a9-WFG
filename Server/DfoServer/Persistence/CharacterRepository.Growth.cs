@@ -3,6 +3,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.Game.Quests;
 
 namespace DfoServer.Persistence;
 
@@ -12,7 +13,7 @@ internal sealed partial class CharacterRepository
     // 成功返回后调用方在原owner内确认死亡并发布Selected；这里不修改实例或发送通知。
     public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected,
         SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog,
-        FrozenDungeonGroundDeath? loot = null) => owner.Execute(() =>
+        FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -26,6 +27,9 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡和明确正经验");
         var death = prepared.Death;
         var identity = death.Identity;
+        if (questDrops is not null && (!ReferenceEquals(questDrops.Expected,expected) || questDrops.EventId != death.EventId ||
+            questDrops.Identity != identity || questDrops.MapId != prepared.Result.Snapshot.CurrentMap.Id))
+            throw new InvalidDataException("任务掉落不是原死亡、角色和地图的冻结规划");
         using var db = database.Open();
         // 精确重放只读receipt，不申请writer；新事实升级写事务失败时由原ID恢复。
         using var tx = db.BeginTransaction(deferred: true);
@@ -57,6 +61,7 @@ internal sealed partial class CharacterRepository
         if (duplicate)
         {
             VerifyDungeonLoot(db, tx, owner.Account, expected.Id, prepared.Death.EventId, loot);
+            VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
             SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: true);
             tx.Commit();
             return new DungeonGrowthCommit(current, true);
@@ -68,14 +73,17 @@ internal sealed partial class CharacterRepository
         if (current.Revision != plan.Revision || current.Level != plan.PreviousLevel || current.Job != plan.Job ||
             current.GrowType != plan.GrowType || !SameLearning(current.Learning, plan.Before) ||
             !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) ||
+            !QuestCycle.Same(current,expected) ||
             !current.Skills.OrderBy(skill => skill.Id).SequenceEqual(expected.Skills.OrderBy(skill => skill.Id)))
             throw new InvalidOperationException("成长revision或完整学习前提已变化");
         command.Parameters.AddWithValue("$account", owner.Account);
-        command.Parameters.AddWithValue("$revision", plan.Revision);
+        var inventoryCharacter = questDrops is null ? current : CommitInventoryInTransaction(db,tx,owner,expected,questDrops.Inventory);
+        command.Parameters.AddWithValue("$revision", inventoryCharacter.Revision);
+        command.Parameters.AddWithValue("$increment", questDrops?.Inventory.Changed == true ? 0 : 1);
         command.Parameters.AddWithValue("$level", plan.TargetLevel);
         command.Parameters.AddWithValue("$experience", checked((long)plan.Learning.Experience));
         command.CommandText = """
-            UPDATE characters SET level=$level,experience=$experience,revision=revision+1
+            UPDATE characters SET level=$level,experience=$experience,revision=revision+$increment
             WHERE id=$id AND account=$account AND revision=$revision
             """;
         if (command.ExecuteNonQuery() != 1)
@@ -113,8 +121,19 @@ internal sealed partial class CharacterRepository
               $rule,$resource,$monster,$monsterLevel,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision)
             """;
         command.ExecuteNonQuery();
+        if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
         SaveDungeonLoot(db, tx, owner.Account, expected, prepared, loot);
         SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
+        if (quests is not null)
+        {
+            var active = prepared.Monster.AiCharacter is null
+                ? QuestHuntProgress.MonsterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster.MonsterId)
+                : QuestHuntProgress.AiCharacterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster.MonsterId);
+            if (questDrops is not null) active = QuestInventoryProgress.Refresh(active,inventoryCharacter.Inventory,quests,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            active = QuestStateProgress.Refresh(active,current with { Level = plan.TargetLevel, Learning = plan.Learning,
+                Inventory = inventoryCharacter.Inventory },quests);
+            WriteQuestConditions(db,tx,expected.Id,current.ActiveMainQuests,active);
+        }
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");

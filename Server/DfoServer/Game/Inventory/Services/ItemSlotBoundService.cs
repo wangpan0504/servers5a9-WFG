@@ -56,7 +56,7 @@ internal static class ItemSlotBoundService
         if (slot.List == InventoryListType.Equipment)
             return kind switch
             {
-                ItemKind.Equipment => slot.Index is >= 12 and <= 24,
+                ItemKind.Equipment => slot.Index is >= 12 and <= 25,
                 ItemKind.Avatar => slot.Index is >= 0 and <= 11,
                 ItemKind.Creature => slot.Index == 26,
                 ItemKind.CreatureEquipment => slot.Index is >= 27 and <= 29,

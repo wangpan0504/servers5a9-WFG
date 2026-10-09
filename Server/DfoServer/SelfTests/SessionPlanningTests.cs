@@ -39,8 +39,8 @@ internal static class SessionPlanningTests
     {
         using var f = new Fixture();
         var draft = CharacterCreation.Prepare("Draft", Profile, f.Towns.Room, f.Towns.InitialReturn, Resolve);
-        TestCheck.That(draft.Job == 0 && draft.AcceptedStoryLevel == 1 && draft.ActiveMainQuests.Single() == new ActiveMainQuest(0, 3145, 1),
-            "建角规则保留职业和初始主线");
+        TestCheck.That(draft.Job == 0 && draft.AcceptedStoryLevel == 1 && draft.ActiveMainQuests.Length == 0,
+            "建角保留职业，不按固定编号自动接取任务");
         TestCheck.That(!ReferenceEquals(draft.Skills, Profile.Skills) && draft.Skills.SequenceEqual(Profile.Skills), "建角复制初始技能数组");
         TestCheck.That(draft.InitialLearning.Trees.All(tree => tree.Sp == 0 && tree.Tp == 0 && tree.Skills.Single() == new LearnedSkill(0, 5, 1)),
             "建角双树绑定原技能且不赠点");

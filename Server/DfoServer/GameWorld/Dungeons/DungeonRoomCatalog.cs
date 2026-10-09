@@ -3,30 +3,40 @@ using PvfLib;
 namespace DfoServer.GameWorld.Dungeons;
 
 // 只保存匹配地图的资源行；整数和标记尚未全部映射到生成规则、战斗状态或 wire 字段。
-internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string RankKind, string Path);
+internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string RankKind, string Path)
+{
+    public IReadOnlyList<string> Modifiers { get; init; } = Array.Empty<string>();
+}
 internal sealed record DungeonRoomPassiveObject(int ObjectId, IReadOnlyList<int> RawValues, string Path);
+internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level);
 internal sealed record DungeonRoomDefinition(
     DungeonMap Map,
     IReadOnlyList<DungeonRoomMonster> Monsters,
     IReadOnlyList<DungeonRoomPassiveObject> PassiveObjects,
     IReadOnlyList<int> Buffs,
-    IReadOnlyList<int>? MonsterTeams = null);
+    IReadOnlyList<int>? MonsterTeams = null)
+{
+    public IReadOnlyList<DungeonRoomAiCharacter> AiCharacters { get; init; } = Array.Empty<DungeonRoomAiCharacter>();
+}
 
 internal sealed class DungeonRoomCatalog
 {
     private readonly PvfArchive archive;
     private readonly IReadOnlyDictionary<int, string> monsters;
     private readonly IReadOnlyDictionary<int, string> passiveObjects;
+    private readonly IReadOnlyDictionary<int, string> aiCharacters;
 
-    private DungeonRoomCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> monsters, IReadOnlyDictionary<int, string> passiveObjects)
-        => (this.archive, this.monsters, this.passiveObjects) = (archive, monsters, passiveObjects);
+    private DungeonRoomCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> monsters, IReadOnlyDictionary<int, string> passiveObjects,
+        IReadOnlyDictionary<int, string> aiCharacters)
+        => (this.archive, this.monsters, this.passiveObjects, this.aiCharacters) = (archive, monsters, passiveObjects, aiCharacters);
 
     public static DungeonRoomCatalog Load(PvfArchive pvf)
     {
 
         var monsters = DungeonCatalog.ParseDirectory(pvf.ReadTokens("monster/monster.lst"), pvf.ResolveString, "monster");
         var objects = ParsePassiveDirectory(pvf.ReadTokens("passiveobject/passiveobject.lst"), pvf.ResolveString);
-        return new(pvf, monsters, objects);
+        var actors = DungeonCatalog.ParseDirectory(pvf.ReadTokens("aicharacter/aicharacter.lst"),pvf.ResolveString,"aicharacter");
+        return new(pvf, monsters, objects, actors);
     }
 
     internal static IReadOnlyDictionary<int, string> ParsePassiveDirectory(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
@@ -49,17 +59,41 @@ internal sealed class DungeonRoomCatalog
         return paths.AsReadOnly();
     }
 
-    public DungeonRoomDefinition Get(DungeonMap map)
+    public DungeonRoomDefinition Get(DungeonMap map, bool requirePassiveDefinitions = true)
     {
         string path = PvfArchive.NormalizePath(map.Path);
         if (map.Id < 0 || !path.StartsWith("map/", StringComparison.Ordinal) || !path.EndsWith(".map", StringComparison.Ordinal)
             || !archive.Contains(path))
             throw new InvalidDataException("房间地图路径或索引无效");
-        return ParseResource(map with { Path = path }, archive.ReadTokens(path), archive.ResolveString, monsters, passiveObjects, archive.Contains);
+        return ParseResource(map with { Path = path }, archive.ReadTokens(path), archive.ResolveString, monsters, passiveObjects, archive.Contains,
+            requirePassiveDefinitions,ResolveAiCharacter);
+    }
+
+    DungeonRoomAiCharacter ResolveAiCharacter(PvfAiCharacterSpawn row)
+    {
+        int id = row.Values[0];
+        if (!aiCharacters.TryGetValue(id,out var path) || !archive.Contains(path))
+            throw new InvalidDataException("房间APC定义不存在: " + id);
+        var minimum = PvfAiCharacterScript.MinimumInfo(archive.ReadTokens(path),archive.ResolveString);
+        // 匹配AIC：名字后四项角色字段，再是等级；不以角色或副本等级替代APC自身声明。
+        if (minimum.Length < 6 || minimum[0].Type != 6 || minimum.Skip(1).Take(5).Any(token => token.Type != 0) ||
+            minimum[5].Value is < 1 or > 255) throw new InvalidDataException("房间APC最低信息或等级无效: " + id);
+        return new(id,row.Values,row.Faction,row.Rank,path,minimum[5].Value);
+    }
+
+    public bool ReportsQuestDeath(DungeonRoomPassiveObject source)
+    {
+        if (!passiveObjects.TryGetValue(source.ObjectId,out var path) || path != source.Path || path.Length == 0 || !archive.Contains(path)) return false;
+        var tokens = archive.ReadTokens(path);
+        for (int at = 0; at + 1 < tokens.Length; at++)
+            if (tokens[at].Type == 3 && archive.ResolveString(tokens[at].Value) == "[quest type]")
+                return tokens[at + 1].Type == 6 && archive.ResolveString(tokens[at + 1].Value) == "[must be destroyed]";
+        return false;
     }
 
     internal static DungeonRoomDefinition ParseResource(DungeonMap map, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve,
-        IReadOnlyDictionary<int, string> monsterPaths, IReadOnlyDictionary<int, string> objectPaths, Func<string, bool> exists)
+        IReadOnlyDictionary<int, string> monsterPaths, IReadOnlyDictionary<int, string> objectPaths, Func<string, bool> exists,
+        bool requirePassiveDefinitions = true, Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter>? resolveAiCharacter = null)
     {
         var sections = new Dictionary<string, IReadOnlyList<PvfToken>>(StringComparer.Ordinal);
         for (int i = 0; i < tokens.Count;)
@@ -71,7 +105,7 @@ internal sealed class DungeonRoomCatalog
             }
 
             string tag = resolve(tokens[i++].Value).ToLowerInvariant();
-            if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]"))
+            if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]" or "[ai character]"))
                 continue;
             if (sections.ContainsKey(tag))
                 throw new NotSupportedException("unsupported: 房间重复资源块 " + tag);
@@ -88,19 +122,32 @@ internal sealed class DungeonRoomCatalog
         var monsterRows = new List<DungeonRoomMonster>();
         if (sections.TryGetValue("[monster]", out var monsterTokens))
         {
-            if (monsterTokens.Count % 10 != 0)
-                throw new NotSupportedException("unsupported: 房间 monster 不是八整数和两字符串的完整行");
-            for (int at = 0; at < monsterTokens.Count; at += 10)
+            for (int at = 0; at < monsterTokens.Count;)
             {
+                if (monsterTokens.Count - at < 10)
+                    throw new NotSupportedException("unsupported: 房间 monster 缺少八整数和完整字符串标记");
                 var values = Integers(monsterTokens.Skip(at).Take(8));
-                if (monsterTokens[at + 8].Type != 6 || monsterTokens[at + 9].Type != 6)
+                at += 8;
+                var labels = new List<string>();
+                while (at < monsterTokens.Count && monsterTokens[at].Type == 6)
+                    labels.Add(resolve(monsterTokens[at++].Value));
+                if (labels.Count < 2)
                     throw new NotSupportedException("unsupported: 房间 monster 标记不是字符串");
-                string placement = resolve(monsterTokens[at + 8].Value);
-                string rank = resolve(monsterTokens[at + 9].Value);
-                if (placement.Length == 0 || rank.Length == 0)
+                if (labels.Any(label => label.Length == 0))
                     throw new NotSupportedException("unsupported: 房间 monster 标记为空");
+                if (labels[^1] is "[champion]" or "[super champion]")
+                {
+                    // Full03 0425D1F9/0425D23E在品级后读附加效果数量；0不带效果，不能当下一怪物ID。
+                    if (at >= monsterTokens.Count || monsterTokens[at] != new PvfToken(0,0))
+                        throw new NotSupportedException("unsupported: 精英怪物的非空附加效果尚未解析");
+                    at++;
+                }
                 string path = Resolve(values[0], monsterPaths, "monster");
-                monsterRows.Add(new(values[0], values, placement, rank, path));
+                monsterRows.Add(new(values[0], values, labels[0], labels[^1], path)
+                {
+                    // 76155真实行含[fixed] [dummy] [boss]；保留中间标记，生成层逐项确认后启用。
+                    Modifiers = Freeze(labels.Skip(1).Take(labels.Count - 2))
+                });
             }
         }
 
@@ -112,7 +159,10 @@ internal sealed class DungeonRoomCatalog
             for (int at = 0; at < objectTokens.Count; at += 4)
             {
                 var values = Integers(objectTokens.Skip(at).Take(4));
-                string path = Resolve(values[0], objectPaths, "passive object");
+                if (values[0] < 0) throw new InvalidDataException("被动物件ID不能为负数");
+                // 装饰物由客户端地图装载；服务端只为任务权威事件验证脚本，不修补无关旧装饰引用。
+                string path = requirePassiveDefinitions ? Resolve(values[0], objectPaths, "passive object")
+                    : objectPaths.GetValueOrDefault(values[0]) ?? "";
                 objectRows.Add(new(values[0], values, path));
             }
         }
@@ -121,7 +171,11 @@ internal sealed class DungeonRoomCatalog
         var teams = sections.TryGetValue("[monster team]", out var teamTokens) ? Integers(teamTokens) : Freeze(Array.Empty<int>());
         if (teams.Count > monsterRows.Count)
             throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
-        return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams);
+        var actors = new List<DungeonRoomAiCharacter>();
+        if (sections.TryGetValue("[ai character]",out var actorTokens))
+            foreach (var row in PvfAiCharacterScript.MapRows(actorTokens,resolve))
+                actors.Add(resolveAiCharacter?.Invoke(row) ?? throw new InvalidDataException("房间APC定义解析依赖缺失"));
+        return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams) { AiCharacters = Freeze(actors) };
 
         string Resolve(int id, IReadOnlyDictionary<int, string> paths, string kind)
         {

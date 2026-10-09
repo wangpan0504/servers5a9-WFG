@@ -52,13 +52,37 @@ CREATE TABLE characters(
     gold_carry_limit INTEGER NOT NULL DEFAULT 0 CHECK(gold_carry_limit BETWEEN 0 AND 2147483647),
     auction_gold_limit INTEGER NOT NULL DEFAULT 400000000 CHECK(auction_gold_limit BETWEEN 0 AND 2147483647),
     cargo_capacity INTEGER NOT NULL DEFAULT 8 CHECK(cargo_capacity BETWEEN 8 AND 264),
+    quest_cycle_day INTEGER NOT NULL DEFAULT 0 CHECK(quest_cycle_day=0 OR quest_cycle_day BETWEEN 19000101 AND 99991231),
+    equipment_slot_flags INTEGER NOT NULL DEFAULT 0 CHECK(equipment_slot_flags BETWEEN 0 AND 255),
     UNIQUE(account,slot)
 );
 
 CREATE TABLE character_completed_quests(
     character_id INTEGER NOT NULL REFERENCES characters(id),
     quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+    daily_period INTEGER NOT NULL DEFAULT 0 CHECK(daily_period=0 OR daily_period BETWEEN 19000101 AND 99991231),
+    answer INTEGER CHECK(answer BETWEEN 0 AND 254),
     PRIMARY KEY(character_id,quest_id)
+);
+
+CREATE TABLE character_quest_drop_receipts(
+    character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL CHECK(length(event_id)=32 AND event_id NOT GLOB '*[^0-9a-f]*'),
+    before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+    plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot)),
+    changed_items TEXT NOT NULL CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+    PRIMARY KEY(character_id,event_id),
+    FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
+CREATE TABLE account_completed_quests(
+    account TEXT NOT NULL REFERENCES accounts(account_id),
+    quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+    character_id INTEGER NOT NULL,
+    acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+    daily_period INTEGER NOT NULL DEFAULT 0 CHECK(daily_period=0 OR daily_period BETWEEN 19000101 AND 99991231),
+    answer INTEGER CHECK(answer BETWEEN 0 AND 254),
+    PRIMARY KEY(account,quest_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
 
 CREATE TABLE character_skills(
@@ -87,8 +111,8 @@ CREATE TABLE character_quest_clear_receipts(
     task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
     dungeon_id INTEGER NOT NULL,map_id INTEGER NOT NULL,
     generation INTEGER NOT NULL CHECK(generation>0),revision INTEGER NOT NULL CHECK(revision>0),
-    PRIMARY KEY(character_id,acceptance_id),UNIQUE(character_id,event_id),
-    UNIQUE(character_id,instance_id),
+    PRIMARY KEY(character_id,acceptance_id),
+
     FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
@@ -97,22 +121,30 @@ CREATE UNIQUE INDEX character_active_quest_acceptance ON character_active_main_q
     WHERE acceptance_id<>'00000000000000000000000000000000';
 
 CREATE TABLE character_quest_completion_receipts(
-    character_id INTEGER NOT NULL,account TEXT NOT NULL,acceptance_id TEXT NOT NULL,
-    quest_id INTEGER NOT NULL CHECK(quest_id=3145),event_id TEXT NOT NULL,instance_id TEXT NOT NULL,
-    task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
-    generation INTEGER NOT NULL CHECK(generation>0),rule_id TEXT NOT NULL,
-    resource_source TEXT NOT NULL,quest_source TEXT NOT NULL,
-    native_index INTEGER NOT NULL CHECK(native_index>=0),base_experience INTEGER NOT NULL CHECK(base_experience>0),
-    raw_additional_percent INTEGER NOT NULL,difficulty_key TEXT NOT NULL,difficulty_weight INTEGER NOT NULL CHECK(difficulty_weight>0),
-    experience_amount INTEGER NOT NULL CHECK(experience_amount BETWEEN 1 AND 2147483647),gold_amount INTEGER NOT NULL CHECK(gold_amount=0),
-    before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),
-    before_experience INTEGER NOT NULL CHECK(before_experience>=0),after_experience INTEGER NOT NULL CHECK(after_experience=before_experience+experience_amount),
-    before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
-    rewards TEXT NOT NULL CHECK(json_valid(rewards) AND json_type(rewards)='array' AND json_array_length(rewards)=7),
-    PRIMARY KEY(character_id,acceptance_id),UNIQUE(character_id,quest_id),
-    FOREIGN KEY(character_id,acceptance_id) REFERENCES character_quest_clear_receipts(character_id,acceptance_id),
-    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
-);
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,
+          acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),event_id TEXT,instance_id TEXT,
+          task_attempt INTEGER CHECK(task_attempt>0),epoch INTEGER CHECK(epoch>0),
+          generation INTEGER NOT NULL CHECK(generation>0),rule_id TEXT NOT NULL,
+          resource_source TEXT NOT NULL,quest_source TEXT NOT NULL,
+          native_index INTEGER NOT NULL CHECK(native_index>=0),base_experience INTEGER NOT NULL CHECK(base_experience>=0),
+          raw_additional_percent INTEGER NOT NULL,difficulty_key TEXT NOT NULL,difficulty_weight INTEGER NOT NULL CHECK(difficulty_weight>=0),
+          experience_amount INTEGER NOT NULL CHECK(experience_amount BETWEEN 0 AND 2147483647),
+          gold_amount INTEGER NOT NULL CHECK(gold_amount BETWEEN 0 AND 2147483647),
+          before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),
+          before_experience INTEGER NOT NULL CHECK(before_experience>=0),after_experience INTEGER NOT NULL CHECK(after_experience=before_experience+experience_amount),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          rewards TEXT NOT NULL CHECK(json_valid(rewards) AND json_type(rewards)='array' AND json_array_length(rewards)<=255),
+          clear_acceptance_id TEXT,condition_type INTEGER NOT NULL DEFAULT 3 CHECK(condition_type IN(0,1,2,3,4,6,12,25,31,39,40,42,44,64,65,67)),
+          selector INTEGER NOT NULL DEFAULT 65535 CHECK(selector BETWEEN 0 AND 65535),multiplier INTEGER NOT NULL DEFAULT 1 CHECK(multiplier BETWEEN 1 AND 65535),
+          consumed TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(consumed) AND json_type(consumed)='array' AND json_array_length(consumed)<=255),
+          changed_items TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+          plan_snapshot TEXT CHECK(plan_snapshot IS NULL OR (json_valid(plan_snapshot) AND json_type(plan_snapshot)='object')),
+          CHECK((condition_type IN(1,3) AND clear_acceptance_id=acceptance_id AND event_id IS NOT NULL AND instance_id IS NOT NULL AND task_attempt IS NOT NULL AND epoch IS NOT NULL)
+            OR (condition_type IN(0,2,4,6,12,25,31,39,40,42,44,64,65,67) AND clear_acceptance_id IS NULL AND event_id IS NULL AND instance_id IS NULL AND task_attempt IS NULL AND epoch IS NULL AND plan_snapshot IS NOT NULL)),
+          PRIMARY KEY(character_id,acceptance_id),
+          FOREIGN KEY(character_id,clear_acceptance_id) REFERENCES character_quest_clear_receipts(character_id,acceptance_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
 CREATE TABLE character_skill_points(
     character_id INTEGER NOT NULL REFERENCES characters(id),
@@ -201,6 +233,32 @@ CREATE TABLE character_game_settings(
     character_id INTEGER PRIMARY KEY,
     account TEXT NOT NULL,
     game_options BLOB NOT NULL CHECK(typeof(game_options)='blob' AND length(game_options)=204),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
+CREATE TABLE character_quest_skip_receipts(
+    character_id INTEGER NOT NULL,account TEXT NOT NULL,
+    acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+    parent_key INTEGER NOT NULL CHECK(parent_key BETWEEN 0 AND 2147483647),question_quest INTEGER NOT NULL CHECK(question_quest BETWEEN 1 AND 29999),
+    before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+    plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot) AND json_type(plan_snapshot)='object'),
+    PRIMARY KEY(character_id,acceptance_id),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
+CREATE TABLE character_quest_lifecycle_receipts(
+    character_id INTEGER NOT NULL, account TEXT NOT NULL, operation_id TEXT NOT NULL CHECK(length(operation_id)=32 AND operation_id NOT GLOB '*[^0-9a-f]*' AND operation_id<>'00000000000000000000000000000000'),
+    action TEXT NOT NULL CHECK(action IN ('Accept','Giveup','Condition')),
+    quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+    acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+    before_revision INTEGER NOT NULL CHECK(before_revision>=0), revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+    before_active TEXT NOT NULL CHECK(json_valid(before_active) AND json_type(before_active)='array'),
+    after_active TEXT NOT NULL CHECK(json_valid(after_active) AND json_type(after_active)='array'),
+  changed_items TEXT NOT NULL CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+  scene_event TEXT CHECK(scene_event IS NULL OR json_valid(scene_event)),
+  before_completed TEXT CHECK(before_completed IS NULL OR (json_valid(before_completed) AND json_type(before_completed)='array')),
+  after_completed TEXT CHECK(after_completed IS NULL OR (json_valid(after_completed) AND json_type(after_completed)='array')),
+    PRIMARY KEY(character_id,operation_id),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
 
@@ -349,7 +407,7 @@ CREATE TABLE mailbox_audit_log(
 );
 CREATE TABLE character_dungeon_growth_receipts(
 character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
-instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>0),
+instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>=0),
 task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
 map_id INTEGER NOT NULL,monster_key INTEGER NOT NULL CHECK(monster_key BETWEEN 0 AND 65535),
 combat_sequence INTEGER NOT NULL CHECK(combat_sequence>0),
@@ -405,7 +463,7 @@ CREATE TABLE account_expert_contracts(
 
 CREATE TABLE character_dungeon_settlement_receipts(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
-  instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>0),
+  instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>=0),
   task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
   dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),map_id INTEGER NOT NULL,
   death_events BLOB NOT NULL CHECK(typeof(death_events)='blob' AND length(death_events)>0 AND length(death_events)%16=0),

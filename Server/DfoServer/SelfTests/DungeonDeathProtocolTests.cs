@@ -40,6 +40,55 @@ internal static class DungeonDeathProtocolTests
         foreach (int length in new[] { 0, 6, 87, 89, 100 })
             That(!DungeonRequests.TryParseDeath(new byte[length], out var invalid) && invalid is null,
                 "death parser rejects unsupported body width " + length);
+        foreach (int contextLength in new[] { 0,22 })
+        {
+            // 独立按生产者调用顺序编码；029083A0仅在上下文非空时追加u64和七个u16。
+            using var encoded = new MemoryStream();
+            using (var writer = new BinaryWriter(encoded, System.Text.Encoding.UTF8, leaveOpen: true))
+            {
+                writer.Write(0xF2345678u); writer.Write(ushort.MaxValue); writer.Write(new byte[30]);
+                writer.Write((byte)0xA5); writer.Write((byte)1); writer.Write((byte)0); writer.Write((ushort)0xFEDC);
+                writer.Write((byte)0); writer.Write(0xF1234521u);
+                if (contextLength != 0)
+                {
+                    writer.Write(0xE23456789ABCDEF1ul);
+                    for (ushort at = 0; at < 7; at++) writer.Write((ushort)(0xF000 + at));
+                }
+                writer.Write((byte)0); writer.Write((byte)0xD7);
+                writer.Write(ClientBodyChecksum.Compute(encoded.ToArray()));
+            }
+            byte[] passive = encoded.ToArray();
+            byte[] context = passive[46..^6];
+            That(DungeonRequests.TryParsePassiveDeath(passive,out var parsed) && passive.Length == 52 + contextLength &&
+                parsed is { ObjectIdentifier: 0xF2345678, ActorFlags: 0xF1234521, Unknown36: 0xA5, Unknown39: 0xFEDC,
+                    UnknownLast: 0xD7, ChecksumMatches: true } && parsed.ContextFields.SequenceEqual(context),
+                "独立被动物件格式保留52/74B、未知高位及可选上下文，不套用88B死亡统计");
+            That(!DungeonRequests.TryParseDeath(passive,out _) && !DungeonRequests.TryParseSinglePlayerDeathStatistics(passive,out _),
+                "被动物件格式不能产生普通怪物统计或战斗事实");
+            passive[0] ^= 1;
+            That(DungeonRequests.TryParsePassiveDeath(passive,out var changed) && changed is { ChecksumMatches: false },
+                "被动物件正文变化保留摘要不匹配，不签发死亡");
+            foreach (int at in new[] { 4,6,30,31,35,37,38,41,passive.Length - 6 })
+            {
+                byte original = passive[at]; passive[at] ^= 0x80;
+                That(!DungeonRequests.TryParsePassiveDeath(passive,out var invalid) && invalid is null,
+                    "独立被动物件常量域不能借用其他39生产者 " + at);
+                passive[at] = original;
+            }
+            Array.Fill(passive,(byte)0);
+            That(context.SequenceEqual(parsed!.ContextFields), "被动物件上下文冻结副本，不保留可变输入");
+        }
+        foreach (int length in new[] { 43,48,51,53,70,73,75,88 })
+            That(!DungeonRequests.TryParsePassiveDeath(new byte[length],out var invalid) && invalid is null,
+                "直接writer长度与部分公共尾部不能变成完整被动物件报告 " + length);
+        // zz在3151安全区的实收终末报告：零参与者、真实角色号12，不是FFFF被动物件格式。
+        byte[] retreat = Convert.FromHexString("720200000C000000000000000000000000004D51000000000000440000000022038C0200000000AF7A0110000000764B00000000000022038C020000000000000000000000004494B57B");
+        That(DungeonRequests.TryParseScriptedDeath(retreat,out var scripted) &&
+            scripted is { ObjectKey: 626, RewriteFlag: 0x22, ChecksumMatches: true },
+            "真实角色号和演员flags22的74B撤退报告可解析；剧情通关仍由当前已发布演员及实例事件账本确认");
+        retreat[^1] ^= 1;
+        That(DungeonRequests.TryParseScriptedDeath(retreat,out scripted) && scripted is { ChecksumMatches: false },
+            "撤退演员摘要不匹配不会变成有效场景终末事实");
         // 匹配ARAD已实收的13条单人报文，固定预期独立取自原字节；解析不签发死亡或证明本轮实机击杀。
         // 第七例首个u64及u32非零，不能只验证全零前缀。
         (string Hex, uint Key, ulong First, uint FirstCount, ulong Second, uint SecondCount, ulong Contribution, uint Checksum)[] samples =
@@ -78,6 +127,45 @@ internal static class DungeonDeathProtocolTests
                 && statistics.RemainingFields is System.Collections.IList list && list.IsReadOnly,
                 "统计后续43B独立冻结，解析不解释为奖励");
         }
+
+        foreach (var sample in new (string Hex,uint Key,ushort ApcKey,bool ApcFirst)[]
+        {
+            ("720200001200000000000000000000000000ED210000000000000300000002110112005821000000000000010011F13602060000000000000002008502DE0000000000C2660014000000341A000000000000FD02DE008002DE000B00340021000000B7D1F6A5",626,566,false),
+            ("780200001200000000000000000000000000CA210000000000000200000002110112005921000000000000010011F1360202000000000000000100B402C60000000000B9090014000000341A00000000000022030901A602C6000B003400210000002B8148E1",632,566,false),
+            ("840200001200000000000000000000000000F41D000000000000040000000211F185020700000000000000020011011200311D00000000000002000E01EB0000000000F91300140000003018000000000000AB0010012401EB000B00340030000000DB1A04B9",644,645,true)
+        })
+        {
+            var captured = Convert.FromHexString(sample.Hex);
+            That(DungeonRequests.TryParseDeath(captured,out var parsed) && parsed is { Reporter: 18 } && parsed.ObjectKey == sample.Key &&
+                parsed.SinglePlayerStatistics is { Participants.Length: 2, ChecksumMatches: true, SpawnLevel: 20, RemainingFields.Count: 43 },
+                "真实友方APC参与的102B集合按动态边界解析，不漏末尾检查值 " + sample.Key);
+            var statistics = parsed!.SinglePlayerStatistics!;
+            That(statistics.Participants[sample.ApcFirst ? 0 : 1] is { Kind: 0xF111 } apc && apc.ObjectKey == sample.ApcKey &&
+                statistics.Participants[sample.ApcFirst ? 1 : 0] is { Kind: 0x0111, ObjectKey: 18 } &&
+                statistics.Participant == statistics.Participants[0],"原序全列表保留，首行不当killer或固定本人 " + sample.Key);
+            var frozen = statistics.Participants;
+            captured[31] ^= 1;
+            That(statistics.Participants.SequenceEqual(frozen) && DungeonRequests.TryParseDeath(captured,out var changed) &&
+                changed!.SinglePlayerStatistics is { ChecksumMatches: false },"参与者冻结且完整正文篡改仍校验失败");
+            foreach (var invalid in new[] { captured[..^1], captured.Concat(new byte[1]).ToArray(),
+                captured[..88], WithCount(captured,1), WithCount(captured,3) })
+                That(!DungeonRequests.TryParseSinglePlayerDeathStatistics(invalid,out _),"集合数量、条目和尾部必须完整等长");
+        }
+        // 仅APC贡献和254来源由匹配原生循环允许；资格不属于Parser，kind完整保留交Game核对。
+        var singleSource = Convert.FromHexString(samples[0].Hex);
+        BinaryPrimitives.WriteUInt16LittleEndian(singleSource.AsSpan(31),0xF111);
+        BinaryPrimitives.WriteUInt16LittleEndian(singleSource.AsSpan(33),566);
+        BinaryPrimitives.WriteUInt32LittleEndian(singleSource.AsSpan(singleSource.Length-4),ClientBodyChecksum.Compute(singleSource.AsSpan(0,singleSource.Length-4)));
+        That(DungeonRequests.TryParseDeath(singleSource,out var onlyApc) && onlyApc!.SinglePlayerStatistics is
+            { Participants.Length: 1, Participant.Kind: 0xF111, Participant.ObjectKey: 566, ChecksumMatches: true },
+            "原生仅APC来源不强制伪造玩家贡献行");
+        var maximum = new byte[74+14*254];
+        singleSource.AsSpan(0,31).CopyTo(maximum); maximum[30] = 254;
+        for (int at = 0; at < 254; at++) singleSource.AsSpan(31,14).CopyTo(maximum.AsSpan(31+14*at));
+        singleSource.AsSpan(45).CopyTo(maximum.AsSpan(31+14*254));
+        BinaryPrimitives.WriteUInt32LittleEndian(maximum.AsSpan(maximum.Length-4),ClientBodyChecksum.Compute(maximum.AsSpan(0,maximum.Length-4)));
+        That(DungeonRequests.TryParseDeath(maximum,out var many) && many!.SinglePlayerStatistics is { Participants.Length: 254, ChecksumMatches: true } &&
+            !DungeonRequests.TryParseSinglePlayerDeathStatistics(WithCount(maximum,255),out _),"原生来源上界254保留，255不借用动态入口");
 
         byte[] invalidChecksum = Convert.FromHexString(samples[0].Hex);
         invalidChecksum[84] ^= 1;
@@ -138,6 +226,7 @@ internal static class DungeonDeathProtocolTests
                 "death notification preserves u16 key zero count mode grade and extras " + key);
         }
         Console.WriteLine($"PASS {Count - checks} dungeon death protocol assertions");
+        static byte[] WithCount(byte[] body,byte count) { var changed = body.ToArray(); changed[30] = count; return changed; }
     }
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf)
     {
