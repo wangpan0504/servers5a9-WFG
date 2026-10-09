@@ -72,6 +72,25 @@ internal static class DungeonCatalogTests
         var valid = fixture.Maze();
         var parsed = fixture.Parse(valid);
         That(parsed.MinimumLevel is null && parsed.BasisLevel is null, "absent level metadata remains unknown");
+        That(!parsed.RoomMoveKeepState && !parsed.IndividualMapMovement, "absent movement flags retain native false defaults");
+        foreach (int value in new[] { -1, 0, 1, 2 })
+        {
+            var flags = fixture.Tag("room move keep state",fixture.Int(value))
+                .Concat(fixture.Tag("individual map movement",fixture.Int(value))).ToArray();
+            var withFlags = fixture.Parse(flags.Concat(fixture.Maze()).ToArray());
+            That(withFlags.RoomMoveKeepState == (value == 1) && withFlags.IndividualMapMovement == (value == 1) &&
+                withFlags.RawSections.Single(section => section.Tag == "individual map movement").Tokens.Single().Value == value,
+                $"movement flags accept only integer one and retain raw value {value}");
+        }
+        var independentFlags = fixture.Parse(fixture.Tag("room move keep state",fixture.Int(1))
+            .Concat(fixture.Tag("individual map movement",fixture.Int(0))).Concat(fixture.Maze()).ToArray());
+        That(independentFlags.RoomMoveKeepState && !independentFlags.IndividualMapMovement, "two movement flags keep separate native fields");
+        var repeatedFlags = fixture.Parse(fixture.Tag("individual map movement",fixture.Int(1))
+            .Concat(fixture.Tag("individual map movement",fixture.Int(0))).Concat(fixture.Maze()).ToArray());
+        That(!repeatedFlags.IndividualMapMovement && repeatedFlags.RawSections.Count(section => section.Tag == "individual map movement") == 2,
+            "repeated movement declaration uses the last value and preserves source declarations");
+        var opaqueFlag = fixture.Parse(fixture.Tag("individual map movement",new PvfToken(7,1)).Concat(fixture.Maze()).ToArray());
+        That(!opaqueFlag.IndividualMapMovement, "unresolved flag token is not interpreted as integer one");
         valid[1] = new(0, 99);
         That(parsed.Mazes[0].Width == 1, "published result does not retain caller token array");
         Unsupported(fixture.Maze(width: 0),"size","零尺寸路线保留诊断");

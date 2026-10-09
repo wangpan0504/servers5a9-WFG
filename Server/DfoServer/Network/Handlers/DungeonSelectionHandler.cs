@@ -29,9 +29,10 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
                 bool Guard() => context.Session.CanPublishFormalDungeon(entered);
                 log.Write("formal_quest_continuation_enter",new { Connection = context.Id, entered.Entry.QuestId,
                     entered.Entry.DungeonId, entered.Snapshot.Identity });
-                // 真实15沿普通入口确认和角色状态同步，再发布新副本；不能按过房只推28/29。
+                // 27隐藏旧Scene界面并切换场景模块；ACK15/state1不能替代，缺少它会保留旧结算页。
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_confirm",Guard);
                 await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(entered.Character.Id),"formal_next_quest_entry_state",Guard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.EmptySelectNotice(),"formal_next_quest_scene_transition",Guard);
                 await context.Notify(NotiPacketType.DUNGEON_INFO,DungeonPackets.Information(entered.Entry),"formal_next_quest_information",Guard);
                 await context.Notify(NotiPacketType.START_MAP,DungeonPackets.StartMap(entered.Entry,entered.Monsters,entered.MapSeed),"formal_next_quest_start_map",Guard);
             }
@@ -41,6 +42,28 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             else if (continuation.Replay is { } replay)
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_replay",
                     () => context.Session.CanPublishFormalDungeon(replay));
+            return CommandResult.Handled;
+        }
+        var replayBefore = context.Owner.Execute(() => (context.Session.Selected,context.Session.Ready,
+            context.Session.SelectionEpoch,context.Session.Phase,Identity: context.Session.DungeonSnapshot?.Identity));
+        var questReplaySelection = context.Session.BeginQuestReplayDungeonSelection(entry.DungeonIndex);
+        if (questReplaySelection.Pending)
+        {
+            if (questReplaySelection.Receipt is { } selected)
+            {
+                if (!await projection.DetachForDungeonSelectionAsync(context,selected)) return CommandResult.Handled;
+                bool Guard() => context.Session.CanPublishDungeonSelection(selected);
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"quest_replay_selection_opened",Guard);
+                await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(selected.Character.Id),"quest_replay_selection_state",Guard);
+            }
+            else if (questReplaySelection.Replay is { } installed)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"quest_replay_selection_retry",
+                    () => context.Session.CanPublishFormalDungeon(installed));
+            else
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionUnavailable(),"quest_replay_selection_rejected",
+                    () => context.Owner.Execute(() => replayBefore.Ready && context.Session.Ready &&
+                        context.Session.SelectionEpoch == replayBefore.SelectionEpoch && context.Session.Phase == replayBefore.Phase &&
+                        ReferenceEquals(context.Session.Selected,replayBefore.Selected) && context.Session.DungeonSnapshot?.Identity == replayBefore.Identity));
             return CommandResult.Handled;
         }
         if (context.BlocksTownActions)

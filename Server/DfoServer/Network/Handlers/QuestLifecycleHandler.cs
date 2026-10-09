@@ -31,6 +31,11 @@ internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog ite
         log.Write("quest_lifecycle", new { Connection = context.Id, questId, action, receipt.Reason, receipt.Commit?.Duplicate });
         if (receipt.Commit is not { } commit)
         {
+            if (action == QuestLifecycleAction.Giveup && receipt.Outcome == QuestLifecycleOutcome.Unchanged)
+            {
+                await context.Reply(opcode, QuestPackets.GivenUp(questId), "quest_closed_child_confirmed", Guard);
+                return CommandResult.Handled;
+            }
             // Full03 ACK31/32的error18均跳过文案与正文；本服用它作中立业务拒绝。
             await context.Reply(opcode, QuestPackets.Rejected(18), "quest_lifecycle_rejected", Guard);
             return CommandResult.Handled;

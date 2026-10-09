@@ -101,6 +101,10 @@ internal static class DatabaseSchemaTests
             VerifyReleasedMigrations(root);
             VerifyMasterQuest14Compatibility(root);
             VerifyQuestSystemMigration(root);
+            VerifyExistingQuestSystemV14(root);
+            VerifyExistingQuestType49(root);
+            VerifyMasterQuest17Migration(root);
+            VerifyExistingQuestFatigueV14(root);
             VerifyQuestSkipConstraints(root);
             VerifyFutureMigrations(path);
             string concurrent = Path.Combine(root, "concurrent.db");
@@ -149,14 +153,14 @@ internal static class DatabaseSchemaTests
         using (var db = Open(path))
         {
             That(Query(db, "PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion && tables.Select((table, index) => Rows(db, table, columns[index])).SequenceEqual(previous),
-                "单次v14保存v13所有旧表原列、rowid、序列、接取身份和领奖规则原值");
+                "连续已发布迁移保存v13所有旧表原列、rowid、序列、接取身份和领奖规则原值");
             That(Query(db, "SELECT clear_acceptance_id=acceptance_id AND condition_type=3 AND selector=65535 AND multiplier=1 AND consumed='[]' AND changed_items='[]' AND plan_snapshot IS NULL FROM character_quest_completion_receipts WHERE rowid=47") is 1L,
                 "旧领奖回执仅补来源关联和默认元数据，不重写旧JSON或规则版本");
             That(Query(db, "SELECT quest_cycle_day||':'||equipment_slot_flags FROM characters") is "0:0" &&
                 Query(db, "SELECT daily_period FROM character_completed_quests") is 0L && Query(db, "SELECT answer IS NULL FROM character_completed_quests") is 1L &&
                 new[] { "character_quest_lifecycle_receipts", "account_completed_quests", "character_quest_drop_receipts", "character_quest_skip_receipts" }
                     .All(table => Query(db, "SELECT count(*) FROM " + table) is 0L),
-                "v14一次建立四张空账本及四个默认列，不补造任务、回答、周期或解锁");
+                "任务系统建立四张空账本及四个默认列，不补造任务、回答、周期或解锁");
             That(Query(db, "SELECT count(*) FROM ordinary_history_trigger_calls") is 0L &&
                 Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN('ordinary_history_index','ordinary_history_trigger')") is 2L,
                 "迁移保留附加索引与触发器，恢复历史行时不重新执行触发器");
@@ -181,8 +185,8 @@ internal static class DatabaseSchemaTests
             Execute(db, "CREATE TABLE character_quest_skip_receipts(collision INTEGER)");
         }
         string before = Snapshot(rollback);
-        Reject<SqliteException>(() => new CharacterRepository(rollback), "v14末段跳过账本撞表时回滚此前全部DDL及数据恢复");
-        That(Snapshot(rollback) == before, "v14失败保留v13版本、全部原表定义、rowid和角色资产");
+        Reject<SqliteException>(() => new CharacterRepository(rollback), "任务结构末段跳过账本撞表时回滚此前全部DDL及数据恢复");
+        That(Snapshot(rollback) == before, "升级失败保留v13版本、全部原表定义、rowid和角色资产");
     }
 
     private static void VerifyMasterQuest14Compatibility(string root)
@@ -192,7 +196,8 @@ internal static class DatabaseSchemaTests
         var rows = new Dictionary<string, (string[] Columns, string Rows)>();
         using (var db = Open(path))
         {
-            // master的任务v14已有完整任务结构，但尚未拥有普通分支疲劳表。
+            // 已发布任务v14有任务结构、旧回执，但尚未拥有普通分支疲劳表。
+            RewindQuestReceiptsToV17(db);
             Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; PRAGMA user_version=14");
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,quest_cycle_day,equipment_slot_flags) VALUES('master-quest',0,'MasterQuest',9,38,1,450,234,0,20261009,7)");
             Execute(db, "INSERT INTO character_completed_quests VALUES(1,6217,20261009,2)");
@@ -217,11 +222,11 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
-            Check(Query(db, "PRAGMA user_version") is 17L && Query(db, "SELECT revision||':'||quest_cycle_day||':'||equipment_slot_flags FROM characters") is "9:20261009:7" &&
+            Check(Query(db, "PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion && Query(db, "SELECT revision||':'||quest_cycle_day||':'||equipment_slot_flags FROM characters") is "9:20261009:7" &&
                 Query(db, "SELECT daily_period||':'||answer FROM character_completed_quests") is "20261009:2" &&
                 Query(db, "SELECT daily_period||':'||answer FROM account_completed_quests") is "20261009:2" &&
                 Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
-                "master已发布任务v14升级17不重复建任务结构、不改周期答案、资产或revision");
+                "master已发布任务v14升级18不重复建任务结构、不改周期答案、资产或revision");
             foreach (var row in rows)
                 Check(Rows(db, row.Key, row.Value.Columns) == row.Value.Rows, "任务v14保留原表全部数据及rowid：" + row.Key);
             Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN ('quest_drop_history_index','quest_drop_history_trigger')") is 2L &&
@@ -240,7 +245,7 @@ internal static class DatabaseSchemaTests
         using (var db = Open(path))
         {
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('skip-history',0,'SkipHistory',19,38,1,450,234,0)");
-            const string receipt = "INSERT INTO character_quest_skip_receipts VALUES(1,'skip-history','234567890abcdef1234567890abcdef1',19,6217,19,20,'{}')";
+            const string receipt = "INSERT INTO character_quest_skip_receipts VALUES(1,'skip-history','234567890abcdef1234567890abcdef1',19,6217,19,20,'{}','234567890abcdef1234567890abcdef1','QuickClear')";
             Execute(db, receipt);
             Reject<SqliteException>(() => Execute(db, receipt), "跳过回执按角色和接取身份唯一");
             Reject<SqliteException>(() => Execute(db, receipt.Replace("234567890abcdef1234567890abcdef1", "34567890abcdef1234567890abcdef12").Replace("19,20,'{}'", "19,21,'{}'")), "跳过回执revision只增加一次");
@@ -250,6 +255,268 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(path);
         Check(Snapshot(path) == committed, "v14再次初始化保留已有跳过回执，不重复迁移");
     }
+
+    private static void VerifyExistingQuestSystemV14(string root)
+    {
+        string path = Path.Combine(root,"quest-existing-v14.db");
+        using (var source = Open(Path.Combine(root,"quest-system-v13.db")))
+        using (var target = Open(path)) source.BackupDatabase(target);
+        const string completion = "character_quest_completion_receipts", skip = "character_quest_skip_receipts";
+        // 冻结实际已运行v14的8列跳过结构；完成表撤回49/70约束，不只改版本号。
+        const string previousSkip = """
+            CREATE TABLE character_quest_skip_receipts(
+              character_id INTEGER NOT NULL,account TEXT NOT NULL,
+              acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+              parent_key INTEGER NOT NULL CHECK(parent_key BETWEEN 0 AND 2147483647),question_quest INTEGER NOT NULL CHECK(question_quest BETWEEN 1 AND 29999),
+              before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+              plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot) AND json_type(plan_snapshot)='object'),
+              PRIMARY KEY(character_id,acceptance_id),
+              FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+            );
+            """;
+        string[] tables; string[][] columns; string[] before;
+        using (var db = Open(path))
+        {
+            Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; PRAGMA user_version=14");
+            ChangeCompletionDefinition(db,sql => sql.Replace("44,49,64","44,64").Replace("65,67,70)","65,67)"));
+            Execute(db,"DROP TABLE " + skip); Execute(db,previousSkip);
+            Execute(db,"INSERT INTO character_quest_skip_receipts(rowid,character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot) VALUES(59,1,'history','34567890abcdef1234567890abcdef12',19,6217,6,7,'{\"Old\":true}')");
+            Execute(db,"CREATE TABLE v14_skip_trigger_calls(value INTEGER)");
+            Execute(db,"CREATE TRIGGER v14_skip_trigger AFTER INSERT ON character_quest_skip_receipts BEGIN INSERT INTO v14_skip_trigger_calls VALUES(1); END");
+            tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
+            before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
+        }
+        string rollback = Path.Combine(root,"quest-existing-v14-rollback.db"), unknown = Path.Combine(root,"quest-existing-v14-unknown.db");
+        using (var source = Open(path))
+        {
+            using (var target = Open(rollback)) source.BackupDatabase(target);
+            using (var target = Open(unknown)) source.BackupDatabase(target);
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            for (int index = 0; index < tables.Length; index++)
+                Check(Rows(db,tables[index],columns[index]) == before[index],"已有v14保留" + tables[index] + "全部旧列、rowid和数据");
+            Check(Query(db,"PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion,"旧任务v14按已发布版本升级，master只追加唯一v18");
+            Check(Query(db,"SELECT operation_id||':'||operation_kind FROM character_quest_skip_receipts WHERE rowid=59") is "34567890abcdef1234567890abcdef12:QuickClear",
+                "旧跳过回执使用原接取身份及QuickClear类型，不改冻结快照");
+            Check(Query(db,"SELECT count(*) FROM v14_skip_trigger_calls") is 0L,"保全历史跳过不重新触发业务触发器");
+            var names = ColumnNames(db,completion);
+            string selected = string.Join(',',names.Select(name => name switch
+            {
+                "\"acceptance_id\"" => "'4567890abcdef1234567890abcdef123'",
+                "\"condition_type\"" => "70", "\"plan_snapshot\"" => "'{}'",
+                "\"event_id\"" or "\"instance_id\"" or "\"task_attempt\"" or "\"epoch\"" or "\"clear_acceptance_id\"" => "NULL",
+                _ => name
+            }));
+            Execute(db,"INSERT INTO " + completion + "(" + string.Join(',',names) + ") SELECT " + selected + " FROM " + completion + " WHERE rowid=47");
+            Check(Query(db,"SELECT count(*) FROM character_quest_completion_receipts WHERE condition_type=70") is 1L,"对齐后的已有v14实际接受type70回执");
+            Execute(db,"INSERT INTO character_quest_skip_receipts VALUES(1,'history',NULL,NULL,NULL,7,8,'{}','567890abcdef1234567890abcdef1234','Manual')");
+            Check(Query(db,"SELECT count(*) FROM character_quest_skip_receipts WHERE operation_kind='Manual' AND question_quest IS NULL") is 1L,"手动跳过无问题时不伪造question或接取身份");
+            Execute(db,"INSERT INTO character_quest_skip_receipts VALUES(1,'history',NULL,NULL,NULL,8,9,'{}','67890abcdef1234567890abcdef12345','Ticket')");
+            Check(Query(db,"SELECT count(*) FROM character_quest_skip_receipts WHERE operation_kind='Ticket' AND acceptance_id IS NULL AND question_quest IS NULL") is 1L,"任务券以独立操作身份保存，不伪造普通接取或回答入口");
+            Reject<SqliteException>(() => Execute(db,"INSERT INTO character_quest_skip_receipts VALUES(1,'history',NULL,NULL,NULL,7,8,'{}','67890abcdef1234567890abcdef12345','QuickClear')"),"普通旅程跳过仍要求真实接取及问题");
+            Check(Query(db,"PRAGMA integrity_check") is "ok" && Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,"保全对齐后数据及历史外键完整");
+        }
+        string after = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == after,"最终v18再次初始化不重建、改写或重放回执");
+        string original = Snapshot(rollback);
+        using (var db = Open(rollback))
+        {
+            Execute(db,"CREATE TEMP TABLE character_quest_skip_receipts_quest_migration(collision INTEGER)");
+            Reject<SqliteException>(() => SqliteMigrations.Apply(db),"v18第二张表保全失败时回滚第一张表及数据");
+        }
+        Check(Snapshot(rollback) == original,"v18对齐失败保留两张原定义、全部历史字段和版本");
+        using (var db = Open(unknown)) Execute(db,"ALTER TABLE character_quest_skip_receipts ADD COLUMN unknown_value INTEGER");
+        original = Snapshot(unknown);
+        Reject<InvalidDataException>(() => new CharacterRepository(unknown),"不把未知v14结构当作可自动修复开发库");
+        Check(Snapshot(unknown) == original,"拒绝未知v14定义时保留原库");
+    }
+
+    private static void VerifyExistingQuestType49(string root)
+    {
+        string path = Path.Combine(root,"quest-existing-v14-before49.db");
+        using (var source = Open(Path.Combine(root,"quest-system-v13.db")))
+        using (var target = Open(path)) source.BackupDatabase(target);
+        string[] tables; string[][] columns; string[] before;
+        using (var db = Open(path))
+        {
+            Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; PRAGMA user_version=14");
+            ChangeCompletionDefinition(db,sql => sql.Replace("44,49,64","44,64"));
+            Execute(db,"INSERT INTO character_quest_skip_receipts VALUES(1,'history',NULL,NULL,NULL,7,8,'{\"Manual\":true}','4567890abcdef1234567890abcdef123','Manual')");
+            Execute(db,"INSERT INTO character_quest_skip_receipts VALUES(1,'history',NULL,NULL,NULL,8,9,'{\"Ticket\":true}','67890abcdef1234567890abcdef12345','Ticket')");
+            tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
+            before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(tables.Select((table,index) => Rows(db,table,columns[index])).SequenceEqual(before),
+                "已含70的旧v14补49仍保留全部表旧列、rowid、JSON、余额及序列");
+            Check(Query(db,"PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion,"旧任务v14的接取型扩展统一在v18迁移");
+            var names = ColumnNames(db,"character_quest_completion_receipts");
+            string selected = string.Join(',',names.Select(name => name switch
+            {
+                "\"acceptance_id\"" => "'567890abcdef1234567890abcdef1234'",
+                "\"condition_type\"" => "49", "\"plan_snapshot\"" => "'{}'",
+                "\"event_id\"" or "\"instance_id\"" or "\"task_attempt\"" or "\"epoch\"" or "\"clear_acceptance_id\"" => "NULL",
+                _ => name
+            }));
+            Execute(db,"INSERT INTO character_quest_completion_receipts(" + string.Join(',',names) + ") SELECT " +
+                selected + " FROM character_quest_completion_receipts WHERE rowid=47");
+            Check(Query(db,"SELECT count(*) FROM character_quest_completion_receipts WHERE condition_type=49") is 1L,
+                "接取型49使用普通非清图回执，不伪造副本字段");
+            Check(Query(db,"SELECT count(*) FROM ordinary_history_trigger_calls") is 1L,
+                "历史触发器不在保全中重放，新业务插入仍正常触发");
+            Check(Query(db,"PRAGMA integrity_check") is "ok" && Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "49约束保全后完整性与历史外键正常");
+        }
+        string committed = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == committed,"包含49的最终v18重开不重建或重发历史奖励");
+    }
+
+    private static void VerifyMasterQuest17Migration(string root)
+    {
+        string path = Path.Combine(root, "master-quest-v17.db");
+        using (var from = Open(Path.Combine(root, "quest-system-v13.db")))
+        using (var to = Open(path)) from.BackupDatabase(to);
+        string[] tables; string[][] columns; string[] before;
+        using (var db = Open(path))
+        {
+            RewindQuestReceiptsToV17(db);
+            Execute(db, "PRAGMA user_version=17");
+            Execute(db, "INSERT INTO character_quest_skip_receipts(rowid,character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot) VALUES(59,1,'history','34567890abcdef1234567890abcdef12',19,6217,6,7,'{\"Old\":true}')");
+            Execute(db, "INSERT INTO character_dungeon_state VALUES(1,'history',700,42,123,4,56)");
+            Execute(db, "INSERT INTO character_fatigue VALUES(1,'history',7,156,9,149,3,4)");
+            Execute(db, "INSERT INTO character_dungeon_fatigue_receipts(rowid,character_id,account,instance_id,task_attempt,map_id,epoch,generation,rule_id,before_revision,revision,before_state,after_state) VALUES(81,1,'history','abcdef1234567890abcdef1234567890',42,76126,9,7,'fatigue-old',6,7,'{\"Used\":6}','{\"Used\":7}')");
+            Execute(db, "INSERT INTO character_inventory_items(item_uid,character_id,account,item_core) VALUES(12345,1,'history','{\"Uid\":12345,\"Legacy\":true}')");
+            Execute(db, "INSERT INTO inventory_avatar_details VALUES(12345,'{\"Detail\":true}')");
+            Execute(db, "INSERT INTO character_quest_drop_receipts(rowid,character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items) VALUES(73,1,'history','1234567890abcdef1234567890abcdef',6,7,'{\"QuestDrop\":true}','[]')");
+            Execute(db, "INSERT INTO character_dungeon_growth_receipts SELECT character_id,account,'legacy','drop-old-run',quest_id,task_attempt,epoch,map_id,3,3,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts WHERE rowid=41");
+            AddDropDependencyFixture(db);
+            Execute(db, "CREATE TABLE v18_trigger_calls(value INTEGER)");
+            Execute(db, "CREATE INDEX v18_completion_index ON character_quest_completion_receipts(rule_id); CREATE INDEX v18_skip_index ON character_quest_skip_receipts(revision)");
+            Execute(db, "CREATE TRIGGER v18_completion_trigger AFTER INSERT ON character_quest_completion_receipts BEGIN INSERT INTO v18_trigger_calls VALUES(1); END");
+            Execute(db, "CREATE TRIGGER v18_skip_trigger AFTER INSERT ON character_quest_skip_receipts BEGIN INSERT INTO v18_trigger_calls VALUES(2); END");
+            tables = TableNames(db); columns = tables.Select(table => ColumnNames(db, table)).ToArray();
+            before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
+        }
+        string rollback = Path.Combine(root, "master-quest-v17-rollback.db");
+        using (var from = Open(path))
+        using (var to = Open(rollback)) from.BackupDatabase(to);
+        string rollbackBefore = Snapshot(rollback);
+        using (var db = Open(rollback))
+        {
+            Execute(db,"CREATE TEMP TABLE character_quest_skip_receipts_quest_migration(collision INTEGER)");
+            Reject<SqliteException>(() => SqliteMigrations.Apply(db),"v18第二张回执表重建失败时回滚v17第一张表和历史数据");
+        }
+        Check(Snapshot(rollback) == rollbackBefore,"v17到v18失败保留版本、全部DDL、rowid、UID、序列、疲劳及掉落账本");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db,"PRAGMA user_version") is 18L,"最新master17只执行唯一新增v18");
+            for (int index=0;index<tables.Length;index++)
+                Check(Rows(db,tables[index],columns[index]) == before[index],"v18保留master17原表全部历史列、rowid和数据：" + tables[index]);
+            Check(Query(db,"SELECT operation_id||':'||operation_kind FROM character_quest_skip_receipts WHERE rowid=59") is "34567890abcdef1234567890abcdef12:QuickClear",
+                "master旧跳过身份原样转为QuickClear操作，不改冻结规划");
+            Check(Query(db,"SELECT count(*) FROM v18_trigger_calls") is 0L &&
+                Query(db,"SELECT count(*) FROM sqlite_schema WHERE name IN('v18_completion_index','v18_skip_index','v18_completion_trigger','v18_skip_trigger')") is 4L,
+                "v18保留两张回执附属索引和触发器，不重新执行历史插入");
+            Check(Query(db,"SELECT used||':'||maximum||':'||used_maximum||':'||remaining||':'||context_auxiliary||':'||selection_auxiliary FROM character_fatigue") is "7:156:9:149:3:4" &&
+                Query(db,"SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'") is 12345L,
+                "v18不修改master疲劳余额、物品UID或序列");
+            Check(Query(db,"PRAGMA integrity_check") is "ok" && Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "v18保留成长、普通掉落三层集合和任务掉落历史外键");
+        }
+        string after = Snapshot(path);
+        _ = new CharacterRepository(path); _ = new AuthenticationRepository(path);
+        Check(Snapshot(path) == after,"v18重开不重建表、不重放领取或消耗");
+    }
+
+    private static void VerifyExistingQuestFatigueV14(string root)
+    {
+        string path = Path.Combine(root, "quest-v14-existing-fatigue.db");
+        using (var from = Open(Path.Combine(root,"master-quest-v17.db")))
+        using (var to = Open(path)) from.BackupDatabase(to);
+        string[] tables; string[][] columns; string[] before;
+        using (var db = Open(path))
+        {
+            RewindQuestReceiptsToV17(db);
+            ChangeReceiptDefinition(db,"character_dungeon_fatigue_receipts",sql => sql.Replace("CHECK(map_id>0)","CHECK(map_id BETWEEN 76121 AND 76126)"));
+            Execute(db,"PRAGMA user_version=14");
+            tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
+            before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
+        }
+        foreach (bool missing in new[] { false, true })
+        {
+            string rejected = Path.Combine(root,missing ? "v14-fatigue-partial.db" : "v14-fatigue-unknown.db");
+            using (var from = Open(path))
+            using (var to = Open(rejected))
+            {
+                from.BackupDatabase(to);
+                Execute(to,missing ? "DROP TABLE character_dungeon_fatigue_receipts" : "ALTER TABLE character_fatigue ADD COLUMN unknown_value INTEGER");
+            }
+            string snapshot = Snapshot(rejected);
+            Reject<InvalidDataException>(() => new CharacterRepository(rejected),"旧v14只兼容完整且精确已知的疲劳结构");
+            Check(Snapshot(rejected) == snapshot,"未知或部分疲劳表拒绝时保存全部原历史和v14版本");
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db,"PRAGMA user_version") is 18L,"已存在疲劳的任务v14保留master迁移顺序并升级至18");
+            for (int index=0;index<tables.Length;index++)
+                Check(Rows(db,tables[index],columns[index]) == before[index],"已知v14疲劳兼容保留全部原列、rowid和历史：" + tables[index]);
+            Check(Query(db,"SELECT count(*) FROM v18_trigger_calls") is 0L && Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "任务掉落、普通集合和疲劳一起参与原v16重建，不重放历史事件");
+            Execute(db,"INSERT INTO character_dungeon_fatigue_receipts SELECT character_id,account,'1234567890abcdef1234567890abcdef',task_attempt+1,81111,epoch,generation,rule_id,before_revision,revision,before_state,after_state FROM character_dungeon_fatigue_receipts WHERE rowid=81");
+            Check(Query(db,"SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE map_id=81111") is 1L,
+                "既有疲劳回执保留原值同时由已发布v16支持普通地图索引");
+        }
+        string after = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == after,"旧v14疲劳兼容后重开不重建或重置");
+    }
+
+    static void ChangeCompletionDefinition(SqliteConnection db,Func<string,string> change) =>
+        ChangeReceiptDefinition(db, "character_quest_completion_receipts", change);
+
+    static void ChangeReceiptDefinition(SqliteConnection db, string table, Func<string,string> change, string[]? columns = null)
+    {
+        string ddl = (string)Query(db,"SELECT sql FROM sqlite_schema WHERE name='" + table + "'")!;
+        var names = columns ?? ColumnNames(db,table);
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT sql FROM sqlite_schema WHERE tbl_name='" + table + "' AND type IN('index','trigger') AND sql IS NOT NULL";
+        var dependencies = new List<string>();
+        using (var reader = command.ExecuteReader()) while (reader.Read()) dependencies.Add(reader.GetString(0));
+        Execute(db,"CREATE TEMP TABLE saved_receipt AS SELECT rowid AS old_rowid,* FROM " + table);
+        Execute(db,"DROP TABLE " + table); Execute(db,change(ddl));
+        Execute(db,"INSERT INTO " + table + "(rowid," + string.Join(',',names) + ") SELECT old_rowid," + string.Join(',',names) + " FROM temp.saved_receipt");
+        Execute(db,"DROP TABLE temp.saved_receipt");
+        foreach (string dependency in dependencies) Execute(db,dependency);
+    }
+
+    // 按实际v17回执约束及八列定义回退，保留疲劳和普通副本历史，不只改版本号。
+    static void RewindQuestReceiptsToV17(SqliteConnection db)
+    {
+        ChangeCompletionDefinition(db, sql => sql.Replace("44,49,64", "44,64").Replace("65,67,70)", "65,67)"));
+        const string skip = "character_quest_skip_receipts";
+        string[] names = ColumnNames(db, skip).Where(name => name is not "\"operation_id\"" and not "\"operation_kind\"").ToArray();
+        ChangeReceiptDefinition(db, skip, _ => QuestSkipV17Schema, names);
+    }
+
+    const string QuestSkipV17Schema = """
+        CREATE TABLE character_quest_skip_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,
+          acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          parent_key INTEGER NOT NULL CHECK(parent_key BETWEEN 0 AND 2147483647),question_quest INTEGER NOT NULL CHECK(question_quest BETWEEN 1 AND 29999),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot) AND json_type(plan_snapshot)='object'),
+          PRIMARY KEY(character_id,acceptance_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
 
     private static void VerifyReleasedMigrations(string root)
     {
@@ -268,7 +535,8 @@ internal static class DatabaseSchemaTests
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
-                RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
+                if (oldVersion >= 17) RewindQuestReceiptsToV17(db);
+                else RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
                 if (oldVersion < 12) Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
@@ -594,27 +862,7 @@ internal static class DatabaseSchemaTests
         return string.Join('|', Query(db, "PRAGMA user_version"),
             Query(db, "SELECT group_concat(sql,'|') FROM (SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name)"),
             Query(db, "SELECT group_concat(name||':'||rootpage,'|') FROM sqlite_schema"),
-            Has("schema_metadata") ? Query(db, "SELECT group_concat(key||':'||value,'|') FROM schema_metadata") : null,
-            Has("old_data") ? Query(db, "SELECT group_concat(value,'|') FROM old_data") : null,
-            Has("characters") ? Query(db, "SELECT group_concat(account||':'||revision||':'||level||':'||experience||':'||gold,'|') FROM characters") : null,
-            Has("accounts") ? Query(db, "SELECT group_concat(account_id||':'||revision||':'||hex(salt)||':'||hex(password_hash)||':'||iterations,'|') FROM accounts") : null,
-            HasColumn("accounts", "disabled") ? Query(db, "SELECT group_concat(account_id||':'||disabled,'|') FROM accounts") : null,
-            Has("account_wallets") ? Query(db, "SELECT group_concat(account||':'||revision,'|') FROM account_wallets") : null,
-            HasColumn("account_wallets", "rental_points") ? Query(db, "SELECT group_concat(account||':'||rental_points,'|') FROM account_wallets") : null,
-            Has("character_skill_points") ? Query(db, "SELECT group_concat(character_id||':'||context||':'||sp||':'||tp,'|') FROM character_skill_points") : null,
-            Has("character_active_main_quests") ? Query(db, "SELECT group_concat(character_id||':'||slot||':'||quest_id||':'||condition_state,'|') FROM character_active_main_quests") : null,
-            HasColumn("character_active_main_quests", "acceptance_id") ? Query(db, "SELECT group_concat(character_id||':'||slot||':'||acceptance_id,'|') FROM character_active_main_quests") : null,
-            Has("character_quest_clear_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||event_id||':'||instance_id||':'||revision,'|') FROM character_quest_clear_receipts") : null,
-            Has("character_quest_completion_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||experience_amount||':'||revision||':'||rewards,'|') FROM character_quest_completion_receipts") : null,
-            HasColumn("character_quest_skip_receipts","plan_snapshot") ? Query(db,"SELECT group_concat(character_id||':'||acceptance_id||':'||parent_key||':'||question_quest||':'||before_revision||':'||revision||':'||plan_snapshot,'|') FROM character_quest_skip_receipts") : null,
-            Has("character_dungeon_growth_receipts") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||monster_key||':'||combat_sequence||':'||amount||':'||revision,'|') FROM character_dungeon_growth_receipts") : null,
-            Has("character_quest_drop_receipts") ? Rows(db, "character_quest_drop_receipts", ColumnNames(db, "character_quest_drop_receipts")) : null,
-            HasColumn("character_dungeon_drop_batches", "payload") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||payload,'|') FROM character_dungeon_drop_batches") : null,
-            HasColumn("character_dungeon_drop_objects", "payload") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||ground_key||':'||payload,'|') FROM character_dungeon_drop_objects") : null,
-            HasColumn("character_dungeon_drop_pickups", "payload") ? Query(db, "SELECT group_concat(character_id||':'||ground_key||':'||payload,'|') FROM character_dungeon_drop_pickups") : null);
-        bool Has(string table) => Query(db, $"SELECT count(*) FROM sqlite_schema WHERE name='{table}'") is 1L;
-        bool HasColumn(string table, string column) => Query(db,
-            $"SELECT count(*) FROM pragma_table_info('{table}') WHERE name='{column}'") is 1L;
+            string.Join('|', TableNames(db).Select(table => table + ':' + Rows(db, table, ColumnNames(db, table)))));
     }
 
     private static void RejectDatabase(Action action)

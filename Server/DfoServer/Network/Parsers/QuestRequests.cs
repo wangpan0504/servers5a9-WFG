@@ -5,9 +5,25 @@ namespace DfoServer.Network.Parsers;
 internal readonly record struct QuestFinishRequest(ushort QuestId, ushort RewardSelector, ushort Multiplier, ushort Reserved);
 internal readonly record struct QuestTriggerRequest(ushort QuestId, byte Value, byte Reserved);
 internal readonly record struct QuestClientTriggerRequest(ushort QuestId, byte? Channel, byte Value, byte Reserved);
+internal readonly record struct QuestHiddenOpenRequest(uint QuestId, uint NpcDialog, uint ItemUseCheck,
+    uint ItemUseState, uint StandByFirst, uint StandBySecond, uint ClientState);
 
 internal static class QuestRequests
 {
+    public static bool TryOpenHidden(ReadOnlySpan<byte> body, out QuestHiddenOpenRequest request)
+    {
+        request = default;
+        // Full03 02289490逐项写七个u32；884正文没有额外opcode前缀。
+        if (body.Length != 28) return false;
+        uint questId = BinaryPrimitives.ReadUInt32LittleEndian(body);
+        if (questId is 0 or >= 30000) return false;
+        request = new(questId, BinaryPrimitives.ReadUInt32LittleEndian(body[4..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(body[8..]), BinaryPrimitives.ReadUInt32LittleEndian(body[12..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(body[16..]), BinaryPrimitives.ReadUInt32LittleEndian(body[20..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(body[24..]));
+        return true;
+    }
+
     public static bool TryTrigger(ReadOnlySpan<byte> body, out QuestClientTriggerRequest request)
     {
         request = default;

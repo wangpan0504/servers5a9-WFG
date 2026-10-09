@@ -13,6 +13,9 @@ internal static class QuestRewardParameterTests
         var catalog = QuestRewardParameterCatalog.Parse(tokens, fixture.Resolve);
         Check(catalog.Difficulty["1"] == 1780 && catalog.Difficulty["10"] == 708 && catalog.Difficulty["G"] == 30,
             "difficulty完整字符串键保留");
+        Check(catalog.Difficulty["g"] == 30 && catalog.Difficulty.Keys.Contains("G", StringComparer.Ordinal) &&
+            !catalog.Difficulty.Keys.Contains("g", StringComparer.Ordinal) && !catalog.Difficulty.ContainsKey("unknown"),
+            "字母匹配忽略大小写，原始键保持且未知键不补倍率");
         Check(catalog.Experience.SequenceEqual(new QuestExperienceParameter[] { new(100, -1), new(126, 10), new(187, 0) }) &&
             catalog.Experience[0].NativeAdditionalPercent == 0 && catalog.Experience[1].NativeAdditionalPercent == 10,
             "EXP原始负值保留，仅正值作为追加倍率");

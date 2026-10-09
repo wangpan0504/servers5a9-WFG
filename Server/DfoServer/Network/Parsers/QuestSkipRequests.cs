@@ -5,9 +5,21 @@ namespace DfoServer.Network.Parsers;
 
 internal readonly record struct QuestQuickClearRequest(uint ParentKey);
 internal readonly record struct QuestBranchAnswer(uint QuestionQuestId, uint Answer);
+internal readonly record struct QuestManualSkipRequest(uint ItemContext);
 
 internal static class QuestSkipRequests
 {
+    public static bool TryManual(ReadOnlySpan<byte> body, out QuestManualSkipRequest request)
+    {
+        request = default;
+        if (body.Length != 4) return false;
+        request = new(BinaryPrimitives.ReadUInt32LittleEndian(body));
+        // 只有0是手册；非零保留真实票券物品上下文，不能解释为任务编号。
+        return true;
+    }
+
+    public static bool TryFinishManual(ReadOnlySpan<byte> body) => body.IsEmpty;
+
     public static bool TryQuickClear(ReadOnlySpan<byte> body, out QuestQuickClearRequest request)
     {
         request = default;

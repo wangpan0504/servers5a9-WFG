@@ -39,12 +39,15 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (character is null || !before.Ready || before.Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
             context.BlocksTownActions)
             return CommandResult.Unhandled;
-        // 匹配普通单人入场形状；未知模式和费用资格不套用该入口。
-        if (selection.Unknown5 != 0 || selection.Unknown7 != 0 || selection.Unknown8 != 0 || selection.Unknown9 != ushort.MaxValue ||
-            selection.Unknown11 != 0 || selection.Unknown15 != 0 || selection.Unknown20 != 0 || selection.Unknown21 != 0)
+        bool replay = selection.Unknown8 == 1;
+        // 回放由1459的完成事实/显式路线授权；附加Scene flags只保留审计，不套普通选图常量。
+        if (selection.Unknown5 != 0 || selection.Unknown11 != 0 || !replay &&
+            (selection.Unknown7 != 0 || selection.Unknown8 != 0 || selection.Unknown9 != ushort.MaxValue ||
+             selection.Unknown15 != 0 || selection.Unknown20 != 0 || selection.Unknown21 != 0))
             return await RejectAsync();
-        var receipt = context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms, drops, items, pieces: pieces);
-        log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Request = selection, receipt?.Snapshot.Identity });
+        var receipt = replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
+            context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms, drops, items, pieces: pieces);
+        log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Request = selection, receipt?.Snapshot.Identity });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
@@ -100,9 +103,11 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         var previousLearning = context.Session.Selected?.Learning;
         FormalDungeonDeathResult result;
         uint objectKey;
+        object audit;
         if (DungeonRequests.TryParseScriptedDeath(request.Body,out var scripted))
         {
             objectKey = scripted!.ObjectKey;
+            audit = scripted;
             result = context.Session.ObserveFormalDungeonScriptedDeath(new NativeDungeonScriptedDeathObservation(objectKey,scripted.RewriteFlag,
                 scripted.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body))),rewards,growth);
         }
@@ -118,26 +123,33 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                 Convert.ToHexString(SHA256.HashData(request.Body)))
             { Participants = statistics.Participants.Select(value => new NativeDungeonDeathParticipant(value.Kind,value.ObjectKey,
                 value.CumulativeHpDecrease,value.PositiveHpDecreaseCount)).ToImmutableArray() };
+            audit = observation;
             result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
         }
-        log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, result.Receipt?.Snapshot.Identity, result.Reward, result.ClearFact });
-        if (result.Outcome == DungeonRunOutcome.Duplicate) return CommandResult.Handled;
-        if (result.Outcome != DungeonRunOutcome.Accepted || result.Receipt is not { } receipt) return CommandResult.Unhandled;
+        var target = result.ReportedTarget;
+        log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, Report = audit,
+            Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.IsBlocking, target.CanReportDeath },
+            result.Receipt?.Snapshot.Identity, result.Reward, result.ClearFact });
+        if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
+            return CommandResult.Unhandled;
+        if (result.Receipt is not { } receipt) return CommandResult.Handled;
         if (result.SpecialChildRetired)
         {
             await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, []),
                 "formal_special_child_retired", () => context.Session.CanPublishFormalDungeon(receipt));
             return CommandResult.Handled;
         }
-        var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
-        var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints), state.GrowthCapsuleExperience,
-            state.ProficiencyLevel, state.ProficiencyExperience);
-        // 本服单人倍率1，显示本次额度；无额外奖励分量显式为0，不覆盖其他owner余额。
-        var display = new CharacterExperienceDisplay(result.Reward!.Amount, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         DungeonDropPacketItem[] dropRows = result.Drop is { } drop ?
             [new(drop.Reservation.GroundKey, drop.Reservation.RecordSlot, drop.Core, drop.Reservation.X, drop.Reservation.Y)] : [];
         await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, dropRows), "formal_monster_death", Guard);
+        // 友方、非阻挡对象只应答退场，不发布经验、任务或结算；未知和已结算敌人仅审计。
+        if (result.Reward is not { } reward) return CommandResult.Handled;
+        var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
+        var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints), state.GrowthCapsuleExperience,
+            state.ProficiencyLevel, state.ProficiencyExperience);
+        // 本服单人倍率1，显示本次额度；无额外奖励分量显式为0，不覆盖其他owner余额。
+        var display = new CharacterExperienceDisplay(reward.Amount, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0);
         foreach (ushort key in result.CulledMonsterKeys)
             await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(key, []), "formal_clear_room_cull", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);

@@ -9,6 +9,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,
     DungeonGroundObject? Drop = null, byte? PreviousLevel = null)
 {
+    public DungeonPlannedMonster? ReportedTarget { get; init; }
     public bool SpecialChildRetired { get; init; }
     public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
     public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];

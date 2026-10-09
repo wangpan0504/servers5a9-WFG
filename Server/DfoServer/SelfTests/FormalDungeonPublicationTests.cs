@@ -139,7 +139,8 @@ internal static class FormalDungeonPublicationTests
                 Check(f.LostResult!.Calls == 2 && f.LostResult.LastDuplicate && f.LostResult.SamePrepared,
                     "结果不明恢复使用同一候选，命中持久receipt只读重放");
             await commands.DispatchAsync(context, death);
-            Check(f.Count() == 1 && stream.Frames.Count == 2, "确认后再次重试没有通知或第二份经验");
+            Check(f.Count() == 1 && f.Read().Learning.Experience == 104 && stream.Frames.Count == 2,
+                "确认后再次重试只审计忽略，不发第二份经验");
         }
 
         (FormalDungeonReceipt Receipt, DungeonPlannedMonster Boss) PrepareBoss(Fixture f)
@@ -471,6 +472,7 @@ internal static class FormalDungeonPublicationTests
         public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null) => inner.CommitLearning(owner, expected, learning, totalSp, totalTp);
         public Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitSkillLayout(owner, expected, learning);
         public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
+        public Character AdvanceAcceptedStoryLevel(AccountOwners.Lease owner, Character expected) => inner.AdvanceAcceptedStoryLevel(owner, expected);
         public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);

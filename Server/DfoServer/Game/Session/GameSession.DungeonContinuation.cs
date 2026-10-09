@@ -46,21 +46,28 @@ internal sealed partial class GameSession
         });
     }
 
-    // 先确认72{1,3}，再发布24；反序会由ACK72覆盖24设置的下一场景选项。
-    public (TownTravelReceipt? Receipt, bool Duplicate) ConfirmFormalDungeonContinuationBoundary() => owner.Execute(() =>
+    // 在72{1,1}结束旧场景，保留后继规划交给客户端24后的真实15。
+    public TownTravelReceipt? LeaveFormalDungeonForContinuation() => owner.Execute(() =>
     {
-        if (pendingDungeonContinuation is not { } pending) return ((TownTravelReceipt?)null,false);
+        if (pendingDungeonContinuation is not { } pending) return null;
         if (pending.Return is { } previous)
             return Ready && Phase == SessionPhase.Town && formalDungeon is null && previous.Generation == owner.Generation &&
                 previous.SelectionEpoch == SelectionEpoch && ReferenceEquals(Selected,previous.Character)
-                ? (previous,true) : ((TownTravelReceipt?)null,false);
-        if (!Ready || !CanEnterFormalDungeon(pending.Previous)) return ((TownTravelReceipt?)null,false);
+                ? previous : null;
+        if (!Ready || !CanEnterFormalDungeon(pending.Previous)) return null;
         var returning = ReturnFromFormalDungeon();
         if (returning is not null) pendingDungeonContinuation = pending with { Return = returning };
-        return (returning,false);
+        return returning;
     });
 
-    // external 的真实24→客户端15边界：15只确认旧场景结束，不重新打开普通选图。
+    // 连图退场中的1,3是旧结算页尾包；回复ACK72会重新写入旧页面的操作状态。
+    public bool HasFormalDungeonContinuation() => owner.Execute(() =>
+        pendingDungeonContinuation is { Return: { } returning } && Ready &&
+        returning.Generation == owner.Generation && returning.SelectionEpoch == SelectionEpoch &&
+        (Phase == SessionPhase.Town && ReferenceEquals(Selected,returning.Character) ||
+            pendingDungeonContinuation.Entered is { } entered && CanPublishFormalDungeon(entered)));
+
+    // external 的真实24→客户端15边界：15确认旧场景结束，再安装后继，不重新打开普通选图。
     public (bool Pending, FormalDungeonReceipt? Dungeon, TownTravelReceipt? Town, FormalDungeonReceipt? Replay) CompleteFormalDungeonContinuation() => owner.Execute(() =>
     {
         if (pendingDungeonContinuation is not { } pending) return (false,(FormalDungeonReceipt?)null,(TownTravelReceipt?)null,(FormalDungeonReceipt?)null);

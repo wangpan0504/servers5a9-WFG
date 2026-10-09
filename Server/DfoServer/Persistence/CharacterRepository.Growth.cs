@@ -127,7 +127,7 @@ internal sealed partial class CharacterRepository
         if (quests is not null)
         {
             var active = prepared.Monster.AiCharacter is null
-                ? QuestHuntProgress.MonsterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster.MonsterId)
+                ? QuestHuntProgress.MonsterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster)
                 : QuestHuntProgress.AiCharacterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster.MonsterId);
             if (questDrops is not null) active = QuestInventoryProgress.Refresh(active,inventoryCharacter.Inventory,quests,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             active = QuestStateProgress.Refresh(active,current with { Level = plan.TargetLevel, Learning = plan.Learning,

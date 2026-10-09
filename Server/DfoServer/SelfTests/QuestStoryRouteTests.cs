@@ -66,8 +66,9 @@ internal static class QuestStoryRouteTests
                         "终点基础地图未清除时允许资源声明的同坐标剧情换层");
                     receipt = f.Session.CompleteFormalDungeonLoading()!;
                     That(receipt.Snapshot.CurrentMap == entry.BossMap && f.Session.ObserveFormalDungeonDeath(
-                        FormalDungeonSessionTests.Observation(baseReceipt,baseReceipt.Monsters.Monsters[0]),kills,growth).Outcome == DungeonRunOutcome.Rejected,
-                        "换层使用真实目标地图并隔离基础层旧对象");
+                        FormalDungeonSessionTests.Observation(baseReceipt,baseReceipt.Monsters.Monsters[0]),kills,growth)
+                            is { Outcome: DungeonRunOutcome.Accepted, Reward: null, Receipt: null },
+                        "换层使用真实目标地图，基础层旧对象仅审计忽略");
                 }
                 foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).OrderBy(row => row.SpawnType == 3).ToArray())
                 {
@@ -90,7 +91,7 @@ internal static class QuestStoryRouteTests
                     else
                     {
                         That(f.Session.ObserveFormalDungeonScriptedDeath(new NativeDungeonScriptedDeathObservation(65536,0x11,true,new string('C',64)),kills,growth)
-                            .Outcome == DungeonRunOutcome.Rejected, "无参与者报告仍拒绝当前实例不存在的对象");
+                            .Outcome == DungeonRunOutcome.Rejected, "无参与者报告仍要求key能由ushort死亡通知表达");
                         That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,monster),kills,growth).Outcome == DungeonRunOutcome.Accepted,
                             $"任务{scenario.Id}房间真实阻塞对象提交");
                     }

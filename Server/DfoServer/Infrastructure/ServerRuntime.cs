@@ -49,6 +49,7 @@ internal static class ServerRuntime
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
         IGameCommandModule dungeon;
         IGameCommandModule? settlement = null;
+        IGameCommandModule? questReplay = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
@@ -61,6 +62,7 @@ internal static class ServerRuntime
                 drops, itemResources.Items, itemResources.EpicPieces,questProjection);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection,itemResources.EpicPieces);
+            questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces);
         }
         else
         {
@@ -90,7 +92,9 @@ internal static class ServerRuntime
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new DungeonSelectionHandler(projection, log),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
-            new QuestQuickClearHandler(quests,questConnections,questProjection,log),
+            new QuestHiddenHandler(quests,log),
+            new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning),
+            new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection),
@@ -101,6 +105,7 @@ internal static class ServerRuntime
         foreach (var module in modules)
             module.Register(commands);
         settlement?.Register(commands);
+        questReplay?.Register(commands);
         commands.Seal();
         var login = new LoginHandler(options, owners, accounts, log);
         var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests);

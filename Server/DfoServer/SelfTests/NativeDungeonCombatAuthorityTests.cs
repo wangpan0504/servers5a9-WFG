@@ -13,52 +13,65 @@ internal static class NativeDungeonCombatAuthorityTests
     {
         int checks = Count;
         var (authority,run) = Fixture(withFriendly: true);
-        var report = Observation(100) with { Participants = [new(0x0111,99,0,0),new(0xF111,102,1,0)] };
-        That(Rejected(authority.ValidateAndIssue(run,run.Snapshot.Identity,report)),"加载前未发布的友方APC不能授权来源");
+        var report = Observation(100) with { ReporterKey = ushort.MaxValue, Participants = [new(0x0111,99,0,0),new(0xF111,102,1,0)] };
+        That(Rejected(authority.ValidateAndIssue(run,run.Snapshot.Identity,report)),"死亡报告仍须当前实例完成加载");
         Load(run);
         var identity = run.Snapshot.Identity;
-        foreach (var invalid in new[]
+        foreach (uint key in new uint[] { 0,999,102,103,200 })
+            That(authority.ValidateAndIssue(run,identity,report with { MonsterKey = key }) is { Outcome: DungeonRunOutcome.Accepted, Death:null },
+                "未知、友方、neutral和非本房目标不因身份拒绝，由Session分类且不产生奖励事实");
+        That(Rejected(authority.ValidateAndIssue(run,identity,report with { MonsterKey = 999, ChecksumMatches = false })),
+            "无奖励应答也保留正文校验");
+        foreach (var source in new[]
         {
             report with { Participants = [] }, report with { ReporterKey = 98 },
-            report with { Participants = [new(0xF111,103,1,1)] }, // neutral
-            report with { Participants = [new(0xF111,104,1,1)] }, // hostile
-            report with { Participants = [new(0xF111,201,1,1)] }, // future room
+            report with { Participants = [new(0xF111,103,1,1)] },
+            report with { Participants = [new(0xF111,104,1,1)] },
+            report with { Participants = [new(0xF111,201,1,1)] },
             report with { Participants = [new(0xF111,65535,1,1)] },
             report with { Participants = [new(0x0211,99,1,1)] },
             report with { Participants = [new(0x0111,98,1,1),new(0xF111,102,1,1)] },
-            report with { MonsterKey = 102 }, report with { MonsterKey = 200 }, report with { ChecksumMatches = false }
+            report with { Participants = [new(0xABCD,65535,ulong.MaxValue,ushort.MaxValue)] }
         })
-            That(Rejected(authority.ValidateAndIssue(run,identity,invalid)),"未知/敌方/neutral/未来房来源与非当前存活敌人仍拒绝");
+        {
+            var (sourceAuthority,sourceRun) = Fixture(); Load(sourceRun);
+            That(sourceAuthority.ValidateAndIssue(sourceRun,sourceRun.Snapshot.Identity,source) is { Outcome: DungeonRunOutcome.Accepted, Death:not null },
+                "Reporter和全部来源kind/key/HP只作审计，不按本人、阵营、是否已发布或数量授权");
+        }
         var accepted = authority.ValidateAndIssue(run,identity,report);
         That(accepted.Outcome == DungeonRunOutcome.Accepted && accepted.Death!.CombatSequence == 1,
-            "本角色与实际已发布友方APC的全来源集合可签发，不加HP次数或比例门禁");
+            "FFFF带完整参与者可签发，之前无奖励目标不消费事实序号");
         That(Duplicate(authority.ValidateAndIssue(run,identity,report with { Participants = report.Participants.ToArray().ToImmutableArray() }),accepted.Death!),
-            "相同完整观察重新解析为新不可变数组仍精确幂等");
+            "同目标重复观察复用同一事实，不重新签发");
         foreach (var changed in new[]
         {
+            report with { ReporterKey = 98 }, report with { Participants = [new(0xABCD,65535,0,0)] },
             report with { Participants = report.Participants.Reverse().ToImmutableArray() },
             report with { Participants = [report.Participants[0],report.Participants[1] with { CumulativeHpDecrease = 2 }] },
             report with { Participants = [report.Participants[0],report.Participants[1] with { PositiveHpDecreaseCount = 1 }] },
             report with { BodySha256 = new string('B',64) }
         })
-            That(Rejected(authority.ValidateAndIssue(run,identity,changed)),"原序或任一来源统计/正文变化不能替换原签发事实");
+            That(Duplicate(authority.ValidateAndIssue(run,identity,changed),accepted.Death!),"来源、原序和正文变化仍返回原事实，不创建新奖励身份");
         Confirm(run,accepted.Death!);
         var onlyApc = report with { MonsterKey = 101, Participants = [new(0xF111,102,0,0)] };
         var second = authority.ValidateAndIssue(run,identity,onlyApc);
-        That(second.Outcome == DungeonRunOutcome.Accepted,"原生仅APC来源允许，不强制玩家贡献");
+        That(second.Outcome == DungeonRunOutcome.Accepted && second.Death!.CombatSequence == 2,
+            "FFFF仅APC来源允许，不强制玩家贡献且新目标只递增一次序号");
         Confirm(run,second.Death!);
+        That(Duplicate(authority.ValidateAndIssue(run,identity,onlyApc with { Participants = [new(0x0211,201,0,0)] }),second.Death!),
+            "已提交后改变来源也不重发奖励身份");
         That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),new(1,0)).Outcome == DungeonRunOutcome.Accepted,"确认死亡后沿原清房合同过房");
         That(Rejected(authority.ValidateAndIssue(run,run.Snapshot.Identity,report with { MonsterKey = 200 })),"过房loading仍不能报死亡");
         Load(run);
         var followed = onlyApc with { MonsterKey = 200 };
-        That(run.IsPublishedFriendlyAiCharacter(102) && run.IsPublishedFriendlyAiCharacter(201) &&
-            authority.ValidateAndIssue(run,run.Snapshot.Identity,followed).Outcome == DungeonRunOutcome.Accepted,
-            "本实例已加载友方APC保留跟随key，可参与下一房真实敌人死亡");
+        That(authority.ValidateAndIssue(run,run.Snapshot.Identity,followed).Outcome == DungeonRunOutcome.Accepted,
+            "跨房保留的APC来源不会阻止下一房死亡报告");
         That(Rejected(authority.ValidateAndIssue(run,identity,followed)),"跟随来源不放宽当前map/epoch身份");
         var (nextAuthority,nextRun) = Fixture(); Load(nextRun);
-        That(Rejected(nextAuthority.ValidateAndIssue(nextRun,nextRun.Snapshot.Identity,report)) &&
-            Rejected(nextAuthority.ValidateAndIssue(nextRun,identity,Observation(100))),"新run不继承旧APC发布身份与旧实例观察");
-        Console.WriteLine($"PASS {Count-checks} 原生友方APC、多来源、跨房跟随与重放断言");
+        var next = nextAuthority.ValidateAndIssue(nextRun,nextRun.Snapshot.Identity,report);
+        That(next.Outcome == DungeonRunOutcome.Accepted && next.Death!.EventId != accepted.Death!.EventId &&
+            Rejected(nextAuthority.ValidateAndIssue(nextRun,identity,Observation(100))),"来源只是审计，新run独立事实不继承旧实例观察");
+        Console.WriteLine($"PASS {Count-checks} 原生来源审计、无奖励目标与提交身份去重断言");
     }
 
     public static void Run()
@@ -83,12 +96,11 @@ internal static class NativeDungeonCombatAuthorityTests
 
         foreach (var invalid in new[]
         {
-            report with { MonsterKey = 65536 }, report with { MonsterKey = 999 }, report with { MonsterKey = 102 },
-            report with { ReporterKey = 98 }, report with { ParticipantKey = 98 }, report with { ParticipantKind = 0x0211 },
+            report with { MonsterKey = 65536 },
             report with { ChecksumMatches = false }, report with { BodySha256 = new string('A', 63) },
             report with { BodySha256 = new string('G', 64) }, report with { BodySha256 = null! }
         })
-            That(Rejected(authority.ValidateAndIssue(run, identity, invalid)), "怪物/归属/检查值/完整指纹门槛拒绝");
+            That(Rejected(authority.ValidateAndIssue(run, identity, invalid)), "协议范围、检查值与完整指纹格式仍拒绝");
 
         var first = authority.ValidateAndIssue(run, identity, report);
         var death = first.Death!;
@@ -97,26 +109,28 @@ internal static class NativeDungeonCombatAuthorityTests
             "首次资格通过才签发；之前拒绝不消费序号");
         That(run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 100, 101 }),
             "签发不直接消费死亡、清房或奖励状态");
-        That(Duplicate(authority.ValidateAndIssue(run, identity, report), death), "精确重放返回原事实，不重新签发");
+        That(Duplicate(authority.ValidateAndIssue(run, identity, report), death), "同提交身份重放返回原事实，不重新签发");
         foreach (var changed in new[]
         {
             report with { ReporterKey = 98 }, report with { ParticipantKind = 0x0211 }, report with { ParticipantKey = 98 },
             report with { CumulativeHpDecrease = 505, Unknown18 = 521 }, report with { PositiveHpDecreaseCount = 4, Unknown26 = 4 },
             report with { RewriteFlag = 1 }, report with { SpawnLevel = 2 }, report with { SpawnHpSnapshot = 503 },
-            report with { Unknown18 = 521 }, report with { Unknown26 = 4 }, report with { ChecksumMatches = false },
+            report with { Unknown18 = 521 }, report with { Unknown26 = 4 },
             report with { BodySha256 = new string('B', 64) }, report with { BodySha256 = new string('a', 64) }
         })
-            That(Rejected(authority.ValidateAndIssue(run, identity, changed)),
-                "同key完整观察任意变化拒绝，包括未知前缀变化所反映的正文指纹");
+            That(Duplicate(authority.ValidateAndIssue(run, identity, changed),death),
+                "同key的来源和统计变化只作审计，继续返回原提交事实");
+        That(Rejected(authority.ValidateAndIssue(run,identity,report with { ChecksumMatches = false })),
+            "已签发缓存也不绕过正文校验");
 
         var preparation = run.PrepareConfirmedDeath(death);
         var pending = preparation.Pending!;
         That(preparation.Outcome == DungeonRunOutcome.Accepted && run.IsPendingDeath(pending), "原事实可进入现有Prepare");
-        var pendingReplay = authority.ValidateAndIssue(run, identity, report);
+        var pendingReplay = authority.ValidateAndIssue(run, identity, report with { ReporterKey = ushort.MaxValue, BodySha256 = new string('B',64) });
         That(Duplicate(pendingReplay, death) && ReferenceEquals(run.PrepareConfirmedDeath(pendingReplay.Death!).Pending, pending),
-            "SQL结果未定的重试仍使用原事实和同一准备对象");
+            "SQL结果未定时来源正文变化的重试仍使用原事实和同一准备对象");
         That(run.CancelUncommittedDeath(pending), "明确SQL回滚取消原准备");
-        var rollbackReplay = authority.ValidateAndIssue(run, identity, report);
+        var rollbackReplay = authority.ValidateAndIssue(run, identity, report with { ParticipantKind = 0xABCD,ParticipantKey = 65535 });
         var retried = run.PrepareConfirmedDeath(rollbackReplay.Death!);
         That(Duplicate(rollbackReplay, death) && retried.Outcome == DungeonRunOutcome.Accepted &&
             ReferenceEquals(retried.Pending!.Death, death) && !ReferenceEquals(retried.Pending, pending),
@@ -137,7 +151,8 @@ internal static class NativeDungeonCombatAuthorityTests
             Rejected(authority.ValidateAndIssue(run, run.Snapshot.Identity, report)), "过房旧epoch及Loading中的缓存都拒绝");
         Load(run);
         var bossIdentity = run.Snapshot.Identity;
-        That(Rejected(authority.ValidateAndIssue(run, bossIdentity, report)), "当前新房不能借旧房缓存事实");
+        That(authority.ValidateAndIssue(run,bossIdentity,report) is { Outcome: DungeonRunOutcome.Duplicate, Death:null },
+            "当前新房旧目标只审计忽略，不携带旧房奖励事实");
         var bossReport = Observation(102);
         var boss = authority.ValidateAndIssue(run, bossIdentity, bossReport);
         That(boss.Outcome == DungeonRunOutcome.Accepted && boss.Death!.CombatSequence == 3, "Boss房合成观察独立签发");
@@ -147,10 +162,10 @@ internal static class NativeDungeonCombatAuthorityTests
             Duplicate(authority.ValidateAndIssue(run, settlementIdentity, bossReport), boss.Death!),
             "Settlement本房精确重复返回原事实，接受Run明确的一次终止epoch推进");
         That(Rejected(authority.ValidateAndIssue(run, bossIdentity, bossReport)), "Settlement旧expected epoch先拒绝");
-        That(Rejected(authority.ValidateAndIssue(run, settlementIdentity, bossReport with { Unknown18 = 521 })) &&
-            Rejected(authority.ValidateAndIssue(run, settlementIdentity, secondReport)) &&
-            Rejected(authority.ValidateAndIssue(run, settlementIdentity, Observation(103))),
-            "Settlement篡改、旧房及无缓存观察均不产生新事实");
+        That(Duplicate(authority.ValidateAndIssue(run,settlementIdentity,bossReport with { Unknown18 = 521 }),boss.Death!) &&
+            authority.ValidateAndIssue(run,settlementIdentity,secondReport) is { Outcome: DungeonRunOutcome.Duplicate, Death:null } &&
+            authority.ValidateAndIssue(run,settlementIdentity,Observation(103)) is { Outcome: DungeonRunOutcome.Accepted, Death:null },
+            "Settlement同目标复用原事实，旧房和未知目标均不产生新奖励身份");
         That(run.Return(settlementIdentity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted &&
             Rejected(authority.ValidateAndIssue(run, run.Snapshot.Identity, bossReport)), "Returned不放行缓存或新签发");
 
@@ -202,9 +217,9 @@ internal static class NativeDungeonCombatAuthorityTests
                 "总次数多于本人次数的控制技能统计可签发合成事实 " + sample.Key);
             That(Duplicate(sampleAuthority.ValidateAndIssue(sampleRun, sampleIdentity, sampleReport), accepted.Death!),
                 "控制技能统计精确重放不重复签发 " + sample.Key);
-            That(Rejected(sampleAuthority.ValidateAndIssue(sampleRun, sampleIdentity,
-                sampleReport with { Unknown18 = sampleReport.Unknown18 + 1 })),
-                "同key改写相容统计也不能替换已签发事实 " + sample.Key);
+            That(Duplicate(sampleAuthority.ValidateAndIssue(sampleRun,sampleIdentity,
+                sampleReport with { Unknown18 = sampleReport.Unknown18+1 }),accepted.Death!),
+                "同key改写统计仍恢复唯一签发事实 " + sample.Key);
             That(sampleRun.Move(sampleIdentity, Guid.NewGuid(), new(1, 0)).Outcome == DungeonRunOutcome.Rejected,
                 "控制技能报告签发后尚未提交仍不能过房 " + sample.Key);
             Confirm(sampleRun, accepted.Death!);
@@ -234,7 +249,7 @@ internal static class NativeDungeonCombatAuthorityTests
                 "客户端等级、HP、次数、统计前缀和改写标志不作为死亡门槛");
             Confirm(statsRun, accepted.Death!);
             That(Duplicate(statsAuthority.ValidateAndIssue(statsRun, statsRun.Snapshot.Identity, sample), accepted.Death!),
-                "统计不设门槛仍保留已提交事实的完整重放去重");
+                "统计不设门槛仍保留已提交事实的身份去重");
         }
 
         foreach (string hex in new[]
@@ -273,9 +288,9 @@ internal static class NativeDungeonCombatAuthorityTests
         That(revisitRun.Move(revisitRun.Snapshot.Identity, Guid.NewGuid(), new(0, 0)).Outcome == DungeonRunOutcome.Accepted,
             "合成中间房清空后回访首房");
         Load(revisitRun);
-        That(Rejected(revisitAuthority.ValidateAndIssue(revisitRun, revisitRun.Snapshot.Identity, report)) &&
+        That(revisitAuthority.ValidateAndIssue(revisitRun,revisitRun.Snapshot.Identity,report) is { Outcome: DungeonRunOutcome.Duplicate, Death:null } &&
             Rejected(revisitAuthority.ValidateAndIssue(revisitRun, firstRoomIdentity, report)),
-            "回访同地图也不能借旧签发epoch或旧expected重新接受观察");
+            "回访同地图的旧epoch目标只审计忽略，旧expected仍拒绝且不能重新发奖");
 
         // 数值取970D实例实收Boss统计，但run、checksum布尔和Parser输出均为合成前提；不替代88B解析/实机。
         var (rewriteAuthority, rewriteRun) = BossFixture();
@@ -294,13 +309,13 @@ internal static class NativeDungeonCombatAuthorityTests
                 "Boss改写不能绕过角色/任务/尝试/实例/epoch身份");
         foreach (var invalid in new[]
         {
-            rewriteReport with { MonsterKey = 65536 }, rewriteReport with { MonsterKey = 284 },
-            rewriteReport with { ReporterKey = 2 }, rewriteReport with { ParticipantKey = 2 },
-            rewriteReport with { ParticipantKind = 0x0211 }, rewriteReport with { ChecksumMatches = false },
+            rewriteReport with { MonsterKey = 65536 }, rewriteReport with { ChecksumMatches = false },
             rewriteReport with { BodySha256 = new string('G', 64) }
         })
             That(Rejected(rewriteAuthority.ValidateAndIssue(rewriteRun, rewriteIdentity, invalid)),
-                "Boss死亡仍核验当前怪物、本人、checksum与指纹");
+                "Boss死亡仍核验协议范围、checksum与指纹格式");
+        That(rewriteAuthority.ValidateAndIssue(rewriteRun,rewriteIdentity,rewriteReport with { MonsterKey = 284 }) is
+            { Outcome: DungeonRunOutcome.Accepted, Death:null },"Boss房未知目标只审计忽略，不签发奖励事实");
         foreach (var ordinaryFixture in new[]
         {
             BossFixture(rank: "[normal]"), BossFixture(startAtBoss: false)
@@ -335,8 +350,11 @@ internal static class NativeDungeonCombatAuthorityTests
             rewriteReport with { CumulativeHpDecrease = 2562 }, rewriteReport with { PositiveHpDecreaseCount = 13 },
             rewriteReport with { BodySha256 = new string('B', 64) }
         })
-            That(Rejected(rewriteAuthority.ValidateAndIssue(rewriteRun, rewriteIdentity, changed)),
-                "Boss同key改载荷不重签，即使新统计也相容");
+            That(Duplicate(rewriteAuthority.ValidateAndIssue(rewriteRun,rewriteIdentity,changed),rewritten.Death!),
+                "Boss同key改载荷仍恢复原奖励身份，不重新签发");
+        That(rewriteAuthority.MatchesIssuedSpawn(rewriteRun,283,rewriteReport.SpawnLevel,rewriteReport.SpawnHpSnapshot) &&
+            !rewriteAuthority.MatchesIssuedSpawn(rewriteRun,283,rewriteReport.SpawnLevel+1,rewriteReport.SpawnHpSnapshot),
+            "117已有查询保留首次签发的spawn观察，不被后续审计报告改写");
         var rewritePending = rewriteRun.PrepareConfirmedDeath(rewritten.Death!);
         That(rewritePending.Outcome == DungeonRunOutcome.Accepted &&
             rewriteRun.CancelUncommittedDeath(rewritePending.Pending!), "Boss原事实的未提交准备可取消");
@@ -360,7 +378,12 @@ internal static class NativeDungeonCombatAuthorityTests
         var unchanged = BossObservation() with { RewriteFlag = 0, Unknown18 = 2760, Unknown26 = 12 };
         That(unchangedAuthority.ValidateAndIssue(unchangedRun, unchangedRun.Snapshot.Identity, unchanged).Outcome == DungeonRunOutcome.Accepted,
             "已规划Boss的flag0报告也接受死亡");
-        Console.WriteLine($"PASS {Count - checks} 原生死亡归属与重放合成断言（非实机）");
+        var (culledAuthority,culledRun) = BossFixture(withMinion: true); Load(culledRun);
+        Confirm(culledRun,culledAuthority.ValidateAndIssue(culledRun,culledRun.Snapshot.Identity,BossObservation()).Death!);
+        That(culledRun.IsCulledMonster(284) && culledAuthority.ValidateAndIssue(culledRun,culledRun.Snapshot.Identity,
+            BossObservation() with { MonsterKey = 284, ReporterKey = ushort.MaxValue, ParticipantKind = 0xABCD }) is
+            { Outcome: DungeonRunOutcome.Duplicate, Death:null },"Boss清场后杂兵补报只审计忽略，不签发额外击杀或奖励事实");
+        Console.WriteLine($"PASS {Count - checks} 原生死亡实例、正文完整性与提交身份合成断言（非实机）");
 
     }
 
@@ -427,7 +450,7 @@ internal static class NativeDungeonCombatAuthorityTests
     // 只合成生成身份及死亡核验上下文；不是加载PVF、创建真实Boss或完成生产提交的证据。
     static (NativeDungeonCombatAuthority Authority, SinglePlayerDungeonRun Run) BossFixture(
         uint dungeonId = 3, uint questId = 3145, int mapId = 76126, int monsterId = 107000903,
-        string rank = "[boss]", int level = 3, bool startAtBoss = true)
+        string rank = "[boss]", int level = 3, bool startAtBoss = true, bool withMinion = false)
     {
         var authority = new NativeDungeonCombatAuthority();
         var map = new DungeonMap(startAtBoss ? "boss" : "map", new(0, 0), mapId, "map/fixture-native-rewrite-boss.map");
@@ -437,7 +460,8 @@ internal static class NativeDungeonCombatAuthorityTests
         var entry = new DungeonEntryPlan(1, 17, dungeonId, questId, 0, 0, maze, map, bossMap);
         var source = new DungeonRoomMonster(monsterId, Array.AsReadOnly(new[] { monsterId, 0, level, 831, 239, 0, 1, 1 }),
             "[fixed]", rank, "monster/fixture-native-rewrite-boss.mob");
-        var plan = DungeonMonsterPlan.FromRoom(new(map, [source], [], []), 1, 283);
+        DungeonRoomMonster[] sources = withMinion ? [source,source with { RankKind = "[normal]" }] : [source];
+        var plan = DungeonMonsterPlan.FromRoom(new(map, sources, [], []), 1, 283);
         DungeonMonsterPlan[] plans = startAtBoss ? [plan] :
             [plan, DungeonMonsterPlan.FromRoom(new(bossMap, [source], [], []), 1, 284)];
         DungeonRouteConnection[] connections = startAtBoss ? [] : [new(map.Position, bossMap.Position)];

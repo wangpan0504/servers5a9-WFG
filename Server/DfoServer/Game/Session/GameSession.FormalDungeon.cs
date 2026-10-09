@@ -47,8 +47,7 @@ internal sealed partial class GameSession
     {
         var (expected, epoch) = owner.Execute(() => (Ready && CanEnterFormalDungeon(retry) &&
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch));
-        if (expected is null ||
-            expected.DungeonState is not { } state)
+        if (expected is null || expected.DungeonState is null)
             return null;
         var done = QuestEligibility.Completed(expected);
         if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
@@ -70,16 +69,23 @@ internal sealed partial class GameSession
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
         if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _, allowClearedQuest, quest,draw,questCatalog))
             return null;
-        if (entry!.IsOrdinary && expected.Fatigue is not { Remaining: > 0 }) return null;
-        var ordinaryReturn = entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
-        if (entry.IsOrdinary && ordinaryReturn is null) return null;
-        state.Validate();
         if (entry!.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
             return null;
         if (questId == 0 && entry.RouteQuestId > 0 && questCatalog is not null &&
             expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId) &&
             !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
                 questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return null;
+        return PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces);
+    }
+
+    PreparedFormalDungeon? PrepareFormalDungeonResources(Character expected,long epoch,DungeonEntryPlan entry,
+        DungeonRoomCatalog rooms,DungeonMonsterDropCatalog? drops,ItemCatalog? items,Func<int,int>? draw,EpicPieceCatalog? pieces)
+    {
+        if (expected.DungeonState is not { } state) return null;
+        state.Validate();
+        if (entry.IsOrdinary && expected.Fatigue is not { Remaining: > 0 }) return null;
+        var ordinaryReturn = entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
+        if (entry.IsOrdinary && ordinaryReturn is null) return null;
         QuestDropResources? questDrops = null;
         if (questCatalog is not null && items is not null && pieces is not null)
         {
@@ -151,6 +157,7 @@ internal sealed partial class GameSession
         Selected = committed;
         formalDungeon = prepared.Dungeon;
         pendingDungeonContinuation = null;
+        pendingQuestReplay = null;
         CurrentDungeonSelection = null;
         Phase = SessionPhase.Loading;
         return FormalReceipt();
@@ -163,22 +170,34 @@ internal sealed partial class GameSession
         !dungeon.Run.HasPendingSettlement && dungeon.Run.Snapshot.Identity.Epoch != long.MaxValue &&
         !dungeon.HasPendingFatigue && !dungeon.Ground.HasPendingPickup && pendingQuestCompletion is null;
 
-    public FormalDungeonReceipt? CompleteFormalDungeonLoading() => owner.Execute(() =>
+    public FormalDungeonReceipt? CompleteFormalDungeonLoading()
     {
-        if (!Ready || Selected is null || Phase != SessionPhase.Loading || formalDungeon is not { } dungeon ||
-            dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || dungeon.Run.Snapshot.Identity.Epoch == long.MaxValue) return null;
-        if (dungeon.Entry.IsOrdinary)
+        var (expected,dungeon,epoch,identity,entry) = owner.Execute(() =>
+            (Ready && Phase == SessionPhase.Loading ? Selected : null, formalDungeon, SelectionEpoch,
+                formalDungeon?.Run.Snapshot.Identity,formalDungeon?.Run.Entry));
+        if (expected is null || dungeon is null || identity is null || entry is null) return null;
+        bool hasMatchingQuest = questCatalog is not null && expected.ActiveMainQuests.Any(active =>
+            QuestHuntProgress.Bound(active,entry) && questCatalog.TryGet(active.QuestId,out var quest) &&
+            QuestDungeonClearProgress.CountsInitializations(quest,entry));
+        return owner.Execute(() =>
         {
-            dungeon.HasPendingFatigue = true;
-            Selected = repository.ConsumeDungeonRoomFatigue(owner, Selected, dungeon.Run);
-            dungeon.HasPendingFatigue = false;
-        }
-        var result = dungeon.Run.CompleteLoading(dungeon.Run.Snapshot.Identity, Guid.NewGuid());
-        if (result.Outcome != DungeonRunOutcome.Accepted) return null;
-        pendingDungeonContinuation = null;
-        Phase = dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon;
-        return FormalReceipt();
-    });
+            if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading ||
+                !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
+                dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
+            if (dungeon.Entry.IsOrdinary)
+            {
+                dungeon.HasPendingFatigue = true;
+                Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run);
+                dungeon.HasPendingFatigue = false;
+            }
+            var result = dungeon.Run.CompleteLoading(identity,Guid.NewGuid(),hasMatchingQuest);
+            if (result.Outcome != DungeonRunOutcome.Accepted) return null;
+            pendingDungeonContinuation = null;
+            pendingQuestReplay = null;
+            Phase = dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon;
+            return FormalReceipt();
+        });
+    }
 
     public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
@@ -205,21 +224,35 @@ internal sealed partial class GameSession
     {
         if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup || HasPendingQuestScene)
             return new FormalDungeonDeathResult(DungeonRunOutcome.Rejected);
+        uint objectKey = normal?.MonsterKey ?? scripted!.MonsterKey;
+        var target = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Run.Snapshot.CurrentMap)
+            .Monsters.SingleOrDefault(monster => monster.ObjectKey == objectKey);
         var issued = normal is not null ? dungeon.Authority.ValidateAndIssue(dungeon.Run,dungeon.Run.Snapshot.Identity,normal) :
             dungeon.Authority.ValidateAndIssueScripted(dungeon.Run,dungeon.Run.Snapshot.Identity,scripted!);
-        if (issued.Death is null) return new FormalDungeonDeathResult(issued.Outcome);
+        if (issued.Death is null)
+        {
+            if (issued.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
+                return new FormalDungeonDeathResult(issued.Outcome) { ReportedTarget = target };
+            ushort key = checked((ushort)objectKey);
+            if (target is not { CanReportDeath: false })
+                return new FormalDungeonDeathResult(issued.Outcome,MonsterKey:key) { ReportedTarget = target };
+            dungeon.Run.RetireNonCombatObject(key);
+            return new FormalDungeonDeathResult(issued.Outcome,FormalReceipt(),key) { ReportedTarget = target };
+        }
         if (issued.Outcome == DungeonRunOutcome.Duplicate && dungeon.Route.Rooms.Any(room => room.Monsters.Any(monster =>
             monster.IsSpecialChild && monster.ObjectKey == issued.Death.MonsterKey)))
-            return new FormalDungeonDeathResult(DungeonRunOutcome.Duplicate);
+            return new FormalDungeonDeathResult(DungeonRunOutcome.Duplicate) { ReportedTarget = target };
         if (dungeon.Run.CurrentLivingMonster(issued.Death.MonsterKey) is { IsSpecialChild: true })
         {
             var retired = dungeon.Run.RetireSpecialChild(issued.Death);
             return new(retired, retired == DungeonRunOutcome.Accepted ? FormalReceipt() : null, issued.Death.MonsterKey)
-                { SpecialChildRetired = retired == DungeonRunOutcome.Accepted };
+                { ReportedTarget = target, SpecialChildRetired = retired == DungeonRunOutcome.Accepted };
         }
         var preparation = dungeon.Run.PrepareConfirmedDeath(issued.Death);
+        if (preparation.Outcome == DungeonRunOutcome.Duplicate)
+            return new FormalDungeonDeathResult(DungeonRunOutcome.Duplicate,MonsterKey:issued.Death.MonsterKey) { ReportedTarget = target };
         if (preparation.Outcome != DungeonRunOutcome.Accepted)
-            return new FormalDungeonDeathResult(preparation.Outcome);
+            return new FormalDungeonDeathResult(preparation.Outcome) { ReportedTarget = target };
         var pending = preparation.Pending!;
         var reward = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
         FrozenDungeonGroundDeath? loot = null;
@@ -246,7 +279,7 @@ internal sealed partial class GameSession
         if (committed.Death.ClearFact is not null)
             dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
         return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward, committed.Death.ClearFact, loot?.Ground, previousLevel)
-        { PreviousQuests = previousQuests, QuestDropSlots = questDrop?.Inventory.ChangedSlots ?? [], CulledMonsterKeys = committed.Death.CulledMonsterKeys };
+        { ReportedTarget = target, PreviousQuests = previousQuests, QuestDropSlots = questDrop?.Inventory.ChangedSlots ?? [], CulledMonsterKeys = committed.Death.CulledMonsterKeys };
     });
 
     public FormalDungeonPickupResult PickFormalDungeonItem(uint groundKey, ItemCatalog items, EpicPieceCatalog pieces) => owner.Execute(() =>
@@ -283,6 +316,8 @@ internal sealed partial class GameSession
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRoom();
         formalDungeon = null;
+        pendingDungeonContinuation = null;
+        pendingQuestReplay = null;
         Phase = SessionPhase.Town;
         return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch);
     });

@@ -10,10 +10,21 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     int? DeclaredSellPrice, int? DeclaredMinimumLevel, string? DeclaredItemGroupName,
     IReadOnlyList<string> UnsupportedFields)
 {
+    public StackableTypeDeclaration? ActionDeclaration { get; init; }
+    public int? DeclaredMaximumLevel { get; init; }
+    public bool HasMaximumLevel { get; init; }
+    public int? DeclaredUseActionPacket { get; init; }
+    public bool HasUseActionPacket { get; init; }
+    public IReadOnlyList<string>? DeclaredUsableJobs { get; init; }
+    public bool HasUsableJobs { get; init; }
+    public IReadOnlyList<string>? DeclaredActionUsablePlaces { get; init; }
+    public bool HasActionUsablePlace { get; init; }
+
     public static StackableFile Parse(int templateId, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
         var fields = new PvfTokenFields(tokens, resolve,
-            ["stackable type", "stack limit", "price", "sell price", "minimum level", "item group name"]);
+            ["stackable type", "stack limit", "price", "sell price", "minimum level", "item group name",
+                "action type", "maximum level", "use action packet", "usable job", "action usable place"]);
         StackableTypeDeclaration? type = null;
         if (fields.TryGet("stackable type", out var values))
         {
@@ -43,6 +54,37 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             else
                 fields.Unsupported("item group name");
         }
-        return new(templateId, path, type, limit, price, sellPrice, minimum, group, fields.UnsupportedFields);
+        StackableTypeDeclaration? action = null;
+        if (fields.TryGet("action type", out values))
+        {
+            if (values.Length > 0 && values[0].Type == 6 && values[1..].ToArray().All(token => token.Type == 0))
+                action = new(resolve(values[0].Value), Array.AsReadOnly(values[1..].ToArray().Select(token => token.Value).ToArray()));
+            else fields.Unsupported("action type");
+        }
+        IReadOnlyList<string>? jobs = null;
+        if (fields.TryGet("usable job", out values))
+        {
+            if (values.ToArray().All(token => token.Type == 6))
+                jobs = Array.AsReadOnly(values.ToArray().Select(token => resolve(token.Value)).ToArray());
+            else fields.Unsupported("usable job");
+        }
+        bool hasMaximum = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[maximum level]");
+        IReadOnlyList<string>? places = null;
+        if (fields.TryGet("action usable place", out values))
+        {
+            if (values.ToArray().All(token => token.Type == 6))
+                places = Array.AsReadOnly(values.ToArray().Select(token => resolve(token.Value)).ToArray());
+            else fields.Unsupported("action usable place");
+        }
+        bool hasUseAction = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[use action packet]");
+        int? maximum = fields.Scalar("maximum level"), useAction = fields.Scalar("use action packet");
+        return new(templateId, path, type, limit, price, sellPrice, minimum, group, fields.UnsupportedFields)
+        {
+            ActionDeclaration = action, DeclaredMaximumLevel = maximum, HasMaximumLevel = hasMaximum,
+            DeclaredUseActionPacket = useAction, HasUseActionPacket = hasUseAction, DeclaredUsableJobs = jobs,
+            HasUsableJobs = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[usable job]"),
+            DeclaredActionUsablePlaces = places,
+            HasActionUsablePlace = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action usable place]")
+        };
     }
 }

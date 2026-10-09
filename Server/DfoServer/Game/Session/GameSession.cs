@@ -163,6 +163,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         formalDungeon = null;
         pendingDungeonContinuation = null;
+        pendingQuestReplay = null;
         pendingQuestCompletion = null;
         pendingQuestLifecycle = null;
         pendingQuestQuickClear = null;

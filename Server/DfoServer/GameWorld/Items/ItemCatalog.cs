@@ -13,6 +13,7 @@ internal sealed class ItemCatalog
     readonly IReadOnlyDictionary<int, string> stackable;
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
     readonly ConcurrentDictionary<int, Lazy<ItemTemplate>> pendingTemplates = new();
+    readonly ConcurrentDictionary<int, QuestTicketDefinition> questTickets = new();
     static readonly string[] JobNames = ["swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief", "at fighter", "at mage", "demonic swordman", "creator mage", "at swordman", "knight", "demonic lancer", "at priest", "gun blader"];
     static readonly Dictionary<string, byte> EquipmentSlots = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -66,6 +67,13 @@ internal sealed class ItemCatalog
         }
     }
     public static byte Slot(string tag) => EquipmentSlots.TryGetValue(tag, out var slot) ? slot : throw new InvalidDataException("未知普通装备类型: " + tag);
+
+    public QuestTicketDefinition QuestTicket(int id) => questTickets.GetOrAdd(id, key =>
+    {
+        if (!stackable.TryGetValue(key,out var path)) throw new InvalidDataException("任务券不是堆叠物品: " + key);
+        var raw = StackableFile.Parse(key,"stackable/" + path,pvf.ReadTokens("stackable/" + path),pvf.ResolveString);
+        return QuestTicketDefinition.Parse(raw,Get(key));
+    });
 
     ItemTemplate Load(int id)
     {

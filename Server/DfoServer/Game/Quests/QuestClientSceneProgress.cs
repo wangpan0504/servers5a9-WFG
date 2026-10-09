@@ -53,8 +53,20 @@ internal static class QuestClientSceneProgress
         return guide.Length == 0 || towns.Areas[(town,area)].Map(completed).Npcs.Any(npc => npc.Id == guide[2].Value);
     }
 
+    public static int ResolveNpc(Character character, int npcId, StoryQuest quest)
+    {
+        int resolved = npcId;
+        // Full03 02282450始终比较原参数，成立的后续行覆盖结果，不递归使用上次替代值。
+        foreach (var row in quest.Definition?.AlternativeNpcs ?? [])
+            if (row.Source == npcId && (character.CompletedQuests.Contains(row.CompletedQuest) ||
+                character.AccountCompletedQuests.Contains(row.CompletedQuest)))
+                resolved = row.Target;
+        return resolved;
+    }
+
     public static bool DialogueNpc(Character character, int npcId, StoryQuest quest, QuestCatalog quests, TownCatalog towns)
     {
+        npcId = ResolveNpc(character,npcId,quest);
         if (npcId <= 0) return false;
         var position = character.Position;
         if (towns.Areas.TryGetValue((position.Town,position.Area),out var area) &&

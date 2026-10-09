@@ -57,8 +57,8 @@ internal static class QuestScriptedSettlementTests
                         "安全层唯一阻挡演员75100是普通rank，不伪造Boss身份");
                     var before = f.Read();
                     That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(previous,previous.Monsters.Monsters.First(monster => monster.IsBoss)),
-                        kills,growth).Outcome == DungeonRunOutcome.Rejected && QuestCompletionRepositoryTests.Same(before,f.Read()),
-                        "基础层旧Boss key不能在新安全层签发死亡或推进任务");
+                        kills,growth) is { Outcome: DungeonRunOutcome.Accepted, Reward: null, Receipt: null } && QuestCompletionRepositoryTests.Same(before,f.Read()),
+                        "基础层旧Boss key在新安全层只审计忽略，不签发奖励或推进任务");
                     That(f.Session.EnableFormalDungeonSettlement(terminalMonster.ObjectKey) is null,
                         "真实终点演员存活且无ClearFact时不能发布结算");
                 }

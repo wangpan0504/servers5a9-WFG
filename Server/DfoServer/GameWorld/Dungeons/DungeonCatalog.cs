@@ -38,6 +38,9 @@ internal sealed record DungeonMaze(
 
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
+    public bool RoomMoveKeepState { get; init; }
+    public bool IndividualMapMovement { get; init; }
+
     public bool TryGetDesignatedDifficulty(out byte difficulty)
     {
         difficulty = 0;
@@ -169,7 +172,14 @@ internal sealed class DungeonCatalog
         Finish();
         if (mazes.Count == 0)
             throw new NotSupportedException("unsupported: 未发现 maze info 资源结构");
-        return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections));
+        return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections))
+        {
+            RoomMoveKeepState = Flag("room move keep state"),
+            IndividualMapMovement = Flag("individual map movement")
+        };
+
+        bool Flag(string tag) => sections.LastOrDefault(section => section.Tag == tag)?.Tokens is [{ Type: 0, Value: 1 }];
+
         int? Scalar(string tag)
         {
             var matches = sections.Where(s => s.Tag == tag).ToArray();
@@ -217,8 +227,6 @@ internal sealed class DungeonCatalog
                 throw new InvalidDataException("map specification 记录不完整");
             var items = new List<DungeonMap>();
             var positions = new HashSet<DungeonPoint>();
-            bool hasLayered = Enumerable.Range(0, values.Count / 4)
-                .Any(index => values[index * 4].Type == 6 && resolve(values[index * 4].Value) == "layered");
             for (int i = 0; i < values.Count; i += 4)
             {
                 if (values[i].Type != 6)

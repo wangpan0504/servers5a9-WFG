@@ -98,21 +98,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (request.Body.Length != 2 || request.Body[0] is not (1 or 2) || request.Body[1] > 3)
             return CommandResult.Unhandled;
         byte state = request.Body[0], option = request.Body[1];
-        if (state == 1 && option == 3)
+        if (state == 1 && option == 3 && context.Session.HasFormalDungeonContinuation())
         {
-            var boundary = context.Session.ConfirmFormalDungeonContinuationBoundary();
-            if (boundary.Receipt is { } returning)
-            {
-                await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,option),
-                    "formal_next_quest_boundary_confirm",() => context.Session.CanPublishTravel(returning));
-                if (!boundary.Duplicate)
-                    await town.ReturnFromFormalDungeonAsync(context,returning,"formal_next_quest_town_boundary");
-                else
-                    // ACK3会再次写入场景选项；重发同一24保持退场状态，不重复回城业务或任务刷新。
-                    await context.Notify(NotiPacketType.AREA_USERS,TownPackets.Transition(returning.Character.Id,returning.Character.Position),
-                        "formal_next_quest_town_boundary_replay",() => context.Session.CanPublishTravel(returning));
-                return CommandResult.Handled;
-            }
+            log.Write("formal_quest_continuation_tail",new { Connection = context.Id, state, option });
+            return CommandResult.Handled;
         }
         if (context.Session.FormalDungeonResultFocus() is not { } current)
             return CommandResult.Unhandled;
@@ -138,10 +127,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             if (continuation is not null)
             {
                 log.Write("formal_quest_continuation",new { Connection = context.Id, Accepted = true, Reason = reason, current.Entry.RouteQuestId });
+                if (context.Session.LeaveFormalDungeonForContinuation() is not { } returning) return CommandResult.Handled;
                 await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,option),
-                    "formal_result_next_quest",() => context.Session.CanPublishDungeonSettlement(continuation));
-                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),
-                    "formal_next_quest_selector_wake",() => context.Session.CanPublishDungeonSettlement(continuation));
+                    "formal_result_next_quest",() => context.Session.CanPublishTravel(returning));
+                await town.ReturnFromFormalDungeonAsync(context,returning,"formal_next_quest_town_boundary");
                 return CommandResult.Handled;
             }
             if (reason != "no-accepted-successor")

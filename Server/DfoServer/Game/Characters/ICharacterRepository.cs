@@ -19,6 +19,7 @@ internal interface ICharacterRepository
     Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null);
     Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning);
     Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit);
+    Character AdvanceAcceptedStoryLevel(AccountOwners.Lease owner, Character expected);
     Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
     QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);

@@ -35,6 +35,16 @@ internal sealed class QuestConnectionCatalog
         return matches.Length == 1;
     }
 
+    // Full03 0418D044把sequence第二值保留为路线；回放UI只暴露正值，不按目标地图猜路线。
+    public bool TryGetReplayDungeon(int questId,out uint dungeonId)
+    {
+        var routes = byParent.Values.SelectMany(unit => unit.Sequence)
+            .Where(step => step.QuestId == questId && step.Parameter > 0)
+            .Select(step => step.Parameter).Distinct().Take(2).ToArray();
+        dungeonId = routes.Length == 1 ? checked((uint)routes[0]) : 0;
+        return routes.Length == 1;
+    }
+
     public static QuestConnectionCatalog Load(PvfArchive pvf) => Parse(pvf.ReadTokens(ResourcePath),pvf.ResolveString);
 
     internal static QuestConnectionCatalog Parse(IReadOnlyList<PvfToken> tokens,Func<int,string> resolve)

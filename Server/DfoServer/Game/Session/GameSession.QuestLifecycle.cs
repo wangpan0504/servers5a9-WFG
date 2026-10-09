@@ -28,11 +28,25 @@ internal sealed partial class GameSession
                 formalDungeon?.Ground.HasPendingPickup != true && formalDungeon?.Run.HasPendingDeath != true &&
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
             var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
-            return (Character: character, SelectionEpoch, Phase, Identity: instance, Entry: formalDungeon?.Entry, Pending: pendingQuestLifecycle);
+            return (Character: character, SelectionEpoch, Phase, Identity: instance, Entry: formalDungeon?.Entry,
+                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear);
         });
         if (capture.Character is not { } expected) return null;
         var refusal = new QuestLifecycleReceipt(expected, null, owner.Generation, capture.SelectionEpoch, capture.Phase, capture.Identity, "任务资格不符");
         if (!quests.TryGet(questId, out var quest)) return refusal;
+        // 觉醒券本地消费者补发关联活动任务32；只确认本次已提交券事务实际关闭的接取槽。
+        if (action == QuestLifecycleAction.Giveup && expected.ActiveMainQuests.All(row => row.QuestId != questId) &&
+            capture.Skip is { Plan.IsTicket: true,Plan.ProfessionGrowType: not null,Committed: not null } ticket &&
+            SameManualPending(ticket,expected,capture.SelectionEpoch,capture.Phase,capture.Identity) &&
+            ticket.Plan.RemovedActive.Any(row => row.QuestId == questId))
+            return refusal with { Outcome = QuestLifecycleOutcome.Unchanged, Reason = "觉醒券已原子关闭此活动任务" };
+        // Full03父任务ACK34会补发未完成子任务32；父交付事务已关闭的子槽只确认，不再回收或写库。
+        if (action == QuestLifecycleAction.Giveup && expected.ActiveMainQuests.All(row => row.QuestId != questId) &&
+            !QuestEligibility.Completed(expected).Contains(questId) &&
+            quest.MainQuest is { } parentId && QuestEligibility.Completed(expected).Contains(parentId) &&
+            quests.TryGet(parentId,out var closedParent) && QuestRelationProgress.ThresholdParent(closedParent,quests) &&
+            closedParent.IntData.Contains(questId))
+            return refusal with { Outcome = QuestLifecycleOutcome.Unchanged, Reason = "阈值父任务已交付并关闭未完成子任务" };
         QuestLifecyclePlan plan;
         try
         {
@@ -84,6 +98,9 @@ internal sealed partial class GameSession
             if (QuestStateProgress.Type(quest) is { } stateType && condition is { Channel: null, Reserved: 0 } stateReport &&
                 (stateReport.Value == 0 || stateType == 12 && stateReport.Value == 1))
                 return QuestLifecyclePlan.SetCondition(expected,quest,QuestStateProgress.Scalar(expected,quest));
+            if (QuestRelationProgress.ThresholdParent(quest,quests) && condition is { Channel: null, Value: 0, Reserved: 0 })
+                return QuestLifecyclePlan.SetCondition(expected,quest,
+                    QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)));
             if (QuestRelationProgress.SequentialParent(quest,quests) && condition is { Channel: null, Reserved: 0 } parentReport &&
                 parentReport.Value <= quest.IntData.Count &&
                 (capture.Phase == SessionPhase.Town || capture.Entry is { } parentEntry && parentEntry.RouteQuestId == quest.Id &&
@@ -123,7 +140,8 @@ internal sealed partial class GameSession
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
             if (condition is not { Channel: null, Value: 0, Reserved: 0 } || capture.Phase != SessionPhase.Town ||
                 quest.Definition is not { Diagnostics.Length: 0 } || quest.SubType != -1 ||
-                QuestEligibility.InspectResource(quest).Entry != QuestResourceEntry.Ordinary && !QuestRelationProgress.DialogueChild(quest, quests))
+                QuestEligibility.InspectResource(quest).Entry != QuestResourceEntry.Ordinary && !QuestRelationProgress.DialogueChild(quest, quests) &&
+                    !QuestHiddenEntry.Direct(quest,quests))
                 throw new InvalidDataException("客户端条件需要已确认类型和当前城镇场景");
             uint scalar;
             if (quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest))
@@ -145,7 +163,8 @@ internal sealed partial class GameSession
     public QuestCycleReceipt? AdvanceQuestCycle(DateTimeOffset now) => owner.Execute(() =>
     {
         if (questCatalog is null || !Ready || Selected is not { } expected || expected.QuestCycleDay >= QuestCycle.Day(now) ||
-            pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is not null || HasPendingQuestScene ||
+            pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } || HasPendingQuestScene ||
+            pendingDungeonContinuation is not null || HasPendingQuestReplay ||
             formalDungeon?.Ground.HasPendingPickup == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true)
             return null;
         Selected = repository.AdvanceQuestCycle(owner, expected, QuestCycle.Day(now));

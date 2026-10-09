@@ -289,8 +289,12 @@ internal static class FormalDungeonSessionTests
                 Check(receipt!.Snapshot.CurrentMap.Id == maps[room] && receipt.Monsters.Monsters.Count > 0,
                     "真实3145六房逐房保留资源行与当前地图");
                 if (oldRoomObservation is not null)
-                    Check(f.Session.ObserveFormalDungeonDeath(oldRoomObservation, kills, growth).Outcome == DungeonRunOutcome.Rejected,
-                        "新房拒绝旧房key与缓存报告");
+                {
+                    var ignored = f.Session.ObserveFormalDungeonDeath(oldRoomObservation,kills,growth);
+                    Check(ignored is { Outcome: DungeonRunOutcome.Duplicate, Reward:null, Receipt:null, ClearFact:null } &&
+                        ignored.MonsterKey == oldRoomObservation.MonsterKey,
+                        "新房旧目标仅作审计，不发送死亡通知或恢复旧房奖励事实");
+                }
                 Check(f.Session.MoveFormalDungeon(0, 0) is null, "未清房不能过房");
                 foreach (var monster in receipt.Monsters.Monsters)
                 {
@@ -302,14 +306,20 @@ internal static class FormalDungeonSessionTests
                     if (!monster.IsBlocking)
                     {
                         long beforeFriendly = f.Count();
-                        Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Rejected &&
-                            f.Count() == beforeFriendly && f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey),
-                            "任务友方保留生成对象，但没有击杀事实、经验或掉落资格");
+                        var beforeFriendlyCharacter = f.Session.Selected!;
+                        Check(f.Session.ObserveFormalDungeonDeath(observation,kills,growth) is
+                            { Outcome: DungeonRunOutcome.Accepted, Reward:null, Receipt:not null, ClearFact:null } &&
+                            f.Count() == beforeFriendly && ReferenceEquals(f.Session.Selected,beforeFriendlyCharacter) &&
+                            !f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey),
+                            "任务友方接受视觉死亡且移除对象，不写击杀经验、掉落或清图事实");
+                        Check(f.Session.ObserveFormalDungeonDeath(observation,kills,growth) is
+                            { Outcome: DungeonRunOutcome.Accepted, Reward:null, Receipt:not null, ClearFact:null } && f.Count() == beforeFriendly,
+                            "当前路线友方重复退场仍可通知，不新增奖励或清图");
                         continue;
                     }
                     if (monster.MonsterId == 107000903)
                     {
-                        // 本版Boss实收：改写仅影响prefix，实际participant累计及创建HP仍独立核验。
+                        // 本版Boss实收：来源和创建HP保留为观察，独立核对正文解析及检查值。
                         byte[] body = Convert.FromHexString("1B0100000100000000000000000000000000CA220000000000001D0000000111010100010A0000000000000C005E0403010000000003360103000000B2080000000000003F03EF00A4030301150012002F00000020B11FCC");
                         Check(DungeonRequests.TryParseDeath(body, out var parsedBoss) && parsedBoss!.ObjectKey == monster.ObjectKey &&
                             parsedBoss.Reporter == receipt.Character.Id && parsedBoss.SinglePlayerStatistics is { ChecksumMatches: true },
@@ -367,10 +377,14 @@ internal static class FormalDungeonSessionTests
                         Check(Convert.ToInt64(f.Query("SELECT combat_sequence FROM character_dungeon_growth_receipts")) == 1 &&
                             finalReceipt.Character.Level == 2, "回滚重试保留第一战斗序号并完成真实等级边界升级");
                     var after = f.Session.Selected!;
-                    Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate &&
-                        ReferenceEquals(after, f.Session.Selected) && f.Count() == count + 1, "原生精确重复不重新发奖");
-                    Check(f.Session.ObserveFormalDungeonDeath(observation with { BodySha256 = new string('B', 64) }, kills, growth).Outcome == DungeonRunOutcome.Rejected,
-                        "同key变更正文指纹拒绝");
+                    var repeated = f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
+                    Check(repeated is { Outcome: DungeonRunOutcome.Duplicate, Reward:null, Receipt:null } &&
+                        repeated.MonsterKey == monster.ObjectKey && ReferenceEquals(after,f.Session.Selected) && f.Count() == count+1,
+                        "普通敌人重复只审计忽略，不重发通知或奖励");
+                    var changed = f.Session.ObserveFormalDungeonDeath(observation with { BodySha256 = new string('B',64) },kills,growth);
+                    Check(changed is { Outcome: DungeonRunOutcome.Duplicate, Reward:null, Receipt:null } &&
+                        changed.MonsterKey == monster.ObjectKey && f.Count() == count+1 && ReferenceEquals(after,f.Session.Selected),
+                        "同key变更正文只作审计，不重发通知或原提交奖励");
                     oldRoomObservation = observation;
                     if (room == maps.Length - 1 && result.ClearFact is not null)
                         Check(result.ClearFact.ConfirmedDeathEvents.Count == f.Count(), "Boss清图事实只包含已提交敌对击杀，不伪造任务友方死亡");
@@ -629,8 +643,12 @@ internal static class FormalDungeonSessionTests
                 !f.Session.CanPublishFormalDungeon(second with { Snapshot = second.Snapshot with { Identity = first.Snapshot.Identity } }),
                 "伪造旧selection epoch或instance的回执不能发布");
             f.Session.CompleteFormalDungeonLoading();
-            Check(f.Session.ObserveFormalDungeonDeath(Observation(first, first.Monsters.Monsters[0]), kills, growth).Outcome == DungeonRunOutcome.Rejected,
-                "新实例加载后也拒绝旧实例key报告");
+            var beforeOldReport = f.Session.Selected!;
+            var ignoredOldRun = f.Session.ObserveFormalDungeonDeath(Observation(first,first.Monsters.Monsters[0]),kills,growth);
+            Check(ignoredOldRun is { Outcome: DungeonRunOutcome.Accepted, Reward:null, Receipt:null, ClearFact:null } &&
+                ignoredOldRun.MonsterKey == first.Monsters.Monsters[0].ObjectKey &&
+                f.Count() == 0 && ReferenceEquals(beforeOldReport,f.Session.Selected),
+                "新实例旧key只作审计，不发送死亡通知或产生当前实例奖励");
             using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
             Reject<InvalidOperationException>(() => f.Session.CanPublishFormalDungeon(second), "旧generation不能发布正式回执");
             Reject<InvalidOperationException>(() => f.Session.CompleteFormalDungeonLoading(), "旧generation不能完成新加载");
@@ -673,8 +691,9 @@ internal static class FormalDungeonSessionTests
                 Check(committed.Outcome == DungeonRunOutcome.Accepted && committed.ClearFact is null &&
                     f.Count() == ++index && f.Session.Selected!.Learning.Experience == (ulong)index * 104,
                     "正式Native合同接受不同计数/前缀，每key仅落一次真实成长事务");
-                Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate && f.Count() == index,
-                    "不同真实形状的精确重放也不重复经验");
+                Check(f.Session.ObserveFormalDungeonDeath(observation,kills,growth) is
+                    { Outcome: DungeonRunOutcome.Duplicate, Reward:null, Receipt:null } && f.Count() == index,
+                    "不同真实形状的普通重放只审计，不重复通知或经验");
             }
             Check(f.Session.DungeonSnapshot!.LivingMonsters.Count == 0 && f.Session.Phase == SessionPhase.Dungeon &&
                 f.Session.MoveFormalDungeon(1, 1) is not null && Same(f.Read(), f.Session.Selected!),
@@ -698,7 +717,8 @@ internal static class FormalDungeonSessionTests
             {
                 CumulativeHpDecrease = 696, PositiveHpDecreaseCount = 2, Unknown18 = 831, Unknown26 = 3
             };
-            var changedObservation = observation with { Unknown18 = 832, BodySha256 = new string('B', 64) };
+            var changedObservation = observation with { Unknown18 = 832, ReporterKey = ushort.MaxValue,
+                Participants = [new(0xABCD,65535,0,0)], BodySha256 = new string('B',64) };
             var original = f.Session.Selected!;
             f.Sql("CREATE TRIGGER loot_fail AFTER INSERT ON character_dungeon_loot_receipts BEGIN SELECT RAISE(ABORT,'late loot failure'); END");
             Reject<SqliteException>(() => f.Session.ObserveFormalDungeonDeath(observation, kills, growth),
@@ -706,21 +726,25 @@ internal static class FormalDungeonSessionTests
             Check(calls == 2 && f.Count() == 0 && Same(original, f.Read()) && ReferenceEquals(original, f.Session.Selected) &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 0,
                 "冻结随机后SQL回滚不留经验或物品，也不提前发布地面");
-            Check(f.Session.ObserveFormalDungeonDeath(changedObservation, kills, growth).Outcome == DungeonRunOutcome.Rejected &&
-                calls == 2 && f.Count() == 0 && Same(original, f.Read()),
-                "待提交控制死亡的相容改包不能换事件、重抽掉落或提前发经验");
+            Reject<SqliteException>(() => f.Session.ObserveFormalDungeonDeath(changedObservation,kills,growth),
+                "来源和统计变化仍恢复冻结候选，未解除的SQL故障继续完整回滚");
+            Check(calls == 2 && f.Count() == 0 && Same(original,f.Read()) && ReferenceEquals(original,f.Session.Selected) &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 0,
+                "改变审计观察不更换事件、不重抽掉落，也不提前提交经验");
             f.Sql("DROP TRIGGER loot_fail");
-            var death = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+            var death = f.Session.ObserveFormalDungeonDeath(changedObservation,kills,growth);
             var ground = death.Drop ?? throw new InvalidOperationException("FAIL 明确合成命中没有地面对象");
             Check(calls == 2 && death.Outcome == DungeonRunOutcome.Accepted && ground.Core.ItemId == 1000 && ground.Core.Count == 1 &&
                 f.Count() == 1 && f.Read().Learning.Experience == 104 &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 1,
                 "原事实重试只复用冻结结果，一次提交XP及完整地面核心");
-            Check(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate &&
-                f.Session.ObserveFormalDungeonDeath(changedObservation, kills, growth).Outcome == DungeonRunOutcome.Rejected && calls == 2 &&
+            Check(f.Session.ObserveFormalDungeonDeath(observation,kills,growth) is
+                { Outcome: DungeonRunOutcome.Duplicate, Reward:null, Receipt:null } &&
+                f.Session.ObserveFormalDungeonDeath(changedObservation,kills,growth) is
+                { Outcome: DungeonRunOutcome.Duplicate, Reward:null, Receipt:null } && calls == 2 &&
                 f.Count() == 1 && f.Read().Learning.Experience == 104 &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_loot_receipts")) == 1,
-                "控制死亡提交后精确重复与相容改包均不再次发经验、抽奖或增发地面");
+                "控制死亡提交后原观察与变化观察均只审计，不重发通知、经验、抽奖或地面");
             uint key = ground.Reservation.GroundKey;
             Check(f.Session.PickFormalDungeonItem(key + 1000, itemResources.Items, itemResources.EpicPieces).Outcome == DungeonRunOutcome.Rejected,
                 "客户端任意key不提供拾取资格");

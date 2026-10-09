@@ -52,6 +52,12 @@ internal static class FormalDungeonTcpTests
                 That(U32(map, 14) == ids[room], "正式TCP依匹配3145六房顺序加载");
                 Load(peer);
                 if (room == 0) VerifyDungeonActions(fixture, peer);
+                if (room == 0)
+                {
+                    peer.Send(39, Death(ushort.MaxValue,ushort.MaxValue,95));
+                    peer.Barrier();
+                    That(Experience(fixture,peer.Id) == experience,"未登记死亡目标只审计忽略，不使用包尾等级伪造奖励");
+                }
                 string beforeMovement = fixture.Snapshot();
                 peer.Send(35, Move(1000, 249));
                 peer.Barrier();
@@ -60,7 +66,7 @@ internal static class FormalDungeonTcpTests
                 {
                     peer.Send(39, oldReport);
                     peer.Barrier();
-                    That(Experience(fixture, peer.Id) == experience, "新房旧key没有经验或死亡通知");
+                    That(Experience(fixture, peer.Id) == experience, "新房旧key只审计忽略，不重复经验或死亡通知");
                 }
                 int count = map[18];
                 for (int index = 0; index < count; index++)
@@ -73,7 +79,7 @@ internal static class FormalDungeonTcpTests
                     byte[] report = Death(key, peer.Id, level);
                     if (room == ids.Length - 1 && U32(map, offset + 8) == 107000906)
                     {
-                        peer.Send(39, report); peer.Barrier();
+                        peer.Send(39, report); peer.Expect(0,38); peer.Barrier();
                         That(Experience(fixture, peer.Id) == experience &&
                             fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, key) is [[0L]],
                             "托比保留真实场景key，但友方死亡报告不能授予经验、掉落或阻塞已开启的结算");
@@ -93,13 +99,17 @@ internal static class FormalDungeonTcpTests
                         peer.Barrier();
                         That(Experience(fixture, peer.Id) == 0, "不匹配正文检查值不能发奖");
                         report = Death(key, peer.Id, 2, 0, 0, 0, 0);
+                        BinaryPrimitives.WriteUInt16LittleEndian(report.AsSpan(4),ushort.MaxValue);
+                        BinaryPrimitives.WriteUInt16LittleEndian(report.AsSpan(31),0x0211);
+                        BinaryPrimitives.WriteUInt16LittleEndian(report.AsSpan(33),ushort.MaxValue);
+                        SealDeath(report);
                     }
                     peer.Send(39, report);
                     byte[] deathNotice = peer.Expect(0, 38).Body;
                     int dropCount = U16(deathNotice, 2);
                     That(U16(deathNotice, 0) == key && dropCount is 0 or 1 && deathNotice.Length == 9 + 131 * dropCount &&
                         deathNotice.AsSpan(deathNotice.Length - 5).SequenceEqual(new byte[] { 0, 0, 255, 0, 0 }),
-                        "正式死亡接受不同报告等级和零扣血统计，投影保留完整可变掉落行及尾部");
+                        "正式死亡接受FFFF报告者、0211来源及不同等级/零扣血统计，投影保留完整掉落行及尾部");
                     byte[] notice = ReadGrowth(room == ids.Length - 1 && map[offset + 13] == 3);
                     experience += expectedGain;
                     byte expectedLevel = 1;
@@ -162,7 +172,7 @@ internal static class FormalDungeonTcpTests
                         fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id") == growthBeforeReplay &&
                         fixture.Snapshot("SELECT * FROM character_dungeon_loot_receipts ORDER BY character_id,event_id") == lootBeforeReplay &&
                         fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == inventoryBeforeReplay,
-                        "精确重复及相容统计变化的同怪重复均不通知、追加经验或掉落receipt、生成物品UID");
+                        "同怪重复及统计变化只审计忽略，不追加通知、经验、掉落receipt或物品UID");
                     oldReport = report;
                 }
                 if (room < target.Length)
@@ -218,9 +228,9 @@ internal static class FormalDungeonTcpTests
             That(U16(retryMap, 25) > U16(map, 25), "再挑战创建新Run、新尝试及新怪key");
             ClearAgain(retryMap);
             peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
-            peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 1]); peer.Expect(1, 15, [1]);
-            peer.Send(72, [1, 3]); peer.Expect(1, 72, [1, 1, 3]);
+            peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 1]);
             peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+            peer.Send(72, [1, 3]); peer.Barrier();
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Barrier();
             That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[3L]],
                 "剧情没有已接取且合法的后继任务时回城，真实15只结束旧场景，不生成新副本");
@@ -319,7 +329,7 @@ internal static class FormalDungeonTcpTests
             Load(peer);
             peer.Send(39, oldReport!);
             peer.Barrier();
-            That(Experience(fixture, peer.Id) == experience, "新实例拒绝上轮死亡请求，不增加资产经验");
+            That(Experience(fixture, peer.Id) == experience, "新实例上轮死亡key只审计忽略，不增加资产经验");
             peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
             byte previousLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
             string afterClear = fixture.Snapshot();

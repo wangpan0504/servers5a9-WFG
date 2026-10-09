@@ -7,6 +7,7 @@ internal sealed record QuestField(string Name, ImmutableArray<QuestRewardToken> 
 internal readonly record struct QuestRequiredAnswer(int QuestId, int Answer);
 internal readonly record struct QuestTargetCharacter(string Job, int GrowType, int Awakening);
 internal readonly record struct QuestDungeonRequirement(int DungeonId, int Parameter);
+internal readonly record struct QuestAlternativeNpc(int Source, int Target, int CompletedQuest);
 internal sealed record QuestNpcVisibility(ImmutableArray<int> Npcs, string Condition, string Visibility);
 
 // 完整资源声明；未恢复的字段保留原值，不能以缺省值取得资格。
@@ -40,6 +41,7 @@ internal sealed record QuestDefinition(ImmutableArray<QuestField> Fields)
     public ImmutableArray<QuestRewardToken> SelectRewards { get; init; } = [];
     public ImmutableArray<QuestRewardToken> AcceptanceRewards { get; init; } = [];
     public ImmutableArray<QuestNpcVisibility> NpcVisibility { get; init; } = [];
+    public ImmutableArray<QuestAlternativeNpc> AlternativeNpcs { get; init; } = [];
     public bool RewardItemTradeInstance { get; init; }
     public ImmutableArray<QuestDropDefinition> Drops { get; init; } = [];
     public ImmutableArray<string> Diagnostics { get; init; } = [];
@@ -94,6 +96,15 @@ internal static class QuestDefinitionReader
                 errors.Add("NPC可见性声明不完整");
             else visibility.Add(new(npcs.Select(value => value.Value).ToImmutableArray(),condition[0].Text!,show[0].Text!));
         }
+        var alternativeNpcs = ImmutableArray.CreateBuilder<QuestAlternativeNpc>();
+        foreach (var field in fields.Where(field => field.Name == "alternative npc index"))
+        {
+            // Full03 QST+91C按资源顺序保留原NPC、替代NPC和已完成任务条件。
+            if (field.Children.Length != 0 || field.Values is not [{ Type: 0 }, { Type: 0 },
+                { Type: 6, Text: "[cleared quest]" }, { Type: 0 }])
+                errors.Add("alternative npc index需要原NPC/替代NPC/[cleared quest]/任务编号");
+            else alternativeNpcs.Add(new(field.Values[0].Value,field.Values[1].Value,field.Values[3].Value));
+        }
         var metadata = new QuestDefinition(fields)
         {
             PrerequisiteGroups = groups,
@@ -119,6 +130,7 @@ internal static class QuestDefinitionReader
             MinimumClearCount = Scalar("multi condition min clear"),
             SelectRewards = Values("reward selection int data"), AcceptanceRewards = Values("depend give item"),
             NpcVisibility = visibility.ToImmutable(),
+            AlternativeNpcs = alternativeNpcs.ToImmutable(),
             RewardItemTradeInstance = (Scalar("reward item trade instance") ?? 0) != 0,
             Drops = QuestDropDefinition.Read(fields,errors),
             Diagnostics = errors.ToImmutable()

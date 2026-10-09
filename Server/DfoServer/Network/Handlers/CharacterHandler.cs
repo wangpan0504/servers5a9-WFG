@@ -17,6 +17,17 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         commands.Register(CmdPacketType.CHECK_DOUBLE_CHARACTER_NAME, CheckNameAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CREATE_CHARACTER, CreateAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.GET_USERINFO, RosterAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
+    }
+
+    Task<CommandResult> StoryDigestAsync(GameConnectionContext context, Packet request)
+    {
+        if (request.Body.Length != 0) return Task.FromResult(CommandResult.Unhandled);
+        var character = context.Session.AcceptStoryDigest();
+        log.Write("story_digest_accepted", new { Connection = context.Id, Character = character?.Id,
+            character?.Level, character?.AcceptedStoryLevel, character?.Revision });
+        // V31在发1446前已更新本地值；这里只保存，下次选角由1382回放。
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> SelectAsync(GameConnectionContext context, Packet request)

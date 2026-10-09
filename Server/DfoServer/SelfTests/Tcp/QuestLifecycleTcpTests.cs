@@ -477,33 +477,7 @@ internal static class QuestLifecycleTcpTests
             peer.Send(31,[31,0,75,12]); peer.Expect(1,31,[1,75,12,1,0,0,0,0]); Drain();
             That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=2") is [[3147L,1L]],
                 "fixture 已接取真实剧情后继3147，后续15沿其合法资源路线进入");
-            long attempt = (long)extra.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=2")[0][0];
-            var oldMap = map;
-            peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,1]); peer.Expect(1,15,[1]); peer.Barrier();
-            That(extra.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=2") is [[long beforeFinalizer]] &&
-                beforeFinalizer == attempt,"72开始后续任务只准备并ACK15唤醒，未发布24退场或新尝试");
-            peer.Send(72,[1,3]); peer.Expect(1,72,[1,1,3]); peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
-            That(extra.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=2") is [[long afterBoundary]] &&
-                afterBoundary == attempt,"真实72选择边界才结束旧实例并24/21退场，真实15前不安装副本或预留尝试");
-            peer.Send(72,[1,3]); peer.Expect(1,72,[1,1,3]); peer.Expect(0,24); peer.Barrier();
-            That(extra.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=2") is [[long afterRepeatedBoundary]] &&
-                afterRepeatedBoundary == attempt,"重复72选择边界ACK后重放同一24，不重复任务刷新或预留副本尝试");
-            peer.Send(15,new byte[4]);
-            peer.Expect(1,15,[1]);
-            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]);
-            var nextInfo = peer.Expect(0,28).Body; map = peer.Expect(0,29).Body;
-            That(U32(nextInfo,0) == 6 && U32(map,14) == 76141 &&
-                extra.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=2") is [[long afterFinalizer]] &&
-                afterFinalizer == attempt+1,"3146→已接取3147的真实15进入资源声明地下城6，新地图76141而非重开旧图");
-            peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Barrier();
-            That(extra.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=2") is [[long replayFinalizer]] &&
-                replayFinalizer == attempt+1,"新图加载前重复15只重放ACK，不创建副本或重发地图");
-            FormalDungeonTcpTests.Load(peer);
-            var durable = extra.Snapshot();
-            peer.Send(39,FormalDungeonTcpTests.Death(U16(oldMap,25),peer.Id,oldMap[31])); peer.Barrier();
-            That(extra.Snapshot() == durable &&
-                extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=2") is [[3147L,1L]],
-                "旧实例的迟到死亡不影响新任务、经验或完成记录");
+            map = ContinueToNextQuest(extra,peer,map);
 
             void ClearRooms((byte X,byte Y)[] path)
             {
@@ -598,6 +572,113 @@ internal static class QuestLifecycleTcpTests
             int offset = Enumerable.Range(0,U16(body,1)).Select(at => 3+123*at).Single(at => U16(body,at) == slot);
             That(U32(body,offset+2) == item && U32(body,offset+6) == balance,"NOTI14钱包slot与实际绝对余额一致");
         }
+    }
+
+    public static async Task RunContinuationAsync(ServerOptions options, string root, TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(options,Path.Combine(root,"quest-continuation"),resources: resources);
+        await fixture.StartAsync();
+        var growth = CharacterGrowthCatalog.Load(resources.Archive,resources.Learning);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            // 只准备早期前置与已覆盖的对话子任务；本组真实验证一条清图、交付和后继转场。
+            var candidate = CharacterCreation.Prepare("QuestNext",resources.Characters.Get(0),resources.Towns.Room,
+                resources.Towns.InitialReturn,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,3,candidate.InitialLearning with {
+                Experience = growth.GetLevelStartExperience(3) },resources.Learning);
+            new CharacterRepository(fixture.Database).Create(owner,candidate with {
+                Level = 3, AcceptedStoryLevel = 1, CompletedQuests = [3145,4873,3157], InitialLearning = learning });
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(prepared: true); FormalDungeonTcpTests.EntryTown(peer);
+            var map = FormalDungeonTcpTests.Enter(peer,3146); FormalDungeonTcpTests.Load(peer);
+            That(U32(map,14) == 76131,"独立连图fixture按真实3146路线进入，未重跑Lv1前缀");
+            peer.Send(31,[31,0,238,11]); peer.Expect(1,31,[1,238,11,1,0,0,0,0]); DrainNotifications(peer);
+            var path = new (byte X,byte Y)[] { (0,1),(1,1),(2,1),(3,1),(4,1) };
+            for (int room = 0; room <= path.Length; room++)
+            {
+                for (int at = 0; at < map[18]; at++)
+                {
+                    int offset = 19+22*at;
+                    peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12]));
+                    DrainNotifications(peer);
+                }
+                if (room == path.Length) break;
+                var move = new byte[100]; move[0] = path[room].X; move[1] = path[room].Y;
+                peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+                FormalDungeonTcpTests.Load(peer);
+            }
+            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
+                    is [[3146L,0L]] &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3054",peer.Id)
+                    is [[3054L]],"独立连图fixture真实清图完成子任务并更新父条件");
+            peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
+            peer.Send(34,[34,0,74,12,255,255,1,0,255,255]);
+            That(Finished(peer).Body[0] == 1,"独立连图fixture真实交付3146父任务"); DrainNotifications(peer);
+            peer.Send(31,[31,0,75,12]); peer.Expect(1,31,[1,75,12,1,0,0,0,0]); DrainNotifications(peer);
+            ContinueToNextQuest(fixture,peer,map,acceptStoryDigest: true);
+        }
+        await fixture.StopAsync();
+    }
+
+    static byte[] ContinueToNextQuest(TcpTestFixture fixture,TcpPeer peer,byte[] oldMap,bool acceptStoryDigest = false)
+    {
+        That(fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3146",peer.Id)
+                is [[3146L]] &&
+            fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
+                is [[3147L,1L]],"连图从已提交前驱和真实已接取3147开始，不用可接列表代替活动任务");
+        long attempt = Attempt();
+        peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,1]); peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+        That(Attempt() == attempt,"72开始后继立即ACK72和24/21退场，真实15前不安装副本或预留尝试");
+        long? storyRevision = null;
+        if (acceptStoryDigest)
+        {
+            var before = fixture.Query("SELECT level,accepted_story_level,revision FROM characters WHERE id=$p0",peer.Id)[0];
+            That(Convert.ToInt64(before[1]) == 1 && Convert.ToInt64(before[0]) > 1,
+                "独立连图fixture保留低于角色等级的剧情接受值，1446确实提交而非无操作");
+            peer.Send(1446,[]); peer.Barrier();
+            var after = fixture.Query("SELECT level,accepted_story_level,revision FROM characters WHERE id=$p0",peer.Id)[0];
+            storyRevision = Convert.ToInt64(after[2]);
+            That(Convert.ToInt64(after[0]) == Convert.ToInt64(before[0]) &&
+                Convert.ToInt64(after[1]) == Convert.ToInt64(before[0]) && storyRevision == Convert.ToInt64(before[2])+1 &&
+                Attempt() == attempt,"连图24后空1446保存服务端等级并只增加一次revision，没有应答或预留副本尝试");
+        }
+        string retired = fixture.Snapshot();
+        for (int replay = 0; replay < 2; replay++)
+        {
+            peer.Send(72,[1,3]); peer.Barrier();
+            That(fixture.Snapshot() == retired && Attempt() == attempt,
+                "旧结算页首次及重复1,3尾包均无响应，不重放ACK72/24或改变后继准备");
+        }
+        peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
+        peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]);
+        peer.Expect(0,27,new byte[42]);
+        var nextInfo = peer.Expect(0,28).Body; var map = peer.Expect(0,29).Body;
+        That(U32(nextInfo,0) == 6 && U32(map,14) == 76141 && Attempt() == attempt+1,
+            "3146到3147的真实15建立一次新尝试，进入地下城6的76141而非重开旧图");
+        string loading = fixture.Snapshot();
+        if (storyRevision is { } savedRevision)
+        {
+            That(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id) is [[long entryRevision]] &&
+                entryRevision == savedRevision+1,"1446后保留预备路线，真实15仅以更新后的revision安装一次新副本");
+            peer.Send(1446,[]); peer.Barrier();
+            That(fixture.Snapshot() == loading,"新图加载前重复1446无写入或通知，保留已安装Run及pending重放快照");
+        }
+        peer.Send(72,[1,3]); peer.Barrier();
+        That(fixture.Snapshot() == loading,"新图加载前的旧1,3尾包仍无响应，不覆盖新图状态或建立尝试");
+        peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Barrier();
+        That(fixture.Snapshot() == loading && Attempt() == attempt+1,
+            "新图加载前重复15只重放ACK，不创建副本或重发地图");
+        FormalDungeonTcpTests.Load(peer); peer.Barrier();
+        string durable = fixture.Snapshot();
+        peer.Send(39,FormalDungeonTcpTests.Death(U16(oldMap,25),peer.Id,oldMap[31])); peer.Barrier();
+        That(fixture.Snapshot() == durable &&
+            fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
+                is [[3147L,1L]],"旧实例迟到死亡不影响新任务、经验或完成记录");
+        return map;
+
+        long Attempt() => Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
     }
 
     static WirePacket Finished(TcpPeer peer, byte[]? expected = null) => peer.Expect(1,34,expected);

@@ -32,7 +32,7 @@ internal static class QuestProfessionReward
             target = checked((byte)(first | target << 4));
         }
         else throw new NotSupportedException("未知职业奖励类型");
-        // CHR的实际赠技索引同时确认职业存在此分支，不能凭全局编号上限放行。
+        // 实际分支资格由任务资源给出，再确认目标CHR赠技索引可读取；占位CHR块不代表有觉醒任务。
         _ = skills.FreeSkills(expected.Job, target);
         return target;
     }

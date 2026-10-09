@@ -38,5 +38,5 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
         await context.Notify(NotiPacketType.ACCEPTABLE_QUEST_LIST, body, "quest_list_refresh", canSend);
     }
 
-    private byte[] Prepare(Character character) => QuestPackets.AvailableList(character.Level, QuestEligibility.Visible(character, quests));
+    private byte[] Prepare(Character character) => QuestPackets.AvailableList(character.Level, QuestEligibility.Candidates(character, quests));
 }

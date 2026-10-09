@@ -35,11 +35,30 @@ internal static class FriendlyAiCharacterDeathTests
             That(actor.MonsterId == 65006 && actor.SpawnType == 5 && !actor.IsBlocking,
                 "APC来源来自实际发布的友方65006，不从F111推定阵营");
             var enemies = opening.Monsters.Monsters.Where(monster => monster.IsBlocking).ToArray();
-            var mixed = Source(opening,enemies[0],actor.ObjectKey,true);
+            var mixed = Source(opening,enemies[0],actor.ObjectKey,true) with { ReporterKey = ushort.MaxValue };
             var initial = f.Session.Selected!;
             That(f.Session.ObserveFormalDungeonDeath(mixed,kills,growth).Outcome == DungeonRunOutcome.Rejected &&
                 QuestCompletionRepositoryTests.Same(initial,f.Read()),"加载前友方来源不能授权死亡或落经验");
             var receipt = f.Session.CompleteFormalDungeonLoading()!;
+            var unknown = mixed with
+            {
+                MonsterKey = 65534, ReporterKey = 65533, BodySha256 = new string('B',64),
+                Participants = [new(0xABCD,65532,0,0)]
+            };
+            var beforeEmpty = f.Session.DungeonSnapshot!;
+            That(Ignored(f.Session.ObserveFormalDungeonDeath(unknown,kills,growth),65534) &&
+                Ignored(f.Session.ObserveFormalDungeonScriptedDeath(new(65534,0x21,true,new string('C',64)),kills,growth),65534) &&
+                QuestCompletionRepositoryTests.Same(initial,f.Read()) && ReferenceEquals(initial,f.Session.Selected) &&
+                beforeEmpty.Identity == f.Session.DungeonSnapshot!.Identity &&
+                beforeEmpty.LivingMonsters.SequenceEqual(f.Session.DungeonSnapshot!.LivingMonsters),
+                "未知目标普通/count0报告只审计忽略，不响应、不写成长、任务或清图状态");
+            That(Empty(f.Session.ObserveFormalDungeonDeath(Source(receipt,actor,actor.ObjectKey,false),kills,growth),actor.ObjectKey) &&
+                !f.Session.DungeonSnapshot!.LivingMonsters.Contains(actor.ObjectKey) &&
+                Empty(f.Session.ObserveFormalDungeonScriptedDeath(new(actor.ObjectKey,0x21,true,new string('C',64)),kills,growth),actor.ObjectKey) &&
+                QuestCompletionRepositoryTests.Same(initial,f.Read()) && ReferenceEquals(initial,f.Session.Selected) &&
+                beforeEmpty.Identity == f.Session.DungeonSnapshot!.Identity,
+                "友方APC普通死亡退场与count0重放空响应，只移除存活视觉对象，不改revision、经验或任务");
+            var retried = mixed;
             if (job == 0)
             {
                 f.Sql("CREATE TRIGGER apc_growth_fail AFTER INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'APC late growth failure'); END");
@@ -47,22 +66,38 @@ internal static class FriendlyAiCharacterDeathTests
                 That(QuestCompletionRepositoryTests.Same(initial,f.Read()) && ReferenceEquals(initial,f.Session.Selected) &&
                     f.Session.DungeonSnapshot!.LivingMonsters.Contains(enemies[0].ObjectKey),"失败保留在线快照、任务与存活目标，可原事实重试");
                 f.Sql("DROP TRIGGER apc_growth_fail");
+                retried = mixed with
+                {
+                    ReporterKey = 65533, BodySha256 = new string('D',64),
+                    Participants = [new(0x0211,65532,0,0),new(0xABCD,65531,0,0)]
+                };
             }
-            var first = f.Session.ObserveFormalDungeonDeath(mixed,kills,growth);
+            var first = f.Session.ObserveFormalDungeonDeath(retried,kills,growth);
             var committed = f.Read();
             That(first.Outcome == DungeonRunOutcome.Accepted && first.Reward is not null &&
                 committed.Revision == initial.Revision+1 && committed.Learning.Experience == initial.Learning.Experience+first.Reward.Amount &&
-                !f.Session.DungeonSnapshot!.LivingMonsters.Contains(enemies[0].ObjectKey),"多来源同一次提交经验和真实敌人死亡");
-            That(f.Session.ObserveFormalDungeonDeath(mixed with { Participants = mixed.Participants.ToArray().ToImmutableArray() },kills,growth)
-                    .Outcome == DungeonRunOutcome.Duplicate &&
-                f.Session.ObserveFormalDungeonDeath(mixed with { Participants = mixed.Participants.Reverse().ToImmutableArray() },kills,growth)
-                    .Outcome == DungeonRunOutcome.Rejected && QuestCompletionRepositoryTests.Same(committed,f.Read()),
-                "新解析数组精确重复不再授奖，来源顺序篡改仍拒绝");
-            That(f.Session.ObserveFormalDungeonDeath(Source(receipt,actor,actor.ObjectKey,false),kills,growth).Outcome == DungeonRunOutcome.Rejected &&
-                QuestCompletionRepositoryTests.Same(committed,f.Read()),"友方可作为来源，仍不能作为敌人死亡目标");
+                first.Receipt is not null && !f.Session.DungeonSnapshot!.LivingMonsters.Contains(enemies[0].ObjectKey),
+                "FFFF与APC多来源正常提交；SQL回滚后换0211或未知来源仍只提交一次真实敌人经验");
+            foreach (var replay in new[]
+            {
+                mixed with { Participants = mixed.Participants.ToArray().ToImmutableArray() },
+                mixed with { Participants = mixed.Participants.Reverse().ToImmutableArray(), BodySha256 = new string('E',64) },
+                mixed with { ReporterKey = 65533, Participants = [new(0xABCD,65532,0,0)], BodySha256 = new string('F',64) }
+            })
+                That(f.Session.ObserveFormalDungeonDeath(replay,kills,growth) is { Outcome: DungeonRunOutcome.Duplicate } duplicate &&
+                    Ignored(duplicate,enemies[0].ObjectKey) && QuestCompletionRepositoryTests.Same(committed,f.Read()),
+                    "已提交普通死亡换来源、顺序或正文仅审计，不重发响应或奖励");
+            int sourceIndex = 0;
             foreach (var monster in enemies.Skip(1))
-                That(f.Session.ObserveFormalDungeonDeath(Source(receipt,monster,actor.ObjectKey,false),kills,growth).Outcome == DungeonRunOutcome.Accepted,
-                    "原生仅APC来源也可结算当前真实敌人，不强制玩家贡献");
+            {
+                var report = Source(receipt,monster,actor.ObjectKey,false) with
+                {
+                    ReporterKey = ushort.MaxValue,
+                    Participants = sourceIndex++ % 2 == 0 ? [new(0x0211,65532,0,0)] : [new(0xABCD,65531,0,0)]
+                };
+                That(f.Session.ObserveFormalDungeonDeath(report,kills,growth) is { Outcome: DungeonRunOutcome.Accepted, Reward: not null },
+                    "0211与未知类型/key仅审计，不阻断当前真实敌人的奖励和死亡");
+            }
             var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology,opening.Entry.StartMap.Position,opening.Entry.BossMap.Position);
             var next = path[1];
             var moved = f.Session.MoveFormalDungeon(checked((byte)next.X),checked((byte)next.Y));
@@ -77,10 +112,11 @@ internal static class FriendlyAiCharacterDeathTests
             var applied = f.Session.ObserveFormalDungeonDeath(followed,kills,growth);
             That(applied.Outcome == DungeonRunOutcome.Accepted && applied.Reward is not null &&
                 f.Read().Learning.Experience == beforeFollowed.Learning.Experience+applied.Reward.Amount &&
-                f.Session.ObserveFormalDungeonDeath(mixed,kills,growth).Outcome == DungeonRunOutcome.Rejected,
-                "已发布友方APC跨房击杀正常落经验，旧房目标仍不能在新房提交");
+                Ignored(f.Session.ObserveFormalDungeonDeath(mixed,kills,growth),enemies[0].ObjectKey),
+                "已退场APC来源跨房仍可推进真实敌人，旧房目标只审计而不响应或发奖");
             var afterFollowed = f.Read();
-            That(f.Session.ObserveFormalDungeonDeath(followed,kills,growth).Outcome == DungeonRunOutcome.Duplicate &&
+            That(f.Session.ObserveFormalDungeonDeath(followed,kills,growth) is { Outcome: DungeonRunOutcome.Duplicate } repeated &&
+                Ignored(repeated,target.ObjectKey) &&
                 QuestCompletionRepositoryTests.Same(afterFollowed,f.Read()),"跨房死亡精确重放仍只保存一次");
             That(f.Session.ReturnFromFormalDungeon() is not null,"正常提前回城结束原run");
             var reopened = f.Session.EnterFormalDungeon(checked((uint)quest.DungeonIndex!.Value),3163,0,dungeons,rooms)!;
@@ -88,17 +124,35 @@ internal static class FriendlyAiCharacterDeathTests
             var currentTarget = reopened.Monsters.Monsters.First(monster => monster.IsBlocking);
             f.Session.CompleteFormalDungeonLoading();
             var beforeStale = f.Read();
+            That(Empty(f.Session.ObserveFormalDungeonScriptedDeath(new(currentActor.ObjectKey,0x21,true,new string('C',64)),kills,growth),currentActor.ObjectKey) &&
+                !f.Session.DungeonSnapshot!.LivingMonsters.Contains(currentActor.ObjectKey) &&
+                Empty(f.Session.ObserveFormalDungeonDeath(Source(reopened,currentActor,actor.ObjectKey,false),kills,growth),currentActor.ObjectKey) &&
+                QuestCompletionRepositoryTests.Same(beforeStale,f.Read()),
+                "新run友方APC先count0退场再普通报告重放，同样无revision、经验或任务变化");
             That(currentActor.ObjectKey != actor.ObjectKey && reopened.Snapshot.Identity.InstanceId != opening.Snapshot.Identity.InstanceId &&
-                f.Session.ObserveFormalDungeonDeath(Source(reopened,currentTarget,actor.ObjectKey,false),kills,growth).Outcome == DungeonRunOutcome.Rejected &&
-                QuestCompletionRepositoryTests.Same(beforeStale,f.Read()),"新run不能借原APC key授权新敌人死亡");
-            That(f.Session.ObserveFormalDungeonDeath(Source(reopened,currentTarget,currentActor.ObjectKey,false),kills,growth).Outcome == DungeonRunOutcome.Accepted,
-                "新run实际发布友方身份正常可用");
-            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+                Ignored(f.Session.ObserveFormalDungeonDeath(mixed,kills,growth),enemies[0].ObjectKey) &&
+                Ignored(f.Session.ObserveFormalDungeonDeath(Source(opening,actor,actor.ObjectKey,false),kills,growth),actor.ObjectKey) &&
+                QuestCompletionRepositoryTests.Same(beforeStale,f.Read()) &&
+                f.Session.DungeonSnapshot!.LivingMonsters.Contains(currentTarget.ObjectKey),
+                "新run中旧目标只审计忽略，不响应、不发新奖励、不误删当前敌人");
+            var oldSource = f.Session.ObserveFormalDungeonDeath(Source(reopened,currentTarget,actor.ObjectKey,false),kills,growth);
+            var afterOldSource = f.Read();
+            That(oldSource is { Outcome: DungeonRunOutcome.Accepted, Reward: not null, Receipt: not null } &&
+                afterOldSource.Revision == beforeStale.Revision+1 &&
+                afterOldSource.Learning.Experience == beforeStale.Learning.Experience+oldSource.Reward.Amount &&
+                !f.Session.DungeonSnapshot!.LivingMonsters.Contains(currentTarget.ObjectKey),
+                "旧run来源key仅审计，仍可推进当前run真实敌人且只提交本次奖励");
+            That(Ignored(f.Session.ObserveFormalDungeonDeath(Source(reopened,currentTarget,currentActor.ObjectKey,false),kills,growth),currentTarget.ObjectKey) &&
+                QuestCompletionRepositoryTests.Same(afterOldSource,f.Read()),"已提交普通目标换回新APC来源只审计，不响应或重复奖励");
+            f.Session.ReturnToRoster();
+            That(f.Session.ObserveFormalDungeonDeath(unknown,kills,growth).Outcome == DungeonRunOutcome.Rejected &&
+                QuestCompletionRepositoryTests.Same(afterOldSource,f.Read()),"未选角仍拒绝死亡，来源审计不绕过会话owner与状态");
+            f.Session.Select(0); f.Session.MarkReady();
             That(QuestCompletionRepositoryTests.Same(f.Session.Selected!,f.Read()) &&
                 f.Read().Learning.Experience > initial.Learning.Experience && f.Read().ActiveMainQuests.Single().QuestId == 3163,
                 "重选恢复真实击杀经验和未伪造的任务状态");
         }
-        Console.WriteLine($"PASS {Count-checks} 真实天空之城APC、多职业、跨房来源与死亡事务断言（非实机）");
+        Console.WriteLine($"PASS {Count-checks} 多职业来源审计、无奖励退场、跨实例重放与死亡事务断言（非实机）");
     }
 
     static NativeDungeonDeathObservation Source(FormalDungeonReceipt receipt,DungeonPlannedMonster target,ushort actor,bool mixed) =>
@@ -106,4 +160,14 @@ internal static class FriendlyAiCharacterDeathTests
         {
             Participants = mixed ? [new(0xF111,actor,2,1),new(0x0111,receipt.Character.Id,7,1)] : [new(0xF111,actor,0,0)]
         };
+
+    static bool Empty(FormalDungeonDeathResult result,ushort key) =>
+        result.Outcome is DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate && result.Receipt is not null &&
+        result.MonsterKey == key && result.Reward is null && result.ClearFact is null && result.Drop is null &&
+        result.QuestDropSlots.Count == 0 && result.CulledMonsterKeys.Count == 0;
+
+    static bool Ignored(FormalDungeonDeathResult result,ushort key) =>
+        result.Outcome is DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate && result.Receipt is null &&
+        result.MonsterKey == key && result.Reward is null && result.ClearFact is null && result.Drop is null &&
+        result.QuestDropSlots.Count == 0 && result.CulledMonsterKeys.Count == 0;
 }

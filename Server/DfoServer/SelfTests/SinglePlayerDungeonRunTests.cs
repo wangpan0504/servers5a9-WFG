@@ -131,8 +131,9 @@ internal static class SinglePlayerDungeonRunTests
                 ReferenceEquals(nativeRun.ClearFact,nativeClear) && nativeClear!.ConfirmedDeathEvents.Count == 2,
                 "Boss后小怪合法迟到报告作为清场重复处理，不新增死亡或通关事实");
         That(native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(22) with { ChecksumMatches = false }).Outcome == DungeonRunOutcome.Rejected &&
-            native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(22) with { ReporterKey = checked((ushort)(reporter+1)) }).Outcome == DungeonRunOutcome.Rejected,
-            "清场迟到报告仍复验检查值和真实上报角色");
+            native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(22) with { ReporterKey = checked((ushort)(reporter+1)) })
+                is { Outcome: DungeonRunOutcome.Duplicate, Death: null },
+            "清场迟到报告保留正文检查值，来源仅审计且不影响空死亡应答");
         nativeRun.Return(nativeRun.Snapshot.Identity,Guid.NewGuid());
         That(native.ValidateAndIssue(nativeRun,nativeRun.Snapshot.Identity,Report(22)).Outcome == DungeonRunOutcome.Rejected,
             "退出实例后不能再使用清场重放入口");
@@ -174,7 +175,106 @@ internal static class SinglePlayerDungeonRunTests
         That(sideRun.Move(sideRun.Snapshot.Identity, Guid.NewGuid(), friendly.Position).Outcome == DungeonRunOutcome.Rejected &&
             sideRun.ClearFact == branchClear.ClearFact,
             "settlement cannot resume room traversal or add an optional branch to the committed clear fact");
-        Console.WriteLine($"PASS {Count - checks} dungeon nonblocking actor lifecycle assertions");
+        RunLoadingCore();
+        Console.WriteLine($"PASS {Count - checks} dungeon actor and confirmed-loading lifecycle assertions");
+    }
+
+    private static void RunLoadingCore()
+    {
+        var authority = new FixtureCombatAuthority();
+        var start = new DungeonMap("map", new(0, 0), 101, "map/loading-start.map");
+        var middle = new DungeonMap("map", new(1, 0), 102, "map/loading-middle.map");
+        var boss = new DungeonMap("boss", new(2, 0), 103, "map/loading-boss.map");
+        var maze = new DungeonMaze(7, 3, 1, "BBFFEE", [start.Position], [boss.Position], [start, middle, boss], []);
+        var entry = new DungeonEntryPlan(99, 17, 3, 3145, 0, 0, maze, start, boss) { InitializationCounterSupported = true };
+        var route = new DungeonFixedRoute([Plan(start, 10), WithTeams(Plan(middle, 11), 0), BossPlan(boss, 12)],
+            [new(start.Position, middle.Position), new(middle.Position, boss.Position)]);
+        foreach (bool reuse in new[] { false, true })
+        {
+            That(SinglePlayerDungeonRun.TryCreate(entry with { IndividualMapMovement = reuse }, 1, 100, route, authority, out var created, out _),
+                "ordinary loading fixture creates the existing identity-bound run");
+            var run = created!;
+            var firstIdentity = run.Snapshot.Identity;
+            var firstAction = Guid.NewGuid();
+            That(run.ConfirmedInitializationCount == 0 && run.LastLoadingFact is null && run.MazeInitializationThreshold == 2 &&
+                run.CompleteLoading(firstIdentity with { InstanceId = Guid.NewGuid() }, firstAction, true).Outcome == DungeonRunOutcome.Rejected &&
+                run.CompleteLoading(firstIdentity, Guid.Empty, true).Outcome == DungeonRunOutcome.Rejected && run.LastLoadingFact is null,
+                "rejected loads neither initialize cache nor count and maze threshold counts positive cells minus one");
+            run.CompleteLoading(firstIdentity, firstAction, true);
+            var firstFact = run.LastLoadingFact;
+            That(firstFact is { IsInitialLoading: true, DidInitializeMap: true, ConfirmedInitializationCount: 0, MazeSourceOrdinal: 7 } &&
+                firstFact.Identity == firstIdentity && firstFact.ActionId == firstAction && firstFact.DungeonId == entry.DungeonId && firstFact.Map == start,
+                "first load freezes actual pre-epoch identity and resource map without counting the initial entry");
+            That(run.CompleteLoading(firstIdentity, firstAction, true).Outcome == DungeonRunOutcome.Duplicate &&
+                run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid(), true).Outcome == DungeonRunOutcome.Rejected &&
+                ReferenceEquals(firstFact, run.LastLoadingFact) && run.ConfirmedInitializationCount == 0,
+                "replayed or out-of-phase loading cannot replace a confirmed fact or count another initialization");
+            run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity, 10, 1));
+            run.Move(run.Snapshot.Identity, Guid.NewGuid(), middle.Position);
+            run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
+            That(run.LastLoadingFact is { IsInitialLoading: false, DidInitializeMap: true, ConfirmedInitializationCount: 0 } &&
+                run.ClearFact is null && run.Phase == SinglePlayerDungeonPhase.Dungeon,
+                "a successful load without matching acceptance still installs cache but never completes a quest or dungeon");
+            run.Move(run.Snapshot.Identity, Guid.NewGuid(), start.Position);
+            var staleIdentity = run.Snapshot.Identity with { Epoch = firstIdentity.Epoch };
+            var beforeRejected = run.LastLoadingFact;
+            That(run.CompleteLoading(staleIdentity, Guid.NewGuid(), true).Outcome == DungeonRunOutcome.Rejected &&
+                ReferenceEquals(beforeRejected, run.LastLoadingFact) && run.ConfirmedInitializationCount == 0,
+                "an old loading epoch cannot advance shared counter or mark an unconfirmed room");
+            run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid(), true);
+            That(run.LastLoadingFact!.DidInitializeMap == !reuse && run.ConfirmedInitializationCount == (reuse ? 0u : 1u),
+                "individual movement reuses the first-room cache while ordinary revisit initializes it again");
+            run.Move(run.Snapshot.Identity, Guid.NewGuid(), middle.Position);
+            run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid(), true);
+            That(run.LastLoadingFact!.DidInitializeMap == !reuse && run.ConfirmedInitializationCount == (reuse ? 0u : 2u),
+                "cache created before a matching quest is accepted stays reusable without retroactive progress");
+            run.Move(run.Snapshot.Identity, Guid.NewGuid(), boss.Position);
+            run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid(), true);
+            uint count = reuse ? 1u : 3u;
+            That(run.LastLoadingFact is { DidInitializeMap: true, IsInitialLoading: false } && run.LastLoadingFact.Map == boss &&
+                run.ConfirmedInitializationCount == count && run.ClearFact is null && run.Phase == SinglePlayerDungeonPhase.Dungeon,
+                "a new boss room adds one matching initialization and reaching threshold does not fabricate clear");
+            var clear = run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity, 12, 2));
+            That(clear.ClearFact is { ConfirmedDeathEvents.Count: 2 } && run.ConfirmedInitializationCount == count &&
+                run.LastLoadingFact!.ConfirmedInitializationCount == count && run.Phase == SinglePlayerDungeonPhase.Settlement,
+                "real boss death retains shared initialization count for the existing clear transaction");
+        }
+        var singleMaze = maze with { Width = 1, Greed = "BB", Starts = [boss.Position with { X = 0 }], Bosses = [boss.Position with { X = 0 }],
+            MapSpecification = [boss with { Position = new(0, 0) }] };
+        var singleBoss = singleMaze.MapSpecification![0];
+        var singleEntry = entry with { Maze = singleMaze, StartMap = singleBoss, BossMap = singleBoss, BaseBossMap = singleBoss };
+        That(SinglePlayerDungeonRun.TryCreate(singleEntry, 2, 200, new([BossPlan(singleBoss, 20)], []), authority, out var single, out _) &&
+            single!.InitializationCounterSupported && single.MazeInitializationThreshold is null && single.ConfirmedInitializationCount == 0,
+            "a new run resets the counter while the unconfirmed single-room minus-one fallback stays unavailable");
+        That(SinglePlayerDungeonRun.TryCreate(entry with { InitializationCounterSupported = false }, 3, 300, route, authority, out var unsupported, out _),
+            "unconfirmed counter shapes retain the existing ordinary run admission");
+        unsupported!.CompleteLoading(unsupported.Snapshot.Identity, Guid.NewGuid(), true);
+        That(unsupported.LastLoadingFact is { InitializationCounterSupported: false, DidInitializeMap: false } &&
+            unsupported.MazeInitializationThreshold is null && unsupported.ConfirmedInitializationCount == 0,
+            "unconfirmed resources report the explicit loading limitation and no replacement counter");
+        That(SinglePlayerDungeonRun.TryCreate(entry, 4, 400, route, authority, out var counting, out _),
+            "positive threshold fixture uses an independent run");
+        counting!.CompleteLoading(counting.Snapshot.Identity, Guid.NewGuid(), true);
+        counting.AcceptConfirmedDeath(authority.Death(counting.Snapshot.Identity, 10, 1));
+        for (uint expected = 1; expected <= 8; expected++)
+        {
+            var target = counting.Snapshot.CurrentMap == start ? middle.Position : start.Position;
+            counting.Move(counting.Snapshot.Identity, Guid.NewGuid(), target);
+            counting.CompleteLoading(counting.Snapshot.Identity, Guid.NewGuid(), true);
+            That(counting.ConfirmedInitializationCount == expected && counting.ClearFact is null &&
+                counting.MazeInitializationThreshold == 2,
+                "positive eight counts actual repeated initializations independently of the maze minus-one threshold");
+        }
+        counting.BindQuestAcceptance(new(1, 3101, 0) { AcceptanceId = Guid.NewGuid() });
+        That(counting.ConfirmedInitializationCount == 8 && counting.Entry.QuestAcceptances.Single().ConditionState == 0,
+            "binding another active acceptance even with completed scalar does not reset the shared native counter");
+        var renewed = new DfoServer.Game.Characters.ActiveMainQuest(0, 3145, 1) { AcceptanceId = Guid.NewGuid() };
+        That(SinglePlayerDungeonRun.TryCreate(entry with { QuestAcceptanceId = renewed.AcceptanceId, QuestAcceptances = [renewed] },
+            5, 500, route, authority, out var newRun, out _) && newRun!.ConfirmedInitializationCount == 0 &&
+            newRun.LastLoadingFact is null &&
+            newRun.CompleteLoading(counting.Snapshot.Identity, Guid.NewGuid(), true).Outcome == DungeonRunOutcome.Rejected &&
+            newRun.ConfirmedInitializationCount == 0 && newRun.Entry.QuestAcceptances.Single().AcceptanceId == renewed.AcceptanceId,
+            "old run loading identity cannot advance the same quest's new acceptance and new run starts its own counter");
     }
 
     public static void Run(PvfArchive pvf)

@@ -32,6 +32,7 @@ internal sealed partial class GameSession
         if (restorePosition && Selected!.Position != CurrentDungeonSelection.ReturnPosition)
             Selected = repository.Save(owner, Selected, CurrentDungeonSelection.ReturnPosition, Selected.Return);
         CurrentDungeonSelection = null;
+        pendingQuestReplay = null;
         Phase = SessionPhase.Town;
         return new DungeonSelectionReceipt(Selected!, owner.Generation, SelectionEpoch, dungeonSelectionId);
     });

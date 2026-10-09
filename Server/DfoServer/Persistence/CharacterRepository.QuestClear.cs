@@ -82,7 +82,7 @@ internal sealed partial class CharacterRepository
             (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 && quest.IntData[0] == clear.ClearMap?.Id &&
                 (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
              QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue &&
-                QuestDungeonClearProgress.Matches(quest,entry) && QuestDungeonClearProgress.ValidScalar(quest,row.ConditionState))).ToArray();
+                QuestDungeonClearProgress.Matches(quest,entry,run) && QuestDungeonClearProgress.ValidScalar(quest,row.ConditionState))).ToArray();
         if (targets.Length == 0 && saved.Count == 0) return;
         if (!QuestClearEligibility.TryValidate(entry, prepared))
             throw new InvalidDataException("任务清图需要同一正式实例末次可信死亡事实");

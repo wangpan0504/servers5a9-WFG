@@ -66,7 +66,102 @@ internal static class QuestCharacterRewardTests
             !QuestEligibility.Evaluate(character,mixed,prerequisites).Eligible &&
             QuestEligibility.Evaluate(character with { CompletedQuests = [103] },mixed,prerequisites).Eligible,
             "空OR组不能绕过保留下来的真实非空前置");
-        Console.WriteLine($"PASS {Count-checks} 槽位任务声明、分类及空前置合同断言");
+        foreach (string name in new[] { "male depend message", "male solve message" })
+        {
+            var text = quest with { Definition = quest.Definition! with
+            {
+                Fields = quest.Definition!.Fields.Add(new(name,[new(6,0,"实际对话文本")],[]))
+            } };
+            That(QuestCoverage.Unconfirmed(text).Length == 0 && QuestCoverage.HasOrdinaryDeclarations(text),
+                "匹配客户端单文本显示声明不再被当作未知业务: " + name);
+            for (byte job = 0; job < 16; job++)
+                That(QuestEligibility.Evaluate(character with { Job = job },text,catalog).Visible,
+                    "显示文本不新增职业资格限制: " + name + "/" + job);
+            foreach (var field in new QuestField[]
+            {
+                new(name,[],[]), new(name,[new(0,1,null)],[]), new(name,[new(6,0,null)],[]),
+                new(name,[new(6,0,"a"),new(6,0,"b")],[]),
+                new(name,[new(6,0,"a")],[new("unknown",[],[])])
+            })
+            {
+                var invalid = text with { Definition = text.Definition! with
+                {
+                    Fields = quest.Definition!.Fields.Add(field)
+                } };
+                That(!QuestCoverage.HasOrdinaryDeclarations(invalid),"男性文本仍要求已确认的单文本形状: " + name);
+                Reject<NotSupportedException>(() => QuestCoverage.RequireOrdinaryDeclarations(invalid),"显示声明形状失败有明确限制");
+            }
+        }
+        foreach (string name in new[] { "visible npc", "show click on complete npc", "dialog show time" })
+        {
+            foreach (int npc in new[] { -2, -1, 0, 127 })
+            {
+                var display = quest with { Definition = quest.Definition! with
+                    { Fields = quest.Definition!.Fields.Add(new(name,[new(0,npc,null)],[])) } };
+                That(QuestCoverage.Unconfirmed(display).Length == 0 && QuestCoverage.HasOrdinaryDeclarations(display),
+                    "客户端显示声明保留有符号单整数，不增加资格或进度限制 " + name + "/" + npc);
+                for (byte job = 0; job < 16; job++)
+                    That(QuestEligibility.Evaluate(character with { Job = job },display,catalog).Visible,
+                        "客户端显示声明使用统一职业资格 " + name + "/" + npc + "/" + job);
+            }
+            foreach (var field in new QuestField[]
+            {
+                new(name,[],[]), new(name,[new(6,0,"127")],[]),
+                new(name,[new(0,127,null),new(0,128,null)],[]),
+                new(name,[new(0,127,null)],[new("unknown",[],[])])
+            })
+            {
+                var invalid = quest with { Definition = quest.Definition! with { Fields = quest.Definition!.Fields.Add(field) } };
+                That(!QuestCoverage.HasOrdinaryDeclarations(invalid),"NPC显示声明仍要求匹配单整数形状: " + name);
+                Reject<NotSupportedException>(() => QuestCoverage.RequireOrdinaryDeclarations(invalid),"错误NPC显示形状保留明确限制");
+            }
+        }
+        var maleDialog = new QuestField("male dialog",
+            Enumerable.Range(0,8).Select(value => new QuestRewardToken(0,value,null)).Append(new(6,0,"原始男性对话")).ToImmutableArray(),[]);
+        var dialog = quest with { Definition = quest.Definition! with { Fields = quest.Definition!.Fields.Add(maleDialog) } };
+        That(QuestCoverage.HasOrdinaryDeclarations(dialog),"八整数及单文本男性对话沿普通任务显示合同");
+        foreach (var invalid in new[]
+        {
+            maleDialog with { Values = maleDialog.Values.RemoveAt(0) },
+            maleDialog with { Values = maleDialog.Values.Add(new(0,1,null)) },
+            maleDialog with { Values = maleDialog.Values.SetItem(0,new(6,0,"1")) },
+            maleDialog with { Values = maleDialog.Values.SetItem(8,new(0,1,null)) },
+            maleDialog with { Children = [new("unknown",[],[])] }
+        })
+            That(!QuestCoverage.HasOrdinaryDeclarations(quest with { Definition = quest.Definition! with
+                { Fields = quest.Definition!.Fields.Add(invalid) } }),"未确认男性对话形状保留明确限制");
+        var notification = new QuestField("quest clear noti",[],
+            [new("image info",[new(6,0,"Interface\\status_icon.img"),new(0,240,null)],[]),
+             new("noti message",[new(6,0,"舒服的风从四周吹来。")],[])]);
+        var notified = quest with { Definition = quest.Definition! with { Fields = quest.Definition!.Fields.Add(notification) } };
+        That(QuestCoverage.Unconfirmed(notified).Length == 0 && QuestCoverage.HasOrdinaryDeclarations(notified),
+            "本地任务完成图标文字声明沿已确认显示合同");
+        That(QuestCoverage.IsClearNotification(notification with { Children = [notification.Children[1],notification.Children[0]] }),
+            "完成提示按子标签识别，保留资源顺序而不依赖固定排列");
+        for (byte job = 0; job < 16; job++)
+            That(QuestEligibility.Evaluate(character with { Job = job },notified,catalog).Visible,
+                "任务完成提示不增加职业资格限制 " + job);
+        var image = notification.Children[0]; var message = notification.Children[1];
+        foreach (var invalid in new QuestField[]
+        {
+            notification with { Values = [new(0,1,null)] },
+            notification with { Children = [image] }, notification with { Children = [image,image] },
+            notification with { Children = [image,message,new("unknown",[],[])] },
+            notification with { Children = [image,message with { Children = [new("unknown",[],[])] }] },
+            notification with { Children = [image with { Values = [new(6,0,null),new(0,240,null)] },message] },
+            notification with { Children = [image with { Values = [new(6,0,"a"),new(6,0,"240")] },message] },
+            notification with { Children = [image with { Values = [new(6,0,"a"),new(0,-1,null)] },message] },
+            notification with { Children = [image,message with { Values = [] }] },
+            notification with { Children = [image,message with { Values = [new(0,1,null)] }] },
+            notification with { Children = [image,message with { Values = [new(6,0,null)] }] },
+            notification with { Children = [image,message with { Values = [new(6,0,"a"),new(6,0,"b")] }] }
+        })
+        {
+            var wrong = notified with { Definition = notified.Definition! with { Fields = quest.Definition!.Fields.Add(invalid) } };
+            That(!QuestCoverage.HasOrdinaryDeclarations(wrong),"完成提示仍要求单图标与单文本的已确认形状");
+            Reject<NotSupportedException>(() => QuestCoverage.RequireOrdinaryDeclarations(wrong),"未知完成提示形状保留明确限制");
+        }
+        Console.WriteLine($"PASS {Count-checks} 槽位任务声明、显示、分类及空前置合同断言");
 
         StoryQuest Field(string name,ImmutableArray<QuestRewardToken> values,ImmutableArray<QuestField> children = default)
         {
@@ -92,7 +187,23 @@ internal static class QuestCharacterRewardTests
         var skills = SkillLearningCatalog.Load(pvf); var growth = CharacterGrowthCatalog.Load(pvf,skills);
         var parameters = QuestRewardParameterCatalog.Load(pvf);
         var empty = QuestEligibilityTests.Quest(100) with { Npc = 2, CompleteNpc = 2, IntData = [2], Attributes = ["not give exp quest"] };
+        var range = empty with { Id = 101, Condition = "[reach the range]", SubType = 1, CompleteNpc = 0,
+            IntData = [40,2,254,218,100,145] };
+        var cinematic = empty with { Id = 102, Condition = "[look cinematic]", CompleteNpc = 0, IntData = [1],
+            CinematicPath = "fixture/scene.cmt", Definition = new([new("go guide",
+                [new(0,40,null),new(0,2,null),new(0,28,null),new(0,-1,null),new(6,0,"前往场景")],[])]) { Job = "[all]" } };
+        var noNpc = empty with { Id = 103, CompleteNpc = 0 };
+        var wrongRange = range with { Id = 104, IntData = [40,2,254,218,0,145] };
+        var sceneCoverage = QuestCoverage.Scan(new(new[] { range,cinematic,noNpc,wrongRange }.ToDictionary(quest => quest.Id)),
+            items.Items,items.EpicPieces,parameters);
+        That(sceneCoverage.Quests.Where(row => row.Id is 101 or 102).All(row => row.ImplementedPath) &&
+            sceneCoverage.Quests.Where(row => row.Id is 103 or 104).All(row => !row.ImplementedPath &&
+                row.Restrictions.Contains("此自动交付入口尚未确认")),
+            "已确认范围和演出场景交付覆盖与Session一致；NPC0普通任务和未知范围不被通用放行");
         var catalog = QuestCatalog.Load(pvf);
+        var clearNotifications = catalog.All.Where(quest => quest.Definition?.Has("quest clear noti") == true).ToArray();
+        That(clearNotifications.Length > 0 && clearNotifications.All(QuestCoverage.HasOrdinaryDisplay),
+            "实际完成提示资源均使用已确认的图标路径、非负序号和文字形状");
         That(catalog.All.Where(quest => quest.RewardType == "[slot expansion]" && QuestCharacterReward.TryScalar(quest,out _))
             .Select(quest => quest.Rewards[0].Value).Distinct().Order().SequenceEqual([0,1,2]),"三个装备槽奖励使用实际标量而非固定任务编号");
         That(catalog.All.Where(quest => quest.RewardType == "[tp]").All(quest => quest.Rewards.Count == 0 &&
@@ -126,10 +237,12 @@ internal static class QuestCharacterRewardTests
             var entry = new DungeonEntryPlan(1,1,0,(uint)quest.Id,0,2,maze,map,map) { QuestAcceptances = [active] };
             var after = active;
             foreach (var target in targets)
-                after = QuestHuntProgress.MonsterDeath([after],entry with { DungeonId = (uint)target.DungeonId },catalog,target.MonsterId)[0];
+                after = QuestHuntProgress.MonsterDeath([after],entry with { DungeonId = (uint)target.DungeonId },catalog,
+                    new(0,1,target.MonsterId,1,null))[0];
             That(after.ConditionState == 0 && after.AcceptanceId == active.AcceptanceId &&
                 QuestHuntProgress.MonsterDeath([active with { AcceptanceId = Guid.NewGuid() }],
-                    entry with { DungeonId = (uint)targets[0].DungeonId },catalog,targets[0].MonsterId)[0].ConditionState == active.ConditionState,
+                    entry with { DungeonId = (uint)targets[0].DungeonId },catalog,
+                    new(0,1,targets[0].MonsterId,1,null))[0].ConditionState == active.ConditionState,
                 "真实前驱包括多地下城通道只由绑定接取的对应死亡推进，旧接取不能推进 " + quest.Id);
         }
         foreach (var quest in slotQuests.Where(quest => quest.RewardType == "[slot expansion]"))

@@ -57,6 +57,32 @@ internal static class ItemModelTests
         Reject<InvalidDataException>(() => StackableFile.Parse(1, "stackable/a.stk", [new(3, 0), new(0, -1)], Resolve));
         That(EquipmentFile.Parse(1, "equipment/a.equ", [new(3, 0), new(0, -1)], Resolve).DeclaredPrice is null, "equipment unsupported scalar remains nonfatal");
         That(PvfItemIndex.Stackable([new(0, 0), new(6, 4)], Resolve, _ => true)[0] == "stackable/fixture.stk", "stackable zero identity is retained");
+        string[] ticketStrings = ["[action type]","[quest clear]","[maximum level]","[use action packet]","[usable job]","[all]","[/action type]","[/usable job]","[any quest clear]",
+            "[action usable place]","[village]","[/action usable place]"];
+        string TicketResolve(int value) => ticketStrings[value];
+        var ticket = StackableFile.Parse(100,"stackable/ticket.stk",
+            [new(3,0),new(6,1),new(3,6),new(3,2),new(0,84),new(3,3),new(0,0),new(3,4),new(6,5),new(3,7)],TicketResolve);
+        That(ticket.ActionDeclaration is { Label: "[quest clear]", Parameters.Count: 0 } && ticket.DeclaredMaximumLevel == 84 &&
+            ticket.HasMaximumLevel && ticket.DeclaredUseActionPacket == 0 && ticket.HasUseActionPacket &&
+            ticket.DeclaredUsableJobs!.SequenceEqual(new[] { "[all]" }),"ticket declarations preserve empty action arguments, explicit zero and job list");
+        ticket = StackableFile.Parse(100,"stackable/ticket.stk",[new(3,0),new(6,8),new(0,674),new(0,649),new(3,6)],TicketResolve);
+        That(ticket.ActionDeclaration!.Parameters.SequenceEqual(new[] { 674,649 }) && !ticket.HasMaximumLevel && ticket.DeclaredMaximumLevel is null,
+            "ticket raw parameters and missing maximum remain distinct");
+        ticket = StackableFile.Parse(100,"stackable/ticket.stk",[new(3,2),new(0,84),new(0,85),new(3,4),new(0,1)],TicketResolve);
+        That(ticket.HasMaximumLevel && ticket.DeclaredMaximumLevel is null && ticket.HasUsableJobs && ticket.DeclaredUsableJobs is null,
+            "malformed ticket bounds and job tokens cannot become absent defaults");
+        ticket = StackableFile.Parse(100,"stackable/ticket.stk",[new(3,9),new(6,10),new(3,11)],TicketResolve);
+        That(ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces!.SequenceEqual(new[] { "[village]" }),
+            "ticket raw village declaration is retained");
+        ticket = StackableFile.Parse(100,"stackable/ticket.stk",[],TicketResolve);
+        That(!ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces is null,"missing usable place has no implicit village restriction");
+        foreach (PvfToken[] values in new PvfToken[][]
+            { [new(3,9),new(0,1)], [new(3,9),new(6,10),new(3,11),new(3,9),new(6,10),new(3,11)] })
+        {
+            ticket = StackableFile.Parse(100,"stackable/ticket.stk",values,TicketResolve);
+            That(ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces is null,
+                "malformed or duplicate usable place cannot become an absent default");
+        }
         Reject<InvalidDataException>(() => PvfItemIndex.Equipment([new(0, 0), new(6, 4)], Resolve, _ => true));
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 5)], Resolve, _ => true));
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 4)], Resolve, _ => false));

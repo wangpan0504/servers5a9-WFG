@@ -28,6 +28,20 @@ internal sealed record DungeonEntryPlan(
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
     public float ExperienceWeight { get; init; } = 1;
     public IReadOnlyList<int> NamedMonsters { get; init; } = Array.Empty<int>();
+    public bool IndividualMapMovement { get; init; }
+    public bool InitializationCounterSupported { get; init; }
+    public bool IsQuestReplay { get; init; }
+
+    public static bool TryCreateReplay(DungeonCatalog catalog,QuestReplayPlan replay,out DungeonEntryPlan? plan,out string reason)
+    {
+        plan = null;
+        DungeonDefinition definition;
+        try { definition = catalog.Get(checked((int)replay.DungeonId)); }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
+        { reason = "dungeon-resource-unavailable"; return false; }
+        return TryCreate(definition,replay.Expected,replay.DungeonId,replay.QuestId,0,out plan,out reason,
+            quest: replay.Quest,isReplay: true);
+    }
 
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
@@ -54,10 +68,10 @@ internal sealed record DungeonEntryPlan(
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
-        Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null)
+        Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false)
     {
         plan = null;
-        reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
+        reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
         if (reason != "resource-request-ready")
             return false;
         if (definition.Id != dungeonId)
@@ -79,7 +93,7 @@ internal sealed record DungeonEntryPlan(
         }
 
         // 仅识别匹配 PVF 已确认的三个整数；未知引用和其他条件形状不能变成默认迷宫。
-        uint routeQuest = quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
+        uint routeQuest = !isReplay && quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
         var candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)).ToArray();
         if (questId == 0 && quests is not null)
         {
@@ -155,8 +169,8 @@ internal sealed record DungeonEntryPlan(
         }
 
         // SourceOrdinal 仅保留资源顺序，不能直接作为 NOTI28 的 wire 枚举。
-        var active = questId == 0 ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
-        plan = new(character.Id, character.Revision, dungeonId, questId, active?.Slot ?? byte.MaxValue, difficulty, maze, starts[0], terminal)
+        var active = questId == 0 || isReplay ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
+        plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, maze, starts[0], terminal)
         {
             BasisLevel = definition.BasisLevel,
             MonsterBasisLevel = definition.BasisLevel,
@@ -165,13 +179,17 @@ internal sealed record DungeonEntryPlan(
             RouteQuestId = routeQuest,
             QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(),
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
-            NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition)
+            NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
+            IndividualMapMovement = definition.IndividualMapMovement,
+            IsQuestReplay = isReplay,
+            InitializationCounterSupported = maze.LayeredMaps.Count == 0 &&
+                !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
         reason = "resource-plan-ready";
         return true;
     }
 
-    private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty, bool allowClearedQuest, StoryQuest? quest)
+    private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty, bool allowClearedQuest, StoryQuest? quest,bool isReplay = false)
     {
         if (dungeonId is 0 or > int.MaxValue)
             return "dungeon-unsupported";
@@ -181,6 +199,9 @@ internal sealed record DungeonEntryPlan(
             return "difficulty-unsupported";
         if (character.Level is < 1 or > 95)
             return "character-level-invalid";
+        if (isReplay)
+            return questId > 0 && difficulty == 0 && quest?.Id == questId && QuestEligibility.Completed(character).Contains((int)questId)
+                ? "resource-request-ready" : "quest-replay-unavailable";
         if (questId == 0) return "resource-request-ready";
         if (QuestEligibility.Completed(character).Contains((int)questId))
             return "quest-already-completed";

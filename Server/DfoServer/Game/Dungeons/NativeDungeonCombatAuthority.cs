@@ -23,7 +23,7 @@ internal sealed record NativeDungeonDeathObservation(
 internal sealed record NativeDungeonDeathResult(DungeonRunOutcome Outcome, ConfirmedDungeonMonsterDeath? Death = null);
 internal sealed record NativeDungeonScriptedDeathObservation(uint MonsterKey, uint ActorFlags, bool ChecksumMatches, string BodySha256);
 
-// 正式死亡报告的归属与重放核验；客户端HP、次数和等级统计不作为死亡门槛。
+// 正式死亡报告的实例与提交身份；来源和目标统计用于审计，不作为死亡门槛。
 // 调用方在原正式实例owner内串行使用；缓存只保存本实例已签发事实，不复制在线角色状态。
 internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
 {
@@ -52,15 +52,6 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
         NativeDungeonDeathObservation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
-        var participants = observation.SourceParticipants;
-        if (observation.ReporterKey != expectedIdentity.CharacterId || participants.Length is 0 or > 254 ||
-            participants.Any(participant => participant.Kind switch
-            {
-                0x0111 => participant.ObjectKey != expectedIdentity.CharacterId,
-                // F111是原生来源标记，友方资格必须来自本实例实际发布过的MAP APC，不能只看kind。
-                0xF111 => !run.IsPublishedFriendlyAiCharacter(participant.ObjectKey),
-                _ => true
-            })) return new(DungeonRunOutcome.Rejected);
         return Issue(run,expectedIdentity,observation.MonsterKey,observation.ChecksumMatches,observation.BodySha256,observation);
     }
 
@@ -81,10 +72,10 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
             return new(DungeonRunOutcome.Rejected);
 
         var snapshot = run.Snapshot;
-        // 旧expected先拒绝；已确认事实的缓存也不能放行另一房间、加载或退出中的旧报告。
+        // 旧expected、加载或退出中的报告不能操作当前实例，正文完整性仍由Parser提供。
         if (snapshot.Identity != expectedIdentity ||
             snapshot.Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement) ||
-            monsterKey > ushort.MaxValue || !ValidFingerprint(fingerprint))
+            monsterKey > ushort.MaxValue || !ValidFingerprint(fingerprint) || !checksumMatches)
             return new(DungeonRunOutcome.Rejected);
 
         ushort key = (ushort)monsterKey;
@@ -94,16 +85,18 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
                 snapshot.Phase == SinglePlayerDungeonPhase.Settlement && cached.Death.Identity.Epoch < long.MaxValue &&
                     snapshot.Identity.Epoch == cached.Death.Identity.Epoch + 1 &&
                     snapshot.Identity == (cached.Death.Identity with { Epoch = snapshot.Identity.Epoch });
-            return SameObservation(cached.Observation,observation) && cached.Map == snapshot.CurrentMap && sameEpoch
+            // 同房同提交身份复用原事实，以便SQL失败后继续恢复；新的来源/正文不重签。
+            // 跨房或旧epoch只审计忽略，不把旧事实带入新场景发奖。
+            return cached.Map == snapshot.CurrentMap && sameEpoch
                 ? new(DungeonRunOutcome.Duplicate, cached.Death)
-                : new(DungeonRunOutcome.Rejected);
+                : new(DungeonRunOutcome.Duplicate);
         }
-        // count=0表示生产者没有伤害参与者；仍要求当前实例实际发布的存活阻塞对象，不能仅凭FFFF签发。
-        if (!checksumMatches || sequence == long.MaxValue)
-            return new(DungeonRunOutcome.Rejected);
         // Boss通关已向客户端清除的小怪可能随后补报39；作为清场重放收尾，不重新授奖。
         if (run.IsCulledMonster(key)) return new(DungeonRunOutcome.Duplicate);
+        // 无资源奖励对象不签发奖励事实；Session区分友方退场应答和未知目标审计忽略。
         if (run.CurrentLivingMonster(key) is null)
+            return new(DungeonRunOutcome.Accepted);
+        if (sequence == long.MaxValue)
             return new(DungeonRunOutcome.Rejected);
 
         long nextSequence = checked(sequence + 1);
@@ -116,7 +109,4 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
     static bool ValidFingerprint(string? value) => value is { Length: 64 } &&
         value.All(character => character is >= '0' and <= '9' or >= 'A' and <= 'F' or >= 'a' and <= 'f');
 
-    static bool SameObservation(object first, object second) => first is NativeDungeonDeathObservation a && second is NativeDungeonDeathObservation b
-        ? (a with { Participants = default }) == (b with { Participants = default }) && a.SourceParticipants.SequenceEqual(b.SourceParticipants)
-        : first.Equals(second);
 }

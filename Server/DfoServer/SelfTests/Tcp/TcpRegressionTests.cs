@@ -12,6 +12,43 @@ internal static class TcpRegressionTests
         ("packet-capture", (options, root, _) => PacketCaptureTcpTests.RunAsync(options, root)),
         ("town", TownProtocolTcpTests.RunAsync),
         ("quests", QuestLifecycleTcpTests.RunAsync),
+        ("quest-continuation", QuestLifecycleTcpTests.RunContinuationAsync),
+        ("story-digest", StoryDigestTcpTests.RunAsync),
+        ("quest-manual-skip", (_, _, resources) => QuestManualSkipTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Learning)),
+        ("quest-ticket", (_, _, resources) => QuestTicketTests.RunAsync(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning)),
+        ("quest-specified-ticket", (_, _, resources) => QuestSpecifiedTicketTests.RunAsync(resources.Towns,resources.Archive,
+            resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
+        ("quest-awakening-ticket", (_, _, resources) => QuestAwakeningTicketTests.RunAsync(resources.Towns,resources.Archive,
+            resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
+        ("quest-play-only", (_, _, resources) => QuestPlayOnlyTests.RunAsync(resources.Towns,resources.Archive,
+            resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
+        ("quest-auto-meet", (_, _, resources) => QuestAutoMeetTests.RunAsync(resources.Towns,resources.Archive,
+            resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
+        ("quest-npc-mapping", (_, _, resources) =>
+        {
+            QuestNpcMappingTests.RunCore();
+            QuestNpcMappingTests.RunResources(resources.Towns,resources.Quests);
+            return Task.CompletedTask;
+        }),
+        ("quest-hidden", (_, _, resources) => QuestHiddenEntryTests.RunAsync(resources.Towns,resources.Archive,
+            resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
+        ("quest-replay", (_, _, resources) => QuestReplayPublicationTests.RunAsync(resources.Archive,
+            resources.Characters,resources.ItemResources,resources.Learning)),
+        ("quest-initialization", (_, _, resources) =>
+        {
+            QuestDungeonClearProgressTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources);
+            QuestDungeonClearProgressTests.RunInitialization(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources);
+            return Task.CompletedTask;
+        }),
+        ("quest-core-rewards", async (_, _, resources) =>
+        {
+            QuestLifecycleTests.Run(resources.Towns, resources.ItemResources);
+            QuestOrdinaryCompletionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            QuestCharacterRewardTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            QuestTpRewardTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);
+            QuestThresholdRelationTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            await QuestCorePublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);
+        }),
         ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
         ("dungeon-settlement", async (_, _, resources) =>
@@ -69,7 +106,7 @@ internal static class TcpRegressionTests
 
     public static IEnumerable<string> GroupNames => Groups.Select(group => group.Name);
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
-    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("dungeon-settlement" or "inventory-persistence" or "resource-survey"));
+    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("quest-continuation" or "quest-manual-skip" or "quest-ticket" or "quest-specified-ticket" or "quest-awakening-ticket" or "quest-play-only" or "quest-auto-meet" or "quest-npc-mapping" or "quest-hidden" or "quest-replay" or "quest-initialization" or "quest-core-rewards" or "dungeon-settlement" or "inventory-persistence" or "resource-survey"));
     public static bool IsValidSelection(string selection)
     {
         string[] names = selection.Split(',');

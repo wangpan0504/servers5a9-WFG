@@ -5,7 +5,7 @@ using DfoServer.GameWorld.Quests;
 namespace DfoServer.Game.Quests;
 
 internal sealed record QuestEligibilityResult(bool Eligible, bool Visible, string Reason);
-internal enum QuestResourceEntry { Ordinary, Dialogue, Dedicated, OutsideLevels, Event, Creature, Profession, Hardcore, Invalid }
+internal enum QuestResourceEntry { Ordinary, Dialogue, Dedicated, OutsideLevels, Event, Creature, Profession, Hardcore, Invalid, Hidden }
 internal sealed record QuestResourceAccess(QuestResourceEntry Entry, string Reason);
 
 // 仅从已装载的领域快照与共享资源计算，不拥有在线角色或访问数据库。
@@ -37,6 +37,8 @@ internal static class QuestEligibility
             return new(QuestResourceEntry.Dedicated, "exception filter需要已确认的单字符串character声明");
         if (quest.MainQuest is not null)
             return new(QuestResourceEntry.Dialogue, "子任务需要父任务及资源顺序的真实入口");
+        if (QuestHiddenEntry.ImmediateShape(quest))
+            return new(QuestResourceEntry.Hidden, "隐藏任务通过合格21候选和884请求开启");
         if (!definition.ExposedByNpc || !OrdinaryGrade(quest.Grade))
             return new(QuestResourceEntry.Dedicated, "隐藏或专用分类任务需要对应入口");
         return new(QuestResourceEntry.Ordinary, "普通任务候选；仍须核对角色、前置及完成状态");
@@ -52,6 +54,17 @@ internal static class QuestEligibility
         var active = character.ActiveMainQuests.Select(quest => (int)quest.QuestId).ToHashSet();
         return catalog.All.Where(quest => Evaluate(character, quest, catalog, completed, active, includeActive: true).Visible)
             .Select(quest => quest.Id).ToImmutableArray();
+    }
+
+    // 21同时携带可见任务与等待客户端884的合格隐藏候选；候选本身不生成822或接取槽。
+    public static ImmutableArray<int> Candidates(Character character, QuestCatalog catalog)
+    {
+        var completed = Completed(character);
+        var active = character.ActiveMainQuests.Select(quest => (int)quest.QuestId).ToHashSet();
+        return catalog.All.Where(quest => Evaluate(character,quest,catalog,completed,active,includeActive:true).Visible ||
+            !active.Contains(quest.Id) && QuestHiddenEntry.Direct(quest,catalog) &&
+            !quest.Definition!.HideOnCompletedQuests.Any(completed.Contains) &&
+            Evaluate(character,quest,catalog,completed,active).Eligible).Select(quest => quest.Id).ToImmutableArray();
     }
 
     public static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog) =>
@@ -112,6 +125,10 @@ internal static class QuestEligibility
             if (!active.Contains(parentId) || !catalog.TryGet(parentId, out var parent) ||
                 parent.Condition is not ("[quest clear]" or "[clear quest]" or "[clear multi quest]"))
                 return Reject("父任务未接取");
+            if (parent.Condition == "[clear multi quest]")
+                return QuestRelationProgress.ThresholdParent(parent,catalog) && parent.IntData.Contains(quest.Id)
+                    ? new(true, includeActive && active.Contains(quest.Id), "等待阈值父任务的真实子任务入口")
+                    : Reject("阈值父任务引用或条件未确认");
             int next = parent.IntData.FirstOrDefault(id => !completed.Contains(id));
             if (next != quest.Id)
                 return Reject("尚未到本子任务的资源顺序");

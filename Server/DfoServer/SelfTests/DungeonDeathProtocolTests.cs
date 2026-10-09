@@ -84,8 +84,8 @@ internal static class DungeonDeathProtocolTests
         // zz在3151安全区的实收终末报告：零参与者、真实角色号12，不是FFFF被动物件格式。
         byte[] retreat = Convert.FromHexString("720200000C000000000000000000000000004D51000000000000440000000022038C0200000000AF7A0110000000764B00000000000022038C020000000000000000000000004494B57B");
         That(DungeonRequests.TryParseScriptedDeath(retreat,out var scripted) &&
-            scripted is { ObjectKey: 626, RewriteFlag: 0x22, ChecksumMatches: true },
-            "真实角色号和演员flags22的74B撤退报告可解析；剧情通关仍由当前已发布演员及实例事件账本确认");
+            scripted is { ObjectKey: 626, Reporter: 12, RewriteFlag: 0x22, ChecksumMatches: true },
+            "74B撤退报告保留实际角色号用于审计；剧情通关仍由资源演员及实例事件账本确认");
         retreat[^1] ^= 1;
         That(DungeonRequests.TryParseScriptedDeath(retreat,out scripted) && scripted is { ChecksumMatches: false },
             "撤退演员摘要不匹配不会变成有效场景终末事实");

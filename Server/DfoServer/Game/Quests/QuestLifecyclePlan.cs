@@ -68,7 +68,8 @@ internal sealed class QuestLifecyclePlan
         ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now)
     {
         var eligibility = QuestEligibility.Evaluate(expected, quest, catalog);
-        if (!eligibility.Eligible || !eligibility.Visible && !QuestRelationProgress.DialogueChild(quest, catalog))
+        if (!eligibility.Eligible || !eligibility.Visible && !QuestRelationProgress.DialogueChild(quest, catalog) &&
+            !QuestRelationProgress.ThresholdParent(quest,catalog) && !QuestHiddenEntry.Direct(quest,catalog))
             throw new InvalidDataException("任务当前不可从普通接取入口接取");
         QuestCoverage.RequireOrdinaryDeclarations(quest);
         if (QuestCycle.Daily(quest) && expected.QuestCycleDay != QuestCycle.Day(now))
@@ -78,6 +79,8 @@ internal sealed class QuestLifecyclePlan
         uint initial = quest.Condition switch
         {
             "[meet npc]" when quest.SubType == -1 && quest.IntData.Count == 1 && quest.IntData[0] > 0 => 1,
+            // Full03成功ACK31的type4/sub1立即触发event4归零，不读取实际点击NPC。
+            "[meet npc]" when QuestStateProgress.Type(quest) == 4 => 0,
             "[reach the range]" when QuestClientSceneProgress.TownRange(quest) => 1,
             "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) => 1,
             "[question]" when QuestQuestionProgress.TryCount(quest,out _) => QuestQuestionProgress.Unanswered,
@@ -87,6 +90,10 @@ internal sealed class QuestLifecyclePlan
             "[condition under clear]" when QuestDungeonClearProgress.TryTarget(quest,out _) => QuestDungeonClearProgress.Initial(quest),
             "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.Initial(quest),
             "[quest clear]" when QuestRelationProgress.SequentialParent(quest,catalog) => QuestRelationProgress.Initial(quest,catalog,expected.CompletedQuests),
+            "[clear multi quest]" when QuestRelationProgress.ThresholdParent(quest,catalog) =>
+                QuestRelationProgress.Initial(quest,catalog,QuestEligibility.Completed(expected)),
+            // Full03 ACK31的type49分支在打开故事UI前即发送归零33；真实接取事务本身已满足此目标。
+            "[play only]" when QuestStateProgress.Type(quest) == 49 => 0,
             _ when QuestStateProgress.Type(quest) is not null => QuestStateProgress.Scalar(expected,quest),
             _ => throw new NotSupportedException("任务条件初值尚未确认: " + quest.Condition)
         };
@@ -132,6 +139,31 @@ internal sealed class QuestLifecyclePlan
             value.Definition.CannotGiveup && !(value.Definition.GiveupRule == 2 && value.Definition.JobChange == 1 && value.RewardType == "[grow type]")))
             throw new InvalidDataException("任务或关联子任务禁止放弃");
         var activeAfter = expected.ActiveMainQuests.Where(active => !remove.Contains(active.QuestId)).ToImmutableArray();
+        var inventory = ReclaimQuestItems(expected,definitions,activeAfter,catalog,now);
+        return new(expected, QuestLifecycleAction.Giveup, accepted.QuestId, accepted.AcceptanceId,
+            QuestInventoryProgress.Refresh(activeAfter, inventory, catalog, now.ToUnixTimeSeconds()), new(expected.Inventory, inventory, "quest_giveup"));
+    }
+
+    // 父交付关闭未选活动分支；真实完成列表和子奖励保持原义，后续32只确认已提交的关闭结果。
+    public static (ImmutableArray<ActiveMainQuest> ActiveAfter, InventoryPlan Inventory, ImmutableArray<ActiveMainQuest> Removed)
+        CloseThresholdChildren(Character expected, StoryQuest parent, QuestCatalog catalog, DateTimeOffset now)
+    {
+        if (!QuestRelationProgress.ThresholdParent(parent,catalog) ||
+            QuestRelationProgress.ThresholdScalar(parent,QuestEligibility.Completed(expected)) != 0)
+            throw new InvalidDataException("阈值父任务尚未达到真实子完成数量");
+        var completed = QuestEligibility.Completed(expected);
+        var removed = expected.ActiveMainQuests.Where(row => parent.IntData.Contains(row.QuestId) &&
+            !completed.Contains(row.QuestId)).ToImmutableArray();
+        var ids = removed.Select(row => (int)row.QuestId).ToHashSet();
+        var activeAfter = expected.ActiveMainQuests.Where(row => !ids.Contains(row.QuestId)).ToImmutableArray();
+        var inventory = ReclaimQuestItems(expected,removed.Select(row => catalog.Get(row.QuestId)),activeAfter,catalog,now);
+        return (QuestInventoryProgress.Refresh(activeAfter,inventory,catalog,now.ToUnixTimeSeconds()),
+            new(expected.Inventory,inventory,"quest_giveup"),removed);
+    }
+
+    static InventorySnapshot ReclaimQuestItems(Character expected, IEnumerable<StoryQuest> definitions,
+        IReadOnlyList<ActiveMainQuest> activeAfter, QuestCatalog catalog, DateTimeOffset now)
+    {
         var collect = new HashSet<int>();
         foreach (var value in definitions)
         {
@@ -156,6 +188,10 @@ internal sealed class QuestLifecyclePlan
             else
                 foreach (int id in other.IntData.Where(collect.Contains))
                     retained[id] = long.MaxValue;
+            if (other.Definition is { AcceptanceRewards.Length: > 0 } definition)
+                foreach (var gifts in QuestFixedRewardDefinition.Parse(other with { Rewards = definition.AcceptanceRewards })
+                    .ForJob(expected.Job,expected.GrowType).Where(gift => collect.Contains(gift.ItemId)).GroupBy(gift => gift.ItemId))
+                    retained[gifts.Key] = Math.Max(retained.GetValueOrDefault(gifts.Key),gifts.Sum(gift => (long)gift.Count));
         }
         var planned = expected.Inventory.Items.ToBuilder();
         foreach (int id in collect)
@@ -176,9 +212,7 @@ internal sealed class QuestLifecyclePlan
                 else planned[at] = item with { Core = item.Core with { Value = item.Core.Count - count } };
             }
         }
-        var inventory = expected.Inventory with { Items = planned.ToImmutable() };
-        return new(expected, QuestLifecycleAction.Giveup, accepted.QuestId, accepted.AcceptanceId,
-            QuestInventoryProgress.Refresh(activeAfter, inventory, catalog, now.ToUnixTimeSeconds()), new(expected.Inventory, inventory, "quest_giveup"));
+        return expected.Inventory with { Items = planned.ToImmutable() };
     }
 
     public static QuestLifecyclePlan SetCondition(Character expected, StoryQuest quest, uint scalar)
@@ -187,7 +221,8 @@ internal sealed class QuestLifecyclePlan
             ?? throw new InvalidDataException("任务未接取");
         bool observedHunt = quest.Condition is "[hunt enemy]" or "[hunt monster]" && scalar == active.ConditionState && QuestHuntProgress.ValidScalar(quest,scalar);
         bool seekMeet = quest.Condition == "[seek n meet npc]" && ValidSeeking(quest) && scalar <= 1023;
-        bool parent = quest.Condition == "[quest clear]" && quest.SubType == 2 && scalar <= quest.IntData.Count;
+        bool parent = quest.Condition == "[quest clear]" && quest.SubType == 2 && scalar <= quest.IntData.Count ||
+            QuestRelationProgress.ThresholdShape(quest) && scalar == QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected));
         bool scene = scalar <= 1 && (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _));
         bool question = QuestQuestionProgress.TryCount(quest,out int answers) && scalar < answers;
         bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest);

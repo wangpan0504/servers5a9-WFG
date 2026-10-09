@@ -20,7 +20,7 @@ internal sealed record DungeonDeathRequest(uint ObjectKey, ushort Reporter, IRea
 // 02A787A0独立发送分支；+1754来自构造参数及资源查询，不是普通怪物对象key。
 internal sealed record DungeonPassiveDeathRequest(uint ObjectIdentifier, uint ActorFlags, byte Unknown36,
     ushort Unknown39, byte UnknownLast, bool ChecksumMatches, IReadOnlyList<byte> ContextFields);
-internal sealed record DungeonScriptedDeathRequest(uint ObjectKey, byte RewriteFlag, bool ChecksumMatches);
+internal sealed record DungeonScriptedDeathRequest(uint ObjectKey, byte RewriteFlag, bool ChecksumMatches, ushort Reporter);
 
 // Unknown 后的数字为正文偏移；保留未确认字段，不推断常量域或业务枚举。
 internal readonly record struct DungeonSelectionRequest(
@@ -76,7 +76,8 @@ internal static class DungeonRequests
             return false;
         // 与单参与者形状相比少14B；改写标志在偏移31，不能借用被动物件格式的偏移42。
         request = new(BinaryPrimitives.ReadUInt32LittleEndian(body),body[31],
-            BinaryPrimitives.ReadUInt32LittleEndian(body[70..]) == ClientBodyChecksum.Compute(body[..70]));
+            BinaryPrimitives.ReadUInt32LittleEndian(body[70..]) == ClientBodyChecksum.Compute(body[..70]),
+            BinaryPrimitives.ReadUInt16LittleEndian(body[4..]));
         return true;
     }
 

@@ -23,12 +23,12 @@ internal static class QuestCoverage
         "pre required quest", "pre required quest answer", "collision quest", "account collision quest", "account quest", "main quest",
         "dungeon info", "job change quest", "cant giveup", "exposed by npc", "event", "creature kind", "creature level", "expertjob level",
         "first exposed by npc", "relation quest", "exception quest", "exception filter", "multi condition min clear", "hardcore mode only", "condition quest hide",
-        "gold multiple", "ignore quest level 4 exp", "attribute", "imagine level", "grow number", "disable quest clear", "npc visibility",
-        "reward item trade instance", "go area guide", "auto accept", "monster reward item", "enemy reward item", "clear reward item", "question info", "casecade clear",
+        "gold multiple", "ignore quest level 4 exp", "attribute", "imagine level", "grow number", "disable quest clear", "npc visibility", "visible npc",
+        "reward item trade instance", "go area guide", "auto accept", "monster reward item", "enemy reward item", "clear reward item", "question info", "casecade clear", "show click on complete npc", "dialog show time", "male dialog", "alternative npc index",
         // 下列文字/演出描述由匹配客户端读取；不据此签发服务器进度或奖励。
-        "name", "name depend on job", "depend message", "condition message", "solve message", "substitutive names", "dialog", "dialog depend on job",
+        "name", "name depend on job", "depend message", "condition message", "solve message", "male depend message", "male solve message", "substitutive names", "dialog", "dialog depend on job",
         "depend message depend on job", "condition message depend on job", "solve message depend on job", "quest item noti", "get quest item noti", "go guide",
-        "quest title noti", "solve video",
+        "quest title noti", "quest clear noti", "solve video",
         // Full03 04194292只写Quest文字区的职业描述选择，不承担接取、进度或奖励条件。
         "change depend on grow job"
     };
@@ -74,12 +74,37 @@ internal static class QuestCoverage
         // Full03 04195F2F读取可见性；clear/delete同样由真实完成投影触发客户端显示，不签发额外进度或奖励。
         definition.NpcVisibility.All(row => row.Condition is "[accept]" or "[clear]" && row.Visibility is "[show]" or "[hide]" ||
             row.Condition == "[clear]" && row.Visibility == "[delete]") &&
-        definition.Fields.Where(field => field.Name is "quest title noti" or "solve video").All(field => field.Name switch
+        definition.Fields.Where(field => field.Name is "quest title noti" or "quest clear noti" or "solve video" or "male depend message" or "male solve message" or "visible npc" or "show click on complete npc" or "dialog show time" or "male dialog" or "alternative npc index").All(field => field.Name switch
         {
             "quest title noti" => IsTitleNotification(field),
+            "quest clear noti" => IsClearNotification(field),
             "solve video" => field.Children.Length == 0 && field.Values is [{ Type: 6, Text: not null }],
+            // Full03 0419432B/04194789只读入QST+F8/+138文本，未改变接取、进度或奖励。
+            "male depend message" or "male solve message" => field.Children.Length == 0 && field.Values is [{ Type: 6, Text: not null }],
+            // Full03 04193E9A保留QST+7A4有符号NPC id；负值在接受/完成消费者中跳过显示集合处理。
+            "visible npc" => field.Children.Length == 0 && field.Values is [{ Type: 0, Text: null }],
+            // Full03 0419A095写QST+6A0布尔；02025DD1据此更新已映射完成NPC的本地点击显示。
+            "show click on complete npc" => field.Children.Length == 0 && field.Values is [{ Type: 0, Text: null }],
+            // Full03 0419C3DB保留QST+87C；02022531复制到本地对话记录的显示时长。
+            "dialog show time" => field.Children.Length == 0 && field.Values is [{ Type: 0, Text: null }],
+            // Full03 04199388复用八整数/单文本对话reader，仅改变客户端性别对话选择。
+            "male dialog" => field.Children.Length == 0 && field.Values.Length == 9 &&
+                field.Values.Take(8).All(value => value is { Type: 0, Text: null }) && field.Values[8] is { Type: 6, Text: not null },
+            "alternative npc index" => field.Children.Length == 0 && field.Values is
+                [{ Type: 0, Text: null }, { Type: 0, Text: null }, { Type: 6, Text: "[cleared quest]" }, { Type: 0, Text: null }],
             _ => false
         });
+
+    public static bool IsClearNotification(QuestField field)
+    {
+        // Full03 0419C261将图标/文字读入QST+84C/+850/+82C；ACK34以本地QST打开UI0xC4。
+        if (field.Values.Length != 0 || field.Children.Length != 2 || field.Children.Any(child => child.Children.Length != 0))
+            return false;
+        var image = field.Children.FirstOrDefault(child => child.Name == "image info");
+        var message = field.Children.FirstOrDefault(child => child.Name == "noti message");
+        return image is { Values: [{ Type: 6, Text: not null }, { Type: 0, Value: >= 0, Text: null }] } &&
+            message is { Values: [{ Type: 6, Text: not null }] };
+    }
 
     public static bool IsTitleNotification(QuestField field)
     {
@@ -104,7 +129,8 @@ internal static class QuestCoverage
 
     public static bool HasOrdinaryDeclarations(StoryQuest quest) => Unconfirmed(quest).Length == 0 &&
         quest.Grade != "[daily random]" &&
-        quest.Definition is { Diagnostics.Length: 0, GradeModifiers.Length: 0, FirstExposedByNpc: null, MinimumClearCount: null } &&
+        quest.Definition is { Diagnostics.Length: 0, GradeModifiers.Length: 0, FirstExposedByNpc: null } definition &&
+        (definition.MinimumClearCount is null || QuestRelationProgress.ThresholdShape(quest)) &&
         (!quest.Definition.Has("auto accept") || QuestClientSceneProgress.Cinematic(quest,out _,out _)) &&
         HasOrdinaryFilter(quest) && HasOrdinaryExceptions(quest) && HasOrdinaryAttributes(quest) &&
         HasOrdinaryDisplay(quest) && HasOrdinaryCascade(quest);
@@ -122,12 +148,27 @@ internal static class QuestCoverage
         if (!HasOrdinaryAttributes(quest))
             throw new NotSupportedException("任务attribute包含未确认的值或声明形状");
         if (!HasOrdinaryDisplay(quest))
-            throw new NotSupportedException("任务npc visibility、quest title noti或solve video显示声明形状尚未确认");
+            throw new NotSupportedException("任务NPC可见性、标题、视频或男性对话文本的显示声明形状尚未确认");
         if (!HasOrdinaryCascade(quest))
             throw new NotSupportedException("任务casecade clear需要1..29999的单整数marker声明");
         if (!HasOrdinaryDeclarations(quest))
             throw new NotSupportedException("任务需要尚未确认的分类修饰、例外、首次NPC、阈值或特殊属性");
     }
+
+    internal static bool HasSupportedTarget(StoryQuest quest, QuestCatalog catalog) => quest.Condition switch
+    {
+        "[meet npc]" => QuestStateProgress.Type(quest) is not null || quest.SubType == -1 && quest.IntData is [> 0],
+        "[seeking]" or "[seek n meet npc]" => quest.SubType == -1 && QuestLifecyclePlan.ValidSeeking(quest),
+        "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.TryTargets(quest,out _),
+        "[quest clear]" => QuestRelationProgress.SequentialParent(quest,catalog),
+        "[clear multi quest]" => QuestRelationProgress.ThresholdParent(quest,catalog),
+        "[clear map]" => QuestClearEligibility.IsSingleMap(quest),
+        "[condition under clear]" => QuestDungeonClearProgress.TryTarget(quest,out _),
+        "[reach the range]" => QuestClientSceneProgress.TownRange(quest),
+        "[look cinematic]" => QuestClientSceneProgress.Cinematic(quest,out _,out _),
+        "[question]" => QuestQuestionProgress.TryCount(quest,out _),
+        _ => QuestStateProgress.Type(quest) is not null
+    };
 
     public static QuestCoverageReport Scan(QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces, QuestRewardParameterCatalog parameters)
     {
@@ -144,10 +185,12 @@ internal static class QuestCoverage
             var references = prerequisite[quest.Id].Concat(parents[quest.Id])
                 .Concat(definition?.Collisions ?? []).Concat(definition?.AccountCollisions ?? [])
                 .Concat(definition?.RelationQuests ?? []).Concat(definition?.HideOnCompletedQuests ?? [])
+                .Concat(definition?.AlternativeNpcs.Select(row => row.CompletedQuest) ?? [])
                 .Concat(definition?.Values("casecade clear").Where(value => value.Type == 0).Select(value => value.Value) ?? []);
             if (quest.Condition is "[quest clear]" or "[clear quest]" or "[clear multi quest]") references = references.Concat(quest.IntData);
             var missing = references.Where(id => id > 0 && !catalog.TryGet(id, out _)).Distinct().Order().ToImmutableArray();
-            if (access.Entry != QuestResourceEntry.Ordinary && !(access.Entry == QuestResourceEntry.Dialogue && QuestRelationProgress.DialogueChild(quest,catalog)))
+            if (access.Entry != QuestResourceEntry.Ordinary && !(access.Entry == QuestResourceEntry.Dialogue && QuestRelationProgress.DialogueChild(quest,catalog)) &&
+                !(access.Entry == QuestResourceEntry.Hidden && QuestHiddenEntry.Direct(quest,catalog)))
                 reasons.Add(access.Reason);
             if (definition is null || definition.Diagnostics.Length != 0) reasons.AddRange(definition?.Diagnostics ?? ["缺少完整定义"]);
             if (pending.Length != 0) reasons.Add("存在未确认声明");
@@ -156,32 +199,24 @@ internal static class QuestCoverage
             catch (InvalidDataException error) { reasons.Add(error.Message); }
             if (quest.Grade is "[daily random]" or "[training]") reasons.Add("对应每日专用列表未接入");
             if (definition?.GradeModifiers.Length > 0 || definition?.FirstExposedByNpc is not null ||
-                definition?.MinimumClearCount is not null) reasons.Add("分类修饰、例外、首次NPC或多条件阈值尚未接入");
+                definition?.MinimumClearCount is not null && !QuestRelationProgress.ThresholdShape(quest))
+                reasons.Add("分类修饰、例外、首次NPC或多条件阈值尚未接入");
             if (!HasOrdinaryFilter(quest)) reasons.Add("exception filter需要已确认的单字符串character声明");
             if (!HasOrdinaryExceptions(quest)) reasons.Add("exception quest需要已确认的单字符串[urgent]声明");
-            if (!HasOrdinaryDisplay(quest)) reasons.Add("npc visibility、quest title noti或solve video显示声明形状尚未确认");
+            if (!HasOrdinaryDisplay(quest)) reasons.Add("NPC可见性、标题、视频或男性对话文本的显示声明形状尚未确认");
             if (!HasOrdinaryCascade(quest)) reasons.Add("casecade clear需要1..29999的单整数marker声明");
             {
-                bool parent = QuestRelationProgress.SequentialParent(quest,catalog);
+                bool sequential = QuestRelationProgress.SequentialParent(quest,catalog);
+                bool threshold = QuestRelationProgress.ThresholdParent(quest,catalog);
+                bool parent = sequential || threshold;
                 bool range = QuestClientSceneProgress.TownRange(quest);
                 bool cinematic = QuestClientSceneProgress.Cinematic(quest,out _,out _);
                 bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
-                if (quest.SubType != -1 && !parent && !range && !dungeonClear) reasons.Add("目标子类型尚未接入");
+                bool state = QuestStateProgress.Type(quest) is not null;
+                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state) reasons.Add("目标子类型尚未接入");
                 if (quest.MainQuest is not null && !QuestRelationProgress.DialogueChild(quest,catalog))
                     reasons.Add("隐藏子任务的实际对话及交付入口未接入");
-                bool target = quest.Condition switch
-                {
-                    "[meet npc]" => quest.SubType == -1 && quest.IntData.Count == 1 && quest.IntData[0] > 0,
-                    "[seeking]" or "[seek n meet npc]" => quest.SubType == -1 && QuestLifecyclePlan.ValidSeeking(quest),
-                    "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.TryTargets(quest,out _),
-                    "[quest clear]" => parent,
-                    "[clear map]" => QuestClearEligibility.IsSingleMap(quest),
-                    "[condition under clear]" => dungeonClear,
-                    "[reach the range]" => range,
-                    "[look cinematic]" => cinematic,
-                    "[question]" => QuestQuestionProgress.TryCount(quest,out _),
-                    _ => QuestStateProgress.Type(quest) is not null
-                };
+                bool target = HasSupportedTarget(quest,catalog);
                 if (!target) reasons.Add(TargetRestriction(quest));
                 if (QuestQuestionProgress.TryCount(quest,out int options) && Enumerable.Range(0,options)
                     .Any(answer => !QuestQuestionProgress.OrdinaryChoice(quest,checked((uint)answer),catalog)))
@@ -190,10 +225,10 @@ internal static class QuestCoverage
                     quest.Rewards is [{ Type: 0, Value: >= 1 and <= 5 }] ||
                     quest.RewardType == "[awakening type]" && quest.Rewards is [{ Type: 0, Value: >= 1 and <= 2 }] &&
                     definition?.JobChange == quest.Rewards[0].Value + 1;
-                bool characterReward = QuestCharacterReward.TryScalar(quest,out _);
+                bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _);
                 if (quest.RewardType != "[item]" && !profession && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest))
                     reasons.Add(RewardRestriction(quest));
-                if (quest.CompleteNpc <= 0 && quest.Condition != "[clear map]" && !dungeonClear &&
+                if (quest.CompleteNpc <= 0 && quest.Condition != "[clear map]" && !dungeonClear && !range && !cinematic &&
                     !(quest.CompleteNpc == -1 && (parent || range || cinematic || quest.Condition is "[meet npc]" or "[seek n meet npc]" or "[question]" or
                         "[seeking]" or "[hunt monster]" or "[hunt enemy]" || QuestStateProgress.Type(quest) is not null)))
                     reasons.Add("此自动交付入口尚未确认");
@@ -243,10 +278,10 @@ internal static class QuestCoverage
         "[custom multi condition]" when quest.SubType == 1 => "目标依赖特殊塔场景及多条件事件；对应塔流程尚未接入",
         "[custom multi condition]" when quest.Path.Contains("/pvp/",StringComparison.Ordinal) => "目标依赖决斗训练场多条件事件；对应场景及条件通道尚未接入",
         "[custom multi condition]" => "本版多条件类型60已确认；实际场景、条件通道和进度保存尚未接入",
-        "[clear multi quest]" => "本版类型70按真实完成记录与最小阈值聚合；专用隐藏入口及标量投影尚未接入",
+        "[clear multi quest]" => "类型70需要已确认的sub4完整子任务引用与有效最小完成数；其他阈值形状尚未接入",
         "[clear a dungeon]" => "目标要求副本集合与子类型条件；普通清图凭据尚未接入此类型的进度编码",
         "[condition under clear]" => "目标要求带条件通关；本版子类型及相应服务端结算统计尚未接入",
-        "[play only]" => "目标要求游玩条件；本版条件与副本统计的对应关系尚未接入",
+        "[play only]" => "接取型目标仅支持本版无参数且无子类型声明；其它目标参数尚未接入",
         "[get score]" => "目标依赖指定场景的真实评分；评分统计尚未接入任务进度",
         "[use skill]" => "目标依赖真实技能使用事实；施法确认及本版进度编码尚未接入",
         "[use item]" or "[use fortune coin]" => "目标依赖实际道具使用或幸运币结果；对应消费事件尚未接入任务进度",
@@ -264,7 +299,7 @@ internal static class QuestCoverage
 
     static string RewardRestriction(StoryQuest quest) => quest.RewardType switch
     {
-        "[tp]" => "V31固定展示2TP已确认；决斗目标及真实额外TP奖励事务入口尚未接入",
+        "[tp]" => "TP奖励需要本版空奖励数组与固定2点声明形状；对应目标仍按实际玩法限制处理",
         "[creature evolution]" => "奖励依赖宠物进化状态；宠物领域尚未接入",
         "[expert job]" => "奖励依赖副职业状态；副职业领域尚未接入",
         "[ridable]" => "奖励依赖坐骑状态；坐骑领域尚未接入",

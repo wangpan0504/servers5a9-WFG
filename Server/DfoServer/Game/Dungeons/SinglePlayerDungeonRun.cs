@@ -8,6 +8,12 @@ internal sealed record DungeonRunIdentity(ushort CharacterId, uint QuestId, long
 internal sealed record DungeonRouteConnection(DungeonPoint First, DungeonPoint Second);
 internal sealed record DungeonRunSnapshot(DungeonRunIdentity Identity, SinglePlayerDungeonPhase Phase, DungeonMap CurrentMap,
     IReadOnlyList<ushort> LivingMonsters);
+internal sealed record DungeonLoadingFact(DungeonRunIdentity Identity, Guid ActionId, uint DungeonId, DungeonMap Map,
+    int MazeSourceOrdinal, bool IsInitialLoading, bool DidInitializeMap, uint ConfirmedInitializationCount,
+    uint? MazeInitializationThreshold)
+{
+    public bool InitializationCounterSupported { get; init; }
+}
 internal sealed record DungeonClearFact(DungeonRunIdentity Identity, uint DungeonId, IReadOnlyList<Guid> ConfirmedDeathEvents)
 {
     public DungeonMap? ClearMap { get; init; }
@@ -57,7 +63,6 @@ internal sealed class SinglePlayerDungeonRun
         public DungeonMonsterPlan Plan { get; } = plan;
         public HashSet<ushort> Dead { get; } = [];
         public HashSet<ushort> Culled { get; } = [];
-        public bool Loaded { get; set; }
         public bool Cleared => Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey) || Culled.Contains(monster.ObjectKey));
     }
     private sealed record ActionFact(DungeonRunIdentity Identity, string Kind, DungeonPoint? Target);
@@ -66,6 +71,7 @@ internal sealed class SinglePlayerDungeonRun
     private readonly Dictionary<DungeonPoint, Room> rooms;
     private readonly Dictionary<DungeonMap, Room> layeredRooms;
     private readonly HashSet<DungeonMap> enteredLayers = [];
+    private readonly HashSet<int> initializedMapSlots = [];
     private readonly HashSet<(DungeonPoint, DungeonPoint)> connections;
     private readonly Dictionary<Guid, ActionFact> acceptedActions = [];
     private readonly Dictionary<Guid, ConfirmedDungeonMonsterDeath> deaths = [];
@@ -77,10 +83,20 @@ internal sealed class SinglePlayerDungeonRun
     private Room current;
     private DungeonRunIdentity identity;
     public long StartCharacterRevision => entry.CharacterRevision;
+    public uint ConfirmedInitializationCount { get; private set; }
+    public uint? MazeInitializationThreshold { get; }
+    public bool InitializationCounterSupported { get; }
+    public DungeonLoadingFact? LastLoadingFact { get; private set; }
     internal DungeonEntryPlan Entry => entry;
     internal bool HasPendingDeath => pendingDeath is not null;
     internal uint DungeonId => entry.DungeonId;
     internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
+    internal void RebasePreparedRevision(long revision)
+    {
+        if (Phase != SinglePlayerDungeonPhase.Loading || acceptedActions.Count != 0 || revision < entry.CharacterRevision)
+            throw new InvalidOperationException("只能同步尚未安装的副本入场规划");
+        entry = entry with { CharacterRevision = revision };
+    }
     // 原生顺序入口可在同一父剧情实例中接取下一子任务，仅绑定此后发生的事件。
     internal void BindQuestAcceptance(DfoServer.Game.Characters.ActiveMainQuest active)
     {
@@ -94,10 +110,12 @@ internal sealed class SinglePlayerDungeonRun
         !current.Dead.Contains(key) && !current.Culled.Contains(key)
             ? current.Plan.Monsters.SingleOrDefault(monster => (monster.CanReportDeath || monster.IsSpecialChild) && monster.ObjectKey == key) : null;
     internal bool IsCulledMonster(ushort key) => Phase == SinglePlayerDungeonPhase.Settlement && ClearFact is not null && current.Culled.Contains(key);
-    // 友方APC跟随过房时保留首次发布key；只有本实例已完成加载的MAP声明能确认来源，未来房间与旧实例不能借用。
-    internal bool IsPublishedFriendlyAiCharacter(ushort key) => Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
-        rooms.Values.Concat(layeredRooms.Values).Any(room => room.Loaded && room.Plan.Monsters.Any(monster =>
-            monster.ObjectKey == key && monster.AiCharacter?.Faction == "[character]"));
+    // 友方、非敌对对象退场只更新显示集合，不加入持久击杀或清图事实；未知key不改变实例。
+    internal void RetireNonCombatObject(ushort key)
+    {
+        if (current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath))
+            current.Dead.Add(key);
+    }
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
     public DungeonClearFact? ClearFact { get; private set; }
     public bool HasPendingSettlement => pendingSettlement is not null;
@@ -125,6 +143,10 @@ internal sealed class SinglePlayerDungeonRun
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = rooms[entry.StartMap.Position];
         identity = new(entry.CharacterId, entry.QuestId, attempt, Guid.NewGuid(), epoch);
+        var grid = entry.Maze.GreedGrid;
+        InitializationCounterSupported = entry.InitializationCounterSupported && entry.Maze.LayeredMaps.Count == 0 && grid.Supported;
+        int positiveCells = grid.Cells?.Count(cell => cell.Index > 0) ?? 0;
+        MazeInitializationThreshold = InitializationCounterSupported && positiveCells > 1 ? checked((uint)(positiveCells - 1)) : null;
     }
 
     public static bool TryCreate(DungeonEntryPlan entry, long taskAttempt, long initialEpoch, DungeonFixedRoute? approvedRoute,
@@ -212,14 +234,23 @@ internal sealed class SinglePlayerDungeonRun
         return true;
     }
 
-    public DungeonRunResult CompleteLoading(DungeonRunIdentity expected, Guid actionId)
+    public DungeonRunResult CompleteLoading(DungeonRunIdentity expected, Guid actionId, bool hasMatchingQuest = false)
     {
         if (Replay(expected, actionId, "loaded", null) is { } replay)
             return replay;
         if (pendingDeath is not null || !Matches(expected) || Phase != SinglePlayerDungeonPhase.Loading || actionId == Guid.Empty || !CanAdvance())
             return Result(DungeonRunOutcome.Rejected);
+        int slot = InitializationCounterSupported ? checked(entry.Maze.Width * current.Plan.Room.Map.Position.Y + current.Plan.Room.Map.Position.X) : 0;
+        bool first = LastLoadingFact is null;
+        bool initialized = InitializationCounterSupported && (!entry.IndividualMapMovement || !initializedMapSlots.Contains(slot));
+        uint count = checked(ConfirmedInitializationCount + (!first && initialized && hasMatchingQuest ? 1u : 0u));
         acceptedActions.Add(actionId, new(expected, "loaded", null));
-        current.Loaded = true;
+        // NOTI28建立新Run并清统计；接取不重置。缓存安装与活跃任务计数分开，完成仍由真实清图判定。
+        if (InitializationCounterSupported)
+            initializedMapSlots.Add(slot);
+        ConfirmedInitializationCount = count;
+        LastLoadingFact = new(expected, actionId, entry.DungeonId, current.Plan.Room.Map, entry.Maze.SourceOrdinal,
+            first, initialized, count, MazeInitializationThreshold) { InitializationCounterSupported = InitializationCounterSupported };
         Phase = SinglePlayerDungeonPhase.Dungeon;
         Advance();
         return SettleIfCleared();

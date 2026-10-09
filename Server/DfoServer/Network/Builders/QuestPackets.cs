@@ -38,6 +38,18 @@ internal static class QuestPackets
         writer.Write((byte)value);
     }
 
+    public static byte[] OpenHidden(IReadOnlyList<int> ids)
+    {
+        if (ids.Count > 29999 || ids.Any(id => id is <= 0 or >= 30000) || ids.Distinct().Count() != ids.Count)
+            throw new InvalidDataException("隐藏任务开启列表的编号越界或重复");
+        using var bytes = new MemoryStream();
+        using var writer = new BinaryWriter(bytes);
+        // Full03 0239EB00：822为count:u32及原序qid:u32，不带成功字节。
+        writer.Write(checked((uint)ids.Count));
+        foreach (int id in ids) writer.Write(checked((uint)id));
+        return bytes.ToArray();
+    }
+
     public static byte[] ActiveList(IReadOnlyList<ActiveMainQuest> active)
     {
         if (active.Count > 30 || active.Select(value => value.Slot).Distinct().Count() != active.Count ||
@@ -95,13 +107,14 @@ internal static class QuestPackets
 
     public static byte[] Finish(ushort questId, byte conditionType, uint experience,
         IReadOnlyList<QuestConsumedItemProjection> consumed, uint gold, IReadOnlyList<QuestRewardItemProjection> rewards, byte? growType = null,
-        IReadOnlyList<QuestCurrencyRewardProjection>? currencies = null)
+        IReadOnlyList<QuestCurrencyRewardProjection>? currencies = null, ushort tpAmount = 0)
     {
-        if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 25 or 31 or 39 or 40 or 42 or 44 or 64 or 65) || experience > int.MaxValue || gold > int.MaxValue ||
+        if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 25 or 31 or 39 or 40 or 42 or 44 or 49 or 64 or 65 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
             consumed.Count > byte.MaxValue || conditionType is not (0 or 25) && consumed.Count != 0 ||
             rewards.Count + (currencies?.Count ?? 0) + (gold == 0 ? 0 : 1) > byte.MaxValue ||
             growType is { } growth && (growth == 0 || (growth & 15) > 5 || growth >> 4 > 2) ||
-            growType is not null && (rewards.Count != 0 || currencies?.Count > 0))
+            growType is not null && (rewards.Count != 0 || currencies?.Count > 0) ||
+            tpAmount is not (0 or 2) || tpAmount != 0 && (growType is not null || rewards.Count != 0 || currencies?.Count > 0))
             throw new InvalidDataException("普通任务交付投影超出已确认合同");
         byte[] rows = FixedRewardRows(rewards,currencies);
         using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
@@ -121,6 +134,12 @@ internal static class QuestPackets
             // Full03 02377DD5读branch/stage，02377E16..02377FF7固定读取两页count；技能完整状态另由19发布。
             writer.Write((byte)(target >> 4 == 0 ? 1 : 2)); writer.Write((byte)(target >> 4 == 0 ? target : target >> 4));
             writer.Write((byte)0); writer.Write((byte)0);
+            return bytes.ToArray();
+        }
+        if (tpAmount != 0)
+        {
+            // Full03 02377B15..32/48：mode29固定展示2TP，不读取数量或物品数组；真实余额由19发布。
+            writer.Write((byte)29);
             return bytes.ToArray();
         }
         writer.Write((byte)0); writer.Write((byte)(rewards.Count + (currencies?.Count ?? 0) + (gold == 0 ? 0 : 1)));

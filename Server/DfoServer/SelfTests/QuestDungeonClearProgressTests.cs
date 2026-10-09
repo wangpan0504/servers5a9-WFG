@@ -130,6 +130,150 @@ internal static class QuestDungeonClearProgressTests
         Console.WriteLine($"PASS {Count-checks} 条件通关计数、原子回滚、重放、重接及领奖断言（合成战斗）");
     }
 
+    public static void RunInitialization(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
+    {
+        int checks = Count;
+        var threshold = QuestEligibilityTests.Quest(1100) with { Condition = "[condition under clear]", SubType = 11,
+            IntData = [3,-1,2], CompleteNpc = -1, Attributes = ["not give exp quest"], Rewards = [] };
+        var mazeTarget = threshold with { Id = 1101, IntData = [3,-1,-1] };
+        var eight = threshold with { Id = 1102, IntData = [3,-1,8] };
+        That(QuestDungeonClearProgress.Initial(eight) == 1 && QuestDungeonClearProgress.ValidScalar(eight,0) &&
+            QuestDungeonClearProgress.ValidScalar(eight,1) && !QuestDungeonClearProgress.ValidScalar(eight,2),
+            "sub11 keeps a boolean scalar instead of initialization count or remaining eight");
+        foreach (var data in new int[][] { [3,-1], [3,-1,0], [3,-1,-2], [3,-1,8,1], [-1,-1,8] })
+            That(!QuestDungeonClearProgress.TryTarget(eight with { IntData = data },out _),
+                "unknown initialization threshold or selector does not become an ordinary supported target");
+        string root = Path.Combine(Path.GetTempPath(),"S5A9-quest-initialization-"+Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(root,"game.db");
+        var quests = new QuestCatalog(new[] { threshold,mazeTarget,eight }.ToDictionary(row => row.Id));
+        var skills = SkillLearningCatalog.Load(pvf);
+        var growth = CharacterGrowthCatalog.Load(pvf,skills);
+        var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var owners = new AccountOwners();
+        using var owner = owners.Acquire("quest-initialization",() => { });
+        try
+        {
+            var repository = new CharacterRepository(path,quests);
+            var current = repository.Create(owner,SkillRepositoryTests.Fixture("Initialize",towns,characters,skills));
+            Accept(threshold); Accept(mazeTarget); Accept(eight);
+            var first = PrepareInitialization(current,2);
+            That(first.Run.ConfirmedInitializationCount == 2 && first.Run.MazeInitializationThreshold == 2 &&
+                first.Run.ClearFact is null && State(1100) == 1 && State(1101) == 1 && State(1102) == 1,
+                "loading facts remain in the run and never update persistent quest progress before a real clear");
+            That(QuestDungeonClearProgress.CountsInitializations(eight,first.Run.Entry) &&
+                QuestDungeonClearProgress.Matches(threshold,first.Run.Entry,first.Run) &&
+                QuestDungeonClearProgress.Matches(mazeTarget,first.Run.Entry,first.Run) &&
+                !QuestDungeonClearProgress.Matches(eight,first.Run.Entry,first.Run) &&
+                !QuestDungeonClearProgress.Matches(threshold,first.Run.Entry) &&
+                !QuestDungeonClearProgress.Matches(threshold with { IntData = [3,-1,3] },first.Run.Entry,first.Run),
+                "the same real count supports an exact positive boundary and maze N-minus-one but not a higher threshold or missing run");
+            var difficult = threshold with { IntData = [3,1,2] };
+            That(!QuestDungeonClearProgress.CountsInitializations(difficult,first.Run.Entry) &&
+                QuestDungeonClearProgress.CountsInitializations(difficult,first.Run.Entry with { Difficulty = 1 }) &&
+                QuestDungeonClearProgress.CountsInitializations(difficult,first.Run.Entry with { Difficulty = 2 }) &&
+                !QuestDungeonClearProgress.CountsInitializations(threshold,first.Run.Entry with { DungeonId = 4 }),
+                "initialization qualification uses minimum difficulty and the actual dungeon");
+            Sql("CREATE TRIGGER fail_initialization AFTER UPDATE ON character_active_main_quests WHEN NEW.quest_id=1100 BEGIN SELECT RAISE(ABORT,'initialization rollback'); END");
+            var before = current;
+            Reject<SqliteException>(() => Commit(first,before),"sub11 final clear SQL failure");
+            That(QuestCompletionRepositoryTests.Same(before,repository.LoadCharacter(owner,current.Slot)) &&
+                Scalar("SELECT count(*) FROM character_dungeon_growth_receipts") == 0 &&
+                Scalar("SELECT count(*) FROM character_quest_clear_receipts") == 0 && first.Run.ClearFact is null &&
+                first.Run.IsPendingDeath(first.Pending) && first.Run.ConfirmedInitializationCount == 2,
+                "failed clear rolls back growth, both qualifying boolean progress states and receipts while retaining the same real run candidate");
+            Sql("DROP TRIGGER fail_initialization");
+            current = Commit(first,before).Character;
+            var replay = Commit(first,before);
+            That(State(1100) == 0 && State(1101) == 0 && State(1102) == 1 && replay.Duplicate &&
+                QuestCompletionRepositoryTests.Same(current,replay.Character) &&
+                Scalar("SELECT count(*) FROM character_quest_clear_receipts") == 2,
+                "only qualifying sub11 targets become zero atomically and return-loss recovery does not add another receipt");
+            first.Run.ConfirmCommittedDeath(first.Pending);
+            var reopened = new CharacterRepository(path,quests).LoadCharacter(owner,current.Slot);
+            That(QuestCompletionRepositoryTests.Same(current,reopened) && repository.LoadQuestClear(owner,current,1100) is not null &&
+                repository.LoadQuestClear(owner,current,1101) is not null && repository.LoadQuestClear(owner,current,1102) is null,
+                "reopening preserves the real final clear receipt without persisting transient loading counters");
+            var sync = new GameSession(repository,towns,owner); sync.Select(current.Slot); sync.MarkReady();
+            var condition = sync.ChangeQuest(1102,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
+            That(condition?.Outcome == QuestLifecycleOutcome.Unchanged && State(1102) == 1,
+                "client scalar zero cannot replace the missing eight-initialization clear fact");
+            var second = PrepareInitialization(current,2);
+            current = Commit(second,current).Character; second.Run.ConfirmCommittedDeath(second.Pending);
+            That(State(1102) == 1 && second.Run.ConfirmedInitializationCount == 2 &&
+                Scalar("SELECT count(*) FROM character_quest_clear_receipts") == 2,
+                "another run starts its own shared counter and two partial clears do not accumulate toward eight");
+            var oldRun = PrepareInitialization(current,8);
+            Guid oldAcceptance = current.ActiveMainQuests.Single(row => row.QuestId == 1102).AcceptanceId;
+            current = repository.CommitQuestLifecycle(owner,QuestLifecyclePlan.Giveup(current,eight,quests,DateTimeOffset.UtcNow)).Character;
+            Accept(eight);
+            Guid newAcceptance = current.ActiveMainQuests.Single(row => row.QuestId == 1102).AcceptanceId;
+            current = Commit(oldRun,current).Character; oldRun.Run.ConfirmCommittedDeath(oldRun.Pending);
+            That(oldAcceptance != newAcceptance && State(1102) == 1 && repository.LoadQuestClear(owner,current,1102) is null &&
+                Scalar("SELECT count(*) FROM character_quest_clear_receipts") == 2,
+                "an old run reaching eight cannot advance or issue a clear receipt for a renewed acceptance");
+            var final = PrepareInitialization(current,8); before = current;
+            That(QuestDungeonClearProgress.Matches(eight,final.Run.Entry,final.Run) &&
+                !QuestDungeonClearProgress.Matches(eight with { IntData = [3,-1,9] },final.Run.Entry,final.Run),
+                "positive eight is inclusive and does not satisfy nine");
+            current = Commit(final,before).Character;
+            var finalReplay = Commit(final,before); final.Run.ConfirmCommittedDeath(final.Pending);
+            var receipt = repository.LoadQuestClear(owner,current,1102);
+            That(State(1102) == 0 && finalReplay.Duplicate && receipt is not null && receipt.AcceptanceId == newAcceptance &&
+                receipt.InstanceId == final.Run.Snapshot.Identity.InstanceId && receipt.EventId == final.Pending.Death.EventId &&
+                receipt.MapId == 76126 && Scalar("SELECT count(*) FROM character_quest_clear_receipts") == 3 &&
+                !current.CompletedQuests.Contains(1102),
+                "exact eight creates the current acceptance's final real-death receipt only once and has not awarded or finished the quest");
+            var finishing = new GameSession(repository,towns,owner); finishing.Select(current.Slot); finishing.MarkReady();
+            var claim = finishing.FinishQuest(1102,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
+            That(claim.Receipt?.Commit is { ConditionType: 1, ExperienceReward.Amount: 0, Rewards.Length: 0 } done &&
+                done.Character.CompletedQuests.Contains(1102) &&
+                finishing.FinishQuest(1102,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Outcome == QuestFinishOutcome.AlreadyCompleted,
+                "sub11 uses the existing zero-reward completion transaction and rejects duplicate handover");
+
+            void Accept(StoryQuest quest) => current = repository.CommitQuestLifecycle(owner,
+                QuestLifecyclePlan.Accept(current,quest,quests,items.Items,items.GoldLimits,items.EpicPieces,DateTimeOffset.UtcNow)).Character;
+            uint State(ushort questId) => current.ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState;
+            DungeonGrowthCommit Commit((SinglePlayerDungeonRun Run,PreparedDungeonDeath Pending) clear,Character expected) =>
+                repository.CommitDungeonGrowth(owner,expected,clear.Run,clear.Pending,new("fixture-only",DungeonKillExperienceCatalog.ResourcePath,
+                    clear.Pending.Monster.MonsterId,clear.Pending.Monster.CandidateLevel,1),growth);
+            void Sql(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
+            long Scalar(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }
+            SqliteConnection Open() { var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); return db; }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
+        Console.WriteLine($"PASS {Count-checks} sub11 initialization threshold, real-clear rollback, replay and renewed-acceptance assertions");
+    }
+
+    static (SinglePlayerDungeonRun Run,PreparedDungeonDeath Pending) PrepareInitialization(Character character,int count)
+    {
+        var start = new DungeonMap("map",new(0,0),76124,"map/initialization-start-fixture.map");
+        var middle = new DungeonMap("map",new(1,0),76125,"map/initialization-middle-fixture.map");
+        var boss = new DungeonMap("boss",new(2,0),76126,"map/initialization-boss-fixture.map");
+        var maze = new DungeonMaze(0,3,1,"BBFFEE",[start.Position],[boss.Position],[start,middle,boss],[]);
+        var entry = new DungeonEntryPlan(character.Id,character.Revision,3,0,byte.MaxValue,0,maze,start,boss)
+        { QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(), InitializationCounterSupported = true };
+        var source = new DungeonRoomMonster(1,[1,0,3,100,100,0,1,1],"[fixed]","[normal]","monster/initialization-fixture.mob");
+        DungeonMonsterPlan Room(DungeonMap map,ushort key,bool friendly) => DungeonMonsterPlan.FromRoom(
+            new DungeonRoomDefinition(map,[source with { RankKind = friendly ? "[normal]" : "[boss]" }],[],[])
+                { MonsterTeams = friendly ? [0] : [] },character.Id,key);
+        var bossPlan = Room(boss,22,false);
+        var route = new DungeonFixedRoute([Room(start,20,true),Room(middle,21,true),bossPlan],
+            [new(start.Position,middle.Position),new(middle.Position,boss.Position)]);
+        var authority = new FixtureAuthority();
+        if (count is not (2 or 8) || !SinglePlayerDungeonRun.TryCreate(entry,1,1,route,authority,out var created,out _))
+            throw new InvalidOperationException("初始化计数fixture只能生成两次或八次实际加载");
+        var run = created!;
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid(),true);
+        for (int index = 1; index < count; index++)
+        {
+            run.Move(run.Snapshot.Identity,Guid.NewGuid(),run.Snapshot.CurrentMap == start ? middle.Position : start.Position);
+            run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid(),true);
+        }
+        run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position);
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid(),true);
+        return (run,run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity,bossPlan.Monsters.Single().ObjectKey)).Pending!);
+    }
+
     static (SinglePlayerDungeonRun Run,PreparedDungeonDeath Pending) Prepare(Character character)
     {
         var map = new DungeonMap("boss",new(0,0),76126,"map/clear-condition-fixture.map");

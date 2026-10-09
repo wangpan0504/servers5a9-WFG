@@ -29,7 +29,7 @@ internal static class QuestRelationProgress
 
     public static bool SequentialParent(StoryQuest parent, QuestCatalog quests) =>
         parent.Condition == "[quest clear]" && parent.SubType == 2 && parent.MainQuest is null &&
-        QuestEligibility.InspectResource(parent).Entry == QuestResourceEntry.Ordinary &&
+        QuestEligibility.InspectResource(parent).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Hidden &&
         QuestCoverage.HasOrdinaryDeclarations(parent) && parent.Grade != "[training]" &&
         !QuestCycle.Daily(parent) && !QuestCycle.Repeat(parent) &&
         parent.Definition is { AccountQuest: false, AccountCollisions.Length: 0, RequiredAnswers.Length: 0 } && parent.IntData.Count > 0 &&
@@ -37,15 +37,36 @@ internal static class QuestRelationProgress
             id is > 0 and < 30000 && quests.TryGet(id, out var child) && child.MainQuest == parent.Id &&
             child.Definition is { Diagnostics.Length: 0 });
 
+    public static bool ThresholdShape(StoryQuest parent) =>
+        parent.Condition == "[clear multi quest]" && parent.SubType == 4 && parent.MainQuest is null &&
+        parent.Definition is { MinimumClearCount: > 0 } definition &&
+        definition.MinimumClearCount.Value <= parent.IntData.Count && parent.IntData.Count > 0 &&
+        parent.IntData.Distinct().Count() == parent.IntData.Count &&
+        parent.IntData.All(id => id is > 0 and < 30000 && id != parent.Id);
+
+    public static bool ThresholdParent(StoryQuest parent, QuestCatalog quests) => ThresholdShape(parent) &&
+        QuestCoverage.HasOrdinaryDeclarations(parent) && parent.IntData.All(id =>
+            quests.TryGet(id,out var child) && child.MainQuest == parent.Id && child.Definition is { Diagnostics.Length: 0 });
+
+    // Full03只要求未达成为正scalar、达成为0；1/0是与该消费合同相容的服务端模型。
+    public static uint ThresholdScalar(StoryQuest parent, IReadOnlyCollection<int> completed)
+    {
+        if (!ThresholdShape(parent)) throw new NotSupportedException("阈值父任务需要完整sub4引用和最小完成数");
+        var done = completed.ToHashSet();
+        return parent.IntData.Count(done.Contains) >= parent.Definition!.MinimumClearCount!.Value ? 0u : 1u;
+    }
+
     public static uint Initial(StoryQuest parent, QuestCatalog quests, IReadOnlyCollection<int> completed)
     {
+        if (ThresholdParent(parent,quests)) return ThresholdScalar(parent,completed);
         if (!SequentialParent(parent,quests)) throw new NotSupportedException("父任务不是已确认的完整顺序关系");
         var done = completed.ToHashSet();
         return checked((uint)parent.IntData.Count(id => !done.Contains(id)));
     }
 
     public static bool DialogueChild(StoryQuest child, QuestCatalog quests) =>
-        child.MainQuest is { } id && quests.TryGet(id, out var parent) && SequentialParent(parent, quests);
+        child.MainQuest is { } id && quests.TryGet(id, out var parent) && parent.IntData.Contains(child.Id) &&
+        (SequentialParent(parent, quests) || ThresholdParent(parent,quests));
 
     public static bool SceneChild(StoryQuest child, Character character, QuestCatalog quests, DungeonEntryPlan entry) =>
         DialogueChild(child,quests) && child.MainQuest == entry.RouteQuestId &&
@@ -60,7 +81,7 @@ internal static class QuestRelationProgress
     {
         var done = completed.ToHashSet();
         return active.Select(row => row.AcceptanceId != Guid.Empty &&
-            quests.TryGet(row.QuestId, out var parent) && SequentialParent(parent, quests)
-                ? row with { ConditionState = checked((uint)parent.IntData.Count(id => !done.Contains(id))) } : row).ToImmutableArray();
+            quests.TryGet(row.QuestId, out var parent) && (SequentialParent(parent, quests) || ThresholdParent(parent,quests))
+                ? row with { ConditionState = Initial(parent,quests,done) } : row).ToImmutableArray();
     }
 }

@@ -131,6 +131,12 @@ internal static class QuestProtocolTests
         byte[] countedClear = QuestPackets.Finish(100,1,17,[],0,fixedRewards[..2]);
         Check(countedClear[3] == 1 && countedClear.AsSpan(4).SequenceEqual(QuestPackets.Finish(100,3,17,[],0,fixedRewards[..2]).AsSpan(4)),
             "计数清图与单清图共用完整奖励行，保留真实条件分类");
+        Check(QuestPackets.Finish(100,70,17,[],0,[]).SequenceEqual(Convert.FromHexString("01640046110000000000")),
+            "阈值父任务70的XP后直接奖励模式，不虚构额外条件字段");
+        Check(QuestPackets.Finish(100,4,0,[],123,[],tpAmount: 2).SequenceEqual(Convert.FromHexString("01640004000000001D")),
+            "TP模式29固定展示2点，不追加金额、数量或奖励count，金币用绝对持有域通知");
+        Reject(() => QuestPackets.Finish(100,4,0,[],0,[],tpAmount: 1),"TP模式不能接受未确认的赠点数量");
+        Reject(() => QuestPackets.Finish(100,4,0,[],0,fixedRewards[..1],tpAmount: 2),"TP专用模式不能吞掉真实物品奖励行");
         foreach (byte branch in Enumerable.Range(1,5).Select(value => (byte)value))
             foreach (byte stage in Enumerable.Range(0,3).Select(value => (byte)value))
             {

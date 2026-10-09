@@ -64,6 +64,7 @@ internal static class SqliteMigrations
         }),
         new(16, "普通副本独立身份与房间账本", UpgradeNormalDungeonReceipts),
         new(17, "任务系统与已发布普通副本兼容", UpgradeQuestSystem),
+        new(18, "任务回执与任务券完整结构", CompleteQuestSystemV18),
     ];
 
     internal const string FatigueSchema = """
@@ -227,6 +228,108 @@ internal static class SqliteMigrations
           PRIMARY KEY(character_id,acceptance_id),
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
+        """;
+
+    private const string QuestSkipSchemaV18 = """
+        CREATE TABLE character_quest_skip_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,
+          acceptance_id TEXT CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          parent_key INTEGER CHECK(parent_key BETWEEN 0 AND 2147483647),question_quest INTEGER CHECK(question_quest BETWEEN 1 AND 29999),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot) AND json_type(plan_snapshot)='object'),
+          operation_id TEXT NOT NULL CHECK(length(operation_id)=32 AND operation_id NOT GLOB '*[^0-9a-f]*' AND operation_id<>'00000000000000000000000000000000'),
+          operation_kind TEXT NOT NULL CHECK(operation_kind IN('QuickClear','Manual','Ticket')),
+          CHECK((operation_kind='QuickClear' AND acceptance_id IS NOT NULL AND operation_id=acceptance_id AND parent_key IS NOT NULL AND question_quest IS NOT NULL)
+            OR (operation_kind IN('Manual','Ticket') AND acceptance_id IS NULL AND parent_key IS NULL AND question_quest IS NULL)),
+          PRIMARY KEY(character_id,operation_id),UNIQUE(character_id,acceptance_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    // v18统一接管已发布master及旧任务分支的已知回执结构，不重写历史规则或奖励。
+    static void CompleteQuestSystemV18(SqliteConnection db, SqliteTransaction tx)
+    {
+        const string completion = "character_quest_completion_receipts", skip = "character_quest_skip_receipts";
+        bool updateCompletion = NeedsUpdate(completion, QuestCompletionSchemaV18, QuestCompletionSchemaV14,
+            QuestCompletionSchemaV18.Replace("44,49,64", "44,64"));
+        bool updateSkip = NeedsUpdate(skip, QuestSkipSchemaV18, QuestSkipSchema);
+        if (!updateCompletion && !updateSkip) return;
+        Execute(db, tx, "PRAGMA defer_foreign_keys=ON");
+        if (updateCompletion) RebuildReceipt(db, tx, completion, QuestCompletionSchemaV18);
+        if (updateSkip) RebuildReceipt(db, tx, skip, QuestSkipSchemaV18, "operation_id,operation_kind", "acceptance_id,'QuickClear'");
+        using var command = db.CreateCommand(); command.Transaction = tx;
+        command.CommandText = "PRAGMA foreign_key_check";
+        using var reader = command.ExecuteReader();
+        if (reader.Read()) throw new InvalidDataException("v18任务账本保全对齐后的外键不完整");
+
+        bool NeedsUpdate(string table, string current, params string[] legacy)
+        {
+            using var query = db.CreateCommand(); query.Transaction = tx;
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            query.Parameters.AddWithValue("$table", table);
+            if (query.ExecuteScalar() is not string actual)
+                throw new InvalidDataException("v18缺少任务账本: " + table);
+            string canonical = NormalizeTable(actual, table);
+            if (canonical == NormalizeTable(current, table)) return false;
+            if (legacy.Any(sql => canonical == NormalizeTable(sql, table))) return true;
+            throw new InvalidDataException("v18任务账本不是已确认的新旧结构: " + table);
+        }
+    }
+
+    // 旧任务分支v14保留了已发布疲劳表，原v15步骤只在两表确实缺失时建表。
+    static bool HasPublishedFatigue(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_fatigue','character_dungeon_fatigue_receipts')";
+        int count = Convert.ToInt32(query.ExecuteScalar());
+        if (count == 0) return false;
+        if (count != 2) throw new InvalidDataException("已有疲劳owner结构不完整，拒绝兼容升级");
+        foreach (string expected in FatigueSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            string table = expected.StartsWith("CREATE TABLE character_fatigue(", StringComparison.Ordinal)
+                ? "character_fatigue" : "character_dungeon_fatigue_receipts";
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            query.Parameters.Clear(); query.Parameters.AddWithValue("$table", table);
+            if (query.ExecuteScalar() is not string actual ||
+                (NormalizeTable(actual, table) != NormalizeTable(expected, table) &&
+                 NormalizeTable(actual, table) != NormalizeTable(expected.Replace("CHECK(map_id BETWEEN 76121 AND 76126)", "CHECK(map_id>0)"), table)))
+                throw new InvalidDataException("已有疲劳owner不是已发布结构: " + table);
+        }
+        return true;
+    }
+
+    // SQLite重命名表会为表名及外键引用补双引号，仍按相同已知声明比较。
+    static string NormalizeTable(string sql, string table) => string.Concat(sql.Where(c => !char.IsWhiteSpace(c)))
+        .TrimEnd(';').Replace("\"" + table + "\"", table)
+        .Replace("\"character_quest_clear_receipts\"", "character_quest_clear_receipts")
+        .Replace("\"characters\"", "characters");
+
+    private const string QuestCompletionSchemaV18 = """
+        CREATE TABLE character_quest_completion_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,
+          acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+          quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),event_id TEXT,instance_id TEXT,
+          task_attempt INTEGER CHECK(task_attempt>0),epoch INTEGER CHECK(epoch>0),
+          generation INTEGER NOT NULL CHECK(generation>0),rule_id TEXT NOT NULL,
+          resource_source TEXT NOT NULL,quest_source TEXT NOT NULL,
+          native_index INTEGER NOT NULL CHECK(native_index>=0),base_experience INTEGER NOT NULL CHECK(base_experience>=0),
+          raw_additional_percent INTEGER NOT NULL,difficulty_key TEXT NOT NULL,difficulty_weight INTEGER NOT NULL CHECK(difficulty_weight>=0),
+          experience_amount INTEGER NOT NULL CHECK(experience_amount BETWEEN 0 AND 2147483647),
+          gold_amount INTEGER NOT NULL CHECK(gold_amount BETWEEN 0 AND 2147483647),
+          before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),
+          before_experience INTEGER NOT NULL CHECK(before_experience>=0),after_experience INTEGER NOT NULL CHECK(after_experience=before_experience+experience_amount),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          rewards TEXT NOT NULL CHECK(json_valid(rewards) AND json_type(rewards)='array' AND json_array_length(rewards)<=255),
+          clear_acceptance_id TEXT,condition_type INTEGER NOT NULL DEFAULT 3 CHECK(condition_type IN(0,1,2,3,4,6,12,25,31,39,40,42,44,49,64,65,67,70)),
+          selector INTEGER NOT NULL DEFAULT 65535 CHECK(selector BETWEEN 0 AND 65535),multiplier INTEGER NOT NULL DEFAULT 1 CHECK(multiplier BETWEEN 1 AND 65535),
+          consumed TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(consumed) AND json_type(consumed)='array' AND json_array_length(consumed)<=255),
+          changed_items TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+          plan_snapshot TEXT CHECK(plan_snapshot IS NULL OR (json_valid(plan_snapshot) AND json_type(plan_snapshot)='object')),
+          CHECK((condition_type IN(1,3) AND clear_acceptance_id=acceptance_id AND event_id IS NOT NULL AND instance_id IS NOT NULL AND task_attempt IS NOT NULL AND epoch IS NOT NULL)
+            OR (condition_type IN(0,2,4,6,12,25,31,39,40,42,44,49,64,65,67,70) AND clear_acceptance_id IS NULL AND event_id IS NULL AND instance_id IS NULL AND task_attempt IS NULL AND epoch IS NULL AND plan_snapshot IS NOT NULL)),
+          PRIMARY KEY(character_id,acceptance_id),
+          FOREIGN KEY(character_id,clear_acceptance_id) REFERENCES character_quest_clear_receipts(character_id,acceptance_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
         """;
 
     private const string QuestLifecycleSchema = """
@@ -480,11 +583,12 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        bool existingFatigue = version == 14 && HasPublishedFatigue(db, tx);
         foreach (var step in steps)
         {
             if (step.Version <= version)
                 continue;
-            step.Upgrade(db, tx);
+            if (step.Version != 15 || !existingFatigue) step.Upgrade(db, tx);
             Execute(db, tx, $"PRAGMA user_version={step.Version}");
         }
         ValidateSchema(db, tx);
@@ -523,7 +627,7 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
-        "SELECT character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot FROM character_quest_skip_receipts LIMIT 0",
+        "SELECT character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot,operation_id,operation_kind FROM character_quest_skip_receipts LIMIT 0",
         "SELECT character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items FROM character_quest_drop_receipts LIMIT 0",
         "SELECT account,quest_id,character_id,acceptance_id,daily_period,answer FROM account_completed_quests LIMIT 0",
         "SELECT character_id,account,operation_id,action,quest_id,acceptance_id,before_revision,revision,before_active,after_active,changed_items,scene_event,before_completed,after_completed FROM character_quest_lifecycle_receipts LIMIT 0",

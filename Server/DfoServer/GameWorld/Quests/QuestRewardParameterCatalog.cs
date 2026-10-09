@@ -44,7 +44,8 @@ internal sealed class QuestRewardParameterCatalog
                 throw new InvalidDataException("任务difficulty块未闭合");
             at--;
         }
-        var difficulty = ImmutableDictionary.CreateBuilder<string, int>(StringComparer.Ordinal);
+        // Full03 041997BA将ASCII小写转为大写，两端查询同样匹配；保留资源原键，不给未知键补倍率。
+        var difficulty = ImmutableDictionary.CreateBuilder<string, int>(StringComparer.OrdinalIgnoreCase);
         var difficultyTokens = Required("[difficulty]");
         if (difficultyTokens.Length == 0 || difficultyTokens.Length % 2 != 0)
             throw new InvalidDataException("任务difficulty必须是完整字符串键与整数值");

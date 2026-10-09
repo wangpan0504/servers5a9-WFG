@@ -72,7 +72,8 @@ internal sealed partial class GameSession
             QuestRelationProgress.SceneChild(quest,expected,quests,entry) && QuestRelationProgress.ZeroRewardChild(quest) &&
             expected.ActiveMainQuests.Any(row => row.QuestId == quest.Id && QuestHuntProgress.Bound(row,entry));
         bool completedParent = QuestRelationProgress.SequentialParent(quest,quests) &&
-            quest.IntData.All(expected.CompletedQuests.Contains);
+            quest.IntData.All(expected.CompletedQuests.Contains) || QuestRelationProgress.ThresholdParent(quest,quests) &&
+            QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)) == 0;
         bool completedScene = captured.Phase == SessionPhase.Town &&
             QuestClientSceneProgress.Matches(expected,quest,towns);
         bool sceneHunt = captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && captured.Entry is { } huntEntry &&
