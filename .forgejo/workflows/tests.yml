@@ -1,0 +1,39 @@
+name: 无 PVF 检查
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  no-pvf:
+    runs-on: codeberg-small
+    timeout-minutes: 5
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:10.0-noble
+    defaults:
+      run:
+        shell: bash
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - name: 检出 PR 提交
+        env:
+          REPOSITORY_URL: ${{ forgejo.event.pull_request.head.repo.clone_url }}
+          PR_COMMIT: ${{ forgejo.event.pull_request.head.sha }}
+        run: |
+          git init .
+          git remote add origin "$REPOSITORY_URL"
+          git fetch --depth=1 origin "$PR_COMMIT"
+          git checkout --detach "$PR_COMMIT"
+
+      - name: Debug 基础检查
+        run: pwsh -NoProfile -File Tools/Check-Development.ps1 -Configuration Debug
+
+      - name: Debug 命令入口检查
+        run: dotnet build/check/bin/DfoServer/debug/DfoServer.dll --selftest-tcp commands
+
+      - name: Release 基础检查
+        run: pwsh -NoProfile -File Tools/Check-Development.ps1 -Configuration Release
+
+      - name: Release 命令入口检查
+        run: dotnet build/check/bin/DfoServer/release/DfoServer.dll --selftest-tcp commands

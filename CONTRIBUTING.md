@@ -102,7 +102,11 @@ PR 使用[合入模板](.forgejo/PULL_REQUEST_TEMPLATE.md)，关联 Issue，说�
 
 仓库管理员在 Codeberg 中配置五个状态标签，以及 `master` 的[分支保护](https://forgejo.org/docs/latest/user/repository/protection/)：限制直接推送和强推，仅维护者合入 PR，并要求独立评审。模块标签按实际任务需要增加，不预先建立无人维护的大量分类。平台权限、标签和保护规则须在平台单独设置，文档或模板存在不代表这些设置已经生效。
 
-当前验证以本地命令与评审记录为准，不要求托管 CI；未配置的 CI 状态不能作为必需检查阻塞所有 PR。模板位于 `.forgejo/ISSUE_TEMPLATE/` 和 `.forgejo/PULL_REQUEST_TEMPLATE.md`，格式依据 [Forgejo 模板说明](https://forgejo.org/docs/latest/user/repository/issue-pull-request-templates/)；合入默认分支后供平台读取。Issue 模板不预设负责人或尚未建立的标签，也不自动完成认领。
+PR 创建、追加提交和重新打开时，由[无 PVF 检查工作流](.forgejo/workflows/tests.yml)使用 `codeberg-small` 运行自动检查。工作流使用自带 .NET 10 SDK 和 PowerShell 的官方 Linux SDK 镜像，检出本次事件对应的 PR 源提交，依次执行 Debug、Release 的 `Tools/Check-Development.ps1` 和 `--selftest-tcp commands`；任何阶段失败均使检查失败，单次任务限时 5 分钟。检查只使用源码、合成输入和临时 SQLite，Fork PR 无需额外 secrets。CI 不包含真实 PVF 的业务自测、完整业务 TCP、资源普查或客户端验收；本地验证仍按[检查范围](#检查范围)补齐。
+
+管理员须在仓库设置的 `Units > Overview` 中启用 Actions；工作流文件不会自动修改平台设置或分支保护。必需检查以实际配置为准，未启用或尚未验证可运行的 CI 状态不得作为必需检查阻塞所有 PR。
+
+模板位于 `.forgejo/ISSUE_TEMPLATE/` 和 `.forgejo/PULL_REQUEST_TEMPLATE.md`，格式依据 [Forgejo 模板说明](https://forgejo.org/docs/latest/user/repository/issue-pull-request-templates/)；合入默认分支后供平台读取。Issue 模板不预设负责人或尚未建立的标签，也不自动完成认领。
 
 ## 实现与审查
 
