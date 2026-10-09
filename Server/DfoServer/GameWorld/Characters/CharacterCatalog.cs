@@ -12,12 +12,32 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
     public CharacterProfile Get(byte job) => profiles.GetValueOrDefault(job) ?? throw new InvalidDataException("Ordinary character job is not implemented");
     public CharacterAttributeDefinition GetAttributeDefinition(byte job) => attributeDefinitions.GetValueOrDefault(job)
         ?? throw new InvalidDataException("角色属性资源未装载");
+
+    internal static IReadOnlyDictionary<int, string> ReadJobList(PvfArchive pvf)
+    {
+        PvfToken[] tokens = pvf.ReadTokens("character/character.lst");
+        if (tokens.Length == 0 || tokens.Length % 2 != 0)
+            throw new InvalidDataException("角色名册为空或ID/路径不成对");
+        var jobs = new Dictionary<int, string>();
+        for (int i = 0; i < tokens.Length; i += 2)
+        {
+            if (tokens[i].Type != 0 || tokens[i].Value is < 0 or > 15 || tokens[i + 1].Type != 6)
+                throw new InvalidDataException("角色名册编号或路径类型无效");
+            string relative = pvf.ResolveString(tokens[i + 1].Value);
+            if (string.IsNullOrWhiteSpace(relative) || relative.StartsWith('/') || relative.Contains(':') ||
+                relative.Replace('\\', '/').Split('/').Any(part => part is "." or ".."))
+                throw new InvalidDataException("角色名册路径非法");
+            string path = PvfArchive.NormalizePath(relative);
+            if (pvf.FindFile("character/" + path)?.DataType != 1 || !jobs.TryAdd(tokens[i].Value, path))
+                throw new InvalidDataException("角色名册重复ID或CHR资源缺失");
+        }
+        return jobs;
+    }
+
     public static CharacterCatalog Load(PvfArchive pvf, ItemCatalog itemCatalog)
     {
 
-        var list = List(pvf.ReadText("character/character.lst"));
-        if (!list.Keys.Order().SequenceEqual(Enumerable.Range(0, 16)))
-            throw new InvalidDataException("Character job list changed");
+        var list = ReadJobList(pvf);
         var profiles = new Dictionary<byte, CharacterProfile>();
         var catalog = new CharacterCatalog(profiles);
         foreach (var entry in list.OrderBy(p => p.Key))

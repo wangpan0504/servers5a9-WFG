@@ -106,6 +106,10 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("普通副本升级需要完整的已有掉落集合外键依赖");
             if (count == 3)
                 tables.AddRange(["character_dungeon_drop_batches", "character_dungeon_drop_objects", "character_dungeon_drop_pickups"]);
+            // 已发布任务v14也引用成长回执；有历史任务掉落时须先重建子表再替换父表。
+            query.CommandText = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='character_quest_drop_receipts'";
+            if (Convert.ToInt32(query.ExecuteScalar()) == 1)
+                tables.Add("character_quest_drop_receipts");
         }
         var schemas = new Dictionary<string, string>();
         var secondary = new List<string>();

@@ -216,7 +216,8 @@ internal sealed class SkillLearningCatalog
     {
 
         var paths = new Dictionary<(byte, ushort), string>();
-        for (byte job = 0; job < Lists.Length; job++)
+        int[] jobs = CharacterCatalog.ReadJobList(pvf).Keys.Order().ToArray();
+        foreach (int job in jobs)
         {
             PvfToken[] tokens = pvf.ReadTokens("skill/" + Lists[job]);
             if (tokens.Length == 0 || tokens.Length % 2 != 0)
@@ -227,7 +228,7 @@ internal sealed class SkillLearningCatalog
                     throw new InvalidDataException("职业技能列表整数或路径类型无效");
                 string path = PvfArchive.NormalizePath("skill/" + pvf.ResolveString(tokens[i + 1].Value));
                 if (!path.StartsWith("skill/", StringComparison.Ordinal) || !path.EndsWith(".skl", StringComparison.Ordinal) ||
-                    path.Contains("..", StringComparison.Ordinal) || !paths.TryAdd((job, (ushort)tokens[i].Value), path))
+                    path.Contains("..", StringComparison.Ordinal) || !paths.TryAdd(((byte)job, (ushort)tokens[i].Value), path))
                     throw new InvalidDataException("职业技能列表路径或重复ID无效");
             }
         }
@@ -236,8 +237,8 @@ internal sealed class SkillLearningCatalog
         // 成长提交会引用赠技；在装配阶段解码，SQLite writer 内只访问已缓存的定义。
         foreach (var key in catalog.grants.SkillIds)
             if (paths.ContainsKey((key.Job, key.Id))) catalog.Get(key.Job, key.Id);
-        for (byte job = 0; job < Lists.Length; job++)
-            catalog.FixedSkills(job);
+        foreach (int job in jobs)
+            catalog.FixedSkills((byte)job);
         return catalog;
     }
 

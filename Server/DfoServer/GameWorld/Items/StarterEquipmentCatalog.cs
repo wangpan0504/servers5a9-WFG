@@ -1,4 +1,5 @@
 using PvfLib;
+using DfoServer.GameWorld.Characters;
 
 namespace DfoServer.GameWorld.Items;
 
@@ -83,15 +84,13 @@ internal sealed class StarterEquipmentCatalog
     public static StarterEquipmentCatalog Load(PvfArchive pvf)
     {
 
-        var jobs = ReadList("character/character.lst", "character/");
-        if (!jobs.Keys.Order().SequenceEqual(Enumerable.Range(0, 16)))
-            throw new InvalidDataException("普通创建职业列表变化");
+        var jobs = CharacterCatalog.ReadJobList(pvf);
         var resources = EquipmentCatalog.Load(pvf);
         var starters = new Dictionary<byte, IReadOnlyList<StarterEquipmentDeclaration>>();
         var definitions = new Dictionary<int, EquipmentDefinition>();
         foreach (var job in jobs)
         {
-            PvfToken[] tokens = pvf.ReadTokens(job.Value);
+            PvfToken[] tokens = pvf.ReadTokens("character/" + job.Value);
             var items = ParseStarterEquipment(tokens, pvf.ResolveString);
             foreach (var item in items)
             {
@@ -108,24 +107,5 @@ internal sealed class StarterEquipmentCatalog
         }
         return new StarterEquipmentCatalog(starters, definitions, resources);
 
-        Dictionary<int, string> ReadList(string path, string prefix)
-        {
-            PvfToken[] tokens = pvf.ReadTokens(path);
-            if (tokens.Length == 0 || tokens.Length % 2 != 0)
-                throw new InvalidDataException("资源列表长度变化");
-            var entries = new Dictionary<int, string>();
-            for (int i = 0; i < tokens.Length; i += 2)
-            {
-                if (tokens[i].Type != 0 || tokens[i + 1].Type != 6)
-                    throw new InvalidDataException("资源列表类型变化");
-                string relative = pvf.ResolveString(tokens[i + 1].Value);
-                if (tokens[i].Value < 0 || string.IsNullOrWhiteSpace(relative) || relative.StartsWith('/') || relative.Contains(':') || relative.Replace('\\', '/').Split('/').Any(part => part is "." or ".."))
-                    throw new InvalidDataException("资源列表 ID 或路径非法");
-                string resolved = PvfArchive.NormalizePath(prefix + relative);
-                if (!resolved.StartsWith(prefix, StringComparison.Ordinal) || !pvf.Contains(resolved) || !entries.TryAdd(tokens[i].Value, resolved))
-                    throw new InvalidDataException("资源列表重复 ID、路径越界或资源缺失");
-            }
-            return entries;
-        }
     }
 }

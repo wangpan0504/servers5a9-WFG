@@ -189,6 +189,7 @@ internal static class DatabaseSchemaTests
     {
         string path = Path.Combine(root, "master-quest-v14.db");
         _ = new CharacterRepository(path);
+        var rows = new Dictionary<string, (string[] Columns, string Rows)>();
         using (var db = Open(path))
         {
             // master的任务v14已有完整任务结构，但尚未拥有普通分支疲劳表。
@@ -197,14 +198,39 @@ internal static class DatabaseSchemaTests
             Execute(db, "INSERT INTO character_completed_quests VALUES(1,6217,20261009,2)");
             Execute(db, "INSERT INTO accounts(account_id,salt,password_hash,iterations) VALUES('master-quest',x'01',x'02',1)");
             Execute(db, "INSERT INTO account_completed_quests VALUES('master-quest',6217,1,'1234567890abcdef1234567890abcdef',20261009,2)");
+            Execute(db, "INSERT INTO character_dungeon_growth_receipts(rowid,character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES(41,1,'master-quest','1234567890abcdef1234567890abcdef','old-run',3145,1,1,76126,1,1,1,20,'legacy-rule','legacy-source',1,1,1,1,40,60,9)");
+            Execute(db, "INSERT INTO character_quest_drop_receipts(rowid,character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items) VALUES(73,1,'master-quest','1234567890abcdef1234567890abcdef',8,9,'{}','[]')");
+            Execute(db, "CREATE INDEX quest_drop_history_index ON character_quest_drop_receipts(revision); CREATE TABLE quest_drop_trigger_calls(value INTEGER)");
+            Execute(db, "CREATE TRIGGER quest_drop_history_trigger AFTER INSERT ON character_quest_drop_receipts BEGIN INSERT INTO quest_drop_trigger_calls VALUES(1); END");
+            foreach (string table in TableNames(db))
+            {
+                string[] columns = ColumnNames(db, table);
+                rows.Add(table, (columns, Rows(db, table, columns)));
+            }
         }
+        string rollback = Path.Combine(root, "master-quest-v14-rollback.db");
+        File.Copy(path, rollback);
+        using (var db = Open(rollback)) Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
+        string before = Snapshot(rollback);
+        RejectDatabase(() => new CharacterRepository(rollback));
+        Check(Snapshot(rollback) == before, "任务v14末段校验失败回滚版本、父子账本、索引及触发器");
         _ = new CharacterRepository(path);
         using (var db = Open(path))
+        {
             Check(Query(db, "PRAGMA user_version") is 17L && Query(db, "SELECT revision||':'||quest_cycle_day||':'||equipment_slot_flags FROM characters") is "9:20261009:7" &&
                 Query(db, "SELECT daily_period||':'||answer FROM character_completed_quests") is "20261009:2" &&
                 Query(db, "SELECT daily_period||':'||answer FROM account_completed_quests") is "20261009:2" &&
                 Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                 "master已发布任务v14升级17不重复建任务结构、不改周期答案、资产或revision");
+            foreach (var row in rows)
+                Check(Rows(db, row.Key, row.Value.Columns) == row.Value.Rows, "任务v14保留原表全部数据及rowid：" + row.Key);
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN ('quest_drop_history_index','quest_drop_history_trigger')") is 2L &&
+                Query(db, "SELECT count(*) FROM quest_drop_trigger_calls") is 0L,
+                "任务掉落索引和触发器保留，迁移不重新触发历史插入");
+        }
+        string upgraded = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == upgraded, "含任务掉落的v14升级后重开不改账本");
     }
 
     private static void VerifyQuestSkipConstraints(string root)
@@ -582,6 +608,7 @@ internal static class DatabaseSchemaTests
             Has("character_quest_completion_receipts") ? Query(db, "SELECT group_concat(character_id||':'||acceptance_id||':'||experience_amount||':'||revision||':'||rewards,'|') FROM character_quest_completion_receipts") : null,
             HasColumn("character_quest_skip_receipts","plan_snapshot") ? Query(db,"SELECT group_concat(character_id||':'||acceptance_id||':'||parent_key||':'||question_quest||':'||before_revision||':'||revision||':'||plan_snapshot,'|') FROM character_quest_skip_receipts") : null,
             Has("character_dungeon_growth_receipts") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||instance_id||':'||monster_key||':'||combat_sequence||':'||amount||':'||revision,'|') FROM character_dungeon_growth_receipts") : null,
+            Has("character_quest_drop_receipts") ? Rows(db, "character_quest_drop_receipts", ColumnNames(db, "character_quest_drop_receipts")) : null,
             HasColumn("character_dungeon_drop_batches", "payload") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||payload,'|') FROM character_dungeon_drop_batches") : null,
             HasColumn("character_dungeon_drop_objects", "payload") ? Query(db, "SELECT group_concat(character_id||':'||event_id||':'||ground_key||':'||payload,'|') FROM character_dungeon_drop_objects") : null,
             HasColumn("character_dungeon_drop_pickups", "payload") ? Query(db, "SELECT group_concat(character_id||':'||ground_key||':'||payload,'|') FROM character_dungeon_drop_pickups") : null);
