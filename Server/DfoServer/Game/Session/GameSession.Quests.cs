@@ -41,8 +41,7 @@ internal sealed partial class GameSession
             if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 formalDungeon?.Ground.HasPendingPickup == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true || HasPendingQuestScene)
                 return (Character: (DfoServer.Game.Characters.Character?)null, SelectionEpoch, Phase,
-                    Identity: (DungeonRunIdentity?)null, Clear: (QuestClearReceipt?)null, Pending: (PendingQuestCompletion?)null, Entry: (DungeonEntryPlan?)null,
-                    Scenes: Array.Empty<QuestSceneEvent>());
+                    Identity: (DungeonRunIdentity?)null, Clear: (QuestClearReceipt?)null, Pending: (PendingQuestCompletion?)null);
             var identity = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
             var pending = pendingQuestCompletion;
             bool samePending = pending is not null && ReferenceEquals(pending.Plan.Expected, Selected) &&
@@ -51,9 +50,7 @@ internal sealed partial class GameSession
             // 提交已发生但返回值丢失时，Selected仍是原旧快照；先以原计划查receipt，不能先用旧revision重读活动槽。
             var clear = !Selected.CompletedQuests.Contains(questId)
                 ? samePending ? pending!.Plan.AuthoritativeClear : ReadClearedQuest(questId)?.Clear : null;
-            var scenes = formalDungeon is { } dungeon ? dungeon.QuestSceneEvents.Values.Where(row => row.Committed &&
-                row.Plan.SceneEvent!.MapId == dungeon.Run.Snapshot.CurrentMap.Id).Select(row => row.Plan.SceneEvent!).ToArray() : [];
-            return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion, Entry: formalDungeon?.Entry, Scenes: scenes);
+            return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion);
         });
         if (captured.Character is not { } expected)
             return new(QuestFinishOutcome.Unsupported);
@@ -65,28 +62,8 @@ internal sealed partial class GameSession
         bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
         if ((quest.Condition == "[clear map]" || dungeonClear) && captured.Clear is null)
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection);
-        int completeNpc = quest.CompleteNpc == -1 && quest.Condition is "[meet npc]" or "[question]" && quest.IntData.Count == 1
-            ? quest.IntData[0] : quest.CompleteNpc == -1 && quest.Condition == "[seek n meet npc]" && QuestLifecyclePlan.ValidSeeking(quest)
-                ? quest.IntData[^1] : quest.CompleteNpc;
-        bool sceneChild = captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && captured.Entry is { } entry &&
-            QuestRelationProgress.SceneChild(quest,expected,quests,entry) && QuestRelationProgress.ZeroRewardChild(quest) &&
-            expected.ActiveMainQuests.Any(row => row.QuestId == quest.Id && QuestHuntProgress.Bound(row,entry));
-        bool completedParent = QuestRelationProgress.SequentialParent(quest,quests) &&
-            quest.IntData.All(expected.CompletedQuests.Contains) || QuestRelationProgress.ThresholdParent(quest,quests) &&
-            QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)) == 0;
-        bool completedScene = captured.Phase == SessionPhase.Town &&
-            QuestClientSceneProgress.Matches(expected,quest,towns);
-        bool sceneHunt = captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && captured.Entry is { } huntEntry &&
-            expected.ActiveMainQuests.Any(row => row.QuestId == quest.Id && row.ConditionState == 0 && QuestHuntProgress.Bound(row,huntEntry)) &&
-            QuestHuntProgress.TryTargets(quest,out var targets) && captured.Scenes.Any(scene => targets.Any(target =>
-                target.EnemyType == 3 && target.MonsterId == scene.TemplateId && (target.DungeonId == -1 || target.DungeonId == scene.DungeonId)));
-        // complete npc=-1表示无指定交付NPC；寻物/猎杀仍由库存或已提交实例事件验证实际条件。
-        bool automatic = quest.CompleteNpc == -1 && (quest.Condition is "[seeking]" or "[hunt monster]" or "[hunt enemy]" || QuestStateProgress.Type(quest) is not null);
-        // 范围/演出达成后可由临时对话演员交付，complete npc不要求作为常驻NPC出现在地图中。
-        // 剧情父任务的complete npc可指演出对话定义；全部真实子任务完成后接受原生交付入口。
-        if (quest.Condition != "[clear map]" && !dungeonClear && !sceneChild && !completedParent && !completedScene && !sceneHunt && !automatic && (captured.Phase != SessionPhase.Town || completeNpc <= 0 ||
-            !QuestClientSceneProgress.DialogueNpc(expected,completeNpc,quest,quests,towns)))
-            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection);
+        // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
+        // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
         if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RewardSelector != selector || incomplete.Plan.Multiplier != multiplier))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection);
         QuestCompletionPreparation preparation;

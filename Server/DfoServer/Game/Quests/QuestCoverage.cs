@@ -210,7 +210,6 @@ internal static class QuestCoverage
                 bool threshold = QuestRelationProgress.ThresholdParent(quest,catalog);
                 bool parent = sequential || threshold;
                 bool range = QuestClientSceneProgress.TownRange(quest);
-                bool cinematic = QuestClientSceneProgress.Cinematic(quest,out _,out _);
                 bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
                 bool state = QuestStateProgress.Type(quest) is not null;
                 if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state) reasons.Add("目标子类型尚未接入");
@@ -228,10 +227,6 @@ internal static class QuestCoverage
                 bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _);
                 if (quest.RewardType != "[item]" && !profession && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest))
                     reasons.Add(RewardRestriction(quest));
-                if (quest.CompleteNpc <= 0 && quest.Condition != "[clear map]" && !dungeonClear && !range && !cinematic &&
-                    !(quest.CompleteNpc == -1 && (parent || range || cinematic || quest.Condition is "[meet npc]" or "[seek n meet npc]" or "[question]" or
-                        "[seeking]" or "[hunt monster]" or "[hunt enemy]" || QuestStateProgress.Type(quest) is not null)))
-                    reasons.Add("此自动交付入口尚未确认");
                 if (!quest.Attributes.Contains("not give exp quest") && (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))
                     reasons.Add("奖励缺少合法difficulty键");
                 if (!HasOrdinaryAttributes(quest)) reasons.Add("attribute包含未确认的值或声明形状");

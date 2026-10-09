@@ -196,10 +196,10 @@ internal static class QuestCharacterRewardTests
         var wrongRange = range with { Id = 104, IntData = [40,2,254,218,0,145] };
         var sceneCoverage = QuestCoverage.Scan(new(new[] { range,cinematic,noNpc,wrongRange }.ToDictionary(quest => quest.Id)),
             items.Items,items.EpicPieces,parameters);
-        That(sceneCoverage.Quests.Where(row => row.Id is 101 or 102).All(row => row.ImplementedPath) &&
-            sceneCoverage.Quests.Where(row => row.Id is 103 or 104).All(row => !row.ImplementedPath &&
-                row.Restrictions.Contains("此自动交付入口尚未确认")),
-            "已确认范围和演出场景交付覆盖与Session一致；NPC0普通任务和未知范围不被通用放行");
+        That(sceneCoverage.Quests.Where(row => row.Id is 101 or 102 or 103).All(row => row.ImplementedPath) &&
+            sceneCoverage.Quests.Single(row => row.Id == 104) is { ImplementedPath: false } unsupported &&
+            unsupported.Restrictions.Contains("目标子类型尚未接入"),
+            "已确认目标不因完成NPC为0而限制交付；未知范围仍按目标形状限制");
         var catalog = QuestCatalog.Load(pvf);
         var clearNotifications = catalog.All.Where(quest => quest.Definition?.Has("quest clear noti") == true).ToArray();
         That(clearNotifications.Length > 0 && clearNotifications.All(QuestCoverage.HasOrdinaryDisplay),

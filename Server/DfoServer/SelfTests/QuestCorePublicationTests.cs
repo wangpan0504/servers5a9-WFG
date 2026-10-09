@@ -38,6 +38,7 @@ internal static class QuestCorePublicationTests
             foreach (bool gold in new[] { false,true }) await TpAsync(gold);
             await TpSendFailureAsync();
             await ThresholdAsync();
+            await DeliveryAfterSceneAsync();
 
             StoryQuest TpQuest(bool gold = false) => QuestEligibilityTests.Quest(100) with
             {
@@ -57,6 +58,89 @@ internal static class QuestCorePublicationTests
                 new QuestCompletionHandler(fixture.Catalog,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,log,
                     new CharacterLevelProjection(computer,projection),projection).Register(commands);
                 commands.Seal(); return commands;
+            }
+
+            async Task DeliveryAfterSceneAsync()
+            {
+                var origin = towns.Room;
+                var basic = QuestEligibilityTests.Quest(100) with
+                {
+                    IntData = [2], Npc = 2, CompleteNpc = 424242, Attributes = ["not give exp quest"],
+                    Rewards = [new(0,2058,null),new(0,1,null)]
+                };
+                var question = basic with
+                {
+                    Condition = "[question]", Definition = new([new("question info",
+                        [new(6,0,"回答"),new(6,0,"问题"),new(6,0,"选项0"),new(6,0,"选项1")],[])]) { Job = "[all]" }
+                };
+                var answer = basic with { Id = 101, Path = "fixture/101.qst", Definition = new([])
+                    { Job = "[all]", PrerequisiteGroups = [[100]], RequiredAnswers = [new(100,1)] } };
+                StoryQuest[] targets =
+                [
+                    basic with { Condition = "[reach the range]", SubType = 1,
+                        IntData = [origin.Town,origin.Area,0,0,10000,10000] },
+                    basic with { Condition = "[look cinematic]", IntData = [1], CinematicPath = "fixture/scene.cmt",
+                        Definition = new([new("go guide",[new(0,origin.Town,null),new(0,origin.Area,null),
+                            new(0,2,null),new(0,-1,null),new(6,0,"前往场景")],[])]) { Job = "[all]" } },
+                    basic,
+                    basic with { Condition = "[seeking]", IntData = [10165055,1], CompleteNpc = 0 },
+                    basic with { Condition = "[seek n meet npc]", IntData = [10165055,1,2] },
+                    basic with { Condition = "[hunt enemy]", IntData = [1,-1,1,1,1] },
+                    basic with { Condition = "[hunt monster]", IntData = [1,-1,1,1] },
+                    basic with { Condition = "[level up]", IntData = [1] },
+                    question
+                ];
+                foreach (var quest in targets)
+                foreach (byte job in quest.Condition == "[reach the range]" ? Enumerable.Range(0,16).Select(value => (byte)value) : new byte[] {0})
+                {
+                    bool hunt = quest.Condition is "[hunt enemy]" or "[hunt monster]";
+                    using var f = new QuestOrdinaryCompletionTests.Fixture(towns,characters,learning,growth,parameters,items,quest,
+                        materialCount:1,active:hunt ? [new(0,100,0)] : [],definitions:quest.Condition == "[question]" ? [quest,answer] : [quest],
+                        configure: candidate => CharacterCreation.Prepare(candidate.Name,characters.Get(job),origin,towns.InitialReturn,learning.Get));
+                    if (!hunt) That(f.Change(100,QuestLifecycleAction.Accept)?.Commit is not null,"独立接取合成交付目标："+quest.Condition);
+                    var accepted = f.Read();
+                    if (accepted.ActiveMainQuests.Single().ConditionState != 0)
+                    {
+                        That(f.Finish(ushort.MaxValue).Outcome == QuestFinishOutcome.Rejected && Same(accepted,f.Read()) && f.Receipts == 0,
+                            "离开场景规则修复不放行未达成的目标："+quest.Condition);
+                        var condition = quest.Condition == "[question]" ? new QuestClientCondition(null,1,0) :
+                            new QuestClientCondition(quest.Condition == "[seek n meet npc]" ? (byte)0x20 : null,0,0);
+                        That(f.Change(100,QuestLifecycleAction.Condition,condition)?.Commit is not null,
+                            "真实源场景通过原进度入口保存目标："+quest.Condition);
+                    }
+                    var achieved = f.Read();
+                    That(achieved.ActiveMainQuests.Single().AcceptanceId != Guid.Empty &&
+                        achieved.ActiveMainQuests.Single().ConditionState == (quest.Condition == "[question]" ? 1u : 0u),
+                        "保存本次接取的完成进度或实际非零回答："+quest.Condition);
+                    That(towns.IsPosition(towns.InitialReturn,QuestEligibility.Completed(achieved)) &&
+                        !QuestClientSceneProgress.DialogueNpc(achieved,quest.CompleteNpc,quest,f.Catalog,towns),
+                        "交付NPC不存在于源场景，不以常驻演员替代已达成事实："+quest.Condition);
+                    f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+                    That(f.Session.Selected!.ActiveMainQuests.Single() == achieved.ActiveMainQuests.Single() &&
+                        f.Session.LeaveRoom(),"重选恢复原达成进度后，沿真实城镇入口离开原场景："+quest.Condition);
+                    var reconnected = f.Read();
+                    That(reconnected.Position != achieved.Position &&
+                        reconnected.ActiveMainQuests.Single() == achieved.ActiveMainQuests.Single() &&
+                        !QuestClientSceneProgress.Matches(reconnected,quest,towns),
+                        "重选及跨地图保留原接取与进度，当前位置不再满足原场景："+quest.Condition+"/job"+job);
+                    var commands = Registry(f); using var stop = new CancellationTokenSource(); using var output = new ControlledOutput();
+                    await using var sender = new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_) => { });
+                    var context = Context(f,output,sender,stop);
+                    That(await commands.DispatchAsync(context,Finish(100)) == CommandResult.Handled &&
+                        output.Opcodes.SequenceEqual(new ushort[] {34,14,21,356}) && output.Frames[0][16] == 1,
+                        "跨场景真实34成功回复并发布奖励及完成列表："+quest.Condition+"/job"+job);
+                    var saved = f.Read();
+                    That(saved.ActiveMainQuests.Length == 0 && saved.CompletedQuests.Contains(100) &&
+                        saved.Inventory.Items.Single(item => item.Core.ItemId == 2058).Core.Count ==
+                            reconnected.Inventory.Items.Where(item => item.Core.ItemId == 2058).Sum(item => item.Core.Count)+1 &&
+                        saved.Revision == reconnected.Revision+1 && f.Receipts == 1 && Same(saved,f.Session.Selected!),
+                        "跨场景交付仍整笔保存真实奖励、清槽与一次回执："+quest.Condition);
+                    if (quest.Condition == "[question]") That(saved.QuestAnswers[100] == 1,"跨场景交付保留实际回答，不统一解释为scalar0");
+                    output.Frames.Clear();
+                    That(await commands.DispatchAsync(context,Finish(100)) == CommandResult.Handled &&
+                        output.Opcodes.SequenceEqual(new ushort[] {34}) && output.Frames[0][16] == 0 &&
+                        Same(saved,f.Read()) && f.Receipts == 1,"跨场景完成后重复交付不再发奖："+quest.Condition);
+                }
             }
 
             async Task TpAsync(bool gold)
@@ -179,7 +263,7 @@ internal static class QuestCorePublicationTests
             }
         }
         finally { Directory.Delete(root,true); }
-        Console.WriteLine($"PASS {Count-checks} 合成TP与type70真实Handler、Sender包序、双树与尾包幂等发布断言（非主线实机）");
+        Console.WriteLine($"PASS {Count-checks} 合成TP、type70与跨场景交付的真实Handler、Sender包序及幂等发布断言（非主线实机）");
     }
 
     static ushort Opcode(byte[] frame) => BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1));
