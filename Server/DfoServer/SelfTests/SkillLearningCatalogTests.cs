@@ -17,6 +17,16 @@ internal static class SkillLearningCatalogTests
     {
         var active = Fixture([7], [4], [4, 4, 4, 4, 4, 4], [1], [0], []);
         That(Parse(active).Type == SkillType.Active && Parse(active).SlotGroup == 3, "主动类型保留且不依赖被动分组字段");
+        var defaults = Parse(Fixture([7], [4], [4, 4, 4, 4, 4, 4], null, null, []));
+        That(defaults.SupportsOrdinarySpLearning && defaults.GetOrdinaryNextRequiredCharacterLevel(0) == 1 &&
+            defaults.GetOrdinaryNextRequiredCharacterLevel(2) == 3 && !defaults.UnsupportedFields.Contains("required level range"),
+            "缺省等级与间隔沿匹配客户端初始化为1，普通多级门槛继续累计");
+        That(Parse(active).GetOrdinaryNextRequiredCharacterLevel(2) == 1,
+            "显式间隔0保留，不能被缺省值覆盖");
+        That(!Parse(Fixture([7], [4], [4, 4, 4, 4, 4, 4], [], [1], [])).SupportsOrdinarySpLearning &&
+            !Parse(Fixture([7], [4], [4, 4, 4, 4, 4, 4], [1], [], [])).SupportsOrdinarySpLearning,
+            "显式空等级或间隔仍保持不支持，不用缺省值遮盖非法声明");
+        Reject<InvalidDataException>(() => Parse(Fixture([7], [4], [4, 4, 4, 4, 4, 4], [1], [-1], [])));
         That(Parse([.. active, new(3, 17)]).IsGuildSkill && !Parse([.. active, new(3, 17)]).SupportsOrdinarySpLearning &&
             Parse([.. active, new(3, 18)]).IsExpertSkill && !Parse([.. active, new(3, 18)]).SupportsOrdinarySpLearning,
             "公会与expert技能资源不混用普通SP或达人超等级资格");
@@ -77,9 +87,9 @@ internal static class SkillLearningCatalogTests
         That(upper.GetOrdinaryResourceSpCost(1, 0) == 20 && upper.GetOrdinaryNextRequiredCharacterLevel(1) == 4 &&
             upper.GetDeclaredGrowtypeMaximum(0) == 10, "上挑普通资源费用及下一等级门槛");
         var backstep = catalog.Get(0, 169);
-        That(!backstep.SupportsOrdinarySpLearning && backstep.GetBasePointCost(0) == 30 &&
-            backstep.GetDeclaredGrowtypeMaximum(0) == 1 && backstep.UnsupportedFields.Contains("required level range"),
-            "后跳满一级且缺 range，不猜默认继续升级");
+        That(backstep.SupportsOrdinarySpLearning && backstep.GetBasePointCost(0) == 30 &&
+            backstep.GetDeclaredGrowtypeMaximum(0) == 1 && backstep.GetOrdinaryNextRequiredCharacterLevel(0) == 1,
+            "后跳缺省间隔为1，仍受资源一级上限限制");
         That(!ghost.IsFeatureSkill && !ghost.HasComboDeclaration && ghost.DeclaredGrowtypeFitness!.All(value => value == 0),
             "缺少 feature、combo、fitness 使用原生重置默认");
         Reject<ArgumentOutOfRangeException>(() => ghost.GetBasePointCost(-1));
@@ -165,7 +175,7 @@ internal static class SkillLearningCatalogTests
     private static SkillLearningDefinition Parse(PvfToken[] tokens) =>
         SkillLearningCatalog.Parse(0, 5, "skill/fixture.skl", tokens, id => FixtureStrings[id]);
 
-    private static PvfToken[] Fixture(int[] costs, int[] maximum, int[] growtype, int[] basis, int[] range, int[] prerequisites)
+    private static PvfToken[] Fixture(int[] costs, int[] maximum, int[] growtype, int[]? basis, int[]? range, int[] prerequisites)
     {
         var tokens = new List<PvfToken> { new(3, 0), new(6, 9) };
         Add(1, costs, 7);
@@ -176,8 +186,9 @@ internal static class SkillLearningCatalogTests
         Add(6, prerequisites, 8);
         return tokens.ToArray();
 
-        void Add(int tag, int[] values, int? endTag = null)
+        void Add(int tag, int[]? values, int? endTag = null)
         {
+            if (values is null) return;
             tokens.Add(new PvfToken(3, tag));
             tokens.AddRange(values.Select(value => new PvfToken(0, value)));
             if (endTag is int end)

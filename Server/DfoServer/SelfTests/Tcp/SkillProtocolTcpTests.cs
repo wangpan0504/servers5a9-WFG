@@ -167,6 +167,17 @@ internal static class SkillProtocolTcpTests
             That(trees.All(tree => tree.Skills.Where(skill => catalog.Get(14, skill.Id).Type == SkillType.Passive)
                 .Select(skill => skill.Slot).SequenceEqual(new byte[] { 102, 103, 104 })),
                 "TCP创建入口和首次登录使用正确初始被动槽位");
+            That(trees.All(tree => tree.Skills.Single(skill => skill.Slot == 0).Id == 7 &&
+                tree.Skills.Single(skill => skill.Slot == 1).Id == 1 && tree.Skills.Single(skill => skill.Id == 169).Slot == 2),
+                "新建女圣职者Z技能在第一格，原第一技能在第二格，后跳仍在第三格");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1);
+            That(SkillPacketsTests.DecodeInitialized(peer.SkillInfo).All(tree =>
+                tree.Skills.Single(skill => skill.Slot == 0).Id == 7 &&
+                tree.Skills.Single(skill => skill.Slot == 1).Id == 1 && tree.Skills.Single(skill => skill.Id == 169).Slot == 2),
+                "新建角色重登从数据库恢复交换后的双树布局");
         }
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "level SkillNew 6", out string slotReply) && slotReply.StartsWith("OK "),
             "隔离fixture设置女圣职者学习等级，重登沿正常来源同步");
@@ -236,6 +247,52 @@ internal static class SkillProtocolTcpTests
             That(trees[0].Skills.Single(skill => skill.Id == 5).Level == 10 && trees[0].Sp == initialSp + 137 - 135 &&
                 System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(peer.ExpertContract.AsSpan(3)) == 0,
                 "到期重登普通等级回落、退费、客户端状态清除及额外来源保留");
+            peer.Barrier();
+        }
+        ushort[] commonIds = [190,175,186,188,178,189];
+        LearnedSkill[] commonBindings;
+        ushort beforeCommonSp;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(expertContract: true);
+            beforeCommonSp = SkillPacketsTests.DecodeInitialized(peer.SkillInfo)[0].Sp;
+            long revision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE slot=0")[0][0]);
+            peer.Send(29, WithChecksum([0,2,190,0,0,1,186,0,0,2,0]));
+            peer.Expect(1,29,[0,0xD9,0]);
+            That(Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE slot=0")[0][0]) == revision &&
+                fixture.Query("SELECT skill_id FROM character_skill_bindings WHERE character_id=1 AND skill_id=190").Length == 0,
+                "混合批次后项等级不足时，受身蹲伏与扣点不部分提交");
+            var body = new List<byte> {0,(byte)commonIds.Length};
+            foreach (ushort id in commonIds) body.AddRange([(byte)id,(byte)(id >> 8),0,1]);
+            body.Add(0);
+            peer.Send(29,WithChecksum(body.ToArray()));
+            var learned = SkillPacketsTests.DecodeSuccess(peer.Expect(1,29).Body);
+            commonBindings = learned.Skills;
+            That(learned.Sp == beforeCommonSp - 110 && learned.Skills.Select(skill => skill.Id).SequenceEqual(commonIds) &&
+                learned.Skills.All(skill => skill.Level == 1) && learned.Skills.Where(skill => catalog.Get(0,skill.Id).Type == SkillType.Active).All(skill => skill.Slot < 12) &&
+                learned.Skills.Where(skill => catalog.Get(0,skill.Id).Type == SkillType.Passive).All(skill => skill.Slot is >= 102 and < 138),
+                "真实29混合学习受身、跃翔及四类暴击，扣110SP，主动与被动正确分槽");
+            foreach (var skill in commonBindings) CheckDatabase(fixture,0,learned.Sp,skill.Level,skill.Slot,skill.Id);
+            peer.Send(29,[0,1,190,0,0,1,0]);
+            peer.Expect(1,29,[0,0x12,0]);
+            That(Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE slot=0")[0][0]) == revision+1,
+                "受身已精通时正常回复且不重复扣点或写库");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(expertContract: true);
+            var trees = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
+            That(trees[0].Sp == beforeCommonSp-110 && commonBindings.All(skill => trees[0].Skills.Contains(skill)) &&
+                trees[1].Skills.All(skill => !commonIds.Contains(skill.Id)),
+                "重登保留通用主动被动等级、槽位、SP与另一树隔离");
+            var body = new List<byte> {0,(byte)commonIds.Length};
+            foreach (ushort id in commonIds) body.AddRange([(byte)id,(byte)(id >> 8),1,1]);
+            body.Add(0);
+            peer.Send(29,WithChecksum(body.ToArray()));
+            var refunded = SkillPacketsTests.DecodeSuccess(peer.Expect(1,29).Body);
+            That(refunded.Sp == beforeCommonSp && refunded.Skills.Select(skill => skill.Id).SequenceEqual(commonIds) &&
+                refunded.Skills.All(skill => skill.Level == 0) && fixture.Query("SELECT skill_id FROM character_skill_bindings WHERE character_id=1 AND skill_id IN (190,175,186,188,178,189)").Length == 0,
+                "通用技能整批退款恢复110SP并删除零级绑定");
             peer.Barrier();
         }
         await fixture.StopAsync();

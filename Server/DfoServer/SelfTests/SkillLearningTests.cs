@@ -179,12 +179,27 @@ internal static class SkillLearningTests
         That(realInitial.State!.Trees.All(tree => tree.Skills.Select(skill => new CharacterSkill(skill.Id, skill.Level)).SequenceEqual(actualProfile.Skills)) &&
             realInitial.State!.Trees.All(tree => tree.Skills.Select(skill => skill.Slot).SequenceEqual(new byte[] { 0, 1, 2, 102, 103, 104 })),
             "真实初始技能保留原ID等级，主动与被动槽位分别投影两树");
-        That(!actual.Get(0, 169).SupportsOrdinarySpLearning && realInitial.State!.Trees[0].Skills.Any(skill => skill.Id == 169),
-            "initial fixed binding eligibility is separate from further learning eligibility");
+        That(actual.Get(0, 169).SupportsOrdinarySpLearning &&
+            SkillLearning.Plan(0, 0, 1, realInitial.State!, Request(169), actual.Get).Failure == SkillLearningFailure.Mastered,
+            "后跳沿默认间隔支持学习规则，初始已学一级仍由真实上限拒绝继续升级");
         for (byte job = 0; job < 16; job++)
         {
             var profile = characters.Get(job);
             var initial = SkillLearning.Initialize(job, profile.Skills, actual);
+            var created = CharacterCreation.Prepare("Layout", profile, new(38, 0, 0, 0), new(38, 0, 0, 0), actual.Get);
+            foreach (var tree in created.InitialLearning.Trees)
+            {
+                var source = initial.State!.Trees.Single(value => value.Context == tree.Context);
+                var first = source.Skills.SingleOrDefault(skill => skill.Slot == 0);
+                var second = source.Skills.SingleOrDefault(skill => skill.Slot == 1);
+                bool swapped = first is not null && second is not null && first.Id != 169 && second.Id != 169;
+                That((!swapped || tree.Skills.Single(skill => skill.Slot == 0).Id == second!.Id &&
+                    tree.Skills.Single(skill => skill.Slot == 1).Id == first!.Id) &&
+                    source.Skills.Where(skill => !swapped || skill.Slot > 1).All(skill => tree.Skills.Contains(skill)) &&
+                    tree.Skills.Select(skill => (skill.Id, skill.Level)).OrderBy(skill => skill.Id)
+                        .SequenceEqual(source.Skills.Select(skill => (skill.Id, skill.Level)).OrderBy(skill => skill.Id)) &&
+                    tree.SameCombos(source), "新建角色双树只交换前两个快捷技能，后跳、等级、被动和连招保留：" + job);
+            }
             if (job is 9 or 10)
             {
                 That(initial.Success && initial.State!.Trees.All(tree => tree.Skills.Count == profile.Skills.Length), "特殊职业完整初始化 " + job);
@@ -204,7 +219,39 @@ internal static class SkillLearningTests
                     "初始被动避开主扩展快捷槽与特殊预留槽 " + job);
             }
         }
+        CommonSkills(actual, characters);
         Console.WriteLine($"PASS {Count - checks} resource skill learning assertions");
+    }
+
+    private static void CommonSkills(SkillLearningCatalog catalog, CharacterCatalog characters)
+    {
+        ushort[] ids = [190,175,186,188,178,189];
+        for (byte job = 0; job < 16; job++)
+        {
+            var profile = characters.Get(job);
+            var initial = SkillLearning.Initialize(job, profile.Skills, catalog).State! with { BonusSp = 0, BonusTp = 0 };
+            var growths = profile.GrowthOptions.GrowTypes.SelectMany(grow => Enumerable.Range(0, grow.Awakenings.Count + 1)
+                .Select(awakening => checked((byte)(grow.Value | awakening << 4)))).Distinct();
+            foreach (byte growth in growths)
+            {
+                var state = SkillPointLedger.Synchronize(job, growth, 95, initial, catalog);
+                var allowed = ids.Where(id => catalog.Get(job,id).GetMaximum(growth) > 0).ToArray();
+                var request = new SkillLearningCommand(0,0,allowed.Select(id => new SkillLearningChangeRequest(id,false,1)).ToArray());
+                var result = SkillLearning.Plan(job,growth,95,state,request,catalog);
+                That(result.Success && result.Changes.Select(skill => skill.Id).SequenceEqual(allowed) &&
+                    result.State!.Trees[0].Sp == state.Trees[0].Sp - allowed.Sum(id => catalog.Get(job,id).GetPointCost(0,growth)) &&
+                    result.State.Trees[1].Skills.SequenceEqual(state.Trees[1].Skills) && result.State.Trees[1].Sp == state.Trees[1].Sp,
+                    "16职业合法成长的受身、跃翔及四类暴击混合学习，费用与另一树保留："+job+"/"+growth);
+                That(result.Changes.Where(skill => catalog.Get(job,skill.Id).Type == SkillType.Active).All(skill => skill.Slot < 12 || skill.Slot is >= 150 and < 198) &&
+                    result.Changes.Where(skill => catalog.Get(job,skill.Id).Type == SkillType.Passive).All(skill => skill.Slot is >= 102 and < 138),
+                    "通用主动使用快捷栏或已满后的主动区，被动使用基础组："+job+"/"+growth);
+                That(SkillLearning.Plan(job,growth,95,result.State!,new(0,0,[new(190,false,1)]),catalog).Failure == SkillLearningFailure.Mastered,
+                    "受身蹲伏缺省间隔不放宽资源一级上限："+job+"/"+growth);
+                foreach (ushort id in ids.Except(allowed))
+                    That(SkillLearning.Plan(job,growth,95,state,new(0,0,[new(id,false,1)]),catalog).Failure == SkillLearningFailure.Mastered,
+                        "职业资源零上限继续禁止学习："+job+"/"+growth+"/"+id);
+            }
+        }
     }
 
     private static CharacterLearningState State(ushort sp, IReadOnlyList<LearnedSkill> skills) => new(123,

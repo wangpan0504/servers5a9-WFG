@@ -315,8 +315,9 @@ internal sealed class SkillLearningCatalog
             unsupported.Add("growtype maximum level");
             growtype = null;
         }
-        int? basis = Scalar("required level");
-        int? range = Scalar("required level range");
+        // 04231CA3..04231D54 将 required level 与 range 的编码标量初始化为1；仅标签缺失时沿用。
+        int? basis = fields.ContainsKey("required level") ? Scalar("required level") : 1;
+        int? range = fields.ContainsKey("required level range") ? Scalar("required level range") : 1;
         // 04231E73/04231E7E 清空前置 vector；标签缺失即空表。
         int[]? pairs = fields.ContainsKey("pre required skill") ? Integers("pre required skill") : [];
         // 04232130..04232194 将六个 fitness 初始化为零。
