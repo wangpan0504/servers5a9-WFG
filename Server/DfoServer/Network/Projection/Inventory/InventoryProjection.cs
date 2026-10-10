@@ -2,6 +2,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Session;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Protocol;
@@ -19,10 +20,10 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         if (!CanSend())
             return;
         var current = receipt.Character;
-        var slots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
-            .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct()
-            .Where(slot => acknowledgedSlots?.Contains(slot) != true).ToArray();
-        if (slots.Any(slot => receipt.Index.Find(slot)?.Creature is not null))
+        var changedSlots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
+            .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct().ToArray();
+        var slots = changedSlots.Where(slot => acknowledgedSlots?.Contains(slot) != true).ToArray();
+        if (changedSlots.Any(slot => receipt.Index.Find(slot)?.Creature is not null))
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
         foreach (var list in slots.Select(slot => slot.List).Distinct().Order())
         {
@@ -32,18 +33,20 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(InventorySnapshot.Empty, list, replaced), "inventory_clear_replaced", CanSend);
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index), "inventory_committed_delta", CanSend);
         }
-        if (slots.Any(slot => slot.List == InventoryListType.Equipment))
+        if (changedSlots.Any(slot => slot.List == InventoryListType.Equipment))
         {
-            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(current), "equipment_actor", CanSend);
+            // 副本及结算沿用当前玩家对象；完整Actor刷新只用于城镇/选图。
+            if (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect)
+                await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(current), "equipment_actor", CanSend);
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current)), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
-                if (CanSend() && context.Session.Phase == DfoServer.Game.Session.SessionPhase.Town)
+                if (CanSend() && context.Session.Phase == SessionPhase.Town)
                     town.Refresh(context);
                 return true;
             });
         }
-        await RestoreLocksAsync(context, current.Inventory, slots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
+        await RestoreLocksAsync(context, current.Inventory, changedSlots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
         if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera and <= DfoServer.Game.Currency.CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
         if (plan.ChangedEpicPieces.Length != 0)

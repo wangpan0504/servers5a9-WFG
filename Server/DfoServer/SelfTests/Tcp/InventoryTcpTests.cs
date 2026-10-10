@@ -281,8 +281,7 @@ internal static partial class InventoryTcpTests
     static void DeltaAndAppearance(TcpPeer peer, byte count)
     {
         var main = peer.Expect(0, 14).Body;
-        var equipment = peer.Expect(0, 14).Body;
-        That(main[0] == 0 && equipment[0] == 3 && main.Length == 126 && equipment.Length == 126, "main and worn slot deltas follow ACK");
+        That(main[0] == 0 && main.Length == 126, "ACK moves worn slots before committed main delta");
         var actor = peer.Expect(0, 2).Body;
         var player = peer.Expect(0, 2).Body;
         That(actor[133 + NameWidth("BagGearTest")] == count && player[126] == count && player.Length == 203 + count * 91, "appearance and player agree after wear change");

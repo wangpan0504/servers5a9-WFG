@@ -12,7 +12,7 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class FormalDungeonTcpTests
+internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -316,6 +316,7 @@ internal static class FormalDungeonTcpTests
         }
         VerifyEntryRecoveryAndJobs(fixture, kills);
         VerifyOrdinaryEntry(fixture);
+        VerifyDungeonEquipmentMoves(fixture, resources);
         VerifyPreviouslyBlockedOrdinaryMaps(fixture, resources);
         string persisted = fixture.Snapshot("SELECT level,experience FROM characters");
         string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");

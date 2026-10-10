@@ -28,7 +28,10 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
         var result = context.Session.MutateInventory(character => inventory.Move(character, request),
             requireTown: IsCargo(request.Source.List) || IsCargo(request.Destination.List));
         await context.Reply(CmdPacketType.MOVE_ITEMSPACE, InventoryPackets.Move(request, result), result.Accepted ? "move_item_committed" : "move_item_rejected");
-        await projection.RefreshAsync(context, result);
+        // ACK19已转移普通穿戴槽；宠物26–29仍保留专属槽位同步。
+        var acknowledgedSlots = result.Plan?.ChangedSlots
+            .Where(slot => slot.List == InventoryListType.Equipment && slot.Index is not (>= 26 and <= 29)).ToHashSet();
+        await projection.RefreshAsync(context, result, acknowledgedSlots);
         return CommandResult.Handled;
     }
 

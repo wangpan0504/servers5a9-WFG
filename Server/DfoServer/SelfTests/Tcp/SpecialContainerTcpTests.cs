@@ -35,13 +35,13 @@ internal static class SpecialContainerTcpTests
             int petUid = checked((int)U32(details, 1));
             That(peer.SpecialContainers[1].Body.Length == 335 && U16(peer.SpecialContainers[1].Body, 3) == 2 &&
                 peer.SpecialContainers[2].Body.Length == 372, "both dedicated lists initialized including artifacts and feed");
+            wornAvatar = peer.SpecialContainers[1].Body.AsSpan(5, 165).ToArray();
             peer.Send(19, Move(1, 0, 101550507, 3, 0, 0));
             peer.Expect(1, 19, Ack(1, 0, 3, 0));
             var clear = peer.Expect(0, 14).Body;
             That(clear.Length == 168 && clear[0] == 1 && U32(clear, 5) == uint.MaxValue && U32(clear, 126) == 30, "avatar unequipped-list clear keeps RAW suffix");
-            wornAvatar = peer.Expect(0, 14).Body;
-            That(wornAvatar.Length == 168 && wornAvatar[0] == 3 && U32(wornAvatar, 5) == 101550507, "equipped avatar delta includes socket and dye blocks");
-            peer.Expect(0, 2); peer.Expect(0, 2);
+            peer.Expect(0, 2);
+            That(peer.Expect(0, 2).Body[126] == 1, "avatar ACK followed by Player carries worn avatar without generic Equipment delta");
             peer.Send(19, Move(7, 0, 63000, 3, 26, 0));
             peer.Expect(1, 19, Ack(7, 0, 3, 26));
             peer.Expect(0, 105, details);
@@ -65,8 +65,7 @@ internal static class SpecialContainerTcpTests
             peer.Send(19, Move(1, 2, 0, 3, 0, 101550507));
             peer.Expect(1, 19, Ack(1, 2, 3, 0));
             var avatar = peer.Expect(0, 14).Body;
-            Bytes(avatar.AsSpan(5), wornAvatar!.AsSpan(5), "reverse unequip keeps avatar extra data");
-            That(peer.Expect(0, 14).Body.Length == 126, "empty equipped avatar slot has ordinary clear width");
+            Bytes(avatar.AsSpan(5), wornAvatar!.AsSpan(2), "reverse unequip keeps avatar extra data");
             peer.Expect(0, 2); peer.Expect(0, 2);
             peer.Send(19, Move(7, 5, 0, 3, 26, 63000));
             peer.Expect(1, 19, Ack(7, 5, 3, 26));

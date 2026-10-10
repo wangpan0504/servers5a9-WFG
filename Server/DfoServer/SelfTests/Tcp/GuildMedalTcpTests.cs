@@ -38,10 +38,11 @@ internal static class GuildMedalTcpTests
             peer.Expect(0, 14); peer.Expect(0, 14);
             peer.Send(19, Move(38, 0, 100380044, 3, 32, 0));
             peer.Expect(1, 19, MoveAck(38, 0, 3, 32));
-            var equipment = peer.Expect(0, 14).Body;
-            That(equipment[0] == 3 && U16(equipment, 3) == 32 && U32(equipment, 5) == 100380044 && equipment.Length == 126,
-                "medal equip uses Client slot32 and ordinary full core width");
-            peer.Expect(0, 14); peer.Expect(0, 2); peer.Expect(0, 2);
+            var sourceClear = peer.Expect(0, 14).Body;
+            That(sourceClear[0] == 38 && U16(sourceClear, 3) == 0 && U32(sourceClear, 5) == uint.MaxValue,
+                "medal ACK moves Client slot32 before committed source-container clear");
+            peer.Expect(0, 2);
+            That(peer.Expect(0, 2).Body[126] == 1, "Player retains worn medal without generic Equipment delta");
             peer.Send(831, Gem(49, 90000, 0));
             SuccessfulGem(peer, 1, 49, 1);
             peer.Send(831, Gem(50, 90001, 1));
@@ -67,8 +68,6 @@ internal static class GuildMedalTcpTests
             SuccessfulGem(peer, 2UL | 33UL << 16, 51, 1);
             peer.Send(19, Move(38, 48, 0, 3, 32, 100380044));
             peer.Expect(1, 19, MoveAck(38, 48, 3, 32));
-            var clear = peer.Expect(0, 14).Body;
-            That(clear[0] == 3 && U32(clear, 5) == uint.MaxValue, "reverse unequip clears body slot32");
             var returned = peer.Expect(0, 14).Body;
             That(returned[0] == 38 && U16(returned, 3) == 48 && BinaryPrimitives.ReadUInt64LittleEndian(returned.AsSpan(104)) == (2UL | 33UL << 16),
                 "unequip retains all embedded gems at end of medal page");
