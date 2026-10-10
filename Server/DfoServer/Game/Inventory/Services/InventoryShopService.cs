@@ -16,11 +16,14 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         // 匹配PVF普通商店不出售图鉴碎片；特殊取得回执未确认前不能伪造实体购买结果。
         if (pieces.ByPiece.ContainsKey(request.ItemId))
             return InventoryResult.Reject(17);
-        if (request.Count is <= 0 or > 1_000_000)
+        if (request.Count is < 0 or > 1_000_000)
             return InventoryResult.Reject(0x85);
         ItemTemplate template;
         try { template = catalog.Get(request.ItemId); }
         catch (InvalidDataException) { return InventoryResult.Reject(17); }
+        // Client 普通装备购买实收 count=0，仍按一件购买；其他商品数量须为正。
+        if (request.Count == 0 && template.Kind != ItemKind.Equipment)
+            return InventoryResult.Reject(0x85);
         int count = template.Kind is ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal ? 1 : request.Count;
         var price = template.ShopPrice;
         var before = character.Inventory;

@@ -45,6 +45,7 @@ internal static class ShopTcpTests
         }
         int gold = 1_000_000;
         long uid;
+        long equipmentUid;
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
@@ -127,6 +128,19 @@ internal static class ShopTcpTests
             Entry(delta, 5, 1106, 1000);
             That(U16(delta, 1) == 2 && fixture.Query("SELECT SUM(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE character_id=1 AND json_extract(item_core,'$.ItemId')=1106") is [[1997L]],
                 "purchase updates only wallet and first compatible stack without creating a new slot");
+            // test 在普通 NPC 商店购买破旧的佩刀的实际16B请求，数量字段为0。
+            peer.Send(21, Convert.FromHexString("986C0000000000000200000001000000"));
+            gold -= 3500;
+            ack = peer.Expect(1, 21).Body;
+            That(ack.Length == 141 && ack[0] == 1 && U32(ack, 1) == gold && U16(ack, 17) == 9 &&
+                U32(ack, 19) == 27800 && U32(ack, 23) == 999_999_998 && ack[140] == 0,
+                "captured zero-count equipment request returns the charged balance and complete equipment core");
+            delta = peer.Expect(0, 14).Body;
+            Entry(delta, 0, 0, gold);
+            Entry(delta, 9, 27800, 999_999_998);
+            That(fixture.Query("SELECT item_uid FROM character_inventory_items WHERE character_id=1 AND json_extract(item_core,'$.ItemId')=27800") is [[long savedEquipmentUid]] && savedEquipmentUid > 0,
+                "zero-count equipment purchase commits exactly one persistent instance");
+            equipmentUid = (long)fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=1 AND list_type=0 AND slot_index=9")[0][0];
             peer.Send(267, [3, 12, 0]);
             peer.Expect(1, 267, [1, 3, 12, 0]);
             peer.Expect(0, 251, [1, 0, 3, 12, 0, 1]);
@@ -171,11 +185,13 @@ internal static class ShopTcpTests
         {
             var entry = peer.Select();
             byte[] full = entry.Single(packet => packet.Kind == 0 && packet.Opcode == 13 && packet.Body[0] == 0).Body;
-            foreach (var (slot, count) in new (short, int)[] { (5, 1000), (65, 997) })
+            foreach (var (slot, item, value) in new (short, int, int)[] { (5, 1106, 1000), (65, 1106, 997), (9, 27800, 999_999_998) })
             {
                 int offset = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(offset => U16(full, offset) == slot);
-                That(U32(full, offset + 2) == 1106 && U32(full, offset + 6) == count, "bounded purchase survives reconnect at slot " + slot);
+                That(U32(full, offset + 2) == item && U32(full, offset + 6) == value, "complete purchased item survives reconnect at slot " + slot);
             }
+            That(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=1 AND list_type=0 AND slot_index=9") is [[long restoredEquipmentUid]] && restoredEquipmentUid == equipmentUid,
+                "zero-count equipment purchase keeps its UID after reconnect");
             That(fixture.Query("SELECT gold FROM characters WHERE id=1") is [[long savedGold]] && savedGold == gold,
                 "native-priced sales and purchases retain the exact balance after reconnect");
             Counts(peer);

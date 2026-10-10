@@ -85,12 +85,21 @@ internal static class ShopTests
             Reject(() => repo.CommitInventory(owner, stale, shop.Buy(stale, new(3175, 1, 2, 1), out _).Plan!), "stale revision cannot buy");
             That(shop.Buy(current, new(3175, int.MaxValue, 2, 1), out _) is { Accepted: false, Error: 0x85 }, "huge count rejected before costs");
             That(!shop.Buy(current, new(3175, 1, 2, 3), out _).Accepted, "forged NPC rejected");
-            foreach (int count in new[] { int.MinValue, -1, 0, 1_000_001, int.MaxValue })
+            foreach (int count in new[] { int.MinValue, -1, 1_000_001, int.MaxValue })
                 foreach (int id in new[] { 3175, 10402 })
                     That(shop.Buy(current, new(id, count, 2, 1), out receipt) is { Accepted: false, Error: 0x85, Plan: null } && receipt is null,
                         "invalid purchase count does not become a one-item charge " + id + "/" + count);
+            That(shop.Buy(current, new(3175, 0, 2, 1), out receipt) is { Accepted: false, Error: 0x85, Plan: null } && receipt is null,
+                "zero stackable purchase remains rejected without a plan or receipt");
             That(shop.Buy(current with { Job = 15, Level = 1 }, new(10402, 99, 2, 1), out receipt).Accepted && receipt!.Count == 1,
                 "equipment buys one without inventing profession or wear-level purchase constraints");
+            bought = shop.Buy(current, new(27800, 0, 2, 1), out receipt);
+            That(bought.Accepted && receipt is { Count: 1, Core.ItemId: 27800 } && receipt.Paid.Gold == current.Inventory.Gold - 3500 &&
+                bought.Plan!.After.Items.Length == current.Inventory.Items.Length + 1,
+                "captured zero-count equipment request charges and grants exactly one item");
+            current = Commit(bought);
+            That(current.Inventory.Items.Single(item => item.Core.ItemId == 27800) is { Uid: > 0, Core.Count: 1 },
+                "zero-count equipment purchase persists one complete instance");
             var potion = catalog.Get(1106);
             That(potion.StackLimit == 1000 && potion.ShopPrice.Gold == 100 && itemResources.Shops.Allows(2, 15, potion.Id), "matched potion stack bound and offer");
             var splitSource = current with { Inventory = new([
