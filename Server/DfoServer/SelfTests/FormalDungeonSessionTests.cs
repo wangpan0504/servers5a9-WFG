@@ -1,4 +1,5 @@
 using static DfoServer.Testing.TestCheck;
+using System.Buffers.Binary;
 using System.Text.Json;
 using System.Security.Cryptography;
 using DfoServer.Game.Accounts;
@@ -296,6 +297,10 @@ internal static class FormalDungeonSessionTests
                         "新房旧目标仅作审计，不发送死亡通知或恢复旧房奖励事实");
                 }
                 Check(f.Session.MoveFormalDungeon(0, 0) is null, "未清房不能过房");
+                foreach (var actor in receipt.Monsters.SpecialObjects)
+                    Check(allSpawnKeys.Add(actor.ObjectKey) && actor.ObjectKey != f.Created.Id &&
+                        actor.ObjectKey >= 256 && actor.ObjectKey < state.NextObjectKey,
+                        "特殊父对象同样占用真实预留key，全程唯一且不伪造敌方死亡");
                 foreach (var monster in receipt.Monsters.Monsters)
                 {
                     Check(allSpawnKeys.Add(monster.ObjectKey) && monster.ObjectKey != f.Created.Id &&
@@ -321,9 +326,18 @@ internal static class FormalDungeonSessionTests
                     {
                         // 本版Boss实收：来源和创建HP保留为观察，独立核对正文解析及检查值。
                         byte[] body = Convert.FromHexString("1B0100000100000000000000000000000000CA220000000000001D0000000111010100010A0000000000000C005E0403010000000003360103000000B2080000000000003F03EF00A4030301150012002F00000020B11FCC");
+                        Check(DungeonRequests.TryParseDeath(body, out var capturedBoss) && capturedBoss!.ObjectKey == 0x11B &&
+                            capturedBoss.Reporter == 1 && capturedBoss.SinglePlayerStatistics is { ChecksumMatches: true, Participant.ObjectKey: 1 },
+                            "匹配Boss实收88B保留历史目标及本人key，原始检查值独立匹配");
+                        // 当前路线新增特殊父对象后key会变化；合成报告重新绑定实例，原抓包仍单独核验。
+                        BinaryPrimitives.WriteUInt32LittleEndian(body, monster.ObjectKey);
+                        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4), receipt.Character.Id);
+                        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(33), receipt.Character.Id);
+                        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(84), ClientBodyChecksum.Compute(body.AsSpan(0, 84)));
                         Check(DungeonRequests.TryParseDeath(body, out var parsedBoss) && parsedBoss!.ObjectKey == monster.ObjectKey &&
-                            parsedBoss.Reporter == receipt.Character.Id && parsedBoss.SinglePlayerStatistics is { ChecksumMatches: true },
-                            "匹配Boss实收88B绑定当前模板key/本人，检查值独立匹配");
+                            parsedBoss.Reporter == receipt.Character.Id && parsedBoss.SinglePlayerStatistics is { ChecksumMatches: true } &&
+                            parsedBoss.SinglePlayerStatistics.Participant.ObjectKey == receipt.Character.Id,
+                            "合成Boss报告绑定当前实例key与本人，修改后正文摘要重新匹配");
                         var boss = parsedBoss!.SinglePlayerStatistics!;
                         observation = new(parsedBoss.ObjectKey, parsedBoss.Reporter, boss.Participant.Kind, boss.Participant.ObjectKey,
                             boss.Participant.CumulativeHpDecrease, boss.Participant.PositiveHpDecreaseCount, boss.RewriteFlag,

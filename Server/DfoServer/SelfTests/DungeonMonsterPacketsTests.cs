@@ -32,7 +32,12 @@ internal static class DungeonMonsterPacketsTests
                 "诊断调用委托同一正式纯Builder，保持完整怪物字节");
             int expectedCount = map.Id switch { 76121 => 4, 76122 => 5, 76123 => 7, 76124 => 5, 76125 => 6, 76126 => 2,
                 _ => throw new InvalidDataException("3145出现未核验房间") };
-            That(body.Length == 23 + expectedCount * 22 && body[18] == expectedCount, "Client nonempty rows use 22 bytes without losing the signed field");
+            // 76125还包含模板225的特殊父对象，完整通知数量不能只计算普通怪物。
+            int expectedParents = map.Id == 76125 ? 1 : 0;
+            That(monsters.Monsters.Count == expectedCount && monsters.SpecialObjects.Count == expectedParents,
+                "3145各房间保留完整怪物与特殊父对象资源行");
+            That(body.Length == 23 + (expectedCount + expectedParents) * 22 && body[18] == expectedCount + expectedParents,
+                "Client全部演员行使用22B布局，保留必读有符号字段");
             That(body[0] == map.Position.X && body[1] == map.Position.Y
                 && BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(14)) == map.Id, "each room retains its own map and grid position");
             using var reader = new BinaryReader(new MemoryStream(body, 19, body.Length - 19));
@@ -49,6 +54,16 @@ internal static class DungeonMonsterPacketsTests
                 That(reader.ReadByte() == expectedType && reader.ReadByte() == 0 && reader.ReadByte() == 0
                     && reader.ReadSByte() == -1 && reader.ReadUInt32() == 0 && reader.ReadByte() == 0,
                     "candidate flags include the mandatory Client signed byte before the u32");
+            }
+            for (int index = 0; index < expectedParents; index++)
+            {
+                That(reader.ReadUInt16() == 0 && reader.ReadUInt32() == index, "特殊父对象保留独立资源索引与行前缀");
+                ushort key = reader.ReadUInt16();
+                That(key != character.Id && keys.Add(key), "特殊父对象key与角色及全部怪物不重复");
+                That(reader.ReadUInt32() == 225 && reader.ReadByte() == 0 && reader.ReadByte() == 9
+                    && reader.ReadByte() == 0 && reader.ReadByte() == 0 && reader.ReadSByte() == -1
+                    && reader.ReadUInt32() == 0 && reader.ReadByte() == 1,
+                    "76125特殊父对象225保留类型9、零等级及非阻塞位，不丢失或混入普通怪物");
             }
             That(reader.ReadBytes(4).SequenceEqual(new byte[] { 0, 0, 0, 255 }) && reader.BaseStream.Position == reader.BaseStream.Length,
                 "extra list, fog, ridable list and member tail remain aligned after the last actor");
