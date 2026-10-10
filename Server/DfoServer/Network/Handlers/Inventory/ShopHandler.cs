@@ -7,13 +7,42 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-internal sealed class ShopHandler(InventoryShopService shop, InventoryProjection projection) : IGameCommandModule
+internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopService cashShop, InventoryProjection projection) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.BUY_ITEM, Buy, nameof(ShopHandler));
+        commands.Register(CmdPacketType.BUY_CERASHOP_ITEM, BuyCeraShop, nameof(ShopHandler));
         commands.Register(CmdPacketType.SELL_ITEM, Sell, nameof(ShopHandler));
         commands.Register(CmdPacketType.SHOP_PURCHASE_COUNT, PurchaseCounts, nameof(ShopHandler));
+    }
+
+    async Task<CommandResult> BuyCeraShop(GameConnectionContext context, Packet packet)
+    {
+        CashShopPurchaseReceipt? receipt = null;
+        InventoryResult result;
+        try
+        {
+            var request = CashShopRequests.Buy(packet.Body);
+            result = context.BlocksTownActions ? InventoryResult.Reject(17) :
+                context.Session.MutateInventory(character => cashShop.Buy(character, request, out receipt), 17);
+        }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM, CashShopPackets.Failure(), "cash_shop_buy_malformed");
+            return CommandResult.Handled;
+        }
+        if (!result.Accepted || receipt is null)
+        {
+            await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM, CashShopPackets.Failure(), "cash_shop_buy_rejected");
+            return CommandResult.Handled;
+        }
+        foreach (var product in receipt.Products)
+            await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM,
+                CashShopPackets.Success(product, receipt.Bonuses.GetValueOrDefault(product.CommodityId)),
+                "cash_shop_buy_success");
+        await projection.RefreshAsync(context, result);
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> Buy(GameConnectionContext context, Packet packet)

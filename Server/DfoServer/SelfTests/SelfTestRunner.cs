@@ -121,6 +121,7 @@ internal static class SelfTestRunner
         CharacterAttributeResourceTests.RunResources(characters);
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
+        CashShopTests.Run(towns, characters, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         await MailboxTests.RunAsync(towns, characters, itemResources, pvf);
         DevelopmentAssetTests.RunResources(towns, itemResources);

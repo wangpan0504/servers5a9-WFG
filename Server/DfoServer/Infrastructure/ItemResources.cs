@@ -16,6 +16,7 @@ internal sealed class ItemResources
     public EpicPieceCatalog EpicPieces { get; }
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
+    public CashShopCatalog CashShop { get; }
 
     public ItemResources(PvfArchive archive)
     {
@@ -30,6 +31,7 @@ internal sealed class ItemResources
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate);
         Boosters = new(archive, stackable);
+        CashShop = CashShopCatalog.Load(archive);
         Rental = RentalCatalog.Load(archive);
     }
 }
