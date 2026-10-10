@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 namespace DfoServer.Network.Parsers;
 
 internal readonly record struct DungeonEntryRequest(uint DungeonIndex);
+internal readonly record struct DungeonStoryPauseRequest(byte State, byte Type);
 internal sealed record DungeonMoveRequest(byte X, byte Y, uint Unknown2, uint Unknown6, byte Unknown10, IReadOnlyList<byte> RemainingFields);
 // 目标实例按来源记录的正HP降低量及次数；原生setter统计在夹取前计算，允许overkill，不是服务端伤害模拟。
 internal sealed record DungeonDeathParticipant(ushort Kind, ushort ObjectKey, ulong CumulativeHpDecrease, ushort PositiveHpDecreaseCount);
@@ -38,6 +39,14 @@ internal readonly record struct DungeonSelectionRequest(
 
 internal static class DungeonRequests
 {
+    public static bool TryParseStoryPause(ReadOnlySpan<byte> body, out DungeonStoryPauseRequest request)
+    {
+        request = default;
+        if (body.Length != 2 || body[0] > 1 || body[1] > 2) return false;
+        request = new(body[0],body[1]);
+        return true;
+    }
+
     // 选择界面返回实收为空正文；未知形状不猜造应答。
     public static bool IsSelectionReturn(ReadOnlySpan<byte> body) => body.IsEmpty;
 

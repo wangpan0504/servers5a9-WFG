@@ -60,6 +60,33 @@ internal static class QuestHuntProgress
     public static ImmutableArray<ActiveMainQuest> PassiveDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
         QuestCatalog quests, int templateId) => Death(active,entry,quests,templateId,3);
 
+    // 演出动态创建的无奖励子任务物件，由真实终点清房确认；不依赖客户端猜测对象key。
+    public static ImmutableArray<ActiveMainQuest> QuestObjectRoomClear(IReadOnlyList<ActiveMainQuest> active,
+        DungeonEntryPlan entry, QuestCatalog quests, DungeonClearFact? clear)
+    {
+        if (clear is null || clear.Identity.CharacterId != entry.CharacterId || clear.Identity.QuestId != entry.QuestId ||
+            clear.DungeonId != entry.DungeonId || clear.ClearMap is null || !entry.IsTerminalMap(clear.ClearMap) ||
+            clear.ConfirmedDeathEvents.Count == 0) return active.ToImmutableArray();
+        var targets = new List<(ActiveMainQuest Active,StoryQuest Quest,QuestHuntTarget Target)>();
+        foreach (var row in active)
+            if (row.ConditionState != 0 && Bound(row,entry) && quests.TryGet(row.QuestId,out var quest) &&
+                TryTargets(quest,out var hunt) && ValidScalar(quest,row.ConditionState))
+                for (int index = 0; index < hunt.Length; index++)
+                {
+                    var target = hunt[index];
+                    if ((row.ConditionState >> (index*9) & 511) > 0 && target.EnemyType == 3 &&
+                        (target.DungeonId == -1 || target.DungeonId == entry.DungeonId) &&
+                        (target.MinimumDifficulty == -1 || entry.Difficulty >= target.MinimumDifficulty)) targets.Add((row,quest,target));
+                }
+        if (targets.Count != 1) return active.ToImmutableArray();
+        var match = targets[0];
+        if (match.Quest.Grade != "[sub]" || match.Quest.MainQuest is not > 0 || !QuestRelationProgress.ZeroRewardChild(match.Quest) ||
+            !entry.Maze.HasActiveQuestConnection(match.Quest.MainQuest.Value) ||
+            !active.Any(parent => parent.QuestId == match.Quest.MainQuest.Value && parent.ConditionState > 0 && Bound(parent,entry)))
+            return active.ToImmutableArray();
+        return PassiveDeath(active,entry,quests,match.Target.MonsterId);
+    }
+
     private static ImmutableArray<ActiveMainQuest> Death(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
         QuestCatalog quests, int templateId, int enemyType, bool ordinaryBoss = false) => active.Select(row =>
     {

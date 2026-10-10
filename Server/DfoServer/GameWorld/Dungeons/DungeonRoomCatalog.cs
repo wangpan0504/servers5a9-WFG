@@ -28,6 +28,7 @@ internal sealed record DungeonRoomDefinition(
 {
     public IReadOnlyList<DungeonRoomSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonRoomSpecialObject>();
     public IReadOnlyList<DungeonRoomAiCharacter> AiCharacters { get; init; } = Array.Empty<DungeonRoomAiCharacter>();
+    public IReadOnlyList<int> EventMonsterPositions { get; init; } = Array.Empty<int>();
 }
 
 internal sealed class DungeonRoomCatalog
@@ -116,7 +117,7 @@ internal sealed class DungeonRoomCatalog
             }
 
             string tag = resolve(tokens[i++].Value).ToLowerInvariant();
-            if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]" or "[ai character]" or "[special passive object]"))
+            if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]" or "[ai character]" or "[special passive object]" or "[event monster position]"))
                 continue;
             if (sections.ContainsKey(tag))
                 throw new NotSupportedException("unsupported: 房间重复资源块 " + tag);
@@ -214,7 +215,11 @@ internal sealed class DungeonRoomCatalog
         if (sections.TryGetValue("[ai character]",out var actorTokens))
             foreach (var row in PvfAiCharacterScript.MapRows(actorTokens,resolve))
                 actors.Add(resolveAiCharacter?.Invoke(row) ?? throw new InvalidDataException("房间APC定义解析依赖缺失"));
-        return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams) { AiCharacters = Freeze(actors), SpecialObjects = Freeze(specialObjects) };
+        var eventPositions = sections.TryGetValue("[event monster position]", out var eventTokens) ? Integers(eventTokens) : Freeze(Array.Empty<int>());
+        if (eventPositions.Count % 3 != 0)
+            throw new InvalidDataException("事件怪物位置不是完整的三整数坐标");
+        return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams)
+            { AiCharacters = Freeze(actors), SpecialObjects = Freeze(specialObjects), EventMonsterPositions = eventPositions };
 
         string Resolve(int id, IReadOnlyDictionary<int, string> paths, string kind)
         {

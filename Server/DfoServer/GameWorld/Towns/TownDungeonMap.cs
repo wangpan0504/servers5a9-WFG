@@ -19,9 +19,12 @@ internal sealed record TownDungeonMap(int Id, string Path, ImmutableArray<TownDu
                 return options.Count > 0 ? new(id,path,options.ToImmutable()) : throw new InvalidDataException("选择地图地下城列表为空");
             if (tokens[at].Type != 0 || tokens[at].Value <= 0) throw new NotSupportedException("选择地图地下城编号格式未确认");
             int dungeon = tokens[at++].Value;
-            bool progress = at < tokens.Count && tokens[at].Type == 3 && resolve(tokens[at].Value) == "[in progress]";
-            if (progress) at++;
-            if (at >= tokens.Count || tokens[at].Type != 0 || tokens[at].Value is 0 or < -1 || progress && tokens[at].Value == -1)
+            string? condition = at < tokens.Count && tokens[at].Type == 3 ? resolve(tokens[at].Value) : null;
+            bool progress = condition == "[in progress]";
+            bool marked = condition is "[in progress]" or "[is clear quest]";
+            // 两种标记都属于前一个地下城；完成条件继续使用持久任务完成记录。
+            if (marked) at++;
+            if (at >= tokens.Count || tokens[at].Type != 0 || tokens[at].Value is 0 or < -1 || marked && tokens[at].Value == -1)
                 throw new NotSupportedException("选择地图任务条件格式未确认");
             options.Add(new(dungeon,tokens[at++].Value,progress));
         }

@@ -1,6 +1,4 @@
 using DfoServer.Game.Inventory.Models;
-using DfoServer.Game.Inventory.Services;
-using DfoServer.Game.Currency;
 
 namespace DfoServer.Network.Builders.Inventory;
 
@@ -109,21 +107,23 @@ internal static class InventoryPackets
         Scalar(writer, 2, result.Error);
     });
 
-    public static byte[] Delete(InventoryDeleteRequest request, InventoryResult result, InventorySnapshot inventory) => Protobuf(result.Accepted, writer =>
+    public static byte[] Delete(InventoryDeleteRequest request, InventoryResult result) => Protobuf(result.Accepted, writer =>
     {
         Scalar(writer, 1, (byte)request.List);
         if (result.Accepted)
         {
+            var plan = result.Plan ?? throw new InvalidOperationException("删除应答缺少库存规划");
+            var current = result.Receipt?.Index ?? plan.AfterIndex;
             foreach (var item in request.Items)
             {
                 using var stream = new MemoryStream();
                 using var child = new BinaryWriter(stream);
                 Scalar(child, 1, checked((uint)item.Slot));
-                // 02365089: 回传槽内剩余数量；装备删除后为0。
-                long remaining = request.List == InventoryListType.Main && CurrencyWallet.RewardKind(item.Value) is { } kind &&
-                    ItemSlotBoundService.CurrencySlot(kind) == item.Slot ? CurrencyWallet.Get(inventory, kind) :
-                    inventory.Find(new(request.List, item.Slot))?.Core.Count ?? 0;
-                Scalar(child, 2, checked((uint)remaining));
+                // 材料足额消费回本次数量；普通丢弃回归一后的实际删除量。
+                var slot = new InventorySlot(request.List,item.Slot);
+                int removed = item.Type == 2 ? item.Count : (plan.BeforeIndex.Find(slot)?.Core.Count ?? 0) -
+                    (current.Find(slot)?.Core.Count ?? 0);
+                Scalar(child, 2, checked((uint)removed));
                 Scalar(child, 3, item.Type);
                 writer.Write((byte)18);
                 Varint(writer, checked((uint)stream.Length));

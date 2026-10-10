@@ -28,21 +28,25 @@ internal static class SkillMaterialTcpTests
             peer.Select();
             string skills = Progress();
             peer.Send(18, Convert.FromHexString("1A00000010001A0A080210E60218DD1720051A080800104118062001200001"));
-            peer.Expect(1, 18, Convert.FromHexString("01150000000800120708E602100F180212060841100518001800"));
+            peer.Expect(1, 18, Convert.FromHexString("01150000000800120708E6021005180212060841100118001800"));
             byte[] ordinary = peer.Expect(0, 14).Body;
             That(ordinary.Length == 126 && ordinary[0] == 0 && U16(ordinary, 1) == 1 && U16(ordinary, 3) == 65 &&
                 U32(ordinary, 5) == 1000 && U32(ordinary, 9) == 5 && Balance() == 15,
                 "混合删除只刷新普通丢弃槽，不将剩余无色数量通知为获得物品");
             peer.Barrier();
             peer.Send(18, Convert.FromHexString("0E00000010001A080802104118052001200001"));
-            peer.Expect(1, 18, Convert.FromHexString("010C000000080012060841100418021800"));
+            peer.Expect(1, 18, Convert.FromHexString("010C000000080012060841100118021800"));
             peer.Barrier();
             That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=1000") is [[4L]],
                 "实体技能材料同样只回ACK，实际数量足额扣除");
             peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
             peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);
-            FormalDungeonTcpTests.Enter(peer);
+            peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27);
+            var selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
+            Array.Clear(selection,16,4);
+            peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
             FormalDungeonTcpTests.Load(peer);
+            peer.Expect(0,36);
             Spend(peer, 10);
             peer.Send(38, Convert.FromHexString("004C007017096C00150053FDD425")); peer.Barrier();
             That(Progress() == skills, "城镇和地下城扣无色不修改等级、经验或双技能树");
@@ -88,9 +92,9 @@ internal static class SkillMaterialTcpTests
         void Spend(TcpPeer peer, byte remaining)
         {
             peer.Send(18, request);
-            peer.Expect(1, 18, [1, 13, 0, 0, 0, 8, 0, 18, 7, 8, 230, 2, 16, remaining, 24, 2, 24, 0]);
+            peer.Expect(1, 18, [1, 13, 0, 0, 0, 8, 0, 18, 7, 8, 230, 2, 16, 5, 24, 2, 24, 0]);
             peer.Barrier();
-            That(Balance() == remaining, "ACK余额与SQL一致，后续屏障确认没有多发获得物品通知");
+            That(Balance() == remaining, "ACK回实际消耗量，SQL保存真实余额，屏障确认没有多发获得物品通知");
         }
     }
 }

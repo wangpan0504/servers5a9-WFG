@@ -25,14 +25,21 @@ internal static class DungeonMonsterPlanTests
         var child = new DungeonRoomSpecialChild(1, "[monster]", Array.AsReadOnly(new[] { 1, 5, 2, 5, -1 }), "monster/fixture.mob");
         var trap = new DungeonRoomSpecialChild(0, "[trap]", [40002, 40, 1, 10, -1], null);
         var parent = new DungeonRoomSpecialObject(0, 3, [3, 100, 200, 0, 2], "passiveobject/fixture.obj", [trap, child]);
-        var specialPlan = DungeonMonsterPlan.FromRoom(room with { SpecialObjects = [parent] }, 99, 98, 5, includeSpecialObjects: true);
+        var specialPlan = DungeonMonsterPlan.FromRoom(room with { SpecialObjects = [parent] }, 99, 98, 5);
         That(specialPlan.SpecialObjects.Single().Source == parent && specialPlan.Monsters.Count == 3 &&
             specialPlan.Monsters[^1] is { IsSpecialChild: true, IsBlocking: false, CandidateLevel: 5 } specialMonster &&
             specialMonster.Source!.SpecialChild == child && specialMonster.Source!.RawValues.SequenceEqual([1, 5, 2, 5, -1]) &&
             specialPlan.Monsters.Select(monster => monster.ObjectKey).Concat(specialPlan.SpecialObjects.Select(actor => actor.ObjectKey)).Distinct().Count() == 4 &&
             specialPlan.NextObjectKey == 103, "特殊父子与普通怪物统一预留key并跳过角色，非怪物原规则未丢失");
-        That(DungeonMonsterPlan.FromRoom(room with { SpecialObjects = [parent] }, 99, 10).SpecialObjects.Count == 0,
-            "本次普通父子接入不改任务路线的已有投影合同");
+        That(DungeonMonsterPlan.FromRoom(room with { SpecialObjects = [parent] }, 99, 10).SpecialObjects.Count == 1,
+            "剧情与普通房间均按资源装载特殊父子");
+        foreach (int automatic in new[] { 0, -1 })
+        {
+            var automaticRoom = room with { SpecialObjects = [parent with { Children = [trap,child with { RawValues = [1,automatic,2,5,-1] }] }] };
+            That(DungeonMonsterPlan.FromRoom(automaticRoom,99,10,37).Monsters[^1].CandidateLevel == 37,
+                "特殊子怪物的非正数等级采用副本basis，不截断原声明");
+            Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(automaticRoom,99,10), "自动等级缺少副本basis时拒绝");
+        }
         Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(ordinaryRoom, 99, 10), "普通等级规则不扩到任务路线");
         Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(ordinaryRoom, 99, 10, 0), "非法副本基准等级不能生成成功");
         That(defaultPlan.Monsters.All(monster => monster.IsBlocking), "missing teams default every source row to blocking");
