@@ -105,6 +105,7 @@ internal static class DatabaseSchemaTests
             VerifyExistingQuestType49(root);
             VerifyMasterQuest17Migration(root);
             VerifyExistingQuestFatigueV14(root);
+            VerifyMissingFatigueV18(root);
             VerifyQuestSkipConstraints(root);
             VerifyFutureMigrations(path);
             string concurrent = Path.Combine(root, "concurrent.db");
@@ -297,7 +298,7 @@ internal static class DatabaseSchemaTests
         {
             for (int index = 0; index < tables.Length; index++)
                 Check(Rows(db,tables[index],columns[index]) == before[index],"已有v14保留" + tables[index] + "全部旧列、rowid和数据");
-            Check(Query(db,"PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion,"旧任务v14按已发布版本升级，master只追加唯一v18");
+            Check(Query(db,"PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion,"旧任务v14按既定迁移顺序升级至当前版本");
             Check(Query(db,"SELECT operation_id||':'||operation_kind FROM character_quest_skip_receipts WHERE rowid=59") is "34567890abcdef1234567890abcdef12:QuickClear",
                 "旧跳过回执使用原接取身份及QuickClear类型，不改冻结快照");
             Check(Query(db,"SELECT count(*) FROM v14_skip_trigger_calls") is 0L,"保全历史跳过不重新触发业务触发器");
@@ -416,7 +417,8 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
-            Check(Query(db,"PRAGMA user_version") is 18L,"最新master17只执行唯一新增v18");
+            Check(Query(db,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                "master17按顺序执行后续迁移并达到当前版本");
             for (int index=0;index<tables.Length;index++)
                 Check(Rows(db,tables[index],columns[index]) == before[index],"v18保留master17原表全部历史列、rowid和数据：" + tables[index]);
             Check(Query(db,"SELECT operation_id||':'||operation_kind FROM character_quest_skip_receipts WHERE rowid=59") is "34567890abcdef1234567890abcdef12:QuickClear",
@@ -465,7 +467,8 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
-            Check(Query(db,"PRAGMA user_version") is 18L,"已存在疲劳的任务v14保留master迁移顺序并升级至18");
+            Check(Query(db,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                "已存在疲劳的任务v14保留master迁移顺序并升级至当前版本");
             for (int index=0;index<tables.Length;index++)
                 Check(Rows(db,tables[index],columns[index]) == before[index],"已知v14疲劳兼容保留全部原列、rowid和历史：" + tables[index]);
             Check(Query(db,"SELECT count(*) FROM v18_trigger_calls") is 0L && Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,
@@ -477,6 +480,61 @@ internal static class DatabaseSchemaTests
         string after = Snapshot(path);
         _ = new CharacterRepository(path);
         Check(Snapshot(path) == after,"旧v14疲劳兼容后重开不重建或重置");
+    }
+
+    private static void VerifyMissingFatigueV18(string root)
+    {
+        string path = Path.Combine(root, "missing-fatigue-v18.db");
+        _ = new CharacterRepository(path);
+        string[] tables; string[][] columns; string[] before;
+        using (var db = Open(path))
+        {
+            Execute(db, """
+                INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction) VALUES
+                  (1,'legacy',0,'Missing',11,39,5,284,276,0),(2,'legacy',1,'Consumed',12,39,5,284,276,0),
+                  (3,'legacy',2,'Unknown',13,39,5,284,276,0),(4,'legacy',3,'ReceiptOnly',14,39,5,284,276,0);
+                INSERT INTO character_dungeon_state VALUES
+                  (1,'legacy',2753,47,123,4,56),(2,'legacy',700,42,123,4,56),(4,'legacy',900,42,123,4,56);
+                INSERT INTO character_fatigue VALUES(2,'legacy',7,156,9,149,3,4);
+                INSERT INTO character_dungeon_fatigue_receipts(rowid,character_id,account,instance_id,task_attempt,map_id,epoch,generation,
+                  rule_id,before_revision,revision,before_state,after_state)
+                  VALUES(81,4,'legacy','abcdef1234567890abcdef1234567890',42,16408,9,7,'fatigue-old',6,7,'{"Used":6}','{"Used":7}');
+                PRAGMA user_version=18;
+                """);
+            tables = TableNames(db).Where(table => table != "character_fatigue").ToArray();
+            columns = tables.Select(table => ColumnNames(db, table)).ToArray();
+            before = tables.Select((table, index) => Rows(db, table, columns[index])).ToArray();
+        }
+        string rollback = Path.Combine(root, "missing-fatigue-rollback.db");
+        using (var from = Open(path))
+        using (var to = Open(rollback)) from.BackupDatabase(to);
+        string original = Snapshot(rollback);
+        using (var db = Open(rollback))
+        {
+            Execute(db, "CREATE TEMP TRIGGER reject_fatigue BEFORE INSERT ON character_fatigue BEGIN SELECT RAISE(ABORT,'fatigue failure'); END");
+            Reject<SqliteException>(() => SqliteMigrations.Apply(db), "旧角色疲劳补齐写入失败时拒绝升级");
+        }
+        Check(Snapshot(rollback) == original, "疲劳补齐失败回滚全部记录和v18版本");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                "已有v18只执行追加迁移并升级到当前版本");
+            Check(Query(db, "SELECT used||':'||maximum||':'||used_maximum||':'||remaining||':'||context_auxiliary||':'||selection_auxiliary FROM character_fatigue WHERE character_id=1") is "0:156:0:156:0:0",
+                "已有真实副本owner且无扣点历史的旧角色补齐本服初始疲劳");
+            Check(Query(db, "SELECT used||':'||maximum||':'||used_maximum||':'||remaining||':'||context_auxiliary||':'||selection_auxiliary FROM character_fatigue WHERE character_id=2") is "7:156:9:149:3:4",
+                "已有疲劳的六项字段完整保留，不重置实际余额");
+            Check(Query(db, "SELECT count(*) FROM character_fatigue WHERE character_id IN(3,4)") is 0L,
+                "未知副本owner或已有扣点历史缺状态的角色不伪造初始值");
+            for (int index = 0; index < tables.Length; index++)
+                Check(Rows(db, tables[index], columns[index]) == before[index], "疲劳补齐保留其他原表数据、rowid与角色revision：" + tables[index]);
+            Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "疲劳补齐后数据库及外键完整");
+        }
+        string committed = Snapshot(path);
+        _ = new CharacterRepository(path);
+        _ = new AuthenticationRepository(path);
+        Check(Snapshot(path) == committed, "补齐后重开不重复初始化或重置疲劳");
     }
 
     static void ChangeCompletionDefinition(SqliteConnection db,Func<string,string> change) =>
@@ -535,8 +593,8 @@ internal static class DatabaseSchemaTests
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
-                if (oldVersion >= 17) RewindQuestReceiptsToV17(db);
-                else RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
+                if (oldVersion == 17) RewindQuestReceiptsToV17(db);
+                else if (oldVersion < 17) RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
                 if (oldVersion < 12) Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
