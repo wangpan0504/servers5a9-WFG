@@ -61,6 +61,7 @@ internal sealed class SinglePlayerDungeonRun
     private sealed class Room(DungeonMonsterPlan plan)
     {
         public DungeonMonsterPlan Plan { get; } = plan;
+        public DungeonElevatorState? Elevator { get; } = DungeonElevatorState.Create(plan);
         public HashSet<ushort> Dead { get; } = [];
         public HashSet<ushort> Culled { get; } = [];
         public bool Cleared => Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey) || Culled.Contains(monster.ObjectKey));
@@ -70,7 +71,12 @@ internal sealed class SinglePlayerDungeonRun
     private readonly DungeonCombatAuthority authority;
     private readonly Dictionary<DungeonPoint, Room> rooms;
     private readonly Dictionary<DungeonMap, Room> layeredRooms;
+    private readonly Room[] storyRooms;
+    private readonly Room[] allRooms;
+    private readonly Dictionary<DungeonPoint, Room> conditionalRooms;
+    private int storyStageIndex;
     private readonly HashSet<DungeonMap> enteredLayers = [];
+    private readonly Dictionary<DungeonPoint, Room> layerSources = [];
     private readonly HashSet<int> initializedMapSlots = [];
     private readonly HashSet<(DungeonPoint, DungeonPoint)> connections;
     private readonly Dictionary<Guid, ActionFact> acceptedActions = [];
@@ -82,6 +88,17 @@ internal sealed class SinglePlayerDungeonRun
     private PreparedDungeonSettlement? committedSettlement;
     private Room current;
     private DungeonRunIdentity identity;
+    public bool BossEntranceOpen { get; private set; }
+    public bool BossEntranceReady => entry.Maze.BossEntrance is { Targets.Count: > 0 } condition &&
+        condition.Targets.All(target => allRooms.Sum(room => room.Plan.Monsters.Count(monster =>
+            monster.MonsterId == target.TargetId && monster.AiCharacter is null && monster.CanReportDeath && !monster.IsSpecialChild &&
+            room.Dead.Contains(monster.ObjectKey))) >= target.Count);
+    internal bool ConfirmBossEntranceOpen()
+    {
+        if (!BossEntranceReady || Phase == SinglePlayerDungeonPhase.Returned) return false;
+        BossEntranceOpen = true;
+        return true;
+    }
     public long StartCharacterRevision => entry.CharacterRevision;
     public uint ConfirmedInitializationCount { get; private set; }
     public uint? MazeInitializationThreshold { get; }
@@ -90,6 +107,7 @@ internal sealed class SinglePlayerDungeonRun
     internal DungeonEntryPlan Entry => entry;
     internal bool HasPendingDeath => pendingDeath is not null;
     internal uint DungeonId => entry.DungeonId;
+    internal DungeonElevatorState? CurrentElevator => current.Elevator;
     internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
     internal void RebasePreparedRevision(long revision)
     {
@@ -137,14 +155,20 @@ internal sealed class SinglePlayerDungeonRun
     {
         this.entry = entry;
         this.authority = authority;
-        rooms = route.Rooms.Where(plan => plan.Room.Map.Kind != "layered").ToDictionary(plan => plan.Room.Map.Position, plan => new Room(
-            plan with { Monsters = Array.AsReadOnly(plan.Monsters.ToArray()) }));
+        var baseRooms = route.Rooms.Where(plan => plan.Room.Map.Kind != "layered" && !plan.Room.Map.IsConditional).Select(plan => new Room(
+            plan with { Monsters = Array.AsReadOnly(plan.Monsters.ToArray()) })).ToArray();
+        rooms = baseRooms.GroupBy(room => room.Plan.Room.Map.Position).ToDictionary(group => group.Key,
+            group => group.FirstOrDefault(room => room.Plan.Room.Map.StoryStageIndex < 0) ?? group.First());
+        storyRooms = baseRooms.Where(room => room.Plan.Room.Map.StoryStageIndex >= 0).OrderBy(room => room.Plan.Room.Map.StoryStageIndex).ToArray();
         layeredRooms = route.Rooms.Where(plan => plan.Room.Map.Kind == "layered").ToDictionary(plan => plan.Room.Map,plan => new Room(plan));
+        conditionalRooms = route.Rooms.Where(plan => plan.Room.Map.IsConditional).ToDictionary(plan => plan.Room.Map.Position,plan => new Room(plan));
+        allRooms = [.. baseRooms, .. layeredRooms.Values, .. conditionalRooms.Values];
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
-        current = rooms[entry.StartMap.Position];
+        current = baseRooms.Single(room => room.Plan.Room.Map == entry.StartMap);
+        storyStageIndex = entry.StartMap.StoryStageIndex;
         identity = new(entry.CharacterId, entry.QuestId, attempt, Guid.NewGuid(), epoch);
         var grid = entry.Maze.GreedGrid;
-        InitializationCounterSupported = entry.InitializationCounterSupported && entry.Maze.LayeredMaps.Count == 0 && grid.Supported;
+        InitializationCounterSupported = entry.InitializationCounterSupported && entry.Maze.LayeredMaps.Count == 0 && storyRooms.Length == 0 && grid.Supported;
         int positiveCells = grid.Cells?.Count(cell => cell.Index > 0) ?? 0;
         MazeInitializationThreshold = InitializationCounterSupported && positiveCells > 1 ? checked((uint)(positiveCells - 1)) : null;
     }
@@ -156,6 +180,8 @@ internal sealed class SinglePlayerDungeonRun
         reason = "unsupported: 需要正式战斗权威及已确认门墙连接";
         if (approvedRoute is null || combatAuthority is null)
             return false;
+        if (entry.Maze.StoryStages.Count > 0 && (entry.BossMap != entry.Maze.StoryStages[^1] ||
+            entry.Maze.StoryStages.Where((map,index) => map.StoryStageIndex != index).Any())) return false;
         if (entry.CharacterId == 0 || entry.CharacterRevision < 0 || entry.QuestId >= 30000 ||
             entry.QuestId == 0 && (entry.ActiveQuestSlot != byte.MaxValue || entry.QuestAcceptanceId != Guid.Empty) ||
             taskAttempt <= 0 || initialEpoch <= 0 || initialEpoch >= long.MaxValue - 2)
@@ -165,13 +191,15 @@ internal sealed class SinglePlayerDungeonRun
         }
         if (entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" ||
             entry.Maze.MapSpecification is not { Count: > 0 } maps ||
+            entry.Maze.ConditionalMaps.Any(map => !map.IsConditional || entry.Maze.BossEntrance is null ||
+                !maps.Any(source => source.Position == map.Position && source.Kind == map.Kind)) ||
             maps.Any(map => map.Position.X < 0 || map.Position.Y < 0 || map.Position.X >= entry.Maze.Width || map.Position.Y >= entry.Maze.Height ||
                 map.Kind is not ("map" or "boss")) || approvedRoute.Rooms.Count == 0 ||
-            approvedRoute.Rooms.Count != maps.Count + entry.Maze.LayeredMaps.Count ||
+            approvedRoute.Rooms.Count != maps.Count + entry.Maze.LayeredMaps.Count + entry.Maze.ConditionalMaps.Count ||
             approvedRoute.Rooms.Select(plan => plan.Room.Map).Distinct().Count() != approvedRoute.Rooms.Count ||
-            approvedRoute.Rooms.Any(plan => !maps.Contains(plan.Room.Map) && !entry.Maze.LayeredMaps.Contains(plan.Room.Map)) ||
+            approvedRoute.Rooms.Any(plan => !maps.Contains(plan.Room.Map) && !entry.Maze.LayeredMaps.Contains(plan.Room.Map) && !entry.Maze.ConditionalMaps.Contains(plan.Room.Map)) ||
             !maps.Contains(entry.StartMap) || !maps.Contains(entry.BaseBossMap) ||
-            !maps.Contains(entry.BossMap) && !entry.Maze.LayeredMaps.Contains(entry.BossMap) ||
+            !maps.Contains(entry.BossMap) && !entry.Maze.LayeredMaps.Contains(entry.BossMap) && !entry.Maze.ConditionalMaps.Contains(entry.BossMap) ||
             entry.Maze.LayeredMaps.Any(map => map.Kind != "layered" || !maps.Any(baseMap => baseMap.Position == map.Position)))
             return false;
         var keys = new HashSet<ushort>();
@@ -181,7 +209,7 @@ internal sealed class SinglePlayerDungeonRun
             DungeonMonsterPlan resourcePlan;
             try
             {
-                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel, entry.IsOrdinary);
+                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException)
             {
@@ -263,9 +291,15 @@ internal sealed class SinglePlayerDungeonRun
         if (pendingDeath is not null)
             return Result(DungeonRunOutcome.Rejected);
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
-            !current.Cleared || !connections.Contains((current.Plan.Room.Map.Position, target)) || !rooms.TryGetValue(target, out Room? next))
+            current.Elevator is { Completed: false } || !current.Cleared || HasPendingLayer() || !connections.Contains((current.Plan.Room.Map.Position, target)) || !rooms.TryGetValue(target, out Room? next))
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "move", target));
+        if (storyRooms.Length > 0 && (storyStageIndex < 0 || current.Plan.Room.Map == storyRooms[storyStageIndex].Plan.Room.Map) &&
+            storyStageIndex + 1 < storyRooms.Length && storyRooms[storyStageIndex+1].Plan.Room.Map.Position == target)
+            next = storyRooms[++storyStageIndex];
+        if (BossEntranceOpen && next.Plan.Room.Map.StoryStageIndex < 0 && current.Plan.Room.Map.Kind != "layered" &&
+            conditionalRooms.TryGetValue(target,out var replacement))
+            next = replacement;
         current = next;
         Phase = SinglePlayerDungeonPhase.Loading;
         Advance();
@@ -277,7 +311,7 @@ internal sealed class SinglePlayerDungeonRun
         string kind = nextLayer ? "layer" : "base";
         if (Replay(expected,actionId,kind,target) is { } replay) return replay;
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
-            pendingDeath is not null || pendingSettlement is not null || current.Plan.Room.Map.Position != target)
+            pendingDeath is not null || pendingSettlement is not null || current.Elevator is { Completed: false } || current.Plan.Room.Map.Position != target)
             return Result(DungeonRunOutcome.Rejected);
         Room next;
         if (nextLayer)
@@ -286,15 +320,24 @@ internal sealed class SinglePlayerDungeonRun
             int at = current.Plan.Room.Map.Kind == "layered" ? Array.IndexOf(layers,current.Plan.Room.Map)+1 : 0;
             if (at >= layers.Length || at > 0 && !current.Cleared || enteredLayers.Contains(layers[at]))
                 return Result(DungeonRunOutcome.Rejected);
+            if (at == 0) layerSources[target] = current;
             enteredLayers.Add(layers[at]); next = layeredRooms[layers[at]];
         }
         else
         {
-            if (current.Plan.Room.Map.Kind != "layered" || !current.Cleared) return Result(DungeonRunOutcome.Rejected);
-            next = rooms[target];
+            if (current.Plan.Room.Map.Kind != "layered" || !current.Cleared || HasPendingLayer()) return Result(DungeonRunOutcome.Rejected);
+            next = layerSources[target];
         }
         acceptedActions.Add(actionId,new(expected,kind,target)); current = next;
         Phase = SinglePlayerDungeonPhase.Loading; Advance(); return Result(DungeonRunOutcome.Accepted);
+    }
+
+    private bool HasPendingLayer()
+    {
+        if (current.Plan.Room.Map.Kind != "layered") return false;
+        var layers = entry.Maze.LayeredMaps.Where(map => map.Position == current.Plan.Room.Map.Position).ToArray();
+        int index = Array.IndexOf(layers,current.Plan.Room.Map);
+        return index < 0 || index + 1 < layers.Length;
     }
 
     public DungeonRunResult Return(DungeonRunIdentity expected, Guid actionId)
@@ -337,9 +380,14 @@ internal sealed class SinglePlayerDungeonRun
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
             CurrentLivingMonster(confirmed.MonsterKey) is null)
             return new(DungeonRunOutcome.Rejected);
-        bool settles = Phase == SinglePlayerDungeonPhase.Dungeon && TerminalBossCleared(confirmed.MonsterKey);
-        // 清场是首次通关的场景效果，不签发额外击杀经验、任务进度或掉落。
-        ushort[] culled = settles ? current.Plan.Monsters.Where(monster => monster.IsBlocking && !monster.IsBoss &&
+        var target = current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey);
+        bool conditionClears = Phase == SinglePlayerDungeonPhase.Dungeon && MatchesClearCondition(target) &&
+            !HasPendingBossDeaths(confirmed.MonsterKey);
+        bool settles = Phase == SinglePlayerDungeonPhase.Dungeon && (TerminalBossCleared(confirmed.MonsterKey) ||
+            conditionClears && IsTerminalRoom());
+        // 明确的猎杀条件同样清退当前房间；非终点不产生通关事实，清退不产生击杀奖励。
+        ushort[] culled = settles || conditionClears ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
+            (conditionClears || !monster.IsBoss) &&
             monster.ObjectKey != confirmed.MonsterKey && !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray() : [];
         DungeonRunIdentity nextIdentity = settles ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
         var nextSnapshot = new DungeonRunSnapshot(nextIdentity,
@@ -348,8 +396,8 @@ internal sealed class SinglePlayerDungeonRun
                 !current.Culled.Contains(monster.ObjectKey) && !culled.Contains(monster.ObjectKey) &&
                 monster.ObjectKey != confirmed.MonsterKey).Select(monster => monster.ObjectKey).ToArray()));
         DungeonClearFact? clear = settles
-            ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = entry.BossMap } : null;
-        pendingDeath = new(confirmed, current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey),
+            ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = current.Plan.Room.Map } : null;
+        pendingDeath = new(confirmed, target,
             new(DungeonRunOutcome.Accepted, nextSnapshot, clear) { CulledMonsterKeys = Array.AsReadOnly(culled) });
         return new(DungeonRunOutcome.Accepted, pendingDeath);
     }
@@ -440,19 +488,31 @@ internal sealed class SinglePlayerDungeonRun
         {
             Phase = SinglePlayerDungeonPhase.Settlement;
             Advance();
-            ClearFact = new(identity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.ToArray())) { ClearMap = entry.BossMap };
+            ClearFact = new(identity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.ToArray())) { ClearMap = current.Plan.Room.Map };
             return new(DungeonRunOutcome.Accepted, Snapshot, ClearFact);
         }
         return Result(DungeonRunOutcome.Accepted);
     }
 
+    private bool MatchesClearCondition(DungeonPlannedMonster monster) => entry.Maze.ClearConditions is [var condition] &&
+        condition.Count == 1 && condition.TargetId == monster.MonsterId && monster.AiCharacter is null &&
+        (condition.Type == "hunt monster" || condition.Type == "hunt boss" && monster.IsBoss);
+
+    private bool IsTerminalRoom() => entry.IsTerminalMap(current.Plan.Room.Map) &&
+        (storyRooms.Length == 0 || storyStageIndex == storyRooms.Length-1);
+
+    private bool HasPendingBossDeaths(ushort? preparedMonsterKey)
+    {
+        int ordinaryBosses = current.Plan.Monsters.Count(monster => monster.IsBoss && monster.AiCharacter is null);
+        return current.Plan.Monsters.Any(monster => monster.IsBoss && (monster.AiCharacter is not null || ordinaryBosses > 1) &&
+            !current.Dead.Contains(monster.ObjectKey) && monster.ObjectKey != preparedMonsterKey);
+    }
+
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null)
     {
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。
-        if (current.Plan.Room.Map != entry.BossMap)
+        if (!IsTerminalRoom() || HasPendingBossDeaths(preparedMonsterKey))
             return false;
-        if (current.Plan.Monsters.Any(monster => monster.AiCharacter is not null && monster.IsBoss &&
-            !current.Dead.Contains(monster.ObjectKey) && monster.ObjectKey != preparedMonsterKey)) return false;
         if (current.Plan.Monsters.All(monster => !monster.IsBlocking || current.Dead.Contains(monster.ObjectKey) ||
             monster.ObjectKey == preparedMonsterKey))
             return true;

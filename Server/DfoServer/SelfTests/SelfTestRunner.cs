@@ -73,6 +73,7 @@ internal static class SelfTestRunner
         CharacterReadTests.Run();
         await SessionPlanningTests.RunAsync();
         TownSelectionTests.Run();
+        TownDungeonMapTests.Run();
         InventoryChangeTests.Run();
         InventoryProjectionTests.Run();
         InventoryWriteTests.Run();
@@ -83,6 +84,9 @@ internal static class SelfTestRunner
         NativeDungeonCombatAuthorityTests.Run();
         NativeDungeonCombatAuthorityTests.RunFriendlySources();
         DungeonRoomCatalogTests.RunCore();
+        DungeonElevatorTests.Run();
+        DungeonStoryFlowTests.Run();
+        DungeonClearConditionTests.Run();
         DungeonMapPoolTests.RunCore();
         DungeonResourceSurveyTests.RunCore();
         DungeonMonsterPlanTests.RunCore();
@@ -117,6 +121,7 @@ internal static class SelfTestRunner
         CharacterAttributeResourceTests.RunResources(characters);
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
+        CashShopTests.Run(towns, characters, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         await MailboxTests.RunAsync(towns, characters, itemResources, pvf);
         DevelopmentAssetTests.RunResources(towns, itemResources);

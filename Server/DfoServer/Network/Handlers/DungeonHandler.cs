@@ -28,6 +28,18 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         commands.Register(CmdPacketType.MOVE_MAP, MoveAsync, nameof(DungeonHandler));
         commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler));
         commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler));
+        commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler));
+    }
+
+    async Task<CommandResult> StoryPauseAsync(GameConnectionContext context, Packet request)
+    {
+        if (!DungeonRequests.TryParseStoryPause(request.Body,out var pause)) return CommandResult.Unhandled;
+        var receipt = context.Session.CurrentFormalDungeonScene();
+        if (receipt is null) return CommandResult.Unhandled;
+        await context.Notify(NotiPacketType.DUNGEON_EVENT_STORY_PAUSE,
+            DungeonPackets.StoryPause(receipt.Character.Id,pause.State,pause.Type),"formal_story_pause",
+            () => context.Session.CanPublishFormalDungeon(receipt));
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> SelectAsync(GameConnectionContext context, Packet request)
@@ -77,6 +89,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (receipt.Entry.IsOrdinary)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(receipt.Character.Fatigue ??
                 throw new InvalidOperationException("已提交普通房间缺少疲劳owner")), "formal_room_fatigue", Guard);
+        if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
         return CommandResult.Handled;
     }
 
@@ -135,6 +148,9 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (result.Receipt is not { } receipt) return CommandResult.Handled;
         if (result.SpecialChildRetired)
         {
+            if (result.Elevator is { } elevator)
+                await context.Notify(NotiPacketType.ELEVATOR_CLEAR_TIME_CHECK, DungeonPackets.Elevator(elevator.Notice!),
+                    "formal_elevator_completed", () => context.Session.CanPublishDungeonElevator(elevator));
             await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, []),
                 "formal_special_child_retired", () => context.Session.CanPublishFormalDungeon(receipt));
             return CommandResult.Handled;
@@ -143,6 +159,13 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         DungeonDropPacketItem[] dropRows = result.Drop is { } drop ?
             [new(drop.Reservation.GroundKey, drop.Reservation.RecordSlot, drop.Core, drop.Reservation.X, drop.Reservation.Y)] : [];
         await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, dropRows), "formal_monster_death", Guard);
+        if (context.Session.PendingDungeonBossEntrance() is { } entrance)
+        {
+            bool sent = false;
+            await context.Notify(NotiPacketType.COMPLETE_CONDITION_PASS_GATE,DungeonPackets.BossEntranceOpened(),"formal_boss_entrance_opened",
+                () => sent = context.Session.CanPublishFormalDungeon(entrance));
+            if (sent) context.Session.ConfirmDungeonBossEntrance(entrance);
+        }
         // 友方、非阻挡对象只应答退场，不发布经验、任务或结算；未知和已结算敌人仅审计。
         if (result.Reward is not { } reward) return CommandResult.Handled;
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");

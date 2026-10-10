@@ -10,6 +10,17 @@ internal sealed record DungeonDropPacketItem(uint ObjectKey, short RecordSlot, I
 
 internal static class DungeonPackets
 {
+    public static byte[] BossEntranceOpened() => new byte[5];
+    public static byte[] Elevator(DungeonElevatorNotice notice) => [notice.Counter, notice.State];
+
+    public static byte[] StoryPause(ushort characterId, byte state, byte type)
+    {
+        byte[] body = new byte[4];
+        BinaryPrimitives.WriteUInt16LittleEndian(body,characterId);
+        body[2] = state; body[3] = type;
+        return body;
+    }
+
     // ACK15 成功标志为 1 时，02348EFD 不再读后续字段；这里只用于已有选图界面路径。
     public static byte[] SelectionOpened() => [1];
 

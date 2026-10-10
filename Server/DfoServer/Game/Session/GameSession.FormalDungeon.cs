@@ -25,7 +25,7 @@ internal sealed partial class GameSession
         public uint ClearTimeMilliseconds { get; set; }
         public bool SettlementEnabled { get; set; }
         public FormalSettlement? Settlement { get; set; }
-        public Dictionary<(int Map, int Template), PendingQuestScene> QuestSceneEvents { get; } = [];
+        public Dictionary<(DungeonMap Map, int Template), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
     }
@@ -100,10 +100,10 @@ internal sealed partial class GameSession
         uint next = state.NextObjectKey;
         try
         {
-            foreach (var map in entry.Maze.MapSpecification!.Concat(entry.Maze.LayeredMaps))
+            foreach (var map in entry.Maze.MapSpecification!.Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps))
             {
                 if (next > ushort.MaxValue) return null;
-                var plan = DungeonMonsterPlan.FromRoom(rooms.Get(map, requirePassiveDefinitions: false), expected.Id, checked((ushort)next), entry.BasisLevel, entry.IsOrdinary);
+                var plan = DungeonMonsterPlan.FromRoom(rooms.Get(map, requirePassiveDefinitions: false), expected.Id, checked((ushort)next), entry.BasisLevel);
                 plans.Add(plan);
                 if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0) next = plan.NextObjectKey;
             }
@@ -123,8 +123,9 @@ internal sealed partial class GameSession
                 if (next > ushort.MaxValue) return null;
                 // 创建位置是已证资源位置；不将首次受击坐标冒充死亡瞬间位置。
                 // 地面RAW不携带最终库存目的槽，独立对象使用显式临时record slot0。
+                // 剧情对象可生成在负坐标，位置按协议的16位字段保留，不作为入场资格。
                 groundReservations.Add(new(monster.ObjectKey, next++, plan.Room.Map,
-                    checked((ushort)monster.Source!.RawValues[3]), checked((ushort)monster.Source.RawValues[4]), 0));
+                    unchecked((ushort)monster.Source!.RawValues[3]), unchecked((ushort)monster.Source.RawValues[4]), 0));
             }
         }
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
@@ -170,6 +171,10 @@ internal sealed partial class GameSession
         !dungeon.Run.HasPendingSettlement && dungeon.Run.Snapshot.Identity.Epoch != long.MaxValue &&
         !dungeon.HasPendingFatigue && !dungeon.Ground.HasPendingPickup && pendingQuestCompletion is null;
 
+    public FormalDungeonReceipt? CurrentFormalDungeonScene() => owner.Execute(() =>
+        Ready && Selected is not null && formalDungeon is not null &&
+        Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement ? FormalReceipt() : null);
+
     public FormalDungeonReceipt? CompleteFormalDungeonLoading()
     {
         var (expected,dungeon,epoch,identity,entry) = owner.Execute(() =>
@@ -213,6 +218,17 @@ internal sealed partial class GameSession
         return FormalReceipt();
     });
 
+    public FormalDungeonReceipt? PendingDungeonBossEntrance() => owner.Execute(() =>
+        Ready && Selected is not null && formalDungeon is { } dungeon &&
+        Phase is SessionPhase.Dungeon or SessionPhase.Settlement && dungeon.Run.BossEntranceReady && !dungeon.Run.BossEntranceOpen
+            ? FormalReceipt() : null);
+
+    public void ConfirmDungeonBossEntrance(FormalDungeonReceipt receipt) => owner.Execute(() =>
+    {
+        if (CanPublishFormalDungeon(receipt)) formalDungeon!.Run.ConfirmBossEntranceOpen();
+        return true;
+    });
+
     public FormalDungeonDeathResult ObserveFormalDungeonDeath(NativeDungeonDeathObservation observation,
         DungeonKillExperienceCatalog rewards, CharacterGrowthCatalog growth) => ObserveDungeonDeath(observation,null,rewards,growth);
 
@@ -245,8 +261,10 @@ internal sealed partial class GameSession
         if (dungeon.Run.CurrentLivingMonster(issued.Death.MonsterKey) is { IsSpecialChild: true })
         {
             var retired = dungeon.Run.RetireSpecialChild(issued.Death);
+            var elevator = retired == DungeonRunOutcome.Accepted && dungeon.Run.CurrentElevator is { } state &&
+                state.Complete(issued.Death.MonsterKey) is { } notice ? ElevatorReceipt(state, notice) : null;
             return new(retired, retired == DungeonRunOutcome.Accepted ? FormalReceipt() : null, issued.Death.MonsterKey)
-                { ReportedTarget = target, SpecialChildRetired = retired == DungeonRunOutcome.Accepted };
+                { ReportedTarget = target, SpecialChildRetired = retired == DungeonRunOutcome.Accepted, Elevator = elevator };
         }
         var preparation = dungeon.Run.PrepareConfirmedDeath(issued.Death);
         if (preparation.Outcome == DungeonRunOutcome.Duplicate)

@@ -13,6 +13,8 @@ internal static class DungeonRoomCatalogTests
     {
         int checks = Count;
         var fixture = new Fixture();
+        var positions = fixture.Parse(fixture.Block("event monster position", [new(0, 330), new(0, -93), new(0, 0)]));
+        That(positions.EventMonsterPositions.SequenceEqual([330, -93, 0]), "事件怪物位置保留三坐标与负值");
         var special = fixture.Block("special passive object", [new(0, 3), new(0, -20), new(0, 150), new(0, 0), new(0, 2),
             fixture.String("[trap]"), new(0, 40002), new(0, 40), new(0, 1), new(0, 10), new(0, -1),
             fixture.String("[monster]"), new(0, 1), new(0, 5), new(0, 3), new(0, 10), new(0, -1)]);
@@ -33,6 +35,7 @@ internal static class DungeonRoomCatalogTests
             catch (Exception error) when (error is InvalidDataException or NotSupportedException) { rejected = true; }
             That(rejected, name);
         }
+        Reject(fixture.Block("event monster position", [new(0, 330), new(0, 93)]), "事件怪物坐标不完整时拒绝");
         var row = fixture.Monster()[1..^1];
         var champion = fixture.Monster(rank: "[champion]")[1..^1];
         var withChampion = fixture.Parse(fixture.Block("monster", [.. champion, new(0, 0), .. row]));

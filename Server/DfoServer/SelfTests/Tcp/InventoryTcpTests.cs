@@ -161,7 +161,7 @@ internal static partial class InventoryTcpTests
             That(U32(sorted, 5) == 18400 && U32(sorted, 128) == 101010912, "sorting follows item IDs and retains complete objects");
             byte[] discard = DeleteItem(9, quality);
             peer.Send(18, discard);
-            peer.Expect(1, 18, Convert.FromHexString("010C000000080012060809100018001800"));
+            peer.Expect(1, 18, Convert.FromHexString("010C000000080012060809100118001800"));
             var removed = peer.Expect(0, 14).Body;
             That(U16(removed, 3) == 9 && U32(removed, 5) == uint.MaxValue, "protobuf discard clears exact main slot");
             beforeReplay = Snapshot(fixture);
@@ -242,12 +242,12 @@ internal static partial class InventoryTcpTests
             peer.Barrier();
             That(Snapshot(fixture) == before, "sorting does not release equipment deletion protection");
             peer.Send(18, DeleteItem(4, 18, 0));
-            peer.Expect(1, 18, Convert.FromHexString("010C000000080012060804100018001800"));
+            peer.Expect(1, 18, Convert.FromHexString("010C000000080012060804101218001800"));
             peer.Expect(0, 14);
             peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM character_inventory_items") is [[5L]], "discard zero removes entire stack and expired item stays removed");
             peer.Send(18, DeleteItem(16, InventoryRewardGrantService.InitialQuality, 0, 3));
-            peer.Expect(1, 18, Convert.FromHexString("010C000000080312060810100018001800"));
+            peer.Expect(1, 18, Convert.FromHexString("010C000000080312060810100118001800"));
             var wearClear = peer.Expect(0, 14).Body;
             That(wearClear[0] == 3 && U16(wearClear, 3) == 16 && U32(wearClear, 5) == uint.MaxValue, "discard worn item clears equipment container");
             var actor = peer.Expect(0, 2).Body;

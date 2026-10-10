@@ -24,8 +24,9 @@ internal sealed record DungeonStaticTopology(
             if (map.Kind is not ("map" or "boss") || map.Id < 0 || string.IsNullOrWhiteSpace(map.Path))
                 return Unsupported("地图身份或种类未支持");
             if (map.Position.X < 0 || map.Position.X >= grid.Width || map.Position.Y < 0 || map.Position.Y >= grid.Height ||
-                !maps.TryAdd(map.Position, map))
+                !maps.TryAdd(map.Position, map) && !maze.StoryStages.Any(stage => stage.Position == map.Position))
                 return Unsupported("地图坐标越界或同格有多个地图候选");
+            if (map.StoryStageIndex < 0) maps[map.Position] = map;
         }
 
         var rooms = new List<DungeonStaticRoom>();

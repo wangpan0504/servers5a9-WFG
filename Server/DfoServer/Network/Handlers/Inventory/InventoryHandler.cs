@@ -57,11 +57,10 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
             return CommandResult.Handled;
         }
         var result = context.Session.MutateInventory(character => inventory.Delete(character, request), requireTown: IsCargo(request.List));
-        var current = result.Receipt?.Character.Inventory ?? InventorySnapshot.Empty;
-        await context.Reply(CmdPacketType.DELETE_ITEM, InventoryPackets.Delete(request, result, current),
+        await context.Reply(CmdPacketType.DELETE_ITEM, InventoryPackets.Delete(request, result),
             result.Accepted ? "delete_item_committed" : "delete_item_rejected",
             result.Receipt is { } receipt ? () => context.Session.CanPublishInventory(receipt) : null);
-        // 材料余额已由 ACK18 更新；重复发送 NOTI14 会把剩余数量显示成获得物品。
+        // ACK18按本次消耗量扣减材料；重复发送NOTI14会触发获得物品提示。
         var acknowledgedSlots = request.Items.Where(item => item.Type == 2)
             .Select(item => new InventorySlot(request.List, item.Slot)).ToHashSet();
         await projection.RefreshAsync(context, result, acknowledgedSlots);

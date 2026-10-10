@@ -27,9 +27,9 @@ internal sealed partial class GameSession
             dungeon.SettlementEnabled || dungeon.Run.ClearFact is null)
             return ((FormalDungeonReceipt, ushort)?)null;
         var snapshot = dungeon.Run.Snapshot;
-        if (snapshot.CurrentMap != dungeon.Entry.BossMap) return ((FormalDungeonReceipt, ushort)?)null;
+        if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort)?)null;
         // 剧情终点可以只有普通阻挡敌人；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。
-        var terminal = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Entry.BossMap).Monsters
+        var terminal = dungeon.Route.Rooms.Single(room => room.Room.Map == snapshot.CurrentMap).Monsters
             .Where(monster => (monster.IsBoss || monster.IsBlocking && monster.CanReportDeath) &&
                 !snapshot.LivingMonsters.Contains(monster.ObjectKey) && !dungeon.Run.IsCulledMonster(monster.ObjectKey)).ToArray();
         var boss = terminal.FirstOrDefault(monster => monster.ObjectKey == reportedBossKey) ??
@@ -60,9 +60,9 @@ internal sealed partial class GameSession
     public FormalDungeonReceipt? ConfirmFormalDungeonBoss(ushort actorId, ushort bossKey, uint spawnLevel, ulong spawnHp) => owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
-            dungeon.Run.ClearFact is null || dungeon.Run.HasPendingSettlement || dungeon.Run.Snapshot.CurrentMap != dungeon.Entry.BossMap)
+            dungeon.Run.ClearFact is null || dungeon.Run.HasPendingSettlement || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap))
             return null;
-        var boss = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Entry.BossMap).Monsters
+        var boss = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Run.Snapshot.CurrentMap).Monsters
             .SingleOrDefault(monster => monster.IsBoss && monster.ObjectKey == bossKey);
         return boss is not null &&
             dungeon.Authority.MatchesIssuedSpawn(dungeon.Run, bossKey, spawnLevel, spawnHp) &&

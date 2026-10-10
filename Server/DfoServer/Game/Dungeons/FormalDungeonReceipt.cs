@@ -11,6 +11,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
 {
     public DungeonPlannedMonster? ReportedTarget { get; init; }
     public bool SpecialChildRetired { get; init; }
+    public DungeonElevatorReceipt? Elevator { get; init; }
     public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
     public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];
     public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];

@@ -121,7 +121,7 @@ internal static class FormalDungeonSessionTests
                 {
                     int actors = catalog.Get(3).Mazes[0].MapSpecification!.Sum(map =>
                     {
-                        var plan = DungeonMonsterPlan.Create(rooms, map, f.Created.Id, 1, 5, includeSpecialObjects: true);
+                        var plan = DungeonMonsterPlan.Create(rooms, map, f.Created.Id, 1, 5);
                         return plan.Monsters.Count + plan.SpecialObjects.Count;
                     });
                     f.Sql($"UPDATE character_dungeon_state SET next_object_key={65536 - actors}");

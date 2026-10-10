@@ -29,12 +29,10 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         .Concat(SpecialObjects.Select(actor => (int)actor.ObjectKey)).DefaultIfEmpty(0).Max() + 1;
     public int? BasisLevel { get; init; }
 
-    public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
-        bool includeSpecialObjects = false)
-        => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel, includeSpecialObjects);
+    public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey, int? basisLevel = null)
+        => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel);
 
-    internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
-        bool includeSpecialObjects = false)
+    internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null)
     {
         if (basisLevel is < 1 or > byte.MaxValue)
             throw new InvalidDataException("副本基准等级超出演员创建范围");
@@ -96,24 +94,24 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         }
 
         var objects = new List<DungeonPlannedSpecialObject>();
-        if (includeSpecialObjects)
+        foreach (var parent in room.SpecialObjects)
         {
-            foreach (var parent in room.SpecialObjects)
+            if (parent.SourceOrdinal is < 0 or > sbyte.MaxValue || parent.RawValues.Count != 5 || parent.RawValues[0] != parent.ObjectId ||
+                parent.RawValues[4] != parent.Children.Count)
+                throw new NotSupportedException("特殊父对象身份或关联范围未支持");
+            objects.Add(new(Allocate(), parent));
+            foreach (var child in parent.Children)
             {
-                if (parent.SourceOrdinal is < 0 or > sbyte.MaxValue || parent.RawValues.Count != 5 || parent.RawValues[0] != parent.ObjectId ||
-                    parent.RawValues[4] != parent.Children.Count)
-                    throw new NotSupportedException("特殊父对象身份或关联范围未支持");
-                objects.Add(new(Allocate(), parent));
-                foreach (var child in parent.Children)
-                {
-                    if (child.Kind != "[monster]") continue; // 其他子规则由实际父脚本消费，保留原声明、不冒充怪物。
-                    if (child.Path is null || child.RawValues.Count != 5 || child.RawValues[0] <= 0 || child.RawValues[1] is < 1 or > byte.MaxValue)
-                        throw new NotSupportedException("特殊怪物缺少已确认资源、显式等级或完整子声明");
-                    var source = new DungeonRoomMonster(child.RawValues[0], child.RawValues, "[special passive object]", "[normal]", child.Path)
-                        { SpecialParent = parent, SpecialChild = child };
-                    // 子actor仅通过父对象产生，不作为普通清房阻塞目标；原生报告仍绑定同一key与实例核验。
-                    result.Add(new(result.Count, Allocate(), source.MonsterId, child.RawValues[1], source) { IsBlocking = false });
-                }
+                if (child.Kind != "[monster]") continue; // 其他子规则由实际父脚本消费，保留原声明、不冒充怪物。
+                if (child.Path is null || child.RawValues.Count != 5 || child.RawValues[0] <= 0)
+                    throw new NotSupportedException("特殊怪物缺少已确认资源或完整子声明");
+                int level = child.RawValues[1] <= 0 ? basisLevel ?? 0 : child.RawValues[1];
+                if (level is < 1 or > byte.MaxValue)
+                    throw new NotSupportedException("特殊怪物的自动等级需要有效副本基准等级");
+                var source = new DungeonRoomMonster(child.RawValues[0], child.RawValues, "[special passive object]", "[normal]", child.Path)
+                    { SpecialParent = parent, SpecialChild = child };
+                // 子actor仅通过父对象产生，不作为普通清房阻塞目标；原生报告仍绑定同一key与实例核验。
+                result.Add(new(result.Count, Allocate(), source.MonsterId, level, source) { IsBlocking = false });
             }
         }
         return new(room, Array.AsReadOnly(result.ToArray())) { SpecialObjects = Array.AsReadOnly(objects.ToArray()), BasisLevel = basisLevel };

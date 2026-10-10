@@ -46,7 +46,7 @@ internal sealed partial class GameSession
                 ? Selected : null;
             var snapshot = dungeon?.Run.Snapshot;
             var room = snapshot is null ? null : dungeon!.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;
-            var key = (snapshot?.CurrentMap.Id ?? 0,(int)templateId);
+            var key = (snapshot?.CurrentMap!, (int)templateId);
             return (Character: character, SelectionEpoch, Phase, Dungeon: dungeon, Snapshot: snapshot, Room: room,
                 Pending: dungeon?.QuestSceneEvents.GetValueOrDefault(key), Key: key);
         });

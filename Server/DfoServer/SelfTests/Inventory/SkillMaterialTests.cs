@@ -28,8 +28,14 @@ internal static class SkillMaterialTests
         var spent = InventoryDeleteService.PlanBatch(inventory, request);
         That(spent.Accepted && spent.Plan!.After.AccountWallet.Get(CurrencyKind.ClearCube) == 15 &&
             spent.Plan.After.Items.IsEmpty && inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 20, "无色足额扣钱包，不建立实体、不污染原快照");
-        Bytes(InventoryPackets.Delete(request, spent, spent.Plan!.After),
-            Convert.FromHexString("010D0000000800120708E602100F18021800"), "ACK18返回槽358真实剩余15与type2");
+        Bytes(InventoryPackets.Delete(request, spent),
+            Convert.FromHexString("010D0000000800120708E602100518021800"), "ACK18返回本次消耗5，不能把剩余15再次扣除");
+        var single = request with { Items = [request.Items[0] with { Count = 1 }] };
+        var large = inventory with { AccountWallet = AccountWallet.Empty.Set(CurrencyKind.ClearCube,1830) };
+        var consumed = InventoryDeleteService.PlanBatch(large,single);
+        Bytes(InventoryPackets.Delete(single,consumed),Convert.FromHexString("010D0000000800120708E602100118021800"),
+            "余额1830消费1回删除量1，不发送余额1829让客户端只剩1");
+        That(consumed.Plan!.After.AccountWallet.Get(CurrencyKind.ClearCube) == 1829,"修正应答不改变实际扣款");
         foreach (var invalid in new InventoryDeleteEntry[] { new(2, 358, 3037, 0), new(2, 358, 3037, -1),
             new(2, 358, 3037, 21), new(2, 357, 3037, 1), new(2, 358, 3036, 1), new(0, 358, 3037, 1), new(3, 358, 3037, 1) })
             That(!InventoryDeleteService.PlanBatch(inventory, request with { Items = [invalid] }).Accepted, "错误数量、钱包映射或未实现类型不扣无色");
@@ -42,7 +48,13 @@ internal static class SkillMaterialTests
             mixed.AccountWallet.Get(CurrencyKind.ClearCube) == 20 && mixed.Items[0] == material, "后一项不足整批拒绝，不部分扣钱包");
         var ordinary = InventoryRequests.Delete(Convert.FromHexString("10000000081210001A0808001041181420032000"));
         That(ordinary.ClientState is null && ordinary.Items.Single() == new InventoryDeleteEntry(0, 65, 20, 3), "原普通丢弃协议未改变");
-        var after = InventoryDeleteService.PlanBatch(spent.Plan.After, request);
+        foreach (int quantity in new[] { 0,9 })
+        {
+            var discard = ordinary with { Items = [new(0,121,3,quantity)] };
+            Bytes(InventoryPackets.Delete(discard,InventoryDeleteService.PlanBatch(mixed,discard)),
+                Convert.FromHexString("010C000000080012060879100318001800"),"整堆丢弃回实际删除3，不能回请求0或超额9");
+        }
+        var after = InventoryDeleteService.PlanBatch(spent.Plan!.After, request);
         That(after.Accepted && after.Plan!.After.AccountWallet.Get(CurrencyKind.ClearCube) == 10, "相同正文的下一次施法按本次消耗扣除");
         Console.WriteLine($"PASS {Count - start} 技能材料正文、钱包、原子规划与ACK断言");
     }

@@ -96,7 +96,7 @@ internal static class DungeonMonsterPacketsTests
         That(empty.SequenceEqual(DungeonPackets.StartMap(approvedEntry, 1)), "真正空怪物计划保持完整23B空名单布局");
         var ordinaryMaze = dungeons.Get(3).Mazes[0];
         var ordinaryMap = ordinaryMaze.MapSpecification!.Single(map => map.Id == 58550);
-        var ordinaryMonsters = DungeonMonsterPlan.Create(rooms, ordinaryMap, character.Id, 256, 5, includeSpecialObjects: true);
+        var ordinaryMonsters = DungeonMonsterPlan.Create(rooms, ordinaryMap, character.Id, 256, 5);
         var ordinaryEntry = approvedEntry with { QuestId = 0, ActiveQuestSlot = byte.MaxValue, Maze = ordinaryMaze, StartMap = ordinaryMap,
             BossMap = ordinaryMaze.MapSpecification!.Single(map => map.Kind == "boss"), QuestAcceptanceId = Guid.Empty, MonsterBasisLevel = 5 };
         byte[] specialBody = DungeonPackets.StartMap(ordinaryEntry, ordinaryMonsters, 1);

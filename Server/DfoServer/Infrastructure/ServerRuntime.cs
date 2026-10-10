@@ -84,7 +84,10 @@ internal static class ServerRuntime
             new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
-            new ShopHandler(new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new ShopHandler(
+                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces),
+                new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces),
+                inventoryProjection),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),

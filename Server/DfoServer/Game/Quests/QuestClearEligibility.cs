@@ -17,8 +17,8 @@ internal static class QuestClearEligibility
         return clear is not null && entry.CharacterId != 0 && entry.DungeonId > 0 &&
             (entry.QuestId == 0 ? entry.ActiveQuestSlot == byte.MaxValue && entry.QuestAcceptanceId == Guid.Empty : entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty) &&
             entry.BaseBossMap.Kind == "boss" &&
-            clear.DungeonId == entry.DungeonId && clear.ClearMap == entry.BossMap &&
-            prepared.Result.Snapshot.CurrentMap == entry.BossMap &&
+            clear.DungeonId == entry.DungeonId && clear.ClearMap == prepared.Result.Snapshot.CurrentMap &&
+            entry.IsTerminalMap(prepared.Result.Snapshot.CurrentMap) &&
             prepared.Result.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement &&
             clear.Identity.CharacterId == entry.CharacterId && clear.Identity.QuestId == entry.QuestId &&
             clear.Identity.TaskAttempt > 0 && clear.Identity.InstanceId != Guid.Empty && death.Identity.Epoch < long.MaxValue &&

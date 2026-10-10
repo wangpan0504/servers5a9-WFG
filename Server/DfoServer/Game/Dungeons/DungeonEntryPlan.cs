@@ -31,6 +31,8 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
+    public bool IsTerminalMap(DungeonMap map) => map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
+        map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map);
 
     public static bool TryCreateReplay(DungeonCatalog catalog,QuestReplayPlan replay,out DungeonEntryPlan? plan,out string reason)
     {
@@ -40,7 +42,7 @@ internal sealed record DungeonEntryPlan(
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
         { reason = "dungeon-resource-unavailable"; return false; }
         return TryCreate(definition,replay.Expected,replay.DungeonId,replay.QuestId,0,out plan,out reason,
-            quest: replay.Quest,isReplay: true);
+            quest: replay.Quest,resolveMaze: maze => catalog.ResolveOrdinaryMaze(definition,maze),isReplay: true);
     }
 
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
@@ -56,7 +58,7 @@ internal sealed record DungeonEntryPlan(
         {
             definition = catalog.Get((int)dungeonId);
         }
-        catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
         {
             reason = "dungeon-resource-unavailable";
             return false;
@@ -105,7 +107,7 @@ internal sealed record DungeonEntryPlan(
                 candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
                 if (candidates.Length > 0)
                 {
-                    int index = (draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32)(candidates.Length);
+                    int index = candidates.Length == 1 ? 0 : (draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32)(candidates.Length);
                     if (index < 0 || index >= candidates.Length) throw new InvalidDataException("迷宫随机索引越界");
                     candidates = [candidates[index]];
                 }
@@ -128,10 +130,14 @@ internal sealed record DungeonEntryPlan(
             return false;
         }
 
-        var maze = resolveMaze is null ? candidates[0] : resolveMaze(candidates[0]);
+        DungeonMaze maze;
+        try { maze = resolveMaze is null ? candidates[0] : resolveMaze(candidates[0]); }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
+        { reason = "dungeon-resource-unavailable"; return false; }
         if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0))
         { reason = "difficulty-unsupported"; return false; }
-        if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 || maze.Bosses.Count != 1
+        if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 ||
+            (maze.StoryStages.Count == 0 ? maze.Bosses.Count != 1 : maze.StoryStages.Count != maze.Bosses.Count)
             || maze.MapSpecification is not { Count: > 0 } maps)
         {
             reason = "quest-maze-layout-unsupported";
@@ -139,7 +145,7 @@ internal sealed record DungeonEntryPlan(
         }
 
         var start = maze.Starts[0];
-        var boss = maze.Bosses[0];
+        var boss = maze.StoryStages.Count > 0 ? maze.StoryStages[^1].Position : maze.Bosses[0];
         if (!InBounds(start, maze) || !InBounds(boss, maze))
         {
             reason = "quest-maze-layout-unsupported";
@@ -147,7 +153,9 @@ internal sealed record DungeonEntryPlan(
         }
 
         var starts = maps.Where(map => map.Position == start).ToArray();
-        var bosses = maps.Where(map => map.Position == boss).ToArray();
+        if (maze.StoryStages.Count > 0 && starts.Length > 1)
+            starts = [starts.FirstOrDefault(map => map.StoryStageIndex < 0) ?? starts[0]];
+        var bosses = maze.StoryStages.Count > 0 ? new[] { maze.StoryStages[^1] } : maps.Where(map => map.Position == boss).ToArray();
         if (starts.Length != 1 || bosses.Length != 1 || bosses[0].Kind != "boss")
         {
             reason = "quest-maze-map-unavailable";
@@ -155,11 +163,16 @@ internal sealed record DungeonEntryPlan(
         }
 
         var terminal = bosses[0];
-        if (quest is not null && QuestClearEligibility.IsSingleMap(quest) && quest.IntData[0] != terminal.Id)
+        if (quest is not null && QuestClearEligibility.IsSingleMap(quest))
         {
             var layers = maze.LayeredMaps.Where(map => map.Position == boss && map.Id == quest.IntData[0]).ToArray();
-            if (layers.Length != 1) { reason = "quest-terminal-map-unavailable"; return false; }
-            terminal = layers[0];
+            if (layers.Length != 0) terminal = layers[^1];
+            else if (quest.IntData[0] != terminal.Id)
+            {
+                var replacements = maze.ConditionalMaps.Where(map => map.Position == boss && map.Id == quest.IntData[0]).ToArray();
+                if (replacements.Length != 1) { reason = "quest-terminal-map-unavailable"; return false; }
+                terminal = replacements[0];
+            }
         }
         if (quest is not null && (quest.Id != (questId == 0 ? routeQuest : questId) || quest.Definition is null ||
             quest.Definition.Dungeons.Length != 0 && !quest.Definition.Dungeons.Any(row => row.DungeonId == dungeonId)))
@@ -182,7 +195,7 @@ internal sealed record DungeonEntryPlan(
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
-            InitializationCounterSupported = maze.LayeredMaps.Count == 0 &&
+            InitializationCounterSupported = maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
         reason = "resource-plan-ready";
