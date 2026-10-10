@@ -275,6 +275,10 @@ internal static class InventorySelfTests
             That(InventoryRequests.Sort(Convert.FromHexString("080000000814100018012000")) == new InventorySortRequest(InventoryListType.Main, ItemKind.Equipment, 0), "native protobuf sort tags");
             var discard = InventoryRequests.Delete(Convert.FromHexString("10000000081210001A0808001041181420032000"));
             That(discard.Items is [{ Slot: 65, Value: 20, Count: 3 }], "native protobuf discard tags");
+            var liveDiscard = InventoryRequests.Delete(Convert.FromHexString("1200000010001A0C0801105B18C09DFEE9012001200000"));
+            That(liveDiscard.List == InventoryListType.Main && liveDiscard.ClientState == 0 &&
+                liveDiscard.Items is [{ Type: 1, Slot: 91, Value: 490704576, Count: 1 }],
+                "captured discard-all frame preserves client item-id value and trailing state");
             Reject(() => InventoryRequests.Sort([0, 0, 0, 0, 8]), "protobuf length mismatch rejects");
             Reject(() => InventoryRequests.Sort(Convert.FromHexString("0200000008FF")), "truncated varint rejects");
             Reject(() => InventoryRequests.Move(new byte[27]), "move truncated body rejects");

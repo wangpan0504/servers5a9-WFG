@@ -43,7 +43,19 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
 
     async Task<CommandResult> DeleteAsync(GameConnectionContext context, Packet packet)
     {
-        var request = InventoryRequests.Delete(packet.Body);
+        InventoryDeleteRequest request;
+        try
+        {
+            request = InventoryRequests.Delete(packet.Body);
+        }
+        catch (InvalidDataException)
+        {
+            request = new(InventoryListType.Main, [], 0);
+            await context.Reply(CmdPacketType.DELETE_ITEM,
+                InventoryPackets.Delete(request, InventoryResult.Reject()),
+                "delete_item_malformed");
+            return CommandResult.Handled;
+        }
         var result = context.Session.MutateInventory(character => inventory.Delete(character, request), requireTown: IsCargo(request.List));
         await context.Reply(CmdPacketType.DELETE_ITEM, InventoryPackets.Delete(request, result),
             result.Accepted ? "delete_item_committed" : "delete_item_rejected",
