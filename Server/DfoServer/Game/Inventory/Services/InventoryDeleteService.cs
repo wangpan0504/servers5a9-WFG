@@ -7,7 +7,7 @@ internal static class InventoryDeleteService
     public static InventoryResult PlanBatch(InventorySnapshot before, InventoryDeleteRequest request)
     {
         if (!Allows(request.List) || request.Flag != 0 || request.Items.Length is < 1 or > 352 ||
-            request.Items.Any(item => item.Type is not (0 or 2)) || request.Items.Select(item => item.Slot).Distinct().Count() != request.Items.Length)
+            request.Items.Any(item => item.Type is not (0 or 1 or 2)) || request.Items.Select(item => item.Slot).Distinct().Count() != request.Items.Length)
             return InventoryResult.Reject();
         var after = before;
         foreach (var item in request.Items)
@@ -51,8 +51,10 @@ internal static class InventoryDeleteService
     public static bool TryDelete(InventoryItem? item, int value, int count, out InventoryItem? remaining)
     {
         remaining = null;
-        // 时装的客户端 value 是递减的剩余秒数，不是服务端详情 UID，不能用它校验实例身份。
-        if (item is null || !Allows(item.Position.List) || value < 0 || item.Avatar is null && item.Core.Value != value ||
+        // 不同丢弃入口在 value 字段分别发送核心数量或物品 ID；槽位与
+        // 当前快照才是实例身份。时装则发送递减的剩余秒数。
+        if (item is null || !Allows(item.Position.List) || value < 0 ||
+            item.Avatar is null && value != item.Core.Value && value != item.Core.ItemId ||
             item.Core.EquipmentLockId != 0)
             return false;
         count = InventoryStackRuleService.NormalizeMoveCount(item.Core, count);

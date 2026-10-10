@@ -85,6 +85,19 @@ internal static class InventoryBehaviorTests
         var discardedWorn = service.Delete(character, deleteWorn);
         check(discardedWorn.Accepted && discardedWorn.Plan!.After.Find(equipped.Position) is null,
             "ordinary discard accepts worn equipment container");
+        var capturedTypeDiscard = new InventoryDeleteRequest(InventoryListType.Equipment,
+            [new(1, equipped.Position.Index, equipped.Core.Value, 1)], 0);
+        var discardedCapturedType = service.Delete(character, capturedTypeDiscard);
+        check(discardedCapturedType.Accepted && discardedCapturedType.Plan!.After.Find(equipped.Position) is null,
+            "captured discard frame type one is accepted for an ordinary item");
+        var clientIdItem = character.Inventory.Items.FirstOrDefault(item => item.Position.List == InventoryListType.Main)
+            ?? new InventoryItem(501, Bag(91), new ItemCore(490704576, ItemKind.Consumable, 1));
+        var clientIdCharacter = character with { Inventory = new([clientIdItem]) };
+        var clientIdDiscard = new InventoryDeleteRequest(InventoryListType.Main,
+            [new(1, clientIdItem.Position.Index, clientIdItem.Core.ItemId, 1)], 0);
+        var discardedClientId = service.Delete(clientIdCharacter, clientIdDiscard);
+        check(discardedClientId.Accepted && discardedClientId.Plan!.After.Find(clientIdItem.Position) is null,
+            "captured discard accepts client item-id value for every role and container");
         var secondWorn = character.Inventory.Items[1];
         check(!service.Delete(character, deleteWorn with { Items = [deleteWorn.Items[0], new(0, secondWorn.Position.Index, secondWorn.Core.Value + 1, 1)] }).Accepted &&
             character.Inventory.Find(equipped.Position) == equipped, "failed worn discard batch cannot remove its first item");
