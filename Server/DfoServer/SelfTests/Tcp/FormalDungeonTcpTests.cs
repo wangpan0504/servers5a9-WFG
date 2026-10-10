@@ -46,12 +46,13 @@ internal static class FormalDungeonTcpTests
             var map = Enter(peer);
             var target = new (byte X, byte Y)[] { (1, 1), (2, 1), (2, 0), (3, 0), (4, 0) };
             int[] ids = [76121, 76122, 76123, 76124, 76125, 76126];
+            int movedSkill = -1;
             for (int room = 0; room < ids.Length; room++)
             {
                 byte roomLevel = projectedLevel;
                 That(U32(map, 14) == ids[room], "正式TCP依匹配3145六房顺序加载");
                 Load(peer);
-                if (room == 0) VerifyDungeonActions(fixture, peer);
+                if (room == 0) movedSkill = VerifyDungeonActions(fixture, peer);
                 if (room == 0)
                 {
                     peer.Send(39, Death(ushort.MaxValue,ushort.MaxValue,95));
@@ -74,6 +75,13 @@ internal static class FormalDungeonTcpTests
                     int offset = 19 + index * 22;
                     ushort key = U16(map, offset + 6);
                     byte level = map[offset + 12];
+                    if (map[offset + 13] == 9)
+                    {
+                        That(room == 4 && count == 7 && U32(map, offset + 8) == 225 && level == 0 &&
+                            map[offset + 14] == 0 && map[offset + 15] == 0 && map[offset + 16] == 255 && map[offset + 21] == 1,
+                            "76125完整生成特殊父对象225，类型9不冒充可击杀的普通怪物");
+                        continue;
+                    }
                     That(level == (room == 4 && index == 4 ? 5 : 3), "TCP生成等级包含副本基准5加偏移0的哥布林");
                     uint expectedGain = level == 5 ? 137u : projectedLevel < 3 ? 104u : 93u;
                     byte[] report = Death(key, peer.Id, level);
@@ -266,7 +274,7 @@ internal static class FormalDungeonTcpTests
                     for (int index = 0; index < count; index++)
                     {
                         int offset = 19 + index * 22;
-                        if (U32(startMap, offset + 8) == 107000906) continue;
+                        if (startMap[offset + 13] == 9 || U32(startMap, offset + 8) == 107000906) continue;
                         peer.Send(39, Death(U16(startMap, offset + 6), peer.Id, startMap[offset + 12]));
                         peer.Expect(0, 38);
                         experience = U64(ReadGrowth(), 1);
@@ -296,7 +304,7 @@ internal static class FormalDungeonTcpTests
                 {
                     var skills = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
                     That(skills.All(tree => tree.Skills.Single(skill => skill.Id == 174).Level == packet[0]) &&
-                        skills[0].Skills.Single(skill => skill.Id == 5).Slot == 6,
+                        skills[0].Skills.Single(skill => skill.Id == movedSkill).Slot == 6,
                         "升级固定技能时跟随完整技能同步，战斗换槽保持稳定");
                     automaticLevel = packet[0];
                 }
@@ -447,8 +455,10 @@ internal static class FormalDungeonTcpTests
                 "副本和结算升级后按等级及实际完成位刷新任务，不省略通知或重显已完成任务");
     }
 
-    static void VerifyDungeonActions(TcpTestFixture fixture, TcpPeer peer)
+    static int VerifyDungeonActions(TcpTestFixture fixture, TcpPeer peer)
     {
+        int movedSkill = Convert.ToInt32(fixture.Query(
+            "SELECT skill_id FROM character_skill_bindings WHERE character_id=$p0 AND context=0 AND slot=0", peer.Id).Single()[0]);
         string progress = fixture.Snapshot("SELECT experience,level FROM characters ORDER BY id") +
             fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") +
             fixture.Snapshot("SELECT * FROM character_skill_points ORDER BY character_id,context");
@@ -476,8 +486,9 @@ internal static class FormalDungeonTcpTests
             fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") +
             fixture.Snapshot("SELECT * FROM character_skill_points ORDER BY character_id,context"),
             "战斗中换槽、学习拒绝、洗点和背包移动/锁定不改run、经验或SP，后续击杀与结算继续");
-        That(fixture.Query("SELECT slot FROM character_skill_bindings WHERE character_id=$p0 AND context=0 AND skill_id=5", peer.Id) is [[6L]],
+        That(fixture.Query("SELECT slot FROM character_skill_bindings WHERE character_id=$p0 AND context=0 AND skill_id=$p1", peer.Id, movedSkill) is [[6L]],
             "战斗中的快捷栏换槽已持久，洗点保留免费技能的已有槽位");
+        return movedSkill;
     }
 
     static void VerifyEntryRecoveryAndJobs(TcpTestFixture fixture, DungeonKillExperienceCatalog kills)
