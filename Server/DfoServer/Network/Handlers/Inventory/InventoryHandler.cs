@@ -52,7 +52,7 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
         {
             request = new(InventoryListType.Main, [], 0);
             await context.Reply(CmdPacketType.DELETE_ITEM,
-                InventoryPackets.Delete(request, InventoryResult.Reject(), InventorySnapshot.Empty),
+                InventoryPackets.Delete(request, InventoryResult.Reject()),
                 "delete_item_malformed");
             return CommandResult.Handled;
         }
