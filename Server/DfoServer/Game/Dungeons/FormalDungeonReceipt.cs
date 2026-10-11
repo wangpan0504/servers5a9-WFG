@@ -27,4 +27,11 @@ internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds,
     uint MonsterExperience);
 internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     DfoServer.GameWorld.Dungeons.DungeonClearExperienceReward? Reward = null, DungeonSettlementPresentation? Presentation = null,
-    Character? PreviousCharacter = null);
+    Character? PreviousCharacter = null)
+{
+    public DungeonCardReward? Card { get; init; }
+    public InventoryResult? Inventory { get; init; }
+    public uint? MailId { get; init; }
+    public DungeonCardOptions? Options { get; init; }
+    public DungeonCardReward? BlackDiamond { get; init; }
+}

@@ -9,6 +9,10 @@ namespace DfoServer.Game.Characters;
 internal interface ICharacterRepository
 {
     Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
+    CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort characterId,DateTimeOffset now);
+    CardMembership SetCardMembership(AccountOwners.Lease owner,string name,CardMembershipKind kind,long expires);
+    DungeonPaidCardCommit CommitPaidDungeonCard(AccountOwners.Lease owner,Character expected,PreparedDungeonSettlement prepared,
+        DungeonCardDelivery delivery,DateTimeOffset now);
     DfoServer.Game.Currency.AccountWallet LoadAccountWallet(AccountOwners.Lease owner);
     CharacterRosterEntry[] ListRoster(AccountOwners.Lease owner);
     Character LoadCharacter(AccountOwners.Lease owner, ushort slot);
@@ -30,7 +34,8 @@ internal interface ICharacterRepository
     DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null);
     DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
-        PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog);
+        PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,
+        DungeonCardDelivery? premiumDelivery = null);
     DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
         DungeonGroundPickupPreparation prepared, InventoryPlan plan);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);

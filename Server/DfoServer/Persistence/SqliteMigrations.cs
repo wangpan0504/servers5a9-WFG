@@ -74,6 +74,8 @@ internal static class SqliteMigrations
             CompleteQuestSystemV18(db, tx);
             DungeonDropCollectionSchema.Upgrade(db, tx);
         }),
+        new(21, "普通免费翻牌奖励与永久邮件回执", static (db, tx) => Execute(db, tx, DungeonCardRewardSchema.Sql)),
+        new(22, "付费翻牌、黑钻及黄金牌每日权益", DungeonPremiumCardSchema.Create),
     ];
 
     private static void BackfillDungeonFatigue(SqliteConnection db, SqliteTransaction tx) => Execute(db, tx, """
@@ -645,6 +647,10 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT account,black_diamond_expires,gold_card_expires,revision FROM account_card_memberships LIMIT 0",
+        "SELECT character_id,account,service_day,used FROM character_gold_card_uses LIMIT 0",
+        "SELECT character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id,paid_reward_json,paid_mail_id,paid_cost,paid_revision,paid_day FROM character_dungeon_card_options LIMIT 0",
+        "SELECT character_id,account,instance_id,plan_json,reward_json,mail_id,revision FROM character_dungeon_card_rewards LIMIT 0",
         "SELECT character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot,operation_id,operation_kind FROM character_quest_skip_receipts LIMIT 0",
         "SELECT character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items FROM character_quest_drop_receipts LIMIT 0",
         "SELECT account,quest_id,character_id,acceptance_id,daily_period,answer FROM account_completed_quests LIMIT 0",

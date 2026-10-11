@@ -44,11 +44,34 @@ internal static class DungeonSettlementProtocolTests
         byte[] rights = DungeonSettlementPackets.CardRights();
         That(rights.Length == 17 && rights[0] == 1 && U16(rights, 1) == 1 && Enumerable.Range(1, 7).All(i => U16(rights, 1 + i * 2) == ushort.MaxValue),
             "70只保留本人免费行资格，其余席与收费行缺席");
-        byte[] card = DungeonSettlementPackets.EmptyCardSelected();
-        That(card.Length == 33 && card[0] == 1 && card.AsSpan(1, 4).SequenceEqual(new byte[4]) &&
+        byte[] card = DungeonSettlementPackets.FreeCardSelected();
+        That(card.Length == 33 && card[0] == 1 && card.AsSpan(1, 4).SequenceEqual(new byte[] { 0, 255, 0, 0 }) &&
             Enumerable.Range(1, 7).All(i => card[1 + i * 4] == 255 && card[2 + i * 4] == 255 && card[3 + i * 4] == 0 && card[4 + i * 4] == 0),
-            "71八席空条目仍完整消费，缺席席位用-1，没有道具金币");
+            "71八席完整消费，仅揭示本人免费牌，未开放付费席用-1");
+        var bonus = new DfoServer.Game.Dungeons.DungeonCardReward(123,
+            new DfoServer.Game.Inventory.Models.ItemCore(10400, DfoServer.GameWorld.Items.ItemKind.Equipment, 345), "fixture", "fixture", 1);
+        byte[] rewarded = DungeonSettlementPackets.CardReward(reward, 1200, bonus);
+        That(rewarded.Length == 234 && rewarded[156] == 2 && U32(rewarded,157) == 0 && U32(rewarded,161) == 123 &&
+            U32(rewarded,165) == 10400 && U32(rewarded,169) == 1 && rewarded[208] == 1 && U32(rewarded,210) == 1200 &&
+            rewarded.AsSpan(226,8).IndexOfAnyExcept((byte)0) == -1,
+            "35免费席按金币及物品ID/本次数量预载，动态段后218B固定字段及八bool尾保持完整");
         Bytes(DungeonSettlementPackets.ResultCommand(1, 2), [1, 1, 2], "72先state后option原值回显");
+        var membership = new DfoServer.Game.Dungeons.CardMembership(100,200,1,3,0);
+        var options = new DfoServer.Game.Dungeons.DungeonCardOptions(bonus,340,false,membership,bonus);
+        byte[] premium = DungeonSettlementPackets.CardReward(reward,1200,bonus,options,bonus);
+        That(premium.Length == 250 && U32(premium,180) == 340 && premium[192] == 2 && U32(premium,193) == 0 &&
+            U32(premium,197) == 123 && U32(premium,201) == 10400 && premium[224] == 1 && U32(premium,226) == 1200,
+            "35会员组扩展仍保留本版尾部，费用与黑钻独立动态组明确排列");
+        byte[] paid = DungeonSettlementPackets.CardSelected(new(options,true,bonus));
+        That(paid.Length == 49 && paid[1] == 0 && paid[2] == 0 && paid[3] == 2 && U32(paid,4) == 0 &&
+            U32(paid,8) == 123 && U32(paid,12) == 10400 && U32(paid,16) == 1,
+            "71同时保留免费及付费选中状态，付费条目独立携带实际金币和本次数量");
+        That(U16(DungeonSettlementPackets.CardRights(true),9) == 1,"70本人付费席在第五个资格槽开放");
+        var price = DungeonCardPriceCatalog.Parse([new(3,1),new(0,1),new(0,100),new(0,3),new(0,340)],_ => "[gold card cost table]");
+        That(price.Price(1) == 100 && price.Price(2) == 100 && price.Price(3) == 340 && price.Price(95) == 340,
+            "付费价格使用PVF等级段，缺精确行取下界而不误设免费");
+        Reject<InvalidDataException>(() => DungeonCardPriceCatalog.Parse([new(3,1),new(0,1)],_ => "[gold card cost table]"),
+            "残缺价格表不能默认为零金币");
         Console.WriteLine($"PASS {Count - before} Boss及空奖励结算协议断言");
     }
 

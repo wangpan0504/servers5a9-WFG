@@ -505,13 +505,24 @@ internal static class FormalDungeonPublicationTests
         }
     }
     // 故障注入只丢弃真实仓储第一次提交后的返回值，不伪造SQL结果或领域确认。
-    sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false) : ICharacterRepository
+    internal sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false,
+        bool loseSettlement = false,bool losePaid = false) : ICharacterRepository
     {
         public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => inner.AdvanceQuestCycle(owner, expected, day);
+        public CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort id,DateTimeOffset now) => inner.LoadCardMembership(owner,id,now);
+        public CardMembership SetCardMembership(AccountOwners.Lease owner,string name,CardMembershipKind kind,long expires) => inner.SetCardMembership(owner,name,kind,expires);
+        public DungeonPaidCardCommit CommitPaidDungeonCard(AccountOwners.Lease owner,Character expected,PreparedDungeonSettlement prepared,DungeonCardDelivery delivery,DateTimeOffset now)
+        {
+            var result = inner.CommitPaidDungeonCard(owner,expected,prepared,delivery,now);
+            if (result.Accepted && ++paidCalls == 1 && losePaid) throw new IOException("合成付费牌已提交但结果返回丢失");
+            return result;
+        }
         public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) =>
             inner.ConsumeDungeonRoomFatigue(owner, expected, run);
         PreparedDungeonDeath? first;
         public int Calls { get; private set; }
+        int settlementCalls;
+        int paidCalls;
         public bool LastDuplicate { get; private set; }
         public bool SamePrepared { get; private set; }
         public int PickupCalls { get; private set; }
@@ -546,7 +557,12 @@ internal static class FormalDungeonPublicationTests
         public QuestQuickClearCommit CommitQuestQuickClear(AccountOwners.Lease owner, QuestQuickClearPlan plan) => inner.CommitQuestQuickClear(owner, plan);
 
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
-            PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog);
+            PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,DungeonCardDelivery? premiumDelivery = null)
+        {
+            var result = inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery);
+            if (++settlementCalls == 1 && loseSettlement) throw new IOException("合成翻牌及经验已提交但返回结果丢失");
+            return result;
+        }
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
             DungeonGroundPickupPreparation prepared, InventoryPlan plan)

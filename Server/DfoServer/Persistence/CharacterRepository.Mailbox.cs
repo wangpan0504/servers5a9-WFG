@@ -353,6 +353,16 @@ internal sealed partial class CharacterRepository
 
     public MailboxResult DeliverMail(MailboxDelivery delivery)
     {
+        using var db = database.Open();
+        using var tx = db.BeginTransaction(deferred: false);
+        var result = DeliverMailInTransaction(db, tx, delivery);
+        tx.Commit();
+        return result;
+    }
+
+    // 通关等资产业务复用外层事务；不能在奖励写事务内另开系统邮件写事务。
+    static MailboxResult DeliverMailInTransaction(SqliteConnection db, SqliteTransaction tx, MailboxDelivery delivery)
+    {
         if (string.IsNullOrWhiteSpace(delivery.Key) || delivery.Key.Length > 128 || delivery.Items.IsDefault || delivery.Items.Length > 10 ||
             delivery.Items.Any(item => item.Uid != 0) || delivery.Gold > int.MaxValue || delivery.Created < 0 || delivery.Expires <= delivery.Created ||
             delivery.SenderName.Contains('\0') || CharacterName.Encoding.GetByteCount(delivery.SenderName) > 29 ||
@@ -363,8 +373,6 @@ internal sealed partial class CharacterRepository
             item.Core.Validate();
             item.ValidateDetails(true);
         }
-        using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
         string content = JsonSerializer.Serialize(new { delivery.Recipient.Id, delivery.Recipient.Account, delivery.SenderName,
             delivery.Text, delivery.Gold, delivery.Expires, delivery.Items });
         using var command = db.CreateCommand();
@@ -391,7 +399,6 @@ internal sealed partial class CharacterRepository
         }
         AuditMail(db, tx, id, delivery.Recipient.Account, delivery.Recipient.Id, 0, "system", delivery.Created,
             new { delivery.Key, delivery.Gold, Items = held.ToImmutable() });
-        tx.Commit();
         return new(MailboxError.None, MailId: id) { Recipient = delivery.Recipient };
     }
 

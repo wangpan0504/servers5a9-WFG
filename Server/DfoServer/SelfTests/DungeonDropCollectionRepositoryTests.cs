@@ -135,7 +135,7 @@ internal static class DungeonDropCollectionRepositoryTests
             // 旧掉落v18和v19均接管现有集合；真实到账资产和逐件结果须原样保留。
             foreach (int sourceVersion in new[] { 18, 19 })
             {
-                Sql($"PRAGMA user_version={sourceVersion}");
+                Sql($"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
                 var upgraded = new CharacterRepository(path).LoadCharacter(owner, current.Slot);
                 That(Query("PRAGMA user_version") == SqliteMigrations.CurrentVersion && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 4 &&
                     Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 4 && SkillRepositoryTests.Equal(upgraded, current),

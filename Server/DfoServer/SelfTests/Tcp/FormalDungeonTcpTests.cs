@@ -196,6 +196,7 @@ internal static partial class FormalDungeonTcpTests
             string assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(46, reportResult);
             ReadClear();
+            assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             experience += clearReward.TotalExperience;
             That(Experience(fixture, peer.Id) == experience && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[1L]],
                 "通关基础与评分经验仅一次提交，击杀经验不再累计");
@@ -206,7 +207,29 @@ internal static partial class FormalDungeonTcpTests
             That(Experience(fixture, peer.Id) == experience, "改变评分的46不能替换冻结报告");
             peer.Send(69); peer.Expect(1, 69, [1]);
             peer.Send(70); That(peer.Expect(1, 70).Body.Length == 17, "70普通八槽完整ACK");
-            peer.Send(71, [0, 0]); That(peer.Expect(1, 71).Body.Length == 33, "71空道具结果保留八槽完整ACK");
+            var cardRow = fixture.Query("SELECT reward_json FROM character_dungeon_card_rewards WHERE character_id=$p0 ORDER BY revision DESC LIMIT 1",peer.Id).Single();
+            var cardReward = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>((string)cardRow[0])!;
+            if (cardReward.Item is { } cardItem)
+            {
+                var location = fixture.Query("SELECT s.list_type,s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=$p1 ORDER BY i.item_uid DESC LIMIT 1",peer.Id,cardItem.ItemId).Single();
+                long goldBefore = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                peer.Send(22,Build(w => { w.Write(Convert.ToByte(location[0]));w.Write(Convert.ToInt16(location[1]));w.Write(1);w.Write(1000);w.Write(1000);w.Write(0u); }));
+                That(peer.Expect(1,22).Body[0] == 1,"生产德利拉结算窗口19B实收形状可出售刚取得的免费牌物品");
+                DrainCardInventory(peer);
+                That(Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]) == goldBefore +
+                    resources.ItemResources.Items.Get(cardItem.ItemId).ShopPrice.GetSellGold(cardItem.Durability,resources.ItemResources.Items.Get(cardItem.ItemId).Durability),
+                    "德利拉出售按完整冻结物品耐久折算价实际增加金币");
+                assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
+            }
+            var automaticCard = peer.Expect(1,71).Body;
+            That(automaticCard.Length == 33 && automaticCard[0] == 1 && automaticCard[1] == 0 && automaticCard[2] == 255,
+                "70后真实计时自动揭示本人免费席，出售的新revision不打断牌面");
+            string cardState = fixture.Snapshot("SELECT * FROM character_dungeon_card_rewards ORDER BY character_id,instance_id");
+            peer.Send(71, [0, 0]); peer.Expect(1,71,automaticCard);
+            That(fixture.Snapshot("SELECT * FROM character_dungeon_card_rewards ORDER BY character_id,instance_id") == cardState,
+                "自动翻牌后的手动重复只回放展示，不追加随机奖励回执");
+            SelectPaid(false);
+            assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(72, [2, 2]); peer.Expect(1, 72, [1, 2, 2]);
             peer.Send(72, [1, 2]); peer.Expect(1, 72, [1, 1, 2]);
             peer.Expect(0, 24);
@@ -214,9 +237,18 @@ internal static partial class FormalDungeonTcpTests
                 "结果页72回城在绑定场景后刷新当前任务，未领奖的任务仍保留");
             peer.Barrier();
             That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assetsBeforeClear &&
-                Experience(fixture, peer.Id) == experience, "空翻牌及结果页回城不生成道具或重复经验");
+                Experience(fixture, peer.Id) == experience, "免费翻牌展示及回城保留已提交资产，不再发物品或经验");
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"black-diamond FormalTcp 30",out string blackReply) && blackReply.StartsWith("OK ") &&
+                DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"gold-card FormalTcp 30",out string goldReply) && goldReply.StartsWith("OK "),
+                "在线GM为当前账号保存黑钻和黄金牌到期资格，不接管正在使用的会话");
             ClearAgain(Enter(peer));
             peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            peer.Send(69);peer.Expect(1,69,[1]);peer.Send(70);peer.Expect(1,70);
+            var paidBeforeAuto = SelectPaid(true);
+            var completeView = peer.Expect(1,71).Body;
+            That(completeView.Length == paidBeforeAuto.Length && completeView[1] == 0 && completeView[2] == 0 &&
+                completeView.AsSpan(3).SequenceEqual(paidBeforeAuto.AsSpan(3)),
+                "付费或黄金牌先选后自动免费揭示仍保留同一付费奖励，计时不会覆盖已取得牌面");
             peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 261, [9]);
             peer.Expect(0, 28);
             byte[] retryMap = peer.Expect(0, 29).Body;
@@ -246,9 +278,37 @@ internal static partial class FormalDungeonTcpTests
                 byte[] clear = peer.Expect(0, 35).Body;
                 That(result.Length == 16 && result[6] == 99 && U16(result, 9) == peer.Id && exp.Length == 91 &&
                     U64(exp, 1) == expectedExperience && exp[0] == expectedLevel &&
-                    U32(exp, 9) == clearReward.TotalExperience && clear.Length == 218 && U32(clear, 0) == clearReward.BaseExperience &&
-                    U32(clear, 4) == clearReward.RankExperience && clear[192] == 1,
+                    U32(exp, 9) == clearReward.TotalExperience && clear.Length >= 218 && U32(clear, 0) == clearReward.BaseExperience &&
+                    U32(clear, 4) == clearReward.RankExperience,
                     "正式结算34→37→35匹配宽度，显示冻结评分及已提交奖励");
+                ReadCommittedCard(fixture,peer,clear,duplicate);
+            }
+
+            byte[] SelectPaid(bool golden)
+            {
+                var optionsRow = fixture.Query("SELECT options_json FROM character_dungeon_card_options WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id).Single();
+                var options = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardOptions>((string)optionsRow[0])!;
+                if (!golden)
+                {
+                    That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"gold FormalTcp 10000",out string answer) && answer.StartsWith("OK "),
+                        "普通付费牌测试提供足够金币，既有窗口内更新不重抽牌面");
+                }
+                long before = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                peer.Send(71,[golden ? (byte)2 : (byte)1,0]);
+                byte[] selected = peer.Expect(1,71).Body;
+                var rewardRow = fixture.Query("SELECT paid_reward_json,paid_cost FROM character_dungeon_card_options WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id).Single();
+                var actual = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>((string)rewardRow[0])!;
+                That(selected[0] == 1 && selected[2] == 0 && selected.Length == 33+selected[3]*8 &&
+                    options.UseGoldCard == golden && Convert.ToInt64(rewardRow[1]) == options.Price &&
+                    Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]) == before-options.Price+actual.Gold,
+                    "71实际费用、金币和付费条目按本次冻结及持久回执核对，不借客户端会员标志");
+                DrainCardInventory(peer);
+                if (golden) That(fixture.Query("SELECT sum(used) FROM character_gold_card_uses WHERE character_id=$p0",peer.Id) is [[1L]],
+                    "黄金牌一次成功领取仅消耗一个角色当日次数");
+                string saved = fixture.Snapshot();
+                peer.Send(71,[1,0]);peer.Expect(1,71,selected);peer.Barrier();
+                That(fixture.Snapshot() == saved,"真实网络重复付费请求不重复扣金币、消耗次数、写奖励或邮件");
+                return selected;
             }
 
             void ClearAgain(byte[] startMap)
@@ -738,6 +798,7 @@ internal static partial class FormalDungeonTcpTests
         That(peer.Expect(0, 34).Body[6] == 90, "普通真实Boss清图开启评分结果通知");
         ReadGrowth(clearReward.TotalExperience);
         byte[] clear = peer.Expect(0, 35).Body;
+        ReadCommittedCard(fixture,peer,clear);
         That(U32(clear, 0) == clearReward.BaseExperience && U32(clear, 4) == clearReward.RankExperience &&
             fixture.Query("SELECT quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0 AND quest_id=0", peer.Id) is [[0L]],
             "普通生产结算使用本路线经验与零任务账本，不复用任务结算资格");
@@ -788,6 +849,49 @@ internal static partial class FormalDungeonTcpTests
         fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", id) +
         fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0 ORDER BY instance_id", id) +
         fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0", id);
+
+    static void ReadCommittedCard(TcpTestFixture fixture, TcpPeer peer, byte[] body, bool duplicate = false)
+    {
+        var row = fixture.Query("SELECT reward_json FROM character_dungeon_card_rewards WHERE character_id=$p0 ORDER BY revision DESC LIMIT 1",peer.Id).Single();
+        var card = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>((string)row[0])!;
+        var expected = new List<(uint Item, uint Amount)>();
+        if (card.Gold > 0) expected.Add((0,checked((uint)card.Gold)));
+        if (card.Item is { } item) expected.Add((checked((uint)item.ItemId),checked((uint)item.Count)));
+        var optionsRow = fixture.Query("SELECT options_json,black_diamond_reward_json FROM character_dungeon_card_options WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id).Single();
+        var options = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardOptions>((string)optionsRow[0])!;
+        var bonus = optionsRow[1] is string bonusJson ? JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>(bonusJson) : null;
+        var bonusPairs = new List<(uint Item,uint Amount)>();
+        if (bonus?.Gold > 0) bonusPairs.Add((0,checked((uint)bonus.Gold)));
+        if (bonus?.Item is { } bonusItem) bonusPairs.Add((checked((uint)bonusItem.ItemId),checked((uint)bonusItem.Count)));
+        int totalPairs = expected.Count+bonusPairs.Count;
+        That(body.Length == 218 + totalPairs * 8 && body[156] == expected.Count && body[192 + totalPairs * 8] == 1 &&
+            body.AsSpan(210 + totalPairs * 8,8).IndexOfAnyExcept((byte)0) == -1 && U32(body,164+expected.Count*8) == options.Price,
+            "35个人免费奖励动态条目及完整八bool尾按当前持久回执独立核对");
+        for (int index = 0; index < expected.Count; index++)
+            That(U32(body,157+index*8) == expected[index].Item && U32(body,161+index*8) == expected[index].Amount,
+                "免费牌每项模板ID和本次数量对应实际金币或冻结物品");
+        int bonusAt = 176+expected.Count*8;
+        That(body[bonusAt] == bonusPairs.Count,"35黑钻单独预载额外奖励组，非会员为空");
+        for (int index = 0; index < bonusPairs.Count; index++)
+            That(U32(body,bonusAt+1+index*8) == bonusPairs[index].Item && U32(body,bonusAt+5+index*8) == bonusPairs[index].Amount,
+                "35黑钻条目精确对应同事务追加的实际金币及冻结核心数量");
+        if (!duplicate) DrainCardInventory(peer);
+    }
+
+    static void DrainCardInventory(TcpPeer peer)
+    {
+        peer.SendBarrier();
+        while (true)
+        {
+            var packet = peer.Read();
+            if (packet.Kind == 1 && packet.Opcode == 1347)
+            {
+                TestCheck.Bytes(packet.Body,[1],"翻牌库存更新后同步屏障");
+                return;
+            }
+            That(packet.Kind == 0 && packet.Opcode == 14,"翻牌/德利拉出售在提交后发送完整库存差量");
+        }
+    }
 
     static ulong Experience(TcpTestFixture fixture, ushort id) => checked((ulong)Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", id)[0][0]));
     static int PickupResourceDrops(TcpTestFixture fixture, TcpPeer peer, byte[] death, uint questId)

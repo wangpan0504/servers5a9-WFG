@@ -54,6 +54,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         finally
         {
+            if (context.Cards is not null) await context.Cards.DisposeAsync();
             await elevator.DisposeAsync();
             online.Remove(login.Owner.Account, session);
             projection.Remove(context);

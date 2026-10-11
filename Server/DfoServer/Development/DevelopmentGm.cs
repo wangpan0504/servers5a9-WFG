@@ -5,6 +5,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Mailbox;
 using DfoServer.GameWorld.Items;
 using System.Text.Json;
+using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Development;
 
@@ -34,6 +35,15 @@ internal static partial class DevelopmentGm
                 return SendItem(request, mailbox ?? throw new InvalidOperationException("邮件服务未装配"),
                     items ?? throw new InvalidOperationException("物品资源未装配"));
             var live = find(request.Account);
+            if (request.Action is DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard)
+            {
+                var kind = request.Action == DevelopmentAction.BlackDiamond ? CardMembershipKind.BlackDiamond : CardMembershipKind.GoldCard;
+                long expires = request.Primary == 0 ? 0 : DateTimeOffset.UtcNow.AddDays(request.Primary).ToUnixTimeSeconds();
+                var membership = live is not null ? live.SetCardMembership(request.Name,kind,expires) :
+                    WithLease(owners,request.Account,lease => repository.SetCardMembership(lease,request.Name,kind,expires));
+                return "OK "+JsonSerializer.Serialize(new {request.Account,kind,expires,membership.GoldCardUsed,DailyLimit=CardMembership.GoldCardDailyLimit})+
+                    " 已保存账号会员资格；新通关结算使用新资格。";
+            }
             if (request.Action == DevelopmentAction.GrowOptions)
             {
                 var roster = live is null ? WithLease(owners, request.Account, repository.ListRoster) : live.Roster();

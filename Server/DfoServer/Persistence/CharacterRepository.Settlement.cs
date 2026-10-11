@@ -2,19 +2,26 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Mailbox;
+using Microsoft.Data.Sqlite;
+using System.Text.Json;
 
 namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
-    // 通关只提交冻结的经验，不重新计算击杀奖励，也不生成翻牌物品、金币或费用。
+    // 通关经验、免费牌资产、满背包邮件和永久回执共用一个事务。
     public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected,
-        SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog) => owner.Execute(() =>
+        SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog,
+        InventoryPlan? cardInventory = null, bool mailCardItem = false, DungeonCardDelivery? premiumDelivery = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(catalog);
+        if (prepared.Options is not null && premiumDelivery is null)
+            throw new InvalidDataException("付费及会员通关必须提供完整免费批次");
         if (!run.IsPendingSettlement(prepared) || prepared.Fact.Identity.CharacterId != expected.Id ||
             prepared.Fact.DungeonId != run.DungeonId || prepared.Fact.ConfirmedDeathEvents.Count == 0)
             throw new InvalidDataException("通关提交需要本角色当前实例的冻结清图事实与首份报告");
@@ -52,8 +59,9 @@ internal sealed partial class CharacterRepository
         }
         if (duplicate)
         {
+            var restored = ReadCardCommit(db, tx, owner.Account, prepared, current, expected, true);
             tx.Commit();
-            return new DungeonSettlementCommit(current, true, reward);
+            return restored;
         }
         var result = CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, catalog);
         if (!result.Success)
@@ -114,7 +122,129 @@ internal sealed partial class CharacterRepository
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久通关成长结果与候选不一致");
+        DungeonCardReward? card = null;
+        uint? mailId = null;
+        if (prepared.Card is { } frozen)
+        {
+            if (premiumDelivery is not null)
+            {
+                if (prepared.Options is null) throw new InvalidDataException("会员奖励缺少冻结资格");
+                DungeonCardReward[] requested = prepared.Options.BlackDiamond is { } bonus ? [frozen,bonus] : [frozen];
+                ValidateCardDelivery(premiumDelivery,requested,0);
+                cardInventory = premiumDelivery.Inventory;
+            }
+            else if (cardInventory is null || cardInventory.Reason != "dungeon_card_reward" ||
+                cardInventory.ChangedCurrencies.Any(kind => kind != Game.Currency.CurrencyKind.Gold) ||
+                cardInventory.After.Gold < cardInventory.Before.Gold ||
+                (long)cardInventory.After.Gold - cardInventory.Before.Gold > frozen.Gold ||
+                mailCardItem && frozen.Item is null)
+                throw new InvalidDataException("免费牌需要同一冻结奖励的库存规划");
+            if (premiumDelivery is null) ValidateCardInventory(cardInventory!, frozen, mailCardItem);
+            committed = CommitInventoryInTransaction(db, tx, owner, committed, cardInventory!);
+            card = premiumDelivery?.Rewards[0] ?? frozen with { Gold = checked((int)(committed.Inventory.Gold - expected.Inventory.Gold)) };
+            if (premiumDelivery is not null)
+                mailId = DeliverCardItems(db,tx,owner,committed,premiumDelivery.MailItems,prepared,"free");
+            else if (mailCardItem)
+            {
+                var recipient = new MailboxRecipient(committed.Id, owner.Account, committed.Name, committed.Job, committed.GrowType, committed.Level);
+                var delivery = new MailboxDelivery("dungeon-card:" + prepared.EventId.ToString("N"), recipient,
+                    "副本奖励", "背包空间不足，免费翻牌物品已通过永久邮件保存。", 0,
+                    [new(0, new(InventoryListType.Main, 9), frozen.Item!)], frozen.CreatedAt);
+                var delivered = DeliverMailInTransaction(db, tx, delivery);
+                if (!delivered.Accepted) throw new InvalidOperationException("翻牌溢出邮件提交失败: " + delivered.Error);
+                mailId = delivered.MailId;
+            }
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$id", expected.Id);
+            command.Parameters.AddWithValue("$account", owner.Account);
+            command.Parameters.AddWithValue("$instance", identity.InstanceId.ToString("N"));
+            command.Parameters.AddWithValue("$plan", JsonSerializer.Serialize(frozen));
+            command.Parameters.AddWithValue("$reward", JsonSerializer.Serialize(card));
+            command.Parameters.AddWithValue("$mail", (object?)mailId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$revision", committed.Revision);
+            command.CommandText = """
+                INSERT INTO character_dungeon_card_rewards(character_id,account,instance_id,plan_json,reward_json,mail_id,revision)
+                VALUES($id,$account,$instance,$plan,$reward,$mail,$revision)
+                """;
+            command.ExecuteNonQuery();
+            if (prepared.Options is { } options)
+            {
+                command.Parameters.AddWithValue("$options",JsonSerializer.Serialize(options));
+                command.Parameters.AddWithValue("$bonus",premiumDelivery is { Rewards.Length:2 } ? JsonSerializer.Serialize(premiumDelivery.Rewards[1]) : (object)DBNull.Value);
+                command.CommandText = """
+                    INSERT INTO character_dungeon_card_options(character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id)
+                    VALUES($id,$account,$instance,$options,$bonus,$mail)
+                    """;
+                command.ExecuteNonQuery();
+            }
+        }
+        else if (cardInventory is not null || mailCardItem)
+            throw new InvalidDataException("没有冻结免费牌时不能提交翻牌资产");
         tx.Commit();
-        return new DungeonSettlementCommit(committed, false, reward);
+        return new DungeonSettlementCommit(committed, false, reward)
+        {
+            Card = card, MailId = mailId, Options = prepared.Options,
+            BlackDiamond = premiumDelivery is { Rewards.Length:2 } ? premiumDelivery.Rewards[1] : null,
+            Inventory = card is null ? null : new(expected.Inventory, committed.Inventory, "dungeon_card_reward")
+        };
     });
+
+    static DungeonSettlementCommit ReadCardCommit(SqliteConnection db, SqliteTransaction tx, string account,
+        PreparedDungeonSettlement prepared, Character current, Character expected, bool duplicate)
+    {
+        if (prepared.Card is null) return new(current, duplicate, prepared.Reward);
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.Parameters.AddWithValue("$id", current.Id);
+        query.Parameters.AddWithValue("$instance", prepared.Fact.Identity.InstanceId.ToString("N"));
+        query.CommandText = "SELECT account,plan_json,reward_json,mail_id FROM character_dungeon_card_rewards WHERE character_id=$id AND instance_id=$instance";
+        using var reader = query.ExecuteReader();
+        if (!reader.Read() || reader.GetString(0) != account || reader.GetString(1) != JsonSerializer.Serialize(prepared.Card))
+            throw new InvalidDataException("通关免费牌回执缺失或冻结奖励被修改");
+        var card = JsonSerializer.Deserialize<DungeonCardReward>(reader.GetString(2)) ?? throw new InvalidDataException("翻牌回执为空");
+        card.Validate();
+        if (card.Gold > prepared.Card.Gold || card with { Gold = prepared.Card.Gold } != prepared.Card)
+            throw new InvalidDataException("翻牌实际回执与冻结来源不一致");
+        uint? mail = reader.IsDBNull(3) ? null : checked((uint)reader.GetInt64(3));
+        reader.Close();
+        DungeonCardReward? bonus = null;
+        if (prepared.Options is { } options)
+        {
+            query.CommandText = "SELECT options_json,black_diamond_reward_json FROM character_dungeon_card_options WHERE character_id=$id AND instance_id=$instance";
+            using var extra = query.ExecuteReader();
+            if (!extra.Read() || extra.GetString(0) != JsonSerializer.Serialize(options)) throw new InvalidDataException("付费及会员冻结计划缺失或变化");
+            if (!extra.IsDBNull(1))
+            {
+                bonus = JsonSerializer.Deserialize<DungeonCardReward>(extra.GetString(1)) ?? throw new InvalidDataException("黑钻回执为空");
+                VerifyActualCard(bonus,options.BlackDiamond ?? throw new InvalidDataException("没有黑钻冻结资格"));
+            }
+        }
+        return new(current, duplicate, prepared.Reward)
+        {
+            Card = card, MailId = mail, Options = prepared.Options, BlackDiamond = bonus,
+            Inventory = new(expected.Inventory, current.Inventory, "dungeon_card_reward")
+        };
+    }
+
+    static void ValidateCardInventory(InventoryPlan plan, DungeonCardReward reward, bool mailItem)
+    {
+        if (plan.After.Expansion != plan.Before.Expansion || plan.After.CargoCapacity != plan.Before.CargoCapacity ||
+            plan.After.GoldCarryLimit != plan.Before.GoldCarryLimit || plan.After.AuctionGoldLimit != plan.Before.AuctionGoldLimit ||
+            plan.After.AccountCargo != plan.Before.AccountCargo || !plan.After.EpicPieces.Same(plan.Before.EpicPieces) ||
+            !ShopPurchaseCount.Same(plan.After.ShopPurchases,plan.Before.ShopPurchases))
+            throw new InvalidDataException("翻牌不能修改无关资产资格");
+        if (mailItem || reward.Item is null)
+        {
+            if (plan.ChangedSlots.Length != 0) throw new InvalidDataException("邮件或空牌不能修改背包物品");
+            return;
+        }
+        if (plan.ChangedSlots.Length != 1) throw new InvalidDataException("普通免费牌必须完整发放同一冻结物品");
+        var slot = plan.ChangedSlots[0];
+        var before = plan.BeforeIndex.Find(slot);
+        var after = plan.AfterIndex.Find(slot);
+        if (after is null || after.Core with { Value = reward.Item.Value } != reward.Item ||
+            before is not null && (before.Uid != after.Uid || before.Core with { Value = reward.Item.Value } != reward.Item) ||
+            after.Core.Count - (before?.Core.Count ?? 0) != reward.Item.Count)
+            throw new InvalidDataException("翻牌新增量、完整核心或原UID与冻结奖励不一致");
+    }
 }

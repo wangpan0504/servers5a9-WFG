@@ -70,7 +70,7 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     async Task<CommandResult> Sell(GameConnectionContext context, Packet packet)
     {
         var request = ShopRequests.Sell(packet.Body);
-        var result = context.BlocksTownActions ? InventoryResult.Reject() : context.Session.MutateInventory(character => shop.Sell(character, request));
+        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject() : context.Session.SellAtShop(request, shop);
         await context.Reply(CmdPacketType.SELL_ITEM, ShopPackets.Sold(result, request), result.Accepted ? "npc_shop_sold" : "npc_shop_sell_rejected");
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;

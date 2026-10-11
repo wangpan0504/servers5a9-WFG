@@ -7,6 +7,7 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
+using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
@@ -14,7 +15,8 @@ namespace DfoServer.Network.Handlers;
 internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dungeons,
     DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth, TownProjection town,
     DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items,
-    CharacterLevelProjection levelProjection, EpicPieceCatalog? pieces = null) : IGameCommandModule
+    CharacterLevelProjection levelProjection, EpicPieceCatalog? pieces = null,
+    DungeonCardRewardPolicy? cards = null, InventoryProjection? inventoryProjection = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -46,9 +48,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     {
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
         var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
-            request.Body, dungeons, rewards, growth);
+            request.Body, dungeons, rewards, growth, cards);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
-            result.Reward, result.Receipt?.Snapshot.Identity });
+            result.Reward, result.Card, result.MailId, result.Receipt?.Snapshot.Identity });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate) || result.Receipt is not { } receipt)
             return CommandResult.Unhandled;
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("结算角色缺成长附属owner");
@@ -65,7 +67,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (SkillPackets.BindingsChanged(previous.Learning, receipt.Character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_clear_skills", Guard);
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard);
-        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.EmptyCardReward(result.Reward, result.Presentation!.MonsterExperience), "formal_clear_reward", Guard);
+        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(result.Reward, result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond), "formal_clear_reward", Guard);
+        if (result.Inventory is { } inventory)
+            await (inventoryProjection ?? throw new InvalidOperationException("免费牌缺少库存投影")).RefreshAsync(context, inventory);
+        if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
         return CommandResult.Handled;
     }
 
@@ -81,15 +86,41 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     {
         if (request.Body.Length != 0 || context.Session.AdvanceFormalDungeonCards(true) is not { } receipt)
             return CommandResult.Unhandled;
-        await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRights(), "formal_empty_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
+        var view = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("翻牌展示失效");
+        await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRights(view.Options is not null), "formal_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
+        context.Cards ??= new DungeonCardProjection(context, log);
+        await context.Cards.StartAsync(receipt);
         return CommandResult.Handled;
     }
 
     async Task<CommandResult> SelectCardAsync(GameConnectionContext context, Packet request)
     {
-        if (request.Body.Length != 2 || context.Session.SelectFormalDungeonEmptyCard(request.Body[0], request.Body[1]) is not { } receipt)
+        if (request.Body.Length != 2)
             return CommandResult.Unhandled;
-        await context.Reply(CmdPacketType.SELECT_CARD, DungeonSettlementPackets.EmptyCardSelected(), "formal_empty_card_selected", () => context.Session.CanPublishDungeonSettlement(receipt));
+        FormalDungeonReceipt? receipt;
+        if (request.Body[0] == 0) receipt = context.Session.SelectFormalDungeonFreeCard(0,request.Body[1]);
+        else if (cards is not null)
+        {
+            var selected = context.Session.SelectFormalDungeonPaidCard(request.Body[0],request.Body[1],cards);
+            if (selected is null)
+            {
+                log.Write("formal_paid_card_rejected",new {Connection=context.Id,Row=request.Body[0],Member=request.Body[1]});
+                return CommandResult.Handled;
+            }
+            receipt = selected.Receipt;
+            var paidView = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("付费牌展示失效");
+            await context.Reply(CmdPacketType.SELECT_CARD,DungeonSettlementPackets.CardSelected(paidView),"formal_paid_card_selected",
+                () => context.Session.CanPublishCardView(receipt,paidView));
+            if (selected.Inventory is { } inventory)
+                await (inventoryProjection ?? throw new InvalidOperationException("付费牌缺少库存投影")).RefreshAsync(context,inventory);
+            if (selected.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
+            return CommandResult.Handled;
+        }
+        else return CommandResult.Unhandled;
+        if (receipt is null) return CommandResult.Unhandled;
+        var view = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("免费牌展示失效");
+        await context.Reply(CmdPacketType.SELECT_CARD, DungeonSettlementPackets.CardSelected(view), "formal_free_card_selected",
+            () => context.Session.CanPublishCardView(receipt,view));
         return CommandResult.Handled;
     }
 

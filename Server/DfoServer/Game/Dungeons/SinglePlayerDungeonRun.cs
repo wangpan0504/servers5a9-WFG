@@ -469,7 +469,7 @@ internal sealed class SinglePlayerDungeonRun
     }
 
     public DungeonSettlementPreparation PrepareSettlement(DungeonClearFact fact, ReadOnlySpan<byte> reportBody,
-        DungeonClearExperienceReward reward)
+        DungeonClearExperienceReward reward, DungeonCardReward? card = null, DungeonCardOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
@@ -480,10 +480,11 @@ internal sealed class SinglePlayerDungeonRun
             string.IsNullOrWhiteSpace(reward.ResourceSource) || reward.ResourceSource.Length > 1024)
             return new(DungeonRunOutcome.Rejected);
         if ((pendingSettlement ?? committedSettlement) is { } frozen)
-            return frozen.ReportBody.SequenceEqual(reportBody) && frozen.Reward == reward
+            return frozen.ReportBody.SequenceEqual(reportBody) && frozen.Reward == reward && frozen.Card == card && frozen.Options == options
                 ? new(committedSettlement is null ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate, frozen)
                 : new(DungeonRunOutcome.Rejected);
-        pendingSettlement = new(fact, reportBody, reward, current.Plan.Room.Map.Id);
+        card?.Validate();
+        pendingSettlement = new(fact, reportBody, reward, current.Plan.Room.Map.Id, card, options);
         return new(DungeonRunOutcome.Accepted, pendingSettlement);
     }
 

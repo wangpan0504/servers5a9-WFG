@@ -20,12 +20,14 @@ internal enum DevelopmentAction
     Gold,
     Item,
     Sp,
-    Contract
+    Contract,
+    BlackDiamond,
+    GoldCard
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
 {
-    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | contract <角色> <剩余秒数> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量>。其他账号在命令前加 account <账号>。";
+    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量>。其他账号在命令前加 account <账号>。";
     public static DevelopmentRequest Parse(string line, string defaultAccount)
     {
         if (string.IsNullOrWhiteSpace(line) || line.Length > 512)
@@ -58,6 +60,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             "grow" when tokens.Length == i + 4 => Growth(account, tokens[i + 1], tokens[i + 2], tokens[i + 3]),
             "sp" when tokens.Length == i + 3 => Numbered(DevelopmentAction.Sp, account, tokens[i + 1], tokens[i + 2]),
             "contract" when tokens.Length == i + 3 => Numbered(DevelopmentAction.Contract, account, tokens[i + 1], tokens[i + 2]),
+            "black-diamond" when tokens.Length == i+3 => Numbered(DevelopmentAction.BlackDiamond,account,tokens[i+1],tokens[i+2]),
+            "gold-card" when tokens.Length == i+3 => Numbered(DevelopmentAction.GoldCard,account,tokens[i+1],tokens[i+2]),
             "quest-add" when tokens.Length == i + 3 => Numbered(DevelopmentAction.QuestAdd, account, tokens[i + 1], tokens[i + 2]),
             "quest-del" when tokens.Length == i + 3 => Numbered(DevelopmentAction.QuestRemove, account, tokens[i + 1], tokens[i + 2]),
             "skill" when tokens.Length == i + 4 => Skilled(account, tokens[i + 1], tokens[i + 2], tokens[i + 3]),
@@ -89,11 +93,13 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             throw new InvalidDataException("角色名无效");
         if (Action == DevelopmentAction.Gold && Primary < 0 || Action == DevelopmentAction.Item && (Primary <= 0 || Secondary <= 0))
             throw new InvalidDataException("金币、道具ID或数量无效");
-        if (Writes && Action is not (DevelopmentAction.Gold or DevelopmentAction.Item))
+        if (Action is DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard && Primary is < 0 or > 3650)
+            throw new InvalidDataException("会员天数范围0–3650，0表示关闭该项会员");
+        if (Writes && Action is not (DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard))
             ToProgressEdit().Validate();
     }
 
-    public bool Writes => Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Contract;
+    public bool Writes => Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard;
 
     public CharacterProgressEdit ToProgressEdit()
     {
