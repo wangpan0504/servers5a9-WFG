@@ -54,9 +54,23 @@ internal static class CharacterPreparationTests
         That(CharacterRequests.ParseCreate(create).Name == "剑影", "Chinese ordinary creation uses byte count");
         byte[] liveCreate = Convert.FromHexString("00070000006C69636F636F6E000000000000FF0001000000");
         That(CharacterRequests.ParseCreate(liveCreate).Name == "licocon", "matching Client live ordinary creation tail accepted");
-        byte[] unknownTail = liveCreate.ToArray();
-        unknownTail[20] = 2;
-        Reject(() => CharacterRequests.ParseCreate(unknownTail), "unobserved creation tail value rejected");
+        for (byte preview = 0; preview <= 5; preview++)
+        {
+            byte[] selectedPreview = liveCreate.ToArray();
+            selectedPreview[^4] = preview;
+            var parsed = CharacterRequests.ParseCreate(selectedPreview);
+            That(parsed.Job == 0 && parsed.Name == "licocon" && parsed.Tail[8] == preview,
+                "建角界面分支展示索引 " + preview + " 保留请求基础职业与原始尾部");
+        }
+        foreach (byte preview in new byte[] { 6, 255 })
+        {
+            byte[] unknownTail = liveCreate.ToArray();
+            unknownTail[^4] = preview;
+            Reject(() => CharacterRequests.ParseCreate(unknownTail), "超出建角展示范围的索引仍拒绝");
+        }
+        byte[] capturedCreate = Convert.FromHexString("00020000003131000000000000FF0002000000");
+        That(CharacterRequests.ParseCreate(capturedCreate) is { Job: 0, Name: "11", Tail: var capturedTail } && capturedTail[8] == 2,
+            "实收男鬼剑士选择鬼泣展示后的建角请求通过解析");
         byte[] unknownJob = liveCreate.ToArray();
         unknownJob[0] = 16;
         Reject(() => CharacterRequests.ParseCreate(unknownJob), "job outside matching PVF list remains rejected");

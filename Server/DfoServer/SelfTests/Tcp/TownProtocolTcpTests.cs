@@ -54,7 +54,7 @@ internal static class TownProtocolTcpTests
 
         foreach (byte variant in new byte[]
         {
-            2,
+            6,
             1
         })
         {
@@ -392,7 +392,8 @@ internal static class TownProtocolTcpTests
                 That(peer.Roster[1] == job, "job roster before create");
                 peer.Send(692, Name(name));
                 peer.Expect(1, 692, [1]);
-                byte[] roster = peer.Create(name, job);
+                byte preview = job == 0 ? (byte)2 : job == 15 ? (byte)4 : (byte)(job % 6);
+                byte[] roster = peer.Create(name, job, variant: preview);
                 characterId = peer.Id;
                 That(roster[1] == job + 1, "job roster after create");
                 string beforeNameCheck = fixture.Snapshot();

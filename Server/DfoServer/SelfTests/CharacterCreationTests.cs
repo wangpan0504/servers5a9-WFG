@@ -38,9 +38,10 @@ internal static class CharacterCreationTests
         byte[] sample = Convert.FromHexString("0F0B0000007169616E677A68616E7368000000000000FF0000000000");
         var request = CharacterRequests.ParseCreate(sample);
         That(request.Job == 15 && request.Name == "qiangzhansh" && request.Tail.SequenceEqual(Convert.FromHexString("000000000000FF0000000000")), "live gunblader body retains job, CP936 name and raw tail");
-        byte[] unobserved = sample.ToArray();
-        unobserved[^4] = 1;
-        Reject(() => CharacterRequests.ParseCreate(unobserved), "job15 tail[8]=1 is not an observed variant");
+        byte[] selectedPreview = sample.ToArray();
+        selectedPreview[^4] = 4;
+        That(CharacterRequests.ParseCreate(selectedPreview) is { Job: 15, Tail: var previewTail } && previewTail[8] == 4,
+            "分支展示选择不再仅限男鬼剑士，枪剑士保留基础职业编号");
         Reject(() => characters.Get(16), "unknown job has no profile");
         var sword = CharacterStatsPackets.Build(characters.Get(0).InitialStats);
         That(BinaryPrimitives.ReadUInt32LittleEndian(sword) == 1800 && BinaryPrimitives.ReadUInt32LittleEndian(sword.AsSpan(4)) == 1400 && BinaryPrimitives.ReadInt16LittleEndian(sword.AsSpan(20)) == 200 && BinaryPrimitives.ReadInt16LittleEndian(sword.AsSpan(22)) == -200 && BinaryPrimitives.ReadUInt32LittleEndian(sword.AsSpan(60)) == 480000 && characters.Get(0).Skills.SequenceEqual(new CharacterSkill[] { new(5, 1), new(46, 1), new(169, 1), new(174, 1), new(179, 7), new(511, 1) }), "swordman stats and six CHR starter skills");
@@ -65,17 +66,18 @@ internal static class CharacterCreationTests
                 BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(1), name.Length);
                 name.CopyTo(body, 5);
                 body[11 + name.Length] = 255;
+                body[^4] = (byte)(job % 6);
                 var parsed = CharacterRequests.ParseCreate(body);
                 var profile = characters.Get(parsed.Job);
                 var created = new GameSession(repo, towns, owner).CreateCharacter(parsed.Name, profile);
-                That(created.Slot == job && created.Job == job && created.Level == 1 && created.GrowType == 0 && created.AcceptedStoryLevel == 1 && created.CompletedQuests.Length == 0 && created.ActiveMainQuests.Length == 0 && created.Revision == 0 && created.Skills.Length == skillCounts[job], "ordinary job " + job + " persisted with its own profile");
+                That(created.Slot == job && created.Job == job && created.Level == 1 && created.GrowType == 0 && created.AcceptedStoryLevel == 1 && created.CompletedQuests.Length == 0 && created.ActiveMainQuests.Length == 0 && created.Revision == 0 && created.Skills.Length == skillCounts[job], "携带分支展示信息的职业 " + job + " 仍按 Lv1 未转职和基础技能创建");
                 byte[] select = TownPackets.Select(created), actor = TownPackets.Actor(created), player = TownPackets.Player(created, computer.Compute(created));
                 That(select.Length == 235 && select[222] == 38 && BinaryPrimitives.ReadUInt16LittleEndian(select.AsSpan(22)) == ushort.MaxValue && BinaryPrimitives.ReadUInt32LittleEndian(select.AsSpan(24)) == 0 && actor[127 + name.Length] == job && player.Length == 622 + 6 * skillCounts[job] && player.AsSpan(36, 89).SequenceEqual(CharacterStatsPackets.Build(profile.InitialStats)), "job " + job + " selects initial town 38 and retains actor identity, quest and equipment");
             }
 
             var reopened = new CharacterRepository(path);
             var rows = reopened.List(owner);
-            That(rows.Length == 16 && rows.Select(c => (int)c.Job).SequenceEqual(Enumerable.Range(0, 16)) && rows.All(c => c.AcceptedStoryLevel == 1 && c.CompletedQuests.Length == 0 && c.ActiveMainQuests.Length == 0) , "all job identities and distinct first quest acceptances survive database reopen");
+            That(rows.Length == 16 && rows.Select(c => (int)c.Job).SequenceEqual(Enumerable.Range(0, 16)) && rows.All(c => c.Level == 1 && c.GrowType == 0 && c.AcceptedStoryLevel == 1 && c.CompletedQuests.Length == 0 && c.ActiveMainQuests.Length == 0) , "携带分支展示信息创建的各职业重开库后仍为 Lv1 未转职");
             byte[] roster = CharacterPackets.Roster(rows.Select(CharacterRosterEntry.FromCharacter).ToArray());
             int at = 15;
             foreach (var row in rows)

@@ -49,9 +49,12 @@ internal static class CharacterRequests
     {
         string name = Name(body, 1);
         int width = CharacterName.Encoding.GetByteCount(name);
-        // 普通创建的公共尾部固定；目前仅 job0 实收过 tail[8]=1 的变体。
-        if (body.Length != 17 + width || body[0] > 15 || !(body[(5 + width)..].SequenceEqual(new byte[] { 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0 }) || body[0] == 0 && body[(5 + width)..].SequenceEqual(new byte[] { 0, 0, 0, 0, 0, 0, 255, 0, 1, 0, 0, 0 })))
+        ReadOnlySpan<byte> tail = body[(5 + width)..];
+        // tail[8] 是建角界面当前展示的分支索引；保留请求值，创建业务仍使用基础职业。
+        if (body[0] > 15 || tail.Length != 12 || tail[8] > 5 ||
+            !tail[..8].SequenceEqual(new byte[] { 0, 0, 0, 0, 0, 0, 255, 0 }) ||
+            !tail[9..].SequenceEqual(new byte[] { 0, 0, 0 }))
             throw new InvalidDataException("Unsupported ordinary Client job or creation tail");
-        return new(body[0], name, body[(5 + width)..].ToArray());
+        return new(body[0], name, tail.ToArray());
     }
 }
