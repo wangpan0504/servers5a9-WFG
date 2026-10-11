@@ -16,7 +16,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth, TownProjection town,
     DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items,
     CharacterLevelProjection levelProjection, EpicPieceCatalog? pieces = null,
-    DungeonCardRewardPolicy? cards = null, InventoryProjection? inventoryProjection = null) : IGameCommandModule
+    DungeonCardRewardPolicy? cards = null, InventoryProjection? inventoryProjection = null,
+    RentalCatalog? rental = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -48,7 +49,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     {
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
         var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
-            request.Body, dungeons, rewards, growth, cards);
+            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
             result.Reward, result.GainedExperience, result.Card, result.MailId, result.Receipt?.Snapshot.Identity });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate) || result.Receipt is not { } receipt)
@@ -69,6 +70,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_clear_skills", Guard);
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard);
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(reward.Applied(result.GainedExperience), result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond), "formal_clear_reward", Guard);
+        if (result.LuckyStarGained)
+            await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
+                RentalPackets.State(receipt.Character.Inventory, DateTimeOffset.UtcNow),
+                "formal_clear_lucky_star", Guard);
         if (result.Inventory is { } inventory)
             await (inventoryProjection ?? throw new InvalidOperationException("免费牌缺少库存投影")).RefreshAsync(context, inventory);
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);

@@ -7,7 +7,7 @@ on:
 jobs:
   no-pvf:
     runs-on: codeberg-small
-    timeout-minutes: 5
+    timeout-minutes: 10
     container:
       image: mcr.microsoft.com/dotnet/sdk:10.0-noble
     defaults:
@@ -26,14 +26,22 @@ jobs:
           git fetch --depth=1 origin "$PR_COMMIT"
           git checkout --detach "$PR_COMMIT"
 
-      - name: Debug 基础检查
-        run: pwsh -NoProfile -File Tools/Check-Development.ps1 -Configuration Debug
+      # The dotnet SDK image intentionally has no PowerShell and no PVF.  Keep
+      # this job shell-only and run the resource-free entry points directly.
+      # This also avoids the old build/check path, which was not a runnable
+      # DLL path after --artifacts-path was introduced.
+      - name: Debug 无资源构建与核心自测
+        run: |
+          dotnet build ServerS5A9.sln -c Debug --nologo
+          dotnet run --project Tools/ArchitectureCheck -c Debug --no-build
+          dotnet run --project Tools/PvfLib.Tests -c Debug --no-build
+          dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-core
+          dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-tcp commands
 
-      - name: Debug 命令入口检查
-        run: dotnet build/check/bin/DfoServer/debug/DfoServer.dll --selftest-tcp commands
-
-      - name: Release 基础检查
-        run: pwsh -NoProfile -File Tools/Check-Development.ps1 -Configuration Release
-
-      - name: Release 命令入口检查
-        run: dotnet build/check/bin/DfoServer/release/DfoServer.dll --selftest-tcp commands
+      - name: Release 无资源构建与核心自测
+        run: |
+          dotnet build ServerS5A9.sln -c Release --nologo
+          dotnet run --project Tools/ArchitectureCheck -c Release --no-build
+          dotnet run --project Tools/PvfLib.Tests -c Release --no-build
+          dotnet run --project Server/DfoServer -c Release --no-build -- --selftest-core
+          dotnet run --project Server/DfoServer -c Release --no-build -- --selftest-tcp commands

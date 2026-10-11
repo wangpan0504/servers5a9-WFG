@@ -85,12 +85,14 @@ internal static class DungeonSettlementTests
             Check(SkillRepositoryTests.Equal(repository.List(owner).Single(), initial) && Receipts() == 0 &&
                 run.IsPendingSettlement(prepared), "回滚不留下经验、SP、revision或receipt，原候选可恢复");
             Execute("DROP TRIGGER fail_clear");
-            var first = repository.CommitDungeonSettlement(owner, initial, run, prepared, growth);
+            var first = repository.CommitDungeonSettlement(owner, initial, run, prepared, growth,
+                grantLuckyStar: true, luckyStarLimit: 999);
             Check(!first.Duplicate && first.Reward == Reward && first.Character.Level == 2 &&
                 first.Character.Learning.Experience == 1000 && first.Character.Revision == initial.Revision + 1 &&
                 first.Character.Learning.Trees.Select(tree => tree.Sp).SequenceEqual(new ushort[] { 33, 38 }) &&
-                first.Character.Learning.Trees.Select(tree => tree.Tp).SequenceEqual(new ushort[] { 4, 5 }),
-                "基础加评分经验原子提交，跨级双树各加SP并保留TP");
+                first.Character.Learning.Trees.Select(tree => tree.Tp).SequenceEqual(new ushort[] { 4, 5 }) &&
+                first.LuckyStarGained && first.LuckyStarTotal == 1 && first.Character.Inventory.AccountWallet.RentalPoints == 1,
+                "基础加评分经验与推荐地图幸运星在同一事务提交");
             Check(first.Character.Inventory.Gold == initial.Inventory.Gold &&
                 first.Character.Inventory.Items.SequenceEqual(initial.Inventory.Items) &&
                 first.Character.ActiveMainQuests.SequenceEqual(initial.ActiveMainQuests) &&
@@ -100,7 +102,8 @@ internal static class DungeonSettlementTests
                 "结算保留任务、位置、技能和资产，不伪造击杀或翻牌奖励");
             // 模拟COMMIT后返回结果丢失：实例尚未确认，保留旧expected与同一候选恢复。
             var recovered = repository.CommitDungeonSettlement(owner, initial, run, prepared, growth);
-            Check(recovered.Duplicate && SkillRepositoryTests.Equal(recovered.Character, first.Character) && Receipts() == 1 &&
+            Check(recovered.Duplicate && !recovered.LuckyStarGained && recovered.LuckyStarTotal == 1 &&
+                SkillRepositoryTests.Equal(recovered.Character, first.Character) && Receipts() == 1 &&
                 run.IsPendingSettlement(prepared), "已提交结果不明重试查询真实receipt，不重复增加经验或SP");
             using (var writer = Open())
             using (var held = writer.BeginTransaction(deferred: false))

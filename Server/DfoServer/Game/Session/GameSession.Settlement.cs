@@ -27,6 +27,8 @@ internal sealed partial class GameSession
         public DungeonCardReward? BlackDiamond { get; set; }
         public DungeonCardReward? Paid { get; set; }
         public uint GainedExperience { get; set; }
+        public bool LuckyStarGained { get; set; }
+        public int LuckyStarTotal { get; set; }
     }
 
     public (FormalDungeonReceipt Receipt, ushort BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
@@ -79,7 +81,7 @@ internal sealed partial class GameSession
 
     public FormalDungeonSettlementResult SettleFormalDungeon(ushort actorId, byte rankPoint, byte maximumRankPoint,
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth,
-        DungeonCardRewardPolicy? cards = null) => owner.Execute(() =>
+        DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0) => owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
             dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
@@ -122,8 +124,10 @@ internal sealed partial class GameSession
                 DungeonCardReward[] requested = premiumOptions.BlackDiamond is { } bonus ? [prepared.Pending.Card!,bonus] : [prepared.Pending.Card!];
                 premium = cards.PlanDelivery(expected,requested,CharacterGrowthPlan.AddExperience(expected,reward.TotalExperience,growth).Plan!.TargetLevel);
             }
+            bool grantLuckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(
+                dungeons.Get(checked((int)dungeon.Entry.DungeonId)), expected.Level);
             var commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
-                planned.Inventory, planned.MailItem,premium);
+                planned.Inventory, planned.MailItem, premium, grantLuckyStar, luckyStarLimit);
             if (commit.Character.Id != expected.Id || commit.Character.Revision < expected.Revision ||
                 dungeon.Run.ConfirmCommittedSettlement(prepared.Pending) != DungeonRunOutcome.Accepted)
                 throw new InvalidOperationException("已提交通关结算不能确认原准备");
@@ -132,6 +136,8 @@ internal sealed partial class GameSession
             settlement.MailId = commit.MailId;
             settlement.BlackDiamond = commit.BlackDiamond;
             settlement.GainedExperience = commit.GainedExperience;
+            settlement.LuckyStarGained = commit.LuckyStarGained;
+            settlement.LuckyStarTotal = commit.LuckyStarTotal;
             if (commit.Inventory is { } plan)
                 inventory = new InventoryResult(true, 0, plan)
                 {
@@ -142,6 +148,8 @@ internal sealed partial class GameSession
         return new FormalDungeonSettlementResult(prepared.Outcome, FormalReceipt(), settlement.Pending.Reward,
             settlement.Presentation, previous) { Card = settlement.Card, Inventory = inventory, MailId = settlement.MailId,
                 GainedExperience = settlement.GainedExperience,
+                LuckyStarGained = settlement.LuckyStarGained,
+                LuckyStarTotal = settlement.LuckyStarTotal,
                 Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond };
     });
 

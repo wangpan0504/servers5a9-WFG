@@ -326,8 +326,9 @@ internal static class QuestCompletionRepositoryTests
         public Character AdvanceAcceptedStoryLevel(AccountOwners.Lease owner, Character expected) => inner.AdvanceAcceptedStoryLevel(owner, expected);
         public Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitSkillLayout(owner, expected, learning);
         public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
-        public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,DungeonCardDelivery? premiumDelivery = null)
-            => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery);
+        public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,DungeonCardDelivery? premiumDelivery = null,
+            bool grantLuckyStar = false, int luckyStarLimit = 0)
+            => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,

@@ -14,7 +14,8 @@ internal sealed partial class CharacterRepository
     // 通关经验、免费牌资产、满背包邮件和永久回执共用一个事务。
     public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected,
         SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog,
-        InventoryPlan? cardInventory = null, bool mailCardItem = false, DungeonCardDelivery? premiumDelivery = null) => owner.Execute(() =>
+        InventoryPlan? cardInventory = null, bool mailCardItem = false, DungeonCardDelivery? premiumDelivery = null,
+        bool grantLuckyStar = false, int luckyStarLimit = 0) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -62,6 +63,7 @@ internal sealed partial class CharacterRepository
         if (duplicate)
         {
             var restored = ReadCardCommit(db, tx, owner.Account, prepared, current, expected, true, gained);
+            restored = restored with { LuckyStarTotal = ReadAccountWallet(db, owner.Account, tx).RentalPoints };
             tx.Commit();
             return restored;
         }
@@ -121,6 +123,8 @@ internal sealed partial class CharacterRepository
               $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision)
             """;
         command.ExecuteNonQuery();
+        var luckyStar = grantLuckyStar ? GrantDungeonLuckyStar(db, tx, owner.Account, luckyStarLimit) :
+            new DungeonLuckyStarGrant(false, ReadAccountWallet(db, owner.Account, tx).RentalPoints);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久通关成长结果与候选不一致");
@@ -186,11 +190,31 @@ internal sealed partial class CharacterRepository
         return new DungeonSettlementCommit(committed, false, reward)
         {
             GainedExperience = checked((uint)plan.GainedExperience),
+            LuckyStarGained = luckyStar.Granted,
+            LuckyStarTotal = luckyStar.Total,
             Card = card, MailId = mailId, Options = prepared.Options,
             BlackDiamond = premiumDelivery is { Rewards.Length:2 } ? premiumDelivery.Rewards[1] : null,
             Inventory = card is null ? null : new(expected.Inventory, committed.Inventory, "dungeon_card_reward")
         };
     });
+
+    static DungeonLuckyStarGrant GrantDungeonLuckyStar(SqliteConnection db, SqliteTransaction tx, string account, int limit)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.Parameters.AddWithValue("$account", account);
+        command.CommandText = "INSERT INTO account_wallets(account) VALUES($account) ON CONFLICT(account) DO NOTHING";
+        command.ExecuteNonQuery();
+        var wallet = ReadAccountWallet(db, account, tx);
+        var grant = DungeonLuckyStarPolicy.Apply(wallet, limit);
+        if (!grant.Granted) return grant;
+        command.Parameters.AddWithValue("$revision", wallet.Revision);
+        command.Parameters.AddWithValue("$points", grant.Total);
+        command.CommandText = "UPDATE account_wallets SET revision=revision+1,rental_points=$points WHERE account=$account AND revision=$revision AND rental_points < $points";
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException("通关幸运星账号钱包版本变化");
+        return grant;
+    }
 
     static DungeonSettlementCommit ReadCardCommit(SqliteConnection db, SqliteTransaction tx, string account,
         PreparedDungeonSettlement prepared, Character current, Character expected, bool duplicate, uint gained)

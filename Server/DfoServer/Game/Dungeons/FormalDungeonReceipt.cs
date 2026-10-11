@@ -31,6 +31,8 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     Character? PreviousCharacter = null)
 {
     public uint GainedExperience { get; init; }
+    public bool LuckyStarGained { get; init; }
+    public int LuckyStarTotal { get; init; }
     public DungeonCardReward? Card { get; init; }
     public InventoryResult? Inventory { get; init; }
     public uint? MailId { get; init; }

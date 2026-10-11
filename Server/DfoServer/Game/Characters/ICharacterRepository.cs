@@ -37,7 +37,7 @@ internal interface ICharacterRepository
         PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null);
     DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,
-        DungeonCardDelivery? premiumDelivery = null);
+        DungeonCardDelivery? premiumDelivery = null, bool grantLuckyStar = false, int luckyStarLimit = 0);
     DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
         DungeonGroundPickupPreparation prepared, InventoryPlan plan);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
