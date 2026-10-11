@@ -184,7 +184,7 @@ internal sealed partial class GameSession
         receipt.Generation == owner.Generation && receipt.SelectionEpoch == SelectionEpoch &&
         formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity;
 
-    // 牌面属于已提交实例，与之后德利拉出售产生的新库存revision无关。
+    // 牌面属于已提交实例，与之后德利拉物品服务产生的新库存revision无关。
     public bool CanPublishDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed: true, CardsShown: true, SelectedCard: 0 });
 
@@ -221,11 +221,15 @@ internal sealed partial class GameSession
     public CardMembership SetCardMembership(string name,CardMembershipKind kind,long expires) =>
         owner.Execute(() => repository.SetCardMembership(owner,name,kind,expires));
 
+    bool CanUseSettlementNpcServices() => Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
+        dungeon.Settlement is { Committed: true } && dungeon.Run.ClearFact is not null &&
+        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingPickup &&
+        pendingQuestCompletion is null && !HasPendingQuestScene;
+
     public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop) => owner.Execute(() =>
     {
         if (!Ready || Selected is null || HasPendingQuestScene ||
-            Phase != SessionPhase.Town && !(Phase == SessionPhase.Settlement &&
-                request.NpcContext == 1000 && request.WindowState == 1000 && formalDungeon?.Settlement is { Committed: true }))
+            Phase != SessionPhase.Town && !(request.NpcContext == 1000 && request.WindowState == 1000 && CanUseSettlementNpcServices()))
             return InventoryResult.Reject();
         return CommitInventory(Selected, shop.Sell(Selected, request));
     });

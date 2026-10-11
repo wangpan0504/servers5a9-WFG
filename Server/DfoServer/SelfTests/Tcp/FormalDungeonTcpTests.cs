@@ -42,11 +42,13 @@ internal static partial class FormalDungeonTcpTests
                 var character = repository.LoadCharacter(owner, 0);
                 var items = resources.ItemResources;
                 var grants = new DfoServer.Game.Inventory.Services.InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-                DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character, grants.Grant(character, [new(1000, 5)]));
+                character = DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character, grants.Grant(character, [new(1000, 5)]));
+                PrepareDelilahServices(repository,owner,character,resources);
             }
             peer.Select();
             EntryTown(peer);
             var map = Enter(peer);
+            RejectDelilahServices(fixture,peer,"Loading");
             var target = new (byte X, byte Y)[] { (1, 1), (2, 1), (2, 0), (3, 0), (4, 0) };
             int[] ids = [76121, 76122, 76123, 76124, 76125, 76126];
             int movedSkill = -1;
@@ -66,7 +68,11 @@ internal static partial class FormalDungeonTcpTests
                         "演出恢复后按170→3重新激活角色，随后继续原击杀与过房流程");
                     peer.Barrier();
                 }
-                if (room == 0) movedSkill = VerifyDungeonActions(fixture, peer);
+                if (room == 0)
+                {
+                    movedSkill = VerifyDungeonActions(fixture, peer);
+                    RejectDelilahServices(fixture,peer,"Dungeon");
+                }
                 if (room == 0)
                 {
                     peer.Send(39, Death(ushort.MaxValue,ushort.MaxValue,95));
@@ -189,6 +195,7 @@ internal static partial class FormalDungeonTcpTests
                 "Lv1零经验起步完整六房得到2868经验，升级后逐次调整击杀倍率");
             That(upgradedRoomMoves > 0, "副本升级只发Player后仍能清完当前房间、成功换房并加载下一房");
             var clearCatalog = DungeonClearExperienceCatalog.Load(resources.Archive);
+            RejectDelilahServices(fixture,peer,"Settlement before commit");
             // 修复后击杀XP为2868；最高评分456使首次通关跨过Lv3边界3315。
             var clearReward = clearCatalog.Calculate(DungeonCatalog.Load(resources.Archive).Get(3), 0, 99);
             byte[] reportResult = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99);
@@ -207,6 +214,8 @@ internal static partial class FormalDungeonTcpTests
             byte[] changedResult = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 90);
             peer.Send(46, changedResult); peer.Barrier();
             That(Experience(fixture, peer.Id) == experience, "改变评分的46不能替换冻结报告");
+            VerifyDelilahServices(fixture,peer,resources);
+            assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(69); peer.Expect(1, 69, [1]);
             peer.Send(70); That(peer.Expect(1, 70).Body.Length == 17, "70普通八槽完整ACK");
             var cardRow = fixture.Query("SELECT reward_json FROM character_dungeon_card_rewards WHERE character_id=$p0 ORDER BY revision DESC LIMIT 1",peer.Id).Single();
@@ -594,7 +603,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(491, [0, 0]);
         peer.Expect(1, 491, [1, 0, 1]);
         peer.Expect(0, 19);
-        var row = fixture.Query("SELECT slot_index FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0", peer.Id).Single();
+        var row = fixture.Query("SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=1000", peer.Id).Single();
         short from = Convert.ToInt16(row[0]);
         const short to = 3;
         peer.Send(19, Build(writer =>

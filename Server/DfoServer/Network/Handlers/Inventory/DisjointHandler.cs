@@ -14,10 +14,15 @@ internal sealed class DisjointHandler(InventoryDisjointService disjoint, Invento
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
     {
         var request = DisjointRequests.Read(packet.Body);
+        var original = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         DisjointReceipt? receipt = null;
-        var result = context.BlocksTownActions ? InventoryResult.Reject(19) :
-            context.Session.MutateInventory(character => disjoint.Disjoint(character, request, out receipt), 19);
-        await context.Reply(CmdPacketType.DISJOINT_ITEM, DisjointPackets.Ack(result, receipt), result.Accepted ? "equipment_disjoint" : "equipment_disjoint_rejected");
+        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+            context.Session.DisjointEquipment(request, disjoint, out receipt);
+        bool CanSend() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) : context.Owner.Execute(() =>
+            context.Session.SelectionEpoch == original.SelectionEpoch && context.Session.Phase == original.Phase &&
+            ReferenceEquals(context.Session.Selected, original.Selected));
+        await context.Reply(CmdPacketType.DISJOINT_ITEM, DisjointPackets.Ack(result, receipt),
+            result.Accepted ? "equipment_disjoint" : "equipment_disjoint_rejected", CanSend);
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }

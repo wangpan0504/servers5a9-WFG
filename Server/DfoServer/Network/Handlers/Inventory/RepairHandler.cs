@@ -14,9 +14,14 @@ internal sealed class RepairHandler(InventoryRepairService repair, InventoryProj
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
     {
         var request = RepairRequests.Read(packet.Body);
-        var result = context.BlocksTownActions ? InventoryResult.Reject(19) :
-            context.Session.MutateInventory(character => repair.Repair(character, request), 19);
-        await context.Reply(CmdPacketType.REPAIR_EQUIPMENT, RepairPackets.Ack(request, result), result.Accepted ? "equipment_repaired" : "equipment_repair_rejected");
+        var original = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+            context.Session.RepairEquipment(request, repair);
+        bool CanSend() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            context.Session.SelectionEpoch == original.SelectionEpoch && context.Session.Phase == original.Phase &&
+            ReferenceEquals(context.Session.Selected, original.Selected));
+        await context.Reply(CmdPacketType.REPAIR_EQUIPMENT, RepairPackets.Ack(request, result),
+            result.Accepted ? "equipment_repaired" : "equipment_repair_rejected", CanSend);
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }

@@ -46,6 +46,7 @@ internal static class DungeonSettlementSessionTests
         PremiumCards(true,true);
         MembershipExpiryAndDay();
         LostPaidResult();
+        DelilahServices();
         CappedSettlement();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
 
@@ -439,12 +440,126 @@ internal static class DungeonSettlementSessionTests
                 "满级完整通关之后仍能正常回城");
         }
 
+        void DelilahServices()
+        {
+            using var f = new Fixture("Delilah",towns,characters,learning,quests);
+            var repair = new InventoryRepairService(itemResources.Items,itemResources.Repair);
+            var disjoint = new InventoryDisjointService(itemResources.Items,itemResources.Disjoint,itemResources.GoldLimits,
+                itemResources.EpicPieces,new DelilahRandom());
+            var damaged = InventoryRewardGrantService.Create(itemResources.Items.Get(10400)) with
+            {
+                Durability = 0, SortLockFlag = 1, EquipmentLockId = 1, EnchantCardId = 3175,
+                EnchantUpgrade = 11, AmplifyType = 2, AmplifyValue = 21, SealFlag = 1, Rune = 8,
+                IsRental = true, ExpireTime = checked((int)DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds())
+            };
+            var source = InventoryRewardGrantService.Create(itemResources.Items.Get(10400)) with { SortLockFlag = 1, SealFlag = 1 };
+            f.EditInventory(inventory => inventory with
+            {
+                Gold = 1000,
+                Items = inventory.Items.Replace(inventory.Find(new(InventoryListType.Equipment,14))!,
+                    new(0,new(InventoryListType.Equipment,14),InventoryRewardGrantService.Create(itemResources.Items.Get(10402)) with { Durability = 0 }))
+                    .Add(new(0,Bag(3),damaged)).Add(new(0,Bag(9),InventoryRewardGrantService.Create(itemResources.Items.Get(10402)) with { Durability = 0 }))
+                    .Add(new(0,Bag(10),source)).Add(new(0,Bag(11),source)).Add(new(0,Bag(12),source with { EquipmentLockId = 1 })).Add(new(0,Bag(13),source))
+                    .Add(new(0,Bag(65),InventoryRewardGrantService.Create(itemResources.Items.Get(2600468),2)))
+            });
+            Unavailable("未选角");
+            f.Session.Select(f.Created.Slot);
+            Unavailable("选角未Ready");
+            f.Session.MarkReady();
+            f.BeginEntry();
+            Unavailable("选图");
+            Enter(f);
+            Unavailable("加载");
+            ClearRun(f,whileDungeon: () => Unavailable("战斗"));
+            Unavailable("清图未提交结算");
+            f.Sql("CREATE TRIGGER delilah_clear_fail BEFORE UPDATE OF experience ON characters BEGIN SELECT RAISE(ABORT,'pending settlement'); END");
+            Reject<SqliteException>(() => Settle(f,[31,32,33]),"待提交结算测试注入真实SQL回滚");
+            Unavailable("结算回滚后仍待提交");
+            f.Sql("DROP TRIGGER delilah_clear_fail");
+            Settle(f,[31,32,33]);
+            f.Session.AdvanceFormalDungeonCards(false);
+            var cards = f.Session.AdvanceFormalDungeonCards(true)!;
+
+            var before = f.Session.Selected!;
+            var single = f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair);
+            var restored = f.Session.Selected!.Inventory.Find(Bag(3))!;
+            Check(single.Accepted && single.Receipt?.Phase == SessionPhase.Settlement &&
+                restored.Uid == before.Inventory.Find(Bag(3))!.Uid && restored.Core == (damaged with { Durability = 33 }) &&
+                f.Read().Inventory.Gold == before.Inventory.Gold-19,"结算单件修理同事务扣实际PVF费用，仅改耐久且保留锁、租赁期限与完整属性");
+            before = f.Session.Selected!;
+            var repeated = f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair);
+            Check(repeated.Accepted && repeated.Plan is { Changed: false } && ReferenceEquals(before,f.Session.Selected) && Same(before,f.Read()),
+                "已修满的结算重复请求合法零变化，不扣费或增加revision");
+            f.Sql("CREATE TRIGGER delilah_repair_fail BEFORE UPDATE ON character_inventory_items BEGIN SELECT RAISE(ABORT,'repair rollback'); END");
+            Reject<SqliteException>(() => f.Session.RepairEquipment(new(Bag(9),-1,0,true),repair),"结算修理失败回滚金币与耐久");
+            Check(ReferenceEquals(before,f.Session.Selected) && Same(before,f.Read()),"失败修理不安装规划快照");
+            f.Sql("DROP TRIGGER delilah_repair_fail");
+            var quick = f.Session.RepairEquipment(new(Bag(9),-1,0,true),repair);
+            Check(quick.Accepted && f.Read().Inventory.Gold == before.Inventory.Gold-240,"结算快速单件修理保留150%资源倍率");
+            before = f.Session.Selected!;
+            var all = f.Session.RepairEquipment(new(Bag(-1),-1,0,false),repair);
+            Check(all.Accepted && all.Plan!.ChangedSlots.SequenceEqual(new[] { new InventorySlot(InventoryListType.Equipment,14) }) &&
+                f.Read().Inventory.Gold == before.Inventory.Gold-160,"结算全部修理只覆盖穿戴及装备快捷栏，与城镇候选和逐件费用一致");
+            Check(!f.Session.RepairEquipment(new(Bag(3),-1,1,false),repair).Accepted &&
+                !f.Session.DisjointEquipment(new(Bag(12),-1,0),disjoint,out _).Accepted,"结算不会取得契约修理资格或绕过分解安全锁");
+            before = f.Session.Selected!;
+            f.Sql("CREATE TRIGGER delilah_disjoint_fail BEFORE INSERT ON currency_audit_log BEGIN SELECT RAISE(ABORT,'disjoint rollback'); END");
+            Reject<SqliteException>(() => f.Session.DisjointEquipment(new(Bag(10),65,0),disjoint,out _),"结算分解钱包审计失败回滚源装备、工具及全部产物");
+            Check(ReferenceEquals(before,f.Session.Selected) && Same(before,f.Read()),"失败分解不留下半份资产或新在线快照");
+            f.Sql("DROP TRIGGER delilah_disjoint_fail");
+            var npc = f.Session.DisjointEquipment(new(Bag(10),-1,0x12345678),disjoint,out var npcReceipt);
+            Check(npc.Accepted && npc.Receipt?.Phase == SessionPhase.Settlement && npcReceipt is { Rewards.Length: 2 } &&
+                npcReceipt.Request.Context == 0x12345678 && f.Read().Inventory.Find(Bag(10)) is null &&
+                f.Read().Inventory.Find(Bag(65))!.Core.Count == 2,"结算NPC分解保留完整context，不伪造资格或消耗便携工具");
+            var portable = f.Session.DisjointEquipment(new(Bag(11),65,0),disjoint,out var portableReceipt);
+            Check(portable.Accepted && portableReceipt is { Rewards.Length: 2 } && f.Read().Inventory.Find(Bag(11)) is null &&
+                f.Read().Inventory.Find(Bag(65))!.Core.Count == 1 && Same(f.Session.Selected!,f.Read()),
+                "结算便携分解源装备、工具与全部钱包产物原子提交并读回一致");
+            before = f.Session.Selected!;
+            Check(!f.Session.DisjointEquipment(new(Bag(11),65,0),disjoint,out var emptyReceipt).Accepted && emptyReceipt is null &&
+                Same(before,f.Read()),"空源分解重放不再次消耗工具或发奖");
+            Check(f.Session.SelectFormalDungeonFreeCard(0,0) is not null && f.Session.CanPublishDungeonCard(cards),
+                "修理和分解推进库存revision后原结算牌面仍可揭示，不重抽或重发奖励");
+            Check(f.Session.CanPublishInventory(portable.Receipt!),"结算投影使用实际提交后的当前角色");
+            var conflict = new InventoryDisjointService(itemResources.Items,itemResources.Disjoint,itemResources.GoldLimits,
+                itemResources.EpicPieces,new DelilahRandom(() => f.Session.SetCharacterGold(f.Created.Name,before.Inventory.Gold+1)));
+            Check(!f.Session.DisjointEquipment(new(Bag(13),-1,0),conflict,out var conflictReceipt).Accepted && conflictReceipt is null &&
+                f.Read().Inventory.Find(Bag(13)) is not null && f.Read().Inventory.Gold == before.Inventory.Gold+1,
+                "规划中GM替换角色快照时拒绝原随机结果，不覆盖新金币或重抽后提交");
+            var returnDuringPlan = new InventoryDisjointService(itemResources.Items,itemResources.Disjoint,itemResources.GoldLimits,
+                itemResources.EpicPieces,new DelilahRandom(() => f.Session.ReturnFromFormalDungeon()));
+            Check(!f.Session.DisjointEquipment(new(Bag(13),-1,0),returnDuringPlan,out var oldInstanceReceipt).Accepted && oldInstanceReceipt is null &&
+                f.Read().Inventory.Find(Bag(13)) is not null && f.Session.Phase == SessionPhase.Town,
+                "规划中回城使原实例失效，不能把结算分解计划提交到城镇");
+            Check(!f.Session.CanPublishInventory(portable.Receipt!) && !f.Session.CanPublishDungeonCard(cards) && Same(f.Session.Selected!,f.Read()),
+                "回城使旧结算物品投影与牌面失效，资产仍已保存");
+            var town = f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair);
+            Check(town.Accepted && town.Receipt?.Phase == SessionPhase.Town,"回城后沿同一入口继续合法修理");
+            f.Session.ReturnToRoster();f.Session.Select(f.Created.Slot);f.Session.MarkReady();
+            Check(!f.Session.CanPublishInventory(town.Receipt!) && Same(f.Session.Selected!,f.Read()),"重选使旧回执失效且重登保留全部修理分解结果");
+            var durable = f.Read();
+            using var replacement = f.TakeOver();
+            Reject<InvalidOperationException>(() => f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair),"被接管的原owner不能执行零变化修理");
+            Reject<InvalidOperationException>(() => f.Session.DisjointEquipment(new(Bag(13),-1,0),disjoint,out _),"被接管的原owner不能分解");
+            Check(Same(durable,f.Read(replacement)),"接管及重开库保留已提交资产，不允许旧会话追加或覆盖");
+
+            void Unavailable(string phase)
+            {
+                var saved = f.Read();
+                Check(!f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair).Accepted &&
+                    !f.Session.DisjointEquipment(new(Bag(10),-1,0),disjoint,out var rejectedReceipt).Accepted && rejectedReceipt is null &&
+                    Same(saved,f.Read()),phase+"拒绝德利拉物品服务并保留资产");
+            }
+            static InventorySlot Bag(short slot) => new(InventoryListType.Main,slot);
+        }
+
         FormalDungeonReceipt Enter(Fixture f) => f.Session.EnterFormalDungeon(3, 3145, 0, dungeons, rooms)
             ?? throw new InvalidOperationException("FAIL 结算测试无法进入正式3145");
 
-        (FormalDungeonReceipt Receipt, DungeonPlannedMonster Boss, uint Experience, int Count) ClearRun(Fixture f, bool capped = false)
+        (FormalDungeonReceipt Receipt, DungeonPlannedMonster Boss, uint Experience, int Count) ClearRun(Fixture f, bool capped = false, Action? whileDungeon = null)
         {
             var receipt = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("FAIL 结算测试加载失败");
+            whileDungeon?.Invoke();
             DungeonPlannedMonster? boss = null;
             FormalDungeonReceipt? final = null;
             uint experience = 0;
@@ -498,6 +613,7 @@ internal static class DungeonSettlementSessionTests
         private readonly string root = Path.Combine(Path.GetTempPath(), "S5A9-clear-session-" + Guid.NewGuid().ToString("N"));
         private readonly string database;
         private readonly CharacterRepository repository;
+        private readonly AccountOwners owners = new();
         private readonly AccountOwners.Lease owner;
         public GameSession Session { get; }
         public string Account => owner.Account;
@@ -510,7 +626,7 @@ internal static class DungeonSettlementSessionTests
         {
             database = Path.Combine(root, "game.db");
             repository = new(database, quests);
-            owner = new AccountOwners().Acquire("clear-session", () => { });
+            owner = owners.Acquire("clear-session", () => { });
             Session = new(loseCardResult || losePaidResult ? new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,
                 loseSettlement:loseCardResult,losePaid:losePaidResult) : repository, towns, owner);
             Created = repository.Create(owner,CharacterCreation.Prepare(name,characters.Get(0),towns.Room,towns.InitialReturn,learning.Get)
@@ -521,12 +637,24 @@ internal static class DungeonSettlementSessionTests
         {
             Session.Select(Created.Slot);
             Session.MarkReady();
+            BeginEntry();
+        }
+
+        public void BeginEntry()
+        {
             Check(Session.LeaveRoom() && Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
                 "结算测试角色经合法出房与旅行进入入口");
             Session.BeginDungeonSelection();
         }
 
-        public Character Read() => repository.LoadCharacter(owner, Created.Slot);
+        public void EditInventory(Func<InventorySnapshot,InventorySnapshot> edit)
+        {
+            var current = Read();
+            repository.CommitInventory(owner,current,new(current.Inventory,edit(current.Inventory),"delilah_fixture"));
+        }
+
+        public Character Read(AccountOwners.Lease? reader = null) => repository.LoadCharacter(reader ?? owner, Created.Slot);
+        public AccountOwners.Lease TakeOver() => owners.Acquire(owner.Account,() => { });
         public long Count(string table)
         {
             using var db = Open();
@@ -566,6 +694,20 @@ internal static class DungeonSettlementSessionTests
         {
             owner.Dispose();
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    sealed class DelilahRandom(Action? firstDraw = null) : Random
+    {
+        bool drawn;
+        public override int Next(int maxValue)
+        {
+            if (!drawn)
+            {
+                drawn = true;
+                firstDraw?.Invoke();
+            }
+            return maxValue-1;
         }
     }
 }

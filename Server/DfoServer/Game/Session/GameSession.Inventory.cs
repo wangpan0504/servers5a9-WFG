@@ -30,10 +30,27 @@ internal sealed partial class GameSession
         ReferenceEquals(Selected, receipt.Character));
 
     public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1,
-        bool requireTown = true)
+        bool requireTown = true) => PlanAndCommitInventory(plan, invalidStateError, requireTown, allowSettlement: false);
+
+    public InventoryResult RepairEquipment(RepairEquipmentRequest request, InventoryRepairService repair) =>
+        PlanAndCommitInventory(character => repair.Repair(character, request), 19, requireTown: true, allowSettlement: true);
+
+    public InventoryResult DisjointEquipment(DisjointRequest request, InventoryDisjointService disjoint, out DisjointReceipt? receipt)
     {
-        var (character, epoch, phase) = owner.Execute(() =>
-            (Ready && (!requireTown || Phase == SessionPhase.Town) && !HasPendingQuestScene ? Selected : null, SelectionEpoch, Phase));
+        DisjointReceipt? plannedReceipt = null;
+        var result = PlanAndCommitInventory(character => disjoint.Disjoint(character, request, out plannedReceipt), 19,
+            requireTown: true, allowSettlement: true);
+        receipt = result.Accepted ? plannedReceipt : null;
+        return result;
+    }
+
+    InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError,
+        bool requireTown, bool allowSettlement)
+    {
+        bool Allowed() => Ready && !HasPendingQuestScene &&
+            (!requireTown || Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices());
+        var (character, epoch, phase, dungeon) = owner.Execute(() =>
+            (Allowed() ? Selected : null, SelectionEpoch, Phase, formalDungeon));
         if (character is null)
             return InventoryResult.Reject(invalidStateError);
 
@@ -42,8 +59,8 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
         {
             // 换角、接管及 GM/其他业务替换快照后，不能把旧随机结果提交给新的状态，也不自动重抽。
-            if (!Ready || Phase != phase || HasPendingQuestScene || SelectionEpoch != epoch ||
-                Selected?.Id != character.Id || !ReferenceEquals(Selected, character))
+            if (!Allowed() || Phase != phase || SelectionEpoch != epoch ||
+                Selected?.Id != character.Id || !ReferenceEquals(Selected, character) || !ReferenceEquals(formalDungeon, dungeon))
                 return InventoryResult.Reject(invalidStateError);
             return CommitInventory(character, result);
         });
