@@ -29,9 +29,11 @@ internal sealed partial class GameSession
         SelectionEpoch == receipt.SelectionEpoch && Selected?.Id == receipt.Character.Id &&
         ReferenceEquals(Selected, receipt.Character));
 
-    public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1)
+    public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1,
+        bool requireTown = true)
     {
-        var (character, epoch) = owner.Execute(() => (Ready && Phase == SessionPhase.Town ? Selected : null, SelectionEpoch));
+        var (character, epoch, phase) = owner.Execute(() =>
+            (Ready && (!requireTown || Phase == SessionPhase.Town) && !HasPendingQuestScene ? Selected : null, SelectionEpoch, Phase));
         if (character is null)
             return InventoryResult.Reject(invalidStateError);
 
@@ -40,7 +42,8 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
         {
             // 换角、接管及 GM/其他业务替换快照后，不能把旧随机结果提交给新的状态，也不自动重抽。
-            if (!Ready || !MatchesSelection(epoch, character.Id) || !ReferenceEquals(Selected, character))
+            if (!Ready || Phase != phase || HasPendingQuestScene || SelectionEpoch != epoch ||
+                Selected?.Id != character.Id || !ReferenceEquals(Selected, character))
                 return InventoryResult.Reject(invalidStateError);
             return CommitInventory(character, result);
         });

@@ -13,6 +13,7 @@ internal sealed class ItemResources
     public NpcShopCatalog Shops { get; }
     public EquipmentRepairCatalog Repair { get; }
     public EquipmentRefinementCatalog Refinement { get; }
+    public RandomOptionCatalog RandomOptions { get; }
     public DisjointCatalog Disjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
     public BoosterCatalog Boosters { get; }
@@ -35,6 +36,7 @@ internal sealed class ItemResources
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate);
+        RandomOptions = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
         Boosters = new(archive, stackable);
