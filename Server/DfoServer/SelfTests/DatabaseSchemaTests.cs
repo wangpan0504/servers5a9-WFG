@@ -110,6 +110,7 @@ internal static class DatabaseSchemaTests
             VerifyMissingFatigueMigration(root, 19);
             VerifyQuestSkipConstraints(root);
             VerifyDropCollectionSchema(root);
+            VerifyExperienceCapMigration(root);
             VerifyFutureMigrations(path);
             string concurrent = Path.Combine(root, "concurrent.db");
             Task.WaitAll(Task.Run(() => new CharacterRepository(concurrent)), Task.Run(() => new AuthenticationRepository(concurrent)));
@@ -121,6 +122,48 @@ internal static class DatabaseSchemaTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
+    }
+
+    private static void VerifyExperienceCapMigration(string root)
+    {
+        string path = Path.Combine(root,"experience-v22.db"), rollback = Path.Combine(root,"experience-v22-fail.db");
+        _ = new CharacterRepository(path);
+        string[] tables; string[][] columns; string[] before;
+        using (var db = Open(path))
+        {
+            Execute(db,"INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('xp-old',0,'XpOld',7,38,1,450,234,0)");
+            Execute(db,"INSERT INTO character_dungeon_growth_receipts VALUES(1,'xp-old','legacy','legacy-instance',0,1,1,76121,123,99,1,20,'legacy-rule','old-resource',1,1,1,1,40,60,7)");
+            AddDropDependencyFixture(db);
+            Execute(db,"CREATE TABLE character_dungeon_growth_receipts_extra(character_id INTEGER,event_id TEXT,value TEXT DEFAULT 'character_dungeon_growth_receipts',FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id)); INSERT INTO character_dungeon_growth_receipts_extra(character_id,event_id) VALUES(1,'legacy')");
+            RewindExperienceCaps(db);
+            Execute(db,"PRAGMA user_version=22");
+            tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
+            before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
+            using var target = Open(rollback); db.BackupDatabase(target);
+        }
+        using (var db = Open(rollback)) Execute(db,"CREATE VIEW character_quest_completion_receipts_xp_cap AS SELECT 1 AS value");
+        string original = Snapshot(rollback);
+        Reject<SqliteException>(() => new CharacterRepository(rollback),"封顶迁移后段撞到视图时整笔失败");
+        Check(Snapshot(rollback) == original,"失败回滚已复制父子表、索引、触发器、历史数据和版本");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            for (int index = 0; index < tables.Length; index++)
+                Check(Rows(db,tables[index],columns[index]) == before[index],"封顶迁移保留原表内容及rowid："+tables[index]);
+            Check(Query(db,"PRAGMA user_version") is 23L && Query(db,"PRAGMA integrity_check") is "ok" &&
+                Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "v22封顶迁移完整提交v23，动态外键后代保持一致");
+            Check(Query(db,"SELECT count(*) FROM sqlite_schema WHERE name IN ('drop_dependency_index','drop_dependency_guard')") is 2L,
+                "封顶迁移保留原集合索引与触发器，不重放触发器");
+            Check(Query(db,"SELECT dflt_value FROM pragma_table_info('character_dungeon_growth_receipts_extra') WHERE name='value'") is "'character_dungeon_growth_receipts'",
+                "外键后代名称含父表前缀时正确替换，字符串默认值保持原样");
+            Execute(db,"INSERT INTO character_dungeon_growth_receipts VALUES(1,'xp-old','cap','cap-instance',0,2,2,76121,124,100,1,20,'cap-rule','resource',1,1,95,95,60,60,8)");
+            Reject<SqliteException>(() => Execute(db,"UPDATE character_dungeon_growth_receipts SET after_experience=59 WHERE event_id='cap'"),"封顶约束仍拒绝经验倒退");
+            Reject<SqliteException>(() => Execute(db,"UPDATE character_dungeon_growth_receipts SET after_experience=81 WHERE event_id='cap'"),"封顶约束仍拒绝超过原冻结额度");
+        }
+        string applied = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == applied,"v23重开不重复迁移或改变回执");
     }
 
     private static void VerifyDropCollectionSchema(string root)
@@ -615,6 +658,7 @@ internal static class DatabaseSchemaTests
                   rule_id,before_revision,revision,before_state,after_state)
                   VALUES(81,4,'legacy','abcdef1234567890abcdef1234567890',42,16408,9,7,'fatigue-old',6,7,'{"Used":6}','{"Used":7}');
                 """);
+            RewindExperienceCaps(db);
             Execute(db, $"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
             tables = TableNames(db).Where(table => table != "character_fatigue").ToArray();
             columns = tables.Select(table => ColumnNames(db, table)).ToArray();
@@ -653,7 +697,9 @@ internal static class DatabaseSchemaTests
     }
 
     static void ChangeCompletionDefinition(SqliteConnection db,Func<string,string> change) =>
-        ChangeReceiptDefinition(db, "character_quest_completion_receipts", change);
+        ChangeReceiptDefinition(db, "character_quest_completion_receipts", sql => change(sql.Replace(
+            "CHECK(after_experience>=before_experience AND after_experience<=before_experience+experience_amount)",
+            "CHECK(after_experience=before_experience+experience_amount)", StringComparison.Ordinal)));
 
     static void ChangeReceiptDefinition(SqliteConnection db, string table, Func<string,string> change, string[]? columns = null)
     {
@@ -709,8 +755,12 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
                 if (oldVersion < 20) RewindDropCollection(db);
-                else if (oldVersion == 20) Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE character_dungeon_card_rewards");
-                else RewindPremiumCards(db);
+                else
+                {
+                    RewindExperienceCaps(db);
+                    if (oldVersion == 20) Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE character_dungeon_card_rewards");
+                    else if (oldVersion == 21) RewindPremiumCards(db);
+                }
                 if (oldVersion == 17) RewindQuestReceiptsToV17(db);
                 else if (oldVersion < 17) RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
@@ -1003,8 +1053,28 @@ internal static class DatabaseSchemaTests
         return db;
     }
 
-    private static void RewindDropCollection(SqliteConnection db) => Execute(db,
-        "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; DROP TABLE IF EXISTS character_dungeon_drop_pickups; DROP TABLE IF EXISTS character_dungeon_drop_objects; DROP TABLE IF EXISTS character_dungeon_drop_batches");
+    private static void RewindDropCollection(SqliteConnection db)
+    {
+        RewindExperienceCaps(db);
+        Execute(db,"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; DROP TABLE IF EXISTS character_dungeon_drop_pickups; DROP TABLE IF EXISTS character_dungeon_drop_objects; DROP TABLE IF EXISTS character_dungeon_drop_batches");
+    }
+
+    // 老版本夹具恢复当时的严格到账约束，不能仅把v23的版本号改低。
+    internal static void RewindExperienceCaps(SqliteConnection db)
+    {
+        bool foreignKeys = Query(db,"PRAGMA foreign_keys") is 1L;
+        Execute(db,"PRAGMA foreign_keys=OFF");
+        try
+        {
+            foreach (var (table, amount) in new[] { ("character_dungeon_growth_receipts","amount"),
+                ("character_dungeon_settlement_receipts","total_experience"),("character_quest_completion_receipts","experience_amount") })
+                if (Query(db,"SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='"+table+"'") is 1L)
+                    ChangeReceiptDefinition(db,table,sql => sql.Replace(
+                        $"CHECK(after_experience>=before_experience AND after_experience<=before_experience+{amount})",
+                        $"CHECK(after_experience=before_experience+{amount})",StringComparison.Ordinal));
+        }
+        finally { if (foreignKeys) Execute(db,"PRAGMA foreign_keys=ON"); }
+    }
 
     private static void RewindPremiumCards(SqliteConnection db) => Execute(db,
         "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships");

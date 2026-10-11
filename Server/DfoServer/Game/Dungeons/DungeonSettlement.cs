@@ -11,6 +11,7 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public uint? MailId { get; init; }
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
+    public uint GainedExperience { get; init; }
 }
 
 // 冻结首份报告与经验候选；只有原实例保存的同一对象能取得提交资格。

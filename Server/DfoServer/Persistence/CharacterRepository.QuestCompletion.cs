@@ -25,7 +25,8 @@ internal sealed partial class CharacterRepository
             active.QuestId != plan.QuestId || active.Slot != plan.QuestSlot || expected.CompletedQuests.Contains(plan.QuestId) ||
             plan.CascadeMarkerQuestId is { } cascade && (cascade is <= 0 or >= 30000 || cascade == plan.QuestId) ||
             reward.ResourcePath != QuestRewardParameterCatalog.ResourcePath ||
-            plan.TargetLearning.Experience != expected.Learning.Experience + reward.Amount ||
+            (plan.GrowthPlan?.RequestedExperience ?? 0) != reward.Amount ||
+            plan.TargetLearning.Experience != (plan.GrowthPlan?.Learning.Experience ?? expected.Learning.Experience) ||
             closed.Count != plan.ClosedChildren.Length || closed.Contains(plan.AcceptanceId) ||
             plan.ClosedChildren.Length != 0 && plan.ConditionType != 70 ||
             plan.ClosedChildren.Any(row => row.AcceptanceId == Guid.Empty || !expected.ActiveMainQuests.Contains(row)) ||
@@ -99,7 +100,7 @@ internal sealed partial class CharacterRepository
                     current.Skills.SequenceEqual(!plan.UpdatesLearning ? expected.Skills : plan.TargetLearning.Trees.Single(tree => tree.Context == 0).Skills
                         .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id)) &&
                     SameInventory(current.Inventory, new(after, after, "quest_receipt_projection"));
-                return Result(current, granted, true, projection);
+                return Result(current, granted, true, projection, checked((uint)(I("after_experience") - I("before_experience"))));
             }
         }
         if (current.Revision != expected.Revision || current.Level != expected.Level || current.Job != expected.Job ||
@@ -207,12 +208,12 @@ internal sealed partial class CharacterRepository
             !QuestCycle.SameClaims(committed.AccountQuestDailyClaims,plan.AccountDailyClaimsAfter))
             throw new InvalidOperationException("持久领奖结果与完整规划不同");
         tx.Commit();
-        return Result(committed, grantedItems, false, true);
+        return Result(committed, grantedItems, false, true, checked((uint)(plan.TargetLearning.Experience - expected.Learning.Experience)));
 
-        QuestCompletionCommit Result(Character character, ImmutableArray<QuestGrantedItem> rows, bool duplicate, bool projection) =>
+        QuestCompletionCommit Result(Character character, ImmutableArray<QuestGrantedItem> rows, bool duplicate, bool projection, uint gained) =>
             new(character, clear, reward, rows, duplicate, projection, expected.Level, expected.Learning) {
                 QuestId = plan.QuestId, AcceptanceId = plan.AcceptanceId, ConditionType = plan.ConditionType,
-                GoldAmount = plan.GoldAmount, TpAmount = plan.TpAmount, Consumed = plan.Consumed, Currencies = plan.Currencies,
+                GoldAmount = plan.GoldAmount, GainedExperience = gained, TpAmount = plan.TpAmount, Consumed = plan.Consumed, Currencies = plan.Currencies,
                 ChangedSlots = plan.Inventory.ChangedSlots.Concat(plan.Inventory.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
                     .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main,slot!.Value)))
                     .Concat(plan.Consumed.Where(row => row.Uid == 0).Select(row => row.Position)).Distinct().ToImmutableArray(), PreviousQuests = expected.ActiveMainQuests,

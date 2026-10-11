@@ -26,6 +26,9 @@ internal static class GrowthPacketsTests
             "00000000000000000000000000000000" +
             "0000000000000000000000");
         byte[] body = GrowthPackets.Experience(2, state, auxiliary, ordinary);
+        That(GrowthPackets.Experience(2,state,auxiliary,CharacterExperienceDisplay.Ordinary).SequenceEqual(golden) &&
+            Decode(GrowthPackets.Experience(2,state,auxiliary,CharacterExperienceDisplay.Ordinary)).Display.PartyExperience == 0,
+            "普通单人策略不把累计经验增量填成队伍额外奖励");
         That(body.Length == 91 && body.SequenceEqual(golden), "Lv1至2完整91B正文与文档静态样本逐字节一致");
         That(Decode(body).Bonuses.Length == 0, "零count仍读取完整40B尾部");
 

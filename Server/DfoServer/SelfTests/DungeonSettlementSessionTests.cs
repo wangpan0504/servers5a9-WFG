@@ -46,6 +46,7 @@ internal static class DungeonSettlementSessionTests
         PremiumCards(true,true);
         MembershipExpiryAndDay();
         LostPaidResult();
+        CappedSettlement();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
 
         void PremiumCards(bool member,bool full)
@@ -410,10 +411,38 @@ internal static class DungeonSettlementSessionTests
                 "再挑战首个真实Session死亡仍生成原完整物品与金币规则，不回退单件显式策略");
         }
 
+        void CappedSettlement()
+        {
+            using var f = new Fixture("CapClear",towns,characters,learning,quests);
+            ulong cap = growth.GetCumulativeExperienceBoundary(95) - 1;
+            f.Sql($"UPDATE characters SET level=95,experience={cap-2} WHERE id={f.Created.Id}");
+            f.Sql($"UPDATE character_skill_points SET sp=sp+{growth.GetSpDelta(1,95)},tp=tp+{growth.GetTpDelta(1,95)} WHERE character_id={f.Created.Id}");
+            f.SelectEntry(); Enter(f);
+            var before = f.Session.Selected!;
+            var completed = ClearRun(f,capped:true);
+            Check(f.Read().Learning.Experience == cap && f.Kills == completed.Count &&
+                f.Read().Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
+                    before.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp))),
+                "Lv95仅到账剩余2经验，其余怪物仍确认死亡和清图，不额外发SP/TP");
+            var policy = new DungeonCardRewardPolicy(DungeonDropRuleCatalog.Load(pvf),itemResources.DungeonDropItems,itemResources.Items,
+                itemResources.GoldLimits,itemResources.EpicPieces,_ => 0,DungeonCardPriceCatalog.Load(pvf));
+            var cleared = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[21,22,23],dungeons,clear,growth,policy);
+            Check(cleared.Outcome == DungeonRunOutcome.Accepted && cleared.GainedExperience == 0 &&
+                cleared.Presentation!.MonsterExperience == 2 && cleared.Card is not null && f.Settlements == 1 &&
+                f.Count("character_dungeon_card_rewards") == 1 && f.Read().Learning.Experience == cap,
+                "经验已满仍原子完成通关和免费翻牌，展示实际击杀2及通关0经验");
+            var actual = f.Read();
+            var replay = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[21,22,23],dungeons,clear,growth,policy);
+            Check(replay.Outcome == DungeonRunOutcome.Duplicate && replay.GainedExperience == 0 && Same(actual,f.Read()),
+                "满级通关精确重放保持经验和奖励，不重复发资产");
+            Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town,
+                "满级完整通关之后仍能正常回城");
+        }
+
         FormalDungeonReceipt Enter(Fixture f) => f.Session.EnterFormalDungeon(3, 3145, 0, dungeons, rooms)
             ?? throw new InvalidOperationException("FAIL 结算测试无法进入正式3145");
 
-        (FormalDungeonReceipt Receipt, DungeonPlannedMonster Boss, uint Experience, int Count) ClearRun(Fixture f)
+        (FormalDungeonReceipt Receipt, DungeonPlannedMonster Boss, uint Experience, int Count) ClearRun(Fixture f, bool capped = false)
         {
             var receipt = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("FAIL 结算测试加载失败");
             DungeonPlannedMonster? boss = null;
@@ -431,7 +460,8 @@ internal static class DungeonSettlementSessionTests
                         Check(f.Session.ConfirmFormalDungeonBoss(f.Created.Id, monster.ObjectKey, (uint)monster.CandidateLevel, 504) is null,
                             "活Boss或未全清房间不接受117协调");
                     }
-                    uint expectedGain = monster.CandidateLevel == 5 ? 137u : f.Session.Selected!.Level < 3 ? 104u : 93u;
+                    uint expectedGain = capped ? monster.CandidateLevel == 5 ? 6u : 4u :
+                        monster.CandidateLevel == 5 ? 137u : f.Session.Selected!.Level < 3 ? 104u : 93u;
                     var death = f.Session.ObserveFormalDungeonDeath(new(monster.ObjectKey, f.Created.Id, 0x0111, f.Created.Id,
                         600, 3, 0, monster.SpawnType == 3 ? 6u : (uint)monster.CandidateLevel,
                         monster.SpawnType == 3 ? 0UL : 504UL, 620, 3, true, new string('A', 64)), kills, growth);

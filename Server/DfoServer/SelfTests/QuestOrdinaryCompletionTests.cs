@@ -150,6 +150,28 @@ internal static class QuestOrdinaryCompletionTests
             That(Same(before, f.Read()) && f.Receipts == 0, "到期拒绝不消耗材料或发任何奖励，已提交回放仍在期限检查之前");
         }
         var meeting = seeking with { Condition = "[meet npc]", IntData = [2], Rewards = Rows(0, 0), Definition = new([]) { Job = "[all]" } };
+        foreach (ulong left in new ulong[] { 5, 0 })
+        {
+            ulong cap = growth.GetCumulativeExperienceBoundary(95) - 1;
+            var quest = meeting with { Attributes = [], DeclaredIgnoreLevelForExperience = 1 };
+            using var f = new Fixture(towns,characters,learning,growth,parameters,items,quest,0,false,false,false,
+                configure: candidate => candidate with { Level = 95, InitialLearning = candidate.InitialLearning with
+                {
+                    Experience = cap-left,
+                    Trees = candidate.InitialLearning.Trees.Select(tree => tree with {
+                        Sp = checked((ushort)(tree.Sp+growth.GetSpDelta(1,95))),
+                        Tp = checked((ushort)(tree.Tp+growth.GetTpDelta(1,95))) }).ToArray()
+                } });
+            f.Change(100,QuestLifecycleAction.Condition,new(null,0,0));
+            var plan = f.Prepare(ushort.MaxValue).Plan!;
+            That(plan.ExperienceReward.Amount > left && plan.Growth.GainedExperience == left && plan.TargetLearning.Experience == cap,
+                "满级任务计划保留原奖励额度，只接纳封顶剩余经验");
+            var commit = f.Repository.CommitQuestCompletion(f.Owner,plan);
+            var replay = f.Repository.CommitQuestCompletion(f.Owner,plan);
+            That(commit.Character.Level == 95 && commit.Character.Learning.Experience == cap && commit.Character.CompletedQuests.Contains(100) &&
+                commit.GainedExperience == left && replay.Duplicate && replay.GainedExperience == left && f.Receipts == 1 && Same(commit.Character,f.Read()),
+                "部分或零到账的满级任务仍完成，重放及独立读库不多发经验");
+        }
         using (var f = Make(meeting, materialCount: 0))
         {
             f.Session.ChangeQuest(100, QuestLifecycleAction.Condition, f.Catalog, items.Items, items.GoldLimits, items.EpicPieces, new(null, 0, 0));

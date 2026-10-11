@@ -300,10 +300,10 @@ internal static class QuestCompletionPublicationTests
         var second = committed.Learning.Trees.Single(tree => tree.Context == 1);
         var auxiliary = committed.DungeonState!;
         Check(frames[2].Length == 107 && growth.ReadByte() == committed.Level && growth.ReadUInt64() == committed.Learning.Experience &&
-            growth.ReadUInt32() == 1780 && growth.ReadUInt16() == first.Sp && growth.ReadUInt16() == second.Sp &&
+            growth.ReadUInt32() == 0 && growth.ReadUInt16() == first.Sp && growth.ReadUInt16() == second.Sp &&
             growth.ReadUInt16() == first.Tp && growth.ReadUInt16() == second.Tp &&
             growth.ReadUInt32() == committed.Inventory.WinPoints && growth.ReadUInt32() == 0 && growth.ReadByte() == 0,
-            "独立NOTI37读器核对91B等级/绝对EXP/本次分量/两树SP和TP");
+            "独立NOTI37读器核对91B等级/绝对EXP/普通事件无队伍加成/两树SP和TP");
         Check(growth.ReadUInt32() == 0 && growth.ReadUInt32() == 0 && growth.ReadUInt32() == auxiliary.GrowthCapsuleExperience &&
             growth.ReadUInt32() == 0 && growth.ReadUInt32() == 0 && growth.ReadByte() == 0 &&
             growth.ReadUInt32() == 0 && growth.ReadUInt32() == 0 && growth.ReadUInt32() == auxiliary.ProficiencyLevel &&

@@ -64,9 +64,22 @@ internal static class CharacterGrowthTests
             CharacterGrowthPlan.Create(character, 96, 5434027680, catalog).Failure == CharacterGrowthFailure.InvalidTarget,
             "等级与经验边界不一致或支持范围外拒绝");
         var lastLevel = character with { Level = 95, Learning = State(catalog.GetLevelStartExperience(95), 15, 25) };
-        That(CharacterGrowthPlan.Create(lastLevel, 95, catalog.GetCumulativeExperienceBoundary(95) - 1, catalog).Success &&
+        ulong cap = catalog.GetCumulativeExperienceBoundary(95) - 1;
+        That(CharacterGrowthPlan.Create(lastLevel, 95, cap, catalog).Success &&
             CharacterGrowthPlan.Create(lastLevel, 95, catalog.GetCumulativeExperienceBoundary(95), catalog).Failure == CharacterGrowthFailure.InvalidTarget,
             "Lv95明确上界，达到未知Lv96范围不截断或夹取");
+        var nearCap = lastLevel with { Learning = lastLevel.Learning with { Experience = cap - 5 } };
+        var capped = CharacterGrowthPlan.AddExperience(nearCap, 100, catalog);
+        That(capped.Success && capped.Plan!.TargetLevel == 95 && capped.Plan.RequestedExperience == 100 &&
+            capped.Plan.GainedExperience == 5 && capped.Plan.Learning.Experience == cap &&
+            capped.Plan.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
+                nearCap.Learning.Trees.OrderBy(tree => tree.Context).Select(tree => (tree.Context,tree.Sp,tree.Tp))),
+            "奖励跨越上界只增加剩余5经验，不进入Lv96或额外发SP/TP");
+        var atCap = nearCap with { Learning = nearCap.Learning with { Experience = cap } };
+        var unchanged = CharacterGrowthPlan.AddExperience(atCap, 100, catalog);
+        That(unchanged.Success && unchanged.Plan!.GainedExperience == 0 && unchanged.Plan.RequestedExperience == 100 &&
+            unchanged.Plan.Learning.Experience == cap && unchanged.Plan.TargetLevel == 95,
+            "已满经验仍接受有合法奖励来源的零到账成长，供死亡和领奖事务使用");
         That(CharacterGrowthPlan.Create(character with { Learning = State(0, 7, 29) }, 3, 2035, catalog).Failure == CharacterGrowthFailure.InvalidSnapshot,
             "GM高等级零XP不作为正常成长快照修复");
         That(CharacterGrowthPlan.Create(character with { Learning = State(1000, ushort.MaxValue, 29) }, 3, 2035, catalog).Failure == CharacterGrowthFailure.PointOverflow &&

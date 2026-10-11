@@ -11,4 +11,9 @@ internal sealed record CharacterExperienceDisplay(uint PartyExperience, uint Fat
     uint SeriaBlessingExperience, uint GrowthContractExperience, uint FatigueBurningExperience,
     uint InternetCafeExperience, IReadOnlyList<CharacterExperienceBonus> Bonuses, uint BuffExperience,
     uint DeductedExperienceComponent, uint FastGrowthExperience, uint Unreferenced75,
-    uint SeriaWelcomeExperience, uint GuildExperience, uint PotionExperience);
+    uint SeriaWelcomeExperience, uint GuildExperience, uint PotionExperience)
+{
+    // 普通单人基础经验由客户端使用累计XP差计算；这里没有队伍或契约等额外贡献。
+    public static CharacterExperienceDisplay Ordinary { get; } = new(0, 0, 0, 0, 0, 0, 0,
+        Array.Empty<CharacterExperienceBonus>(), 0, 0, 0, 0, 0, 0, 0);
+}

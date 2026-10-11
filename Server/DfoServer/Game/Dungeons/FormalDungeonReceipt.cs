@@ -12,6 +12,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     DungeonGroundObject? Drop = null, byte? PreviousLevel = null)
 {
     public ImmutableArray<DungeonGroundObject> Drops { get; init; } = [];
+    public uint GainedExperience { get; init; }
     public DungeonPlannedMonster? ReportedTarget { get; init; }
     public bool SpecialChildRetired { get; init; }
     public DungeonElevatorReceipt? Elevator { get; init; }
@@ -29,6 +30,7 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     DfoServer.GameWorld.Dungeons.DungeonClearExperienceReward? Reward = null, DungeonSettlementPresentation? Presentation = null,
     Character? PreviousCharacter = null)
 {
+    public uint GainedExperience { get; init; }
     public DungeonCardReward? Card { get; init; }
     public InventoryResult? Inventory { get; init; }
     public uint? MailId { get; init; }

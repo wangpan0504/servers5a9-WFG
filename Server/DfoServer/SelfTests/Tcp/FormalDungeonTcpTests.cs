@@ -137,7 +137,7 @@ internal static partial class FormalDungeonTcpTests
                     byte expectedLevel = 1;
                     while (experience >= growth.GetCumulativeExperienceBoundary(expectedLevel)) expectedLevel++;
                     That(notice.Length == 91 && notice[0] == expectedLevel && U64(notice, 1) == experience &&
-                        U32(notice, 9) == expectedGain && U16(notice, 13) == growth.GetSpDelta(1, expectedLevel) &&
+                        U32(notice, 9) == 0 && U16(notice, 13) == growth.GetSpDelta(1, expectedLevel) &&
                         U16(notice, 15) == growth.GetSpDelta(1, expectedLevel), "完整NOTI37绝对经验等级及两树SP来自已提交角色");
                     if (room == ids.Length - 1 && map[offset + 13] == 3)
                     {
@@ -280,7 +280,7 @@ internal static partial class FormalDungeonTcpTests
                 byte[] clear = peer.Expect(0, 35).Body;
                 That(result.Length == 16 && result[6] == 99 && U16(result, 9) == peer.Id && exp.Length == 91 &&
                     U64(exp, 1) == expectedExperience && exp[0] == expectedLevel &&
-                    U32(exp, 9) == clearReward.TotalExperience && clear.Length >= 218 && U32(clear, 0) == clearReward.BaseExperience &&
+                    U32(exp, 9) == 0 && clear.Length >= 218 && U32(clear, 0) == clearReward.BaseExperience &&
                     U32(clear, 4) == clearReward.RankExperience,
                     "正式结算34→37→35匹配宽度，显示冻结评分及已提交奖励");
                 ReadCommittedCard(fixture,peer,clear,duplicate);
@@ -446,7 +446,7 @@ internal static partial class FormalDungeonTcpTests
             var questGrowth = peer.Expect(0, 37).Body;
             if (rewardLevel > previousLevel) peer.Expect(0, 19);
             That(questGrowth.Length == 91 && questGrowth[0] == rewardLevel && U64(questGrowth, 1) == experience &&
-                U32(questGrowth, 9) == questExperience && U16(questGrowth, 13) == growth.GetSpDelta(1, rewardLevel) &&
+                U32(questGrowth, 9) == 0 && U16(questGrowth, 13) == growth.GetSpDelta(1, rewardLevel) &&
                 U16(questGrowth, 15) == growth.GetSpDelta(1, rewardLevel) &&
                 fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id) is [[long questRevision]] && questRevision == beforeQuestRevision + 1 &&
                 fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long gold]] && gold == beforeQuestGold &&
@@ -664,7 +664,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(39, Death(key, peer.Id, level));
                 That(U16(peer.Expect(0, 38).Body) == key, "女圣职者加载后死亡沿正式通道确认当前怪物key");
                 byte[] growth = peer.Expect(0, 37).Body;
-                That(U32(growth, 9) == 104 && Experience(fixture, peer.Id) == 104,
+                That(U32(growth, 9) == 0 && Experience(fixture, peer.Id) == 104,
                     "女圣职者拒绝、132返回、15重进后可完成正式死亡成长");
             }
             peer.Send(42);
@@ -887,7 +887,7 @@ internal static partial class FormalDungeonTcpTests
         {
             experience += delta;
             byte[] notice = peer.Expect(0, 37).Body;
-            That(notice.Length == 91 && U64(notice, 1) == experience && U32(notice, 9) == delta && Experience(fixture, peer.Id) == experience,
+            That(notice.Length == 91 && U64(notice, 1) == experience && U32(notice, 9) == 0 && Experience(fixture, peer.Id) == experience,
                 "普通死亡和结算的实际完整经验通知与持久累计经验一致");
             if (notice[0] != currentLevel)
             {

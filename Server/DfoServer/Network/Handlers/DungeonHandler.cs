@@ -149,7 +149,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         var target = result.ReportedTarget;
         log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, Report = audit,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.IsBlocking, target.CanReportDeath },
-            result.Receipt?.Snapshot.Identity, result.Reward, result.ClearFact });
+            result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ClearFact });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return CommandResult.Unhandled;
         if (result.Receipt is not { } receipt) return CommandResult.Handled;
@@ -182,8 +182,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints), state.GrowthCapsuleExperience,
             state.ProficiencyLevel, state.ProficiencyExperience);
-        // 本服单人倍率1，显示本次额度；无额外奖励分量显式为0，不覆盖其他owner余额。
-        var display = new CharacterExperienceDisplay(reward.Amount, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0);
+        var display = CharacterExperienceDisplay.Ordinary;
         foreach (ushort key in result.CulledMonsterKeys)
             await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(key, []), "formal_clear_room_cull", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);

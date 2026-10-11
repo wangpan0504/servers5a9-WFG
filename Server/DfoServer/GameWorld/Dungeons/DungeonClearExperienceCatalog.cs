@@ -4,7 +4,15 @@ namespace DfoServer.GameWorld.Dungeons;
 
 internal sealed record DungeonClearExperienceReward(
     uint BaseExperience, uint RankExperience, uint TotalExperience,
-    int RankBonusIndex, string RuleId, string ResourceSource);
+    int RankBonusIndex, string RuleId, string ResourceSource)
+{
+    public DungeonClearExperienceReward Applied(uint amount)
+    {
+        if (amount > TotalExperience) throw new InvalidDataException("通关实际经验超过冻结额度");
+        uint basis = Math.Min(BaseExperience, amount);
+        return this with { BaseExperience = basis, RankExperience = amount - basis, TotalExperience = amount };
+    }
+}
 
 // 本服参考外部服务端的基础与评分公式，数值按PVF声明精度计算，不声称逐位还原客户端算法。
 internal sealed class DungeonClearExperienceCatalog

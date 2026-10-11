@@ -50,13 +50,14 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
             request.Body, dungeons, rewards, growth, cards);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
-            result.Reward, result.Card, result.MailId, result.Receipt?.Snapshot.Identity });
+            result.Reward, result.GainedExperience, result.Card, result.MailId, result.Receipt?.Snapshot.Identity });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate) || result.Receipt is not { } receipt)
             return CommandResult.Unhandled;
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("结算角色缺成长附属owner");
+        var reward = result.Reward ?? throw new InvalidOperationException("已提交结算缺少经验奖励");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints),
             state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
-        var display = new CharacterExperienceDisplay(result.Reward!.TotalExperience, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0);
+        var display = CharacterExperienceDisplay.Ordinary;
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
         await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
@@ -67,7 +68,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (SkillPackets.BindingsChanged(previous.Learning, receipt.Character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_clear_skills", Guard);
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard);
-        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(result.Reward, result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond), "formal_clear_reward", Guard);
+        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(reward.Applied(result.GainedExperience), result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond), "formal_clear_reward", Guard);
         if (result.Inventory is { } inventory)
             await (inventoryProjection ?? throw new InvalidOperationException("免费牌缺少库存投影")).RefreshAsync(context, inventory);
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);

@@ -39,6 +39,7 @@ internal static class QuestCorePublicationTests
             await TpSendFailureAsync();
             await ThresholdAsync();
             await DeliveryAfterSceneAsync();
+            foreach (ulong remaining in new ulong[] { 5, 0 }) await CappedAwardAsync(remaining);
 
             StoryQuest TpQuest(bool gold = false) => QuestEligibilityTests.Quest(100) with
             {
@@ -58,6 +59,43 @@ internal static class QuestCorePublicationTests
                 new QuestCompletionHandler(fixture.Catalog,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,log,
                     new CharacterLevelProjection(computer,projection),projection).Register(commands);
                 commands.Seal(); return commands;
+            }
+
+            async Task CappedAwardAsync(ulong remaining)
+            {
+                ulong cap = growth.GetCumulativeExperienceBoundary(95) - 1;
+                var quest = QuestEligibilityTests.Quest(100) with { DeclaredIgnoreLevelForExperience = 1,
+                    IntData = [2], Npc = 2, CompleteNpc = 2, Rewards = [new(0,0,null),new(0,0,null)] };
+                using var fixture = new QuestOrdinaryCompletionTests.Fixture(towns,characters,learning,growth,
+                    parameters,items,quest,materialCount: 0,configure: candidate => candidate with { Level = 95,
+                        InitialLearning = candidate.InitialLearning with { Experience = cap-remaining,
+                            Trees = candidate.InitialLearning.Trees.Select(tree => tree with {
+                                Sp = checked((ushort)(tree.Sp+growth.GetSpDelta(1,95))),
+                                Tp = checked((ushort)(tree.Tp+growth.GetTpDelta(1,95))) }).ToArray() } });
+                fixture.Change(100,QuestLifecycleAction.Condition,new(null,0,0));
+                var expected = fixture.Read();
+                var prepared = fixture.Prepare(ushort.MaxValue);
+                That(prepared.Plan is { } planned && planned.ExperienceReward.Amount > remaining,
+                    "封顶发布用例保留正额度任务奖励："+prepared.Outcome);
+                var commands = Registry(fixture);
+                using var stop = new CancellationTokenSource();
+                using var stream = new ControlledOutput();
+                await using var sender = new GameConnectionSender(fixture.Owner,stream,stop,0,(_,_,_,_,_) => { });
+                var context = Context(fixture,stream,sender,stop);
+                var request = Finish(100);
+                That(await commands.DispatchAsync(context,request) == CommandResult.Handled && fixture.Receipts == 1 &&
+                    fixture.Read().Learning.Experience == cap,
+                    "部分或零到账仍经真实Handler完成任务事务");
+                var ack = stream.Frames.Single(frame => frame[0] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 34);
+                var experience = stream.Frames.Single(frame => frame[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 37);
+                That(BinaryPrimitives.ReadUInt32LittleEndian(ack.AsSpan(20)) == remaining && experience.Length == 107 &&
+                    BinaryPrimitives.ReadUInt64LittleEndian(experience.AsSpan(17)) == cap &&
+                    BinaryPrimitives.ReadUInt32LittleEndian(experience.AsSpan(25)) == 0 &&
+                    fixture.Read().Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
+                        expected.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp))),
+                    "ACK34弹窗显示实际到账，NOTI37完整绝对经验及零队伍分量保持两树点数");
+                That(await commands.DispatchAsync(context,request) == CommandResult.Handled && fixture.Receipts == 1 &&
+                    fixture.Read().Learning.Experience == cap,"满级重复请求不多发经验或任务奖励");
             }
 
             async Task DeliveryAfterSceneAsync()
@@ -263,7 +301,7 @@ internal static class QuestCorePublicationTests
             }
         }
         finally { Directory.Delete(root,true); }
-        Console.WriteLine($"PASS {Count-checks} 合成TP、type70与跨场景交付的真实Handler、Sender包序及幂等发布断言（非主线实机）");
+        Console.WriteLine($"PASS {Count-checks} 合成TP、type70、经验封顶与跨场景交付的真实Handler、Sender包序及幂等发布断言（非主线实机）");
     }
 
     static ushort Opcode(byte[] frame) => BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1));

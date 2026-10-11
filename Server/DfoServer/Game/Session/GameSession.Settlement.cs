@@ -26,6 +26,7 @@ internal sealed partial class GameSession
         public bool AutoRevealScheduled { get; set; }
         public DungeonCardReward? BlackDiamond { get; set; }
         public DungeonCardReward? Paid { get; set; }
+        public uint GainedExperience { get; set; }
     }
 
     public (FormalDungeonReceipt Receipt, ushort BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
@@ -130,6 +131,7 @@ internal sealed partial class GameSession
             settlement.Card = commit.Card;
             settlement.MailId = commit.MailId;
             settlement.BlackDiamond = commit.BlackDiamond;
+            settlement.GainedExperience = commit.GainedExperience;
             if (commit.Inventory is { } plan)
                 inventory = new InventoryResult(true, 0, plan)
                 {
@@ -139,6 +141,7 @@ internal sealed partial class GameSession
         }
         return new FormalDungeonSettlementResult(prepared.Outcome, FormalReceipt(), settlement.Pending.Reward,
             settlement.Presentation, previous) { Card = settlement.Card, Inventory = inventory, MailId = settlement.MailId,
+                GainedExperience = settlement.GainedExperience,
                 Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond };
     });
 

@@ -30,7 +30,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier);
         log.Write("quest_completion", new { Connection = context.Id, result.Outcome,
             result.Receipt?.Commit.AcceptanceId, result.Receipt?.Commit.Clear?.InstanceId,
-            result.Receipt?.Commit.ExperienceReward, result.Receipt?.Commit.Duplicate });
+            result.Receipt?.Commit.ExperienceReward, result.Receipt?.Commit.GainedExperience, result.Receipt?.Commit.Duplicate });
         if (result.Outcome != QuestFinishOutcome.Committed || result.Receipt is not { } receipt)
         {
             if (result.RejectionReceipt is not { } rejection)
@@ -47,7 +47,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         var commit = receipt.Commit;
         var character = commit.Character;
         var rewards = commit.Rewards.Select(row => new QuestRewardItemProjection(row.Item, row.GrantedCount)).ToArray();
-        byte[] acknowledgement = QuestPackets.Finish(request.QuestId, commit.ConditionType, commit.ExperienceReward.Amount,
+        byte[] acknowledgement = QuestPackets.Finish(request.QuestId, commit.ConditionType, commit.GainedExperience,
                 commit.Consumed.Select(row => new QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(), commit.GoldAmount, rewards,
                 commit.ProfessionGrowType,commit.Currencies.Select(row => new QuestCurrencyRewardProjection(
                     ItemSlotBoundService.CurrencySlot(row.Kind) ?? throw new InvalidOperationException("钱包奖励缺少已确认持有域"),
@@ -67,7 +67,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             var state = character.DungeonState ?? throw new InvalidOperationException("已提交任务成长缺少附属owner");
             var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)character.Inventory.WinPoints), state.GrowthCapsuleExperience,
                 state.ProficiencyLevel, state.ProficiencyExperience);
-            var display = new CharacterExperienceDisplay(commit.ExperienceReward.Amount, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0);
+            var display = CharacterExperienceDisplay.Ordinary;
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning, auxiliary, display),
                 "quest_reward_experience", Guard);
         }

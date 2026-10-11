@@ -40,10 +40,11 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$instance", identity.InstanceId.ToString("N"));
         command.CommandText = """
             SELECT account,event_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,
-              base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source
+              base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_experience,after_experience
             FROM character_dungeon_settlement_receipts WHERE character_id=$id AND instance_id=$instance
             """;
         bool duplicate;
+        uint gained = 0;
         using (var reader = command.ExecuteReader())
         {
             duplicate = reader.Read();
@@ -56,10 +57,11 @@ internal sealed partial class CharacterRepository
                 reader.GetInt64(11) != reward.TotalExperience || reader.GetInt64(12) != reward.RankBonusIndex ||
                 reader.GetString(13) != reward.RuleId || reader.GetString(14) != reward.ResourceSource))
                 throw new InvalidDataException("同一通关实例的事实、报告或奖励被修改");
+            if (duplicate) gained = checked((uint)(reader.GetInt64(16) - reader.GetInt64(15)));
         }
         if (duplicate)
         {
-            var restored = ReadCardCommit(db, tx, owner.Account, prepared, current, expected, true);
+            var restored = ReadCardCommit(db, tx, owner.Account, prepared, current, expected, true, gained);
             tx.Commit();
             return restored;
         }
@@ -183,6 +185,7 @@ internal sealed partial class CharacterRepository
         tx.Commit();
         return new DungeonSettlementCommit(committed, false, reward)
         {
+            GainedExperience = checked((uint)plan.GainedExperience),
             Card = card, MailId = mailId, Options = prepared.Options,
             BlackDiamond = premiumDelivery is { Rewards.Length:2 } ? premiumDelivery.Rewards[1] : null,
             Inventory = card is null ? null : new(expected.Inventory, committed.Inventory, "dungeon_card_reward")
@@ -190,9 +193,9 @@ internal sealed partial class CharacterRepository
     });
 
     static DungeonSettlementCommit ReadCardCommit(SqliteConnection db, SqliteTransaction tx, string account,
-        PreparedDungeonSettlement prepared, Character current, Character expected, bool duplicate)
+        PreparedDungeonSettlement prepared, Character current, Character expected, bool duplicate, uint gained)
     {
-        if (prepared.Card is null) return new(current, duplicate, prepared.Reward);
+        if (prepared.Card is null) return new(current, duplicate, prepared.Reward) { GainedExperience = gained };
         using var query = db.CreateCommand();
         query.Transaction = tx;
         query.Parameters.AddWithValue("$id", current.Id);
@@ -221,6 +224,7 @@ internal sealed partial class CharacterRepository
         }
         return new(current, duplicate, prepared.Reward)
         {
+            GainedExperience = gained,
             Card = card, MailId = mail, Options = prepared.Options, BlackDiamond = bonus,
             Inventory = new(expected.Inventory, current.Inventory, "dungeon_card_reward")
         };

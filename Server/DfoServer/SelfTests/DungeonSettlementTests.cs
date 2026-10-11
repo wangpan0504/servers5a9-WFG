@@ -132,7 +132,6 @@ internal static class DungeonSettlementTests
             Reject<InvalidOperationException>(() => repository.CommitDungeonSettlement(owner, moved, staleRun, stalePrepared, growth), "相同revision下学习前提变化也拒绝");
 
             foreach (var unsupported in new[] { Fixture("GrowClear") with { GrowType = 15 }, Fixture("OldClear") with { InitialLearning = CharacterLearningState.Uninitialized },
-                Fixture("FullClear") with { Level = 95, InitialLearning = Learning(growth.GetCumulativeExperienceBoundary(95) - 1) },
                 Fixture("SpClear") with { InitialLearning = Learning(0, ushort.MaxValue) } })
             {
                 var role = repository.Create(owner, unsupported);
@@ -140,7 +139,7 @@ internal static class DungeonSettlementTests
                 deniedRun.AcceptConfirmedDeath(deniedAuthority.Death(deniedRun.Snapshot.Identity, 20));
                 var denied = deniedRun.PrepareSettlement(deniedRun.ClearFact!, new byte[] { 1 }, Reward).Pending!;
                 Reject<InvalidDataException>(() => repository.CommitDungeonSettlement(owner, role, deniedRun, denied, growth),
-                    "非法成长、经验上界和SP溢出门禁保留");
+                    "非法成长快照和SP溢出门禁保留，满级合法快照由封顶规则接管");
                 Check(SkillRepositoryTests.Equal(repository.List(owner).Single(saved => saved.Id == role.Id), role) && Receipts() == 1,
                     "成长拒绝不截断奖励、不改变资产或新增receipt");
             }

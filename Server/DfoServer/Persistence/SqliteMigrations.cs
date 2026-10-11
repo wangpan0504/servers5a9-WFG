@@ -76,6 +76,7 @@ internal static class SqliteMigrations
         }),
         new(21, "普通免费翻牌奖励与永久邮件回执", static (db, tx) => Execute(db, tx, DungeonCardRewardSchema.Sql)),
         new(22, "付费翻牌、黑钻及黄金牌每日权益", DungeonPremiumCardSchema.Create),
+        new(23, "成长经验封顶与实际到账回执", ExperienceCapSchema.Upgrade),
     ];
 
     private static void BackfillDungeonFatigue(SqliteConnection db, SqliteTransaction tx) => Execute(db, tx, """
