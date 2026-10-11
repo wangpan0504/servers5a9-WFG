@@ -25,13 +25,13 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
 {
     public void Register(GameCommandRegistry commands)
     {
-        commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler));
-        commands.Register(CmdPacketType.FINISH_LOADING, LoadedAsync, nameof(DungeonHandler));
-        commands.Register(CmdPacketType.DIE_MONSTER, DeathAsync, nameof(DungeonHandler));
-        commands.Register(CmdPacketType.MOVE_MAP, MoveAsync, nameof(DungeonHandler));
-        commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler));
-        commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler));
-        commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler));
+        commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.FINISH_LOADING, LoadedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.DIE_MONSTER, DeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.MOVE_MAP, MoveAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
     }
 
     async Task<CommandResult> StoryPauseAsync(GameConnectionContext context, Packet request)

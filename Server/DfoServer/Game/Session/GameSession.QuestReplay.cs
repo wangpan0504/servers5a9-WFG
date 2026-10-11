@@ -66,7 +66,7 @@ internal sealed partial class GameSession
             CurrentDungeonSelection = new(++dungeonSelectionId,SelectionEpoch,Selected!.Id,Selected.Position,Selected.Position);
         }
         ValidateDungeonSelection();
-        Phase = SessionPhase.MapSelect;
+        SetState(SessionPhase.MapSelect);
         pendingQuestReplay = pending with { SelectionOpened = true };
         return new QuestReplaySelection(true,new(Selected!,owner.Generation,SelectionEpoch,dungeonSelectionId));
     });

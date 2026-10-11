@@ -183,7 +183,7 @@ internal sealed partial class GameSession
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
         CurrentDungeonSelection = null;
-        Phase = SessionPhase.Loading;
+        SetState(SessionPhase.Loading);
         return FormalReceipt();
     }
 
@@ -222,7 +222,7 @@ internal sealed partial class GameSession
             if (result.Outcome != DungeonRunOutcome.Accepted) return null;
             pendingDungeonContinuation = null;
             pendingQuestReplay = null;
-            Phase = dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon;
+            SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             return FormalReceipt();
         });
     }
@@ -241,7 +241,7 @@ internal sealed partial class GameSession
             ? dungeon.Run.MoveLayer(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target,moveKind == 1)
             : dungeon.Run.Move(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target);
         if (result.Outcome != DungeonRunOutcome.Accepted) return null;
-        Phase = SessionPhase.Loading;
+        SetState(SessionPhase.Loading);
         return FormalReceipt();
     });
 
@@ -321,7 +321,7 @@ internal sealed partial class GameSession
         dungeon.PendingQuestDrop = null;
         if (loot is not null && !dungeon.Ground.PublishCommitted(pending, loot))
             throw new InvalidOperationException("已提交掉落的原准备不能发布");
-        Phase = dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon;
+        SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
         dungeon.KillExperienceTotal = checked(dungeon.KillExperienceTotal + committed.Commit.GainedExperience);
         if (committed.Death.ClearFact is not null)
             dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
@@ -381,7 +381,7 @@ internal sealed partial class GameSession
         formalDungeon = null;
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
-        Phase = SessionPhase.Town;
+        SetState(SessionPhase.Town);
         return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch);
     });
 

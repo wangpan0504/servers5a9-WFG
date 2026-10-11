@@ -2,6 +2,7 @@ using DfoServer.Network.Parsers;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
+using DfoServer.Game.Session;
 
 namespace DfoServer.Network.Handlers;
 
@@ -57,7 +58,7 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log) : IG
 
     bool BlockTownAction(GameConnectionContext context, Packet request)
     {
-        if (!context.BlocksTownActions)
+        if (context.Session.CheckState(UserStateRequirement.WorldReady) && !context.BlocksTownActions)
             return false;
         // 活动拥有当前场景，不能把其坐标写入城镇；门禁由对应活动的生命周期解除。
         log.Write("town_command_blocked", new { Connection = context.Id, request.Opcode, context.Session.SelectionEpoch });

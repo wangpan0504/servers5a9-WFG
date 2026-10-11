@@ -3,6 +3,7 @@ using DfoServer.Network.Protocol;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
+using DfoServer.Game.Session;
 
 namespace DfoServer.Network.Handlers;
 
@@ -12,12 +13,13 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.ENTER_SELECT_DUNGEON, EnterAsync, nameof(DungeonSelectionHandler));
-        commands.Register(CmdPacketType.BACK_2_VILLAGE, ReturnAsync, nameof(DungeonSelectionHandler));
+        commands.Register(CmdPacketType.BACK_2_VILLAGE, ReturnAsync, nameof(DungeonSelectionHandler), UserStateRequirement.WorldReady);
     }
 
     async Task<CommandResult> EnterAsync(GameConnectionContext context, Packet request)
     {
         var entry = DungeonRequests.ParseEntry(request.Body);
+        if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
         var continuation = context.Session.CompleteFormalDungeonContinuation();

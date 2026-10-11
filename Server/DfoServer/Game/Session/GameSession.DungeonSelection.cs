@@ -17,7 +17,7 @@ internal sealed partial class GameSession
             CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected.Id, Selected.Position, back);
         }
         ValidateDungeonSelection();
-        Phase = SessionPhase.MapSelect;
+        SetState(SessionPhase.MapSelect);
         return new DungeonSelectionReceipt(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId);
     });
 
@@ -33,7 +33,7 @@ internal sealed partial class GameSession
             Selected = repository.Save(owner, Selected, CurrentDungeonSelection.ReturnPosition, Selected.Return);
         CurrentDungeonSelection = null;
         pendingQuestReplay = null;
-        Phase = SessionPhase.Town;
+        SetState(SessionPhase.Town);
         return new DungeonSelectionReceipt(Selected!, owner.Generation, SelectionEpoch, dungeonSelectionId);
     });
 

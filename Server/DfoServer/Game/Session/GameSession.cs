@@ -123,7 +123,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             Selected = character;
             completed = quests;
             Ready = false;
-            Phase = SessionPhase.Unselected;
+            SetState(SessionPhase.Unselected);
             SelectionEpoch++;
             return true;
         });
@@ -139,8 +139,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         {
             if (Selected is null)
                 throw new InvalidOperationException("No selected character");
+            if (Ready || Phase != SessionPhase.Unselected)
+                throw new InvalidOperationException("入城就绪只能由当前未完成的选角初始化推进");
             Ready = true;
-            Phase = SessionPhase.Town;
+            SetState(SessionPhase.Town);
             return true;
         });
     }
@@ -198,8 +200,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         Selected = null;
         completed = new HashSet<int>();
         Ready = false;
-        Phase = SessionPhase.Unselected;
         CurrentDungeonSelection = null;
+        SetState(SessionPhase.Unselected);
         TravelReason = reason;
     }
 }

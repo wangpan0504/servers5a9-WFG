@@ -1,3 +1,4 @@
+using DfoServer.Game.Session;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
@@ -21,12 +22,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
 {
     public void Register(GameCommandRegistry commands)
     {
-        commands.Register(CmdPacketType.BOSS_DIE_CHECK, BossAsync, nameof(DungeonSettlementHandler));
-        commands.Register(CmdPacketType.SET_PLAY_RESULT, ResultAsync, nameof(DungeonSettlementHandler));
-        commands.Register(CmdPacketType.SCORE_SCROLL_STATE, ScrollAsync, nameof(DungeonSettlementHandler));
-        commands.Register(CmdPacketType.CARD_SELECT_RIGHT_STATE, CardsAsync, nameof(DungeonSettlementHandler));
-        commands.Register(CmdPacketType.SELECT_CARD, SelectCardAsync, nameof(DungeonSettlementHandler));
-        commands.Register(CmdPacketType.EPLP_COMMAND, ResultCommandAsync, nameof(DungeonSettlementHandler));
+        commands.Register(CmdPacketType.BOSS_DIE_CHECK, BossAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.SET_PLAY_RESULT, ResultAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.SCORE_SCROLL_STATE, ScrollAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.CARD_SELECT_RIGHT_STATE, CardsAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.SELECT_CARD, SelectCardAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.EPLP_COMMAND, ResultCommandAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
     }
 
     async Task<CommandResult> BossAsync(GameConnectionContext context, Packet request)
