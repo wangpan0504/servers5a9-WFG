@@ -62,6 +62,9 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
         var spent = CurrencyService.Spend(before, CurrencyKind.Cera, checked((int)total));
         if (!spent.Accepted)
             return InventoryResult.Reject(10);
+        // 主商品和附赠按真实货币归属合计；付费购买不能沿普通发奖的上限截断规则少发奖励。
+        if (!CanGrantCurrencies(spent.Plan!.After, rewards, new CurrencyService(goldLimits).CarryLimit(character)))
+            return InventoryResult.Reject(17);
         var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = spent.Plan!.After }, rewards,
             catalog, goldLimits, pieces, utcNow, shopExpiration: shopExpiration);
         if (!grant.Accepted)
@@ -69,5 +72,18 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
 
         receipt = new(products.ToImmutableArray(), bonuses);
         return new(true, 0, new(before, grant.Plan!.After, "cash_shop_buy"));
+    }
+
+    internal static bool CanGrantCurrencies(InventorySnapshot inventory, IReadOnlyList<InventoryReward> rewards, int goldLimit)
+    {
+        foreach (var group in rewards.GroupBy(reward => CurrencyWallet.RewardKind(reward.ItemId)))
+        {
+            if (group.Key is not { } kind)
+                continue;
+            long limit = kind == CurrencyKind.Gold ? goldLimit : int.MaxValue;
+            if (CurrencyWallet.Get(inventory, kind) + group.Sum(reward => (long)reward.Count) > limit)
+                return false;
+        }
+        return true;
     }
 }

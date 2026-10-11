@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
@@ -48,6 +49,21 @@ internal static class CashShopTcpTests
         await fixture.StartAsync();
         That(Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "Runtime商城调试默认开启");
         That(Command("cash-shop-expiration off") == "OK {\"ignoreAbsoluteExpiration\":false}", "可显式恢复PVF期限规则");
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            byte[] failedBody = new byte[19];
+            failedBody[2] = 1;
+            BinaryPrimitives.WriteUInt32LittleEndian(failedBody.AsSpan(7), checked((uint)product.CommodityId));
+            string unchanged = Snapshot();
+            // 钱包写入及物品分配之后才失败，确认费用和所有奖励属于同一笔事务。
+            fixture.Sql("CREATE TRIGGER fail_cash_shop_late BEFORE INSERT ON currency_audit_log " +
+                "WHEN NEW.action_name='cash_shop_buy' BEGIN SELECT RAISE(ABORT,'cash shop failure'); END");
+            peer.Send(64, failedBody);
+            peer.Closed();
+            That(Snapshot() == unchanged, "商城晚期SQL失败不发成功，点券、物品、UID、钱包版本及审计整笔回滚");
+            fixture.Sql("DROP TRIGGER fail_cash_shop_late");
+        }
         using (var peer = Open(fixture))
         {
             peer.Select();
@@ -104,5 +120,14 @@ internal static class CashShopTcpTests
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "商城 TCP 事务保持 SQLite 完整性");
+
+        string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT id,revision,gold,revive_coins,win_points FROM characters ORDER BY id")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_wallets ORDER BY account")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM sqlite_sequence ORDER BY name")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log"));
     }
 }

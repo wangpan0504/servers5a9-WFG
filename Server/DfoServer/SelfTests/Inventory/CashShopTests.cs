@@ -1,5 +1,6 @@
 using static DfoServer.Testing.TestCheck;
 using System.Buffers.Binary;
+using System.Text.Json;
 using DfoServer.Infrastructure;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -13,6 +14,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Development;
+using DfoServer.Game.Session;
 
 namespace DfoServer.Testing.Inventory;
 
@@ -47,6 +49,16 @@ internal static class CashShopTests
                 "其他创建入口保留原相对期限 " + kind);
         }
         That(CashShopPackets.Failure().SequenceEqual(new byte[] { 0, 0, 0 }), "商城失败包完整3字节，u16错误码为0");
+        var capped = InventorySnapshot.Empty with { ReviveCoins = int.MaxValue - 6 };
+        That(InventoryCashShopService.CanGrantCurrencies(capped, [new(1, 3), new(42, 3)], 100_000) &&
+            !InventoryCashShopService.CanGrantCurrencies(capped, [new(1, 3), new(42, 4)], 100_000),
+            "商城容量按真实货币聚合复活币别名，恰好满额允许、超过一枚拒绝");
+        That(!InventoryCashShopService.CanGrantCurrencies(InventorySnapshot.Empty,
+            [new(3037, int.MaxValue), new(3037, int.MaxValue)], 100_000), "商城多行奖励使用宽整数合计，不溢出为可容纳");
+        var goldCap = InventorySnapshot.Empty with { Gold = 99_999 };
+        That(InventoryCashShopService.CanGrantCurrencies(goldCap, [new(0, 1)], 100_000) &&
+            !InventoryCashShopService.CanGrantCurrencies(goldCap, [new(0, 2)], 100_000),
+            "商城容量规则允许金币恰好到携带上界，超出一枚拒绝而不截断；不据此开放金币商品");
         foreach (var (line, expected) in new[] { ("cash-shop-expiration", -1), ("cash-shop-expiration on", 1), ("cash-shop-expiration off", 0) })
             That(DevelopmentRequest.Parse(line, "10000") is { Action: DevelopmentAction.CashShopExpiration, Name: "" } request &&
                 request.Primary == expected, "商城调试查询和切换不依赖角色");
@@ -128,6 +140,50 @@ internal static class CashShopTests
             "cash shop reward enters the PVF-defined inventory list");
         That(!service.Buy(character, new(0, [new(int.MaxValue, 0)]), out _).Accepted,
             "unknown cash shop commodity is rejected without a charge");
+        VerifyFullRewards(repo, owner, character.Slot, towns, resources);
         Console.WriteLine("PASS cash shop purchase parser, Cera charge, reward placement and ACK assertions");
+    }
+
+    static void VerifyFullRewards(CharacterRepository repository, AccountOwners.Lease owner, ushort slot,
+        TownCatalog towns, ItemResources resources)
+    {
+        // 合成商品行只替换商城目录；模板、实际钱包归属和库存事务继续使用匹配资源及正式入口。
+        var shop = CashShopCatalog.Parse("[material]\n700001 3037 3 0 0 1 0 0 0\n" +
+            "700002 3037 4 0 0 2 0 0 0\n700003 1108 1 0 0 3 0 0 0",
+            "[bonus item]\n700003 3037 5\n[/bonus item]");
+        var service = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits, resources.EpicPieces);
+        var current = repository.LoadCharacter(owner, slot);
+        var currency = new CurrencyService(resources.GoldLimits);
+        current = InventoryService.Commit(repository, owner, current, currency.Grant(current, CurrencyKind.Cera, 20));
+        current = InventoryService.Commit(repository, owner, current, currency.Grant(current, CurrencyKind.ClearCube, int.MaxValue - 8));
+        var nearCap = current with { Inventory = CurrencyWallet.Set(current.Inventory, CurrencyKind.ClearCube, int.MaxValue - 6) };
+        foreach (var request in new CashShopPurchaseRequest[]
+        {
+            new(0, [new(700002, 0), new(700002, 0)]),
+            new(0, [new(700001, 0), new(700002, 0)]),
+            new(0, [new(700001, 0), new(700003, 0)])
+        })
+            That(service.Buy(nearCap, request, out var rejected) is { Accepted: false, Plan: null } && rejected is null,
+                "重复商品、不同主商品及主商品加赠品的合计超限整笔拒绝");
+        var bonusCap = current with { Inventory = CurrencyWallet.Set(current.Inventory, CurrencyKind.ClearCube, int.MaxValue - 4) };
+        That(service.Buy(bonusCap, new(0, [new(700003, 0)]), out _) is { Accepted: false, Plan: null },
+            "附赠超限时不只发主商品或扣点券");
+        var session = new GameSession(repository, towns, owner);
+        session.Select(slot);
+        session.MarkReady();
+        var before = session.Selected!;
+        var combined = new CashShopPurchaseRequest(0, [new(700001, 0), new(700003, 0)]);
+        var result = session.MutateInventory(character => service.Buy(character, combined, out _));
+        var after = session.Selected!;
+        That(result.Accepted && after.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == int.MaxValue &&
+            after.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 16 && after.Revision == before.Revision + 1 &&
+            after.Inventory.AccountWallet.Revision == before.Inventory.AccountWallet.Revision + 1 &&
+            after.Inventory.Items.Single(item => item.Core.ItemId == 1108).Core.Count == 1,
+            "真实提交恰好容纳主商品和赠品全部收益，扣费及两种账号余额仅增加一次版本");
+        That(!session.MutateInventory(character => service.Buy(character, combined, out _)).Accepted &&
+            ReferenceEquals(after, session.Selected) &&
+            JsonSerializer.Serialize(repository.LoadCharacter(owner, slot)) == JsonSerializer.Serialize(after),
+            "满额后的再次购买拒绝，不改点券、钱包版本、物品或角色快照，重读保持完整奖励");
+        session.End();
     }
 }
