@@ -54,7 +54,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
                 .PlayerAsync(context,receipt.Character,"quest_ticket_profession_player",Guard);
         }
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),"quest_ticket_active",Guard);
-        await projection.RefreshAsync(context,receipt.Character,Guard);
+        await projection.RefreshAsync(context,receipt.Character,Guard, restoreCompleted: false);
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(receipt.Character),"quest_ticket_completed",Guard);
         return CommandResult.Handled;
     }

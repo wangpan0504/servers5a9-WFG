@@ -78,9 +78,10 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "quest_growth_skills", Guard);
         if (character.EquipmentSlotFlags != commit.PreviousEquipmentSlotFlags)
             await levelProjection.PlayerAsync(context,character,"quest_equipment_slots",Guard);
-        await levelProjection.RefreshAsync(context, character, commit.PreviousLevel, "quest_level_committed", Guard, commit.PreviousGrowType);
+        await levelProjection.RefreshAsync(context, character, commit.PreviousLevel, "quest_level_committed", Guard, commit.PreviousGrowType,
+            restoreCompletedQuests: false);
         if (character.Level == commit.PreviousLevel && character.GrowType == commit.PreviousGrowType && projection is not null)
-            await projection.RefreshAsync(context, character, Guard);
+            await projection.RefreshAsync(context, character, Guard, restoreCompleted: false);
         // V31空574会清完成集合；完整任务投影最后以356恢复真实完成记录。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character),"quest_completed_list",Guard);
         return CommandResult.Handled;

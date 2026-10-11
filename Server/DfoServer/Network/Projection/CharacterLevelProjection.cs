@@ -11,7 +11,7 @@ internal sealed class CharacterLevelProjection(CharacterStatComputer stats, Ques
         context.Notify(NotiPacketType.USERINFO,TownPackets.Player(committed,stats.Compute(committed)),action,canSend);
 
     public async Task RefreshAsync(GameConnectionContext context, Character committed, byte previousLevel,
-        string action, Func<bool> canSend, byte? previousGrowType = null)
+        string action, Func<bool> canSend, byte? previousGrowType = null, bool restoreCompletedQuests = true)
     {
         if (previousLevel is < 1 or > 95 || committed.Level < previousLevel)
             throw new InvalidDataException("等级刷新必须使用真实提交前后等级");
@@ -24,6 +24,6 @@ internal sealed class CharacterLevelProjection(CharacterStatComputer stats, Ques
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(committed), action + "_actor", canSend);
         await PlayerAsync(context,committed,action + "_player",canSend);
         if (quests is not null)
-            await quests.RefreshAsync(context, committed, canSend);
+            await quests.RefreshAsync(context, committed, canSend, restoreCompletedQuests);
     }
 }

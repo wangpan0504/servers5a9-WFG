@@ -95,7 +95,7 @@ internal sealed class QuestQuickClearHandler(QuestCatalog quests, QuestConnectio
     async Task PublishCompletedAsync(GameConnectionContext context,QuestQuickClearReceipt receipt,Func<bool> guard,string action)
     {
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),action+"_active",guard);
-        await projection.RefreshAsync(context,receipt.Character,guard);
+        await projection.RefreshAsync(context,receipt.Character,guard, restoreCompleted: false);
         // 完成表放在完整活动/可接投影之后，恢复答案和本角色级联标记。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(receipt.Character),action+"_completed",guard);
     }

@@ -37,8 +37,10 @@ internal static class QuestQuickClearTcpTests
                 fixture.Sql("UPDATE character_completed_quests SET answer=$p0 WHERE character_id=$p1 AND quest_id=$p2",answer.Answer,created.Id,answer.QuestId);
             using var peer = Open(fixture);
             peer.Select(created.Slot,prepared: true);
+            byte[] historyBeforeAccept = peer.CompletedQuestHistory;
             peer.Send(31,[31,0,(byte)question.Id,(byte)(question.Id >> 8)]);
-            peer.Expect(1,31,[1,(byte)question.Id,(byte)(question.Id >> 8),255,255,255,255,0]); peer.Expect(0,21); peer.Barrier();
+            peer.Expect(1,31,[1,(byte)question.Id,(byte)(question.Id >> 8),255,255,255,255,0]); peer.Expect(0,21);
+            Bytes(peer.Expect(0,356).Body, historyBeforeAccept, "旅程问题接取后保留原完成前置与回答"); peer.Barrier();
             string assets = Assets(created.Id);
             peer.Send(1714,Build(writer => writer.Write(uint.MaxValue))); peer.Expect(1,1714,[0,0,0]); peer.Barrier();
             That(Assets(created.Id) == assets,"未知完整u32 parent key不截断、不修改资产");

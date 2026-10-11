@@ -22,6 +22,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] Roster { get; private set; } = [];
     public byte[] SkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
+    public byte[] CompletedQuestHistory { get; private set; } = [];
     public ushort Id { get; private set; }
     public WirePacket[] SpecialContainers { get; private set; } = [];
     public byte[][] Mailbox { get; private set; } = [];
@@ -112,6 +113,8 @@ internal sealed class TcpPeer : IDisposable
         header.CopyTo(frame, 0);
         stream.ReadExactly(frame.AsSpan(16));
         TestCheck.That(Crc(frame.AsSpan(11)) == BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(7)), "S2C CRC");
+        if (header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 356)
+            CompletedQuestHistory = frame[16..];
         return new(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..]);
     }
 
@@ -206,6 +209,7 @@ internal sealed class TcpPeer : IDisposable
         InitialGameOptions = initialGameOptions is null ? [] : Expect(0, 173, initialGameOptions).Body;
         var middle = new List<WirePacket>();
         SkillInfo = [];
+        CompletedQuestHistory = [];
         for (int index = 2; index < afterCargo; index++)
         {
             var packet = Read();
@@ -245,6 +249,12 @@ internal sealed class TcpPeer : IDisposable
                         w.Write(appearanceFlags.Value);
                     }));
                 AvailableQuests = Expect(0, 21).Body;
+                if (prepared)
+                {
+                    CompletedQuestHistory = Expect(0, 356).Body;
+                    TestCheck.Bytes(CompletedQuestHistory, middle.Single(packet => packet.Opcode == 356).Body,
+                        "入城21后恢复同一角色完成历史，保留前面的场景完成位");
+                }
             }
             if (notice == ((byte)0, (ushort)3))
             {

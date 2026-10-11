@@ -88,8 +88,9 @@ internal static class QuestCompletionPublicationTests
                 "全职业重复领奖返回静默拒绝，不重发经验/物品或改变revision");
             stream.Frames.Clear();
             Check(await commands.DispatchAsync(context, new Packet(1, 42, [])) == CommandResult.Handled &&
-                stream.Opcodes.SequenceEqual(new ushort[] { 42, 24, 21 }) && fixture.Session.Phase == SessionPhase.Town,
-                "副本领奖后的回城ACK42和场景24之后校准任务列表21");
+                stream.Opcodes.SequenceEqual(new ushort[] { 42, 24, 21, 356 }) && fixture.Session.Phase == SessionPhase.Town &&
+                stream.Frames[^1][20 + 3145] == 1,
+                "副本领奖回城后按21→356恢复实际完成历史");
             var available = QuestLifecycleTcpTests.List(stream.Frames[2][16..], committed.Level);
             Check(available.Contains(4873) && !available.Contains(3145) && fixture.Read().Revision == revision,
                 "同一选角和连接领奖回城后直接看见后续4873，刷新不重复提交或发奖");

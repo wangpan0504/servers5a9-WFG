@@ -62,10 +62,12 @@ internal static class QuestLifecycleTcpTests
             // 合成已完成前置的隔离fixture；生产不回填现场角色或伪造清图。
             f.Sql("DELETE FROM character_active_main_quests; INSERT INTO character_completed_quests(character_id,quest_id) VALUES(1,3145)");
             peer.Select(prepared: true);
+            byte[] initialHistory = peer.CompletedQuestHistory;
             That(List(peer.AvailableQuests, 1).Contains(4873), "完成前置后登录列表下发真实4873定义");
             peer.Send(31, Convert.FromHexString("1F000913"));
             peer.Expect(1, 31, Convert.FromHexString("0109130100000000"));
             That(List(peer.Expect(0, 21).Body, 1).Contains(4873), "已接取任务保留在列表，不能重复接取");
+            Bytes(peer.Expect(0,356).Body, initialHistory, "接取下一任务后完成历史不丢失，仍含真实3145完成位");
             string first = (string)f.Query("SELECT acceptance_id FROM character_active_main_quests WHERE quest_id=4873")[0][0];
             string state = State();
             peer.Send(31, Convert.FromHexString("1F000913")); peer.Expect(1, 31, [0, 18, 0]); peer.Barrier();
@@ -84,8 +86,9 @@ internal static class QuestLifecycleTcpTests
             That(State() == state, "多通道不能借单会面类型推进任务");
             peer.Send(32, Convert.FromHexString("20000913")); peer.Expect(1, 32, Convert.FromHexString("010913"));
             That(List(peer.Expect(0, 21).Body, 1).Contains(4873), "放弃后重新计算可接列表");
+            Bytes(peer.Expect(0,356).Body, initialHistory, "放弃任务不清除之前已完成的历史");
             peer.Send(31, Convert.FromHexString("1F000913")); peer.Expect(1, 31, Convert.FromHexString("0109130100000000"));
-            peer.Expect(0, 21);
+            peer.Expect(0, 21); peer.Expect(0,356);
             That(f.Query("SELECT acceptance_id FROM character_active_main_quests WHERE quest_id=4873") is [[string second]] &&
                 second != first && f.Query("SELECT count(*) FROM character_quest_lifecycle_receipts") is [[4L]],
                 "接受、条件、放弃、重接各持久化一次，新接取身份独立");
@@ -130,7 +133,7 @@ internal static class QuestLifecycleTcpTests
                 That(accepted[0] == 1 && U16(accepted,1) == id && U32(accepted,3) == (type == 25 ? 512 : 1),
                     "复合及场景目标按独立类型接取 " + type);
                 if (type == 25) peer.Expect(0,14);
-                peer.Expect(0,21);
+                peer.Expect(0,21); peer.Expect(0,356);
                 peer.Send(33,type == 25 ? [(byte)33,0,(byte)id,(byte)(id>>8),0x20,0,0] : [(byte)33,0,(byte)id,(byte)(id>>8),0,0]);
                 peer.Expect(1,33,[1,(byte)id,(byte)(id>>8),0,0,0,0]);
                 peer.Send(34,[(byte)34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]);
@@ -160,7 +163,7 @@ internal static class QuestLifecycleTcpTests
             That(accepted.Length == 18 && accepted[0] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(accepted.AsSpan(3)) == 0 && accepted[7] == 1 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(accepted.AsSpan(10)) == 10165055 && BinaryPrimitives.ReadUInt32LittleEndian(accepted.AsSpan(14)) == 3,
                 "合成寻物接取按10B赠品行下发实际三件，初始库存即达成");
-            peer.Expect(0,14); peer.Expect(0,21);
+            peer.Expect(0,14); peer.Expect(0,21); peer.Expect(0,356);
             string before = f.Snapshot();
             peer.Send(34,Convert.FromHexString("2200267502000100FFFF")); Finished(peer,[0,19,0]); peer.Barrier();
             That(f.Snapshot() == before, "错误选择不能先消耗任务材料");
@@ -180,14 +183,14 @@ internal static class QuestLifecycleTcpTests
         using (var peer = Open(f))
         {
             peer.Select(prepared: true); peer.Travel(38,0,622,196,38,1,bottom: true);
-            peer.Send(31,Convert.FromHexString("1F002775")); peer.Expect(1,31,Convert.FromHexString("0127750200000000")); peer.Expect(0,21);
+            peer.Send(31,Convert.FromHexString("1F002775")); peer.Expect(1,31,Convert.FromHexString("0127750200000000")); peer.Expect(0,21); peer.Expect(0,356);
             That(!List(peer.AvailableQuests,1).Contains(29992), "隐藏子任务不由全量普通列表提前暴露");
             string before = f.Snapshot();
             peer.Send(34,Convert.FromHexString("22002775FFFF0100FFFF")); Finished(peer,[0,19,0]); peer.Barrier();
             That(f.Snapshot() == before, "新父任务不能提前领取自身奖励");
             peer.Send(31,Convert.FromHexString("1F002975")); peer.Expect(1,31,[0,18,0]); peer.Barrier();
             That(f.Snapshot() == before, "真实TCP不能跳接尚未到达的第二个子任务");
-            peer.Send(31,Convert.FromHexString("1F002875")); peer.Expect(1,31,Convert.FromHexString("0128750100000000")); peer.Expect(0,21);
+            peer.Send(31,Convert.FromHexString("1F002875")); peer.Expect(1,31,Convert.FromHexString("0128750100000000")); peer.Expect(0,21); peer.Expect(0,356);
             peer.Send(33,Convert.FromHexString("210028750000")); peer.Expect(1,33,Convert.FromHexString("01287500000000"));
             peer.Expect(0,574); peer.Expect(0,356); peer.Barrier();
             peer.Send(34,Convert.FromHexString("22002875FFFF0100FFFF")); Finished(peer,[0,19,0]); peer.Barrier();
@@ -199,7 +202,7 @@ internal static class QuestLifecycleTcpTests
             That(accept.Length == 18 && BinaryPrimitives.ReadUInt32LittleEndian(accept.AsSpan(3)) == 0 && accept[7] == 1,
                 "第二个寻物子任务按真实赠品初始化为已达成，接取身份独立");
             ushort materialSlot = BinaryPrimitives.ReadUInt16LittleEndian(accept.AsSpan(8));
-            peer.Expect(0,14); peer.Expect(0,21);
+            peer.Expect(0,14); peer.Expect(0,21); peer.Expect(0,356);
             long revision = (long)f.Query("SELECT revision FROM characters")[0][0];
             peer.Send(34,Convert.FromHexString("22002975FFFF0100FFFF"));
             var complete = Finished(peer).Body;
@@ -237,8 +240,8 @@ internal static class QuestLifecycleTcpTests
         using (var peer = Open(f))
         {
             peer.Select(prepared: true);
-            peer.Send(31,Convert.FromHexString("1F002A75")); peer.Expect(1,31,Convert.FromHexString("012A750200000000")); peer.Expect(0,21);
-            peer.Send(31,[31,0,35,117]); peer.Expect(1,31,[1,35,117,2,0,0,0,0]); peer.Expect(0,21);
+            peer.Send(31,Convert.FromHexString("1F002A75")); peer.Expect(1,31,Convert.FromHexString("012A750200000000")); peer.Expect(0,21); peer.Expect(0,356);
+            peer.Send(31,[31,0,35,117]); peer.Expect(1,31,[1,35,117,2,0,0,0,0]); peer.Expect(0,21); peer.Expect(0,356);
             string before = State();
             peer.Send(33,Convert.FromHexString("21002A75100000")); peer.Expect(1,33,[0,19,0]); peer.Barrier();
             That(State() == before, "城镇客户端猎杀报告不能生成死亡或减少次数");
@@ -282,7 +285,7 @@ internal static class QuestLifecycleTcpTests
             }
             peer.Send(33,Convert.FromHexString("21002A75100000")); peer.Expect(1,33,Convert.FromHexString("012A7500000000")); peer.Barrier();
             peer.Send(33,[33,0,35,117,16,0,0]); peer.Expect(1,33,[1,35,117,0,0,0,0]); peer.Barrier();
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
         }
         using (var peer = Open(f))
         {
@@ -304,13 +307,13 @@ internal static class QuestLifecycleTcpTests
             {
                 bool repeated = f.Query($"SELECT quest_id FROM character_completed_quests WHERE quest_id={id}").Length != 0;
                 peer.Send(31,[31,0,(byte)id,(byte)(id>>8)]); peer.Expect(1,31,[1,(byte)id,(byte)(id>>8),1,0,0,0,0]);
+                peer.Expect(0,21);
+                byte[] flags = peer.Expect(0,356).Body;
                 if (repeated)
                 {
-                    byte[] flags = peer.Expect(0,356).Body;
                     That(flags.Length == 30004 && U32(flags,0) == 30000 && flags[4 + id] == 0,
                         "重复接取下发已提交完成表，当前完成位清零");
                 }
-                peer.Expect(0,21);
                 peer.Send(33,[33,0,(byte)id,(byte)(id>>8),0,0]); peer.Expect(1,33,[1,(byte)id,(byte)(id>>8),0,0,0,0]);
                 peer.Send(34,[34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]); Finished(peer,[1,(byte)id,(byte)(id>>8),4,0,0,0,0,0,0]);
                 byte[] available = peer.Expect(0,21).Body; peer.Expect(0,356); peer.Barrier();
@@ -338,7 +341,7 @@ internal static class QuestLifecycleTcpTests
         using (var peer = Open(f))
         {
             peer.Select(prepared: true);
-            peer.Send(31,[31,0,37,117]); peer.Expect(1,31,[1,37,117,1,0,0,0,0]); peer.Expect(0,21);
+            peer.Send(31,[31,0,37,117]); peer.Expect(1,31,[1,37,117,1,0,0,0,0]); peer.Expect(0,21); peer.Expect(0,356);
         }
         using (var peer = Open(f))
         {
@@ -375,7 +378,7 @@ internal static class QuestLifecycleTcpTests
         using (var peer = Open(f))
         {
             peer.Select(prepared: true);
-            peer.Send(31,[31,0,29,117]);peer.Expect(1,31,[1,29,117,0,0,0,0,0]);peer.Expect(0,21);
+            peer.Send(31,[31,0,29,117]);peer.Expect(1,31,[1,29,117,0,0,0,0,0]);peer.Expect(0,21); peer.Expect(0,356);
             peer.Send(34,[34,0,29,117,255,255,1,0,255,255]);
             Finished(peer,[1,29,117,0,0,0,0,0,1,0,0,0,100,0,0,0,0,0]);
             var gold = peer.Expect(0,14).Body;
@@ -413,7 +416,7 @@ internal static class QuestLifecycleTcpTests
             var before = extra.Snapshot();
             peer.Send(34,[34,0,34,117,255,255,2,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(extra.Snapshot() == before,"批量重复34不再次扣除材料或增加钱包");
-            peer.Send(31,[31,0,33,117]); peer.Expect(1,31,[1,33,117,0,0,0,0,0]); peer.Expect(0,21);
+            peer.Send(31,[31,0,33,117]); peer.Expect(1,31,[1,33,117,0,0,0,0,0]); peer.Expect(0,21); peer.Expect(0,356);
             peer.Send(34,[34,0,33,117,255,255,1,0,255,255]);
             finished = Finished(peer).Body;
             That(finished.Length == 37 && finished[8] == 1 && finished[9] == 0 && U16(finished,10) == 354 && U32(finished,12) == 2 &&
@@ -421,7 +424,7 @@ internal static class QuestLifecycleTcpTests
                 "寻物按虚拟Main槽扣晶体，奖励行回实际红色晶体增量");
             inventory = peer.Expect(0,14).Body; MainBalance(inventory,354,3033,4); MainBalance(inventory,356,3035,4);
             peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
-            peer.Send(31,[31,0,32,117]); peer.Expect(1,31,[1,32,117,255,255,255,255,0]); peer.Expect(0,21);
+            peer.Send(31,[31,0,32,117]); peer.Expect(1,31,[1,32,117,255,255,255,255,0]); peer.Expect(0,21); peer.Expect(0,356);
             peer.Send(33,[33,0,32,117,1,0]); peer.Expect(1,33,[1,32,117,1,0,0,0]);
             peer.Send(34,[34,0,32,117,255,255,1,0,255,255]); peer.Expect(1,34,[1,32,117,42,0,0,0,0,0,0]);
             int[] available = List(peer.Expect(0,21).Body,1);
@@ -667,7 +670,7 @@ internal static class QuestLifecycleTcpTests
             }
             peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
             long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
-            peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,2]); peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+            peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,2]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             string returned = fixture.Snapshot();
             peer.Send(72,[1,3]); peer.Barrier();
             That(fixture.Snapshot() == returned && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)
@@ -685,7 +688,7 @@ internal static class QuestLifecycleTcpTests
             fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
                 is [[3147L,1L]],"连图从已提交前驱和真实已接取3147开始，不用可接列表代替活动任务");
         long attempt = Attempt();
-        peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,1]); peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+        peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
         That(Attempt() == attempt,"72开始后继立即ACK72和24/21退场，真实15前不安装副本或预留尝试");
         long? storyRevision = null;
         if (acceptStoryDigest)

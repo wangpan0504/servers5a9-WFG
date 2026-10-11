@@ -248,7 +248,7 @@ internal static partial class FormalDungeonTcpTests
             ClearAgain(retryMap);
             peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
             peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 2]);
-            peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+            peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             peer.Send(72, [1, 3]); peer.Barrier();
             That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[3L]],
                 "剧情没有已接取且合法的后继任务时明确回城，不等待15或生成新副本");
@@ -349,7 +349,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(39, oldReport!);
             peer.Barrier();
             That(Experience(fixture, peer.Id) == experience, "新实例上轮死亡key只审计忽略，不增加资产经验");
-            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
             byte previousLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
             string afterClear = fixture.Snapshot();
             for (int replay = 0; replay < 2; replay++)
@@ -462,8 +462,20 @@ internal static partial class FormalDungeonTcpTests
             BinaryPrimitives.ReadInt16LittleEndian(player.AsSpan(44)) == 75 + 48 * (level - 1),
             "副本与结算升级只发Player，当前CHR基础/完整Core/双树来自实际提交角色");
         if (!town)
+        {
             That(QuestLifecycleTcpTests.List(peer.Expect(0, 21).Body, level).Contains(3145) != completedMainline,
                 "副本和结算升级后按等级及实际完成位刷新任务，不省略通知或重显已完成任务");
+            if (completedMainline)
+                That(peer.Expect(0,356).Body[4+3145] == 1, "副本升级任务列表刷新后保留已完成主线历史");
+        }
+    }
+
+    static void RefreshedQuests(TcpPeer peer)
+    {
+        byte[] history = peer.CompletedQuestHistory;
+        peer.Expect(0,21);
+        if (history.Skip(4).Any(value => value != 0))
+            Bytes(peer.Expect(0,356).Body, history, "回城或接取刷新21后保留已知完成历史");
     }
 
     static int VerifyDungeonActions(TcpTestFixture fixture, TcpPeer peer)
@@ -556,7 +568,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(42);
             peer.Expect(1, 42, [1]);
             peer.Expect(0, 24);
-            peer.Expect(0, 21);
+            RefreshedQuests(peer);
             peer.Barrier();
         }
         using (var peer = Open(fixture))
@@ -573,7 +585,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(42);
             peer.Expect(1, 42, [1]);
             peer.Expect(0, 24);
-            peer.Expect(0, 21);
+            RefreshedQuests(peer);
             peer.Barrier();
         }
     }
@@ -609,7 +621,7 @@ internal static partial class FormalDungeonTcpTests
             That(U32(info, 0) == dungeonId && info[7] == 0 && U32(start, 14) == startMap.Id && start[18] > 0,
                 "7与8完整路线规划通过，真正生产通知使用本副本普通起点和所有初始化actor");
             Load(peer); peer.Expect(0, 36, [1, 0, 156, 0, 0, 0, 155, 0, 0, 0]);
-            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         }
     }
 
@@ -633,7 +645,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(37, new byte[8]); peer.Barrier();
         That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[1L, 155L]],
             "普通重复加载不重复收费，实际NOTI36及SQLowner一致");
-        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         SelectMap(peer); peer.Send(16, selection);
         peer.Expect(0, 28); var current = peer.Expect(0, 29).Body; Load(peer);
         peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 154, 0, 0, 0]);
@@ -667,7 +679,7 @@ internal static partial class FormalDungeonTcpTests
         That(Experience(fixture, peer.Id) == beforeChild && fixture.Query(
             "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, U16(current, childOffset + 6)) is [[0L]],
             "真实机关子报告只一次死亡收尾，不冒充普通经验或资产receipt");
-        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[2L]],
             "普通返回后再次挑战实际建立新尝试，没有重新接取或修改主线");
     }
@@ -767,7 +779,7 @@ internal static partial class FormalDungeonTcpTests
         Load(peer); ExpectFatigue(7);
         peer.Send(39, bossReport!); peer.Barrier();
         That(Experience(fixture, peer.Id) == experience, "再挑战拒绝旧普通Boss报告，不重复结算或发经验");
-        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[long last]] && last == attempt + 2 &&
             fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0", peer.Id) is [[1L]] &&
             fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0", peer.Id) is [[3145L]] &&
@@ -822,7 +834,7 @@ internal static partial class FormalDungeonTcpTests
     {
         peer.Send(31,[31,0,(byte)questId,(byte)(questId >> 8)]);
         byte[] accepted = peer.Expect(1,31).Body;
-        if (accepted[0] == 1) peer.Expect(0,21);
+        if (accepted[0] == 1) RefreshedQuests(peer);
         else Bytes(accepted,[0,18,0],"重复接取通过通用错误响应，不改变已有副本fixture");
         SelectMap(peer);
         var selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection,dungeonId);
