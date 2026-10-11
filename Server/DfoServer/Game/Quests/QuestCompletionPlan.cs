@@ -28,7 +28,7 @@ internal sealed class QuestCompletionPlan
         ImmutableArray<QuestPlannedItemReward> rewards, ImmutableArray<QuestConsumedItem> consumed,
         uint gold, int goldBase, int goldMultiple, int penalty, DateTimeOffset now, QuestCatalog quests, QuestClearReceipt? clear,
         byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
-        byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim)
+        byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold)
     {
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
         AuthoritativeClear = clear;
@@ -38,7 +38,7 @@ internal sealed class QuestCompletionPlan
         ExperienceReward = experience; Inventory = inventory; GrowthPlan = growth; Rewards = rewards; Consumed = consumed;
         Multiplier = multiplier;
         Currencies = currencies;
-        GoldAmount = gold; FrozenAt = now;
+        GoldAmount = gold; MailedGoldAmount = mailedGold; FrozenAt = now;
         DailyPeriod = QuestCycle.Daily(quest) ? QuestCycle.Day(now) : 0;
         AccountQuest = quest.Definition!.AccountQuest;
         AccountCompletedAfter = (AccountQuest ? expected.AccountCompletedQuests.Append(quest.Id) : expected.AccountCompletedQuests).Order().ToImmutableArray();
@@ -73,6 +73,13 @@ internal sealed class QuestCompletionPlan
             // 只有TP领奖追加赠点身份；普通任务及其历史回执Snapshot保持原字节。
             var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
             snapshot[nameof(TpAmount)] = TpAmount;
+            Snapshot = snapshot.ToJsonString();
+        }
+        if (MailedGoldAmount != 0)
+        {
+            // 只有整笔金币转邮件时追加字段；普通任务及历史回执保持原Snapshot字节。
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot[nameof(MailedGoldAmount)] = MailedGoldAmount;
             Snapshot = snapshot.ToJsonString();
         }
         if (ConditionType == 70)
@@ -128,6 +135,8 @@ internal sealed class QuestCompletionPlan
     public ImmutableDictionary<int,byte> AccountAnswersAfter { get; }
     // 只在任务资源声明金币时计算。
     public uint GoldAmount { get; }
+    public uint MailedGoldAmount { get; }
+    public uint DirectGoldAmount => GoldAmount - MailedGoldAmount;
 
     public static QuestCompletionPreparation Prepare(Character expected, StoryQuest quest, ushort selector,
         QuestCatalog quests, QuestRewardParameterCatalog parameters, ItemCatalog items, GoldLimitCatalog goldLimits,
@@ -299,12 +308,17 @@ internal sealed class QuestCompletionPlan
             if (grant.Plan.ChangedCurrencies.Any(kind => ItemSlotBoundService.CurrencySlot(kind) is null) || grant.Plan.ChangedEpicPieces.Length != 0 ||
                 grant.Plan.ChangedSlots.Any(slot => slot.List != InventoryListType.Main))
                 throw new NotSupportedException("任务特殊持有域奖励尚未确认");
+            uint mailedGold = 0;
             if (gold != 0)
             {
                 var currency = new CurrencyService(goldLimits).Grant(expected with { Inventory = after }, CurrencyKind.Gold, checked((int)gold));
-                if (!currency.Accepted || currency.Plan is null || currency.Plan.After.Gold - after.Gold != gold)
+                if (!currency.Accepted || currency.Plan is null)
                     throw new InvalidDataException("任务金币无法完整接纳");
-                after = currency.Plan.After;
+                if (currency.Plan.After.Gold - after.Gold == gold)
+                    after = currency.Plan.After;
+                else
+                    // 整笔本次奖励保留到永久邮件；不部分截断，也不改变玩家已有超限余额。
+                    mailedGold = gold;
             }
             var rewards = ImmutableArray.CreateBuilder<QuestPlannedItemReward>();
             var currencies = ImmutableArray.CreateBuilder<QuestCurrencyReward>();
@@ -346,7 +360,7 @@ internal sealed class QuestCompletionPlan
             return new(QuestCompletionOutcome.Accepted, new(expected, active, quest, selector, experience,
                 new(expected.Inventory, after, "quest_complete"), growth, rewards.ToImmutable(), consumed.ToImmutable(),
                 gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, rewardLearning, multiplier, currencies.ToImmutable(),
-                QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim), "通用领奖计划已冻结");
+                QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold), "通用领奖计划已冻结");
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException or ArgumentOutOfRangeException)
         {

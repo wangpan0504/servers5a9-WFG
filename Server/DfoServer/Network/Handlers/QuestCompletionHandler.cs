@@ -28,9 +28,11 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
         var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier);
-        log.Write("quest_completion", new { Connection = context.Id, result.Outcome,
+        log.Write("quest_completion", new { Connection = context.Id, Quest = request.QuestId, result.Outcome,
+            Accepted = result.Outcome == QuestFinishOutcome.Committed, Failure = result.Failure.ToString(),
             result.Receipt?.Commit.AcceptanceId, result.Receipt?.Commit.Clear?.InstanceId,
-            result.Receipt?.Commit.ExperienceReward, result.Receipt?.Commit.GainedExperience, result.Receipt?.Commit.Duplicate });
+            result.Receipt?.Commit.ExperienceReward, result.Receipt?.Commit.GainedExperience, result.Receipt?.Commit.Duplicate,
+            result.Receipt?.Commit.DirectGoldAmount, result.Receipt?.Commit.MailedGoldAmount, result.Receipt?.Commit.GoldMailId });
         if (result.Outcome != QuestFinishOutcome.Committed || result.Receipt is not { } receipt)
         {
             if (result.RejectionReceipt is not { } rejection)
@@ -48,7 +50,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         var character = commit.Character;
         var rewards = commit.Rewards.Select(row => new QuestRewardItemProjection(row.Item, row.GrantedCount)).ToArray();
         byte[] acknowledgement = QuestPackets.Finish(request.QuestId, commit.ConditionType, commit.GainedExperience,
-                commit.Consumed.Select(row => new QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(), commit.GoldAmount, rewards,
+                commit.Consumed.Select(row => new QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(), commit.DirectGoldAmount, rewards,
                 commit.ProfessionGrowType,commit.Currencies.Select(row => new QuestCurrencyRewardProjection(
                     ItemSlotBoundService.CurrencySlot(row.Kind) ?? throw new InvalidOperationException("钱包奖励缺少已确认持有域"),
                     row.Kind == DfoServer.Game.Currency.CurrencyKind.ReviveCoin ? 1 : row.ItemId,row.Count)).ToArray(),commit.TpAmount);
@@ -58,9 +60,9 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "quest_profession_skills", Guard);
         await context.Reply(CmdPacketType.FINISH_QUEST, acknowledgement, "quest_completion_committed", Guard);
         // ACK34先消费真实增量，再投影完整Core及绝对成长；不在最终库存之后重放增量奖励。
-        if (commit.ChangedSlots.Length != 0 || commit.GoldAmount != 0)
+        if (commit.ChangedSlots.Length != 0 || commit.DirectGoldAmount != 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(character.Inventory, InventoryListType.Main,
-                commit.ChangedSlots.Concat(commit.GoldAmount == 0 ? [] : new[] { new InventorySlot(InventoryListType.Main, 0) }).ToArray()),
+                commit.ChangedSlots.Concat(commit.DirectGoldAmount == 0 ? [] : new[] { new InventorySlot(InventoryListType.Main, 0) }).ToArray()),
                 "quest_reward_inventory", Guard);
         if (commit.ExperienceReward.Amount != 0)
         {
@@ -84,6 +86,8 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             await projection.RefreshAsync(context, character, Guard, restoreCompleted: false);
         // 匹配客户端空574会清完成集合；完整任务投影最后以356恢复真实完成记录。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character),"quest_completed_list",Guard);
+        if (commit.GoldMailId is not null && receipt.Phase == DfoServer.Game.Session.SessionPhase.Town)
+            await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "quest_gold_mail_arrived", Guard);
         return CommandResult.Handled;
     }
 }

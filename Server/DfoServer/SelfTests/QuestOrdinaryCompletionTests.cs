@@ -29,6 +29,7 @@ internal static class QuestOrdinaryCompletionTests
         int checks = Count;
         var learning = SkillLearningCatalog.Load(pvf); var growth = CharacterGrowthCatalog.Load(pvf, learning);
         var parameters = QuestRewardParameterCatalog.Load(pvf);
+        QuestGoldMailTests.Run(towns, characters, items, learning, growth, parameters);
         QuestRewardToken[] Rows(params int[] values) => values.Select(value => new QuestRewardToken(0, value, null)).ToArray();
         var seeking = QuestEligibilityTests.Quest(100) with
         {

@@ -274,6 +274,7 @@ internal static class QuestCompletionRepositoryTests
         public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) =>
             inner.ConsumeDungeonRoomFatigue(owner, expected, run);
         QuestCompletionPlan? first;
+        public QuestCompletionPlan? FirstPlan => first;
         public int Calls { get; private set; }
         public bool SamePlan { get; private set; }
         public bool LastDuplicate { get; private set; }

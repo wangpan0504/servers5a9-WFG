@@ -15,6 +15,9 @@ internal sealed record QuestCompletionCommit(Character Character, QuestClearRece
     public Guid AcceptanceId { get; init; } = Clear?.AcceptanceId ?? Guid.Empty;
     public byte ConditionType { get; init; } = 3;
     public uint GoldAmount { get; init; }
+    public uint MailedGoldAmount { get; init; }
+    public uint DirectGoldAmount => GoldAmount - MailedGoldAmount;
+    public uint? GoldMailId { get; init; }
     public uint GainedExperience { get; init; }
     public ushort TpAmount { get; init; }
     public ImmutableArray<QuestConsumedItem> Consumed { get; init; } = [];
@@ -38,4 +41,7 @@ internal sealed record QuestRefusalReceipt(Character Character, long Generation,
     public SessionPhase Phase { get; init; } = DungeonIdentity is null ? SessionPhase.Town : SessionPhase.Settlement;
 }
 internal sealed record QuestFinishResult(QuestFinishOutcome Outcome, QuestCompletionReceipt? Receipt = null,
-    QuestRefusalReceipt? RejectionReceipt = null);
+    QuestRefusalReceipt? RejectionReceipt = null)
+{
+    public QuestCompletionFailure Failure { get; init; }
+}

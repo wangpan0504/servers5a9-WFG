@@ -53,19 +53,19 @@ internal sealed partial class GameSession
             return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion);
         });
         if (captured.Character is not { } expected)
-            return new(QuestFinishOutcome.Unsupported);
+            return new(QuestFinishOutcome.Unsupported) { Failure = QuestCompletionFailure.EligibilityChanged };
         var rejection = new QuestRefusalReceipt(expected, owner.Generation, captured.SelectionEpoch, captured.Identity) { Phase = captured.Phase };
         if (!quests.TryGet(questId, out var quest))
-            return new(QuestFinishOutcome.Unsupported, RejectionReceipt: rejection);
+            return new(QuestFinishOutcome.Unsupported, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.ResourceUnsupported };
         if (QuestEligibility.Completed(expected).Contains(questId))
-            return new(QuestFinishOutcome.AlreadyCompleted, RejectionReceipt: rejection);
+            return new(QuestFinishOutcome.AlreadyCompleted, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
         if ((quest.Condition == "[clear map]" || dungeonClear) && captured.Clear is null)
-            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection);
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
         if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RewardSelector != selector || incomplete.Plan.Multiplier != multiplier))
-            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection);
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         QuestCompletionPreparation preparation;
         if (captured.Pending is { } pending && pending.SelectionEpoch == captured.SelectionEpoch && pending.Phase == captured.Phase &&
             pending.DungeonIdentity == captured.Identity && ReferenceEquals(pending.Plan.Expected, expected) &&
@@ -81,7 +81,7 @@ internal sealed partial class GameSession
             if (preparation.Outcome != QuestCompletionOutcome.Accepted || preparation.Plan is null)
                 return new QuestFinishResult(preparation.Outcome == QuestCompletionOutcome.InsufficientSpace &&
                     preparation.Failure == QuestCompletionFailure.InventoryCapacity
-                    ? QuestFinishOutcome.InsufficientSpace : QuestFinishOutcome.Rejected, RejectionReceipt: rejection);
+                    ? QuestFinishOutcome.InsufficientSpace : QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = preparation.Failure };
             var plan = preparation.Plan;
             // 不明提交结果保留这份冻结计划；精确查询同接取receipt，不生成新的领奖身份。
             pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity);

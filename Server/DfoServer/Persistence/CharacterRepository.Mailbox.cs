@@ -373,8 +373,7 @@ internal sealed partial class CharacterRepository
             item.Core.Validate();
             item.ValidateDetails(true);
         }
-        string content = JsonSerializer.Serialize(new { delivery.Recipient.Id, delivery.Recipient.Account, delivery.SenderName,
-            delivery.Text, delivery.Gold, delivery.Expires, delivery.Items });
+        string content = MailDeliveryContent(delivery);
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$key", delivery.Key);
@@ -401,6 +400,12 @@ internal sealed partial class CharacterRepository
             new { delivery.Key, delivery.Gold, Items = held.ToImmutable() });
         return new(MailboxError.None, MailId: id) { Recipient = delivery.Recipient };
     }
+
+    static string MailDeliveryContent(MailboxDelivery delivery) => JsonSerializer.Serialize(new
+    {
+        delivery.Recipient.Id, delivery.Recipient.Account, delivery.SenderName,
+        delivery.Text, delivery.Gold, delivery.Expires, delivery.Items
+    });
 
     static uint InsertMail(SqliteConnection db, SqliteTransaction tx, MailboxRecipient recipient, ushort senderId, string sender,
         string text, uint gold, long created, long? expires, string? key, string? content)
