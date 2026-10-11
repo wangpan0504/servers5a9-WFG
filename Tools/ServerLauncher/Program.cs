@@ -25,11 +25,16 @@ internal static class Program
 #endif
         if (args.Length != 0)
         {
+            if (args is ["--selftest-gm"])
+            {
+                try { GmWebTests.RunAsync().GetAwaiter().GetResult(); return 0; }
+                catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+            }
             if (args is ["--help"])
             {
                 Console.WriteLine(BundledServer
-                    ? "S5A9Server：单 EXE 游戏服务。双击打开启动界面；--server [运行参数] [命令] 使用内置服务端。"
-                    : "DfoLauncher：Windows 游戏服务启动器，管理同目录的 DfoServer.exe。");
+                    ? "S5A9Server：单 EXE 游戏服务。双击打开启动界面；--server [运行参数] [命令] 使用内置服务端；--selftest-gm 检查内置GM网页。"
+                    : "DfoLauncher：Windows 游戏服务启动器，管理同目录的 DfoServer.exe；--selftest-gm 检查内置GM网页。");
                 return 0;
             }
             Console.Error.WriteLine(BundledServer

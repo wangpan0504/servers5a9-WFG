@@ -8,12 +8,17 @@ namespace ServerLauncher;
 
 internal sealed record LaunchSettings(string ServerIp, int ChannelPort, int GamePort, string PvfPath, string DataDirectory)
 {
+    public bool GmEnabled { get; init; }
+    public int GmPort { get; init; } = 23102;
+    public int GmWebPort { get; init; } = 23103;
+    [System.Text.Json.Serialization.JsonIgnore] public int ActiveGmPort => GmEnabled ? GmPort : 0;
+
     public void Validate()
     {
         if (ServerIp != "auto" && (!IPAddress.TryParse(ServerIp, out var address) ||
             address.AddressFamily != AddressFamily.InterNetwork || address.Equals(IPAddress.Any) || address.Equals(IPAddress.Broadcast)))
             throw new InvalidDataException("服务地址请填写 IPv4 或 auto；本机使用 127.0.0.1。");
-        int[] ports = [ChannelPort, GamePort];
+        int[] ports = GmEnabled ? [ChannelPort, GamePort, GmPort, GmWebPort] : [ChannelPort, GamePort];
         if (ports.Any(port => port is < 1 or > 65535) || ports.Distinct().Count() != ports.Length)
             throw new InvalidDataException("已启用的端口须在 1–65535 内，且不能重复。");
         if (string.IsNullOrWhiteSpace(PvfPath) || string.IsNullOrWhiteSpace(DataDirectory))
@@ -30,6 +35,8 @@ internal sealed class ServerProcess(string root, Action<string> log) : IAsyncDis
     Task? output, errors;
     bool ready;
     public bool HasExited => process is null || process.HasExited;
+    public bool OwnsGmConnection(TcpClient client) => ready && !HasExited && process is { } owned &&
+        LocalConnectionOwner.Matches(client, owned.Id);
 
     public async Task<ReadyInfo> StartAsync(LaunchSettings settings, CancellationToken token)
     {
@@ -57,9 +64,10 @@ internal sealed class ServerProcess(string root, Action<string> log) : IAsyncDis
         IPAddress listen = settings.ServerIp == "auto" ? IPAddress.Any : IPAddress.Parse(settings.ServerIp);
         if (!IPAddress.IsLoopback(listen))
             listen = IPAddress.Any;
-        foreach (int port in new[] { settings.ChannelPort, settings.GamePort })
+        foreach (var (address, port) in new[] { (listen, settings.ChannelPort), (listen, settings.GamePort) }
+            .Concat(settings.GmEnabled ? new[] { (IPAddress.Loopback, settings.GmPort), (IPAddress.Loopback, settings.GmWebPort) } : []))
         {
-            var check = new TcpListener(listen, port);
+            var check = new TcpListener(address, port);
             try { check.Start(); }
             catch (SocketException) { throw new IOException($"端口 {port} 已被占用或不可监听，请修改端口或正常停止旧服务。"); }
             finally { check.Stop(); }
@@ -77,7 +85,7 @@ internal sealed class ServerProcess(string root, Action<string> log) : IAsyncDis
         if (Program.BundledServer)
             start.ArgumentList.Add("--server");
         foreach (string argument in new[] { "--server-ip", settings.ServerIp, "--channel-port", settings.ChannelPort.ToString(),
-            "--game-port", settings.GamePort.ToString(), "--gm-port", "0" })
+            "--game-port", settings.GamePort.ToString(), "--gm-port", settings.ActiveGmPort.ToString() })
             start.ArgumentList.Add(argument);
         // 默认布局仍可使用已有服务包；自定义路径由新版服务端显式接收。
         if (!pvf.Equals(Path.Combine(root, "Data", "Pvf", "Script.pvf"), StringComparison.OrdinalIgnoreCase))
@@ -113,7 +121,7 @@ internal sealed class ServerProcess(string root, Action<string> log) : IAsyncDis
                 using var stream = new FileStream(receipt, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 var state = await JsonSerializer.DeserializeAsync<ReadyInfo>(stream, cancellationToken: deadline.Token);
                 if (state is not null && state.Pid == process.Id && state.ChannelPort == settings.ChannelPort &&
-                    state.GamePort == settings.GamePort && state.GmPort == 0)
+                    state.GamePort == settings.GamePort && state.GmPort == settings.ActiveGmPort)
                 {
                     ready = true;
                     return state;

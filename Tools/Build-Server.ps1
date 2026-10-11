@@ -120,6 +120,8 @@ if ($SingleFile) {
 }
 $launcherCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--help' -WindowStyle Hidden -Wait -PassThru
 if ($launcherCheck.ExitCode -ne 0) { throw "启动器检查失败；临时产物保留在 $stage" }
+$gmCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--selftest-gm' -WindowStyle Hidden -Wait -PassThru
+if ($gmCheck.ExitCode -ne 0) { throw "内置GM网页检查失败；临时产物保留在 $stage" }
 
 $data = Join-Path $output 'Data'
 New-Item -ItemType Directory -Path $data -Force | Out-Null

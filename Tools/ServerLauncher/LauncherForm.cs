@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace ServerLauncher;
@@ -9,10 +10,13 @@ internal sealed class LauncherForm : Form
     readonly string root;
     readonly TextBox serverIp = new() { Text = "127.0.0.1", Dock = DockStyle.Fill, AccessibleName = "服务地址" };
     readonly NumericUpDown channel = Port(23100, "频道端口"), game = Port(23101, "游戏端口");
+    readonly CheckBox enableGm = new() { Text = "启用 GM 工具（仅本机）", AutoSize = true, AccessibleName = "启用 GM 工具" };
+    readonly NumericUpDown gmPort = Port(23102, "GM 命令端口"), gmWebPort = Port(23103, "GM 网页端口");
     readonly TextBox pvf = new() { Dock = DockStyle.Fill, AccessibleName = "PVF 文件" };
     readonly TextBox data = new() { Dock = DockStyle.Fill, AccessibleName = "存档目录" };
     readonly Button choosePvf = Button("选择文件…"), chooseData = Button("选择目录…");
     readonly Button start = Button("启动服务"), stop = Button("停止服务"), copy = Button("复制地址"), logs = Button("打开日志目录");
+    readonly Button openGm = Button("打开 GM 工具");
     readonly Label status = new() { Text = "未启动", AutoSize = true, ForeColor = Color.DimGray, Anchor = AnchorStyles.Right };
     readonly GroupBox settings = new() { Text = "启动设置", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(16) };
     readonly TextBox addresses = new() { Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None,
@@ -23,6 +27,7 @@ internal sealed class LauncherForm : Form
     readonly ConcurrentQueue<string> pendingLogs = new();
     readonly System.Windows.Forms.Timer refresh = new() { Interval = 100 };
     ServerProcess? server;
+    GmWebHost? gmWeb;
     CancellationTokenSource? starting;
     Task? transition;
     State state;
@@ -40,13 +45,13 @@ internal sealed class LauncherForm : Form
         Font = new Font("Microsoft YaHei UI", 10);
         BackColor = Color.White;
         int availableHeight = Screen.PrimaryScreen?.WorkingArea.Height ?? 768;
-        ClientSize = new Size(900, Math.Max(608, Math.Min(680, availableHeight - 64)));
-        MinimumSize = new Size(840, 640);
+        ClientSize = new Size(960, Math.Max(660, Math.Min(760, availableHeight - 64)));
+        MinimumSize = new Size(900, 700);
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Font;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1, RowCount = 7 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        foreach (float height in new[] { 56f, 220f, 48f, 112f, 24f })
+        foreach (float height in new[] { 56f, 292f, 48f, 124f, 24f })
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
@@ -57,12 +62,12 @@ internal sealed class LauncherForm : Form
         heading.Controls.Add(status, 1, 0);
         layout.Controls.Add(heading, 0, 0);
 
-        var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 5 };
+        var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 7 };
         fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 105));
         fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
         fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        for (int row = 0; row < 4; row++)
+        for (int row = 0; row < 6; row++)
             fields.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         fields.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         fields.Controls.Add(FieldLabel("服务地址"), 0, 0);
@@ -78,14 +83,20 @@ internal sealed class LauncherForm : Form
         fields.Controls.Add(FieldLabel("存档目录"), 0, 3);
         fields.Controls.Add(PathField(data, chooseData), 1, 3);
         fields.SetColumnSpan(fields.GetControlFromPosition(1, 3)!, 3);
-        var note = new Label { Text = "本机地址：127.0.0.1；局域网可填 IPv4 或 auto。存档使用所选目录中的 game.db；空目录会新建存档。",
+        fields.Controls.Add(enableGm, 0, 4);
+        fields.SetColumnSpan(enableGm, 4);
+        fields.Controls.Add(FieldLabel("GM 端口"), 0, 5);
+        fields.Controls.Add(gmPort, 1, 5);
+        fields.Controls.Add(FieldLabel("网页端口"), 2, 5);
+        fields.Controls.Add(gmWebPort, 3, 5);
+        var note = new Label { Text = "空存档目录会新建 game.db。GM 仅供本机管理；勾选后启动服务，再点击“打开 GM 工具”，无需安装 Python。",
             Dock = DockStyle.Fill, ForeColor = Color.DimGray, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
-        fields.Controls.Add(note, 0, 4);
+        fields.Controls.Add(note, 0, 6);
         fields.SetColumnSpan(note, 4);
         settings.Controls.Add(fields);
         layout.Controls.Add(settings, 0, 1);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
-        actions.Controls.AddRange([start, stop, copy, logs]);
+        actions.Controls.AddRange([start, stop, openGm, copy, logs]);
         layout.Controls.Add(actions, 0, 2);
         var connections = new GroupBox { Text = "连接地址", Dock = DockStyle.Fill, Padding = new Padding(16, 12, 16, 12) };
         connections.Controls.Add(addresses);
@@ -98,6 +109,8 @@ internal sealed class LauncherForm : Form
         pvf.Text = "Data/Pvf/Script.pvf";
         data.Text = "Data";
         LoadSettings();
+        enableGm.CheckedChanged += (_, _) => gmPort.Enabled = gmWebPort.Enabled = enableGm.Checked;
+        gmPort.Enabled = gmWebPort.Enabled = enableGm.Checked;
         choosePvf.Click += (_, _) => BeginInvoke((Action)(() =>
         {
             using var dialog = new OpenFileDialog { Title = "选择 PVF 资源", Filter = "PVF 文件 (*.pvf)|*.pvf|所有文件 (*.*)|*.*", CheckFileExists = true };
@@ -135,6 +148,16 @@ internal sealed class LauncherForm : Form
             try { Clipboard.SetText(addresses.Text); WriteLog("连接地址已复制。"); }
             catch (System.Runtime.InteropServices.ExternalException) { WriteLog("剪贴板正被占用，请稍后再试。"); }
         };
+        openGm.Click += (_, _) =>
+        {
+            if (state != State.Running || gmWeb is null || closeRequested) return;
+            try
+            {
+                Process.Start(new ProcessStartInfo(gmWeb.Url) { UseShellExecute = true });
+                WriteLog("GM 工具：" + gmWeb.Url);
+            }
+            catch (System.ComponentModel.Win32Exception error) { WriteLog("无法打开浏览器，请使用连接地址中的 GM 网页地址：" + error.Message); }
+        };
         logs.Click += (_, _) =>
         {
             string directory = Path.Combine(root, "Logs");
@@ -162,7 +185,8 @@ internal sealed class LauncherForm : Form
     {
         if (state != State.Idle || closeRequested)
             return;
-        var options = new LaunchSettings(serverIp.Text.Trim(), (int)channel.Value, (int)game.Value, pvf.Text.Trim(), data.Text.Trim());
+        var options = new LaunchSettings(serverIp.Text.Trim(), (int)channel.Value, (int)game.Value, pvf.Text.Trim(), data.Text.Trim())
+        { GmEnabled = enableGm.Checked, GmPort = (int)gmPort.Value, GmWebPort = (int)gmWebPort.Value };
         SetState(State.Starting);
         addresses.Text = "正在启动，等待服务确认就绪…";
         starting = new CancellationTokenSource();
@@ -173,8 +197,15 @@ internal sealed class LauncherForm : Form
             var token = starting.Token;
             // 文件与端口预检查也放在线程池执行，网络盘延迟不能阻塞窗口消息。
             var ready = await Task.Run(() => ownedServer.StartAsync(options, token));
+            if (options.GmEnabled)
+            {
+                gmWeb = new GmWebHost(ready.GmPort, options.GmWebPort, WriteLog, () => !ownedServer.HasExited,
+                    ownedServer.OwnsGmConnection);
+                WriteLog("GM 工具已就绪：" + gmWeb.Url);
+            }
             string ip = ready.AdvertisedAddress ?? options.ServerIp;
             addresses.Text = $"频道：{ip}:{ready.ChannelPort}\r\n游戏：{ip}:{ready.GamePort}\r\n存档：{ready.DataDirectory ?? Path.GetFullPath(options.DataDirectory, root)}";
+            if (gmWeb is not null) addresses.Text += $"\r\nGM 工具：{gmWeb.Url}";
             try
             {
                 var remembered = options with { PvfPath = PortablePath(options.PvfPath), DataDirectory = PortablePath(options.DataDirectory) };
@@ -188,7 +219,7 @@ internal sealed class LauncherForm : Form
             WriteLog("游戏服务已就绪。");
             SetState(State.Running);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or OperationCanceledException or System.ComponentModel.Win32Exception or ArgumentException or NotSupportedException)
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or OperationCanceledException or System.ComponentModel.Win32Exception or ArgumentException or NotSupportedException)
         {
             string message = error is OperationCanceledException
                 ? starting.IsCancellationRequested ? "已取消启动。" : "启动等待超过 45 秒，请检查资源和日志。"
@@ -217,6 +248,16 @@ internal sealed class LauncherForm : Form
 
     async Task ReleaseServerAsync()
     {
+        if (gmWeb is not null)
+        {
+            var ownedWeb = gmWeb;
+            gmWeb = null;
+            try { await ownedWeb.DisposeAsync(); }
+            catch (Exception error) when (error is IOException or SocketException)
+            {
+                WriteLog("GM 网页关闭时发生错误：" + error.Message);
+            }
+        }
         if (server is null)
             return;
         try { await server.DisposeAsync(); }
@@ -235,7 +276,7 @@ internal sealed class LauncherForm : Form
         if (closeRequested)
             return;
         closeRequested = true;
-        start.Enabled = stop.Enabled = false;
+        start.Enabled = stop.Enabled = openGm.Enabled = false;
         starting?.Cancel();
         if (transition is not null)
             await transition;
@@ -253,6 +294,7 @@ internal sealed class LauncherForm : Form
         stop.Enabled = value is State.Starting or State.Running && !closeRequested;
         stop.Text = value == State.Starting ? "取消启动" : "停止服务";
         copy.Enabled = value == State.Running;
+        openGm.Enabled = value == State.Running && gmWeb is not null && !closeRequested;
         status.Text = text ?? value switch { State.Idle => "未启动", State.Starting => "正在启动…", State.Running => "运行中", _ => "正在停止…" };
         status.ForeColor = text == "启动失败" ? Color.Firebrick : value switch
         {
@@ -281,10 +323,13 @@ internal sealed class LauncherForm : Form
             serverIp.Text = saved.ServerIp;
             channel.Value = saved.ChannelPort;
             game.Value = saved.GamePort;
+            enableGm.Checked = saved.GmEnabled;
+            gmPort.Value = saved.GmPort;
+            gmWebPort.Value = saved.GmWebPort;
             pvf.Text = saved.PvfPath;
             data.Text = saved.DataDirectory;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
         {
             WriteLog("已恢复默认设置；上次设置无法读取：" + error.Message);
         }
