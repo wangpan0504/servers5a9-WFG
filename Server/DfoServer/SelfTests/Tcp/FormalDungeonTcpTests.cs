@@ -247,12 +247,11 @@ internal static partial class FormalDungeonTcpTests
             That(U16(retryMap, 25) > U16(map, 25), "再挑战创建新Run、新尝试及新怪key");
             ClearAgain(retryMap);
             peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
-            peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 1]);
+            peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 2]);
             peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
             peer.Send(72, [1, 3]); peer.Barrier();
-            peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Barrier();
             That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[3L]],
-                "剧情没有已接取且合法的后继任务时回城，真实15只结束旧场景，不生成新副本");
+                "剧情没有已接取且合法的后继任务时明确回城，不等待15或生成新副本");
             SelectMap(peer);
             peer.Send(132); peer.Expect(1, 132, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]); peer.Expect(0, 23); peer.Expect(0, 24);

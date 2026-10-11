@@ -123,12 +123,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         if (option == 1)
         {
-            var continuation = context.Session.BeginFormalDungeonQuestContinuation(current,dungeons,rooms,drops,items,pieces,out string reason);
+            var continuation = context.Session.BeginFormalDungeonQuestContinuation(current,dungeons,rooms,drops,items,pieces,
+                out bool returnToTown,out string reason);
             if (continuation is not null)
             {
                 log.Write("formal_quest_continuation",new { Connection = context.Id, Accepted = true, Reason = reason, current.Entry.RouteQuestId });
-                if (context.Session.LeaveFormalDungeonForContinuation() is not { } returning) return CommandResult.Handled;
-                await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,option),
+                var returning = returnToTown ? context.Session.ReturnFromFormalDungeon() : context.Session.LeaveFormalDungeonForContinuation();
+                if (returning is null) return CommandResult.Handled;
+                // 无后继必须确认回城选项，不能让客户端继续执行下一任务的15入场链。
+                await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,returnToTown ? (byte)2 : option),
                     "formal_result_next_quest",() => context.Session.CanPublishTravel(returning));
                 await town.ReturnFromFormalDungeonAsync(context,returning,"formal_next_quest_town_boundary");
                 return CommandResult.Handled;

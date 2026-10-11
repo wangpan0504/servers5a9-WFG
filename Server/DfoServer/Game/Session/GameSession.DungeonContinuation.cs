@@ -12,13 +12,14 @@ internal sealed partial class GameSession
     PendingDungeonContinuation? pendingDungeonContinuation;
 
     public FormalDungeonReceipt? BeginFormalDungeonQuestContinuation(FormalDungeonReceipt current, DungeonCatalog dungeons,
-        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces, out string reason)
+        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces,
+        out bool returnToTown, out string reason)
     {
+        returnToTown = false;
         reason = "settlement-changed";
         if (!owner.Execute(() => Ready && CanEnterFormalDungeon(current)) || questCatalog is null) return null;
         var character = current.Character;
-        bool story = current.Entry.RouteQuestId > 0 &&
-            current.Entry.Maze.HasActiveQuestConnection(checked((int)current.Entry.RouteQuestId));
+        bool taskRoute = current.Entry.RouteQuestId > 0;
         DungeonQuestContinuation? next = null;
         if (!towns.Areas.TryGetValue((character.Position.Town,character.Position.Area),out var area) ||
             area.DungeonWorldMap is not { } worldMap || !towns.DungeonMaps.TryGetValue(worldMap,out var map) || map.Error is not null)
@@ -26,8 +27,8 @@ internal sealed partial class GameSession
         else
             next = DungeonQuestContinuationRules.Resolve(character,current.Entry,questCatalog,dungeons,
                 map.Options.Select(row => row.DungeonId),out reason);
-        if (next is null && !story) return null;
-        // 有合法已接取主线才准备下一图；剧情无合法路线按普通回城完成握手。
+        if (next is null && !taskRoute && character.ActiveMainQuests.Length != 0) return null;
+        // 任务路线或没有活动任务时，无合法后继直接回城；普通选其他副本保留原入口。
         PreparedFormalDungeon? prepared = null;
         try
         {
@@ -37,13 +38,15 @@ internal sealed partial class GameSession
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException)
         { reason = "successor-entry-unavailable"; }
         if (next is { DungeonId: > 0 } && prepared is null) reason = "successor-entry-unavailable";
-        return owner.Execute(() =>
+        var receipt = owner.Execute(() =>
         {
             if (!Ready || !CanEnterFormalDungeon(current) || next is not null &&
                 !Selected!.ActiveMainQuests.Any(row => row.AcceptanceId == next.Quest.AcceptanceId && row.QuestId == next.Quest.QuestId)) return null;
-            pendingDungeonContinuation = new(current,prepared);
+            if (prepared is not null) pendingDungeonContinuation = new(current,prepared);
             return current;
         });
+        returnToTown = receipt is not null && prepared is null;
+        return receipt;
     }
 
     // 在72{1,1}结束旧场景，保留后继规划交给客户端24后的真实15。

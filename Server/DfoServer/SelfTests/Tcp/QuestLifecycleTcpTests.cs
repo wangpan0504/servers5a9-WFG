@@ -576,6 +576,7 @@ internal static class QuestLifecycleTcpTests
 
     public static async Task RunContinuationAsync(ServerOptions options, string root, TcpTestResources resources)
     {
+        await VerifyNoMainQuestReturnAsync(options,root,resources);
         await using var fixture = new TcpTestFixture(options,Path.Combine(root,"quest-continuation"),resources: resources);
         await fixture.StartAsync();
         var growth = CharacterGrowthCatalog.Load(resources.Archive,resources.Learning);
@@ -618,6 +619,61 @@ internal static class QuestLifecycleTcpTests
             That(Finished(peer).Body[0] == 1,"独立连图fixture真实交付3146父任务"); DrainNotifications(peer);
             peer.Send(31,[31,0,75,12]); peer.Expect(1,31,[1,75,12,1,0,0,0,0]); DrainNotifications(peer);
             ContinueToNextQuest(fixture,peer,map,acceptStoryDigest: true);
+        }
+        await fixture.StopAsync();
+    }
+
+    static async Task VerifyNoMainQuestReturnAsync(ServerOptions options,string root,TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(options,Path.Combine(root,"quest-no-main-return"),resources: resources);
+        await fixture.StartAsync();
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare("NoMainNext",resources.Characters.Get(0),resources.Towns.Room,
+                resources.Towns.InitialReturn,resources.Learning.Get);
+            new CharacterRepository(fixture.Database).Create(owner,candidate with { CompletedQuests = [3145,4873,3157] });
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(prepared: true); FormalDungeonTcpTests.EntryTown(peer);
+            That(fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id).Length == 0 &&
+                !List(peer.AvailableQuests,1).Contains(3146),"已完成救出赛丽亚及对话，等级不足时没有活动主线或可接3146");
+            peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,new byte[42]);
+            peer.Send(16,Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000"));
+            That(peer.Expect(0,28).Body[7] == 0,"没有任务身份的普通maze不能依靠活动剧情连接决定回城");
+            var map = peer.Expect(0,29).Body;
+            var path = new (byte X,byte Y)[] { (1,1),(2,1),(2,0),(3,0) };
+            for (int room = 0; room <= path.Length; room++)
+            {
+                FormalDungeonTcpTests.Load(peer); DrainNotifications(peer);
+                var enemies = Enumerable.Range(0,map[18]).Select(at => 19+22*at)
+                    .Where(at => map[at+13] != 9 && map[at+14] == 0).OrderBy(at => map[at+13] == 3);
+                foreach (int at in enemies)
+                {
+                    var death = FormalDungeonTcpTests.Death(U16(map,at+6),peer.Id,map[at+12]);
+                    if (map[at+13] == 3)
+                    {
+                        death[55] = 1;
+                        BinaryPrimitives.WriteUInt64LittleEndian(death.AsSpan(18),9000);
+                        BinaryPrimitives.WriteUInt32LittleEndian(death.AsSpan(26),30);
+                        FormalDungeonTcpTests.SealDeath(death);
+                    }
+                    peer.Send(39,death); DrainNotifications(peer);
+                }
+                if (room == path.Length) break;
+                var move = new byte[100]; move[0] = path[room].X; move[1] = path[room].Y;
+                peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+            }
+            peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
+            long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
+            peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,2]); peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+            string returned = fixture.Snapshot();
+            peer.Send(72,[1,3]); peer.Barrier();
+            That(fixture.Snapshot() == returned && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)
+                is [[long actual]] && actual == attempt,"无主线明确确认回城并忽略旧尾包，不再发选图或建立连图尝试");
+            peer.Send(35,Move(400,249)); peer.Barrier();
+            That(fixture.Query("SELECT x FROM characters WHERE id=$p0",peer.Id) is [[400L]],"回城完成后城镇移动恢复，连接保持可用");
         }
         await fixture.StopAsync();
     }
