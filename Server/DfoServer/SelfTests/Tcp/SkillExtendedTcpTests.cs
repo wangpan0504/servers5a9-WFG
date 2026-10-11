@@ -30,6 +30,13 @@ internal static class SkillExtendedTcpTests
             { Job = job, Level = 95, AcceptedStoryLevel = 1, Skills = profile.Skills, InitialLearning = state,
                 Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(profile) });
         }
+        var atPriest = resources.Characters.Get(14);
+        var atPriestState = SkillLearning.Initialize(14, catalog.FreeSkills(14, 4), catalog).State! with
+            { Experience = growth.GetLevelStartExperience(25) };
+        atPriestState = SkillPointLedger.Synchronize(14, 4, 25, atPriestState, catalog);
+        repository.Create(owner, new NewCharacter("DualSlash", resources.Towns.Room, resources.Towns.InitialReturn)
+        { Job = 14, GrowType = 4, Level = 25, AcceptedStoryLevel = 1, Skills = catalog.FreeSkills(14, 4).ToArray(),
+            InitialLearning = atPriestState, Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(atPriest) });
         Character Role(ushort slot) => repository.List(owner).Single(role => role.Slot == slot);
         await fixture.StartAsync();
         var tp = PvfScript.List(resources.Archive.ReadText("skill/swordmanskill.lst")).Keys.Select(id => catalog.Get(0, checked((ushort)id)))
@@ -108,11 +115,44 @@ internal static class SkillExtendedTcpTests
             That(learned.Skills.Single().Slot is >= 102 and < 138 && learned.Sp < catalog.TotalSp(95) + 137,
                 "缔造者被动按资源扣费并保持被动分组");
         }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(3);
+            var before = Role(3);
+            peer.Send(29, Purchase(68, 7));
+            peer.Expect(1, 29, [0, 0xD9, 0]);
+            That(Role(3).Revision == before.Revision && Role(3).Learning.Trees[0].Sp == before.Learning.Trees[0].Sp,
+                "双重切割等级不足正常拒绝、不扣点且连接继续");
+            // zz实收的单级学习正文及4B检查尾，独立编码保留原故障形状。
+            byte[] request = [0, 1, 68, 0, 0, 1, 0, 0x0B, 0xD2, 0xFE, 0x7E];
+            for (byte level = 1; level <= 2; level++)
+            {
+                peer.Send(29, request);
+                var learned = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
+                That(learned.Skills.Single().Id == 68 && learned.Skills.Single().Level == level &&
+                    learned.Sp == before.Learning.Trees[0].Sp - 20 * level && learned.Tp == 0,
+                    "双重切割完整ACK、逐级扣20SP且同连接继续 " + level);
+                var saved = Role(3);
+                That(saved.Learning.Trees[0].Skills.Single(skill => skill.Id == 68).Level == level &&
+                    saved.Learning.Trees[0].Sp == learned.Sp && saved.Learning.Trees[1].Sp == before.Learning.Trees[1].Sp &&
+                    saved.Learning.Trees[1].Skills.All(skill => skill.Id != 68), "学习提交与双树隔离 " + level);
+            }
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(3);
+            var trees = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
+            That(trees[0].Skills.Single(skill => skill.Id == 68).Level == 2 &&
+                trees[0].Sp == atPriestState.Trees[0].Sp - 40 && trees[1].Skills.All(skill => skill.Id != 68),
+                "双重切割重登回放等级、余额并保持副树");
+            peer.Barrier();
+        }
         for (byte job = 9; job <= 10; job++)
         {
             using var peer = Open(fixture);
             peer.Create("Fresh" + job, job);
-            ushort slot = (ushort)(job - 6);
+            ushort slot = (ushort)(job - 5);
             peer.Select(slot, combos: job == 9 ? SkillPackets.Combos(Role(slot).Learning) : null);
             var trees = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
             That(trees.All(tree => tree.Sp == 0 && tree.Tp == 0 && tree.Skills.Length == resources.Characters.Get(job).Skills.Length),

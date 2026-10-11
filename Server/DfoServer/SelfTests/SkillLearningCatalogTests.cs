@@ -58,6 +58,18 @@ internal static class SkillLearningCatalogTests
             "重复方向元数据不影响主动学习和主动组");
         That(Parse([.. passive, .. repeatedFitness]).SlotGroup is null && Parse([.. passive, .. repeatedFitness]).SupportsOrdinarySpLearning,
             "重复方向元数据的被动新分组未知，原有普通学习字段继续读取");
+        var repeatedFields = Parse([.. active, new(3, 0), new(6, 14), new(3, 1), new(0, 40), new(3, 7),
+            new(3, 4), new(0, 35), new(3, 6), new(0, 12), new(0, 1), new(3, 8),
+            new(3, 12), new(0, 1), new(3, 12), new(0, 0)]);
+        That(repeatedFields.Type == SkillType.Active && repeatedFields.GetBasePointCost(0) == 7 &&
+            repeatedFields.GetOrdinaryNextRequiredCharacterLevel(0) == 1 && repeatedFields.Prerequisites is { Count: 0 } &&
+            repeatedFields.IsFeatureSkill, "重复类型、费用、等级、前置及feature按external取首段，保留空首段");
+        var firstPrerequisites = Fixture([7], [4], [4, 4, 4, 4, 4, 4], [1], [0], [12, 1]);
+        That(Parse([.. firstPrerequisites, new(3, 6), new(3, 8)]).Prerequisites!
+            .SequenceEqual(new[] { new SkillPrerequisite(12, 1) }), "后续空前置块不清除首段要求");
+        Reject<InvalidDataException>(() => Parse([.. firstPrerequisites, new(3, 6), new(0, 12), new(0, 1)]));
+        Reject<InvalidDataException>(() => Parse([.. Fixture([-1], [4], [4, 4, 4, 4, 4, 4], [1], [0], []),
+            new(3, 1), new(0, 7), new(3, 7)]));
         Console.WriteLine("PASS skill resource type and slot group assertions");
     }
 
@@ -118,6 +130,13 @@ internal static class SkillLearningCatalogTests
         That(catalog.Get(0, 5).Path != catalog.Get(1, 5).Path &&
             catalog.Get(10, 250).GetDeclaredGrowtypeMaximum(1) == 0,
             "同技能ID不跨职业合并，growtype零声明原样保留");
+        foreach (var (job, id) in new (byte, ushort)[] { (2, 109), (2, 143), (4, 49), (5, 143), (6, 122),
+            (8, 3), (8, 216), (8, 218), (14, 68) })
+            That(catalog.Get(job, id).SupportsPointLearning, "真实重复标签技能完整解析并保留SP/TP资格 " + job + "/" + id);
+        That(catalog.Get(4, 49).DeclaredPointCosts!.SequenceEqual(new[] { 10 }) &&
+            catalog.Get(6, 122).Prerequisites is { Count: 0 }, "不同费用和先空后有的前置声明均沿external取首段");
+        That(catalog.Get(14, 68).Prerequisites!.SequenceEqual(new[] { new SkillPrerequisite(12, 1) }) &&
+            catalog.Get(14, 68).GetBasePointCost(0) == 20, "双重切割保留首段前置技能12一级与20SP费用");
 
         PvfToken[] valid = Fixture([15, 20], [4], [1, 2, 3, 4, 5, 6], [1], [2], [46, 2, 169, 1]);
         var synthetic = Parse(valid);
@@ -153,7 +172,8 @@ internal static class SkillLearningCatalogTests
         badType[3] = new PvfToken(2, BitConverter.SingleToInt32Bits(15));
         Reject<InvalidDataException>(() => Parse(badType));
         Reject<InvalidDataException>(() => Parse(valid[..^1]));
-        Reject<InvalidDataException>(() => Parse([.. valid, new PvfToken(3, 4), new PvfToken(0, 1)]));
+        That(Parse([.. valid, new PvfToken(3, 4), new PvfToken(0, 35)]).GetOrdinaryNextRequiredCharacterLevel(0) == 1,
+            "重复等级声明按首段读取");
         var discounted = Parse([.. valid, new PvfToken(3, 11), .. Enumerable.Repeat(new PvfToken(0, 33), 6)]);
         That(discounted.GetOrdinaryResourceSpCost(0, 0) == 10, "fitness 百分比整数截断，未减角色状态费用");
         Reject<ArgumentOutOfRangeException>(() => discounted.GetOrdinaryResourceSpCost(0, 6));

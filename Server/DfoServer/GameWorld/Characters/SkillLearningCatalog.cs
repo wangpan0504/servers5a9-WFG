@@ -273,8 +273,8 @@ internal sealed class SkillLearningCatalog
                 // 部分资源重复声明分组元数据；含义未闭合，只禁猜新被动组，不影响原有学习字段。
                 if (name is "skill class" or "skill fitness growtype")
                     unsupported.Add(name);
-                else
-                    throw new InvalidDataException("重复技能学习标签: " + name);
+                // external 的 Document.Section 读取首段；后续同名段不合并、不覆盖，空首段也有效。
+                // 仍逐段核对闭块，字段类型及取值由下面的首段解析校验。
             }
             if (name is "purchase cost" or "special purchase cost" or "pre required skill" or "combo set")
             {
