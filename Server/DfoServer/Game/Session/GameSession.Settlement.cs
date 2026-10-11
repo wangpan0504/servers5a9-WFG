@@ -145,9 +145,13 @@ internal sealed partial class GameSession
     public FormalDungeonReceipt? RetryFormalDungeon(FormalDungeonReceipt expected, DungeonCatalog dungeons,
         DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces = null)
     {
+        var original = owner.Execute(() => CanEnterFormalDungeon(expected) ? formalDungeon : null);
+        if (original is null) return null;
         uint quest = DfoServer.Game.Quests.QuestEligibility.Completed(expected.Character).Contains((int)expected.Entry.QuestId) ? 0 : expected.Entry.QuestId;
         // 资源规划失败保留原结算实例；新尝试持久预留成功后才替换旧实例。
-        return EnterFormalDungeon(expected.Entry.DungeonId,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,pieces: pieces,
-            requiredCharacter: expected.Character,retry: expected);
+        // 复用不可变生成规则和随机源；新Run独立冻结结果，不继承旧地面对象。
+        return EnterFormalDungeon(expected.Entry.DungeonId,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,
+            draw: original.Draw, pieces: pieces, requiredCharacter: expected.Character,retry: expected,
+            prepareDrops: original.PrepareDrops);
     }
 }

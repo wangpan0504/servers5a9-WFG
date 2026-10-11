@@ -104,9 +104,12 @@ internal static class DatabaseSchemaTests
             VerifyExistingQuestSystemV14(root);
             VerifyExistingQuestType49(root);
             VerifyMasterQuest17Migration(root);
+            VerifyLegacyDropV18Migration(root);
             VerifyExistingQuestFatigueV14(root);
-            VerifyMissingFatigueV18(root);
+            VerifyMissingFatigueMigration(root, 18);
+            VerifyMissingFatigueMigration(root, 19);
             VerifyQuestSkipConstraints(root);
+            VerifyDropCollectionSchema(root);
             VerifyFutureMigrations(path);
             string concurrent = Path.Combine(root, "concurrent.db");
             Task.WaitAll(Task.Run(() => new CharacterRepository(concurrent)), Task.Run(() => new AuthenticationRepository(concurrent)));
@@ -118,6 +121,70 @@ internal static class DatabaseSchemaTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
+    }
+
+    private static void VerifyDropCollectionSchema(string root)
+    {
+        string path = Path.Combine(root, "drop-collection-v20.db");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "SELECT count(*) FROM character_dungeon_drop_batches") is 0L &&
+                Query(db, "SELECT count(*) FROM character_dungeon_drop_objects") is 0L &&
+                Query(db, "SELECT count(*) FROM character_dungeon_drop_pickups") is 0L,
+                "新库直接建立v20完整空集合账本，不补发历史掉落");
+            RewindDropCollection(db);
+            Execute(db, "PRAGMA user_version=17");
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('drop-old',0,'DropOld',7,38,1,450,234,0,123)");
+            // 最后一张表撞到视图，前两张DDL和版本必须在同一升级事务回滚。
+            Execute(db, "CREATE VIEW character_dungeon_drop_pickups AS SELECT id FROM characters");
+        }
+        string beforeUpgrade = Snapshot(path);
+        Reject<SqliteException>(() => new CharacterRepository(path), "v20末表建表失败回滚任务升级、前两张集合表和版本");
+        Check(Snapshot(path) == beforeUpgrade, "v20失败保留真实v17、旧角色金币和全部原结构");
+        using (var db = Open(path)) Execute(db, "DROP VIEW character_dungeon_drop_pickups");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+            Check(Query(db, "PRAGMA user_version") is long upgradedVersion && upgradedVersion == SqliteMigrations.CurrentVersion && Query(db, "SELECT revision||':'||gold FROM characters") is "7:123" &&
+                Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "真实v17升级当前版本完成任务结构及空集合表，保留原资产、revision和外键");
+        string complete = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == complete, "正式集合结构重开不改变现有基线、版本或资产");
+        foreach (var (table, column) in new[]
+        {
+            ("character_dungeon_drop_pickups", "after_core"),
+            ("character_dungeon_drop_objects", "gold_amount"),
+            ("character_dungeon_drop_batches", "object_count")
+        })
+        {
+            using var db = Open(path);
+            foreach (bool missingTable in new[] { true, false })
+            {
+                using var tx = db.BeginTransaction();
+                SqliteMigrations.Execute(db, tx, missingTable ? "DROP TABLE " + table :
+                    "ALTER TABLE " + table + " RENAME COLUMN " + column + " TO fixture_missing_column");
+                if (missingTable)
+                    Reject<InvalidDataException>(() => SqliteMigrations.ValidateSchema(db, tx), "集合部分表不能通过完整数据库结构校验");
+                else
+                    Reject<SqliteException>(() => SqliteMigrations.ValidateSchema(db, tx), "集合三表齐全仍拒绝缺失完整数量或拾取核心列");
+                tx.Rollback();
+                Check(Snapshot(path) == complete, "集合结构拒绝并回滚后保留原完整结构与版本");
+            }
+        }
+        using (var db = Open(path))
+        {
+            using var tx = db.BeginTransaction();
+            foreach (string table in new[] { "character_dungeon_drop_pickups", "character_dungeon_drop_objects", "character_dungeon_drop_batches" })
+                SqliteMigrations.Execute(db, tx, "DROP TABLE " + table);
+            Reject<InvalidDataException>(() => SqliteMigrations.ValidateSchema(db, tx), "正式v20缺全部集合表也拒绝，不回退可选结构");
+            tx.Rollback();
+        }
+        using (var db = Open(path))
+            Execute(db, "DROP TABLE character_dungeon_drop_pickups");
+        string incomplete = Snapshot(path);
+        Reject<InvalidDataException>(() => new CharacterRepository(path), "重开已有部分集合结构时在启动前拒绝");
+        Check(Snapshot(path) == incomplete, "重开拒绝不补造集合表、不修改原数据或版本");
     }
 
     private static void VerifyQuestSystemMigration(string root)
@@ -223,11 +290,11 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
-            Check(Query(db, "PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion && Query(db, "SELECT revision||':'||quest_cycle_day||':'||equipment_slot_flags FROM characters") is "9:20261009:7" &&
+            Check(Query(db, "PRAGMA user_version") is long compatibleVersion && compatibleVersion == SqliteMigrations.CurrentVersion && Query(db, "SELECT revision||':'||quest_cycle_day||':'||equipment_slot_flags FROM characters") is "9:20261009:7" &&
                 Query(db, "SELECT daily_period||':'||answer FROM character_completed_quests") is "20261009:2" &&
                 Query(db, "SELECT daily_period||':'||answer FROM account_completed_quests") is "20261009:2" &&
                 Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
-                "master已发布任务v14升级18不重复建任务结构、不改周期答案、资产或revision");
+                "master已发布任务v14升级当前版本不重复建任务结构、不改周期答案、资产或revision");
             foreach (var row in rows)
                 Check(Rows(db, row.Key, row.Value.Columns) == row.Value.Rows, "任务v14保留原表全部数据及rowid：" + row.Key);
             Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN ('quest_drop_history_index','quest_drop_history_trigger')") is 2L &&
@@ -437,6 +504,54 @@ internal static class DatabaseSchemaTests
         Check(Snapshot(path) == after,"v18重开不重建表、不重放领取或消耗");
     }
 
+    private static void VerifyLegacyDropV18Migration(string root)
+    {
+        string path = Path.Combine(root, "legacy-drop-v18.db");
+        using (var source = Open(Path.Combine(root, "master-quest-v17.db")))
+        using (var target = Open(path)) source.BackupDatabase(target);
+        string[] tables;
+        string[][] columns;
+        string[] before;
+        using (var db = Open(path))
+        {
+            // 原掉落v18有完整集合，但任务回执仍是master v17，不能只调整最终版本号。
+            RewindQuestReceiptsToV17(db);
+            Execute(db, "PRAGMA user_version=18");
+            Execute(db, "UPDATE character_dungeon_drop_objects SET core='{\"Uid\":0,\"Attrs\":[9,8,7],\"Legacy\":true}' WHERE ground_key=512");
+            Execute(db, "UPDATE character_dungeon_drop_pickups SET item_uid=12345,after_core='{\"Uid\":12345,\"Attrs\":[9,8,7],\"Legacy\":true}' WHERE ground_key=512");
+            tables = TableNames(db);
+            columns = tables.Select(table => ColumnNames(db, table)).ToArray();
+            before = tables.Select((table, index) => Rows(db, table, columns[index])).ToArray();
+        }
+        string rollback = Path.Combine(root, "legacy-drop-v18-rollback.db");
+        using (var source = Open(path))
+        using (var target = Open(rollback)) source.BackupDatabase(target);
+        using (var db = Open(rollback)) Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
+        string original = Snapshot(rollback);
+        RejectDatabase(() => new CharacterRepository(rollback));
+        Check(Snapshot(rollback) == original, "旧掉落v18后段校验失败时回滚任务重建、集合、全部数据和版本");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                "旧掉落分支v18经兼容步骤升级当前版本，不跳过已发布任务v18");
+            foreach (var (table, index) in tables.Select((table, index) => (table, index)))
+                Check(Rows(db, table, columns[index]) == before[index], "旧掉落v18保留原表所有列、rowid、Core、UID及冻结结果：" + table);
+            Check(Query(db, "SELECT count(*) FROM pragma_table_info('character_quest_skip_receipts') WHERE name IN('operation_id','operation_kind')") is 2L &&
+                Query(db, "SELECT operation_id=acceptance_id AND operation_kind='QuickClear' FROM character_quest_skip_receipts WHERE rowid=59") is 1L,
+                "旧跳过补齐真实操作身份，保留原接取与冻结规划");
+            Check(Query(db, "SELECT count(*) FROM character_dungeon_drop_objects") is 1L &&
+                Query(db, "SELECT count(*) FROM character_dungeon_drop_pickups") is 1L &&
+                Query(db, "SELECT count(*) FROM v18_trigger_calls") is 0L,
+                "已冻结和已拾取集合不重建、不补发、不重放历史触发器");
+            Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "旧掉落v18兼容升级保持完整性与历史外键");
+        }
+        string committed = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == committed, "兼容旧掉落v18后再次打开不修改任何回执或资产");
+    }
+
     private static void VerifyExistingQuestFatigueV14(string root)
     {
         string path = Path.Combine(root, "quest-v14-existing-fatigue.db");
@@ -482,9 +597,9 @@ internal static class DatabaseSchemaTests
         Check(Snapshot(path) == after,"旧v14疲劳兼容后重开不重建或重置");
     }
 
-    private static void VerifyMissingFatigueV18(string root)
+    private static void VerifyMissingFatigueMigration(string root, int sourceVersion)
     {
-        string path = Path.Combine(root, "missing-fatigue-v18.db");
+        string path = Path.Combine(root, $"missing-fatigue-v{sourceVersion}.db");
         _ = new CharacterRepository(path);
         string[] tables; string[][] columns; string[] before;
         using (var db = Open(path))
@@ -499,13 +614,13 @@ internal static class DatabaseSchemaTests
                 INSERT INTO character_dungeon_fatigue_receipts(rowid,character_id,account,instance_id,task_attempt,map_id,epoch,generation,
                   rule_id,before_revision,revision,before_state,after_state)
                   VALUES(81,4,'legacy','abcdef1234567890abcdef1234567890',42,16408,9,7,'fatigue-old',6,7,'{"Used":6}','{"Used":7}');
-                PRAGMA user_version=18;
                 """);
+            Execute(db, $"PRAGMA user_version={sourceVersion}");
             tables = TableNames(db).Where(table => table != "character_fatigue").ToArray();
             columns = tables.Select(table => ColumnNames(db, table)).ToArray();
             before = tables.Select((table, index) => Rows(db, table, columns[index])).ToArray();
         }
-        string rollback = Path.Combine(root, "missing-fatigue-rollback.db");
+        string rollback = Path.Combine(root, $"missing-fatigue-v{sourceVersion}-rollback.db");
         using (var from = Open(path))
         using (var to = Open(rollback)) from.BackupDatabase(to);
         string original = Snapshot(rollback);
@@ -514,12 +629,12 @@ internal static class DatabaseSchemaTests
             Execute(db, "CREATE TEMP TRIGGER reject_fatigue BEFORE INSERT ON character_fatigue BEGIN SELECT RAISE(ABORT,'fatigue failure'); END");
             Reject<SqliteException>(() => SqliteMigrations.Apply(db), "旧角色疲劳补齐写入失败时拒绝升级");
         }
-        Check(Snapshot(rollback) == original, "疲劳补齐失败回滚全部记录和v18版本");
+        Check(Snapshot(rollback) == original, $"疲劳补齐失败回滚全部记录和v{sourceVersion}版本");
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
             Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
-                "已有v18只执行追加迁移并升级到当前版本");
+                $"已有v{sourceVersion}只执行追加迁移并升级到当前版本");
             Check(Query(db, "SELECT used||':'||maximum||':'||used_maximum||':'||remaining||':'||context_auxiliary||':'||selection_auxiliary FROM character_fatigue WHERE character_id=1") is "0:156:0:156:0:0",
                 "已有真实副本owner且无扣点历史的旧角色补齐本服初始疲劳");
             Check(Query(db, "SELECT used||':'||maximum||':'||used_maximum||':'||remaining||':'||context_auxiliary||':'||selection_auxiliary FROM character_fatigue WHERE character_id=2") is "7:156:9:149:3:4",
@@ -593,6 +708,7 @@ internal static class DatabaseSchemaTests
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
+                RewindDropCollection(db);
                 if (oldVersion == 17) RewindQuestReceiptsToV17(db);
                 else if (oldVersion < 17) RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
@@ -685,14 +801,14 @@ internal static class DatabaseSchemaTests
                     "真实连续迁移后数据库与外键完整");
                 if (oldVersion == 13)
                 {
-                    Check(Query(db, "SELECT payload FROM character_dungeon_drop_batches") is "原批次" &&
-                        Query(db, "SELECT payload FROM character_dungeon_drop_objects") is "完整Core" &&
-                        Query(db, "SELECT payload FROM character_dungeon_drop_pickups") is "已到账凭据" &&
+                    Check(Query(db, "SELECT resource_source FROM character_dungeon_drop_batches") is "原批次" &&
+                        Query(db, "SELECT core FROM character_dungeon_drop_objects") is "{}" &&
+                        Query(db, "SELECT after_core FROM character_dungeon_drop_pickups") is "{}" &&
                         Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN ('drop_dependency_index','drop_dependency_guard')") is 2L,
                         "普通账本重建保留外部完整集合三层引用、全部行及附属索引触发器");
                     Reject<SqliteException>(() => Execute(db, "UPDATE character_dungeon_drop_objects SET event_id='missing'"),
                         "集合外键在重建及重命名后仍拒绝不存在的原成长来源");
-                    Reject<SqliteException>(() => Execute(db, "INSERT INTO character_dungeon_drop_objects VALUES(1,'legacy',513,'')"),
+                    Reject<SqliteException>(() => Execute(db, "INSERT INTO character_dungeon_drop_objects VALUES(1,'legacy',1,513,NULL,99,100,200,0)"),
                         "集合附属触发器在重建后仍生效");
                 }
             }
@@ -799,6 +915,7 @@ internal static class DatabaseSchemaTests
     // 成功迁移夹具恢复完整已发布v13结构，不以改版本号冒充旧库。
     internal static void RewindQuestSystemToV13(SqliteConnection db, bool keepFatigue = false)
     {
+        RewindDropCollection(db);
         if (!keepFatigue)
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
         Execute(db, "PRAGMA foreign_keys=OFF");
@@ -884,21 +1001,30 @@ internal static class DatabaseSchemaTests
         return db;
     }
 
-    // 只模拟三层成长外键，避免在普通图测试中重复实现掉落模块的业务DDL；完整DDL另由依赖组合验证。
-    private static void AddDropDependencyFixture(SqliteConnection db) => Execute(db, """
-        CREATE TABLE character_dungeon_drop_batches(character_id INTEGER,event_id TEXT,payload TEXT NOT NULL,
-          PRIMARY KEY(character_id,event_id),FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id));
-        CREATE TABLE character_dungeon_drop_objects(character_id INTEGER,event_id TEXT,ground_key INTEGER,payload TEXT NOT NULL,
-          PRIMARY KEY(character_id,ground_key),FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_drop_batches(character_id,event_id));
-        CREATE TABLE character_dungeon_drop_pickups(character_id INTEGER,ground_key INTEGER,payload TEXT NOT NULL,
-          PRIMARY KEY(character_id,ground_key),FOREIGN KEY(character_id,ground_key) REFERENCES character_dungeon_drop_objects(character_id,ground_key));
-        CREATE INDEX drop_dependency_index ON character_dungeon_drop_objects(payload);
-        CREATE TRIGGER drop_dependency_guard BEFORE INSERT ON character_dungeon_drop_objects
-          WHEN NEW.payload='' BEGIN SELECT RAISE(ABORT,'空集合测试载荷'); END;
-        INSERT INTO character_dungeon_drop_batches VALUES(1,'legacy','原批次');
-        INSERT INTO character_dungeon_drop_objects VALUES(1,'legacy',512,'完整Core');
-        INSERT INTO character_dungeon_drop_pickups VALUES(1,512,'已到账凭据');
-        """);
+    private static void RewindDropCollection(SqliteConnection db) => Execute(db,
+        "DROP TABLE IF EXISTS character_dungeon_drop_pickups; DROP TABLE IF EXISTS character_dungeon_drop_objects; DROP TABLE IF EXISTS character_dungeon_drop_batches");
+
+    // 使用真实集合DDL与明确合成行，验证旧版已有集合随成长父表迁移完整保留。
+    private static void AddDropDependencyFixture(SqliteConnection db)
+    {
+        using (var tx = db.BeginTransaction())
+        {
+            DungeonDropCollectionSchema.Upgrade(db, tx);
+            tx.Commit();
+        }
+        Execute(db, """
+            CREATE INDEX drop_dependency_index ON character_dungeon_drop_objects(core);
+            CREATE TRIGGER drop_dependency_guard BEFORE INSERT ON character_dungeon_drop_objects
+              WHEN NEW.gold_amount=99 BEGIN SELECT RAISE(ABORT,'集合测试触发器'); END;
+            INSERT INTO character_dungeon_drop_batches
+              SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,'legacy-rule','原批次',1
+              FROM character_dungeon_growth_receipts WHERE character_id=1 AND event_id='legacy';
+            INSERT INTO character_dungeon_drop_objects VALUES(1,'legacy',0,512,'{}',0,100,200,0);
+            INSERT INTO character_dungeon_drop_pickups
+              SELECT character_id,account,event_id,512,instance_id,task_attempt,epoch,177,1,'{}',NULL,1,NULL,NULL,8
+              FROM character_dungeon_drop_batches WHERE character_id=1 AND event_id='legacy';
+            """);
+    }
 
     private static object? Query(SqliteConnection db, string sql)
     {

@@ -1,6 +1,8 @@
 using static DfoServer.Testing.TestCheck;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Builders.Inventory;
+using DfoServer.Game.Currency;
 
 namespace DfoServer;
 
@@ -61,6 +63,30 @@ internal static class DungeonPickupProtocolTests
             "显式零flags可编码，Builder不推断特殊资源或奖励资格");
 
         That(DungeonPickupPackets.Accepted().SequenceEqual(new byte[] { 1 }), "ACK43成功精确1B");
+        var gold = DungeonPickupPackets.SinglePlayerGoldNotification(0xFEDCBA98, 0x8123, 123456);
+        using (var stream = new MemoryStream(gold))
+        using (var reader = new BinaryReader(stream))
+        {
+            That(gold.Length == 47 && reader.ReadUInt32() == 0xFEDCBA98 && reader.ReadUInt16() == 0x8123,
+                "金币通知沿本版u32地面key和u16拾取者头部，不使用A21的117B布局");
+            for (int member = 0; member < 8; member++)
+            {
+                bool participates = reader.ReadByte() != 0;
+                uint amount = reader.ReadUInt32();
+                That(participates == (member == 0) && amount == (member == 0 ? 123456u : 0u),
+                    "金币消费者每个成员均读取金额，非本人成员也不省略四字节");
+                if (participates)
+                    That(reader.ReadByte() == 0, "单人无额外金币分量，数量字段仍必须消费");
+            }
+            That(stream.Position == stream.Length, "八成员金币通知完整消费，无普通物品目的槽或尾部");
+        }
+        Reject<ArgumentOutOfRangeException>(() => DungeonPickupPackets.SinglePlayerGoldNotification(1, 2, 0),
+            "未产生已提交金币增量不得编码金币拾取成功");
+        That(CurrencyPackets.PickupSlot(CurrencyKind.Gold) == 0 && CurrencyPackets.PickupSlot(CurrencyKind.ClearCube) == 358 &&
+            CurrencyPackets.PickupSlot(CurrencyKind.GoldCube) == 359 && CurrencyPackets.PickupSlot(CurrencyKind.EpicSoul) == 365,
+            "集合材料投影使用本版虚拟余额槽，不把账号材料写入角色金币槽");
+        Reject<NotSupportedException>(() => CurrencyPackets.PickupSlot(CurrencyKind.Cera),
+            "没有普通拾取槽的货币不得猜测槽0发布");
         foreach (ushort error in new ushort[] { 0, 1, 0x8123, ushort.MaxValue })
         {
             byte[] rejection = DungeonPickupPackets.Rejected(error);

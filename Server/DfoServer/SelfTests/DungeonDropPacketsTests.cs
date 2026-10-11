@@ -24,27 +24,35 @@ internal static class DungeonDropPacketsTests
         }, 65000, 63000);
         var one = DungeonPackets.MonsterDeath(257, [first]);
         var two = DungeonPackets.MonsterDeath(258, [first, second]);
+        var gold = DungeonPackets.MonsterDeath(259, [new(1234, 0, null, 0, 0) { GoldAmount = 321 }]);
+        That(gold.Length == 140 && BinaryPrimitives.ReadUInt32LittleEndian(gold.AsSpan(4)) == 1234 &&
+            BinaryPrimitives.ReadInt32LittleEndian(gold.AsSpan(10)) == 0 && BinaryPrimitives.ReadInt32LittleEndian(gold.AsSpan(14)) == 321 &&
+            gold.AsSpan(18, 117).SequenceEqual(new byte[117]) && gold.AsSpan(135).SequenceEqual(new byte[] { 0, 0, 255, 0, 0 }),
+            "金币使用本版完整地面key与123B记录，模板0/金额和零创建上下文不伪造实体Core");
+        Reject<InvalidDataException>(() => DungeonPackets.MonsterDeath(1, [new(1234, 0, null, 0, 0)]), "空Core与零金币不能形成合法地面记录");
+        Reject<InvalidDataException>(() => DungeonPackets.MonsterDeath(1, [first with { GoldAmount = 1 }]), "一条地面记录不能同时包含实体和金币");
         That(one.Length == 140 && two.Length == 271 && BinaryPrimitives.ReadUInt16LittleEndian(two) == 258
             && BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(2)) == 2, "非零掉落每条131B且u16数量在头部");
         int cursor = 4;
         foreach (var drop in new[] { first, second })
         {
+            var expectedCore = drop.Core ?? throw new InvalidOperationException("固定物品fixture缺少Core");
             That(BinaryPrimitives.ReadUInt32LittleEndian(two.AsSpan(cursor)) == drop.ObjectKey, "地面对象key完整保留u32高位");
             int core = cursor + 4;
             That(BinaryPrimitives.ReadInt16LittleEndian(two.AsSpan(core)) == drop.RecordSlot
-                && BinaryPrimitives.ReadInt32LittleEndian(two.AsSpan(core + 2)) == drop.Core.ItemId
-                && BinaryPrimitives.ReadInt32LittleEndian(two.AsSpan(core + 6)) == drop.Core.Value,
+                && BinaryPrimitives.ReadInt32LittleEndian(two.AsSpan(core + 2)) == expectedCore.ItemId
+                && BinaryPrimitives.ReadInt32LittleEndian(two.AsSpan(core + 6)) == expectedCore.Value,
                 "123B记录与普通背包相同，堆叠数量或装备品级不混入对象key");
-            That(two[core + 10] == drop.Core.Attr && BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(core + 11)) == drop.Core.Durability
-                && BinaryPrimitives.ReadUInt32LittleEndian(two.AsSpan(core + 97)) == drop.Core.Extension97
-                && BinaryPrimitives.ReadUInt64LittleEndian(two.AsSpan(core + 101)) == drop.Core.GuardianGemKeys
-                && BinaryPrimitives.ReadUInt32LittleEndian(two.AsSpan(core + 114)) == drop.Core.Extension114.Value
-                && two[core + 118] == drop.Core.Extension114.Flag
-                && BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(core + 121)) == drop.Core.Extension121,
+            That(two[core + 10] == expectedCore.Attr && BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(core + 11)) == expectedCore.Durability
+                && BinaryPrimitives.ReadUInt32LittleEndian(two.AsSpan(core + 97)) == expectedCore.Extension97
+                && BinaryPrimitives.ReadUInt64LittleEndian(two.AsSpan(core + 101)) == expectedCore.GuardianGemKeys
+                && BinaryPrimitives.ReadUInt32LittleEndian(two.AsSpan(core + 114)) == expectedCore.Extension114.Value
+                && two[core + 118] == expectedCore.Extension114.Flag
+                && BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(core + 121)) == expectedCore.Extension121,
                 "完整普通资产属性和扩展尾部不丢失或另造简化格式");
-            That(BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(core + 123)) == drop.X
-                && BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(core + 125)) == drop.Y,
-                "位置紧跟完整123B记录，第二条仍保持正确游标");
+            That(BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(core + 123)) == drop.ContextValue
+                && BinaryPrimitives.ReadUInt16LittleEndian(two.AsSpan(core + 125)) == drop.VisibilityFilter,
+                "两个创建上下文紧跟完整123B记录，第二条仍保持正确游标；非零不证明普通可见");
             cursor += 131;
         }
         That(two.AsSpan(cursor).SequenceEqual(new byte[] { 0, 0, 255, 0, 0 }), "所有物品后再读取死亡可选标志、mode、grade及两尾标志");
@@ -53,8 +61,8 @@ internal static class DungeonDropPacketsTests
             && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(11)) == 0x8123
             && BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(7)) == GameFrame.Crc(frame.AsSpan(11))
             && frame.AsSpan(16).SequenceEqual(two), "非零掉落使用完整NOTI38帧、序号和CRC合同");
-        Reject<InvalidDataException>(() => DungeonPackets.MonsterDeath(1, [first, first with { X = 1 }]), "重复地面key拒绝而不重复宣布");
-        Reject<InvalidDataException>(() => DungeonPackets.MonsterDeath(1, [first with { Core = first.Core with { Value = 0 } }]), "零数量资产不产生成功包");
+        Reject<InvalidDataException>(() => DungeonPackets.MonsterDeath(1, [first, first with { ContextValue = 1 }]), "重复地面key拒绝而不重复宣布");
+        Reject<InvalidDataException>(() => DungeonPackets.MonsterDeath(1, [first with { Core = first.Core! with { Value = 0 } }]), "零数量资产不产生成功包");
         Reject<NotSupportedException>(() => DungeonPackets.MonsterDeath(1, [first with { Core = new(1, ItemKind.Avatar, 1) }]), "缺失时装RAW明确拒绝");
         Reject<NotSupportedException>(() => DungeonPackets.MonsterDeath(1, [first with { Core = new(1, ItemKind.Creature, 1) }]), "缺失宠物detail明确拒绝");
         var bound = Enumerable.Range(0, 500).Select(index => first with { ObjectKey = checked((uint)index) }).ToArray();

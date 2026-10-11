@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
@@ -171,7 +172,8 @@ internal static class QuestCycleContinuationTests
                 .GetConstructors(BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic)
                 .Single(constructor => constructor.GetParameters().Length == args.Length).Invoke(args);
             var dungeon = Create("FormalDungeon",entry,route,run,authority,1u,ground,
-                new Dictionary<int,DungeonExplicitDropPool>(),(Func<int,int>)(_ => 0));
+                new Dictionary<int,DungeonExplicitDropPool>(),(Func<int,int>)(_ => 0),null,
+                ImmutableDictionary<ushort,DungeonDropGenerationPlan>.Empty);
             var prepared = Create("PreparedFormalDungeon",character,Session.SelectionEpoch,dungeon,key+1);
             if (forReplay)
             {

@@ -20,6 +20,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
 using DfoServer.Game.Rental;
 using DfoServer.Game.Settings;
+using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Infrastructure;
 // 唯一装配入口：按领域增加模块及依赖，不在协议循环中维护业务分支。
@@ -57,12 +58,22 @@ internal static class ServerRuntime
             var rooms = DungeonRoomCatalog.Load(pvf);
             questRooms = rooms;
             var drops = DungeonMonsterDropCatalog.Load(pvf);
+            var dropRules = DungeonDropRuleCatalog.Load(pvf);
+            var dropCandidates = itemResources.DungeonDropItems;
+            var specialDrops = itemResources.DungeonSpecialDrops;
+            var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get, specialDrops);
+            DungeonDropGenerationPlan PrepareDrops(DungeonEntryPlan entry, DungeonPlannedMonster monster) =>
+                resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.SpawnType, entry.Difficulty, entry.BasisLevel);
+            log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
+                EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
+                FifthProbabilityRows = dropRules.ProbabilityRows.Count(row => row.Values[4] != 0),
+                specialDrops.Compatibility });
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
-                drops, itemResources.Items, itemResources.EpicPieces,questProjection);
+                drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection,itemResources.EpicPieces);
-            questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces);
+            questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops);
         }
         else
         {

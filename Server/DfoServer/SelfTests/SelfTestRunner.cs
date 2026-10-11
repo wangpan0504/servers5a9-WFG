@@ -26,6 +26,7 @@ internal static class SelfTestRunner
         DungeonSettlementTests.RunCore();
         DungeonSelectionReturnTests.RunCore();
         DungeonPickupProtocolTests.Run();
+        DungeonPickupPlanningTests.RunCore();
         SkillLearningDisconnectTests.Run();
         QuestFixedRewardTests.Run();
         QuestProtocolTests.Run();
@@ -93,6 +94,10 @@ internal static class SelfTestRunner
         SinglePlayerDungeonRunTests.RunCore();
         DungeonExplicitDropPolicyTests.RunCore();
         DungeonGroundStateTests.RunCore();
+        DungeonDropRuleCatalogTests.RunCore();
+        DungeonSpecialDropCatalogTests.RunCore();
+        DungeonItemDropCatalogTests.RunCore();
+        DungeonDropGenerationPlanTests.RunCore();
         GrowthPacketsTests.Run();
         SkillRequestTests.Run();
         SkillLearningTests.RunCore();
@@ -191,8 +196,13 @@ internal static class SelfTestRunner
         DungeonSettlementTests.RunResources(pvf);
         DungeonSettlementSessionTests.Run(towns, pvf, characters, itemResources);
         DungeonMonsterDropCatalogTests.Run(pvf);
+        DungeonDropRuleCatalogTests.RunResources(pvf);
+        DungeonItemDropCatalogTests.RunResources(itemResources.DungeonDropItems);
+        DungeonSpecialDropCatalogTests.RunResources(itemResources.DungeonSpecialDrops);
+        DungeonPickupPlanningTests.RunResources(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         DungeonExplicitDropPolicyTests.RunResources(DungeonMonsterDropCatalog.Load(pvf), itemResources.Items);
         DungeonGrowthRepositoryTests.Run(towns, pvf, characters);
+        DungeonDropCollectionRepositoryTests.Run(towns, pvf, characters, itemResources);
         await FormalDungeonSessionTests.RunAsync(towns, pvf, characters, itemResources);
         await FormalDungeonPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         SkillLearningCatalogTests.Run(pvf);

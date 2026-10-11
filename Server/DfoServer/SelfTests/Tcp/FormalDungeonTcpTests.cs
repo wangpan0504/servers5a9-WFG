@@ -7,6 +7,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.Game.Quests;
 using DfoServer.Development.Dungeons;
 using DfoServer.Network.Management;
+using DfoServer.Game.Inventory.Models;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -126,7 +127,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Send(39, report);
                     byte[] deathNotice = peer.Expect(0, 38).Body;
                     int dropCount = U16(deathNotice, 2);
-                    That(U16(deathNotice, 0) == key && dropCount is 0 or 1 && deathNotice.Length == 9 + 131 * dropCount &&
+                    That(U16(deathNotice, 0) == key && dropCount <= 500 && deathNotice.Length == 9 + 131 * dropCount &&
                         deathNotice.AsSpan(deathNotice.Length - 5).SequenceEqual(new byte[] { 0, 0, 255, 0, 0 }),
                         "正式死亡接受FFFF报告者、0211来源及不同等级/零扣血统计，投影保留完整掉落行及尾部");
                     byte[] notice = ReadGrowth(room == ids.Length - 1 && map[offset + 13] == 3);
@@ -151,32 +152,7 @@ internal static partial class FormalDungeonTcpTests
                         peer.Barrier();
                         That(Experience(fixture, peer.Id) == experience, "117仅协调已死亡Boss，已开启结算不重复发31或经验");
                     }
-                    if (dropCount != 0)
-                    {
-                        uint ground = U32(deathNotice, 4);
-                        int itemId = checked((int)U32(deathNotice, 10));
-                        That(itemId is 1000 or 1047 or 1004 && U32(deathNotice, 14) == 1,
-                            "本服正式随机仅生成获授权的一件普通物品");
-                        byte[] getItem = new byte[20];
-                        BinaryPrimitives.WriteUInt32LittleEndian(getItem, ground);
-                        peer.Send(43, getItem);
-                        byte[] got = peer.Expect(0, 39).Body;
-                        That(got.Length == 19 && U32(got, 0) == ground && U16(got, 4) == peer.Id && U16(got, 14) == peer.Id,
-                            "实际普通20B拾取获得完整19B NOTI39，不追加空42");
-                        ushort slot = U16(got, 16);
-                        peer.Expect(0, 14);
-                        peer.Expect(1, 43, [1]);
-                        That(fixture.Query("SELECT destination_slot,item_uid FROM character_dungeon_pickup_receipts WHERE character_id=$p0 AND ground_key=$p1", peer.Id, ground)
-                            is [{ Length: 2 } row] && Convert.ToUInt16(row[0]) == slot && Convert.ToInt64(row[1]) > 0,
-                            "拾取通知使用同事务实际UID与目的槽");
-                        string assets = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
-                        peer.Send(43, getItem);
-                        peer.Expect(1, 43, [0, 22, 0]);
-                        peer.Barrier();
-                        That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assets,
-                            "重复拾取明确拒绝并恢复等待，库存不再增加");
-                        picked++;
-                    }
+                    picked += PickupResourceDrops(fixture, peer, deathNotice, 3145);
                     string growthBeforeReplay = fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id");
                     string lootBeforeReplay = fixture.Snapshot("SELECT * FROM character_dungeon_loot_receipts ORDER BY character_id,event_id");
                     string inventoryBeforeReplay = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
@@ -689,10 +665,14 @@ internal static partial class FormalDungeonTcpTests
         That(fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0", peer.Id) is [[3145L]] &&
             fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", peer.Id) is [[0L]],
             "普通完整TCP挑战复用真实领奖角色，不伪造任务完成或清空活动任务");
-        string questAssets = fixture.Snapshot("""
-            SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 AND
+        long[] originalRewardUids = fixture.Query("""
+            SELECT item_uid FROM character_inventory_items WHERE character_id=$p0 AND
               json_extract(item_core,'$.ItemId') IN (10165055,101010438,10403,12403,14403,16403,18403) ORDER BY item_uid
-            """, peer.Id);
+            """, peer.Id).Select(row => Convert.ToInt64(row[0])).ToArray();
+        That(originalRewardUids.Length >= 7, "普通挑战前确有完整七项领奖实例，不能用空查询证明资产保全");
+        string originalRewardQuery = "SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 AND item_uid IN (" +
+            string.Join(",", originalRewardUids) + ") ORDER BY item_uid";
+        string questAssets = fixture.Snapshot(originalRewardQuery, peer.Id);
         long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]);
         ulong experience = Experience(fixture, peer.Id);
         byte currentLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
@@ -748,19 +728,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]);
                     peer.Expect(0, 31, []);
                 }
-                if (death[2] != 0)
-                {
-                    uint groundKey = U32(death, 4);
-                    byte[] pickup = new byte[20]; BinaryPrimitives.WriteUInt32LittleEndian(pickup, groundKey);
-                    peer.Send(43, pickup);
-                    byte[] picked = peer.Expect(0, 39).Body;
-                    peer.Expect(0, 14); peer.Expect(1, 43, [1]);
-                    That(picked.Length == 19 && U32(picked, 0) == groundKey && fixture.Query("""
-                        SELECT g.quest_id FROM character_dungeon_growth_receipts g JOIN character_dungeon_pickup_receipts p
-                          ON g.character_id=p.character_id AND g.event_id=p.event_id WHERE p.character_id=$p0 AND p.ground_key=$p1
-                        """, peer.Id, groundKey) is [[0L]], "普通随机命中沿零任务成长来源原子拾取，不借用3145掉落身份");
-                    ordinaryPicked++;
-                }
+                ordinaryPicked += PickupResourceDrops(fixture, peer, death, 0);
             }
         }
         That(bossReport is not null && fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND quest_id=0", peer.Id)
@@ -784,10 +752,8 @@ internal static partial class FormalDungeonTcpTests
             fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0", peer.Id) is [[1L]] &&
             fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0", peer.Id) is [[3145L]] &&
             fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", peer.Id) is [[0L]] &&
-            fixture.Snapshot("""
-                SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 AND
-                  json_extract(item_core,'$.ItemId') IN (10165055,101010438,10403,12403,14403,16403,18403) ORDER BY item_uid
-                """, peer.Id) == questAssets, "普通挑战与再挑战保留真实七项领奖UID/Core、完成位和空活动主线");
+            fixture.Snapshot(originalRewardQuery, peer.Id) == questAssets,
+            "普通挑战与再挑战保留原领奖UID/Core、完成位和空活动主线；合法掉落可新增同模板实例");
         Console.WriteLine($"PASS 真实3145领奖后普通六房32个静态目标、Boss改写、结算及再挑战生产TCP；普通随机拾取{ordinaryPicked}件（合成战斗，非客户端验收）");
 
         void ReadGrowth(uint delta)
@@ -824,6 +790,58 @@ internal static partial class FormalDungeonTcpTests
         fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0", id);
 
     static ulong Experience(TcpTestFixture fixture, ushort id) => checked((ulong)Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", id)[0][0]));
+    static int PickupResourceDrops(TcpTestFixture fixture, TcpPeer peer, byte[] death, uint questId)
+    {
+        int count = U16(death, 2);
+        That(death.Length == 9 + count * 131, "默认资源策略发送全部冻结行，数量与完整正文一致");
+        var keys = new HashSet<uint>();
+        for (int ordinal = 0; ordinal < count; ordinal++)
+        {
+            int offset = 4 + ordinal * 131;
+            uint ground = U32(death, offset), itemId = U32(death, offset + 6), value = U32(death, offset + 10);
+            That(keys.Add(ground) && ground != peer.Id && (itemId != 0 || value > 0), "各物品/金币保留独立key与合法核心");
+            byte[] pickup = new byte[20]; BinaryPrimitives.WriteUInt32LittleEndian(pickup, ground);
+            peer.Send(43, pickup);
+            byte[] got = peer.Expect(0, 39).Body;
+            That(U32(got, 0) == ground && U16(got, 4) == peer.Id, "逐件拾取回报本次实际地面与本人身份");
+            if (itemId == 0)
+            {
+                int cursor = 6;
+                for (int member = 0; member < 8; member++)
+                {
+                    byte active = got[cursor++]; uint amount = U32(got, cursor); cursor += 4;
+                    That(active == (member == 0 ? 1 : 0) && amount == (member == 0 ? value : 0), "金币八成员分支保留实际金额");
+                    if (active != 0) That(got[cursor++] == 0, "单人无额外金币分量");
+                }
+                That(got.Length == 47 && cursor == got.Length, "金币独立47B格式完整消费");
+            }
+            else That(got.Length == 19 && U16(got, 14) == peer.Id, "普通物品与账号材料保留完整19B格式");
+            peer.Expect(0, 14); peer.Expect(1, 43, [1]);
+            var row = fixture.Query("""
+                SELECT p.currency_kind,p.amount,p.destination_slot,p.item_uid,o.core,o.gold_amount,b.quest_id
+                FROM character_dungeon_drop_pickups p JOIN character_dungeon_drop_objects o
+                  ON o.character_id=p.character_id AND o.ground_key=p.ground_key
+                JOIN character_dungeon_drop_batches b ON b.character_id=o.character_id AND b.event_id=o.event_id
+                WHERE p.character_id=$p0 AND p.ground_key=$p1
+                """, peer.Id, ground).Single();
+            That(Convert.ToUInt32(row[6]) == questId, "集合拾取沿本次真实任务/普通死亡来源提交，不借旧实例身份");
+            if (itemId == 0) That(row[4] is null or DBNull && Convert.ToUInt32(row[5]) == value && Convert.ToUInt32(row[1]) == value,
+                "金币地面与真实到账金额一致，不制造背包UID");
+            else
+            {
+                var core = JsonSerializer.Deserialize<ItemCore>((string)row[4]!)!;
+                That(core.ItemId == itemId && core.Value == value && core.Count == Convert.ToInt32(row[1]),
+                    "物品模板、冻结属性种子和数量沿同一集合持久化");
+                if (row[0] is null or DBNull) That(Convert.ToInt64(row[3]) > 0 && Convert.ToUInt16(row[2]) == U16(got, 16),
+                    "实体拾取使用已提交UID及目的槽");
+            }
+            string beforeDuplicate = fixture.Snapshot();
+            peer.Send(43, pickup); peer.Expect(1, 43, [0, 22, 0]); peer.Barrier();
+            That(fixture.Snapshot() == beforeDuplicate, "重复拾取不增加角色、账号钱包或物品资产");
+        }
+        return count;
+    }
+
     static ulong U64(byte[] body, int at) => BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(at));
     internal static void EntryTown(TcpPeer peer)
     {

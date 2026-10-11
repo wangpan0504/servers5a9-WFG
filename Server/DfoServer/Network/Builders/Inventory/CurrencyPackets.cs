@@ -8,6 +8,13 @@ internal static class CurrencyPackets
     // 354–359 为六色晶体，360–365 为六种灵魂。
     static readonly int[] AccountItemIds = [3033, 3034, 3035, 3036, 3037, 3262, 10100115, 10100116, 10099773, 10099774, 10099775, 10158124];
     public static IEnumerable<short> VirtualSlots => new short[] { 0, 1, 2 }.Concat(Enumerable.Range(354, 12).Select(slot => (short)slot));
+    public static short PickupSlot(CurrencyKind kind) => kind switch
+    {
+        CurrencyKind.Gold or CurrencyKind.ReviveCoin or CurrencyKind.WinPoint => checked((short)kind),
+        >= CurrencyKind.BlackCube and <= CurrencyKind.GoldCube => checked((short)(354 + kind - CurrencyKind.BlackCube)),
+        >= CurrencyKind.CommonSoul and <= CurrencyKind.EpicSoul => checked((short)(360 + kind - CurrencyKind.CommonSoul)),
+        _ => throw new NotSupportedException("该货币没有已确认的普通地面拾取目的槽")
+    };
     public static bool WriteVirtual(BinaryWriter writer, InventorySnapshot inventory, short slot)
     {
         if (slot is not (>= 0 and <= 2 or >= 354 and <= 365)) return false;

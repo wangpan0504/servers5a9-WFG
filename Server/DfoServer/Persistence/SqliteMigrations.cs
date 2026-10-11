@@ -65,14 +65,24 @@ internal static class SqliteMigrations
         new(16, "普通副本独立身份与房间账本", UpgradeNormalDungeonReceipts),
         new(17, "任务系统与已发布普通副本兼容", UpgradeQuestSystem),
         new(18, "任务回执与任务券完整结构", CompleteQuestSystemV18),
-        new(19, "补齐旧副本角色的疲劳初始状态", static (db, tx) => Execute(db, tx, """
+        new(19, "补齐旧副本角色的疲劳初始状态", BackfillDungeonFatigue),
+        new(20, "完整地面掉落集合与旧掉落分支v18及v19兼容", static (db, tx) =>
+        {
+            // 旧掉落v19尚未执行master的疲劳v19；按同一资格补齐，已有值和历史回执保持原样。
+            BackfillDungeonFatigue(db, tx);
+            // 已部署掉落分支v18尚未执行master的任务v18；精确接管已知结构且保留原回执。
+            CompleteQuestSystemV18(db, tx);
+            DungeonDropCollectionSchema.Upgrade(db, tx);
+        }),
+    ];
+
+    private static void BackfillDungeonFatigue(SqliteConnection db, SqliteTransaction tx) => Execute(db, tx, """
             INSERT INTO character_fatigue(character_id,account,used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary)
             SELECT c.id,c.account,0,156,0,156,0,0 FROM characters c
             JOIN character_dungeon_state d ON d.character_id=c.id AND d.account=c.account
             WHERE NOT EXISTS(SELECT 1 FROM character_fatigue f WHERE f.character_id=c.id)
               AND NOT EXISTS(SELECT 1 FROM character_dungeon_fatigue_receipts r WHERE r.character_id=c.id)
-            """)),
-    ];
+            """);
 
     internal const string FatigueSchema = """
         CREATE TABLE character_fatigue(
@@ -630,6 +640,7 @@ internal static class SqliteMigrations
             query.CommandText = sql;
             using var reader = query.ExecuteReader();
         }
+        DungeonDropCollectionSchema.Validate(db, tx, required: true);
     }
 
     private static readonly string[] RequiredColumns =

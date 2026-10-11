@@ -17,7 +17,8 @@ internal sealed partial class GameSession
     {
         returnToTown = false;
         reason = "settlement-changed";
-        if (!owner.Execute(() => Ready && CanEnterFormalDungeon(current)) || questCatalog is null) return null;
+        var original = owner.Execute(() => Ready && CanEnterFormalDungeon(current) ? formalDungeon : null);
+        if (original is null || questCatalog is null) return null;
         var character = current.Character;
         bool taskRoute = current.Entry.RouteQuestId > 0;
         DungeonQuestContinuation? next = null;
@@ -33,7 +34,7 @@ internal sealed partial class GameSession
         try
         {
             if (next is { DungeonId: > 0 }) prepared = PrepareFormalDungeon(next.DungeonId,next.Quest.QuestId,next.Difficulty,
-                dungeons,rooms,drops,items,null,pieces,character,current);
+                dungeons,rooms,drops,items,original.Draw,pieces,character,current,original.PrepareDrops);
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException)
         { reason = "successor-entry-unavailable"; }

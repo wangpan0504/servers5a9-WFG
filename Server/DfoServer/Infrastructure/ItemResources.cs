@@ -1,5 +1,6 @@
 using DfoServer.GameWorld.Items;
 using PvfLib;
+using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Infrastructure;
 
@@ -17,6 +18,10 @@ internal sealed class ItemResources
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
     public CashShopCatalog CashShop { get; }
+    readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
+    readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
+    public DungeonItemDropCatalog DungeonDropItems => dungeonDropItems.Value;
+    public DungeonSpecialDropCatalog DungeonSpecialDrops => dungeonSpecialDrops.Value;
 
     public ItemResources(PvfArchive archive)
     {
@@ -30,6 +35,8 @@ internal sealed class ItemResources
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate);
+        dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
+        dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
         Boosters = new(archive, stackable);
         CashShop = CashShopCatalog.Load(archive);
         Rental = RentalCatalog.Load(archive);

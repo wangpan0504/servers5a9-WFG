@@ -78,11 +78,11 @@ internal static class DungeonGroundStateTests
             identity with { InstanceId = Guid.NewGuid() }, identity with { Epoch = identity.Epoch - 1 }, identity with { Epoch = identity.Epoch + 1 }
         })
             That(state.FindAvailable(wrong, 400) is null && state.PreparePickup(wrong, ground) is null, "拾取完整身份不匹配拒绝");
-        That(state.PreparePickup(identity, ground with { Core = core with { Attr = 2 } }) is null &&
+        That(state.PreparePickup(identity, ground with { Content = new(core with { Attr = 2 }) }) is null &&
             state.PreparePickup(identity, ground with { }) is null, "即使字段相等的Ground复制也不能更换完整Core或原对象");
         var availableSnapshot = state.Snapshot;
         var pickup = state.PreparePickup(identity, ground) ?? throw new InvalidOperationException("FAIL 合法地面拾取未生成准备");
-        That(ReferenceEquals(pickup.Ground, ground) && state.HasPendingPickup && !state.ExpireRoom() &&
+        That(ReferenceEquals(pickup.Ground, ground) && state.HasPendingPickup && !state.ExpireRun() &&
             state.FindAvailable(identity, 400) is null && ReferenceEquals(state.PreparePickup(identity, ground), pickup),
             "未知SQL结果保留同一拾取准备并阻止出房，不重复规划资产");
         var clonedPickup = new DungeonGroundPickupPreparation(pickup.Identity, pickup.Ground);
@@ -114,7 +114,7 @@ internal static class DungeonGroundStateTests
         run.ConfirmCommittedDeath(missRetry);
         That(state.PublishCommitted(missRetry, miss) && state.Snapshot.Items.Length == 1 && state.FindAvailable(identity, 401) is null,
             "明确提交的未命中不建立空物品实体");
-        That(state.ExpireRoom() && run.Move(identity, Guid.NewGuid(), fixture.Plans[1].Room.Map.Position).Outcome == DungeonRunOutcome.Accepted &&
+        That(!state.ExpireRun() && run.Move(identity, Guid.NewGuid(), fixture.Plans[1].Room.Map.Position).Outcome == DungeonRunOutcome.Accepted &&
             state.Snapshot.Items.IsEmpty, "无待拾取时允许出房，新房只暴露本房对象");
 
         var other = Fixture();
@@ -140,15 +140,29 @@ internal static class DungeonGroundStateTests
         FreezeCommit(expired, 101, 2, Core);
         var expiredSnapshot = expired.Ground.Snapshot;
         That(expired.Run.Move(expired.Run.Snapshot.Identity, Guid.NewGuid(), expired.Plans[1].Room.Map.Position).Outcome == DungeonRunOutcome.Accepted &&
-            expired.Ground.Snapshot.Items.IsEmpty, "即使调用方漏显式Expire，Run已经换房也自动隐藏旧房对象");
+            expired.Ground.Snapshot.Items.IsEmpty && expired.Ground.FindAvailable(expired.Run.Snapshot.Identity, 400) is null,
+            "加载与另一个房间隐藏旧房对象，不能跨房拾取");
         Load(expired.Run);
         FreezeCommit(expired, 102, 3, () => null);
         expired.Run.Move(expired.Run.Snapshot.Identity, Guid.NewGuid(), expired.Plans[0].Room.Map.Position);
         Load(expired.Run);
-        That(expired.Ground.Snapshot.Items.All(item => item.Status == DungeonGroundStatus.Expired) &&
-            expired.Ground.FindAvailable(expired.Run.Snapshot.Identity, 400) is null &&
+        That(expired.Ground.Snapshot.Items.All(item => item.Status == DungeonGroundStatus.Available) &&
+            ReferenceEquals(expired.Ground.FindAvailable(expired.Run.Snapshot.Identity, 400), expiredGround) &&
+            expiredSnapshot.Items.All(item => item.Status == DungeonGroundStatus.Available),
+            "回访同地图保留原完整物品与key，历史快照不变，不重抽或重建对象");
+        That(expired.Ground.FindAvailable(expiredGround.DeathIdentity, 400) is null &&
+            expired.Ground.PreparePickup(expiredGround.DeathIdentity, expiredGround) is null,
+            "回访仍要求当前加载epoch，旧死亡身份不能直接取得拾取资格");
+        var revisitedPickup = expired.Ground.PreparePickup(expired.Run.Snapshot.Identity, expiredGround)!;
+        That(expired.Ground.ConfirmPickup(revisitedPickup), "回访原房间可以确认一次原物品拾取");
+        expired.Run.Move(expired.Run.Snapshot.Identity, Guid.NewGuid(), expired.Plans[1].Room.Map.Position);
+        Load(expired.Run);
+        expired.Run.Move(expired.Run.Snapshot.Identity, Guid.NewGuid(), expired.Plans[0].Room.Map.Position);
+        Load(expired.Run);
+        That(expired.Ground.FindAvailable(expired.Run.Snapshot.Identity, 400) is null &&
             expired.Ground.PreparePickup(expired.Run.Snapshot.Identity, expiredGround) is null &&
-            expiredSnapshot.Items.All(item => item.Status == DungeonGroundStatus.Available), "回访同地图不复活过期物品，历史快照仍不可变");
+            expired.Ground.Snapshot.Items.Single(item => item.Ground.Reservation.GroundKey == 400).Status == DungeonGroundStatus.Picked,
+            "再次回访不恢复已拾取物品，其他未拾取对象保持原状态");
 
         var returned = Fixture();
         Load(returned.Run);
@@ -187,7 +201,71 @@ internal static class DungeonGroundStateTests
             return Core();
         }), "失败尝试不能重抽");
         That(failures == 1 && failed.Ground.Snapshot.Items.IsEmpty, "factory失败保留有界拒绝状态，未创建可拾取对象");
+        MultipleGroundObjects();
         Console.WriteLine($"PASS {Count - checks} 地面冻结与拾取生命周期纯合成断言");
+
+        void MultipleGroundObjects()
+        {
+            var many = Fixture(withMiddle: true);
+            var extra = many.Reservations[0];
+            DungeonGroundReservation[] reserved = [.. many.Reservations,
+                extra with { GroundKey = 700, Ordinal = 1 }, extra with { GroundKey = 701, Ordinal = 2 },
+                extra with { GroundKey = 702, Ordinal = 3 }];
+            var owner = new DungeonGroundState(many.Run, many.Plans, reserved);
+            Load(many.Run);
+            var eventFact = many.Authority.Death(many.Run.Snapshot.Identity, 100, 1);
+            var preparation = many.Run.PrepareConfirmedDeath(eventFact).Pending!;
+            DungeonGroundContent[] contents = [new(Core()), new(new ItemCore(2000, ItemKind.Material, 7)),
+                new(new ItemCore(3000, ItemKind.Equipment, 0) { Durability = 13 }), new(null, 77)];
+            int calls = 0;
+            var frozenMany = owner.GetOrFreezeAssets(preparation, () => { calls++; return contents; });
+            contents[1] = new(contents[1].Item! with { Value = 99 });
+            That(calls == 1 && frozenMany.Grounds.Select(item => item.Reservation.GroundKey).SequenceEqual(new uint[] { 400, 700, 701, 702 }) &&
+                frozenMany.Grounds[1].Core.Count == 7 && frozenMany.Grounds[2].Core.Value == 0 &&
+                frozenMany.Grounds[3].IsGold && frozenMany.Grounds[3].GoldAmount == 77 &&
+                owner.Snapshot.Items.All(item => item.Status == DungeonGroundStatus.Frozen),
+                "同一死亡冻结完整消耗品、材料数量、零品级装备及独立金币，源列表修改不污染集合");
+            RejectState(() => { _ = frozenMany.Ground; }, "单件仓储不能悄悄截断多件冻结结果");
+            That(many.Run.CancelUncommittedDeath(preparation), "多件死亡明确回滚允许撤销Run准备");
+            var retry = many.Run.PrepareConfirmedDeath(eventFact).Pending!;
+            RejectState(() => owner.GetOrFreezeAssets(retry, () => { calls++; return []; }, "改换后的规则来源"),
+                "同怪已冻结集合拒绝改换资源来源，不能以重新准备计划掩盖原结果");
+            That(ReferenceEquals(owner.GetOrFreezeAssets(retry, () => { calls++; return []; }), frozenMany) && calls == 1,
+                "多件掉落回滚后复用原完整集合，不重抽或缩为空结果");
+            many.Run.ConfirmCommittedDeath(retry);
+            That(owner.PublishCommitted(retry, frozenMany) && frozenMany.Grounds.All(item =>
+                ReferenceEquals(owner.FindAvailable(many.Run.Snapshot.Identity, item.Reservation.GroundKey), item)),
+                "同一明确提交后发布全部独立地面key，不仅发布首件");
+            var identity = many.Run.Snapshot.Identity;
+            var first = owner.PreparePickup(identity, frozenMany.Grounds[0])!;
+            That(owner.PreparePickup(identity, frozenMany.Grounds[1]) is null && owner.CancelPickup(first) &&
+                frozenMany.Grounds.All(item => owner.FindAvailable(identity, item.Reservation.GroundKey) is not null),
+                "一件拾取未定时拒绝另一件准备，回滚不消耗同死亡的其他资产");
+            That(owner.ConfirmPickup(owner.PreparePickup(identity, frozenMany.Grounds[0])!) &&
+                owner.FindAvailable(identity, 400) is null && owner.FindAvailable(identity, 700) is not null &&
+                owner.FindAvailable(identity, 701) is not null, "确认一件只消费该key，其余材料和装备仍可独立拾取");
+            var remaining = many.Run.PrepareConfirmedDeath(many.Authority.Death(identity, 101, 2)).Pending!;
+            var empty = owner.GetOrFreezeMany(remaining, () => []);
+            many.Run.ConfirmCommittedDeath(remaining); owner.PublishCommitted(remaining, empty);
+            many.Run.Move(many.Run.Snapshot.Identity, Guid.NewGuid(), many.Plans[1].Room.Map.Position); Load(many.Run);
+            That(owner.FindAvailable(many.Run.Snapshot.Identity, 700) is null, "多件旧房key也不能在其他房间拾取");
+            var middle = many.Run.PrepareConfirmedDeath(many.Authority.Death(many.Run.Snapshot.Identity, 102, 3)).Pending!;
+            var middleEmpty = owner.GetOrFreezeMany(middle, () => []);
+            many.Run.ConfirmCommittedDeath(middle); owner.PublishCommitted(middle, middleEmpty);
+            many.Run.Move(many.Run.Snapshot.Identity, Guid.NewGuid(), many.Plans[0].Room.Map.Position); Load(many.Run);
+            That(owner.FindAvailable(many.Run.Snapshot.Identity, 400) is null &&
+                ReferenceEquals(owner.FindAvailable(many.Run.Snapshot.Identity, 700), frozenMany.Grounds[1]) &&
+                owner.ConfirmPickup(owner.PreparePickup(many.Run.Snapshot.Identity, frozenMany.Grounds[1])!) &&
+                owner.FindAvailable(many.Run.Snapshot.Identity, 701) is not null,
+                "回访保持各件自己的已拾取状态，原材料数量和装备不会重建");
+            var gold = frozenMany.Grounds[3];
+            RejectState(() => { _ = gold.Core; }, "金币不是伪造itemId0的实体Core");
+            That(owner.ConfirmPickup(owner.PreparePickup(many.Run.Snapshot.Identity, gold)!) &&
+                owner.FindAvailable(many.Run.Snapshot.Identity, 702) is null,
+                "同死亡金币使用独立key确认，不消费尚未拾取装备");
+            RejectData(() => new DungeonGroundContent(null, 0).Validate(), "零金币不能占据有效地面对象");
+            RejectData(() => new DungeonGroundContent(Core(), 1).Validate(), "物品与金币来源不能混合为一个对象");
+        }
 
         void RejectData(Action action, string name) => Reject<InvalidDataException>(action, name);
         void RejectState(Action action, string name) => Reject<InvalidOperationException>(action, name);

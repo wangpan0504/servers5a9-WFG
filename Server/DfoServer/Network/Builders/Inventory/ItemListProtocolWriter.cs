@@ -6,6 +6,16 @@ namespace DfoServer.Network.Builders.Inventory;
 internal static class ItemListProtocolWriter
 {
     public const int EntrySize = 123;
+    // 地面金币沿相同123B普通记录，itemId=0与金币增量不进入实体ItemCore业务模型。
+    public static void WriteGroundGold(BinaryWriter writer, short recordSlot, int amount)
+    {
+        if (amount <= 0)
+            throw new InvalidDataException("地面金币记录必须携带正增量");
+        writer.Write(recordSlot);
+        writer.Write(0);
+        writer.Write(amount);
+        writer.Write(new byte[EntrySize - 10]);
+    }
     public static void Write(BinaryWriter writer, InventorySlot slot, InventoryItem? item, long utcSeconds)
     {
         var core = item?.Core;

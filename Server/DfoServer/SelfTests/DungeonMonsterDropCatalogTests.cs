@@ -47,8 +47,18 @@ internal static class DungeonMonsterDropCatalogTests
         Reject(() => Parse(new(3, 1), new(0, 1000), new(0, 50)), "缺失结束tag拒绝");
         Reject(() => Parse(new PvfToken(3, 2)), "孤立结束tag不伪装成缺失声明");
         Reject(() => Parse(new(3, 1), new(3, 6)), "未支持嵌套条件拒绝而不抽掉条件");
-        Reject(() => Parse(new(3, 1), new(3, 2), new(3, 1), new(3, 2)), "重复item块拒绝");
-        Reject(() => Parse(new(3, 3), new(3, 4), new(3, 3), new(3, 4)), "重复冠军块拒绝");
+        var repeated = Parse(new(3, 1), new(0, 1000), new(0, 50), new(3, 2),
+            new(3, 1), new(0, 1047), new(0, 200), new(3, 2));
+        That(repeated.Items!.SequenceEqual(new[] { new DungeonMonsterDropEntry(1000, 50) }) &&
+            repeated.ItemBlocks.Count == 2 && repeated.ItemBlocks[1][0].ItemId == 1047,
+            "参考首块参与抽样，后续不同声明保留原值，不重复加权或令整个资源拒绝");
+        That(Parse(new(3, 3), new(3, 4), new(3, 3), new(3, 4)).CommonChampionBlocks.Count == 2,
+            "重复冠军块同样保留，每个块仍要求完整格式");
+        int tauId = DungeonCatalog.ParseDirectory(pvf.ReadTokens("monster/monster.lst"), pvf.ResolveString, "monster")
+            .Single(row => row.Value == "monster/tau/shauta.mob").Key;
+        var tau = catalog.Get(tauId);
+        That(tau.ItemBlocks.Count == 2 && tau.Items!.SequenceEqual(tau.ItemBlocks[1]),
+            "萨乌塔真实资源含两个相同item块，首块不会被重复声明放大权重");
         Console.WriteLine($"PASS {Count - checks} 怪物掉落声明与匹配资源断言");
 
         void Reject(Action action, string name)

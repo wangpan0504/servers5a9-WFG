@@ -44,6 +44,7 @@ internal static class FormalDungeonSessionTests
         Invalidation();
         RecordedNormalStatistics();
         FrozenLootTransaction();
+        PerMonsterDrops();
         OrdinaryLifecycle();
         OrdinaryRoutes();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Session文件库、六房合成击杀、身份及回滚断言（非实机）");
@@ -783,18 +784,35 @@ internal static class FormalDungeonSessionTests
             var merged = f.Session.PickFormalDungeonItem(second.Drop!.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces);
             Check(merged.Commit!.ItemUid == uid && f.Read().Inventory.Items.Single(item => item.Uid == uid).Core == (ground.Core with { Value = 2 }),
                 "第二个真实来源核心只加一件，复用已有堆叠UID及全部属性");
-            DungeonGroundObject? expired = null;
+            DungeonGroundObject? cached = null;
             foreach (var monster in entry.Monsters.Monsters.Skip(2))
-                expired = f.Session.ObserveFormalDungeonDeath(Observation(entry, monster), kills, growth).Drop;
-            Check(f.Session.MoveFormalDungeon(1, 1) is not null && f.Session.CompleteFormalDungeonLoading() is not null &&
-                f.Session.PickFormalDungeonItem(expired!.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces).Outcome == DungeonRunOutcome.Rejected,
-                "离房销毁未拾取地面，旧房key不能在新房授予资产");
+                cached = f.Session.ObserveFormalDungeonDeath(Observation(entry, monster), kills, growth).Drop;
+            var nextRoom = f.Session.MoveFormalDungeon(1, 1)!;
+            Check(nextRoom is not null &&
+                f.Session.PickFormalDungeonItem(cached!.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces).Outcome == DungeonRunOutcome.Rejected &&
+                f.Session.CompleteFormalDungeonLoading() is not null &&
+                f.Session.PickFormalDungeonItem(cached.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces).Outcome == DungeonRunOutcome.Rejected,
+                "加载及另一个房间拒绝旧房key，保留原物品供合法回访");
+            foreach (var monster in nextRoom!.Monsters.Monsters)
+                Check(f.Session.ObserveFormalDungeonDeath(Observation(nextRoom, monster), kills, growth).Outcome == DungeonRunOutcome.Accepted,
+                    "按原正式死亡合同清理相邻房间，不能跳过回访准入");
+            var start = entry.Entry.StartMap.Position;
+            Check(f.Session.MoveFormalDungeon(checked((byte)start.X), checked((byte)start.Y)) is not null && f.Session.CompleteFormalDungeonLoading() is not null,
+                "清房后经原静态连接回访起始房间");
+            var revisited = f.Session.PickFormalDungeonItem(cached!.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces);
+            Check(revisited.Outcome == DungeonRunOutcome.Accepted && revisited.Commit?.ItemUid == uid &&
+                f.Read().Inventory.Items.Single(item => item.Uid == uid).Core == (ground.Core with { Value = 3 }) &&
+                Same(f.Read(), f.Session.Selected!) &&
+                f.Session.PickFormalDungeonItem(cached.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces).Outcome == DungeonRunOutcome.Rejected &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_pickup_receipts")) == 3,
+                "回访原地面同事务加一件并保留UID，重复不追加资产或receipt");
+            var persistedExperience = f.Session.Selected!.Learning.Experience;
             f.Session.ReturnToRoster();
             f.Session.Select(f.Created.Slot);
             f.Session.MarkReady();
-            Check(f.Session.Selected!.Learning.Experience == 416 && f.Session.Selected.Inventory.Items.Single(item => item.Uid == uid).Core.Value == 2 &&
+            Check(f.Session.Selected!.Learning.Experience == persistedExperience && f.Session.Selected.Inventory.Items.Single(item => item.Uid == uid).Core.Value == 3 &&
                 f.Session.Selected.DungeonState!.NextObjectKey == entry.Character.DungeonState.NextObjectKey &&
-                new CharacterRepository(f.Path).LoadCharacter(f.Owner, f.Created.Slot).Inventory.Items.Single(item => item.Uid == uid).Core.Value == 2,
+                new CharacterRepository(f.Path).LoadCharacter(f.Owner, f.Created.Slot).Inventory.Items.Single(item => item.Uid == uid).Core.Value == 3,
                 "重选/仓储重开保留拾取资产、XP和不回绕高水位；非实机重启替代");
             using var miss = new Fixture("LootMiss", towns, characters, learning, quests);
             miss.SelectEntry();
@@ -838,6 +856,84 @@ internal static class FormalDungeonSessionTests
             var resumedItem = full.Read().Inventory.Find(new(InventoryListType.Main, range.Start));
             Check(resumedPickup.Outcome == DungeonRunOutcome.Accepted && resumedItem?.Core == fullGround.Core,
                 $"测试显式恢复后拾取原地面；outcome={resumedPickup.Outcome},slot={resumedPickup.Commit?.Destination.Index},count={resumedItem?.Core.Count},phase={full.Session.Phase}");
+        }
+
+        void PerMonsterDrops()
+        {
+            using var f = new Fixture("RuleMonsters", towns, characters, learning, quests);
+            f.SelectEntry();
+            var drops = DungeonMonsterDropCatalog.Load(pvf);
+            var pool = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(itemResources.Items.Get(1000), 50) });
+            var ordinary = new DungeonDropGenerationPlan("明示普通怪规则", [new(10000, pool, 3, 3)]);
+            var boss = new DungeonDropGenerationPlan("明示Boss规则", [new(10000, null, 2, 2, new(5, 17, 0))]);
+            var beforeEntry = f.Session.Selected!;
+            Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
+                prepareDrops: (_, _) => throw new NotSupportedException("明确未解释的fixture规则")) is null &&
+                ReferenceEquals(beforeEntry, f.Session.Selected) && Same(beforeEntry, f.Read()) && f.Session.DungeonSnapshot is null,
+                "未支持的逐怪规则在预留attempt/key前拒绝准入，不静默换用显式掉率或写资产");
+            var inputs = new Dictionary<ushort, (int Level, byte Type, byte Difficulty)>();
+            int draws = 0;
+            var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
+                draw: _ => { draws++; return 0; }, prepareDrops: (route, monster) =>
+                {
+                    inputs.Add(monster.ObjectKey, (monster.CandidateLevel, monster.SpawnType, route.Difficulty));
+                    return monster.IsBoss ? boss : ordinary;
+                })!;
+            int preparedCount = inputs.Count;
+            Check(preparedCount > entry.Monsters.Monsters.Count && inputs.Values.Any(row => row.Type == 3) &&
+                inputs.Values.Select(row => row.Level).Distinct().Count() > 1 && inputs.Values.All(row => row.Difficulty == 0) && draws == 0,
+                "准入锁外为全路线各怪准备实际等级/类型/难度规则，不只为首房准备或消费掉落随机");
+            var maps = entry.Entry.Maze.MapSpecification!;
+            var receipt = f.Session.CompleteFormalDungeonLoading()!;
+            int deaths = 0, seenBoss = 0;
+            for (int mapIndex = 0; mapIndex < maps.Count; mapIndex++)
+            {
+                var map = maps[mapIndex];
+                Check(receipt.Snapshot.CurrentMap == map, "逐怪规则沿原批准路线与房间身份消费");
+                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking))
+                {
+                    var observation = monster.IsBoss
+                        ? new NativeDungeonDeathObservation(monster.ObjectKey, f.Created.Id, 0x0111, f.Created.Id,
+                            600, 3, 0, 6, 0, 620, 3, true, new string('C', 64))
+                        : Observation(receipt, monster);
+                    int beforeDraws = draws;
+                    if (deaths == 0)
+                    {
+                        f.Sql("CREATE TRIGGER per_monster_fail AFTER INSERT ON character_dungeon_drop_batches BEGIN SELECT RAISE(ABORT,'per monster failure'); END");
+                        Reject<SqliteException>(() => f.Session.ObserveFormalDungeonDeath(observation, kills, growth),
+                            "逐怪集合在真实SQL晚期失败后保留原冻结结果");
+                        beforeDraws = draws;
+                        f.Sql("DROP TRIGGER per_monster_fail");
+                    }
+                    var result = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                    Check(result.Outcome == DungeonRunOutcome.Accepted && inputs.Count == preparedCount &&
+                        result.Drops.All(row => row.ResourceIdentity == (monster.IsBoss ? boss : ordinary).ResourceSource),
+                        "真实Session死亡只消费原monster计划，保留每怪来源，不重新解析或改换规则");
+                    if (monster.IsBoss)
+                    {
+                        seenBoss++;
+                        Check(result.Drops.Length == 2 && result.Drops.All(row => row.IsGold && row.GoldAmount == 17),
+                            "Boss保留两枚独立金币数量，不能套用普通怪的物品计划或容量");
+                    }
+                    else
+                        Check(result.Drops.Length == 1 && result.Drops[0].Core.Count == 3 && !result.Drops[0].IsGold,
+                            "普通怪沿自身规则生成三件完整堆叠，不能套用Boss金币规则");
+                    int afterDraws = draws;
+                    Check((deaths != 0 || afterDraws == beforeDraws) &&
+                        f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate && draws == afterDraws,
+                        "首次SQL失败重试与精确重复均不重抽已冻结的逐怪结果");
+                    deaths++;
+                }
+                if (mapIndex + 1 < maps.Count)
+                {
+                    var nextMap = maps[mapIndex + 1].Position;
+                    Check(f.Session.MoveFormalDungeon((byte)nextMap.X, (byte)nextMap.Y) is not null, "逐怪集合清房后合法过房");
+                    receipt = f.Session.CompleteFormalDungeonLoading()!;
+                }
+            }
+            Check(seenBoss == 1 && f.Count() == deaths &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_batches WHERE resource_source='明示Boss规则'")) == 1,
+                "普通/Boss分别记账，全部死亡集合与成长同事务保留正确规则来源");
         }
 
         FormalDungeonReceipt Enter(Fixture f) => f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms)

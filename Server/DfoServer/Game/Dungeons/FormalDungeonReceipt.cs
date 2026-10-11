@@ -1,5 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Currency;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Dungeons;
 
@@ -9,6 +11,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,
     DungeonGroundObject? Drop = null, byte? PreviousLevel = null)
 {
+    public ImmutableArray<DungeonGroundObject> Drops { get; init; } = [];
     public DungeonPlannedMonster? ReportedTarget { get; init; }
     public bool SpecialChildRetired { get; init; }
     public DungeonElevatorReceipt? Elevator { get; init; }
@@ -17,7 +20,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
 }
 internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
-    bool ProjectionCurrent);
+    bool ProjectionCurrent, CurrencyKind? Currency = null, int Amount = 0);
 internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     DungeonGroundObject? Ground = null, DungeonPickupCommit? Commit = null);
 internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds, byte RankPoint, byte RankGrade,

@@ -6,7 +6,11 @@ namespace DfoServer.GameWorld.Dungeons;
 // Parameter保持PVF原整数；这里不规定随机分母、数量或是否独立抽取。
 internal sealed record DungeonMonsterDropEntry(int ItemId, int Parameter);
 internal sealed record DungeonMonsterDropDeclaration(int MonsterId, string Path,
-    IReadOnlyList<DungeonMonsterDropEntry>? Items, IReadOnlyList<DungeonMonsterDropEntry>? CommonChampionItems);
+    IReadOnlyList<DungeonMonsterDropEntry>? Items, IReadOnlyList<DungeonMonsterDropEntry>? CommonChampionItems)
+{
+    public IReadOnlyList<IReadOnlyList<DungeonMonsterDropEntry>> ItemBlocks { get; init; } = [];
+    public IReadOnlyList<IReadOnlyList<DungeonMonsterDropEntry>> CommonChampionBlocks { get; init; } = [];
+}
 
 internal sealed class DungeonMonsterDropCatalog
 {
@@ -33,6 +37,8 @@ internal sealed class DungeonMonsterDropCatalog
     {
         IReadOnlyList<DungeonMonsterDropEntry>? items = null;
         IReadOnlyList<DungeonMonsterDropEntry>? champion = null;
+        var itemBlocks = new List<IReadOnlyList<DungeonMonsterDropEntry>>();
+        var championBlocks = new List<IReadOnlyList<DungeonMonsterDropEntry>>();
         for (int at = 0; at < tokens.Count; at++)
         {
             if (tokens[at].Type != 3)
@@ -42,8 +48,6 @@ internal sealed class DungeonMonsterDropCatalog
                 throw new InvalidDataException("怪物掉落结束块缺少起始块: " + path);
             if (tag is not ("[item]" or "[common champion drop item]"))
                 continue;
-            if (tag == "[item]" ? items is not null : champion is not null)
-                throw new InvalidDataException("重复怪物掉落块: " + path + " " + tag);
             string closing = "[/" + tag[1..];
             var rows = new List<DungeonMonsterDropEntry>();
             at++;
@@ -58,11 +62,19 @@ internal sealed class DungeonMonsterDropCatalog
                 throw new InvalidDataException("怪物掉落块未闭合或包含未支持条件: " + path);
             var frozen = Array.AsReadOnly(rows.ToArray());
             if (tag == "[item]")
-                items = frozen;
+            {
+                itemBlocks.Add(frozen);
+                items ??= frozen;
+            }
             else
-                champion = frozen;
+            {
+                championBlocks.Add(frozen);
+                champion ??= frozen;
+            }
         }
         // 缺失块是null，显式空块是空集合；二者不能被解释成同一种默认掉落规则。
-        return new(monsterId, path, items, champion);
+        // 参考服务端Section取首块；后续完整保留，不合并成重复权重，也不令正常副本断开。
+        return new(monsterId, path, items, champion)
+        { ItemBlocks = itemBlocks.AsReadOnly(), CommonChampionBlocks = championBlocks.AsReadOnly() };
     }
 }

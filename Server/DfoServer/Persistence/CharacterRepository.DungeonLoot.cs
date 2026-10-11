@@ -14,6 +14,11 @@ internal sealed partial class CharacterRepository
         PreparedDungeonDeath prepared, FrozenDungeonGroundDeath? loot)
     {
         if (loot is null) return;
+        if (loot.UsesCollectionLedger)
+        {
+            SaveDropCollection(db, tx, account, expected, prepared, loot);
+            return;
+        }
         if (!ReferenceEquals(loot.Death, prepared.Death) || loot.Identity.CharacterId != expected.Id ||
             loot.CommittedIdentity != prepared.Result.Snapshot.Identity || loot.Map != prepared.Result.Snapshot.CurrentMap ||
             prepared.Monster.MonsterId is not (1 or 2) || prepared.Monster.SpawnType != 0 ||
@@ -42,6 +47,13 @@ internal sealed partial class CharacterRepository
     static void VerifyDungeonLoot(SqliteConnection db, SqliteTransaction tx, string account, ushort characterId,
         Guid eventId, FrozenDungeonGroundDeath? loot)
     {
+        if (loot?.UsesCollectionLedger == true)
+        {
+            VerifyDropCollection(db, tx, account, characterId, eventId, loot);
+            return;
+        }
+        if (HasDropCollection(db, tx, characterId, eventId))
+            throw new InvalidDataException("完整集合的死亡重放不能省略或改成旧单件合同");
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", characterId);
@@ -104,6 +116,8 @@ internal sealed partial class CharacterRepository
         DungeonGroundPickupPreparation prepared, InventoryPlan plan) => owner.Execute(() =>
     {
         var ground = prepared.Ground;
+        if (ground.UsesCollectionLedger)
+            return CommitDropCollectionPickup(owner, expected, prepared, plan);
         ValidateLootCore(ground.Core);
         if (prepared.Identity.CharacterId != expected.Id || prepared.Identity.InstanceId != ground.DeathIdentity.InstanceId ||
             prepared.Identity.TaskAttempt != ground.DeathIdentity.TaskAttempt)

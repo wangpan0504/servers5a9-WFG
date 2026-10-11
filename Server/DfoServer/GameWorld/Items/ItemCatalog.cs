@@ -68,6 +68,36 @@ internal sealed class ItemCatalog
     }
     public static byte Slot(string tag) => EquipmentSlots.TryGetValue(tag, out var slot) ? slot : throw new InvalidDataException("未知普通装备类型: " + tag);
 
+    // 在资源装配阶段枚举；正creation rate的普通道具完整解析，失败不得静默删除候选。
+    public IEnumerable<ItemTemplate> DropCandidates()
+    {
+        foreach (var (id, path) in equipment.Concat(stackable).OrderBy(row => row.Key))
+        {
+            if (id <= 2)
+                continue;
+            bool isEquipment = equipment.ContainsKey(id);
+            var document = isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
+                new PvfDocument(pvf.ReadText("stackable/" + path));
+            int rate = CreationRate(document);
+            if (rate == 0)
+                continue;
+            var template = Get(id);
+            if (template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession)
+                yield return template;
+        }
+    }
+
+    internal static int CreationRate(PvfDocument document)
+    {
+        if (!document.Has("creation rate"))
+            return 0;
+        string value = document.Section("creation rate").Trim();
+        if (!int.TryParse(value, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out int rate) || rate < 0)
+            throw new InvalidDataException("物品creation rate必须是单个非负整数");
+        return rate;
+    }
+
     public QuestTicketDefinition QuestTicket(int id) => questTickets.GetOrAdd(id, key =>
     {
         if (!stackable.TryGetValue(key,out var path)) throw new InvalidDataException("任务券不是堆叠物品: " + key);
@@ -155,6 +185,7 @@ internal sealed class ItemCatalog
             BorrowAvatarAppearance = kind == ItemKind.Avatar && slot != 9,
             GuardianGemEffects = kind == ItemKind.GuardianGem ? ReadGuardianGemEffects(text) : [],
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
+            CreationRate = CreationRate(text),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
             // 分解采用模板价值及基础出售倍率，不使用NPC售出时的耐久和90%折价。
             DisjointValue = isEquipment ? (int)Math.Clamp((long)baseValue * equipmentSellRate / 1000, 1, int.MaxValue) : 0,

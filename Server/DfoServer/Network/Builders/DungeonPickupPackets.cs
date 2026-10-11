@@ -22,6 +22,21 @@ internal static class DungeonPickupPackets
         return body;
     }
 
+    // 资源0的金币分支：023C97F6..023C9A78读取八成员，每成员必须有u8标记和u32金额。
+    // 单人仅成员0参与，额外分量数显式为0；没有普通物品的recipient/slot/tail字段。
+    public static byte[] SinglePlayerGoldNotification(uint groundObjectKey, ushort pickerKey, uint amount)
+    {
+        if (amount == 0)
+            throw new ArgumentOutOfRangeException(nameof(amount), "金币拾取通知必须有实际已提交增量");
+        byte[] body = new byte[47];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, groundObjectKey);
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4), pickerKey);
+        body[6] = 1;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7), amount);
+        // offset11为本人成员附加分量数量0，其余七成员为完整的标记0/金额0。
+        return body;
+    }
+
     // ACK43成功只消费公共success，不代替NOTI39入包；没有额外NOTI42空包。
     public static byte[] Accepted() => [1];
 

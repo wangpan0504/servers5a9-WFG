@@ -34,6 +34,7 @@ internal static class DungeonSettlementSessionTests
         CommittedSettlement();
         ReturnWithoutSettlement();
         PublicationGuard();
+        RetryCollectionRules();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
 
         void CommittedSettlement()
@@ -168,6 +169,36 @@ internal static class DungeonSettlementSessionTests
                 "同阶段GM替换快照不能静默跳过结算通知，旧投影明确失效");
             f.Session.ReturnToRoster();
             Check(!f.Session.CanPublishDungeonSettlement(receipt), "旧选角结果不可发往后续名册阶段");
+        }
+
+        void RetryCollectionRules()
+        {
+            using var f = new Fixture("ClearRetry", towns, characters, learning, quests);
+            f.SelectEntry();
+            var drops = DungeonMonsterDropCatalog.Load(pvf);
+            var pool = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(itemResources.Items.Get(1000), 50) });
+            // 明示fixture概率和数量只验证规则传递，不改变Runtime资源掉率。
+            var generation = new DungeonDropGenerationPlan("明确合成再挑战规则/实际资源模板", [
+                new(10000, pool, 3, 3), new(10000, null, 1, 1, new(1, 17, 0))]);
+            var entry = f.Session.EnterFormalDungeon(3, 3145, 0, dungeons, rooms, drops, itemResources.Items,
+                draw: _ => 0, prepareDrops: (_, _) => generation)!;
+            var completed = ClearRun(f);
+            var settled = Settle(f, [1, 2, 3]);
+            var retry = f.Session.RetryFormalDungeon(settled.Receipt!, dungeons, rooms, drops, itemResources.Items);
+            Check(retry is not null && retry.Snapshot.Identity.InstanceId != entry.Snapshot.Identity.InstanceId &&
+                retry.Snapshot.Identity.TaskAttempt == entry.Snapshot.Identity.TaskAttempt + 1 &&
+                retry.Character.DungeonState!.NextObjectKey > entry.Character.DungeonState!.NextObjectKey && f.Kills == completed.Count,
+                "集合再挑战预留独立实例与更高对象key，准入不复用死亡或旧资产结果");
+            var loaded = f.Session.CompleteFormalDungeonLoading()!;
+            var monster = loaded.Monsters.Monsters.First(row => row.IsBlocking);
+            var death = f.Session.ObserveFormalDungeonDeath(new(monster.ObjectKey, f.Created.Id, 0x0111, f.Created.Id,
+                600, 3, 0, (uint)monster.CandidateLevel, 504, 620, 3, true, new string('B', 64)), kills, growth);
+            Check(death.Outcome == DungeonRunOutcome.Accepted && death.Drops.Length == 2 &&
+                death.Drops.Any(row => !row.IsGold && row.Core.ItemId == 1000 && row.Core.Count == 3) &&
+                death.Drops.Any(row => row.IsGold && row.GoldAmount == 17) &&
+                death.Drops.All(row => row.DeathIdentity.InstanceId == retry!.Snapshot.Identity.InstanceId) &&
+                death.Drops.Select(row => row.Reservation.GroundKey).Distinct().Count() == 2 && f.Kills == completed.Count + 1,
+                "再挑战首个真实Session死亡仍生成原完整物品与金币规则，不回退单件显式策略");
         }
 
         FormalDungeonReceipt Enter(Fixture f) => f.Session.EnterFormalDungeon(3, 3145, 0, dungeons, rooms)

@@ -44,17 +44,20 @@ internal static class FormalDungeonPublicationTests
         await ReselectDuringSendAsync();
         await ReturnDuringSendAsync();
         await PickupLostResultAsync();
+        await CollectionPublicationAsync();
         await ClearedQuestSendFailureAsync();
         await ClearNoticeFailureAsync();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Handler真实文件提交、结果丢失、发送故障及重选隔离断言（合成死亡，非实机）");
 
 
-        GameCommandRegistry Registry(Fixture f, TownPresence? presence = null)
+        GameCommandRegistry Registry(Fixture f, TownPresence? presence = null,
+            Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null)
         {
             var commands = new GameCommandRegistry();
             new DungeonHandler(f.Log, catalog, rooms, growth, kills,
                 new TownProjection(towns, computer, presence, items.EpicPieces), new CharacterLevelProjection(computer),
-                DungeonMonsterDropCatalog.Load(pvf), items.Items, items.EpicPieces).Register(commands);
+                DungeonMonsterDropCatalog.Load(pvf), items.Items, items.EpicPieces, items.GoldLimits,
+                prepareDrops: prepareDrops).Register(commands);
             commands.Seal();
             return commands;
         }
@@ -309,6 +312,65 @@ internal static class FormalDungeonPublicationTests
                 f.Session.CanPublishFormalDungeon(second!) && f.Session.Selected!.DungeonState!.LastAttempt == 2,
                 "迟到退出不把新副本角色加入城镇同屏，不破坏新run或身份预留");
         }
+        async Task CollectionPublicationAsync()
+        {
+            using var f = new Fixture(towns, characters, learning, quests, false);
+            // 明示必命中概率与零波动金币验证生产调用，不改变Runtime资源掉率。
+            var pool = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(items.Items.Get(1000), 50) });
+            var generation = new DungeonDropGenerationPlan("明确合成生成规则/实际资源模板", [
+                new(10000, pool, 3, 3), new(10000, null, 1, 1, new(1, 17, 0))]);
+            f.Session.BeginDungeonSelection();
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput();
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(99, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            int prepared = 0;
+            var commands = Registry(f, prepareDrops: (route, monster) =>
+            {
+                Check(route.Difficulty == 0 && monster.CandidateLevel > 0, "生产选图Handler传递实际逐怪规则输入");
+                prepared++;
+                return generation;
+            });
+            byte[] selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
+            await commands.DispatchAsync(context, new(1, 16, selection));
+            Check(prepared > 0 && f.Session.Phase == SessionPhase.Loading, "生产选图Handler装配逐怪规则并建立原正式Run");
+            var entry = f.Session.CompleteFormalDungeonLoading()!;
+            stream.Frames.Clear();
+            await commands.DispatchAsync(context, new(1, 39, Death(entry.Monsters.Monsters[0].ObjectKey, entry.Character.Id, 3)));
+            var body = stream.Frames[0].AsSpan(16).ToArray();
+            Check(body.Length == 271 && BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(2)) == 2 &&
+                BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(10)) == 1000 && BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(14)) == 3 &&
+                BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(141)) == 0 && BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(145)) == 17 &&
+                body.AsSpan(262, 4).SequenceEqual(new byte[4]),
+                "生产死亡Handler发布完整物品和金币两行，不截成首件或将位置写入上下文");
+            uint itemKey = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(4));
+            uint goldKey = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(135));
+            int before = stream.Frames.Count;
+            byte[] get = new byte[20];
+            BinaryPrimitives.WriteUInt32LittleEndian(get, goldKey);
+            await commands.DispatchAsync(context, new(1, 43, get));
+            Check(stream.Opcodes.Skip(before).SequenceEqual(new ushort[] { 39, 14, 43 }) &&
+                stream.Frames[before].Length == 63 && stream.Frames[before + 1].Length == 142 &&
+                stream.Frames[before + 2].AsSpan(16).SequenceEqual(new byte[] { 1 }),
+                "金币生产包序为47B通知、实际余额差量与成功ACK");
+            var notice = stream.Frames[before].AsSpan(16).ToArray();
+            var delta = stream.Frames[before + 1].AsSpan(16).ToArray();
+            Check(notice.Length == 47 && BinaryPrimitives.ReadUInt32LittleEndian(notice.AsSpan(7)) == 17 &&
+                BinaryPrimitives.ReadUInt16LittleEndian(delta.AsSpan(3)) == 0 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(delta.AsSpan(9)) == f.Read().Inventory.Gold && f.Read().Inventory.Gold == 17,
+                "金币增量和虚拟槽0的绝对余额来自同一实际提交");
+            BinaryPrimitives.WriteUInt32LittleEndian(get, itemKey);
+            await commands.DispatchAsync(context, new(1, 43, get));
+            Check(f.Read().Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 3 &&
+                f.Read().Inventory.Gold == 17 && f.Session.Selected!.Inventory.Gold == 17,
+                "同死亡第二个key独立拾取三件原物品，不重复授予已取金币");
+            var actual = f.Read();
+            int sent = stream.Frames.Count;
+            await commands.DispatchAsync(context, new(1, 43, get));
+            Check(stream.Frames.Count == sent + 1 && stream.Frames[^1].AsSpan(16).SequenceEqual(new byte[] { 0, 22, 0 }) && Same(actual, f.Read()),
+                "集合生产重复拾取只拒绝一次，实际库存与金币保持不变");
+        }
+
         async Task PickupLostResultAsync()
         {
             using var f = new Fixture(towns, characters, learning, quests, true, losePickup: true);
@@ -320,6 +382,9 @@ internal static class FormalDungeonPublicationTests
             await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
             var context = new GameConnectionContext(new(5, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
             await commands.DispatchAsync(context, new(1, 39, Death(entry.Monsters.Monsters[0].ObjectKey, entry.Character.Id, 3)));
+            Check(stream.Frames[0].Length == 156 && stream.Frames[0].AsSpan(147, 4).SequenceEqual(new byte[4]) &&
+                entry.Monsters.Monsters[0].Source!.RawValues[4] != 0,
+                "真实死亡Handler的可控随机命中投影零创建上下文，不将非零资源Y写成客户端可见性过滤");
             var old = f.Session.Selected!;
             uint key = BinaryPrimitives.ReadUInt32LittleEndian(stream.Frames[0].AsSpan(20));
             byte[] get = new byte[20];

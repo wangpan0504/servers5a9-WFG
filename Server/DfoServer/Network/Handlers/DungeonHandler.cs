@@ -12,13 +12,16 @@ using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Currency;
 using DfoServer.Network.Builders.Inventory;
 
 namespace DfoServer.Network.Handlers;
 
 internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
     CharacterGrowthCatalog growth, DungeonKillExperienceCatalog rewards, TownProjection town, CharacterLevelProjection levelProjection,
-    DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null, QuestProjection? quests = null) : IGameCommandModule
+    DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null,
+    GoldLimitCatalog? goldLimits = null, QuestProjection? quests = null,
+    Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -62,7 +65,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
              selection.Unknown15 != 0 || selection.Unknown20 != 0 || selection.Unknown21 != 0))
             return await RejectAsync();
         var receipt = replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
-            context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms, drops, items, pieces: pieces);
+            context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms,
+                drops, items, pieces: pieces, prepareDrops: prepareDrops);
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Request = selection, receipt?.Snapshot.Identity });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
@@ -160,8 +164,12 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             return CommandResult.Handled;
         }
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
-        DungeonDropPacketItem[] dropRows = result.Drop is { } drop ?
-            [new(drop.Reservation.GroundKey, drop.Reservation.RecordSlot, drop.Core, drop.Reservation.X, drop.Reservation.Y)] : [];
+        // 02B0FA96读取第二个u16作为可见性过滤；普通掉落显式为0，位置由客户端死亡对象散落链确定。
+        var grounds = result.Drops;
+        if (grounds.IsEmpty && result.Drop is { } single)
+            grounds = [single];
+        DungeonDropPacketItem[] dropRows = grounds.Select(drop => new DungeonDropPacketItem(drop.Reservation.GroundKey,
+            drop.Reservation.RecordSlot, drop.Content.Item, 0, 0) { GoldAmount = drop.GoldAmount }).ToArray();
         await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, dropRows), "formal_monster_death", Guard);
         if (context.Session.PendingDungeonBossEntrance() is { } entrance)
         {
@@ -206,7 +214,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (items is null || pieces is null || !DungeonPickupRequests.TryParseOrdinary(request.Body, out var parsed))
             return CommandResult.Unhandled;
         var previousQuests = context.Owner.Execute(() => context.Session.Selected?.ActiveMainQuests);
-        var result = context.Session.PickFormalDungeonItem(parsed.GroundObjectKey, items, pieces);
+        var result = context.Session.PickFormalDungeonItem(parsed.GroundObjectKey, items, pieces, goldLimits);
         if (result.Outcome != DungeonRunOutcome.Accepted || result.Receipt is not { } receipt || result.Commit is not { } commit)
         {
             // 本服普通拒绝用已证可解除等待且保留原地面核心的22，不命名为原版满包错误。
@@ -215,11 +223,16 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         }
         if (!commit.ProjectionCurrent) return CommandResult.CloseConnection;
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        var destination = commit.Currency is { } kind
+            ? new InventorySlot(InventoryListType.Main, CurrencyPackets.PickupSlot(kind)) : commit.Destination;
         // 普通consumer不使用这九个局部值。本服无扩展贡献，明确投影零，不作Builder默认。
-        await context.Notify(NotiPacketType.GET_ITEM, DungeonPickupPackets.OrdinaryNotification(parsed.GroundObjectKey,
-            receipt.Character.Id, new byte[8], receipt.Character.Id, checked((ushort)commit.Destination.Index), 0), "formal_pickup_notice", Guard);
+        var notice = commit.Currency == CurrencyKind.Gold
+            ? DungeonPickupPackets.SinglePlayerGoldNotification(parsed.GroundObjectKey, receipt.Character.Id, checked((uint)commit.Amount))
+            : DungeonPickupPackets.OrdinaryNotification(parsed.GroundObjectKey,
+                receipt.Character.Id, new byte[8], receipt.Character.Id, checked((ushort)destination.Index), 0);
+        await context.Notify(NotiPacketType.GET_ITEM, notice, "formal_pickup_notice", Guard);
         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
-            InventoryListType.Main, [commit.Destination]), "formal_pickup_inventory", Guard);
+            InventoryListType.Main, [destination]), "formal_pickup_inventory", Guard);
         await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "formal_pickup_ack", Guard);
         if (previousQuests is not null && !previousQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_pickup_quest_conditions", Guard);
