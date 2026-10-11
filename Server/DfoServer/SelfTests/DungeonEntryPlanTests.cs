@@ -91,6 +91,28 @@ internal static class DungeonEntryPlanTests
         That(catalog.Get(12).AllowsDifficulty(1,false) && !catalog.Get(12).AllowsDifficulty(2,false) &&
             !catalog.Get(12).AllowsDifficulty(1,true) && !catalog.Get(3).AllowsDifficulty(1,false),
             "合法普通难度按difficulty level检查，剧情difficulty size及designate限制仍保留");
+        var hero = character with { Job = 13, GrowType = 36, Level = 90, ActiveMainQuests = [new(3,3240,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(catalog,hero,151,3240,0,out var heroPlan,out string heroReason,quest: quests.Get(3240),quests: quests),
+            "向暗黑城前进可进入英雄冢：" + heroReason);
+        That(heroPlan is { QuestId: 3240, RouteQuestId: 3240, ActiveQuestSlot: 3, Maze.SourceOrdinal: 7, StartMap.Id: 91391, BossMap.Id: 91398 } &&
+            heroPlan.QuestAcceptanceId == hero.ActiveMainQuests[0].AcceptanceId && heroPlan.Maze.StaticTopology.Supported,
+            "英雄冢沿真实任务接取身份及八房路线规划，不替换成普通图");
+        That(DungeonEntryPlan.TryCreate(catalog,hero,151,0,0,out var autoHero,out _,quests: quests) &&
+            autoHero is { QuestId: 0, RouteQuestId: 3240, Maze.SourceOrdinal: 7 }, "普通选图同样匹配英雄冢活动任务路线");
+        var heroDefinition = catalog.Get(151);
+        var heroLevels = heroDefinition.RawSections.First(section => section.Tag == "difficulty level");
+        That(heroDefinition.RawSections.Count(section => section.Tag == "difficulty level") == 2 &&
+            Enumerable.Range(0,5).All(value => heroDefinition.AllowsDifficulty((byte)value,false) == (value < 3)) &&
+            !heroDefinition.AllowsDifficulty(1,true), "相同重复难度表保留普通难度范围与剧情难度限制");
+        foreach (var tokens in new PvfToken[][]
+        {
+            [new(0,0),new(0,1),new(0,1),new(0,0),new(0,0)],
+            [new(0,1)],
+            [new(0,1),new(0,1),new(0,2),new(0,0),new(0,0)],
+            [new(7,1),new(0,1),new(0,1),new(0,0),new(0,0)]
+        })
+            That(!(heroDefinition with { RawSections = [heroLevels,new("difficulty level",tokens)] }).AllowsDifficulty(0,false),
+                "冲突、残缺、非法值与引用难度表仍拒绝");
         var maze = selected.Maze;
         RejectDefinition(definition with { Id = 1 }, "dungeon-resource-mismatch");
         RejectDefinition(definition with { MinimumLevel = null }, "dungeon-level-unknown");

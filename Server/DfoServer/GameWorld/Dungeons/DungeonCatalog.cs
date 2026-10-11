@@ -109,7 +109,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         }
         var levels = RawSections.Where(section => section.Tag == "difficulty level").ToArray();
         if (levels.Length == 0) return difficulty == 0;
-        return levels.Length == 1 && levels[0].Tokens.Count == 5 && levels[0].Tokens.All(token => token.Type == 0 && token.Value is 0 or 1) &&
+        // 部分副本重复声明同一难度表；内容相同不构成冲突，未知或不一致声明仍拒绝。
+        return levels[0].Tokens.Count == 5 && levels[0].Tokens.All(token => token.Type == 0 && token.Value is 0 or 1) &&
+            levels.All(section => section.Tokens.SequenceEqual(levels[0].Tokens)) &&
             levels[0].Tokens[difficulty].Value != 0;
     }
 }
