@@ -248,6 +248,7 @@ internal static class ClientSettingsTcpTests
                 CheckRoleMain(fixture, idB, account, mainB, roleB);
                 ReturnSelection(peer);
                 Select(peer, 0, mainA, roleA, mainA);
+                TravelVisibility(peer, Read(mainA, 1) == 0 ? (byte)1 : (byte)3);
             }
             ReturnSelection(peer);
             Select(peer, 1, mainA, roleB, mainB);
@@ -306,6 +307,28 @@ internal static class ClientSettingsTcpTests
     }
 
     static readonly int[] Scoped = [1, 13, 55, 74, 22, 68, 89, 94];
+    static void TravelVisibility(TcpPeer peer, byte state)
+    {
+        foreach (var (area, x, y) in new (byte, ushort, ushort)[] { (0, 622, 196), (1, 873, 253) })
+        {
+            peer.Send(area == 0 ? (ushort)1426 : (ushort)36, area == 0 ? [] : Area(38, 1, x, y, 38, 0));
+            peer.SendBarrier();
+            peer.Expect(0, 23, Build(writer =>
+            {
+                writer.Write(peer.Id); writer.Write((byte)38); writer.Write(area);
+                writer.Write(x); writer.Write(y); writer.Write((byte)0); writer.Write(state);
+            }));
+            peer.Expect(0, 24, Build(writer =>
+            {
+                writer.Write((byte)38); writer.Write(area); writer.Write((ushort)1); writer.Write(peer.Id);
+                writer.Write(x); writer.Write(y); writer.Write((byte)0); writer.Write(state); writer.Write((byte)1);
+            }));
+            if (area == 1)
+                peer.Expect(0, 1379, [38, 0, 0, 0]);
+            peer.Expect(1, 1347, [1]);
+        }
+    }
+
     static ushort Read(byte[] payload, int slot) => U16(payload, slot * 2);
     static void Write(byte[] payload, int slot, ushort value)
     {

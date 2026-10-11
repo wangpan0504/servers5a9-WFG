@@ -66,9 +66,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     {
         // 切图前不在旧场景移动实体；124 只属于选角入城。
         if (initial)
-            await context.Notify(NotiPacketType.USER_POSITION, TownPackets.Position(c.Id, c.Position, false), "position", canSend);
-        await context.Notify(NotiPacketType.USER_AREA, TownPackets.Position(c.Id, c.Position, true), "area", canSend);
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c.Id, c.Position), "transition", canSend);
+            await context.Notify(NotiPacketType.USER_POSITION, TownPackets.Position(c, false), "position", canSend);
+        await context.Notify(NotiPacketType.USER_AREA, TownPackets.Position(c, true), "area", canSend);
+        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c), "transition", canSend);
         var completed = DfoServer.Game.Quests.QuestEligibility.Completed(c);
         if (towns.IsRoom(c.Position, completed) && (c.Return ?? towns.DefaultReturn(c.Position, completed)) is { } back)
             await context.Notify(NotiPacketType.PREV_VILLAGE, TownPackets.RoomReturnTown(back), "room_return_town", canSend);
@@ -135,7 +135,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     public async Task ReturnFromFormalDungeonAsync(GameConnectionContext context, TownTravelReceipt receipt, string action)
     {
         bool CanSend() => context.Session.CanPublishTravel(receipt);
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character.Id, receipt.Character.Position), action, CanSend);
+        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
         // 城镇场景绑定后重新投影当前任务，不依赖重新选角。
         if (quests is not null)
             await quests.RefreshAsync(context, receipt.Character, CanSend);

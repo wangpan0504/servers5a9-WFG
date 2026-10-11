@@ -278,7 +278,7 @@ internal sealed class DungeonProbeModule : IGameCommandModule
             return true;
         });
         // NOTI24 的当前模块 3 分支负责离开副本；不提前发送城镇状态改变其分支。
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(character.Id, character.Position), "probe_return_town_transition");
+        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(character), "probe_return_town_transition");
         context.Owner.Execute(() =>
         {
             if (context.BlocksTownActions && context.Session.Selected?.Id == character.Id && context.Session.Selected.Revision == character.Revision)

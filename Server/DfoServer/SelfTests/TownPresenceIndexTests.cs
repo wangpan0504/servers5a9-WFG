@@ -66,7 +66,7 @@ internal static class TownPresenceIndexTests
             presence.Move(peers[0].Owner, peers[0].Sender, source);
             await Drain();
             That(Body(1, 22).Equals(Body(2, 22)), "one movement shares the same read-only body between recipients");
-            That(Body(1, 22).Span.SequenceEqual(TownPackets.Position(source.Id, source.Position, false)), "shared movement retains committed coordinates");
+            That(Body(1, 22).Span.SequenceEqual(TownPackets.Position(source, false)), "shared movement retains committed coordinates");
             That(peers.Where((_, i) => i == 0 || i >= 3).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "movement does not reach self or another scene");
             Clear();
             presence.Refresh(peers[0].Owner, peers[0].Sender, source);

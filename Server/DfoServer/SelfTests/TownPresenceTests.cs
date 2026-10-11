@@ -295,14 +295,14 @@ internal static class TownPresenceTests
             await flightTargetSend.Send(1, 1347, [1], "drain-in-flight-replacement").WaitAsync(TimeSpan.FromSeconds(2));
             var flightFrames = Frames(flightTargetStream);
             That(flightFrames.Select(f => f.Opcode).SequenceEqual(new ushort[] { 2, 6, 2, 3, 22, 1347 }), "in-flight old Actor is removed without stale State or Position before replacement snapshot");
-            That(flightFrames[1].Body.SequenceEqual(TownPackets.RemoveActor(flightSourceCharacter.Id)) && flightFrames[4].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter.Id, flightReplacementCharacter.Position, false)), "old Actor cleanup and replacement committed position retain the reused actor id");
+            That(flightFrames[1].Body.SequenceEqual(TownPackets.RemoveActor(flightSourceCharacter.Id)) && flightFrames[4].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter, false)), "old Actor cleanup and replacement committed position retain the reused actor id");
             // 旧连接的finally可晚于新成员入场；再次清理不得删除新membership，后续位置仍能送达。
             presence.Remove(flightSourceSend);
             flightReplacementCharacter = repo.Save(flightReplacement, flightReplacementCharacter, flightReplacementCharacter.Position with { X = 634 }, towns.InitialReturn);
             presence.Move(flightReplacement, flightReplacementSend, flightReplacementCharacter);
             await flightTargetSend.Send(1, 1347, [1], "drain-after-old-finally").WaitAsync(TimeSpan.FromSeconds(2));
             flightFrames = Frames(flightTargetStream);
-            That(flightFrames.Count(f => f.Opcode == 6) == 1 && flightFrames[^2].Opcode == 22 && flightFrames[^2].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter.Id, flightReplacementCharacter.Position, false)), "late old connection cleanup preserves replacement membership and its movement");
+            That(flightFrames.Count(f => f.Opcode == 6) == 1 && flightFrames[^2].Opcode == 22 && flightFrames[^2].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter, false)), "late old connection cleanup preserves replacement membership and its movement");
             presence.Remove(flightTargetSend);
             presence.Remove(flightReplacementSend);
             That(presence.Count == 0, "in-flight takeover fixture releases all memberships");

@@ -169,8 +169,8 @@ internal static partial class TownProtocolTcpTests
             peer.Send(132);
             peer.Expect(1, 132, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
-            peer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write((byte)38); w.Write((byte)2); w.Write((ushort)89); w.Write((ushort)249); w.Write((byte)0); w.Write((byte)1); }));
-            peer.Expect(0, 24, Build(w => { w.Write((byte)38); w.Write((byte)2); w.Write((ushort)1); w.Write(peer.Id); w.Write((ushort)89); w.Write((ushort)249); w.Write(new byte[] { 0, 1, 1 }); }));
+            peer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write((byte)38); w.Write((byte)2); w.Write((ushort)89); w.Write((ushort)249); w.Write((byte)0); w.Write((byte)3); }));
+            peer.Expect(0, 24, Build(w => { w.Write((byte)38); w.Write((byte)2); w.Write((ushort)1); w.Write(peer.Id); w.Write((ushort)89); w.Write((ushort)249); w.Write(new byte[] { 0, 3, 1 }); }));
             That(fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", peer.Id) == $"[[38,2,89,249,{revision + 1}]]",
                 "边界内外返回提交安全落点，包体与落库一致");
             before = fixture.Snapshot();
@@ -341,8 +341,8 @@ internal static partial class TownProtocolTcpTests
                     peer.Send(132);
                     peer.Expect(1, 132, [1]);
                     peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
-                    peer.Expect(0, 23, [(byte)peer.Id, (byte)(peer.Id >> 8), back.Town, back.Area, (byte)back.X, (byte)(back.X >> 8), (byte)back.Y, (byte)(back.Y >> 8), 0, 1]);
-                    peer.Expect(0, 24, [back.Town, back.Area, 1, 0, (byte)peer.Id, (byte)(peer.Id >> 8), (byte)back.X, (byte)(back.X >> 8), (byte)back.Y, (byte)(back.Y >> 8), 0, 1, 1]);
+                    peer.Expect(0, 23, [(byte)peer.Id, (byte)(peer.Id >> 8), back.Town, back.Area, (byte)back.X, (byte)(back.X >> 8), (byte)back.Y, (byte)(back.Y >> 8), 0, 3]);
+                    peer.Expect(0, 24, [back.Town, back.Area, 1, 0, (byte)peer.Id, (byte)(peer.Id >> 8), (byte)back.X, (byte)(back.X >> 8), (byte)back.Y, (byte)(back.Y >> 8), 0, 3, 1]);
                     peer.Send(132);
                     peer.Barrier();
                     That(fixture.Snapshot() == afterReturn, "返回132只提交资源落点，重复点击不重发和写库");
@@ -415,6 +415,9 @@ internal static partial class TownProtocolTcpTests
                 That(U16(packets[0].Body, 22) == ushort.MaxValue && U32(packets[0].Body, 24) == 0, "新角色没有按固定编号自动接取的任务");
                 Bytes(packets[1].Body, [1, 0, 0, 0], "accepted story level");
                 Bytes(packets[2].Body.AsSpan(127 + NameWidth(name), 3), [job, 0, 1], "actor job");
+                That(packets.Single(packet => packet.Kind == 0 && packet.Opcode == 23).Body[9] == 3 &&
+                    packets.Single(packet => packet.Kind == 0 && packet.Opcode == 24).Body[11] == 3,
+                    "各职业首次地区绑定保留默认开启的转职显示位 " + job);
                 AssetWireResult actorEquipment = AssetWireChecks.ActorEntries(packets[2].Body, 133 + NameWidth(name));
                 That(actorEquipment.Entries.Length == 5 && actorEquipment.ConsumedBytes == 126, "town Actor consumes five complete entries");
                 CheckAssetRows(fixture, job, actorEquipment, false);
@@ -449,6 +452,9 @@ internal static partial class TownProtocolTcpTests
                 That(packets[0].Body[222] == 38 && packets.Single(packet => packet.Kind == 0 && packet.Opcode == 23).Body[2] == 38, "relogin initial town agrees with USER_AREA for job " + job);
                 That(U16(packets[0].Body, 22) == ushort.MaxValue && U32(packets[0].Body, 24) == 0, "重登保留空任务槽，不自动接取任务");
                 Bytes(packets[3].Body, player, "relogin skills and stats");
+                That(packets.Single(packet => packet.Kind == 0 && packet.Opcode == 23).Body[9] == 3 &&
+                    packets.Single(packet => packet.Kind == 0 && packet.Opcode == 24).Body[11] == 3,
+                    "各职业重连地区绑定保留转职显示位 " + job);
             }
 
             using (var peer = Open(fixture))

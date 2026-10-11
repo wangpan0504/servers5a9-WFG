@@ -243,7 +243,7 @@ internal static partial class FormalDungeonTcpTests
             assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(72, [2, 2]); peer.Expect(1, 72, [1, 2, 2]);
             peer.Send(72, [1, 2]); peer.Expect(1, 72, [1, 1, 2]);
-            peer.Expect(0, 24);
+            That(peer.Expect(0, 24).Body[11] == 3, "正式副本结果页回城保留转职特效显示位");
             That(QuestLifecycleTcpTests.List(peer.Expect(0, 21).Body, projectedLevel).Contains(3145),
                 "结果页72回城在绑定场景后刷新当前任务，未领奖的任务仍保留");
             peer.Barrier();

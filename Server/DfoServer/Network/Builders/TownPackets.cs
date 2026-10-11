@@ -118,12 +118,13 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Position(ushort id, Location position, bool area)
+    public static byte[] Position(Character character, bool area)
     {
+        var position = character.Position;
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
-            writer.Write(id);
+            writer.Write(character.Id);
             if (area)
             {
                 writer.Write(position.Town);
@@ -134,7 +135,8 @@ internal static class TownPackets
             writer.Write(position.Y);
             writer.Write(position.Direction);
             if (area)
-                writer.Write((byte)1);
+                // 02A90970将状态bit1写入转职特效显示记录，切图不能固定清零。
+                writer.Write((byte)(1 | (character.VisibilityFlags & 2)));
             else
                 writer.Write((ushort)100);
             return stream.ToArray();
@@ -245,17 +247,18 @@ internal static class TownPackets
         return body;
     }
 
-    public static byte[] Transition(ushort id, Location position)
+    public static byte[] Transition(Character character)
     {
+        var position = character.Position;
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
             writer.Write(new byte[] { position.Town, position.Area });
             writer.Write((ushort)1);
-            writer.Write(id);
+            writer.Write(character.Id);
             writer.Write(position.X);
             writer.Write(position.Y);
-            writer.Write(new byte[] { position.Direction, 1, 1 });
+            writer.Write(new byte[] { position.Direction, (byte)(1 | (character.VisibilityFlags & 2)), 1 });
             return stream.ToArray(); // 023DFA82 consumes a third byte after direction and area state.
         }
     }

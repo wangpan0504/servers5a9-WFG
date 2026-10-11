@@ -75,7 +75,7 @@ internal static class DungeonProbeTcpTests
             {
                 peer.Send(42);
                 peer.Expect(1, 42, [1]);
-                peer.Expect(0, 24);
+                That(peer.Expect(0, 24).Body[11] == 3, "诊断副本回城保留转职特效显示位");
                 peer.Send(132);
                 peer.Barrier();
                 peer.Send(16, request);

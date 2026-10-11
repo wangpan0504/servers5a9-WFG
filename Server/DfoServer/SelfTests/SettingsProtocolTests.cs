@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Session;
 using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Towns;
@@ -46,6 +47,7 @@ internal static class SettingsProtocolTests
         Reject<InvalidDataException>(() => SettingsPackets.CharacterOptions([0]), "损坏角色设置不能回放");
         SelectionGuard(game, character);
         RoleScopedValues();
+        TownVisibility();
         Console.WriteLine($"PASS {Count - before} client settings parser, projection and selection assertions");
     }
 
@@ -101,6 +103,24 @@ internal static class SettingsProtocolTests
         BinaryPrimitives.WriteUInt32LittleEndian(body, (uint)data.Length);
         data.CopyTo(body, 4);
         return body;
+    }
+
+    static void TownVisibility()
+    {
+        var point = new Location(38, 0, 622, 196, 5);
+        // 职业共用状态消费；未知外观bits不能混入位置状态，第三尾字节保持原值。
+        foreach (byte job in Enumerable.Range(0, 16).Select(value => (byte)value))
+        foreach (var (flags, state) in new (byte, byte)[] { (4, 1), (6, 3), (28, 1), (30, 3), (253, 1), (255, 3) })
+        {
+            var character = new Character(0x1234, 0, "Visibility", 7, point, null) { Job = job, VisibilityFlags = flags };
+            Bytes(TownPackets.Position(character, false), [0x34, 0x12, 0x6e, 2, 0xc4, 0, 5, 100, 0],
+                "各职业坐标通知22不携带外观状态，方向和速度保持");
+            Bytes(TownPackets.Position(character, true), [0x34, 0x12, 38, 0, 0x6e, 2, 0xc4, 0, 5, state],
+                "各职业区域通知23保留转职显示开关和坐标");
+            Bytes(TownPackets.Transition(character), [38, 0, 1, 0, 0x34, 0x12, 0x6e, 2, 0xc4, 0, 5, state, 1],
+                "各职业场景通知24保留转职显示开关、状态bit0与第三尾字节");
+            That(character.VisibilityFlags == flags && character.Revision == 7, "构包不修改角色显示设置及revision");
+        }
     }
 
     sealed class SettingsStore : IClientSettingsStore

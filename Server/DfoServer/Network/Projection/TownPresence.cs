@@ -39,7 +39,7 @@ internal sealed class TownPresence(TownCatalog towns)
     static Bodies Capture(Member source)
     {
         var c = source.Character;
-        return new(TownPackets.Actor(c), TownPackets.ActorState(c.Id), TownPackets.Position(c.Id, c.Position, false));
+        return new(TownPackets.Actor(c), TownPackets.ActorState(c.Id), TownPackets.Position(c, false));
     }
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>
         new(source.Character.Id, source.Serial, bodies.Actor, bodies.State, bodies.Position, () => Visible(source, target));
