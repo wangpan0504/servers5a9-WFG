@@ -27,6 +27,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[][] Mailbox { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
+    public byte[] InitialGameOptions { get; private set; } = [];
 
     static readonly Encoding names;
     static TcpPeer()
@@ -201,6 +202,8 @@ internal sealed class TcpPeer : IDisposable
         // 保留普通入城断言的返回索引，特殊容器单独暴露；线上顺序仍逐包严格验证。
         var prefix = Batch(expected[..2]);
         var creatures = Expect(0, 105);
+        byte[]? initialGameOptions = (settings ?? []).FirstOrDefault(option => option.Opcode == 173).Body;
+        InitialGameOptions = initialGameOptions is null ? [] : Expect(0, 173, initialGameOptions).Body;
         var middle = new List<WirePacket>();
         SkillInfo = [];
         for (int index = 2; index < afterCargo; index++)

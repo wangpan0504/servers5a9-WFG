@@ -21,6 +21,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (c.AcceptedStoryLevel > 0)
             await context.Notify(NotiPacketType.STORY_DIGEST_INFO, TownPackets.StoryLevel(c), "accepted_story_level");
         await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(c.Inventory), "creature_details_initialize");
+        // 首次创建本人UI前先初始化主设置；地区绑定后仍回放完整设置，补齐依赖角色实体的应用。
+        if (settings is not null && settingReceipt is not null)
+            await settings.InitializeGameOptionsAsync(context, settingReceipt, "account_settings_before_player");
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(c), "actor");
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c)), "player");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");

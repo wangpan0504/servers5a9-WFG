@@ -13,6 +13,8 @@ internal static class ClientSettingsTcpTests
         const string account = "settingsalice", otherAccount = "settingsbob";
         byte[] initial = Payload(204, 7), shared = Payload(204, 31), first = Payload(512, 63), second = Payload(512, 127);
         byte[] otherGame = Payload(204, 193), otherCharacter = Payload(512, 251);
+        Write(initial, 90, 0);
+        Write(shared, 90, 75);
         ushort firstId, secondId, otherId;
 
         using (var peer = Open(fixture, account))
@@ -175,6 +177,7 @@ internal static class ClientSettingsTcpTests
         byte[] gameBody = [.. Blob(projected), 0, 0, 0, 0, 0, 0, 0, 0];
         (ushort Opcode, byte[] Body)[] settings = character is null ? [(173, gameBody)] : [(173, gameBody), (390, Blob(Character(character, projected)))];
         peer.Select(slot, settings: settings, appearanceFlags: Flags(projected));
+        That(peer.InitialGameOptions.SequenceEqual(gameBody), "本人Actor/Player之前预载完整主设置，UI大小和当前角色字段与后段回放一致");
         That(peer.ClientSettings.Length == settings.Length, "完整设置按173、390顺序位于地区绑定之后及124之前");
         peer.Barrier();
     }
