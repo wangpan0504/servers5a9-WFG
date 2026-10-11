@@ -14,7 +14,8 @@ using DfoServer.Testing;
 
 namespace DfoServer.Application;
 
-internal static class ServerApplication
+// Windows 单文件 host 只通过命令行入口启动服务，不公开领域或存储类型。
+public static class ServerApplication
 {
     public static async Task<int> RunAsync(string[] args)
     {

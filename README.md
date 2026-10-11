@@ -34,6 +34,8 @@ PVF 读取由独立的 [PvfLib](Tools/PvfLib/README.md) 提供，游戏资源定
 
 ### 2. 发布目标平台的程序
 
+Windows 需要单个 EXE 分发时，双击仓库根的 [build-single-server.bat](build-single-server.bat)，或执行 `./Tools/Build-Server.ps1 -SingleFile`。输出为 `dist/win-x64-single/S5A9Server.exe`，启动界面、服务端及托管依赖直接打包在同一程序中，无需附带 DLL、Resources、Sqlite 或启动脚本。目标机器无需另装 .NET；SQLite 等原生依赖由 .NET 自动加载到系统缓存。PVF、存档、日志和启动设置外置，详见[单 EXE 分发](Docs/开发/环境与配置.md#windows-单-exe-分发)。
+
 Windows 本机反复游玩测试，可双击仓库根的 `build-server.bat`，或执行以下脚本。默认输出到 `dist/win-x64`，同时生成独立的 `DfoLauncher.exe` 游戏服务启动器；重新构建保留已有存档、PVF 和日志，并在更新前备份 `Data`。自定义目录及停服更新说明见[本机测试构建](Docs/开发/环境与配置.md#本机测试构建windows)。
 
 ```powershell
@@ -69,9 +71,11 @@ chmod +x dist/linux-x64/DfoServer
 
 RID 选择的是**运行程序的机器**，不是游戏客户端的架构。跨平台发布后，帮助命令和实际启动需在目标系统验证；其他系统条件见 [.NET RID 说明](https://learn.microsoft.com/zh-cn/dotnet/core/rid-catalog)。
 
-输出为[自包含部署](https://learn.microsoft.com/zh-cn/dotnet/core/deploying/)，已带 .NET 运行时，目标机器无需另装 .NET，但仍需满足目标系统的原生依赖要求。将 `dist/<RID>/` **整个目录**复制或压缩后分发，保留依赖库、Resources、Sqlite、Data/Pvf 和启动脚本，不能只取 `DfoServer.exe` 或 `DfoServer`。公开分发包不包含 PVF、玩家数据库或日志；若源码目录已有 PVF，发布时会复制它，打包前需排除。
+上面的直接 `dotnet publish` 命令输出为[自包含目录部署](https://learn.microsoft.com/zh-cn/dotnet/core/deploying/)，已带 .NET 运行时，目标机器无需另装 .NET，但仍需满足目标系统的原生依赖要求。目录模式需复制 `dist/<RID>/` **整个目录**，保留依赖库、Resources、Sqlite 和启动脚本；Windows 单文件模式只需复制 `S5A9Server.exe`。公开分发不包含 PVF、玩家数据库或日志；若源码目录已有 PVF，直接目录发布会复制它，打包前需排除，单文件模式不将 PVF 打入 EXE。
 
 ### 3. 放入资源并启动
+
+单文件模式双击 `S5A9Server.exe`，在启动界面选择自行提供的 PVF 和存档目录后点击“启动服务”。已有进度请选择原来的存档目录；空目录会新建库。程序不附带、搬迁或合并玩家存档。
 
 把自行准备的 `Script.pvf` 放在**发布目录**的 `Data/Pvf/Script.pvf`，例如 `dist/win-x64/Data/Pvf/Script.pvf`。然后只执行当前平台对应的启动命令：
 

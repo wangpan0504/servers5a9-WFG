@@ -5,14 +5,21 @@
 运行目录，默认 dist/win-x64。相对路径以仓库根目录为基准。
 .PARAMETER PvfPath
 首次运行所需的 Script.pvf；仅在运行目录尚无该文件时复制，不替换已有资源。
+.PARAMETER SingleFile
+将启动器和服务端托管依赖合并为一个 S5A9Server.exe，默认输出 dist/win-x64-single。
 #>
 [CmdletBinding()]
 param(
     [ValidateNotNullOrEmpty()][string]$OutputDirectory = 'dist/win-x64',
-    [string]$PvfPath
+    [string]$PvfPath,
+    [switch]$SingleFile
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
+if ($SingleFile -and -not $PSBoundParameters.ContainsKey('OutputDirectory')) {
+    $OutputDirectory = 'dist/win-x64-single'
+}
+$program = if ($SingleFile) { 'S5A9Server.exe' } else { 'DfoServer.exe' }
 
 function Get-FullPath([string]$Path) {
     if (-not [IO.Path]::IsPathRooted($Path)) { $Path = Join-Path $root $Path }
@@ -56,8 +63,8 @@ Assert-NoLinks $output
 if (Test-Path -LiteralPath $output) {
     if (-not (Test-Path -LiteralPath $output -PathType Container)) { throw '输出路径必须是目录。' }
     if (@(Get-ChildItem -LiteralPath $output -Force).Count -and
-        -not (Test-Path -LiteralPath (Join-Path $output 'DfoServer.dll') -PathType Leaf)) {
-        throw '已有非空目录不是服务端程序目录；请选择空目录或已有 DfoServer.dll 的运行目录。'
+        -not (Test-Path -LiteralPath (Join-Path $output $(if ($SingleFile) { $program } else { 'DfoServer.dll' })) -PathType Leaf)) {
+        throw '已有非空目录与本次发布模式不匹配；请选择空目录或同一模式的运行目录。'
     }
     foreach ($item in Get-ChildItem -LiteralPath $output -Recurse -Force) {
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
@@ -81,24 +88,37 @@ $buildRoot = Join-Path $root 'build'
 $stage = Join-Path $buildRoot ('publish-' + [guid]::NewGuid().ToString('N'))
 $payload = Join-Path $stage 'publish'
 Write-Host "发布 Windows x64 Release 自包含程序，运行目录：$output"
-Invoke-Dotnet @('publish', (Join-Path $root 'Server/DfoServer/DfoServer.csproj'),
-    '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
-    '--artifacts-path', (Join-Path $stage 'artifacts'), '-o', $payload)
+if (-not $SingleFile) {
+    Invoke-Dotnet @('publish', (Join-Path $root 'Server/DfoServer/DfoServer.csproj'),
+        '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
+        '--artifacts-path', (Join-Path $stage 'artifacts'), '-o', $payload)
+}
 $launcherPayload = Join-Path $stage 'launcher'
-Invoke-Dotnet @('publish', (Join-Path $root 'Tools/ServerLauncher/ServerLauncher.csproj'),
+$launcherArguments = @('publish', (Join-Path $root 'Tools/ServerLauncher/ServerLauncher.csproj'),
     '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
     '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
+    '-p:EnableCompressionInSingleFile=true',
     '--artifacts-path', (Join-Path $stage 'artifacts'), '-o', $launcherPayload)
-Copy-Item -LiteralPath (Join-Path $launcherPayload 'DfoLauncher.exe') -Destination $payload
-foreach ($name in @('DfoServer.exe', 'DfoServer.dll', 'Resources/channel.txt',
-    'Sqlite/game_schema.sql', 'start-server.bat', 'DfoLauncher.exe')) {
+if ($SingleFile) { $launcherArguments += '-p:BundleServer=true' }
+Invoke-Dotnet $launcherArguments
+New-Item -ItemType Directory -Path $payload -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $launcherPayload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -Destination $payload
+$requiredFiles = if ($SingleFile) { @($program) } else {
+    @('DfoServer.exe', 'DfoServer.dll', 'Resources/channel.txt', 'Sqlite/game_schema.sql', 'start-server.bat', 'DfoLauncher.exe')
+}
+foreach ($name in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)) {
         throw "发布文件缺失：$name；临时产物保留在 $stage"
     }
 }
-& (Join-Path $payload 'DfoServer.exe') --help
-if ($LASTEXITCODE -ne 0) { throw "发布程序启动检查失败；临时产物保留在 $stage" }
-$launcherCheck = Start-Process -FilePath (Join-Path $payload 'DfoLauncher.exe') -ArgumentList '--help' -WindowStyle Hidden -Wait -PassThru
+if ($SingleFile) {
+    $serverCheck = Start-Process -FilePath (Join-Path $payload $program) -ArgumentList '--server','--help' -WindowStyle Hidden -Wait -PassThru
+    if ($serverCheck.ExitCode -ne 0) { throw "内置服务端启动检查失败；临时产物保留在 $stage" }
+} else {
+    & (Join-Path $payload $program) --help
+    if ($LASTEXITCODE -ne 0) { throw "发布程序启动检查失败；临时产物保留在 $stage" }
+}
+$launcherCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--help' -WindowStyle Hidden -Wait -PassThru
 if ($launcherCheck.ExitCode -ne 0) { throw "启动器检查失败；临时产物保留在 $stage" }
 
 $data = Join-Path $output 'Data'
@@ -136,29 +156,34 @@ try {
     $pvfDirectory = Join-Path $data 'Pvf'
     New-Item -ItemType Directory -Path $pvfDirectory -Force | Out-Null
     $readme = Join-Path $pvfDirectory 'README.md'
-    if (-not (Test-Path -LiteralPath $readme)) {
+    if (-not $SingleFile -and -not (Test-Path -LiteralPath $readme)) {
         Copy-Item -LiteralPath (Join-Path $payload 'Data/Pvf/README.md') -Destination $readme
     }
     $targetPvf = Join-Path $pvfDirectory 'Script.pvf'
     if (Test-Path -LiteralPath $targetPvf -PathType Leaf) {
         Write-Host "保留已有 PVF：$targetPvf"
     } else {
-        if (-not $sourcePvf -and (Test-Path -LiteralPath (Join-Path $payload 'Data/Pvf/Script.pvf') -PathType Leaf)) {
+        if (-not $sourcePvf -and -not $SingleFile -and (Test-Path -LiteralPath (Join-Path $payload 'Data/Pvf/Script.pvf') -PathType Leaf)) {
             $sourcePvf = Join-Path $payload 'Data/Pvf/Script.pvf'
         }
         if ($sourcePvf) { Copy-Item -LiteralPath $sourcePvf -Destination $targetPvf }
     }
-    & (Join-Path $output 'DfoServer.exe') --help
-    if ($LASTEXITCODE -ne 0) { throw '运行目录中的程序启动检查失败。' }
+    if ($SingleFile) {
+        $installedCheck = Start-Process -FilePath (Join-Path $output $program) -ArgumentList '--server','--help' -WindowStyle Hidden -Wait -PassThru
+        if ($installedCheck.ExitCode -ne 0) { throw '运行目录中的单文件程序启动检查失败。' }
+    } else {
+        & (Join-Path $output $program) --help
+        if ($LASTEXITCODE -ne 0) { throw '运行目录中的程序启动检查失败。' }
+    }
     $launcherConfig = Join-Path $output 'launcher.local.json'
-    if (-not (Test-Path -LiteralPath $launcherConfig)) {
+    if (-not $SingleFile -and -not (Test-Path -LiteralPath $launcherConfig)) {
         $defaults = [ordered]@{
             ServerIp = '127.0.0.1'; ChannelPort = 23100; GamePort = 23101
             PvfPath = 'Data/Pvf/Script.pvf'; DataDirectory = 'Data'
         }
         [IO.File]::WriteAllText($launcherConfig, ($defaults | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
         Write-Host "已生成默认启动配置：$launcherConfig"
-    } else {
+    } elseif (Test-Path -LiteralPath $launcherConfig) {
         Write-Host "保留已有启动配置：$launcherConfig"
     }
 } catch {
@@ -176,8 +201,13 @@ if (-not (Test-Within $resolvedStage $buildRoot) -or $resolvedStage -eq $buildRo
     throw '临时目录边界检查失败，未清理。'
 }
 Remove-Item -LiteralPath $resolvedStage -Recurse -Force
-Write-Host "构建完成。双击启动器：$output\DfoLauncher.exe"
-Write-Host "无参数的 start-server.bat 也会打开启动器；带参数时直接运行命令行服务。"
+if ($SingleFile) {
+    Write-Host "构建完成。单程序：$output\$program"
+    Write-Host '分发程序只需复制这个 EXE，无需附带 DLL、Resources、Sqlite 或启动脚本。PVF 和存档仍由启动界面选择。'
+} else {
+    Write-Host "构建完成。双击启动器：$output\DfoLauncher.exe"
+    Write-Host "无参数的 start-server.bat 也会打开启动器；带参数时直接运行命令行服务。"
+}
 Write-Host "默认本机连接：127.0.0.1，频道 TCP 23100，游戏 TCP 23101；实际设置读取 launcher.local.json。"
 Write-Host "存档：$data\game.db；日志：$output\Logs。后续构建请始终使用同一输出目录。"
 if (-not (Test-Path -LiteralPath $targetPvf -PathType Leaf)) {

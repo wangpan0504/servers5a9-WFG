@@ -8,5 +8,10 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>DfoLauncher</AssemblyName>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName Condition="'$(BundleServer)' == 'true'">S5A9Server</AssemblyName>
+    <DefineConstants Condition="'$(BundleServer)' == 'true'">$(DefineConstants);BUNDLED_SERVER</DefineConstants>
   </PropertyGroup>
+  <ItemGroup Condition="'$(BundleServer)' == 'true'">
+    <ProjectReference Include="../../Server/DfoServer/DfoServer.csproj" />
+  </ItemGroup>
 </Project>

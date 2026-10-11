@@ -65,7 +65,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     ProcessStartInfo StartInfo(params string[] arguments)
     {
         PrepareRuntime();
-        var info = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        bool singleFile = File.Exists(Path.Combine(Root, "S5A9Server.exe"));
+        var info = new ProcessStartInfo(singleFile ? Path.Combine(Root, "S5A9Server.exe") :
+            Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -73,7 +75,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             RedirectStandardError = true,
             RedirectStandardInput = true
         };
-        info.ArgumentList.Add(Path.Combine(Root, "DfoServer.dll"));
+        info.ArgumentList.Add(singleFile ? "--server" : Path.Combine(Root, "DfoServer.dll"));
         info.WorkingDirectory = Root;
         foreach (string argument in new[] { "--server-ip", Options.AdvertisedAddress, "--listen-ip", Options.ListenAddress,
             "--channel-port", Options.ChannelPort.ToString(), "--game-port", Options.GamePort.ToString(),
@@ -98,7 +100,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (arguments.Length == 1 && arguments[0] == "--help")
         {
             start.ArgumentList.Clear();
-            start.ArgumentList.Add(Path.Combine(Root, "DfoServer.dll"));
+            start.ArgumentList.Add(File.Exists(Path.Combine(Root, "S5A9Server.exe")) ? "--server" : Path.Combine(Root, "DfoServer.dll"));
             start.ArgumentList.Add("--help");
         }
         using var child = Process.Start(start) ?? throw new IOException("CLI process did not start");
@@ -231,7 +233,13 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     // 每个子进程使用独立的程序目录，按正式固定布局隔离 Data/Logs，不增加测试专用启动参数。
     void PrepareRuntime()
     {
-        string source = Path.GetDirectoryName(typeof(TcpTestFixture).Assembly.Location)!;
+        string source = AppContext.BaseDirectory;
+        if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "S5A9Server")
+        {
+            LinkOrCopy(Environment.ProcessPath ?? throw new InvalidDataException("单文件测试缺少 host 路径"),
+                Path.Combine(Root, "S5A9Server.exe"));
+            return;
+        }
         foreach (string file in Directory.EnumerateFiles(source))
         {
             string name = Path.GetFileName(file);

@@ -12,9 +12,12 @@
     <ProjectReference Include="../../Tools/PvfLib/PvfLib.csproj" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <EmbeddedResource Include="Resources/channel.txt" LogicalName="DfoServer.Resources.channel.txt" />
+    <EmbeddedResource Include="Sqlite/game_schema.sql" LogicalName="DfoServer.Sqlite.game_schema.sql" />
     <None Update="Resources/**" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Sqlite/*.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="Data/Pvf/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="Data/Pvf/*" CopyToPublishDirectory="Never" Condition="'$(BundleServer)' == 'true'" />
     <None Include="../../start-server.bat;../../start-server.sh" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

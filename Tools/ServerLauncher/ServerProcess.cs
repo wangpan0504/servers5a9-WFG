@@ -34,7 +34,9 @@ internal sealed class ServerProcess(string root, Action<string> log) : IAsyncDis
     public async Task<ReadyInfo> StartAsync(LaunchSettings settings, CancellationToken token)
     {
         settings.Validate();
-        string executable = Path.Combine(root, "DfoServer.exe");
+        string executable = Program.BundledServer
+            ? Environment.ProcessPath ?? throw new IOException("无法确定本次单文件程序位置。")
+            : Path.Combine(root, "DfoServer.exe");
         if (!File.Exists(executable))
             throw new FileNotFoundException("请将启动器放在 DfoServer.exe 所在的完整服务包中。");
         string pvf = Path.GetFullPath(settings.PvfPath, root);
@@ -72,6 +74,8 @@ internal sealed class ServerProcess(string root, Action<string> log) : IAsyncDis
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+        if (Program.BundledServer)
+            start.ArgumentList.Add("--server");
         foreach (string argument in new[] { "--server-ip", settings.ServerIp, "--channel-port", settings.ChannelPort.ToString(),
             "--game-port", settings.GamePort.ToString(), "--gm-port", "0" })
             start.ArgumentList.Add(argument);

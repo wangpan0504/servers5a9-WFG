@@ -27,7 +27,7 @@ internal static class SqliteDatabaseBootstrap
                 }
                 else
                 {
-                    string sql = File.ReadAllText(schemaPath ?? Path.Combine(AppContext.BaseDirectory, "Sqlite", "game_schema.sql"));
+                    string sql = ReadSchema(schemaPath);
                     using var tx = db.BeginTransaction();
                     // 基线只含独立建表和索引语句；逐条执行，保证中途 DDL 错误不会被批处理吞掉。
                     foreach (string statement in sql.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
@@ -52,5 +52,17 @@ internal static class SqliteDatabaseBootstrap
             }
         }
         return connectionString;
+    }
+
+    static string ReadSchema(string? explicitPath)
+    {
+        string path = explicitPath ?? Path.Combine(AppContext.BaseDirectory, "Sqlite", "game_schema.sql");
+        // 显式 schema 路径不能因文件缺失而退回默认结构；目录发布保留外部 SQL。
+        if (explicitPath is not null || File.Exists(path))
+            return File.ReadAllText(path);
+        using var stream = typeof(SqliteDatabaseBootstrap).Assembly.GetManifestResourceStream("DfoServer.Sqlite.game_schema.sql")
+            ?? throw new InvalidDataException("程序缺少内置数据库结构");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 }

@@ -20,7 +20,13 @@ internal static class ChannelTcpTests
             Bytes(hello.AsSpan(4, 16), "EMU-LAB-KEY-0001"u8, "channel key");
             Write(stream, 9, []);
             byte[] script = Decode(Read(stream, 10));
-            byte[] expected = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
+            string path = Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt");
+            using var reference = File.Exists(path) ? File.OpenRead(path) :
+                typeof(ChannelTcpTests).Assembly.GetManifestResourceStream("DfoServer.Resources.channel.txt")
+                ?? throw new InvalidDataException("频道回归缺少参考脚本");
+            using var expectedBytes = new MemoryStream();
+            reference.CopyTo(expectedBytes);
+            byte[] expected = expectedBytes.ToArray();
             Bytes(script.AsSpan(0, expected.Length), expected, "channel script transport");
             Write(stream, 17, new byte[24]);
             byte[] directory = Decode(Read(stream, 18));

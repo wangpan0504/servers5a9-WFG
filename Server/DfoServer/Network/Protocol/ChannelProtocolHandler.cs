@@ -9,7 +9,7 @@ internal sealed class ChannelProtocolHandler(ServerOptions options, ServerLog lo
     public async Task RunAsync(ConnectionContext connection)
     {
         bool hello = false, script = false;
-        byte[] scriptBytes = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
+        byte[] scriptBytes = ReadChannelScript();
         while (true)
         {
             byte[] b = await connection.ReadAsync();
@@ -37,5 +37,17 @@ internal sealed class ChannelProtocolHandler(ServerOptions options, ServerLog lo
             if (b[1] == 17 && script)
                 return;
         }
+    }
+
+    static byte[] ReadChannelScript()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt");
+        if (File.Exists(path))
+            return File.ReadAllBytes(path);
+        using var stream = typeof(ChannelProtocolHandler).Assembly.GetManifestResourceStream("DfoServer.Resources.channel.txt")
+            ?? throw new InvalidDataException("程序缺少内置频道脚本");
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return bytes.ToArray();
     }
 }
