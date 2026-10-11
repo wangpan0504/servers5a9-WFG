@@ -141,7 +141,8 @@ internal sealed partial class GameSession
             if (commit.Inventory is { } plan)
                 inventory = new InventoryResult(true, 0, plan)
                 {
-                    Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase }
+                    Receipt = new(Selected, owner.Generation, SelectionEpoch)
+                        { Phase = Phase, DungeonIdentity = dungeon.Run.Snapshot.Identity }
                 };
             settlement.Committed = true;
         }
@@ -221,7 +222,8 @@ internal sealed partial class GameSession
         settlement.Paid = committed.Reward;
         InventoryResult? inventory = committed.Inventory is { } plan ? new(true,0,plan)
         {
-            Receipt = new(Selected,owner.Generation,SelectionEpoch) { Phase = Phase,PreviousQuests = before.ActiveMainQuests }
+            Receipt = new(Selected,owner.Generation,SelectionEpoch)
+                { Phase = Phase,DungeonIdentity = formalDungeon.Run.Snapshot.Identity,PreviousQuests = before.ActiveMainQuests }
         } : null;
         return new(FormalReceipt(),committed.Reward,inventory,committed.MailId,committed.Duplicate);
     });

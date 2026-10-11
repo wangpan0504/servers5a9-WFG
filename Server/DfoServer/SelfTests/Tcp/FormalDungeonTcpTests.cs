@@ -950,11 +950,16 @@ internal static partial class FormalDungeonTcpTests
         for (int index = 0; index < bonusPairs.Count; index++)
             That(U32(body,bonusAt+1+index*8) == bonusPairs[index].Item && U32(body,bonusAt+5+index*8) == bonusPairs[index].Amount,
                 "35黑钻条目精确对应同事务追加的实际金币及冻结核心数量");
-        if (!duplicate) DrainCardInventory(peer);
+        int inventoryNotices = DrainCardInventory(peer, fixture);
+        if (duplicate) That(inventoryNotices == 0,"重复结算只刷新幸运星余额，不重发背包奖励差量");
+        else if (card.Gold > 0 || bonus?.Gold > 0)
+            That(inventoryNotices > 0,"已到账翻牌金币必须发送实际背包差量，不能只通过提交断言");
     }
 
-    static void DrainCardInventory(TcpPeer peer)
+    static int DrainCardInventory(TcpPeer peer, TcpTestFixture? fixture = null)
     {
+        int inventoryNotices = 0;
+        bool luckyStarSeen = false;
         peer.SendBarrier();
         while (true)
         {
@@ -962,9 +967,19 @@ internal static partial class FormalDungeonTcpTests
             if (packet.Kind == 1 && packet.Opcode == 1347)
             {
                 TestCheck.Bytes(packet.Body,[1],"翻牌库存更新后同步屏障");
-                return;
+                return inventoryNotices;
+            }
+            if (packet.Kind == 0 && packet.Opcode == 988 && fixture is not null)
+            {
+                That(!luckyStarSeen && inventoryNotices == 0 && packet.Body.Length == 8 && U32(packet.Body,4) == 0 &&
+                    U32(packet.Body,0) == Convert.ToInt64(fixture.Query("SELECT rental_points FROM account_wallets WHERE account=$p0",
+                        fixture.Options.DevelopmentAccount).Single()[0]),
+                    "结算幸运星在库存差量前投影实际账号余额且只通知一次");
+                luckyStarSeen = true;
+                continue;
             }
             That(packet.Kind == 0 && packet.Opcode == 14,"翻牌/德利拉出售在提交后发送完整库存差量");
+            inventoryNotices++;
         }
     }
 

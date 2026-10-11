@@ -98,6 +98,8 @@ internal static class DungeonSettlementSessionTests
             Check(selected is not null && draws == frozen && paid.Inventory.Gold == beforePaid.Inventory.Gold - cleared.Options!.Price + selected.Reward.Gold &&
                 Same(paid,f.Read()) && f.Query("SELECT paid_cost FROM character_dungeon_card_options") is long cost && cost == cleared.Options.Price,
                 "付费牌同一事务先验证扣费再增加冻结奖励，不因重试重新抽牌");
+            Check(selected!.Inventory?.Receipt is { } paidReceipt && f.Session.CanPublishInventory(paidReceipt),
+                "付费及会员翻牌库存回执绑定当前副本身份，提交后可实际发布差量");
             if (member) Check(f.Query("SELECT sum(used) FROM character_gold_card_uses") is 1L,"黄金会员一次成功选牌只消费一次角色当日权益");
             else Check(f.Count("character_gold_card_uses") == 0,"普通金币付费牌不消费黄金会员计数");
             var repeat = f.Session.SelectFormalDungeonPaidCard(2,0,policy);
@@ -180,6 +182,8 @@ internal static class DungeonSettlementSessionTests
             Check(draws == frozenDraws && Same(stored,f.Session.Selected!) && restored.Card is not null &&
                 restored.Inventory?.Receipt is not null && f.Count("character_dungeon_card_rewards") == 1 && f.Settlements == 1,
                 "原报告恢复只读真实回执，安装实际角色及库存发布回执，不再次抽牌或发资产");
+            Check(restored.Inventory?.Receipt is { } restoredReceipt && f.Session.CanPublishInventory(restoredReceipt),
+                "返回结果丢失后的免费牌恢复回执仍绑定当前副本并允许发布");
             Check(SettleCard().Outcome == DungeonRunOutcome.Duplicate && Same(stored,f.Read()),
                 "恢复确认后的重复报告继续保持资产和唯一回执");
             FormalDungeonSettlementResult SettleCard() => f.Session.SettleFormalDungeon(f.Created.Id,99,99,[7,8,9],dungeons,clear,growth,policy);
@@ -206,12 +210,23 @@ internal static class DungeonSettlementSessionTests
                 f.Count("character_dungeon_card_rewards") == 0 && f.Count("mailbox_messages") == 0,
                 "翻牌SQL失败没有部分资产或成功在线快照");
             f.Sql("DROP TRIGGER card_fail");
+            f.Sql("CREATE TRIGGER lucky_star_fail AFTER UPDATE OF rental_points ON account_wallets BEGIN SELECT RAISE(ABORT,'lucky star rollback'); END");
+            Reject<SqliteException>(() => CardSettle(), "幸运星末段失败回滚已经写入的通关、翻牌和邮件");
+            Check(draws == frozenDraws && Same(previous,f.Read()) && ReferenceEquals(previous,f.Session.Selected) &&
+                f.Settlements == 0 && f.Count("character_dungeon_card_rewards") == 0 && f.Count("mailbox_messages") == 0,
+                "幸运星SQL失败保留原钱包和随机计划，不留下翻牌资产、经验或邮件");
+            f.Sql("DROP TRIGGER lucky_star_fail");
             var result = CardSettle();
             var committed = f.Session.Selected!;
             Check(draws == frozenDraws && result.Card is { Gold: > 0, Item: not null } &&
                 committed.Inventory.Gold == previous.Inventory.Gold + result.Card.Gold && Same(committed,f.Read()) &&
                 f.Settlements == 1 && f.Count("character_dungeon_card_rewards") == 1,
                 "同报告重试沿原随机核心提交一次金币、物品及永久回执");
+            Check(result.LuckyStarGained && result.LuckyStarTotal == previous.Inventory.AccountWallet.RentalPoints + 1 &&
+                committed.Inventory.AccountWallet.RentalPoints == result.LuckyStarTotal &&
+                committed.Inventory.AccountWallet.Revision == previous.Inventory.AccountWallet.Revision + 1 &&
+                result.Inventory?.Receipt is { } freeReceipt && f.Session.CanPublishInventory(freeReceipt),
+                "免费牌与幸运星共事务，实际钱包和副本身份回执均安装到当前角色");
             var core = result.Card!.Item!;
             if (full)
                 Check(result.MailId is not null && committed.Inventory.Items.SequenceEqual(previous.Inventory.Items) &&
@@ -245,7 +260,7 @@ internal static class DungeonSettlementSessionTests
             Check(f.Session.RevealFormalDungeonCard(cards) is null && Same(beforeFlip,f.Read()),
                 "回城后旧计时及旧牌面不影响新阶段，重开库保留全部已提交资产");
 
-            FormalDungeonSettlementResult CardSettle() => f.Session.SettleFormalDungeon(f.Created.Id,99,99,[4,5,6],dungeons,clear,growth,policy);
+            FormalDungeonSettlementResult CardSettle() => f.Session.SettleFormalDungeon(f.Created.Id,99,99,[4,5,6],dungeons,clear,growth,policy,luckyStarLimit:999);
         }
 
         void CommittedSettlement()

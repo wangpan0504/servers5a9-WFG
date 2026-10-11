@@ -123,8 +123,6 @@ internal sealed partial class CharacterRepository
               $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision)
             """;
         command.ExecuteNonQuery();
-        var luckyStar = grantLuckyStar ? GrantDungeonLuckyStar(db, tx, owner.Account, luckyStarLimit) :
-            new DungeonLuckyStarGrant(false, ReadAccountWallet(db, owner.Account, tx).RentalPoints);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久通关成长结果与候选不一致");
@@ -186,6 +184,11 @@ internal sealed partial class CharacterRepository
         }
         else if (cardInventory is not null || mailCardItem)
             throw new InvalidDataException("没有冻结免费牌时不能提交翻牌资产");
+        // 翻牌规划绑定提交前钱包；完成其保存后再授星，避免本事务使自己的规划失效。
+        var luckyStar = grantLuckyStar ? GrantDungeonLuckyStar(db, tx, owner.Account, luckyStarLimit) :
+            new DungeonLuckyStarGrant(false, ReadAccountWallet(db, owner.Account, tx).RentalPoints);
+        if (luckyStar.Granted)
+            committed = committed with { Inventory = committed.Inventory with { AccountWallet = ReadAccountWallet(db, owner.Account, tx) } };
         tx.Commit();
         return new DungeonSettlementCommit(committed, false, reward)
         {
