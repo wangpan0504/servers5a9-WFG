@@ -282,6 +282,8 @@ internal static class QuestCompletionRepositoryTests
         public bool LoseSceneResult { get; init; }
         public bool LoseGrowthResult { get; init; }
         public bool LoseCompletionResult { get; init; } = true;
+        public bool LoseInventoryResult { get; init; }
+        int inventoryCalls;
         public bool SameLifecyclePlan { get; private set; }
         QuestLifecyclePlan? firstLifecycle;
         int lifecycleCalls;
@@ -337,6 +339,11 @@ internal static class QuestCompletionRepositoryTests
         }
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected, DungeonGroundPickupPreparation prepared, InventoryPlan plan) =>
             inner.CommitDungeonPickup(owner, expected, prepared, plan);
-        public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);
+        public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan)
+        {
+            var result = inner.CommitInventory(owner, expected, plan);
+            if (LoseInventoryResult && ++inventoryCalls == 1) throw new IOException("合成库存已提交但返回结果丢失");
+            return result;
+        }
     }
 }

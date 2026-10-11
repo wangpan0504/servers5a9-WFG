@@ -73,6 +73,13 @@ internal static class TcpRegressionTests
         }),
         ("jobs", TownProtocolTcpTests.JobsAsync),
         ("inventory", InventoryTcpTests.RunAsync),
+        ("consumable-use", ConsumableUseTcpTests.RunAsync),
+        ("consumable-use-rules", (_, _, resources) =>
+        {
+            ConsumableUseTests.RunResources(resources.ItemResources);
+            ConsumableUseSessionTests.Run(resources.Towns, resources.Characters, resources.Archive);
+            return Task.CompletedTask;
+        }),
         ("inventory-persistence", (_, _, resources) =>
         {
             Inventory.InventoryCommitTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
@@ -119,7 +126,7 @@ internal static class TcpRegressionTests
 
     public static IEnumerable<string> GroupNames => Groups.Select(group => group.Name);
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
-    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("dungeon-entry-plan" or "quest-continuation" or "quest-manual-skip" or "quest-ticket" or "quest-specified-ticket" or "quest-awakening-ticket" or "quest-play-only" or "quest-auto-meet" or "quest-npc-mapping" or "quest-hidden" or "quest-replay" or "quest-initialization" or "dungeon-story-events" or "quest-core-rewards" or "dungeon-settlement" or "inventory-persistence" or "resource-survey"));
+    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("dungeon-entry-plan" or "quest-continuation" or "quest-manual-skip" or "quest-ticket" or "quest-specified-ticket" or "quest-awakening-ticket" or "quest-play-only" or "quest-auto-meet" or "quest-npc-mapping" or "quest-hidden" or "quest-replay" or "quest-initialization" or "dungeon-story-events" or "quest-core-rewards" or "dungeon-settlement" or "inventory-persistence" or "resource-survey" or "consumable-use-rules"));
     public static bool IsValidSelection(string selection)
     {
         string[] names = selection.Split(',');

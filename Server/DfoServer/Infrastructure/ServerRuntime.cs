@@ -99,6 +99,7 @@ internal static class ServerRuntime
             new SettingsHandler(settings, log, projection),
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
             new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables), log),
             new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),

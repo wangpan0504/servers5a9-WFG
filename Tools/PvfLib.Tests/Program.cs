@@ -17,5 +17,6 @@ ArchiveIndexTests.Run();
 ArchiveBoundaryTests.Run();
 ScriptTests.Run();
 ItemModelTests.Run();
+RecoveryConsumableTests.Run();
 Console.WriteLine($"PASS {TestCheck.Count} PvfLib assertions");
 return 0;

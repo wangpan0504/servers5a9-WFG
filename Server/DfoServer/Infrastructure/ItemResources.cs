@@ -19,6 +19,7 @@ internal sealed class ItemResources
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
     public CashShopCatalog CashShop { get; }
+    public RecoveryConsumableCatalog RecoveryConsumables { get; }
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
     readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
     public DungeonItemDropCatalog DungeonDropItems => dungeonDropItems.Value;
@@ -36,6 +37,7 @@ internal sealed class ItemResources
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate);
+        RecoveryConsumables = new(archive, stackable);
         RandomOptions = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));

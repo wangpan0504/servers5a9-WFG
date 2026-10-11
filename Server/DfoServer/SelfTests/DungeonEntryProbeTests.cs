@@ -372,7 +372,8 @@ internal static class DungeonEntryProbeTests
                         && BinaryPrimitives.ReadUInt16LittleEndian(transition[4..]) == returnCharacter.Id
                         && BinaryPrimitives.ReadUInt16LittleEndian(transition[6..]) == returnCharacter.Position.X
                         && BinaryPrimitives.ReadUInt16LittleEndian(transition[8..]) == returnCharacter.Position.Y
-                        && transition[10] == returnCharacter.Position.Direction && transition[11] == 1 && transition[12] == 1,
+                        && transition[10] == returnCharacter.Position.Direction && returnCharacter.VisibilityFlags == 6
+                        && transition[11] == 3 && transition[12] == 1,
                         "NOTI24 returns the exact town snapshot and ACK42 has only success");
                     That(await loadingCommands.DispatchAsync(loadingContext, giveupRequest) == CommandResult.Unhandled
                         && loadingBytes.Length == 195 && !loadingContext.BlocksTownActions,

@@ -106,6 +106,7 @@ internal static class SelfTestRunner
         SkillLearningCatalogTests.RunCore();
         SkillLayoutTests.Run();
         ItemRequestTests.Run();
+        ConsumableUseTests.RunCore();
         RandomOptionTests.RunCore();
         MailboxProtocolTests.Run();
         MailboxPersistenceTests.Run();
@@ -131,6 +132,8 @@ internal static class SelfTestRunner
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
+        ConsumableUseTests.RunResources(itemResources);
+        ConsumableUseSessionTests.Run(towns, characters, pvf);
         await MailboxTests.RunAsync(towns, characters, itemResources, pvf);
         DevelopmentAssetTests.RunResources(towns, itemResources);
         InventoryBatchTests.Run(itemResources);

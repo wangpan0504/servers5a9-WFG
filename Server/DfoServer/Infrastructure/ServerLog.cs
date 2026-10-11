@@ -88,6 +88,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "formal_dungeon_entry" => "Dungeon entry", "formal_dungeon_settlement" => "Dungeon settlement",
             "dungeon_selection_return" => "Dungeon selection return", "formal_dungeon_return" => "Returned to town",
             "quest_lifecycle" => "Quest update", "quest_completion" => "Quest completion", "gm" => "GM command",
+            "consumable_use" => "Consumable use",
             _ => kind.Replace('_', ' ')
         };
         return title + ": " + DetailText(fields);
@@ -133,7 +134,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         "selected" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
         "formal_dungeon_settlement" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_enter" or "dungeon_entry_probe" or "dungeon_probe_return" or
-        "quest_lifecycle" or "quest_completion" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
+        "quest_lifecycle" or "quest_completion" or "consumable_use" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
         "quest_ticket_use" or "gm" or "unimplemented" ||
         kind.EndsWith("_rejected", StringComparison.Ordinal) || kind.EndsWith("_failed", StringComparison.Ordinal);
 
