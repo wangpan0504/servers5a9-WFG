@@ -50,7 +50,8 @@ internal static class SkillExtendedTcpTests
             peer.Send(331, [1, 5, 0, 3, 2, 128, 4]); peer.Expect(1, 331, [1]);
             customized = peer.Expect(0, 19).Body;
             var commands = SkillPacketsTests.DecodeInitialized(customized);
-            That(commands[0].Skills.Single(skill => skill.Id == 5).Command == "028004" && commands[1].Skills.All(skill => skill.Command == "") &&
+            That(commands[0].Skills.Single(skill => skill.Id == 5).Command == "028004" &&
+                commands[1].Skills.All(skill => skill.Command == catalog.Get(0, skill.Id).DefaultCommand) &&
                 commands[0].Sp == before[0].Sp && commands[0].Tp == before[0].Tp, "TCP指令整数回推、主树隔离及点数不变");
             long revision = Role(0).Revision;
             peer.Send(331, [1, 5, 0, 3, 2, 128, 4]); peer.Expect(1, 331, [1]); peer.Expect(0, 19, customized);
@@ -59,7 +60,7 @@ internal static class SkillExtendedTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(sceneSkills: customized);
-            Bytes(peer.SkillInfo, customized, "重登场景绑定前后均回放保存指令");
+            Bytes(peer.SceneSkillInfo, customized, "重登场景后回放保存指令及资源默认");
             peer.Send(29, [0, 1, 5, 0, 0, 1, 0]);
             var ack = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
             That(ack.Skills.Single().Command == "028004" && ack.Skills.Single().Level == 2, "升级ACK保留自定义指令");
@@ -67,7 +68,8 @@ internal static class SkillExtendedTcpTests
             That(SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body)[0].Skills.Single(skill => skill.Id == 5).Command == "04",
                 "实收恢复默认也通过331保存默认指令");
             peer.Send(332, []); peer.Expect(1, 332, [1]);
-            That(SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body).All(tree => tree.Skills.All(skill => skill.Command == "")), "332清除自定义指令");
+            That(SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body).All(tree =>
+                tree.Skills.All(skill => skill.Command == catalog.Get(0, skill.Id).DefaultCommand)), "332清除自定义存档并显式恢复资源默认指令");
             ushort sp = ack.Sp;
             peer.Send(29, Purchase(tp.SkillId, 2));
             var bought = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
@@ -161,6 +163,17 @@ internal static class SkillExtendedTcpTests
                 .All(skill => skill.Slot is >= 102 and < 138)), "特殊职业新角色被动不进入快捷栏 " + job);
         }
         await fixture.StopAsync();
+        // 复现dd的默认三段斩：主树Lv18、副树Lv1，没有任何自定义指令存档。
+        var free = catalog.FreeSkills(0, 5);
+        var defaultState = SkillLearning.Initialize(0, free, catalog).State! with
+            { Experience = growth.GetLevelStartExperience(49) };
+        defaultState = SkillPointLedger.Synchronize(0, 5, 49, defaultState, catalog);
+        var defaultLearning = SkillLearning.Plan(0, 5, 49, defaultState, new(0, 0, [new(8, false, 17)]), catalog);
+        That(defaultLearning.Success, "dd三段斩Lv18默认指令夹具按真实资源学习");
+        var defaultRole = repository.Create(owner, new NewCharacter("DefaultSlash", resources.Towns.Room, resources.Towns.InitialReturn)
+        { Job = 0, GrowType = 5, Level = 49, AcceptedStoryLevel = 1, Skills = free.ToArray(),
+            InitialLearning = defaultLearning.State!,
+            Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)) });
         await fixture.StartAsync("extended-restart");
         using (var peer = Open(fixture))
         {
@@ -168,6 +181,35 @@ internal static class SkillExtendedTcpTests
             peer.Select(1, combos: SkillPackets.Combos(expected));
             That(expected.Trees[0].Combos.Single(combo => combo.Root == 119).Children.Single() == 77 &&
                 expected.Trees[1].Combos.Single(combo => combo.Root == 119).Children.All(id => id != 77), "重启回放两树独立连招");
+            peer.Barrier();
+        }
+        byte[] defaultReplay;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(defaultRole.Slot);
+            defaultReplay = peer.SceneSkillInfo;
+            var trees = SkillPacketsTests.DecodeInitialized(defaultReplay);
+            That(trees[0].Skills.Single(skill => skill.Id == 8).Level == 18 &&
+                trees[1].Skills.Single(skill => skill.Id == 8).Level == 1 &&
+                trees.All(tree => tree.Skills.Single(skill => skill.Id == 8).Command == "0C04"),
+                "默认三段斩两树显式回放按住方向Z而非空字段，真实等级保持");
+            peer.Send(7, []); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            peer.Select(defaultRole.Slot);
+            Bytes(peer.SceneSkillInfo, defaultReplay, "同连接重选默认角色恢复完整指令绑定");
+            peer.Send(7, []); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            peer.Select(0);
+            peer.Send(331, [1, 5, 0, 2, 2, 4]); peer.Expect(1, 331, [1]); peer.Expect(0, 19);
+            peer.Send(7, []); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            peer.Select(defaultRole.Slot);
+            Bytes(peer.SceneSkillInfo, defaultReplay, "自定义角色切回默认角色不混入上一角色指令");
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(defaultRole.Slot);
+            Bytes(peer.SceneSkillInfo, defaultReplay, "断线重登默认指令仍在场景后恢复");
+            That(fixture.Query("SELECT skill_id FROM character_skill_commands WHERE character_id=" + defaultRole.Id).Length == 0,
+                "默认指令回放不写技能指令表");
             peer.Barrier();
         }
         await fixture.StopAsync();

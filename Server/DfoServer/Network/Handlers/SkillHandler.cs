@@ -35,7 +35,8 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill commands receipt");
         bool Guard() => context.Session.CanPublishLearning(receipt);
         await context.Reply(opcode, [1], "skill_commands_committed", Guard);
-        await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "skill_commands_info", Guard);
+        await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning,
+            id => catalog.Get(receipt.Character.Job, id).DefaultCommand), "skill_commands_info", Guard);
         return CommandResult.Handled;
     }
 

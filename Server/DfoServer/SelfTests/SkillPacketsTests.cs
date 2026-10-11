@@ -27,6 +27,14 @@ internal static class SkillPacketsTests
         byte[] sample = Convert.FromHexString("1E0000000813120C080010001A06080010051801120C080010001A06080010051801");
         That(SkillPackets.Initialized(zero).SequenceEqual(sample), "fixed NOTI19 sample includes zero-valued required fields and two actual bindings");
         var decoded = DecodeInitialized(sample);
+        var explicitDefaults = DecodeInitialized(SkillPackets.Initialized(zero, _ => "0C04"));
+        That(explicitDefaults.All(tree => tree.Skills.Single().Command == "0C04") &&
+            zero.Trees.All(tree => tree.Skills.Single().Command.Length == 0),
+            "显式默认指令进入两树field4但不修改学习存档");
+        var customized = State(zero.Trees[0] with { Skills = [new(0, 5, 1) { Command = "030304" }] }, zero.Trees[1]);
+        var mixed = DecodeInitialized(SkillPackets.Initialized(customized, _ => "0C04"));
+        That(mixed[0].Skills.Single().Command == "030304" && mixed[1].Skills.Single().Command == "0C04",
+            "每树已有指令优先，另一树独立补默认");
         That(decoded.Length == 2 && decoded.All(tree => tree.Sp == 0 && tree.Tp == 0 && tree.Skills.Single() == new LearnedSkill(0, 5, 1)),
             "independent protobuf reader verifies required presence and real slot0");
         byte[] ack = SkillPackets.Success(0, 0, zero, [new(0, 5, 1)]);

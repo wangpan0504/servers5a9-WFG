@@ -27,7 +27,8 @@ internal sealed class SkillLearningDefinition
         string[] unsupported, int? skillClass = null, int? skillFitnessGrowtypeCount = null,
         int[]? secondGrowtypeMaximumLevels = null, FixedSkillRule? fixedLevel = null,
         int[]? skillFitnessGrowtypes = null, int[]? skillFitnessSecondGrowtypes = null,
-        bool guildSkill = false, bool expertSkill = false, int[]? tpCosts = null, ushort[]? comboSkills = null, bool commandCustomizing = true)
+        bool guildSkill = false, bool expertSkill = false, int[]? tpCosts = null, ushort[]? comboSkills = null,
+        bool commandCustomizing = true, string defaultCommand = "")
     {
         growtypeFitness = fitness is null ? null : Array.AsReadOnly(fitness);
         IsFeatureSkill = featureSkill;
@@ -47,6 +48,7 @@ internal sealed class SkillLearningDefinition
         TpCosts = Array.AsReadOnly(tpCosts ?? []);
         ComboSkills = Array.AsReadOnly(comboSkills ?? []);
         CommandCustomizing = commandCustomizing;
+        DefaultCommand = defaultCommand;
         this.costs = costs is null ? null : Array.AsReadOnly(costs);
         this.maximumLevels = maximumLevels is null ? null : Array.AsReadOnly(maximumLevels);
         this.growtypeMaximumLevels = growtypeMaximumLevels is null ? null : Array.AsReadOnly(growtypeMaximumLevels);
@@ -80,6 +82,7 @@ internal sealed class SkillLearningDefinition
     public IReadOnlyList<int> TpCosts { get; }
     public IReadOnlyList<ushort> ComboSkills { get; }
     public bool CommandCustomizing { get; }
+    public string DefaultCommand { get; }
     public bool IsFeatureSkill { get; }
     public bool HasComboDeclaration { get; }
     public bool IsGuildSkill { get; }
@@ -254,7 +257,7 @@ internal sealed class SkillLearningCatalog
         string[] tags = ["type", "skill class", "skill fitness growtype", "purchase cost", "maximum level",
             "growtype maximum level", "required level", "required level range", "pre required skill", "growtype fitness",
             "feature skill type", "combo set", "second growtype maximum level", "fixed level skill",
-            "interval level", "add level per interval", "is apply contract skillmaster", "skill fitness second growtype", "guild skill", "expert skill", "special purchase cost", "command customizing"];
+            "interval level", "add level per interval", "is apply contract skillmaster", "skill fitness second growtype", "guild skill", "expert skill", "special purchase cost", "command customizing", "command"];
         var fields = new Dictionary<string, PvfToken[]>(StringComparer.Ordinal);
         var unsupported = new List<string>();
         for (int i = 0; i < tokens.Length; i++)
@@ -276,7 +279,7 @@ internal sealed class SkillLearningCatalog
                 // external 的 Document.Section 读取首段；后续同名段不合并、不覆盖，空首段也有效。
                 // 仍逐段核对闭块，字段类型及取值由下面的首段解析校验。
             }
-            if (name is "purchase cost" or "special purchase cost" or "pre required skill" or "combo set")
+            if (name is "purchase cost" or "special purchase cost" or "pre required skill" or "combo set" or "command")
             {
                 if (i >= tokens.Length || resolve(tokens[i].Value) != "[/" + name + "]")
                     throw new InvalidDataException("技能学习标签没有结束块: " + name);
@@ -361,11 +364,14 @@ internal sealed class SkillLearningCatalog
                 throw new InvalidDataException("固定等级技能参数非法");
             fixedLevel = new(interval, add, apply == 1);
         }
+        bool customizing = !fields.ContainsKey("command customizing") || Scalar("command customizing") != 0;
+        string command = type == SkillType.Active && customizing && fields.TryGetValue("command", out var commandTokens)
+            ? ParseCommand(commandTokens, resolve) : "";
         return new SkillLearningDefinition(job, skillId, path, type, costs, maximum, growtype, basis, range,
             prerequisites, fitness, featureSkill, comboDeclared, unsupported.ToArray(), skillClass, skillFitnessGrowtypeCount, second, fixedLevel,
             skillFitness, secondFitness, fields.ContainsKey("guild skill"), fields.ContainsKey("expert skill"),
             fields.ContainsKey("special purchase cost") ? Integers("special purchase cost") : null,
-            combo.Select(id => (ushort)id).ToArray(), !fields.ContainsKey("command customizing") || Scalar("command customizing") != 0);
+            combo.Select(id => (ushort)id).ToArray(), customizing, command);
 
         int[]? Integers(string tag)
         {
@@ -389,5 +395,40 @@ internal sealed class SkillLearningCatalog
             unsupported.Add(tag);
             return null;
         }
+    }
+
+    internal static string ParseCommand(PvfToken[] tokens, Func<int, string> resolve)
+    {
+        if (tokens.Length == 0) return "";
+        if (tokens.Length > 9 || tokens.Length % 2 == 0)
+            throw new InvalidDataException("技能默认指令不是最多五键的交替序列");
+        var keys = new byte[(tokens.Length + 1) / 2];
+        for (int i = 0; i < keys.Length; i++)
+        {
+            if (tokens[i * 2].Type != 5)
+                throw new InvalidDataException("技能默认指令按键不是类型5的字符串引用");
+            keys[i] = resolve(tokens[i * 2].Value) switch
+            {
+                "(UP)" => 0, "(DOWN)" => 1, "(LEFT)" => 2, "(RIGHT)" => 3,
+                "(SKILL)" => 4, "(JUMP)" => 5, "(ATTACK)" => 6, "(BUFF)" => 8,
+                _ => throw new InvalidDataException("技能默认指令包含未知按键")
+            };
+            if (i == 0) continue;
+            if (tokens[i * 2 - 1].Type != 7)
+                throw new InvalidDataException("技能默认指令分隔符不是类型7的字符串引用");
+            switch (resolve(tokens[i * 2 - 1].Value))
+            {
+                case ",": break;
+                case "&" when keys[i - 1] <= 3:
+                    // 02D7D9E0将9..12拆入按住方向表，普通方向0..3仍是顺序按键。
+                    keys[i - 1] += 9;
+                    break;
+                default: throw new InvalidDataException("技能默认指令包含未知组合");
+            }
+        }
+        if (keys[^1] is not (4 or 5 or 6 or 8))
+            throw new InvalidDataException("技能默认指令缺少终止操作键");
+        // 单独跳跃/攻击属于客户端固有输入，02D7C250不接受这种自定义向量。
+        return keys.Length == 1 && keys[0] is 5 or 6 ? "" : Convert.ToHexString(keys);
     }
 }

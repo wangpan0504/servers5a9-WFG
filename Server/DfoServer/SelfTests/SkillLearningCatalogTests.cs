@@ -15,6 +15,21 @@ internal static class SkillLearningCatalogTests
 
     public static void RunCore()
     {
+        string[] commandStrings = ["(UP)", "(DOWN)", "(LEFT)", "(RIGHT)", "(SKILL)", "(JUMP)", "(ATTACK)", "(BUFF)", "&", ","];
+        string Command(PvfToken[] tokens) => SkillLearningCatalog.ParseCommand(tokens, id => commandStrings[id]);
+        for (int direction = 0; direction < 4; direction++)
+            That(Command([new(5, direction), new(7, 8), new(5, 4)]) == Convert.ToHexString([(byte)(9 + direction), 4]),
+                "四方向按住编码9..12，不是普通方向重复 " + direction);
+        That(Command([new(5, 3), new(7, 9), new(5, 3), new(7, 9), new(5, 4)]) == "030304",
+            "连续右右Z与按住右Z的0C04明确分开");
+        That(Command([new(5, 1), new(7, 8), new(5, 5)]) == "0A05" &&
+            Command([new(5, 1), new(7, 8), new(5, 6)]) == "0A06" && Command([new(5, 7)]) == "08",
+            "按住方向加跳跃/攻击和BUFF操作键分别保留");
+        That(Command([]) == "" && Command([new(5, 5)]) == "" && Command([new(5, 6)]) == "",
+            "空声明和固有单跳跃/攻击不冒充可安装的自定义指令");
+        Reject<InvalidDataException>(() => Command([new(0, 3), new(7, 8), new(5, 4)]));
+        Reject<InvalidDataException>(() => Command([new(5, 3), new(7, 8)]));
+        Reject<InvalidDataException>(() => Command([new(5, 4), new(7, 8), new(5, 4)]));
         var active = Fixture([7], [4], [4, 4, 4, 4, 4, 4], [1], [0], []);
         That(Parse(active).Type == SkillType.Active && Parse(active).SlotGroup == 3, "主动类型保留且不依赖被动分组字段");
         var defaults = Parse(Fixture([7], [4], [4, 4, 4, 4, 4, 4], null, null, []));
@@ -114,6 +129,23 @@ internal static class SkillLearningCatalogTests
         Reject<KeyNotFoundException>(() => catalog.Get(0, ushort.MaxValue));
 
         ushort[] ids = [5, 5, 4, 11, 1, 4, 1, 5, 1, 5, 250, 1, 1, 2, 1, 1];
+        That(catalog.Get(0, 8).DefaultCommand == "0C04" && catalog.Get(0, 5).DefaultCommand == "0904" &&
+            catalog.Get(0, 46).DefaultCommand == "04" && catalog.Get(0, 1).DefaultCommand == "010106" &&
+            catalog.Get(0, 3).DefaultCommand == "010008" && catalog.Get(0, 169).DefaultCommand == "" &&
+            !catalog.Get(0, 169).CommandCustomizing,
+            "三段斩/鬼斩按住方向、上挑Z、顺序攻击/BUFF取真实资源，禁止自定义的固有输入保持");
+        string[] commandLists = ["swordmanskill.lst", "fighterskill.lst", "gunnerskill.lst", "mageskill.lst", "priestskill.lst",
+            "atgunnerskill.lst", "thiefskill.lst", "atfighterskill.lst", "atmageskill.lst", "dsswordmanskill.lst",
+            "creatormageskill.lst", "atswordmanskill.lst", "knight.lst", "demoniclancerskill.lst", "atpriestskill.lst", "gunbladerskill.lst"];
+        for (byte job = 0; job < commandLists.Length; job++)
+        {
+            var commands = PvfScript.List(pvf.ReadText("skill/" + commandLists[job])).Keys
+                .Select(id => catalog.Get(job, checked((ushort)id))).Where(skill => skill.DefaultCommand.Length > 0).ToArray();
+            That(commands.All(skill => skill.Type == SkillType.Active && skill.CommandCustomizing &&
+                Convert.FromHexString(skill.DefaultCommand).Length is >= 1 and <= 5), "职业默认指令只投影可安装的主动技能 " + job);
+            int held = commands.Count(skill => Convert.FromHexString(skill.DefaultCommand).Any(key => key is >= 9 and <= 12));
+            Console.WriteLine($"PASS 默认指令资源 job={job} commands={commands.Length} held={held}");
+        }
         int[] costs = [15, 20, 20, 15, 20, 20, 15, 20, 20, 5, 0, 15, 20, 15, 20, 20];
         int[] maximum = [60, 20, 20, 60, 20, 20, 20, 20, 20, 60, 1, 60, 20, 60, 20, 20];
         string[] directories = ["swordman", "fighter", "gunner", "mage", "priest", "atgunner", "thief", "atfighter",

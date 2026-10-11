@@ -21,6 +21,7 @@ internal sealed class TcpPeer : IDisposable
     ushort sequence;
     public byte[] Roster { get; private set; } = [];
     public byte[] SkillInfo { get; private set; } = [];
+    public byte[] SceneSkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
     public byte[] CompletedQuestHistory { get; private set; } = [];
     public ushort Id { get; private set; }
@@ -209,6 +210,7 @@ internal sealed class TcpPeer : IDisposable
         InitialGameOptions = initialGameOptions is null ? [] : Expect(0, 173, initialGameOptions).Body;
         var middle = new List<WirePacket>();
         SkillInfo = [];
+        SceneSkillInfo = [];
         CompletedQuestHistory = [];
         for (int index = 2; index < afterCargo; index++)
         {
@@ -239,7 +241,18 @@ internal sealed class TcpPeer : IDisposable
             // 设置必须在地区绑定后、入城完成前回放；单独保留以免改变旧用例的包索引。
             if (notice == ((byte)0, (ushort)124))
             {
-                if (sceneSkills is not null) Expect(0, 19, sceneSkills);
+                if (SkillInfo.Length > 0)
+                {
+                    SceneSkillInfo = Expect(0, 19, sceneSkills).Body;
+                    var originalTrees = SkillPacketsTests.DecodeInitialized(SkillInfo);
+                    var sceneTrees = SkillPacketsTests.DecodeInitialized(SceneSkillInfo);
+                    TestCheck.That(originalTrees.Length == sceneTrees.Length && originalTrees.Zip(sceneTrees).All(pair =>
+                        pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
+                        pair.First.Skills.Length == pair.Second.Skills.Length && pair.First.Skills.Zip(pair.Second.Skills).All(skills =>
+                            skills.First.Slot == skills.Second.Slot && skills.First.Id == skills.Second.Id && skills.First.Level == skills.Second.Level &&
+                            (skills.First.Command.Length == 0 || skills.First.Command == skills.Second.Command))),
+                        "场景后仅可补默认指令，完整两树余额、绑定、等级与已保存指令保持");
+                }
                 if (combos is not null) Expect(0, 447, combos);
                 ClientSettings = (settings ?? []).Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
                 if (appearanceFlags.HasValue)

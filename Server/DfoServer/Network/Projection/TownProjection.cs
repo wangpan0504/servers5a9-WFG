@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Protocol;
@@ -11,7 +12,8 @@ using DfoServer.Game.Dungeons;
 namespace DfoServer.Network.Projection;
 
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
-    MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null)
+    MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
+    SkillLearningCatalog? learning = null)
 {
     public async Task EnterAsync(GameConnectionContext context)
     {
@@ -48,9 +50,10 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await mailbox.InitializeAsync(context);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
         await LocationAsync(context, c, initial: true);
-        // 场景绑定可能重建技能管理器；带自定义指令的角色在23/24后补回原字节。
-        if (c.Learning.Initialized && c.Learning.Trees.Any(tree => tree.Skills.Any(skill => skill.Command.Length > 0)))
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(c.Learning), "skill_commands_after_scene");
+        // 显式恢复资源默认指令，不能只重发缺省field4并假定按住方向已经注册。
+        if (c.Learning.Initialized)
+            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(c.Learning,
+                learning is null ? null : id => learning.Get(c.Job, id).DefaultCommand), "skill_commands_after_scene");
         if (c.Job == 9 && c.Learning.Initialized)
             await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(c.Learning), "skill_combo_initialize");
         if (settings is not null && settingReceipt is not null)

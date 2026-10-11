@@ -48,7 +48,7 @@ internal static class SkillPackets
         return [1, context, from, to];
     }
 
-    public static byte[] Initialized(CharacterLearningState state)
+    public static byte[] Initialized(CharacterLearningState state, Func<ushort, string>? defaultCommand = null)
     {
         Validate(state, requireFullTrees: true);
         using var payload = new MemoryStream();
@@ -71,11 +71,12 @@ internal static class SkillPackets
                             Field(skillWriter, 1, skill.Slot);
                             Field(skillWriter, 2, skill.Id);
                             Field(skillWriter, 3, skill.Level);
-                            if (skill.Command.Length > 0)
+                            string command = skill.Command.Length > 0 ? skill.Command : defaultCommand?.Invoke(skill.Id) ?? "";
+                            if (command.Length > 0)
                             {
                                 using var keys = new MemoryStream();
                                 using (var keyWriter = new BinaryWriter(keys, System.Text.Encoding.UTF8, leaveOpen: true))
-                                    foreach (byte key in Convert.FromHexString(skill.Command)) Varint(keyWriter, key);
+                                    foreach (byte key in Convert.FromHexString(command)) Varint(keyWriter, key);
                                 Message(skillWriter, 4, keys.ToArray());
                             }
                         }
