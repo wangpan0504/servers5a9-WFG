@@ -33,6 +33,8 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --channel-port <端口>      频道端口，默认 23100
           --game-port <端口>         游戏端口，默认 23101
           --gm-port <端口>           本机 GM 端口，默认 0（关闭）
+          --pvf-path <文件>          资源文件，默认 Data/Pvf/Script.pvf
+          --data-dir <目录>          存档目录，默认 Data，数据库名为 game.db
           --session-ttl <秒>         认证元数据有效期，默认 300
           --dungeon-entry-probe <模式>  独立开发诊断，默认 Disabled
           --packet-capture [目录]    启动并记录应用层帧
@@ -42,8 +44,8 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --scan-quests              只读任务覆盖与依赖检查，输出JSON
           --gm [命令]               开发管理命令
           --help                    显示帮助，不读取资源或创建数据库
-        默认路径以服务端程序所在目录为基准；运行参数放在命令之前。
-        PVF 固定为 Data/Pvf/Script.pvf，数据库固定在 Data，日志固定在 Logs。
+        默认及相对路径以服务端程序所在目录为基准；运行参数放在命令之前。
+        日志固定在程序目录的 Logs；切换存档目录使用该目录的 game.db，不自动搬迁数据。
         重复登录固定替换旧连接，不限制客户端来源 IP，不读取 JSON 运行配置。
         """;
 
@@ -59,7 +61,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
         int index = 0;
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         while (index < args.Length && args[index] is "--server-ip" or "--listen-ip" or
-            "--channel-port" or "--game-port" or "--gm-port" or "--session-ttl" or "--dungeon-entry-probe")
+            "--channel-port" or "--game-port" or "--gm-port" or "--session-ttl" or "--dungeon-entry-probe" or "--pvf-path" or "--data-dir")
         {
             string name = args[index++];
             if (index == args.Length || string.IsNullOrWhiteSpace(args[index]) || args[index].StartsWith("--", StringComparison.Ordinal))

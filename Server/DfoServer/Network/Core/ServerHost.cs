@@ -39,7 +39,11 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             starting = "Readiness marker";
             onStarted();
             log.Flush();
-            File.WriteAllText(Path.Combine(options.LogDirectory, "ready.json"), JsonSerializer.Serialize(new { options.ChannelPort, options.GamePort, options.GmPort, Pid = Environment.ProcessId }));
+            File.WriteAllText(Path.Combine(options.LogDirectory, "ready.json"), JsonSerializer.Serialize(new
+            {
+                options.ChannelPort, options.GamePort, options.GmPort, options.AdvertisedAddress, options.ListenAddress,
+                options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId
+            }));
             log.Write("server_ready", new { Pid = Environment.ProcessId });
             starting = "Running listeners";
             listeners = [Accept(channel, channelProtocol, true, lifetime.Token), Accept(game, gameProtocol, false, lifetime.Token)];

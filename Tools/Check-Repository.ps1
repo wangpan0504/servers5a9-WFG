@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 $root=(Resolve-Path -LiteralPath $Repository).Path
 $prefix=$root.TrimEnd([IO.Path]::DirectorySeparatorChar)+[IO.Path]::DirectorySeparatorChar
 $issues=[Collections.Generic.List[string]]::new()
-$excludedDirectories=@('.git','.vs','.venv','__pycache__','build','bin','obj','artifacts','runtime','node_modules')
+$excludedDirectories=@('.git','.vs','.venv','__pycache__','build','bin','obj','artifacts','dist','runtime','node_modules')
 $files=[Collections.Generic.List[string]]::new()
 $directories=[Collections.Generic.Queue[string]]::new()
 $directories.Enqueue($root)

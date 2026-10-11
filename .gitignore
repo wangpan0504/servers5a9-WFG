@@ -14,7 +14,8 @@ build/
 server.local.json
 *.local.json
 **/Logs/
-**/Data/server.lock
+**/server.lock
+**/launcher.lock
 server-instance.json
 ready.json
 stop.request

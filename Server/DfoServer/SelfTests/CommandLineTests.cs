@@ -52,7 +52,7 @@ internal static class CommandLineTests
             That(ServerCommand.Parse(["--selftest-tcp", group]).Kind == ServerCommandKind.TcpTest, "known TCP group " + group);
         foreach (string selection in new[] { "", "booster,", "booster,booster", "booster,unknown", "Booster" })
             Reject(["--selftest-tcp", selection]);
-        foreach (string name in new[] { "--pvf", "--data-dir", "--log-dir", "--duplicate-login", "--client-ip" })
+        foreach (string name in new[] { "--pvf", "--log-dir", "--duplicate-login", "--client-ip" })
             Reject([name, "unused"]);
         string[][] invalid =
         [
@@ -71,6 +71,10 @@ internal static class CommandLineTests
         ];
         foreach (string[] arguments in invalid)
             Reject(arguments);
+        Reject(["--pvf-path"]);
+        Reject(["--data-dir", " "]);
+        Reject(["--pvf-path", "one.pvf", "--pvf-path", "two.pvf"]);
+        Reject(["--data-dir", "bad\0path"]);
 
         var defaults = ServerOptions.Load();
         That(defaults.PvfPath == Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf") &&
@@ -89,6 +93,12 @@ internal static class CommandLineTests
             Environment.CurrentDirectory = root;
             File.WriteAllText(Path.Combine(root, "server.local.json"), "invalid JSON");
             That(ServerOptions.Load() == defaults, "working directory and local JSON cannot change fixed defaults");
+            var paths = ServerOptions.Load(ServerCommand.Parse(["--pvf-path", "resources with spaces/Script.pvf", "--data-dir", "saved data"]).Options);
+            That(paths.PvfPath == Path.GetFullPath("resources with spaces/Script.pvf", AppContext.BaseDirectory) &&
+                paths.DataDirectory == Path.GetFullPath("saved data", AppContext.BaseDirectory), "relative resource and save paths use executable directory despite working directory changes");
+            var absolute = ServerOptions.Load(ServerCommand.Parse(["--pvf-path", Path.Combine(root, "external.pvf"), "--data-dir", root]).Options);
+            That(absolute.PvfPath == Path.Combine(root, "external.pvf") && absolute.DataDirectory == root &&
+                absolute.LogDirectory == defaults.LogDirectory, "absolute overrides preserve the selected files and fixed log directory");
             That(!Directory.Exists(Path.Combine(root, "Data")), "option validation creates no player data");
         }
         finally

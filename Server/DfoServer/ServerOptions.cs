@@ -46,6 +46,8 @@ internal sealed record ServerOptions
                     "--channel-port" => value with { ChannelPort = Number(argument, name) },
                     "--game-port" => value with { GamePort = Number(argument, name) },
                     "--gm-port" => value with { GmPort = Number(argument, name) },
+                    "--pvf-path" => value with { PvfPath = StoragePath(argument, name) },
+                    "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
                     "--session-ttl" => value with { SessionTtlSeconds = Number(argument, name) },
                     "--dungeon-entry-probe" => value with { DevelopmentDungeonEntryProbe = Mode<DungeonEntryProbeMode>(argument, name) },
                     _ => throw new InvalidDataException("未知运行参数：" + name)
@@ -70,6 +72,15 @@ internal sealed record ServerOptions
 
     static int Number(string argument, string name) => int.TryParse(argument, NumberStyles.None, CultureInfo.InvariantCulture, out int result)
         ? result : throw new InvalidDataException(name + " 必须为非负整数");
+
+    static string StoragePath(string argument, string name)
+    {
+        try { return Path.GetFullPath(argument, AppContext.BaseDirectory); }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new InvalidDataException(name + " 路径无效", error);
+        }
+    }
 
     static T Mode<T>(string argument, string name) where T : struct, Enum =>
         Enum.GetNames<T>().Contains(argument, StringComparer.Ordinal) && Enum.TryParse<T>(argument, out var result)

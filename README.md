@@ -34,6 +34,14 @@ PVF 读取由独立的 [PvfLib](Tools/PvfLib/README.md) 提供，游戏资源定
 
 ### 2. 发布目标平台的程序
 
+Windows 本机反复游玩测试，可双击仓库根的 `build-server.bat`，或执行以下脚本。默认输出到 `dist/win-x64`，同时生成独立的 `DfoLauncher.exe` 游戏服务启动器；重新构建保留已有存档、PVF 和日志，并在更新前备份 `Data`。自定义目录及停服更新说明见[本机测试构建](Docs/开发/环境与配置.md#本机测试构建windows)。
+
+```powershell
+./Tools/Build-Server.ps1
+# 首次构建时可指定资源；相对路径以仓库根目录为基准
+./Tools/Build-Server.ps1 -OutputDirectory dist/win-x64 -PvfPath "<匹配客户端的 Script.pvf 路径>"
+```
+
 Windows x64，在 PowerShell 中执行：
 
 ```powershell
@@ -79,6 +87,8 @@ bash ./dist/linux-x64/start-server.sh
 
 已有自包含包的用户可以跳过构建，解压后在包内放入同一相对路径的 PVF，运行包内的 `start-server.bat` 或 `bash ./start-server.sh` 即可。
 
+Windows 测试构建包可直接双击 `DfoLauncher.exe`，选择地址、端口、PVF 文件及存档目录后点击“启动服务”。首次构建生成程序旁的 `launcher.local.json`，默认使用相对路径；重新构建保留已有配置，成功启动后记住选择，移动整个服务包后按新程序目录解析相对路径。界面显示运行状态、连接地址及实际存档目录，支持停止服务、复制地址及查看日志；无参数的 `start-server.bat` 也会打开该启动器。GM 继续使用独立工具。目标机器无需另装 .NET 或 Python，需保留完整服务包和资源目录。
+
 首次成功启动会创建数据库，并在程序目录下生成 `Logs/ready.json`。确认其中 PID 和端口对应本次进程；启动失败先看终端输出及 `Logs/server.jsonl`。前台退出使用 **Ctrl+C**。
 
 ### 4. 本机或局域网连接
@@ -114,7 +124,7 @@ macOS/Linux 的 `start-server.sh` 接受相同参数。`auto` 自动选择活动
     ready.json              本次启动信息
 ```
 
-启动只使用命令行参数，不读取 JSON 运行配置；PVF、Data、Logs 路径固定。重复登录固定为 `ReplaceExisting`，验证凭据后替换旧连接，不校验客户端来源 IP。
+服务端只使用命令行参数，不读取 JSON 运行配置；PVF 和 Data 默认位于程序目录，可用 `--pvf-path`、`--data-dir` 指定其它位置，日志仍在程序旁的 `Logs`。启动器的本地设置仅用于生成这些参数。重复登录固定为 `ReplaceExisting`，验证凭据后替换旧连接，不校验客户端来源 IP。
 
 账号和游戏资产统一保存在 `Data/game.db`，当前结构为 **v2**，沿用 v1 基线标识。新库按完整 SQL 建立；已有 v1 库连续迁移升级，失败整体回滚。升级前正常停服并备份 `Data/`。没有本项目基线标识的旧库不自动迁移或覆盖，使用独立程序目录创建新库。多个实例分别使用独立目录和端口；完整规则见[数据库初始化与升级](Docs/开发/数据库.md)。
 

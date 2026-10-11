@@ -10,5 +10,9 @@ if not defined SERVER_EXE (
   exit /b 1
 )
 for %%I in ("%SERVER_EXE%") do cd /d "%%~dpI"
+if "%~1"=="" if exist "DfoLauncher.exe" (
+  start "" "DfoLauncher.exe"
+  exit /b 0
+)
 "%SERVER_EXE%" %*
 exit /b %ERRORLEVEL%
