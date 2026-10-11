@@ -25,13 +25,14 @@ internal static class CashShopPackets
         return body;
     }
 
+    // 失败响应的 error 是 u16（分派器读 body[1..3]）。客户端 64 失败分支 02357D32 按 error 分流，
+    // 只有 error==0（02357D71 显示 3EEh）与 error==0x6D（02357D8F 显示 15BDh"不能作为礼物赠送"）
+    // 两条直接路径是安全的；其余任何 error（含商城码 0x82..0x89）都走 02357DAD→03A1F600→03A1F780，
+    // 后者访问 "0000"(0x30303030) 空对象 → 01CBD7D0 c0000005（实机两次闪退：error=17 与 error=0x82）。
+    // 故失败统一回 error=0（3EEh 通用提示），不区分具体失败原因，待客户端失败分支合同取证后细分。
     public static byte[] Failure() =>
     [
-        0, 4,
-        0xff, 0xff, 0xff, 0xff,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0
+        0,          // success = 0
+        0, 0,       // error u16 = 0
     ];
 }

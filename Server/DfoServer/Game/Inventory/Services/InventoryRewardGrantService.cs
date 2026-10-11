@@ -12,7 +12,7 @@ internal static class InventoryRewardGrantService
 {
     // 普通创建策略：满耐久、100%品级种子；强化/锻造默认零，显式奖励可指定，期限与部位来自 CHR/PVF。
     public const int InitialQuality = 999_999_998;
-    public static ItemCore Create(ItemTemplate template, int count = 1, DateTimeOffset? utcNow = null, byte upgrade = 0, byte refinement = 0)
+    public static ItemCore Create(ItemTemplate template, int count = 1, DateTimeOffset? utcNow = null, byte upgrade = 0, byte refinement = 0, bool shopExpiration = false)
     {
         if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal) && count != 1)
             throw new InvalidDataException("无效发放数量");
@@ -30,15 +30,15 @@ internal static class InventoryRewardGrantService
             GenuineUpgrade = refinement,
             Durability = template.Kind == ItemKind.Avatar ? (ushort)0 : template.Durability,
             SealFlag = template.Kind != ItemKind.Creature && template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0,
-            ExpireTime = template.Expiration.Resolve(utcNow ?? DateTimeOffset.UtcNow)
+            ExpireTime = shopExpiration ? template.Expiration.ResolveShop(utcNow ?? DateTimeOffset.UtcNow) : template.Expiration.Resolve(utcNow ?? DateTimeOffset.UtcNow)
         };
     }
 
     public static InventorySnapshot CreateStarter(CharacterProfile profile) => new(
         profile.Equipment.Select(item => CreateItem(item.Template, new(InventoryListType.Equipment, item.Slot), Create(item.Template))).ToImmutableArray());
 
-    public static InventoryResult TryGrantBatch(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null)
-        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow);
+    public static InventoryResult TryGrantBatch(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null, bool shopExpiration = false)
+        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow, shopExpiration: shopExpiration);
 
     public static InventoryResult TryGrantItems(Character character, IReadOnlyList<InventoryItem> instances, ItemCatalog catalog,
         GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null)
@@ -46,7 +46,7 @@ internal static class InventoryRewardGrantService
             instances, catalog, goldLimits, pieces, utcNow);
 
     static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
-        ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow)
+        ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false)
     {
         var inventory = character.Inventory;
         var wallet = inventory;
@@ -79,7 +79,7 @@ internal static class InventoryRewardGrantService
             var template = catalog.Get(reward.ItemId);
             if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
                 return InventoryResult.Reject();
-            var prototype = instances is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement) : instances[rewardIndex].Core;
+            var prototype = instances is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement, shopExpiration: shopExpiration) : instances[rewardIndex].Core;
             if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || instances?[rewardIndex].IsExpired(now.ToUnixTimeSeconds()) == true)
                 return InventoryResult.Reject(19);
             if (prototype.IsExpired(now.ToUnixTimeSeconds()))

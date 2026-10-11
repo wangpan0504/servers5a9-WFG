@@ -39,6 +39,28 @@ internal sealed record DungeonMaze(
             ? QuestConnectionTokens[1].Value : null;
     public bool HasActiveQuestConnection(int questId) => ConnectionQuestId == questId && QuestConnectionTokens[0].Value == 0;
 
+    // 布局实质相同判定：同一任务连接的 maze 可能在资源里重复出现（如 SunderLandDark 的转职任务
+    // 7104/7105 各重复一次），字段完全一致时视为同一路线，避免入场被歧义拒绝。
+    public bool SameLayout(DungeonMaze other) =>
+        Width == other.Width && Height == other.Height && Greed == other.Greed &&
+        Starts.SequenceEqual(other.Starts) && Bosses.SequenceEqual(other.Bosses) &&
+        SameMaps(MapSpecification, other.MapSpecification) && SameMaps(LayeredMaps, other.LayeredMaps) &&
+        SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps);
+
+    static bool SameMaps(IReadOnlyList<DungeonMap>? left, IReadOnlyList<DungeonMap>? right)
+    {
+        var a = left ?? Array.Empty<DungeonMap>();
+        var b = right ?? Array.Empty<DungeonMap>();
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (!SameMap(a[i], b[i])) return false;
+        return true;
+    }
+
+    static bool SameMap(DungeonMap left, DungeonMap right) =>
+        left.Kind == right.Kind && left.Position == right.Position && left.Id == right.Id && left.Path == right.Path &&
+        left.StoryStageIndex == right.StoryStageIndex && left.LayerIndex == right.LayerIndex && left.IsConditional == right.IsConditional;
+
     // 只描述资源结构，不表示准入通过或可以向客户端发布初始化通知。
     public string MapStructure => MapSpecification is null ? "unsupported" : "explicit";
     public string? UnsupportedReason => ResourceError ?? (MapSpecification is null ? "缺少显式 map specification，地图生成合同未实现" : null);

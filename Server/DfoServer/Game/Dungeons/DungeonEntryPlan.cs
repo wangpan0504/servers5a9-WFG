@@ -97,6 +97,8 @@ internal sealed record DungeonEntryPlan(
         // 仅识别匹配 PVF 已确认的三个整数；未知引用和其他条件形状不能变成默认迷宫。
         uint routeQuest = !isReplay && quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
         var candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)).ToArray();
+        if (candidates.Length > 1 && candidates.Skip(1).All(maze => maze.SameLayout(candidates[0])))
+            candidates = [candidates[0]];
         if (questId == 0 && quests is not null)
         {
             candidates = definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active => maze.ConnectsQuest(active.QuestId,difficulty))).ToArray();

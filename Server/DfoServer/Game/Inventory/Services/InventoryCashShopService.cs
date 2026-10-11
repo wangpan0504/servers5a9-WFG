@@ -53,7 +53,7 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
         if (!spent.Accepted)
             return InventoryResult.Reject(10);
         var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = spent.Plan!.After }, rewards,
-            catalog, goldLimits, pieces, utcNow);
+            catalog, goldLimits, pieces, utcNow, shopExpiration: true);
         if (!grant.Accepted)
             return grant;
 
