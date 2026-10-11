@@ -52,6 +52,17 @@ internal static partial class FormalDungeonTcpTests
                 byte roomLevel = projectedLevel;
                 That(U32(map, 14) == ids[room], "正式TCP依匹配3145六房顺序加载");
                 Load(peer);
+                if (room == 0)
+                {
+                    peer.Send(191, [0,0]);
+                    That(peer.Expect(0,170).Body.SequenceEqual(new byte[] { (byte)peer.Id,(byte)(peer.Id >> 8),0,0 }),
+                        "实收普通演出暂停请求只同步本人170");
+                    peer.Send(191, [1,0]);
+                    That(peer.Expect(0,170).Body.SequenceEqual(new byte[] { (byte)peer.Id,(byte)(peer.Id >> 8),1,0 }) &&
+                        peer.Expect(0,3).Body.SequenceEqual(new byte[] { 1,(byte)peer.Id,(byte)(peer.Id >> 8),1 }),
+                        "演出恢复后按170→3重新激活角色，随后继续原击杀与过房流程");
+                    peer.Barrier();
+                }
                 if (room == 0) movedSkill = VerifyDungeonActions(fixture, peer);
                 if (room == 0)
                 {

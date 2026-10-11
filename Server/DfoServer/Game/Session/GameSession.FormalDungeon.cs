@@ -204,6 +204,11 @@ internal sealed partial class GameSession
         });
     }
 
+    public bool ConfirmFormalDungeonLayerBase(byte x, byte y) => owner.Execute(() =>
+        Ready && Selected is not null && formalDungeon is { } dungeon &&
+        Phase is SessionPhase.Loading or SessionPhase.Dungeon && !HasPendingQuestScene &&
+        dungeon.Run.ConfirmLayerBase(dungeon.Run.Snapshot.Identity,new(x,y)));
+
     public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
         if (!Ready || Selected is null || Phase != SessionPhase.Dungeon || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup || HasPendingQuestScene) return null;

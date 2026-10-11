@@ -57,16 +57,26 @@ internal static class DungeonPackets
     }
 
     // NOTI29空名单为23B；seed由调用方显式提供，不能在Builder推导资源或实例随机规则。
-    public static byte[] StartMap(DungeonEntryPlan plan, uint seed)
+    public static byte[] StartMap(DungeonEntryPlan plan, uint seed, DungeonMapOperation? operation = null,
+        DungeonMapPayload payload = DungeonMapPayload.Build)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        byte[] body = new byte[23];
+        var mode = operation ?? (plan.StartMap.Kind == "layered" ? DungeonMapOperation.AdvanceLayer : DungeonMapOperation.Current);
+        if (mode > DungeonMapOperation.RestoreBase || payload > DungeonMapPayload.Refresh)
+            throw new InvalidDataException("未知地图操作或投影模式");
+        byte[] body = new byte[payload == DungeonMapPayload.Cached ? 16 : 23];
         body[0] = checked((byte)plan.StartMap.Position.X);
         body[1] = checked((byte)plan.StartMap.Position.Y);
-        body[2] = plan.StartMap.Kind == "layered" ? (byte)1 : (byte)0;
+        body[2] = (byte)mode;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(3), seed);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), 1);
-        body[13] = 1;
+        body[13] = (byte)payload;
+        if (payload == DungeonMapPayload.Cached)
+        {
+            // 本版mode0不读取mapId、演员或掉落列表，直接读取空骑乘组及成员选择。
+            body[15] = byte.MaxValue;
+            return body;
+        }
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(14), checked((uint)plan.StartMap.Id));
         // 三个空列表及fog字段保留0，FF跳过成员选择；不代替NOTI28的格记录初始化。
         body[22] = byte.MaxValue;
@@ -74,14 +84,16 @@ internal static class DungeonPackets
     }
 
     // NOTI29每个已规划monster完整22B；等级和类型由领域确定，不在此解释资源行。
-    public static byte[] StartMap(DungeonEntryPlan plan, DungeonMonsterPlan monsters, uint seed)
+    public static byte[] StartMap(DungeonEntryPlan plan, DungeonMonsterPlan monsters, uint seed,
+        DungeonMapOperation? operation = null, DungeonMapPayload payload = DungeonMapPayload.Build)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(monsters);
         int actorCount = checked(monsters.Monsters.Count + monsters.SpecialObjects.Count);
         if (monsters.Room.Map != plan.StartMap || actorCount > byte.MaxValue)
             throw new InvalidDataException("怪物计划与房间不匹配或超过通知数量范围");
-        byte[] empty = StartMap(plan, seed);
+        byte[] empty = StartMap(plan, seed, operation, payload);
+        if (payload == DungeonMapPayload.Cached) return empty;
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write(empty.AsSpan(0, 18));

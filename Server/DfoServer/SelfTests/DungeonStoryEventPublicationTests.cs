@@ -4,6 +4,7 @@ using System.Reflection;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
@@ -75,14 +76,19 @@ internal static class DungeonStoryEventPublicationTests
             async Task Pause()
             {
                 long revision = session.Selected!.Revision;
-                foreach (byte[] body in new byte[][] { [0,1],[1,1],[1,1] })
+                foreach (byte[] body in new byte[][] { [0,0],[1,0],[0,1],[1,1],[0,2],[1,2],[1,2] })
                 {
+                    bool restore = body[0] == 1 && session.DungeonSnapshot!.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement;
                     output.SetLength(0);
                     That(await commands.DispatchAsync(context,new(1,191,body)) == CommandResult.Handled,"真实命令表接入剧情暂停和恢复");
                     byte[] frame = output.ToArray();
-                    That(frame.Length == 20 && frame[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 170 &&
+                    That(frame.Length == (restore ? 40 : 20) && frame[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 170 &&
                         BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(16)) == expected.Id && frame[18] == body[0] && frame[19] == body[1],
-                        "Sender发布当前角色与原状态，重复恢复不额外发送加载或结算通知");
+                        "暂停只发170；已加载场景恢复沿170→3顺序，不重放加载、Actor或结算通知");
+                    if (restore)
+                        That(frame[20] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(21)) == 3 &&
+                            frame.AsSpan(36).SequenceEqual(new byte[] { 1,(byte)expected.Id,(byte)(expected.Id >> 8),1 }),
+                            "三个演出域及重复恢复均重新激活当前角色，使用独立编码的4B状态正文");
                 }
                 That(session.Selected!.Revision == revision && repository.LoadCharacter(owner,created.Slot)!.Revision == revision,
                     "暂停交换不修改任务或数据库revision");
@@ -135,11 +141,59 @@ internal static class DungeonStoryEventPublicationTests
             That(!session.CanPublishFormalDungeon(receipt) && await commands.DispatchAsync(context,new(1,191,[1,1])) == CommandResult.Unhandled &&
                 output.Length == 0 && session.Selected!.ActiveMainQuests.Single(row => row.QuestId == 201).ConditionState == 0,
                 "重选使原暂停回执失效，重登保留已提交物件进度");
+            await TempleAsync(towns,pvf,characters,items,learning,commands);
 
             void Sql(string sql) { using var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
             long Scalar(string sql) { using var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }
         }
         finally { Directory.Delete(root,true); }
         Console.WriteLine($"PASS {Count-before} 剧情事件真实Handler、Sender、SQLite回滚、重放及重选断言（合成场景）");
+    }
+
+    static async Task TempleAsync(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items,
+        SkillLearningCatalog learning,GameCommandRegistry commands)
+    {
+        var quests = QuestCatalog.Load(pvf);
+        var growth = CharacterGrowthCatalog.Load(pvf,learning);
+        var completed = DfoServer.Development.CharacterPreparation.Load(pvf).MapQuests.Append(3203).Where(id => id != 3204).Distinct().ToArray();
+        using var f = new QuestSceneTests.Fixture(towns,characters,learning,growth,quests,false,27,
+            completed);
+        That(f.Session.ChangeQuest(3204,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
+            "隔离Lv27角色合法接取真实3204，不使用现场玩家库");
+        f.TravelTo(towns,new(40,4,800,285));
+        var entry = f.Session.EnterFormalDungeon(24,3204,0,DungeonCatalog.Load(pvf),DungeonRoomCatalog.Load(pvf))!;
+        That(entry is not null && entry.Snapshot.CurrentMap.Id == 53480,"真实3204使用53480基础房间入场");
+        f.Session.CompleteFormalDungeonLoading();
+        var baseKeys = f.Session.DungeonSnapshot!.LivingMonsters.ToArray();
+        long revision = f.Read().Revision;
+        using var output = new MemoryStream(); using var stop = new CancellationTokenSource();
+        await using var sender = new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_) => { });
+        var context = new GameConnectionContext(new(89,IPAddress.Loopback,output,stop),f.Owner,f.Session,sender);
+        byte[] move = new byte[100]; move[0] = 2; move[1] = 2; move[10] = 1;
+        That(await commands.DispatchAsync(context,new(1,45,move)) == CommandResult.Handled &&
+            f.Session.DungeonSnapshot!.CurrentMap.Id == 53501,"复现首个kind1进入原演出层53501");
+        output.SetLength(0);
+        await commands.DispatchAsync(context,new(1,37,new byte[8]));
+        output.SetLength(0);
+        That(await commands.DispatchAsync(context,new(1,45,move)) == CommandResult.Handled,"第二个相同kind1结束演出层，不再静默拒绝");
+        byte[] written = output.ToArray();
+        byte[] expected = new byte[16]; expected[0] = 2; expected[1] = 2; expected[2] = 2;
+        BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(3),entry!.MapSeed);
+        expected[9] = 1; expected[15] = 255;
+        That(written.Length == 49 && written[0] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(written.AsSpan(1)) == 45 && written[16] == 1 &&
+            written[17] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(written.AsSpan(18)) == 29 && written.AsSpan(33).SequenceEqual(expected),
+            "恢复沿ACK45→NOTI29精确16B缓存正文，不重新下发基础演员或地图编号");
+        That(f.Session.DungeonSnapshot!.CurrentMap.Id == 53480 && f.Session.DungeonSnapshot.LivingMonsters.SequenceEqual(baseKeys) &&
+            f.Read().Revision == revision && f.Read().ActiveMainQuests.Single(row => row.QuestId == 3204).ConditionState == 1,
+            "恢复原房间key和任务接取，演出换层不创造死亡、奖励或清图凭据");
+        var restored = f.Session.DungeonSnapshot;
+        output.SetLength(0);
+        That(await commands.DispatchAsync(context,new(1,45,move)) == CommandResult.Handled && output.Length == 0 &&
+            f.Session.DungeonSnapshot!.Identity == restored!.Identity && f.Session.DungeonSnapshot.Phase == restored.Phase,
+            "加载前的最终自动确认仅消费一次，不重发地图或重置加载");
+        await commands.DispatchAsync(context,new(1,37,new byte[8]));
+        output.SetLength(0);
+        That(await commands.DispatchAsync(context,new(1,45,move)) == CommandResult.Unhandled && output.Length == 0 &&
+            f.Session.DungeonSnapshot!.Phase == SinglePlayerDungeonPhase.Dungeon,"重复最终确认不能再次进入演出层");
     }
 }

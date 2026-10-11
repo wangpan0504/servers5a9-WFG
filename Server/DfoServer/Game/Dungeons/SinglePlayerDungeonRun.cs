@@ -4,10 +4,16 @@ namespace DfoServer.Game.Dungeons;
 
 internal enum SinglePlayerDungeonPhase { Loading, Dungeon, Settlement, Returned }
 internal enum DungeonRunOutcome { Accepted, Duplicate, Rejected, Unsupported }
+internal enum DungeonMapOperation : byte { Current, AdvanceLayer, RestoreBase }
+internal enum DungeonMapPayload : byte { Cached, Build, Refresh }
 internal sealed record DungeonRunIdentity(ushort CharacterId, uint QuestId, long TaskAttempt, Guid InstanceId, long Epoch);
 internal sealed record DungeonRouteConnection(DungeonPoint First, DungeonPoint Second);
 internal sealed record DungeonRunSnapshot(DungeonRunIdentity Identity, SinglePlayerDungeonPhase Phase, DungeonMap CurrentMap,
-    IReadOnlyList<ushort> LivingMonsters);
+    IReadOnlyList<ushort> LivingMonsters)
+{
+    public DungeonMapOperation MapOperation { get; init; }
+    public DungeonMapPayload MapPayload { get; init; } = DungeonMapPayload.Build;
+}
 internal sealed record DungeonLoadingFact(DungeonRunIdentity Identity, Guid ActionId, uint DungeonId, DungeonMap Map,
     int MazeSourceOrdinal, bool IsInitialLoading, bool DidInitializeMap, uint ConfirmedInitializationCount,
     uint? MazeInitializationThreshold)
@@ -77,6 +83,9 @@ internal sealed class SinglePlayerDungeonRun
     private int storyStageIndex;
     private readonly HashSet<DungeonMap> enteredLayers = [];
     private readonly Dictionary<DungeonPoint, Room> layerSources = [];
+    private DungeonPoint? pendingLayerBaseAck;
+    private DungeonMapOperation mapOperation;
+    private DungeonMapPayload mapPayload = DungeonMapPayload.Build;
     private readonly HashSet<int> initializedMapSlots = [];
     private readonly HashSet<(DungeonPoint, DungeonPoint)> connections;
     private readonly Dictionary<Guid, ActionFact> acceptedActions = [];
@@ -139,7 +148,8 @@ internal sealed class SinglePlayerDungeonRun
     public bool HasPendingSettlement => pendingSettlement is not null;
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
-            !current.Culled.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()));
+            !current.Culled.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()))
+        { MapOperation = mapOperation, MapPayload = mapPayload };
 
     // 父脚本子actor的收尾不进入普通击杀集合，不能借此触发清图、经验或任务事实。
     public DungeonRunOutcome RetireSpecialChild(ConfirmedDungeonMonsterDeath death)
@@ -301,6 +311,9 @@ internal sealed class SinglePlayerDungeonRun
             conditionalRooms.TryGetValue(target,out var replacement))
             next = replacement;
         current = next;
+        mapOperation = DungeonMapOperation.Current;
+        mapPayload = DungeonMapPayload.Build;
+        pendingLayerBaseAck = null;
         Phase = SinglePlayerDungeonPhase.Loading;
         Advance();
         return Result(DungeonRunOutcome.Accepted);
@@ -314,22 +327,37 @@ internal sealed class SinglePlayerDungeonRun
             pendingDeath is not null || pendingSettlement is not null || current.Elevator is { Completed: false } || current.Plan.Room.Map.Position != target)
             return Result(DungeonRunOutcome.Rejected);
         Room next;
-        if (nextLayer)
+        var layers = entry.Maze.LayeredMaps.Where(map => map.Position == target).ToArray();
+        int at = current.Plan.Room.Map.Kind == "layered" ? Array.IndexOf(layers,current.Plan.Room.Map)+1 : 0;
+        // 原生kind1同时表示下一层和末层返回；不能把末层结束当作越界请求。
+        if (nextLayer && at < layers.Length)
         {
-            var layers = entry.Maze.LayeredMaps.Where(map => map.Position == target).ToArray();
-            int at = current.Plan.Room.Map.Kind == "layered" ? Array.IndexOf(layers,current.Plan.Room.Map)+1 : 0;
-            if (at >= layers.Length || at > 0 && !current.Cleared || enteredLayers.Contains(layers[at]))
+            if (at > 0 && !current.Cleared || enteredLayers.Contains(layers[at]))
                 return Result(DungeonRunOutcome.Rejected);
             if (at == 0) layerSources[target] = current;
             enteredLayers.Add(layers[at]); next = layeredRooms[layers[at]];
+            mapOperation = DungeonMapOperation.AdvanceLayer;
+            mapPayload = at == 0 ? DungeonMapPayload.Build : DungeonMapPayload.Refresh;
         }
         else
         {
             if (current.Plan.Room.Map.Kind != "layered" || !current.Cleared || HasPendingLayer()) return Result(DungeonRunOutcome.Rejected);
             next = layerSources[target];
+            mapOperation = DungeonMapOperation.RestoreBase;
+            mapPayload = DungeonMapPayload.Cached;
+            pendingLayerBaseAck = target;
         }
         acceptedActions.Add(actionId,new(expected,kind,target)); current = next;
         Phase = SinglePlayerDungeonPhase.Loading; Advance(); return Result(DungeonRunOutcome.Accepted);
+    }
+
+    internal bool ConfirmLayerBase(DungeonRunIdentity expected, DungeonPoint target)
+    {
+        if (!Matches(expected) || Phase is not (SinglePlayerDungeonPhase.Loading or SinglePlayerDungeonPhase.Dungeon) ||
+            pendingDeath is not null || pendingSettlement is not null || pendingLayerBaseAck != target ||
+            current.Plan.Room.Map.Position != target || current.Plan.Room.Map.Kind == "layered") return false;
+        pendingLayerBaseAck = null;
+        return true;
     }
 
     private bool HasPendingLayer()
@@ -394,7 +422,8 @@ internal sealed class SinglePlayerDungeonRun
             settles ? SinglePlayerDungeonPhase.Settlement : Phase, current.Plan.Room.Map,
             Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
                 !current.Culled.Contains(monster.ObjectKey) && !culled.Contains(monster.ObjectKey) &&
-                monster.ObjectKey != confirmed.MonsterKey).Select(monster => monster.ObjectKey).ToArray()));
+                monster.ObjectKey != confirmed.MonsterKey).Select(monster => monster.ObjectKey).ToArray()))
+            { MapOperation = mapOperation,MapPayload = mapPayload };
         DungeonClearFact? clear = settles
             ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = current.Plan.Room.Map } : null;
         pendingDeath = new(confirmed, target,

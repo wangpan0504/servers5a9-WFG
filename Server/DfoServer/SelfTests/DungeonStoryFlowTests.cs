@@ -25,7 +25,7 @@ internal static class DungeonStoryFlowTests
         }
         foreach (byte[] invalid in new byte[][] { [],[0],[0,0,0],[2,0],[0,3] })
             That(!DungeonRequests.TryParseStoryPause(invalid,out _),"无效暂停正文不转成成功应答");
-        Layers(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects();
+        Layers(); LayerBaseRestore(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects();
         Console.WriteLine($"PASS {Count-before} 剧情暂停、层叠、重复坐标阶段和动态任务物件断言（合成）");
     }
 
@@ -41,12 +41,16 @@ internal static class DungeonStoryFlowTests
         var authority = new Authority();
         That(SinglePlayerDungeonRun.TryCreate(entry,1,100,new(plans,[new(start.Position,boss.Position)]),authority,out var run,out _),"叠层使用同一个正式实例");
         run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
-        That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,true).Outcome == DungeonRunOutcome.Accepted,"首层按资源入口进入");
+        That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,true).Outcome == DungeonRunOutcome.Accepted &&
+            run.Snapshot.MapOperation == DungeonMapOperation.AdvanceLayer && run.Snapshot.MapPayload == DungeonMapPayload.Build,
+            "首层按资源入口进入，使用operation1/mode1");
         run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
         That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Rejected &&
             run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,false).Outcome == DungeonRunOutcome.Rejected,
             "存在后续层时不能跳过演出返回基础房间或普通邻房");
-        That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,true).Outcome == DungeonRunOutcome.Accepted,"后续层按原序推进");
+        That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,true).Outcome == DungeonRunOutcome.Accepted &&
+            run.Snapshot.MapOperation == DungeonMapOperation.AdvanceLayer && run.Snapshot.MapPayload == DungeonMapPayload.Refresh,
+            "后续层按原序推进，使用operation1/mode2");
         run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
         That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Accepted && run.Snapshot.CurrentMap == boss,
             "末层清房后允许正常邻房加载");
@@ -80,6 +84,39 @@ internal static class DungeonStoryFlowTests
             "第二层不继承第一层的清房和死亡缓存");
         That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,31,2)).ClearFact?.ClearMap == maze.LayeredMaps[1] &&
             run.ClearFact!.ConfirmedDeathEvents.Count == 2,"原序最后同ID层实际清房后才产生最终通关凭据");
+    }
+
+    static void LayerBaseRestore()
+    {
+        var start = new DungeonMap("map",new(0,0),100,"map/base.map");
+        var boss = new DungeonMap("boss",new(1,0),101,"map/boss.map");
+        var layer = start with { Kind = "layered",Id = 102,Path = "map/layer.map" };
+        var maze = new DungeonMaze(0,2,1,"BBEE",[start.Position],[boss.Position],[start,boss],[]) { LayeredMaps = [layer] };
+        var entry = new DungeonEntryPlan(99,0,777,200,0,0,maze,start,boss);
+        var authority = new Authority();
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,new([Monster(start,10),Empty(boss),Empty(layer)],
+            [new(start.Position,boss.Position)]),authority,out var run,out _),"缓存基础房间保留尚未死亡的原怪物");
+        run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,true);
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        var oldLayer = run.Snapshot.Identity;
+        That(run.MoveLayer(oldLayer,Guid.NewGuid(),start.Position,true).Outcome == DungeonRunOutcome.Accepted &&
+            run.Snapshot is { MapOperation: DungeonMapOperation.RestoreBase,MapPayload: DungeonMapPayload.Cached } &&
+            run.Snapshot.CurrentMap == start && run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 10 }),
+            "末层kind1回到原基础房间，用operation2/mode0恢复缓存，不重生或伪造死亡");
+        var restored = run.Snapshot;
+        That(!run.ConfirmLayerBase(oldLayer,start.Position) && !run.ConfirmLayerBase(restored.Identity,boss.Position) &&
+            run.ConfirmLayerBase(restored.Identity,start.Position) && !run.ConfirmLayerBase(restored.Identity,start.Position) &&
+            run.Snapshot.Identity == restored.Identity && run.Phase == restored.Phase,
+            "最后确认绑定当前实例和坐标，仅消费一次，不重置加载或推进epoch");
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),start.Position,true).Outcome == DungeonRunOutcome.Rejected &&
+            run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Rejected,
+            "已消费叠层不能重新触发，基础房间仍保留自己的真实清怪门禁");
+        run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,10,1));
+        That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Accepted &&
+            run.Snapshot.MapOperation == DungeonMapOperation.Current && run.Snapshot.MapPayload == DungeonMapPayload.Build,
+            "恢复后真实清房可继续普通路线，不把缓存恢复模式带入邻房");
     }
 
     static void Stages()

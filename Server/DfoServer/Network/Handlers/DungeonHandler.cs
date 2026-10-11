@@ -39,6 +39,10 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         await context.Notify(NotiPacketType.DUNGEON_EVENT_STORY_PAUSE,
             DungeonPackets.StoryPause(receipt.Character.Id,pause.State,pause.Type),"formal_story_pause",
             () => context.Session.CanPublishFormalDungeon(receipt));
+        // 演出恢复后重新激活已加载角色；提前恢复仍由后续加载确认发布初始状态。
+        if (pause.State == 1 && receipt.Snapshot.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement)
+            await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id),
+                "formal_story_player_state", () => context.Session.CanPublishFormalDungeon(receipt));
         return CommandResult.Handled;
     }
 
@@ -225,11 +229,19 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
     async Task<CommandResult> MoveAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonRequests.TryParseMove(request.Body, out var move)) return CommandResult.Unhandled;
-        var receipt = context.Session.MoveFormalDungeon(move!.X, move.Y, move.Unknown10);
+        if (move!.Unknown10 == 1 && context.Session.ConfirmFormalDungeonLayerBase(move.X,move.Y))
+        {
+            log.Write("formal_layer_base_ack",new { Connection = context.Id, move.X, move.Y });
+            return CommandResult.Handled;
+        }
+        var receipt = context.Session.MoveFormalDungeon(move.X, move.Y, move.Unknown10);
+        log.Write("formal_dungeon_move",new { Connection = context.Id, Accepted = receipt is not null,
+            move.X, move.Y, Kind = move.Unknown10, receipt?.Snapshot.CurrentMap, receipt?.Snapshot.MapOperation, receipt?.Snapshot.MapPayload });
         if (receipt is null) return CommandResult.Unhandled;
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "formal_move_ack", Guard);
-        await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed), "formal_next_map", Guard);
+        await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
+            receipt.Snapshot.MapOperation,receipt.Snapshot.MapPayload), "formal_next_map", Guard);
         return CommandResult.Handled;
     }
 
