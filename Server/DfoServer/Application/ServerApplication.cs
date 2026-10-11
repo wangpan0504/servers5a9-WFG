@@ -4,6 +4,7 @@ using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.GameWorld.Items;
 using System.Globalization;
+using System.Diagnostics;
 using System.Text.Json;
 using DfoServer.Development;
 using DfoServer.Infrastructure;
@@ -53,6 +54,8 @@ internal static class ServerApplication
         }
         catch (Exception error) when (error is InvalidDataException or IOException or JsonException or ArgumentException)
         {
+            if (command.Kind == ServerCommandKind.Serve)
+                Console.WriteLine($"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff}] [ERROR] [server_failed] Configuration: {error.Message}");
             Console.Error.WriteLine(error.Message);
             return 2;
         }
@@ -76,73 +79,110 @@ internal static class ServerApplication
             await TcpRegressionTests.RunAsync(options, command.Arguments.FirstOrDefault());
             return 0;
         }
-        using var pvf = PvfArchive.Open(options.PvfPath);
+        using var log = command.Kind == ServerCommandKind.Serve ? new ServerLog(options.LogDirectory, Console.Out) : null;
+        return await RunWithResourcesAsync(command, options, log);
+    }
 
-        if (command.Kind == ServerCommandKind.InspectDungeon)
-            return InspectDungeon(pvf, int.Parse(command.Arguments[0], CultureInfo.InvariantCulture));
-        if (command.Kind == ServerCommandKind.ScanDungeons)
+    static async Task<int> RunWithResourcesAsync(ServerCommand command, ServerOptions options, ServerLog? log)
+    {
+        string stage = "Configuration";
+        T Load<T>(string name, Func<T> load)
         {
-            // 全量只读扫描在仓储、实例锁和监听初始化之前完成。
-            // 完整扫描输出可达数百MiB，直接写流，避免再生成一份巨大的UTF-16 JSON字符串。
-            using var output = Console.OpenStandardOutput();
-            JsonSerializer.Serialize(output, DungeonResourceSurvey.Scan(pvf));
-            output.WriteByte((byte)'\n');
-            return 0;
+            if (log is null)
+                return load();
+            stage = name;
+            log?.Write("startup", new { Stage = name, State = "starting" });
+            var timer = Stopwatch.StartNew();
+            T result = load();
+            log?.Write("startup", new { Stage = name, State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
+            return result;
         }
-        if (command.Kind == ServerCommandKind.ScanQuests)
+        try
         {
-            using var output = Console.OpenStandardOutput();
-            var scanItems = new ItemResources(pvf);
-            JsonSerializer.Serialize(output, DfoServer.Game.Quests.QuestCoverage.Scan(DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf),
-                scanItems.Items, scanItems.EpicPieces, DfoServer.GameWorld.Quests.QuestRewardParameterCatalog.Load(pvf)));
-            output.WriteByte((byte)'\n');
-            return 0;
-        }
-        if (command.Kind == ServerCommandKind.InspectPreparation)
-        {
-            Console.WriteLine(JsonSerializer.Serialize(CharacterPreparation.Load(pvf)));
-            return 0;
-        }
+            log?.Write("startup", new { Stage = stage, State = "complete", Pid = Environment.ProcessId,
+                options.ListenAddress, options.AdvertisedAddress, options.ChannelPort, options.GamePort, options.GmPort,
+                options.PvfPath, Database = Path.Combine(options.DataDirectory, "game.db"), options.LogDirectory,
+                PacketCapture = options.PacketCaptureDirectory ?? "disabled", options.DevelopmentDungeonEntryProbe });
+            using var pvf = Load("PVF archive", () => PvfArchive.Open(options.PvfPath));
 
-        var towns = TownCatalog.Load(pvf);
-        if (command.Kind == ServerCommandKind.InspectTowns)
-        {
-            Console.WriteLine(JsonSerializer.Serialize(new { Room = towns.Room, Return = towns.InitialReturn, Areas = towns.Areas.Values }));
-            return 0;
-        }
-
-        if (command.Kind == ServerCommandKind.Gm)
-            return DevelopmentCommands.RunGm(command.Arguments, options, pvf);
-        var itemResources = new ItemResources(pvf);
-        var characters = CharacterCatalog.Load(pvf, itemResources.Items);
-        if (command.Kind == ServerCommandKind.SelfTest)
-        {
-            await SelfTestRunner.RunAsync(towns, pvf, characters, itemResources);
-            return 0;
-        }
-
-        Directory.CreateDirectory(options.DataDirectory);
-        // 服务监听、导入及离线准备共用同一实例锁；自测在此之前转入隔离入口。
-        using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        if (command.Kind == ServerCommandKind.PrepareCharacter)
-        {
-            OfflineCharacterPreparation.Run(options, pvf, towns, command.Arguments[0], command.Arguments[1]);
-            return 0;
-        }
-
-        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
-        var repository = new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests);
-        if (command.Kind == ServerCommandKind.ImportCharacters)
-        {
-            using var owner = new AccountOwners().Acquire(options.DevelopmentAccount, () =>
+            if (command.Kind == ServerCommandKind.InspectDungeon)
+                return InspectDungeon(pvf, int.Parse(command.Arguments[0], CultureInfo.InvariantCulture));
+            if (command.Kind == ServerCommandKind.ScanDungeons)
             {
+                // 全量只读扫描在仓储、实例锁和监听初始化之前完成。
+                // 完整扫描输出可达数百MiB，直接写流，避免再生成一份巨大的UTF-16 JSON字符串。
+                using var output = Console.OpenStandardOutput();
+                JsonSerializer.Serialize(output, DungeonResourceSurvey.Scan(pvf));
+                output.WriteByte((byte)'\n');
+                return 0;
+            }
+            if (command.Kind == ServerCommandKind.ScanQuests)
+            {
+                using var output = Console.OpenStandardOutput();
+                var scanItems = new ItemResources(pvf);
+                JsonSerializer.Serialize(output, DfoServer.Game.Quests.QuestCoverage.Scan(DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf),
+                    scanItems.Items, scanItems.EpicPieces, DfoServer.GameWorld.Quests.QuestRewardParameterCatalog.Load(pvf)));
+                output.WriteByte((byte)'\n');
+                return 0;
+            }
+            if (command.Kind == ServerCommandKind.InspectPreparation)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(CharacterPreparation.Load(pvf)));
+                return 0;
+            }
+
+            var towns = Load("Town resources", () => TownCatalog.Load(pvf));
+            if (command.Kind == ServerCommandKind.InspectTowns)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { Room = towns.Room, Return = towns.InitialReturn, Areas = towns.Areas.Values }));
+                return 0;
+            }
+
+            if (command.Kind == ServerCommandKind.Gm)
+                return DevelopmentCommands.RunGm(command.Arguments, options, pvf);
+            var itemResources = Load("Item resources", () => new ItemResources(pvf));
+            var characters = Load("Character resources", () => CharacterCatalog.Load(pvf, itemResources.Items));
+            if (command.Kind == ServerCommandKind.SelfTest)
+            {
+                await SelfTestRunner.RunAsync(towns, pvf, characters, itemResources);
+                return 0;
+            }
+
+            // 服务监听、导入及离线准备共用同一实例锁；自测在此之前转入隔离入口。
+            using var databaseLock = Load("Database instance lock", () =>
+            {
+                Directory.CreateDirectory(options.DataDirectory);
+                return new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             });
-            Console.WriteLine("Imported: " + LegacyCharacterImport.Run(repository, owner, towns, command.Arguments[0]));
+            if (command.Kind == ServerCommandKind.PrepareCharacter)
+            {
+                OfflineCharacterPreparation.Run(options, pvf, towns, command.Arguments[0], command.Arguments[1]);
+                return 0;
+            }
+
+            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf));
+            var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests));
+            log?.Write("startup", new { Stage = "Database schema", State = "complete", Version = SqliteMigrations.CurrentVersion });
+            if (command.Kind == ServerCommandKind.ImportCharacters)
+            {
+                using var owner = new AccountOwners().Acquire(options.DevelopmentAccount, () =>
+                {
+                });
+                Console.WriteLine("Imported: " + LegacyCharacterImport.Run(repository, owner, towns, command.Arguments[0]));
+                return 0;
+            }
+
+            var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf));
+            stage = "Runtime and listeners";
+            await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!);
             return 0;
         }
-
-        await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, SkillLearningCatalog.Load(pvf), itemResources, quests);
-        return 0;
+        catch (Exception error) when (log is not null)
+        {
+            Console.Error.WriteLine($"Server failed at {stage}: {error}");
+            log.Write("server_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message });
+            return 1;
+        }
     }
 
     static int InspectDungeon(PvfArchive pvf, int id)

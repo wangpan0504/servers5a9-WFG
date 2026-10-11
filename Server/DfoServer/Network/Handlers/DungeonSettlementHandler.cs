@@ -134,6 +134,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,returnToTown ? (byte)2 : option),
                     "formal_result_next_quest",() => context.Session.CanPublishTravel(returning));
                 await town.ReturnFromFormalDungeonAsync(context,returning,"formal_next_quest_town_boundary");
+                log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "next-quest", returnToTown,
+                    returning.Character.Id, returning.Character.Position });
                 return CommandResult.Handled;
             }
             if (reason != "no-accepted-successor")
@@ -161,6 +163,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_return", Guard);
         await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_result_town");
+        log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "settlement", receipt.Character.Id, receipt.Character.Position });
         return CommandResult.Handled;
     }
 }

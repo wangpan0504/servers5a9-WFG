@@ -10,7 +10,7 @@ namespace DfoServer.Infrastructure;
 internal static class ServerLifetime
 {
     public static async Task RunAsync(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
-        SkillLearningCatalog learning, ItemResources itemResources, DfoServer.GameWorld.Quests.QuestCatalog quests)
+        SkillLearningCatalog learning, ItemResources itemResources, DfoServer.GameWorld.Quests.QuestCatalog quests, ServerLog log)
     {
         using var stop = new CancellationTokenSource();
         ConsoleCancelEventHandler onCancel = (_, args) =>
@@ -31,7 +31,6 @@ internal static class ServerLifetime
             watcher.Created += (_, _) => stop.Cancel();
             if (File.Exists(Path.Combine(options.LogDirectory, "stop.request")))
                 throw new InvalidDataException("Remove prior stop.request before starting a new run");
-            using var log = new ServerLog(options.LogDirectory);
             await ServerRuntime.Create(options, pvf, repository, towns, characters, learning, itemResources, log, quests).RunAsync(stop.Token);
         }
         finally

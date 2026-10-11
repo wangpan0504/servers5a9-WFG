@@ -32,7 +32,7 @@ internal static class QuestProtocolTests
         Check(QuestRequests.TryTrigger(Convert.FromHexString("2100490C100000"), out var multi) &&
             multi == new QuestClientTriggerRequest(3145, 0x10, 0, 0) &&
             QuestRequests.TryTrigger(Convert.FromHexString("2100490C0000"), out var single) && single.Channel is null,
-            "V31原生产器分开保留6B普通与7B三通道条件");
+            "匹配客户端原生产器分开保留6B普通与7B三通道条件");
         Check(!QuestRequests.TryTrigger(Convert.FromHexString("2100490C110000"), out _) &&
             !QuestRequests.TryTrigger(Convert.FromHexString("2100490C10000000"), out _), "未知通道和附加尾部拒绝");
         Check(QuestPackets.AvailableList(95, [1, 3145, 29999]).SequenceEqual(Convert.FromHexString("0E00000008151000185F220601C918AFEA01")),
@@ -48,7 +48,7 @@ internal static class QuestProtocolTests
         Check(QuestPackets.Finish(100, 0, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640000000000000100B100030000000000")),
             "普通寻物先读本次扣除7B行，再读mode0和奖励数，不填剩余库存");
         Check(QuestPackets.Finish(100, 25, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640019000000000100B100030000000000")),
-            "寻物会面分类25按V31原码读取同一7B材料数组，再读奖励mode");
+            "寻物会面分类25按匹配客户端原码读取同一7B材料数组，再读奖励mode");
         Check(QuestPackets.Finish(100,64,0,[],0,[]).SequenceEqual(Convert.FromHexString("01640040000000000000")) &&
             QuestPackets.Finish(100,65,0,[],0,[]).SequenceEqual(Convert.FromHexString("01640041000000000000")),
             "范围64和演出65跳过材料数组，保留真实分类和零奖励完整正文");
@@ -147,7 +147,7 @@ internal static class QuestProtocolTests
                     reader.ReadByte() == (stage == 0 ? 1 : 2) && reader.ReadByte() == (stage == 0 ? branch : stage),
                     "转职与两级觉醒响应写入实际branch/stage " + target);
                 Check(reader.ReadByte() == 0 && reader.ReadByte() == 0 && stream.Position == stream.Length,
-                    "V31职业响应独立读器完整读取两树页，不以提前19替代第二页count " + target);
+                    "匹配客户端职业响应独立读器完整读取两树页，不以提前19替代第二页count " + target);
             }
         Reject(() => QuestPackets.Finish(3145,3,1780,[],0,
             [fixedRewards[0] with { Item = fixedRewards[0].Item with { Uid = 0 } }, .. fixedRewards.Skip(1)]), "临时UID不能领成功");

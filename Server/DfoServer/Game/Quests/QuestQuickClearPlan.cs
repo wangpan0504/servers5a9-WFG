@@ -40,7 +40,7 @@ internal sealed class QuestQuickClearPlan
         this.unit = unit; activeQuestion = active; this.question = question; this.marker = marker;
         OperationId = active.AcceptanceId;
         Interval = interval; Answer = answer;
-        // V31完成消费者会把终点casecade关联marker加入当前角色完成集；与普通账号任务分开保存。
+        // 匹配客户端完成消费者会把终点casecade关联marker加入当前角色完成集；与普通账号任务分开保存。
         var scope = interval.Select(quest => quest.Id).Prepend(question.Id).Append(marker.Id).ToHashSet();
         ScopeQuestIds = scope.Order().ToImmutableArray();
         var completed = QuestEligibility.Completed(expected);

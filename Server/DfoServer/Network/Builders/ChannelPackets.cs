@@ -6,6 +6,7 @@ namespace DfoServer.Network.Builders;
 
 internal static class ChannelPackets
 {
+    public const string ChannelName = "#ch.10";
     const string Key = "EMU-LAB-KEY-0001";
     static void Put(byte[] b, int at, int x) => BitConverter.GetBytes(x).CopyTo(b, at);
     public static byte[] Frame(int op, byte[] body)
@@ -32,7 +33,7 @@ internal static class ChannelPackets
         byte[] b = new byte[76];
         Put(b, 0, 1);
         Put(b, 8, 1);
-        Encoding.ASCII.GetBytes("#ch.10").CopyTo(b, 12);
+        Encoding.ASCII.GetBytes(ChannelName).CopyTo(b, 12);
         Put(b, 32, 50);
         Encoding.ASCII.GetBytes(address).CopyTo(b, 40);
         Put(b, 72, port);

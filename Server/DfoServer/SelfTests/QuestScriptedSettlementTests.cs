@@ -95,7 +95,7 @@ internal static class QuestScriptedSettlementTests
             That(f.Session.EnableFormalDungeonSettlement(target.ObjectKey) is null,"115/31开启确认后不再次发布结算入口");
             var killed = f.Read();
             byte[] report = DungeonSettlementProtocolTests.Report(killed.Id,99);
-            That(DungeonSettlementRequests.TryParsePlayResult(report,out var parsed),"实际V31的46正文可独立解析");
+            That(DungeonSettlementRequests.TryParsePlayResult(report,out var parsed),"匹配客户端的46正文可独立解析");
             var settled = f.Session.SettleFormalDungeon(parsed!.ActorId,parsed.RankPoint,parsed.MaximumRankPoint,report,dungeons,clears,growth);
             var committed = f.Read();
             That(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt is not null && settled.Reward is not null &&

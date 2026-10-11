@@ -15,6 +15,8 @@ internal static class PacketCaptureTcpTests
         }
         await fixture.StopAsync();
         TestCheck.That(!File.Exists(Path.Combine(fixture.Options.LogDirectory, "packet_log.txt")), "capture off creates no packet file");
+        TestCheck.That(File.ReadAllText(Path.Combine(fixture.Options.LogDirectory, "stdout.txt")).Contains("GM control: disabled"),
+            "startup stdout explicitly reports disabled GM");
         await fixture.StartAsync("enabled", packetCapture: true);
         ChannelTcpTests.Run(fixture);
         using (var peer = TcpPeer.Open(fixture))

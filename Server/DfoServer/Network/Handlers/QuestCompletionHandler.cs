@@ -82,7 +82,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             restoreCompletedQuests: false);
         if (character.Level == commit.PreviousLevel && character.GrowType == commit.PreviousGrowType && projection is not null)
             await projection.RefreshAsync(context, character, Guard, restoreCompleted: false);
-        // V31空574会清完成集合；完整任务投影最后以356恢复真实完成记录。
+        // 匹配客户端空574会清完成集合；完整任务投影最后以356恢复真实完成记录。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character),"quest_completed_list",Guard);
         return CommandResult.Handled;
     }

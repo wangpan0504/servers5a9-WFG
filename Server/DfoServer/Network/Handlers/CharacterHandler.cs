@@ -26,7 +26,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         var character = context.Session.AcceptStoryDigest();
         log.Write("story_digest_accepted", new { Connection = context.Id, Character = character?.Id,
             character?.Level, character?.AcceptedStoryLevel, character?.Revision });
-        // V31在发1446前已更新本地值；这里只保存，下次选角由1382回放。
+        // 匹配客户端在发1446前已更新本地值；这里只保存，下次选角由1382回放。
         return Task.FromResult(CommandResult.Handled);
     }
 

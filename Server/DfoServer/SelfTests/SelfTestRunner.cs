@@ -16,6 +16,7 @@ internal static class SelfTestRunner
         CommandLineTests.Run();
         FrameCrcTests.Run();
         await BufferedLogTests.RunAsync();
+        await ServerLogTests.RunAsync();
         await GameSenderBudgetTests.RunAsync();
         await PacketCaptureTests.RunAsync();
         ClientNoticeTests.Run();

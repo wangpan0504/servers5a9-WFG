@@ -30,7 +30,7 @@ internal sealed partial class GameSession
             return null;
         int index = condition.Channel == 0x10 ? 0 : condition.Channel == 0x20 ? 1 : 2;
         if (index >= targets.Length || targets[index].EnemyType != 3) return null;
-        // V31被动物件演出也从0200F950发33；它不是普通怪物死亡，不要求另一个39报告。
+        // 匹配客户端被动物件演出也从0200F950发33；它不是普通怪物死亡，不要求另一个39报告。
         return ObserveFormalPassiveEvent(checked((uint)targets[index].MonsterId),fingerprint,resources,questId);
     }
 

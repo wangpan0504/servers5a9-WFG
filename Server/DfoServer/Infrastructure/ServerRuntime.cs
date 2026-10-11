@@ -21,6 +21,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.Game.Rental;
 using DfoServer.Game.Settings;
 using DfoServer.Game.Dungeons;
+using System.Diagnostics;
 
 namespace DfoServer.Infrastructure;
 // 唯一装配入口：按领域增加模块及依赖，不在协议循环中维护业务分支。
@@ -29,6 +30,8 @@ internal static class ServerRuntime
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests)
     {
+        log.Write("startup", new { Stage = "Runtime assembly", State = "starting" });
+        var timer = Stopwatch.StartNew();
         var owners = new AccountOwners();
         var online = new OnlineSessionDirectory();
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
@@ -121,28 +124,32 @@ internal static class ServerRuntime
         settlement?.Register(commands);
         questReplay?.Register(commands);
         commands.Seal();
+        log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, log);
         var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests);
         var channel = new ChannelProtocolHandler(options, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
+        log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
         return new ServerHost(options, channel, game, management, Started, log);
-        void Started() => log.Write("ready", new
+        void Started()
         {
-            options.ChannelPort,
-            options.GamePort,
-            options.GmPort,
-            options.DevelopmentAccount,
-            options.DevelopmentDungeonEntryProbe,
-            Pid = Environment.ProcessId,
-            Towns = towns.Areas.Keys.Select(key => key.Item1).Distinct().Count(),
-            Areas = towns.Areas.Count,
-            MissingMaps = towns.Areas.Values
-                .SelectMany(area => area.Phases.Prepend(area.Default))
-                .Where(map => map.Error is not null)
-                .Select(map => new { map.Path, map.Error })
-                .Distinct()
-                .ToArray()
-        });
+            var missingMaps = towns.Areas.Values.SelectMany(area => area.Phases.Prepend(area.Default))
+                .Where(map => map.Error is not null).Select(map => new { map.Path, map.Error }).Distinct().ToArray();
+            if (missingMaps.Length != 0)
+                log.Write("resource_warning", new { Stage = "Town maps", Count = missingMaps.Length, MissingMaps = missingMaps });
+            log.Write("ready", new
+            {
+                options.ChannelPort,
+                options.GamePort,
+                options.GmPort,
+                options.DevelopmentAccount,
+                options.DevelopmentDungeonEntryProbe,
+                Pid = Environment.ProcessId,
+                Towns = towns.Areas.Keys.Select(key => key.Item1).Distinct().Count(),
+                Areas = towns.Areas.Count,
+                MissingMaps = missingMaps
+            });
+        }
         string DevelopmentCommand(string line)
         {
             string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,

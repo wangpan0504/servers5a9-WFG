@@ -64,6 +64,7 @@ internal static class PacketCaptureTests
             string blocked = Path.Combine(root, "blocked");
             File.WriteAllText(blocked, "not a directory");
             using var failedCapture = new PacketCapture(blocked);
+            TestCheck.That(!failedCapture.IsEnabled, "startup status reflects capture failure rather than the requested directory");
             using var faultBytes = new MemoryStream();
             var faultConnection = new ConnectionContext(14, IPAddress.Loopback, faultBytes, stop, capture: failedCapture);
             await faultConnection.WriteAsync(sent);

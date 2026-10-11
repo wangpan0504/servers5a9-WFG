@@ -54,7 +54,7 @@ internal static class QuestMainlineTests
         ReachLevel(3); Accept(3146); Accept(3157); Gate(3);
         var parent = Enter(3,3146);
         That(f.Session.ObserveFormalPassiveTrigger(3157,new(0x10,0,0),new string('D',64),rooms)?.Commit is not null,
-            "新角色父任务路线按V31右侧NPC对话33事件推进首个子任务，无普通死亡报告");
+            "新角色父任务路线按匹配客户端右侧NPC对话33事件推进首个子任务，无普通死亡报告");
         Finish(3157); Accept(3054); Clear(parent); Finish(3054); Finish(3146); Return();
         ClearQuest(3147); ClearQuest(3148); Meeting(4875); ClearQuest(3149); ClearQuest(3150); ClearQuest(3151);
         Meeting(3152); Meeting(3153); Meeting(6929);

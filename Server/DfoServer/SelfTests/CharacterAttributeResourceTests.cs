@@ -34,7 +34,7 @@ internal static class CharacterAttributeResourceTests
             CharacterStatComputer.ComputeLevelBaseStats(definition, 1, 19).MaxHp == 2300 &&
             CharacterStatComputer.ComputeLevelBaseStats(definition, 1, 50).MaxHp == 17800 &&
             CharacterStatComputer.ComputeLevelBaseStats(definition, 0x11, 50).MaxHp == 17800,
-            "V31正常基础18级分段、转职块与觉醒声明独立，不套旧版50级再分段");
+            "匹配客户端正常基础18级分段、转职块与觉醒声明独立，不套旧版50级再分段");
         Check(CharacterStatComputer.ComputeLevelBaseStats(definition, 0, 19).PhysicalAttack == 864,
             "float32声明先转十倍定点再按等级累计，不丢失4.8精度");
         RejectRange(() => CharacterStatComputer.ComputeLevelBaseStats(definition, 0, 0));

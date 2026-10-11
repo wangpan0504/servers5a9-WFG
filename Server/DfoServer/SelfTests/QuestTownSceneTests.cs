@@ -86,7 +86,7 @@ internal static class QuestTownSceneTests
                 "与目标NPC相隔超过width+40时拒绝客户端终末事件");
             That(f.Session.Move(new(690,250,0,0,0,0)) &&
                 Change(f,3162,QuestLifecycleAction.Condition)?.Character.ActiveMainQuests.Single().ConditionState == 0,
-                "V31 NPC范围在width+40边界可达成，服务端校验真实当前坐标");
+                "匹配客户端 NPC范围在width+40边界可达成，服务端校验真实当前坐标");
             That(Finish(f,3162).Receipt?.Commit.ConditionType == 64 && f.Read().CompletedQuests.Contains(3162),
                 "3162在目标范围内由剧情临时莱诺NPC444交付，无需前往另一张常驻NPC地图");
             That(QuestEligibility.Visible(f.Read(),quests).Contains(3163),"3162完成后开放实际Lv18后继3163，不补跳其他剧情");

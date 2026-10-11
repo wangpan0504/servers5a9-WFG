@@ -21,6 +21,7 @@ internal static class CommandLineTcpTests
         TestCheck.That(!Directory.Exists(fixture.Options.DataDirectory), "invalid commands and help create no player database or instance lock");
         TestCheck.That(!File.Exists(Path.Combine(fixture.Options.LogDirectory, "ready.json")), "invalid commands never publish readiness");
         string directHelp = await fixture.CliAsync(null, "--help");
+        TestCheck.That(!directHelp.Contains("[startup]"), "help stdout is not polluted by service logs");
         TestCheck.That(directHelp.Contains("--server-ip", StringComparison.Ordinal) && directHelp.Contains("Data/Pvf/Script.pvf", StringComparison.Ordinal), "direct CLI help works without JSON or resources");
 
         string text = new string('x', 128 * 1024) + "日志尾部";
@@ -43,6 +44,9 @@ internal static class CommandLineTcpTests
         await failed.StopAsync();
         TestCheck.That(rejected && new FileInfo(Path.Combine(failed.Options.LogDirectory, "stderr.txt")).Length > 0,
             "startup failure preserves diagnostics and completes cleanup");
+        string failedOutput = File.ReadAllText(Path.Combine(failed.Options.LogDirectory, "stdout.txt"));
+        TestCheck.That(failedOutput.Contains("[ERROR] [server_failed]") && failedOutput.Contains("PVF archive") &&
+            !failedOutput.Contains("Server ready"), "missing PVF stdout identifies the failed stage without a ready message");
         Console.WriteLine("PASS C# command entry process checks");
     }
 }

@@ -22,7 +22,7 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
         var character = receipt.Commit.Character;
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),"quest_ready_children_progress",Guard);
         if (refreshList) await RefreshAsync(context,character,Guard, restoreCompleted: false);
-        // V31空574会清完成集合，356须放在完整任务投影最后。
+        // 匹配客户端空574会清完成集合，356须放在完整任务投影最后。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(character),"quest_ready_children_completed",Guard);
         return true;
     }

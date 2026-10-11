@@ -20,6 +20,7 @@ internal sealed class GameCommandRegistry
     sealed record Registration(string Source, GameCommandHandler Handler);
     readonly Dictionary<ushort, Registration> registrations = [];
     FrozenDictionary<ushort, Registration>? commands;
+    public int Count => commands?.Count ?? registrations.Count;
     public void Register(CmdPacketType opcode, GameCommandHandler handler, string source)
     {
         if (commands is not null)

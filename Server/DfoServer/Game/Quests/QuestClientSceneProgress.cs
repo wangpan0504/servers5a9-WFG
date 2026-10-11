@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 
 namespace DfoServer.Game.Quests;
 
-// V31范围type64及演出type65使用各自终末事件；坐标与演出入口由当前服务端场景约束。
+// 匹配客户端范围type64及演出type65使用各自终末事件；坐标与演出入口由当前服务端场景约束。
 internal static class QuestClientSceneProgress
 {
     public static bool TownRange(StoryQuest quest) => quest.Condition == "[reach the range]" &&

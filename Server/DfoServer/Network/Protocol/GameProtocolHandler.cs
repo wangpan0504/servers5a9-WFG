@@ -42,12 +42,14 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     if (cycle.Phase == SessionPhase.Town && quests is not null)
                         await new QuestProjection(quests).RefreshAsync(context, cycle.Character, Guard);
                 }
-                log.Write("recv", new { Connection = connection.Id, request.Kind, request.Opcode, Name = name, Body = loginPacket || request.Opcode == (ushort)CmdPacketType.CLIENT_SPEC_STATISTIC ? "[login-redacted]" : Convert.ToHexString(request.Body) });
+                string body = PacketCapture.IsAuthentication(request.Opcode) ? "[login-redacted]" : Convert.ToHexString(request.Body);
+                log.Write("recv", new { Connection = connection.Id, request.Kind, request.Opcode, Name = name, Body = body });
                 var result = await commands.DispatchAsync(context, request);
                 if (result == CommandResult.CloseConnection)
                     return;
                 if (result == CommandResult.Unhandled)
-                    log.Write("unimplemented", new { Connection = connection.Id, request.Opcode, Name = name, Length = request.Body.Length });
+                    log.Write("unimplemented", new { Connection = connection.Id, Phase = session.Phase.ToString(), request.Kind,
+                        request.Opcode, Name = name, Length = request.Body.Length, Body = body });
             }
         }
         finally

@@ -68,7 +68,7 @@ internal sealed class SkillLearningDefinition
         SkillType.Active => 3,
         SkillType.Passive when SkillClass == 4 => 2,
         SkillType.Passive when SkillClass is >= 0 and <= 3 && SkillFitnessGrowtypeCount is int count => count <= 2 ? 1 : 0,
-        // S4A21 的分组越界回退到普通被动组；V31 第五转职资源使用 class=5。
+        // S4A21 的分组越界回退到普通被动组；匹配客户端第五转职资源使用 class=5。
         SkillType.Passive when SkillClass is >= 5 => 0,
         _ => null
     };

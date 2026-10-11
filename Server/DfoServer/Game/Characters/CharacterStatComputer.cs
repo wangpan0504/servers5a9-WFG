@@ -35,7 +35,7 @@ internal sealed class CharacterStatComputer(CharacterCatalog characters)
         var ordinary = definition.Blocks.Single(block => block.ResourceGrowType == 1 && block.Awakening == 0);
         var growth = definition.Blocks.Single(block => block.ResourceGrowType == firstGrow + 1 && block.Awakening == 0);
         // 02B53A83..02B53C56：先将CHR各项转换为十倍整数，再整型乘加。
-        // V31正常模式用未转职块至18级，之后用firstGrow；觉醒不另套旧版50级分段。
+        // 匹配客户端正常模式用未转职块至18级，之后用firstGrow；觉醒不另套旧版50级分段。
         // awakening资源声明仍独立保留；这里不包含永久、装备或技能修正。
         return new(
             checked((uint)Value(CharacterAttributeField.MaxHp)), checked((uint)Value(CharacterAttributeField.MaxMp)),

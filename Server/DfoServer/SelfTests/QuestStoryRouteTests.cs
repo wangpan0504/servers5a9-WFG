@@ -79,7 +79,7 @@ internal static class QuestStoryRouteTests
                         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(42),0x11);
                         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(70),ClientBodyChecksum.Compute(body.AsSpan(0,70)));
                         That(DungeonRequests.TryParseScriptedDeath(body,out var parsed) && parsed!.ChecksumMatches && !DungeonRequests.TryParsePassiveDeath(body,out _),
-                            "V31普通对象count=0正文与被动物件正文分别解析");
+                            "匹配客户端普通对象count=0正文与被动物件正文分别解析");
                         var observation = new NativeDungeonScriptedDeathObservation(monster.ObjectKey,parsed!.RewriteFlag,true,Convert.ToHexString(SHA256.HashData(body)));
                         var before = f.Read();
                         That(f.Session.ObserveFormalDungeonScriptedDeath(observation with { ChecksumMatches = false },kills,growth).Outcome == DungeonRunOutcome.Rejected &&
@@ -107,7 +107,7 @@ internal static class QuestStoryRouteTests
             That(finish.Outcome == QuestFinishOutcome.Committed && f.Read().CompletedQuests.Contains(scenario.Id), $"任务{scenario.Id}原子交付并保留完成记录");
             That(f.Session.ReturnFromFormalDungeon() is not null, "剧情完成正常回城");
         }
-        Console.WriteLine($"PASS {Count-checks} 实际Lv5–20清图路线与V31剧情死亡断言（非实机）");
+        Console.WriteLine($"PASS {Count-checks} 实际Lv5–20清图路线与匹配客户端剧情死亡断言（非实机）");
     }
 
     internal static DungeonPoint[] Path(DungeonStaticTopology topology,DungeonPoint start,DungeonPoint boss)

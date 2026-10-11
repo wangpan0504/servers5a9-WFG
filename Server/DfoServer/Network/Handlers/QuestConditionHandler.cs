@@ -45,7 +45,7 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
             items is not null && goldLimits is not null && pieces is not null && growth is not null &&
             quests.TryGet(request.QuestId,out var quest) && QuestRelationProgress.ZeroRewardChild(quest))
         {
-            // 匹配V31子任务33后没有34；复用普通交付事务保存零奖励完成位和父任务进度。
+            // 匹配客户端子任务33后没有34；复用普通交付事务保存零奖励完成位和父任务进度。
             closed = context.Session.FinishQuest(request.QuestId,ushort.MaxValue,quests,parameters,items,goldLimits,pieces,growth).Receipt;
             if (closed is { Commit.ProjectionCurrent: false }) return CommandResult.CloseConnection;
             if (closed is not null) log.Write("quest_child_closed",new { Connection = context.Id, request.QuestId, closed.Commit.AcceptanceId, closed.Commit.Duplicate });

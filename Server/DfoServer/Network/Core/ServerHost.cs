@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using DfoServer.Infrastructure;
+using DfoServer.Network.Builders;
 
 namespace DfoServer.Network;
 
@@ -20,15 +21,27 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         var game = new TcpListener(IPAddress.Parse(options.ListenAddress), options.GamePort);
         Task gm = Task.CompletedTask;
         Task[] listeners = [];
+        string starting = "Channel listener";
         try
         {
             channel.Start();
+            starting = "Game listener";
             game.Start();
+            starting = "GM listener";
             if (runManagement is not null)
                 gm = runManagement(lifetime.Token);
+            log.Write("listening", new { ChannelName = ChannelPackets.ChannelName,
+                Channel = channel.LocalEndpoint.ToString(), Game = game.LocalEndpoint.ToString(),
+                AdvertisedGame = $"{options.AdvertisedAddress}:{options.GamePort}",
+                Gm = options.GmPort == 0 ? "disabled" : $"127.0.0.1:{options.GmPort}",
+                PacketCapture = packetCapture?.IsEnabled == true ? options.PacketCaptureDirectory : "disabled",
+                ServiceLog = Path.Combine(options.LogDirectory, "server.jsonl") });
+            starting = "Readiness marker";
             onStarted();
             log.Flush();
             File.WriteAllText(Path.Combine(options.LogDirectory, "ready.json"), JsonSerializer.Serialize(new { options.ChannelPort, options.GamePort, options.GmPort, Pid = Environment.ProcessId }));
+            log.Write("server_ready", new { Pid = Environment.ProcessId });
+            starting = "Running listeners";
             listeners = [Accept(channel, channelProtocol, true, lifetime.Token), Accept(game, gameProtocol, false, lifetime.Token)];
             // 某个监听失败时取消整个实例，避免 Task.WhenAll 永久等待另一个监听。
             var workers = runManagement is null ? listeners : [.. listeners, gm];
@@ -36,6 +49,11 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
         {
+        }
+        catch (Exception error)
+        {
+            log.Write("listener_failed", new { Stage = starting, Reason = error.GetType().Name, error.Message });
+            throw;
         }
         finally
         {
@@ -84,12 +102,17 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
         try
         {
+            log.Write("connected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME", Peer = client.Client.RemoteEndPoint?.ToString() });
             client.NoDelay = true;
             await protocol.RunAsync(new(id, peer, client.GetStream(), lifetime, channel, capture));
         }
         catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException or InvalidDataException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
         {
             log.Write("closed", new { Connection = id, Channel = channel, Reason = ex.GetType().Name, ex.Message });
+        }
+        finally
+        {
+            log.Write("disconnected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME" });
         }
     }
 }

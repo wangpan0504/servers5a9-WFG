@@ -173,7 +173,7 @@ internal static class QuestOrdinaryCompletionTests
             var unchanged = f.Read();
             That(f.Change(100,QuestLifecycleAction.Condition,new(0x10,1,0))?.Commit is null &&
                 f.Change(100,QuestLifecycleAction.Condition,new(null,3,0))?.Commit is null && Same(unchanged,f.Read()),
-                "问题仅接受V31普通回答通道和资源中的零基选项");
+                "问题仅接受匹配客户端普通回答通道和资源中的零基选项");
             That(f.Change(100,QuestLifecycleAction.Condition,new(null,1,0))!.Character.ActiveMainQuests.Single().ConditionState == 1 &&
                 f.Prepare(ushort.MaxValue).Plan is { ConditionType: 42, Answer: 1 },"第二个选项保存零基scalar1，不误当第一回答完成标记");
             TestCheck.Reject<IOException>(() => f.Finish(ushort.MaxValue),"回答及奖励提交后返回丢失");

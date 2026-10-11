@@ -9,6 +9,7 @@ internal sealed class PacketCapture : IDisposable
 {
     readonly BufferedLogFile file;
     int failed;
+    public bool IsEnabled => Volatile.Read(ref failed) == 0;
 
     public PacketCapture(string directory)
     {
@@ -26,7 +27,7 @@ internal sealed class PacketCapture : IDisposable
         var text = new StringBuilder();
         text.Append($"{DateTimeOffset.Now:O} connection={connection} protocol={(channel ? "CHANNEL" : "GAME")} {(send ? "SEND" : "RECV")} kind=0x{frame[0]:X2} opcode=0x{opcode:X4} name={name} len={frame.Length} body=({Math.Max(0, frame.Length - header)}B)");
         // 连同畸形认证包一起脱敏；旧扩展包也可能含凭据，不输出 body 或 raw。
-        bool redact = !channel && !send && opcode is (ushort)CmdPacketType.LOGIN or (ushort)CmdPacketType.LOGIN_PRECHECK or (ushort)CmdPacketType.CLIENT_SPEC_STATISTIC;
+        bool redact = !channel && !send && IsAuthentication(opcode);
         if (redact)
             text.Append(" [authentication payload redacted]\n");
         else
@@ -39,6 +40,9 @@ internal sealed class PacketCapture : IDisposable
         }
         Append(text.ToString());
     }
+
+    internal static bool IsAuthentication(ushort opcode) => opcode is
+        (ushort)CmdPacketType.LOGIN or (ushort)CmdPacketType.LOGIN_PRECHECK or (ushort)CmdPacketType.CLIENT_SPEC_STATISTIC;
 
     static void Hex(StringBuilder text, ReadOnlySpan<byte> bytes)
     {
