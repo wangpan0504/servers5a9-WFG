@@ -2,14 +2,17 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Settings;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Random? random = null)
+internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
+    Random? random = null, GameDebugSettings? debugSettings = null)
 {
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
     {
         receipt = null;
+        bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
         var before = character.Inventory;
         var now = utcNow ?? DateTimeOffset.UtcNow;
         var source = before.Find(new(InventoryListType.Main, request.Slot));
@@ -42,7 +45,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
                     continue;
                 var template = catalog.Get(id);
-                if (InventoryRewardGrantService.Create(template, utcNow: now).IsExpired(now.ToUnixTimeSeconds()))
+                if (InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration).IsExpired(now.ToUnixTimeSeconds()))
                     return InventoryResult.Reject(19);
             }
             if (choices is not null && choices.Any(row => (row.Upgrade != 0 || row.Refinement != 0) &&
@@ -160,7 +163,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         }
         else
             grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
-        var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, grants, catalog, goldLimits, pieces, now);
+        var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, grants, catalog, goldLimits, pieces, now,
+            shopExpiration: shopExpiration);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());

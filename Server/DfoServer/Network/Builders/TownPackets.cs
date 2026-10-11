@@ -7,9 +7,9 @@ namespace DfoServer.Network.Builders;
 // Client 包体构造。只读取角色快照，不修改会话或访问数据库。
 internal static class TownPackets
 {
-    public static byte[] Select(Character character)
+    public static byte[] Select(Character character, CharacterFatigueState? displayedFatigue = null)
     {
-        var fatigue = character.Fatigue ?? CharacterFatigueState.NewOrdinary;
+        var fatigue = displayedFatigue ?? character.Fatigue ?? CharacterFatigueState.NewOrdinary;
         fatigue.Validate();
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))

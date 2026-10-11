@@ -53,6 +53,12 @@ internal static class TcpRegressionTests
         }),
         ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
+        ("dungeon-entry-plan", (_, _, resources) =>
+        {
+            QuestReplayTests.RunCore();
+            DungeonEntryPlanTests.Run(resources.Archive);
+            return Task.CompletedTask;
+        }),
         ("dungeon-settlement", async (_, _, resources) =>
         {
             DungeonRoomCatalogTests.Run(resources.Archive);
@@ -84,6 +90,7 @@ internal static class TcpRegressionTests
         ("skill-slots", SkillQuickSlotsTcpTests.RunAsync),
         ("skill-material", SkillMaterialTcpTests.RunAsync),
         ("gm-progress", CharacterProgressTcpTests.RunAsync),
+        ("gm-debug", FormalDungeonTcpTests.RunDebugAsync),
         ("special-containers", SpecialContainerTcpTests.RunAsync),
         ("guild-medals", GuildMedalTcpTests.RunAsync),
         ("currency", CurrencyTcpTests.RunAsync),
@@ -109,7 +116,7 @@ internal static class TcpRegressionTests
 
     public static IEnumerable<string> GroupNames => Groups.Select(group => group.Name);
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
-    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("quest-continuation" or "quest-manual-skip" or "quest-ticket" or "quest-specified-ticket" or "quest-awakening-ticket" or "quest-play-only" or "quest-auto-meet" or "quest-npc-mapping" or "quest-hidden" or "quest-replay" or "quest-initialization" or "dungeon-story-events" or "quest-core-rewards" or "dungeon-settlement" or "inventory-persistence" or "resource-survey"));
+    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("dungeon-entry-plan" or "quest-continuation" or "quest-manual-skip" or "quest-ticket" or "quest-specified-ticket" or "quest-awakening-ticket" or "quest-play-only" or "quest-auto-meet" or "quest-npc-mapping" or "quest-hidden" or "quest-replay" or "quest-initialization" or "dungeon-story-events" or "quest-core-rewards" or "dungeon-settlement" or "inventory-persistence" or "resource-survey"));
     public static bool IsValidSelection(string selection)
     {
         string[] names = selection.Split(',');

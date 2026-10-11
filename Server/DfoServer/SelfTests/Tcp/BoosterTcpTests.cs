@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
+using DfoServer.Network.Management;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -13,7 +14,7 @@ internal static class BoosterTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster"), resources: resources);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster"), gm: true, resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -29,6 +30,7 @@ internal static class BoosterTcpTests
             });
         }
         await fixture.StartAsync();
+        SetExpirationDebug(fixture, false);
         using (var peer = Open(fixture))
         {
             SendOpen(peer, 65, 1);
@@ -158,6 +160,11 @@ internal static class BoosterTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
+    internal static void SetExpirationDebug(TcpTestFixture fixture, bool enabled)
+    {
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "cash-shop-expiration " + (enabled ? "on" : "off"), out string reply) &&
+            reply == "OK {\"ignoreAbsoluteExpiration\":" + (enabled ? "true" : "false") + "}", "GM设置实际礼包期限调试状态");
+    }
     static void SendOpen(TcpPeer peer, short slot, int count) => peer.Send(160, Build(writer => { writer.Write(slot); writer.Write(count); }));
     internal static void ExpectAck(TcpPeer peer, int source, short slot, (int Id, int Count)[] rewards) => peer.Expect(1, 160, Build(writer =>
     {

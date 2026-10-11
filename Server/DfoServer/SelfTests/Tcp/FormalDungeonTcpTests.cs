@@ -21,6 +21,8 @@ internal static partial class FormalDungeonTcpTests
         var kills = DungeonKillExperienceCatalog.Load(resources.Archive);
         await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"), gm: true, resources: resources);
         await fixture.StartAsync();
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out var fatigueMode) &&
+            fatigueMode == "OK {\"infiniteFatigue\":false}", "正式副本扣点回归显式关闭无限疲劳");
         byte[]? oldReport = null;
         ulong experience = 0;
         ushort nextKey;
@@ -370,6 +372,8 @@ internal static partial class FormalDungeonTcpTests
         string points = fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context");
         await fixture.StopAsync();
         await fixture.StartAsync("actual-restart", isolatedProcess: true);
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out fatigueMode) &&
+            fatigueMode == "OK {\"infiniteFatigue\":false}", "重启后的正常扣点回归重新关闭无限疲劳");
         That(fixture.Snapshot("SELECT level,experience FROM characters") == persisted &&
             fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context") == points &&
             fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == inventory,
@@ -481,6 +485,68 @@ internal static partial class FormalDungeonTcpTests
         }
         await fixture.StopAsync();
         Console.WriteLine($"PASS 正式TCP静默拒绝后回城重进、全部职业和转职加载、原生统计合成击杀、六房升级、真实随机拾取{picked}件、重复拒绝及服务重启（非Windows实机；零样本不作拾取覆盖）");
+    }
+
+    public static async Task RunDebugAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root,"gm-debug"),gm: true,resources: resources);
+        await fixture.StartAsync();
+        string Command(string line)
+        {
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,line,out var text),"GM调试端口返回 " + line);
+            return text;
+        }
+        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
+            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "两个调试开关默认开启");
+        using (var peer = Open(fixture))
+        {
+            peer.Create("InfiniteTcp");
+            fixture.Sql("UPDATE character_fatigue SET used=maximum,remaining=0");
+            string stored = fixture.Snapshot("SELECT * FROM character_fatigue");
+            var selected = peer.Select().Single(row => row.Kind == 1 && row.Opcode == 4).Body;
+            That(U16(selected,11) == 0 && U16(selected,228) == 156 && fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
+                "无限疲劳选角显示满值但不覆盖真实零疲劳");
+            EntryTown(peer); SelectMap(peer);
+            byte[] selection = Selection();
+            BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);
+            peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
+            long enteredRevision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters")[0][0]);
+            Load(peer); peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            peer.Send(37,new byte[8]); peer.Barrier();
+            That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored &&
+                fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts") is [[0L]] &&
+                fixture.Query("SELECT revision FROM characters") is [[long unchanged]] && unchanged == enteredRevision,
+                "无限模式及重复加载不扣疲劳、不制造扣点账本或revision");
+            That(Command("infinite-fatigue invalid").StartsWith("ERR ") &&
+                Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}", "错误开关参数不改变默认状态");
+            That(Command("infinite-fatigue off") == "OK {\"infiniteFatigue\":false}", "GM可关闭实际Session共享的无限疲劳");
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            SelectMap(peer); peer.Send(16,selection); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+            That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored, "关闭后真实零疲劳拒绝重新入场");
+            That(Command("infinite-fatigue on").StartsWith("OK "), "重新开启无限疲劳");
+            peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
+            Load(peer); peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+        }
+        That(Command("infinite-fatigue off").StartsWith("OK "), "普通扣点场景显式关闭无限模式");
+        using (var peer = Open(fixture))
+        {
+            peer.Create("FiniteTcp"); peer.Select(1); EntryTown(peer); SelectMap(peer);
+            byte[] selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);
+            peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
+            Load(peer); peer.Expect(0,36,[1,0,156,0,0,0,155,0,0,0]);
+            peer.Send(37,new byte[8]); peer.Barrier();
+            That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[1L,155L]] &&
+                fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
+                "关闭开关恢复真实一次扣点及原去重账本");
+        }
+        await fixture.StopAsync();
+        await fixture.StartAsync("restart");
+        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
+            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "服务重建恢复两个开关默认开启");
+        That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+            "调试切换保留SQLite完整性");
+        await fixture.StopAsync();
     }
 
     static void ExpectLevelRefresh(TcpPeer peer, byte level, ulong experience, bool town = false, bool completedMainline = false)

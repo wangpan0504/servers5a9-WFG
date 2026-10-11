@@ -96,7 +96,42 @@ internal static class DungeonEntryPlanTests
         RejectDefinition(definition with { MinimumLevel = null }, "dungeon-level-unknown");
         RejectDefinition(definition with { MinimumLevel = 2 }, "dungeon-level-too-low");
         RejectDefinition(definition with { Mazes = [definition.Mazes[0]] }, "quest-maze-unavailable");
-        RejectDefinition(definition with { Mazes = [maze, maze] }, "quest-maze-ambiguous");
+        var duplicate = maze with { SourceOrdinal = maze.SourceOrdinal + 1 };
+        That(DungeonEntryPlan.TryCreate(definition with { Mazes = [maze, duplicate] },character,3,3145,0,out var deduplicated,out _) &&
+            deduplicated!.Maze == maze, "显式任务的完整等价路线保留首次声明");
+        That(DungeonEntryPlan.TryCreate(definition with { Mazes = [maze, duplicate] },character,3,0,0,out var autoDuplicate,out _,quests: quests) &&
+            autoDuplicate is { RouteQuestId: 3145, Maze.SourceOrdinal: 1 }, "普通选图的活动任务路线也去重");
+        var completedMaze = maze with { QuestConnectionTokens = [new(0,1),new(0,3145),new(0,-1)] };
+        That(DungeonEntryPlan.TryCreate(definition with { Mazes = [completedMaze,completedMaze with { SourceOrdinal = 9 }] },
+            character with { ActiveMainQuests = [], CompletedQuests = [3145] },3,0,0,out var completedRoute,out _,quests: quests) &&
+            completedRoute!.RouteQuestId == 3145, "普通选图的完成任务路线也去重");
+        foreach (var different in new[]
+        {
+            maze with { ResourceError = "fixture" },
+            maze with { ClearConditions = [new("hunt monster",999,1)] },
+            maze with { WarpMaps = [new(maze.Starts[0],maze.Bosses[0])] },
+            maze with { BossEntrance = new(0,0,[new(999,0,1)]) },
+            maze with { MapSpecification = maze.MapSpecification!.Select((map,index) => index == 0 ? map with { CandidateIds = [map.Id,999] } : map).ToArray() }
+        })
+        {
+            RejectDefinition(definition with { Mazes = [maze,different] }, "quest-maze-ambiguous");
+            That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze,duplicate,different] },character,3,0,0,out _,out var mixed,quests: quests) &&
+                mixed == "quest-maze-ambiguous", "重复项不能掩盖不同路线的真实歧义");
+        }
+        var differentQuest = maze with { QuestConnectionTokens = [new(0,0),new(0,3146),new(0,-1)] };
+        That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze,differentQuest] },
+            character with { ActiveMainQuests = [new(0,3145,1),new(1,3146,1)] },3,0,0,out _,out _,quests: quests),
+            "地图相同但任务身份不同仍拒绝歧义");
+        var difficultyRoute = maze with { QuestConnectionTokens = [new(0,0),new(0,3145),new(0,0)] };
+        RejectDefinition(definition with { Mazes = [maze,difficultyRoute] }, "quest-maze-ambiguous");
+
+        foreach (ushort id in new ushort[] { 7104,7105 })
+        {
+            var actual = character with { Level = 20, GrowType = 5, ActiveMainQuests = [new(0,id,1)] };
+            That(DungeonEntryPlan.TryCreate(catalog,actual,1000,id,0,out _,out _,quest: quests.Get(id),quests: quests) &&
+                DungeonEntryPlan.TryCreate(catalog,actual,1000,0,0,out var routed,out _,quests: quests) && routed!.RouteQuestId == id,
+                "匹配剑影转职资源的显式和普通选图入口均可规划");
+        }
         RejectMaze(maze with { QuestConnectionTokens = [new(0, 0), new(7, 3145), new(0, -1)] }, "quest-maze-unavailable");
         RejectMaze(maze with { QuestConnectionTokens = [new(0, 0), new(0, 3145)] }, "quest-maze-unavailable");
         RejectMaze(maze with { QuestConnectionTokens = [new(0, 1), new(0, 3145), new(0, -1)] }, "quest-maze-unavailable");
@@ -124,6 +159,10 @@ internal static class DungeonEntryPlanTests
         var clearTarget = parent with { Condition = "[clear map]", SubType = -1, IntData = [999] };
         That(!DungeonEntryPlan.TryCreate(definition with { Id = 17, Mazes = [otherMaze] },otherCharacter with { ActiveMainQuests = [new(0,100,1)] },
             17,100,0,out _,out var mismatch,quest: clearTarget) && mismatch == "quest-terminal-map-unavailable", "任务目标地图不属于路线Boss时拒绝，不替换路线");
+        var child = parent with { Id = 101, MainQuest = 100 };
+        That(DungeonEntryPlan.TryCreate(definition with { Id = 17, Mazes = [otherMaze,otherMaze with { SourceOrdinal = 8 }] },
+            otherCharacter with { ActiveMainQuests = [new(0,101,1)] },17,101,0,out var fallback,out _,quest: child) &&
+            fallback!.RouteQuestId == 100, "子任务回退到父任务的重复路线也去重");
         Console.WriteLine($"PASS {Count - checks} dungeon entry plan assertions");
 
         void Reject(Character input, uint dungeonId, uint questId, byte difficulty, string expected)

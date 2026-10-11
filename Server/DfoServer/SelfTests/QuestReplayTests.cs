@@ -60,7 +60,11 @@ internal static class QuestReplayTests
         That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze with { QuestConnectionTokens = [new(0,1),new(0,400),new(0,-1)] }] },
             character,1100,400,0,out _,out _,quest: quest,isReplay: true),
             "回放原剧情路线不误选已完成connection或普通地图");
-        That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze,maze] },character,1100,400,0,out _,out _,quest: quest,isReplay: true) &&
+        That(DungeonEntryPlan.TryCreate(definition with { Mazes = [maze,maze with { SourceOrdinal = 1 }] },character,1100,400,0,
+            out var duplicate,out _,quest: quest,isReplay: true) && duplicate!.Maze.SourceOrdinal == maze.SourceOrdinal,
+            "回放等价重复路线保留首个资源序号");
+        That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze,maze with { ClearConditions = [new("hunt monster",999,1)] }] },
+            character,1100,400,0,out _,out _,quest: quest,isReplay: true) &&
             !DungeonEntryPlan.TryCreate(definition,character with { CompletedQuests = [] },1100,400,0,out _,out _,quest: quest,isReplay: true),
             "迷宫歧义和失去真实完成事实时拒绝回放，不借用普通接取绕过");
         Console.WriteLine($"PASS {Count-checks} 合成任务回放资格、原剧情路线及状态隔离断言");

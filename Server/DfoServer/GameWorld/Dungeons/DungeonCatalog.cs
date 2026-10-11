@@ -42,24 +42,30 @@ internal sealed record DungeonMaze(
     // 布局实质相同判定：同一任务连接的 maze 可能在资源里重复出现（如 SunderLandDark 的转职任务
     // 7104/7105 各重复一次），字段完全一致时视为同一路线，避免入场被歧义拒绝。
     public bool SameLayout(DungeonMaze other) =>
-        Width == other.Width && Height == other.Height && Greed == other.Greed &&
+        Width == other.Width && Height == other.Height && Greed == other.Greed && ResourceError == other.ResourceError &&
         Starts.SequenceEqual(other.Starts) && Bosses.SequenceEqual(other.Bosses) &&
         SameMaps(MapSpecification, other.MapSpecification) && SameMaps(LayeredMaps, other.LayeredMaps) &&
-        SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps);
+        SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps) &&
+        WarpMaps.SequenceEqual(other.WarpMaps) && ClearConditions.SequenceEqual(other.ClearConditions) &&
+        SameEntrance(BossEntrance, other.BossEntrance);
+
+    static bool SameEntrance(DungeonBossEntrance? left, DungeonBossEntrance? right) =>
+        left is null || right is null ? left is null && right is null :
+        left.TimeMode == right.TimeMode && left.TimeValue == right.TimeValue && left.Targets.SequenceEqual(right.Targets);
 
     static bool SameMaps(IReadOnlyList<DungeonMap>? left, IReadOnlyList<DungeonMap>? right)
     {
-        var a = left ?? Array.Empty<DungeonMap>();
-        var b = right ?? Array.Empty<DungeonMap>();
-        if (a.Count != b.Count) return false;
-        for (int i = 0; i < a.Count; i++)
-            if (!SameMap(a[i], b[i])) return false;
+        if (left is null || right is null) return left is null && right is null;
+        if (left.Count != right.Count) return false;
+        for (int i = 0; i < left.Count; i++)
+            if (!SameMap(left[i], right[i])) return false;
         return true;
     }
 
     static bool SameMap(DungeonMap left, DungeonMap right) =>
         left.Kind == right.Kind && left.Position == right.Position && left.Id == right.Id && left.Path == right.Path &&
-        left.StoryStageIndex == right.StoryStageIndex && left.LayerIndex == right.LayerIndex && left.IsConditional == right.IsConditional;
+        left.StoryStageIndex == right.StoryStageIndex && left.LayerIndex == right.LayerIndex && left.IsConditional == right.IsConditional &&
+        left.CandidateIds.SequenceEqual(right.CandidateIds);
 
     // 只描述资源结构，不表示准入通过或可以向客户端发布初始化通知。
     public string MapStructure => MapSpecification is null ? "unsupported" : "explicit";

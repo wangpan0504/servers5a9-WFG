@@ -4,6 +4,7 @@ using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Auth;
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Settings;
 
 namespace DfoServer.Game.Session;
 
@@ -18,7 +19,8 @@ internal enum SessionPhase : byte
     Settlement
 }
 
-internal sealed partial class GameSession(ICharacterRepository repository, TownCatalog towns, AccountOwners.Lease owner, AuthenticatedIdentity? identity = null, DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null)
+internal sealed partial class GameSession(ICharacterRepository repository, TownCatalog towns, AccountOwners.Lease owner, AuthenticatedIdentity? identity = null,
+    DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, GameDebugSettings? debugSettings = null)
 {
     public AuthenticatedIdentity? Identity { get; } = identity;
     public Character? Selected { get; private set; }
@@ -26,6 +28,13 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public SessionPhase Phase { get; private set; } = SessionPhase.Unselected;
     public long SelectionEpoch { get; private set; }
     public string TravelReason { get; private set; } = "not-requested";
+
+    public CharacterFatigueState FatigueForClient(Character character)
+    {
+        var state = character.Fatigue ?? CharacterFatigueState.NewOrdinary;
+        state.Validate();
+        return debugSettings?.InfiniteFatigue == true ? state with { Used = 0, Remaining = state.Maximum } : state;
+    }
 
     IReadOnlySet<int> completed = new HashSet<int>();
     public CharacterRosterEntry[] Roster() => repository.ListRoster(owner);

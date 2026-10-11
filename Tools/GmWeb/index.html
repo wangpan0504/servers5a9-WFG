@@ -37,6 +37,26 @@
   <h1>开发 GM</h1>
   <p class="lead">选择角色后调整进度、金币或发放道具。修改后回到游戏选角并再次进入，刷新金币和角色邮箱；道具从邮箱领取。属性仍是职业初始值。</p>
   <section>
+    <h2>商城调试</h2>
+    <div class="row">
+      <div><label for="cash-shop-expiration">商城与礼包期限覆盖</label><select id="cash-shop-expiration" disabled><option value="off">关闭：遵循 PVF 期限</option><option value="on">开启：统一到期于 2038 年</option></select></div>
+      <button id="set-cash-shop-expiration" type="button" disabled>应用</button>
+      <button id="read-cash-shop-expiration" class="quiet" type="button">读取状态</button>
+      <span id="cash-shop-status" class="meta">尚未读取</span>
+    </div>
+    <p class="meta" style="margin:8px 0 0">默认开启，重启恢复开启。商城购买及已有随机、选择礼包开箱的主商品、附赠和内部道具统一到期于 2038-01-19 11:14:07（UTC+8）；关闭后遵循原 PVF 期限。不追溯修改已发放物品。</p>
+  </section>
+  <section>
+    <h2>疲劳调试</h2>
+    <div class="row">
+      <div><label for="infinite-fatigue">无限疲劳</label><select id="infinite-fatigue" disabled><option value="on">开启：无限疲劳</option><option value="off">关闭：真实疲劳</option></select></div>
+      <button id="set-infinite-fatigue" type="button" disabled>应用</button>
+      <button id="read-infinite-fatigue" class="quiet" type="button">读取状态</button>
+      <span id="fatigue-status" class="meta">尚未读取</span>
+    </div>
+    <p class="meta" style="margin:8px 0 0">全服务生效，默认开启、重启恢复开启。开启始终显示满疲劳且刷图不扣点，存档中的真实疲劳不变；关闭后恢复原显示和扣点。重新选角或下次房间加载刷新显示。</p>
+  </section>
+  <section>
     <h2>账号</h2>
     <div class="row">
       <div><label for="account">账号</label><input id="account" autocomplete="off"></div>
@@ -201,6 +221,32 @@ async function post(line) {
   return body.text;
 }
 
+async function cashShopExpiration(mode) {
+  const text = await post(`cash-shop-expiration${mode === undefined ? "" : ` ${mode}`}`);
+  if (!text.startsWith("OK ")) throw new Error(text);
+  const state = JSON.parse(text.slice(3));
+  if (typeof state.ignoreAbsoluteExpiration !== "boolean") throw new Error("商城调试状态无效");
+  const input = document.querySelector("#cash-shop-expiration");
+  input.value = state.ignoreAbsoluteExpiration ? "on" : "off";
+  input.disabled = false;
+  document.querySelector("#set-cash-shop-expiration").disabled = false;
+  document.querySelector("#cash-shop-status").textContent = state.ignoreAbsoluteExpiration ? "统一覆盖到 2038 年" : "遵循 PVF 期限";
+  show(text, "ok");
+}
+
+async function infiniteFatigue(mode) {
+  const text = await post(`infinite-fatigue${mode === undefined ? "" : ` ${mode}`}`);
+  if (!text.startsWith("OK ")) throw new Error(text);
+  const state = JSON.parse(text.slice(3));
+  if (typeof state.infiniteFatigue !== "boolean") throw new Error("疲劳调试状态无效");
+  const input = document.querySelector("#infinite-fatigue");
+  input.value = state.infiniteFatigue ? "on" : "off";
+  input.disabled = false;
+  document.querySelector("#set-infinite-fatigue").disabled = false;
+  document.querySelector("#fatigue-status").textContent = state.infiniteFatigue ? "无限疲劳已开启" : "使用真实疲劳";
+  show(text, "ok");
+}
+
 async function refresh() {
   clearGrowthOptions();
   const text = await post(line("list"));
@@ -251,6 +297,10 @@ function number(id) {
 }
 
 document.querySelector("#refresh").addEventListener("click", guard(refresh));
+document.querySelector("#read-cash-shop-expiration").addEventListener("click", guard(() => cashShopExpiration()));
+document.querySelector("#set-cash-shop-expiration").addEventListener("click", guard(() => cashShopExpiration(document.querySelector("#cash-shop-expiration").value)));
+document.querySelector("#read-infinite-fatigue").addEventListener("click", guard(() => infiniteFatigue()));
+document.querySelector("#set-infinite-fatigue").addEventListener("click", guard(() => infiniteFatigue(document.querySelector("#infinite-fatigue").value)));
 document.querySelector("#detail").addEventListener("click", guard(async () => {
   const role = name();
   if (!role) return;
@@ -304,6 +354,8 @@ fetch("/api/meta").then(r => r.json()).then(meta => {
   document.querySelector("#account").value = defaultAccount;
   const port = meta.gmPort ? `127.0.0.1:${meta.gmPort}` : "未开启";
   document.querySelector("#status").textContent = `GM 端口 ${port}`;
+  cashShopExpiration().catch(ex => { document.querySelector("#cash-shop-status").textContent = ex.message; });
+  infiniteFatigue().catch(ex => { document.querySelector("#fatigue-status").textContent = ex.message; });
 }).catch(() => show("网页状态读取失败。", "bad"));
 </script>
 </body>

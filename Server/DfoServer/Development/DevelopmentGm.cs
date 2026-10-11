@@ -4,6 +4,8 @@ using Microsoft.Data.Sqlite;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Mailbox;
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Settings;
 using System.Text.Json;
 using DfoServer.Game.Dungeons;
 
@@ -13,11 +15,12 @@ internal static partial class DevelopmentGm
 {
     public const string Written = " 已写入。服务端通行校验立即使用新等级和任务。客户端回到选角并再次进入后刷新画面。属性块仍是匹配职业的初始值。";
     public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find,
-        MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null)
+        MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
+        InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null)
     {
         try
         {
-            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress);
+            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings);
         }
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
         {
@@ -26,11 +29,24 @@ internal static partial class DevelopmentGm
     }
 
     public static string Execute(ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find, DevelopmentRequest request,
-        MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null)
+        MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
+        InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null)
     {
         try
         {
             request.Validate();
+            if (request.Action == DevelopmentAction.InfiniteFatigue)
+            {
+                if (debugSettings is null) throw new InvalidOperationException("无限疲劳调试开关仅支持在线服务");
+                if (request.Primary >= 0) debugSettings.InfiniteFatigue = request.Primary == 1;
+                return "OK " + JsonSerializer.Serialize(new { infiniteFatigue = debugSettings.InfiniteFatigue });
+            }
+            if (request.Action == DevelopmentAction.CashShopExpiration)
+            {
+                if (cashShop is null) throw new InvalidOperationException("商城期限调试开关仅支持在线服务");
+                if (request.Primary >= 0) cashShop.IgnoreAbsoluteExpiration = request.Primary == 1;
+                return "OK " + JsonSerializer.Serialize(new { ignoreAbsoluteExpiration = cashShop.IgnoreAbsoluteExpiration });
+            }
             if (request.Action == DevelopmentAction.Item)
                 return SendItem(request, mailbox ?? throw new InvalidOperationException("邮件服务未装配"),
                     items ?? throw new InvalidOperationException("物品资源未装配"));

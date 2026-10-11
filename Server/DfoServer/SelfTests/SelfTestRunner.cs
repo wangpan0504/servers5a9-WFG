@@ -14,6 +14,7 @@ internal static class SelfTestRunner
     public static async Task RunCoreAsync()
     {
         CommandLineTests.Run();
+        CashShopTests.RunCore();
         FrameCrcTests.Run();
         await BufferedLogTests.RunAsync();
         await ServerLogTests.RunAsync();

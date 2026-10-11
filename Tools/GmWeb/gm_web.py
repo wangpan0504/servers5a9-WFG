@@ -124,12 +124,15 @@ def serve(gm_port, port):
 
 def self_check():
     received = []
+    cash_shop_debug = True
+    infinite_fatigue = True
     listener = socket.socket()
     listener.bind((BIND, 0))
     listener.listen(8)
     gm_port = listener.getsockname()[1]
 
     def once():
+        nonlocal cash_shop_debug, infinite_fatigue
         conn, _ = listener.accept()
         with conn:
             data = b""
@@ -152,11 +155,23 @@ def self_check():
                 reply = "OK " + json.dumps({"job": 0, "first": 1, "second": 0, "options": {"baseName": "鬼剑士", "growTypes": [{"value": 0, "label": "鬼剑士", "awakenings": []}, {"value": 1, "label": "剑魂", "awakenings": ["剑圣", "剑神"]}]}}, ensure_ascii=False)
             elif line == "account 10000 grow 测角 1 2":
                 reply = "OK 测角 id=1 grow=33 skills=5 sp=5000 tp=7 已写入。双技能树已重建。"
+            elif line in ("cash-shop-expiration", "cash-shop-expiration on", "cash-shop-expiration off"):
+                if line.endswith(" on"):
+                    cash_shop_debug = True
+                elif line.endswith(" off"):
+                    cash_shop_debug = False
+                reply = "OK " + json.dumps({"ignoreAbsoluteExpiration": cash_shop_debug})
+            elif line in ("infinite-fatigue", "infinite-fatigue on", "infinite-fatigue off"):
+                if line.endswith(" on"):
+                    infinite_fatigue = True
+                elif line.endswith(" off"):
+                    infinite_fatigue = False
+                reply = "OK " + json.dumps({"infiniteFatigue": infinite_fatigue})
             else:
                 reply = "ERR 未识别"
             conn.sendall((reply + "\n").encode("utf-8"))
 
-    for _ in range(6):
+    for _ in range(12):
         threading.Thread(target=once, daemon=True).start()
     probe = socket.socket()
     probe.bind((BIND, 0))
@@ -176,7 +191,9 @@ def self_check():
         assert "开发 GM" in page
         assert 'id="gold"' in page and 'id="item-id"' in page and 'id="item-count"' in page and "通过邮件发放" in page
         assert 'id="grow-first"' in page and 'id="grow-second"' in page and "重置技能" in page
-        commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2", "account 10000 grow-options 测角", "account 10000 grow 测角 1 2")
+        assert 'id="cash-shop-expiration"' in page and 'id="cash-shop-status"' in page
+        assert 'id="infinite-fatigue"' in page and 'id="fatigue-status"' in page
+        commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2", "account 10000 grow-options 测角", "account 10000 grow 测角 1 2", "cash-shop-expiration", "cash-shop-expiration off", "cash-shop-expiration on", "infinite-fatigue", "infinite-fatigue off", "infinite-fatigue on")
         for line in commands:
             req = Request(
                 f"http://{BIND}:{web_port}/api/command",
@@ -188,6 +205,10 @@ def self_check():
             assert body["ok"] and body["text"].startswith("OK "), body
             if "grow-options" in line:
                 assert json.loads(body["text"][3:])["options"]["growTypes"][1]["awakenings"] == ["剑圣", "剑神"]
+            if line.startswith("cash-shop-expiration"):
+                assert json.loads(body["text"][3:])["ignoreAbsoluteExpiration"] == (not line.endswith(" off"))
+            if line.startswith("infinite-fatigue"):
+                assert json.loads(body["text"][3:])["infiniteFatigue"] == (not line.endswith(" off"))
         assert received == list(commands), received
     finally:
         listener.close()

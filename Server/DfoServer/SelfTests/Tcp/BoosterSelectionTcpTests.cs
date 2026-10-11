@@ -14,7 +14,7 @@ internal static class BoosterSelectionTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-selection"), resources: resources);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-selection"), gm: true, resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -33,6 +33,7 @@ internal static class BoosterSelectionTcpTests
         int[] imported = [100050791, 100100692, 100150661];
         byte[][] importedEntries = [];
         await fixture.StartAsync();
+        SetExpirationDebug(fixture, false);
         using (var peer = Open(fixture))
         {
             SendSelect(peer, 3, [10000871]);

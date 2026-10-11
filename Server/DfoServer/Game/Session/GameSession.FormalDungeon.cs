@@ -91,7 +91,7 @@ internal sealed partial class GameSession
     {
         if (expected.DungeonState is not { } state) return null;
         state.Validate();
-        if (entry.IsOrdinary && expected.Fatigue is not { Remaining: > 0 }) return null;
+        if (entry.IsOrdinary && (expected.Fatigue is null || debugSettings?.InfiniteFatigue != true && expected.Fatigue.Remaining == 0)) return null;
         var ordinaryReturn = entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return null;
         QuestDropResources? questDrops = null;
@@ -212,7 +212,7 @@ internal sealed partial class GameSession
             if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading ||
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
-            if (dungeon.Entry.IsOrdinary)
+            if (dungeon.Entry.IsOrdinary && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
                 Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run);

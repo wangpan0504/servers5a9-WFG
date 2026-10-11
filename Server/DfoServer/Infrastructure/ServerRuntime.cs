@@ -47,6 +47,8 @@ internal static class ServerRuntime
         var stats = new Game.Characters.CharacterStatComputer(characters);
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
+        var debugSettings = new GameDebugSettings();
+        var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
         var commands = new GameCommandRegistry();
         DungeonRoomCatalog? questRooms = null;
@@ -102,13 +104,14 @@ internal static class ServerRuntime
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
             new ShopHandler(
                 new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces),
-                new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces),
+                cashShop,
                 inventoryProjection),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
-            new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
+                debugSettings: debugSettings), inventoryProjection),
             new DungeonSelectionHandler(projection, log),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new QuestHiddenHandler(quests,log),
@@ -128,7 +131,7 @@ internal static class ServerRuntime
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings);
         var channel = new ChannelProtocolHandler(options, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
@@ -155,7 +158,7 @@ internal static class ServerRuntime
         string DevelopmentCommand(string line)
         {
             string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
-                mailbox, itemResources.Items, progress);
+                mailbox, itemResources.Items, progress, cashShop, debugSettings);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });
             return result;
         }

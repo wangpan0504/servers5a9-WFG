@@ -10,6 +10,7 @@ using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
+using DfoServer.Game.Settings;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
 
@@ -67,6 +68,24 @@ internal static class BoosterEquipmentTests
             "actual PVF reward keeps complete template, 60-day expiry, reinforcement and refinement in separate fields");
         That(result.Plan!.After.Gold == 12345 && receipt!.Rewards.Single() == new BoosterGrantedItem(401000005, 1) &&
             current.Level == 1 && current.Job == 15, "no added price, reward job or wear-level constraint");
+        var debugSettings = new GameDebugSettings();
+        var debugRandom = new PlannedRandom();
+        var debugService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
+            itemResources.EpicPieces, debugRandom, debugSettings);
+        var debugOpen = debugService.Open(current, Select(3, 401000005), out _, now);
+        That(debugOpen.Accepted && debugOpen.Plan!.After.Items.Single().Core is { ExpireTime: int.MaxValue, Attr: 7, GenuineUpgrade: 3 },
+            "礼包内部60天装备在调试开启时统一2038期限，原装备属性保持");
+        debugSettings.IgnoreCashShopAbsoluteExpiration = false;
+        var normalOpen = debugService.Open(current, Select(3, 401000005), out _, now);
+        That(normalOpen.Accepted && normalOpen.Plan!.After.Items.Single().Core.ExpireTime == Core(401000005).ExpireTime &&
+            debugOpen.Plan!.After.Items.Single().Core.ExpireTime == int.MaxValue, "关闭恢复内部奖励相对期限，不改写已规划实例");
+        debugSettings.IgnoreCashShopAbsoluteExpiration = true;
+        debugRandom.Values.Enqueue(0);
+        debugRandom.BeforeDraw = () => debugSettings.IgnoreCashShopAbsoluteExpiration = false;
+        var randomSource = current with { Inventory = new([new(1, Bag(3), Core(10014751))]) };
+        debugOpen = debugService.Open(randomSource, Select(3, 16000), out _, now);
+        That(debugOpen.Accepted && debugOpen.Plan!.After.Items.Single().Core.ExpireTime == int.MaxValue &&
+            !debugSettings.IgnoreCashShopAbsoluteExpiration, "抽取期间切换GM时，整次开箱仍使用入口冻结的期限状态");
         current = current with { Inventory = new([new(1, Bag(3), Core(10014751, 2))]) };
         var source = current;
         random.Values.Enqueue(0);
@@ -184,9 +203,11 @@ internal static class BoosterEquipmentTests
     {
         public Queue<long> Values { get; } = new();
         public int Calls { get; private set; }
+        public Action? BeforeDraw { get; set; }
         public override long NextInt64(long maxValue)
         {
             Calls++;
+            BeforeDraw?.Invoke();
             long value = Values.Dequeue();
             if (value < 0 || value >= maxValue)
                 throw new InvalidOperationException("随机强化用例超出真实权重范围");

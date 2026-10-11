@@ -15,7 +15,8 @@ internal static class BoosterEquipmentTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-equipment"), resources: resources);
+        Inventory.BoosterEquipmentTests.Run(resources.Towns, resources.Characters, itemResources);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-equipment"), gm: true, resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -26,11 +27,12 @@ internal static class BoosterEquipmentTcpTests
             {
                 Job = 15, AcceptedStoryLevel = 1, Skills = characters.Get(15).Skills,
                 Inventory = new([new(0, Bag(3), Core(10005273)), new(0, Bag(4), Core(10014751, 2)),
-                    new(0, Bag(5), Core(10014751, 2))], Gold: 12345)
+                    new(0, Bag(5), Core(10014751, 2)), new(0, Bag(6), Core(10005273)), new(0, Bag(7), Core(10005273))], Gold: 12345)
             });
         }
         var committedEntries = new List<byte[]>();
         await fixture.StartAsync();
+        SetExpirationDebug(fixture, false);
         using (var peer = Open(fixture))
         {
             peer.Select();
@@ -85,12 +87,33 @@ internal static class BoosterEquipmentTcpTests
             for (int i = 0; i < committedEntries.Count; i++)
                 That(EquipmentEntry(full, (short)(9 + i), true).SequenceEqual(committedEntries[i]),
                     "reconnect restores every byte including fixed and random levels and original expiry");
+            SetExpirationDebug(fixture, true);
+            SendSelect(peer, 6, [401000005]);
+            ExpectAck(peer, 10005273, 6, [(401000005, 1)]);
+            byte[] debugDelta = peer.Expect(0, 14).Body;
+            That(U32(EquipmentEntry(debugDelta, 14), 56) == int.MaxValue,
+                "GM开启后，礼包内部相对期限装备在NOTI14中统一下发2038截止");
+            SetExpirationDebug(fixture, false);
+            long earliestExpiry = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 * 86400;
+            SendSelect(peer, 7, [401000005]);
+            ExpectAck(peer, 10005273, 7, [(401000005, 1)]);
+            byte[] normalDelta = peer.Expect(0, 14).Body;
+            uint normalExpiry = U32(EquipmentEntry(normalDelta, 15), 56);
+            That(normalExpiry >= earliestExpiry && normalExpiry <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 * 86400,
+                "GM关闭后，下一次开箱恢复原60天期限");
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            var full = peer.Select()[4].Body;
+            That(U32(EquipmentEntry(full, 14, true), 56) == int.MaxValue && U32(EquipmentEntry(full, 15, true), 56) < int.MaxValue,
+                "关闭与重连仍保留各次开箱实际提交的期限");
             peer.Barrier();
         }
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters") is [[12345L]] &&
-            fixture.Query("SELECT COUNT(DISTINCT item_uid) FROM character_inventory_items") is [[5L]],
-            "all five complete instances persist with unique identities and no additional fee");
+            fixture.Query("SELECT COUNT(DISTINCT item_uid) FROM character_inventory_items") is [[7L]],
+            "正常及调试的七个完整实例保留唯一UID，不追加费用");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "equipment reward database integrity");
 

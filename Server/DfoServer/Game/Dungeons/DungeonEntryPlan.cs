@@ -96,14 +96,12 @@ internal sealed record DungeonEntryPlan(
 
         // 仅识别匹配 PVF 已确认的三个整数；未知引用和其他条件形状不能变成默认迷宫。
         uint routeQuest = !isReplay && quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
-        var candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)).ToArray();
-        if (candidates.Length > 1 && candidates.Skip(1).All(maze => maze.SameLayout(candidates[0])))
-            candidates = [candidates[0]];
+        var candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)));
         if (questId == 0 && quests is not null)
         {
-            candidates = definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active => maze.ConnectsQuest(active.QuestId,difficulty))).ToArray();
+            candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active => maze.ConnectsQuest(active.QuestId,difficulty))));
             if (candidates.Length == 0)
-                candidates = definition.Mazes.Where(maze => QuestEligibility.Completed(character).Any(id => maze.ConnectsQuest((uint)id,difficulty,1))).ToArray();
+                candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => QuestEligibility.Completed(character).Any(id => maze.ConnectsQuest((uint)id,difficulty,1))));
             if (candidates.Length == 0)
             {
                 candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
@@ -122,7 +120,7 @@ internal sealed record DungeonEntryPlan(
             }
         }
         else if (candidates.Length == 0 && routeQuest != questId)
-            candidates = definition.Mazes.Where(maze => maze.ConnectsQuest(routeQuest,difficulty)).ToArray();
+            candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(routeQuest,difficulty)));
         else if (questId == 0) candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
         else routeQuest = questId;
         if (candidates.Length != 1)
@@ -202,6 +200,16 @@ internal sealed record DungeonEntryPlan(
         };
         reason = "resource-plan-ready";
         return true;
+    }
+
+    static DungeonMaze[] DistinctQuestRoutes(IEnumerable<DungeonMaze> source)
+    {
+        var routes = new List<DungeonMaze>();
+        foreach (var maze in source)
+            if (maze.QuestConnectionTokens.Count == 0 || !routes.Any(existing =>
+                existing.QuestConnectionTokens.SequenceEqual(maze.QuestConnectionTokens) && existing.SameLayout(maze)))
+                routes.Add(maze);
+        return routes.ToArray();
     }
 
     private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty, bool allowClearedQuest, StoryQuest? quest,bool isReplay = false)

@@ -7,10 +7,9 @@ internal sealed record ItemExpiration(int AbsoluteTime = 0, int Days = 0)
 {
     public int Resolve(DateTimeOffset now) => Days > 0 ? (int)Math.Min(int.MaxValue, now.ToUnixTimeSeconds() + (long)Days * 86400) : AbsoluteTime;
 
-    // 商城购买专用：仅按 [usable period] 相对期限，不套用 [expiration date] 的绝对截止。
-    // 商城现金商品常带活动结束时间（如 2020 新春礼包的 2020-04-09），该时间是销售截止而非物品失效时间；
-    // 普通奖励（副本/任务/邮件）仍用 Resolve 的绝对过期语义。
-    public int ResolveShop(DateTimeOffset now) => Days > 0 ? (int)Math.Min(int.MaxValue, now.ToUnixTimeSeconds() + (long)Days * 86400) : 0;
+    // 商城/礼包调试统一覆盖为协议上限：2038-01-19 11:14:07（UTC+8）。
+    // 带PVF期限的客户端模板不会把0视为永久；正常购买和其他奖励仍使用 Resolve。
+    public int ResolveShop(DateTimeOffset _) => int.MaxValue;
 
     public static ItemExpiration Parse(PvfDocument text)
     {

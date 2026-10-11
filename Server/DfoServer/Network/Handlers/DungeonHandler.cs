@@ -95,8 +95,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
         if (receipt.Entry.IsOrdinary)
-            await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(receipt.Character.Fatigue ??
-                throw new InvalidOperationException("已提交普通房间缺少疲劳owner")), "formal_room_fatigue", Guard);
+            await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
         return CommandResult.Handled;
     }
