@@ -33,6 +33,7 @@ internal static class SelfTestRunner
         SkillLearningDisconnectTests.Run();
         QuestFixedRewardTests.Run();
         QuestProtocolTests.Run();
+        TitleTests.RunCore();
         QuestEligibilityTests.Run();
         QuestCatalogTests.RunCore();
         QuestHuntProgressTests.Run();

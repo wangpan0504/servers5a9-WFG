@@ -29,9 +29,8 @@ internal static class SqliteDatabaseBootstrap
                 {
                     string sql = ReadSchema(schemaPath);
                     using var tx = db.BeginTransaction();
-                    // 基线只含独立建表和索引语句；逐条执行，保证中途 DDL 错误不会被批处理吞掉。
-                    foreach (string statement in sql.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-                        SqliteMigrations.Execute(db, tx, statement);
+                    // SQLite负责SQL语句边界，不能按分号拆开触发器的BEGIN/END块。
+                    SqliteMigrations.Execute(db, tx, sql);
                     SqliteMigrations.MarkCurrent(db, tx);
                     SqliteMigrations.ValidateSchema(db, tx);
                     tx.Commit();

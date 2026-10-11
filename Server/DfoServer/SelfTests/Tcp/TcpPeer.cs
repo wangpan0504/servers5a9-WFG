@@ -27,6 +27,8 @@ internal sealed class TcpPeer : IDisposable
     public ushort Id { get; private set; }
     public WirePacket[] SpecialContainers { get; private set; } = [];
     public byte[][] Mailbox { get; private set; } = [];
+    public byte[] TitleProgress { get; private set; } = [];
+    public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] InitialGameOptions { get; private set; } = [];
@@ -277,6 +279,17 @@ internal sealed class TcpPeer : IDisposable
                     mails.Add(packet.Body);
                     packet = Read();
                 }
+                TestCheck.That(packet.Kind == 0 && packet.Opcode == 359, "角色称号三计数在邮件后、城镇状态前初始化");
+                TitleProgress = packet.Body;
+                TestCheck.That(TitleProgress.Length == 20 + U32(TitleProgress, 0) * 10, "成就列表必读16B最近完成尾部");
+                TitleBooks = Enumerable.Range(0, 5).Select(category =>
+                {
+                    var book = Expect(0, 358);
+                    TestCheck.That(book.Body.Length >= 11 && U16(book.Body, 1) == 0 && U32(book.Body, 3) == category,
+                        "本人称号簿owner为0，五种分类均下发空或完整表");
+                    return book;
+                }).ToArray();
+                packet = Read();
                 TestCheck.That(mails.Count > 0 && packet.Kind == 0 && packet.Opcode == 3, "mailbox initializes after account assets and before town state");
                 tail.Add(packet);
             }

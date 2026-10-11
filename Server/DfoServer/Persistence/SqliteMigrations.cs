@@ -78,6 +78,7 @@ internal static class SqliteMigrations
         new(22, "付费翻牌、黑钻及黄金牌每日权益", DungeonPremiumCardSchema.Create),
         new(23, "成长经验封顶与实际到账回执", ExperienceCapSchema.Upgrade),
         new(24, "删除角色时保留账号任务完成事实", AccountQuestSourceSchema.Upgrade),
+        new(25, "称号簿实体位置、三计数进度与章节奖励", static (db, tx) => Execute(db, tx, TitleSchema)),
     ];
 
     private static void BackfillDungeonFatigue(SqliteConnection db, SqliteTransaction tx) => Execute(db, tx, """
@@ -87,6 +88,59 @@ internal static class SqliteMigrations
             WHERE NOT EXISTS(SELECT 1 FROM character_fatigue f WHERE f.character_id=c.id)
               AND NOT EXISTS(SELECT 1 FROM character_dungeon_fatigue_receipts r WHERE r.character_id=c.id)
             """);
+
+    internal const string TitleSchema = """
+        CREATE TABLE character_title_book_slots(
+            character_id INTEGER NOT NULL,
+            account TEXT NOT NULL,
+            list_type INTEGER NOT NULL CHECK(list_type BETWEEN 18 AND 22),
+            slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 255),
+            item_uid INTEGER NOT NULL UNIQUE,
+            PRIMARY KEY(character_id,list_type,slot_index),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
+            FOREIGN KEY(account,character_id,item_uid) REFERENCES character_inventory_items(account,owner_character_id,item_uid) ON DELETE CASCADE
+        );
+        CREATE TABLE character_title_progress(
+            character_id INTEGER NOT NULL,
+            account TEXT NOT NULL,
+            quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+            remaining1 INTEGER NOT NULL CHECK(remaining1 BETWEEN 0 AND 65535),
+            remaining2 INTEGER NOT NULL CHECK(remaining2 BETWEEN 0 AND 65535),
+            remaining3 INTEGER NOT NULL CHECK(remaining3 BETWEEN 0 AND 65535),
+            completed_revision INTEGER NOT NULL DEFAULT 0 CHECK(completed_revision>=0),
+            PRIMARY KEY(character_id,quest_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
+            CHECK((remaining1+remaining2+remaining3=0 AND completed_revision>0) OR (remaining1+remaining2+remaining3>0 AND completed_revision=0))
+        );
+        CREATE TABLE character_title_sections(
+            character_id INTEGER NOT NULL,
+            account TEXT NOT NULL,
+            section_key INTEGER NOT NULL CHECK(section_key BETWEEN 0 AND 1279),
+            revision INTEGER NOT NULL CHECK(revision>0),
+            PRIMARY KEY(character_id,section_key),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        CREATE TRIGGER title_book_exclusive_insert BEFORE INSERT ON character_title_book_slots
+        WHEN EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=NEW.item_uid) OR
+             EXISTS(SELECT 1 FROM mailbox_attachments WHERE item_uid=NEW.item_uid)
+        BEGIN SELECT RAISE(ABORT,'title item already has a position'); END;
+        CREATE TRIGGER title_book_exclusive_update BEFORE UPDATE ON character_title_book_slots
+        WHEN EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=NEW.item_uid) OR
+             EXISTS(SELECT 1 FROM mailbox_attachments WHERE item_uid=NEW.item_uid)
+        BEGIN SELECT RAISE(ABORT,'title item already has a position'); END;
+        CREATE TRIGGER inventory_not_title_insert BEFORE INSERT ON character_inventory_slots
+        WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
+        BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+        CREATE TRIGGER inventory_not_title_update BEFORE UPDATE ON character_inventory_slots
+        WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
+        BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+        CREATE TRIGGER mail_not_title_insert BEFORE INSERT ON mailbox_attachments
+        WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
+        BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+        CREATE TRIGGER mail_not_title_update BEFORE UPDATE ON mailbox_attachments
+        WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
+        BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+        """;
 
     internal const string FatigueSchema = """
         CREATE TABLE character_fatigue(
@@ -645,10 +699,22 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
+        using var constraints = db.CreateCommand();
+        constraints.Transaction = tx;
+        constraints.CommandText = """
+            SELECT count(*) FROM sqlite_schema WHERE type='trigger' AND name IN
+              ('title_book_exclusive_insert','title_book_exclusive_update','inventory_not_title_insert',
+               'inventory_not_title_update','mail_not_title_insert','mail_not_title_update');
+            """;
+        if (Convert.ToInt64(constraints.ExecuteScalar()) != 6)
+            throw new InvalidDataException("称号簿与背包、邮件的实例互斥约束缺失");
     }
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,account,list_type,slot_index,item_uid FROM character_title_book_slots LIMIT 0",
+        "SELECT character_id,account,quest_id,remaining1,remaining2,remaining3,completed_revision FROM character_title_progress LIMIT 0",
+        "SELECT character_id,account,section_key,revision FROM character_title_sections LIMIT 0",
         "SELECT account,black_diamond_expires,gold_card_expires,revision FROM account_card_memberships LIMIT 0",
         "SELECT character_id,account,service_day,used FROM character_gold_card_uses LIMIT 0",
         "SELECT character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id,paid_reward_json,paid_mail_id,paid_cost,paid_revision,paid_day FROM character_dungeon_card_options LIMIT 0",

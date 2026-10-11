@@ -11,7 +11,8 @@ namespace DfoServer.Network.Projection.Inventory;
 
 internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces)
 {
-    public async Task RefreshAsync(GameConnectionContext context, InventoryResult result, IReadOnlySet<InventorySlot>? acknowledgedSlots = null)
+    public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
+        IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true)
     {
         if (!result.Accepted || result.Plan is not { Changed: true } plan)
             return;
@@ -27,13 +28,18 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
         foreach (var list in slots.Select(slot => slot.List).Distinct().Order())
         {
+            if (DfoServer.Game.Titles.TitleBookService.IsBook(list))
+            {
+                await context.Notify(NotiPacketType.TITLE_BOOK_LIST, TitlePackets.Book(current.Inventory, (byte)list - 18), "title_book_committed", CanSend);
+                continue;
+            }
             var replaced = slots.Where(slot => slot.List == list && plan.BeforeIndex.Find(slot) is { } old &&
                 receipt.Index.Find(slot) is { } now && old.Core.ItemId != now.Core.ItemId).ToArray();
             if (replaced.Length != 0)
                 await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(InventorySnapshot.Empty, list, replaced), "inventory_clear_replaced", CanSend);
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index), "inventory_committed_delta", CanSend);
         }
-        if (changedSlots.Any(slot => slot.List == InventoryListType.Equipment))
+        if (refreshEquipment && changedSlots.Any(slot => slot.List == InventoryListType.Equipment))
         {
             // 副本及结算沿用当前玩家对象；完整Actor刷新只用于城镇/选图。
             if (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect)
@@ -74,6 +80,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         var locked = new List<InventorySlot>();
         foreach (var slot in slots.Distinct())
         {
+            if (DfoServer.Game.Titles.TitleBookService.IsBook(slot.List)) continue;
             var item = currentIndex.Find(slot);
             if (item is null)
                 continue; // 空槽已由物品差量清除。

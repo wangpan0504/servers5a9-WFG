@@ -53,6 +53,9 @@ internal static class ItemSlotBoundService
 
     public static bool Allows(ushort expansion, InventorySlot slot, ItemKind kind)
     {
+        // 实际分类容量与允许的称号模板由称号簿用例再校验。
+        if (slot.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent)
+            return kind == ItemKind.Equipment && slot.Index is >= 0 and < 256;
         if (slot.List == InventoryListType.Equipment)
             return kind switch
             {

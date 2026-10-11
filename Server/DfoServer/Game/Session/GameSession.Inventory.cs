@@ -21,11 +21,13 @@ internal sealed partial class GameSession
     {
         Selected = InventoryService.Commit(repository, owner, character, result);
         return result with { Receipt = result.Accepted && result.Plan is not null
-            ? new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase, PreviousQuests = character.ActiveMainQuests } : null };
+            ? new(Selected, owner.Generation, SelectionEpoch)
+                { Phase = Phase, DungeonIdentity = formalDungeon?.Run.Snapshot.Identity, PreviousQuests = character.ActiveMainQuests } : null };
     }
 
     public bool CanPublishInventory(InventoryCommitReceipt receipt) => owner.Execute(() =>
         Ready && receipt.Generation == owner.Generation && Phase == receipt.Phase &&
+        receipt.DungeonIdentity == formalDungeon?.Run.Snapshot.Identity &&
         SelectionEpoch == receipt.SelectionEpoch && Selected?.Id == receipt.Character.Id &&
         ReferenceEquals(Selected, receipt.Character));
 
@@ -47,11 +49,9 @@ internal sealed partial class GameSession
     InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError,
         bool requireTown, bool allowSettlement)
     {
-        bool Allowed() => Ready && !HasPendingQuestScene &&
-            (!requireTown || Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices());
-        var (character, epoch, phase, dungeon) = owner.Execute(() =>
-            (Allowed() ? Selected : null, SelectionEpoch, Phase, formalDungeon));
-        if (character is null)
+        var capture = owner.Execute(() => (Character: CanPlan() ? Selected : null,
+            SelectionEpoch, Phase, Dungeon: formalDungeon, Identity: formalDungeon?.Run.Snapshot.Identity));
+        if (capture.Character is not { } character)
             return InventoryResult.Reject(invalidStateError);
 
         // 只读资源解析和批量规划不占用所属账号锁；此回调不能写库或修改在线状态。
@@ -59,10 +59,23 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
         {
             // 换角、接管及 GM/其他业务替换快照后，不能把旧随机结果提交给新的状态，也不自动重抽。
-            if (!Allowed() || Phase != phase || SelectionEpoch != epoch ||
-                Selected?.Id != character.Id || !ReferenceEquals(Selected, character) || !ReferenceEquals(formalDungeon, dungeon))
+            if (!CanPlan() || SelectionEpoch != capture.SelectionEpoch || Phase != capture.Phase ||
+                !ReferenceEquals(formalDungeon, capture.Dungeon) || formalDungeon?.Run.Snapshot.Identity != capture.Identity ||
+                !ReferenceEquals(Selected, character))
                 return InventoryResult.Reject(invalidStateError);
             return CommitInventory(character, result);
         });
+
+        bool CanPlan()
+        {
+            if (!Ready || Selected is null || HasPendingQuestScene) return false;
+            // 既有城镇用例保持原资格；只有专用跨场景取放核对未完成事务与副本上下文。
+            if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();
+            return !HasPendingQuestScene && pendingQuestCompletion is null && pendingQuestLifecycle is null &&
+                pendingQuestQuickClear is null && pendingDungeonContinuation is null && !HasPendingQuestReplay &&
+                formalDungeon?.Ground.HasPendingPickup != true &&
+                (Phase == SessionPhase.Town || Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
+                    formalDungeon is { HasPendingFatigue: false } dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);
+        }
     }
 }

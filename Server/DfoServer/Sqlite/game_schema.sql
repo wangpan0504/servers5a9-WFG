@@ -580,3 +580,54 @@ CREATE TABLE character_dungeon_drop_pickups(
   PRIMARY KEY(character_id,ground_key),
   FOREIGN KEY(character_id,event_id,ground_key) REFERENCES character_dungeon_drop_objects(character_id,event_id,ground_key),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE character_title_book_slots(
+    character_id INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    list_type INTEGER NOT NULL CHECK(list_type BETWEEN 18 AND 22),
+    slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 255),
+    item_uid INTEGER NOT NULL UNIQUE,
+    PRIMARY KEY(character_id,list_type,slot_index),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
+    FOREIGN KEY(account,character_id,item_uid) REFERENCES character_inventory_items(account,owner_character_id,item_uid) ON DELETE CASCADE
+);
+CREATE TABLE character_title_progress(
+    character_id INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+    remaining1 INTEGER NOT NULL CHECK(remaining1 BETWEEN 0 AND 65535),
+    remaining2 INTEGER NOT NULL CHECK(remaining2 BETWEEN 0 AND 65535),
+    remaining3 INTEGER NOT NULL CHECK(remaining3 BETWEEN 0 AND 65535),
+    completed_revision INTEGER NOT NULL DEFAULT 0 CHECK(completed_revision>=0),
+    PRIMARY KEY(character_id,quest_id),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
+    CHECK((remaining1+remaining2+remaining3=0 AND completed_revision>0) OR (remaining1+remaining2+remaining3>0 AND completed_revision=0))
+);
+CREATE TABLE character_title_sections(
+    character_id INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    section_key INTEGER NOT NULL CHECK(section_key BETWEEN 0 AND 1279),
+    revision INTEGER NOT NULL CHECK(revision>0),
+    PRIMARY KEY(character_id,section_key),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+CREATE TRIGGER title_book_exclusive_insert BEFORE INSERT ON character_title_book_slots
+WHEN EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=NEW.item_uid) OR
+     EXISTS(SELECT 1 FROM mailbox_attachments WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'title item already has a position'); END;
+CREATE TRIGGER title_book_exclusive_update BEFORE UPDATE ON character_title_book_slots
+WHEN EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=NEW.item_uid) OR
+     EXISTS(SELECT 1 FROM mailbox_attachments WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'title item already has a position'); END;
+CREATE TRIGGER inventory_not_title_insert BEFORE INSERT ON character_inventory_slots
+WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+CREATE TRIGGER inventory_not_title_update BEFORE UPDATE ON character_inventory_slots
+WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+CREATE TRIGGER mail_not_title_insert BEFORE INSERT ON mailbox_attachments
+WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+CREATE TRIGGER mail_not_title_update BEFORE UPDATE ON mailbox_attachments
+WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in title book'); END;

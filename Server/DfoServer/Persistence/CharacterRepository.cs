@@ -273,7 +273,9 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             Learning = ReadLearning(db, character.Id, transaction),
             Inventory = ReadInventory(db, character.Id, transaction, shared),
             DungeonState = ReadDungeonState(db, character.Id, transaction),
-            Fatigue = ReadFatigue(db, character.Id, transaction)
+            Fatigue = ReadFatigue(db, character.Id, transaction),
+            TitleProgress = ReadTitleProgress(db, character.Id, transaction),
+            TitleSections = ReadTitleSections(db, character.Id, transaction)
         };
     }
 

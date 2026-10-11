@@ -14,6 +14,11 @@ internal enum InventoryListType : byte
     Equipment = 3,
     Pet = 7,
     AccountCargo = 12,
+    TitleGeneral = 18,
+    TitleSpecific = 19,
+    TitlePvp = 20,
+    TitleDespair = 21,
+    TitleEvent = 22,
     GuildMedal = 38
 }
 

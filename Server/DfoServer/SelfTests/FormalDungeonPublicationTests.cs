@@ -508,6 +508,8 @@ internal static class FormalDungeonPublicationTests
     internal sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false,
         bool loseSettlement = false,bool losePaid = false) : ICharacterRepository
     {
+        public Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan) => inner.CommitTitleAchievement(owner, plan);
+        public InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId) => inner.ReadPublicTitleBook(owner, characterId);
         public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => inner.AdvanceQuestCycle(owner, expected, day);
         public CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort id,DateTimeOffset now) => inner.LoadCardMembership(owner,id,now);
         public CardMembership SetCardMembership(AccountOwners.Lease owner,string name,CardMembershipKind kind,long expires) => inner.SetCardMembership(owner,name,kind,expires);

@@ -89,7 +89,8 @@ internal sealed partial class CharacterRepository
         }
         command.CommandText = """
             SELECT m.attachment_id,i.item_uid,m.source_list,m.source_slot,i.item_core,a.detail,p.detail,
-                   i.account,i.character_id,(SELECT count(*) FROM character_inventory_slots s WHERE s.item_uid=i.item_uid)
+                   i.account,i.character_id,(SELECT count(*) FROM character_inventory_slots s WHERE s.item_uid=i.item_uid)+
+                     (SELECT count(*) FROM character_title_book_slots b WHERE b.item_uid=i.item_uid)
             FROM mailbox_attachments m JOIN character_inventory_items i ON i.item_uid=m.item_uid
             LEFT JOIN inventory_avatar_details a ON a.item_uid=i.item_uid
             LEFT JOIN inventory_creature_details p ON p.item_uid=i.item_uid
@@ -454,7 +455,8 @@ internal sealed partial class CharacterRepository
             UPDATE character_inventory_items SET character_id=$id,account=$account,item_core=$core,updated_at=CURRENT_TIMESTAMP
             WHERE item_uid=$uid AND ((account=$sourceAccount AND character_id=$sourceCharacter) OR
               (account=$account AND character_id=$id))
-              AND NOT EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=$uid);
+              AND NOT EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=$uid)
+              AND NOT EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=$uid);
             """;
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("邮件转移实例失去所有权或仍位于库存");
@@ -491,7 +493,7 @@ internal sealed partial class CharacterRepository
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
-        command.CommandText = "DELETE FROM character_inventory_items WHERE item_uid=$uid AND account=$account AND character_id=$id AND NOT EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=$uid)";
+        command.CommandText = "DELETE FROM character_inventory_items WHERE item_uid=$uid AND account=$account AND character_id=$id AND NOT EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=$uid) AND NOT EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=$uid)";
         command.Parameters.AddWithValue("$uid", uid);
         command.Parameters.AddWithValue("$account", account);
         command.Parameters.AddWithValue("$id", characterId);

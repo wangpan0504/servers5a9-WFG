@@ -41,4 +41,6 @@ internal interface ICharacterRepository
     DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
         DungeonGroundPickupPreparation prepared, InventoryPlan plan);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
+    Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan);
+    InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId);
 }

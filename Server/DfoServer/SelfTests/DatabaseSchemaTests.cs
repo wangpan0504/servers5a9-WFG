@@ -8,6 +8,13 @@ namespace DfoServer;
 
 internal static class DatabaseSchemaTests
 {
+    internal static void RemoveTitleSchema(SqliteConnection db) => Execute(db, """
+        DROP TRIGGER IF EXISTS title_book_exclusive_insert; DROP TRIGGER IF EXISTS title_book_exclusive_update;
+        DROP TRIGGER IF EXISTS inventory_not_title_insert; DROP TRIGGER IF EXISTS inventory_not_title_update;
+        DROP TRIGGER IF EXISTS mail_not_title_insert; DROP TRIGGER IF EXISTS mail_not_title_update;
+        DROP TABLE IF EXISTS character_title_book_slots; DROP TABLE IF EXISTS character_title_progress; DROP TABLE IF EXISTS character_title_sections;
+        """);
+
     public static void Run()
     {
         int before = TestCheck.Count;
@@ -65,7 +72,8 @@ internal static class DatabaseSchemaTests
                 "ALTER TABLE character_dungeon_growth_receipts DROP COLUMN resource_source",
                 "DROP TABLE character_dungeon_state", "DROP TABLE character_dungeon_loot_receipts",
                 "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_quest_lifecycle_receipts; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts",
-                "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN report_body"
+                "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN report_body",
+                "DROP TABLE character_title_progress", "DROP TABLE character_title_book_slots", "DROP TRIGGER inventory_not_title_insert"
             })
             {
                 string rejected = Path.Combine(root, Guid.NewGuid().ToString("N") + ".db");
@@ -83,6 +91,7 @@ internal static class DatabaseSchemaTests
             {
                 Execute(db, "CREATE TABLE old_data(value TEXT)");
                 Execute(db, "INSERT INTO old_data VALUES('keep')");
+                RemoveTitleSchema(db);
                 Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             }
             string legacySnapshot = Snapshot(legacy);
@@ -110,6 +119,7 @@ internal static class DatabaseSchemaTests
             VerifyMissingFatigueMigration(root, 19);
             VerifyQuestSkipConstraints(root);
             VerifyDropCollectionSchema(root);
+            VerifyTitleMigration(root);
             VerifyExperienceCapMigration(root);
             VerifyAccountQuestSourceMigration(root);
             VerifyFutureMigrations(path);
@@ -138,6 +148,7 @@ internal static class DatabaseSchemaTests
             Execute(db,"CREATE TABLE character_dungeon_growth_receipts_extra(character_id INTEGER,event_id TEXT,value TEXT DEFAULT 'character_dungeon_growth_receipts',FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id)); INSERT INTO character_dungeon_growth_receipts_extra(character_id,event_id) VALUES(1,'legacy')");
             RewindExperienceCaps(db);
             RewindAccountQuestSource(db);
+            RemoveTitleSchema(db);
             Execute(db,"PRAGMA user_version=22");
             tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
             before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
@@ -195,6 +206,7 @@ internal static class DatabaseSchemaTests
                 Query(db, "SELECT count(*) FROM character_dungeon_drop_pickups") is 0L,
                 "新库直接建立v20完整空集合账本，不补发历史掉落");
             RewindDropCollection(db);
+            RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('drop-old',0,'DropOld',7,38,1,450,234,0,123)");
             // 最后一张表撞到视图，前两张DDL和版本必须在同一升级事务回滚。
@@ -327,6 +339,7 @@ internal static class DatabaseSchemaTests
         {
             // 已发布任务v14有任务结构、旧回执，但尚未拥有普通分支疲劳表。
             RewindQuestReceiptsToV17(db);
+            RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,quest_cycle_day,equipment_slot_flags) VALUES('master-quest',0,'MasterQuest',9,38,1,450,234,0,20261009,7)");
             Execute(db, "INSERT INTO character_completed_quests VALUES(1,6217,20261009,2)");
@@ -406,6 +419,7 @@ internal static class DatabaseSchemaTests
         string[] tables; string[][] columns; string[] before;
         using (var db = Open(path))
         {
+            RemoveTitleSchema(db);
             Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             ChangeCompletionDefinition(db,sql => sql.Replace("44,49,64","44,64").Replace("65,67,70)","65,67)"));
             Execute(db,"DROP TABLE " + skip); Execute(db,previousSkip);
@@ -471,6 +485,7 @@ internal static class DatabaseSchemaTests
         string[] tables; string[][] columns; string[] before;
         using (var db = Open(path))
         {
+            RemoveTitleSchema(db);
             Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             ChangeCompletionDefinition(db,sql => sql.Replace("44,49,64","44,64"));
             Execute(db,"INSERT INTO character_quest_skip_receipts VALUES(1,'history',NULL,NULL,NULL,7,8,'{\"Manual\":true}','4567890abcdef1234567890abcdef123','Manual')");
@@ -515,6 +530,7 @@ internal static class DatabaseSchemaTests
         using (var db = Open(path))
         {
             RewindQuestReceiptsToV17(db);
+            RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
             Execute(db, "INSERT INTO character_quest_skip_receipts(rowid,character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot) VALUES(59,1,'history','34567890abcdef1234567890abcdef12',19,6217,6,7,'{\"Old\":true}')");
             Execute(db, "INSERT INTO character_dungeon_state VALUES(1,'history',700,42,123,4,56)");
@@ -577,6 +593,7 @@ internal static class DatabaseSchemaTests
         {
             // 原掉落v18有完整集合，但任务回执仍是master v17，不能只调整最终版本号。
             RewindQuestReceiptsToV17(db);
+            RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=18");
             Execute(db, "UPDATE character_dungeon_drop_objects SET core='{\"Uid\":0,\"Attrs\":[9,8,7],\"Legacy\":true}' WHERE ground_key=512");
             Execute(db, "UPDATE character_dungeon_drop_pickups SET item_uid=12345,after_core='{\"Uid\":12345,\"Attrs\":[9,8,7],\"Legacy\":true}' WHERE ground_key=512");
@@ -623,6 +640,7 @@ internal static class DatabaseSchemaTests
         {
             RewindQuestReceiptsToV17(db);
             ChangeReceiptDefinition(db,"character_dungeon_fatigue_receipts",sql => sql.Replace("CHECK(map_id>0)","CHECK(map_id BETWEEN 76121 AND 76126)"));
+            RemoveTitleSchema(db);
             Execute(db,"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
             before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
@@ -676,6 +694,7 @@ internal static class DatabaseSchemaTests
                   rule_id,before_revision,revision,before_state,after_state)
                   VALUES(81,4,'legacy','abcdef1234567890abcdef1234567890',42,16408,9,7,'fatigue-old',6,7,'{"Used":6}','{"Used":7}');
                 """);
+            RemoveTitleSchema(db);
             RewindExperienceCaps(db);
             RewindAccountQuestSource(db);
             Execute(db, $"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
@@ -773,6 +792,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
+                RemoveTitleSchema(db);
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
                 if (oldVersion < 20) RewindDropCollection(db);
@@ -784,7 +804,7 @@ internal static class DatabaseSchemaTests
                 }
                 if (oldVersion == 17) RewindQuestReceiptsToV17(db);
                 else if (oldVersion < 17) RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
-                if (oldVersion >= 17) RewindAccountQuestSource(db);
+                if (oldVersion >= 17 && oldVersion < 24) RewindAccountQuestSource(db);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
                 if (oldVersion < 12) Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
@@ -801,6 +821,7 @@ internal static class DatabaseSchemaTests
                     Execute(db, "DROP TABLE character_dungeon_growth_receipts");
                 if (oldVersion == 1)
                     Execute(db, "ALTER TABLE account_wallets DROP COLUMN rental_points");
+                RemoveTitleSchema(db);
                 Execute(db, $"PRAGMA user_version={oldVersion}");
                 if (oldVersion == 13)
                     AddDropDependencyFixture(db);
@@ -909,6 +930,7 @@ internal static class DatabaseSchemaTests
             Execute(db, "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages");
             Execute(db, "DROP TABLE character_dungeon_growth_receipts");
             Execute(db, "ALTER TABLE account_wallets DROP COLUMN rental_points");
+            RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=1");
             Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
         }
@@ -919,6 +941,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(clearRollback);
         using (var db = Open(clearRollback))
         {
+            RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_dungeon_settlement_receipts; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=9; CREATE TABLE character_dungeon_settlement_receipts(collision INTEGER)");
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,experience,gold) VALUES('keep',0,'ClearKeep',11,38,1,450,234,0,321,456)");
         }
@@ -929,6 +952,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(questRollback);
         using (var db = Open(questRollback))
         {
+            RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=12");
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('keep',0,'QuestKeep',11,38,1,450,234,0)");
             Execute(db, "INSERT INTO character_active_main_quests VALUES(1,0,3145,1)");
@@ -943,6 +967,47 @@ internal static class DatabaseSchemaTests
                 Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='character_dungeon_state'") is 0L &&
                 Query(db, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='rental_points'") is 0L,
                 "回滚恢复真实v1结构");
+        }
+    }
+
+    private static void VerifyTitleMigration(string root)
+    {
+        foreach (bool fail in new[] { false, true })
+        {
+            string path = Path.Combine(root, "title-v20-" + fail + ".db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                RemoveTitleSchema(db);
+                Execute(db, """
+                    INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold) VALUES(1,'title-legacy',0,'TitleLegacy',9,38,1,450,234,0,123);
+                    INSERT INTO character_inventory_items(item_uid,character_id,account,item_core) VALUES(87,1,'title-legacy','{"ItemId":26596,"Kind":1,"Value":123,"EnchantCardId":3185}');
+                    INSERT INTO character_inventory_slots(character_id,account,list_type,slot_index,item_uid) VALUES(1,'title-legacy',0,9,87);
+                    PRAGMA user_version=24;
+                    """);
+                if (fail) Execute(db, "CREATE TABLE character_title_progress(collision INTEGER)");
+            }
+            string before = Snapshot(path);
+            if (fail)
+            {
+                Reject<SqliteException>(() => new CharacterRepository(path), "称号进度晚期撞表回滚整个v25增量");
+                Check(Snapshot(path) == before, "v25失败不留下部分位置表或触发器，也不改变原UID和版本");
+            }
+            else
+            {
+                _ = new CharacterRepository(path);
+                using var db = Open(path);
+                Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                    Query(db, "SELECT count(*) FROM character_title_progress") is 0L && Query(db, "SELECT count(*) FROM character_title_book_slots") is 0L,
+                    "v24只新增称号空表和互斥约束，不按等级补发历史称号");
+                Check(Query(db, "SELECT revision||':'||gold FROM characters") is "9:123" &&
+                    Query(db, "SELECT item_uid FROM character_inventory_slots") is 87L &&
+                    Query(db, "SELECT json_extract(item_core,'$.EnchantCardId') FROM character_inventory_items") is 3185L,
+                    "称号增量不重建旧背包表，原UID、位置、属性与角色revision完整保留");
+                string upgraded = Snapshot(path);
+                _ = new CharacterRepository(path);
+                Check(Snapshot(path) == upgraded, "重开库不再执行称号增量");
+            }
         }
     }
 
@@ -989,6 +1054,7 @@ internal static class DatabaseSchemaTests
     // 成功迁移夹具恢复完整已发布v13结构，不以改版本号冒充旧库。
     internal static void RewindQuestSystemToV13(SqliteConnection db, bool keepFatigue = false)
     {
+        RemoveTitleSchema(db);
         RewindDropCollection(db);
         if (!keepFatigue)
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
@@ -1008,6 +1074,7 @@ internal static class DatabaseSchemaTests
             Execute(db, "INSERT INTO " + table + "(rowid," + columns + ") SELECT old_rowid," + columns + " FROM temp.old_receipts");
             Execute(db, "DROP TABLE temp.old_receipts");
         }
+        RemoveTitleSchema(db);
         Execute(db, "PRAGMA user_version=13; PRAGMA foreign_keys=ON");
     }
 
@@ -1087,6 +1154,7 @@ internal static class DatabaseSchemaTests
                   WHEN NEW.quest_id=29999 BEGIN SELECT RAISE(ABORT,'source guard'); END;
                 """);
             RewindAccountQuestSource(db);
+            RemoveTitleSchema(db);
             Execute(db, "PRAGMA user_version=23");
             originalRow = Rows(db, "account_completed_quests", ColumnNames(db, "account_completed_quests"));
             Check(Query(db, "SELECT \"notnull\" FROM pragma_table_info('account_completed_quests') WHERE name='character_id'") is 1L,

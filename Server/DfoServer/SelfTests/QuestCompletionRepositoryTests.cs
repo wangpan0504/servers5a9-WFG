@@ -266,6 +266,8 @@ internal static class QuestCompletionRepositoryTests
     // 真实提交结果丢失，仅在第一次返回之后注入；保存原计划引用用于精确重试检查。
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
+        public Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan) => inner.CommitTitleAchievement(owner, plan);
+        public InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId) => inner.ReadPublicTitleBook(owner, characterId);
         public CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort id,DateTimeOffset now) => inner.LoadCardMembership(owner,id,now);
         public CardMembership SetCardMembership(AccountOwners.Lease owner,string name,CardMembershipKind kind,long expires) => inner.SetCardMembership(owner,name,kind,expires);
         public DungeonPaidCardCommit CommitPaidDungeonCard(AccountOwners.Lease owner,Character expected,PreparedDungeonSettlement prepared,DungeonCardDelivery delivery,DateTimeOffset now)

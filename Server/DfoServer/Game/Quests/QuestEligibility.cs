@@ -67,14 +67,15 @@ internal static class QuestEligibility
             Evaluate(character,quest,catalog,completed,active).Eligible).Select(quest => quest.Id).ToImmutableArray();
     }
 
-    public static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog) =>
+    public static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
+        bool allowAboveMaximum = false) =>
         Evaluate(character, quest, catalog, Completed(character),
-            character.ActiveMainQuests.Select(active => (int)active.QuestId).ToHashSet());
+            character.ActiveMainQuests.Select(active => (int)active.QuestId).ToHashSet(), allowAboveMaximum: allowAboveMaximum);
 
     public static HashSet<int> Completed(Character character) => character.CompletedQuests.Concat(character.AccountCompletedQuests).ToHashSet();
 
     private static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
-        IReadOnlySet<int> completed, IReadOnlySet<int> active, bool includeActive = false)
+        IReadOnlySet<int> completed, IReadOnlySet<int> active, bool includeActive = false, bool allowAboveMaximum = false)
     {
         var access = InspectResource(quest);
         if (access.Entry is QuestResourceEntry.Invalid or QuestResourceEntry.OutsideLevels or QuestResourceEntry.Event or
@@ -88,7 +89,7 @@ internal static class QuestEligibility
             return Reject("角色等级或职业无效");
         // 特殊等级标记保留原值，不能截为1或95后成为普通可接任务。
         if (quest.MinimumLevel < 1 || quest.MaximumLevel < quest.MinimumLevel ||
-            character.Level < quest.MinimumLevel || character.Level > quest.MaximumLevel)
+            character.Level < quest.MinimumLevel || !allowAboveMaximum && character.Level > quest.MaximumLevel)
             return Reject("等级不符");
         if (definition.Job is not (null or "[all]") && definition.Job != Jobs[character.Job])
             return Reject("职业不符");

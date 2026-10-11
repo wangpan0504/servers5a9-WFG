@@ -12,6 +12,9 @@ internal static class InventoryMoveService
 
     public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds)
     {
+        if (request.Source.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent ||
+            request.Destination.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent)
+            return InventoryResult.Reject(CannotMoveItem);
         // 调用方在owner内取得稳定输入；复制技能数组，后续资格读取和前提使用同一份快照。
         character = character with { Skills = [.. character.Skills] };
         var precondition = new InventoryCharacterPrecondition(character);

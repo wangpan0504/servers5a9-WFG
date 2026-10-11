@@ -12,6 +12,7 @@ internal sealed class OnlineSessionDirectory
         return true;
     });
     public GameSession? Find(string account) => sessions.TryGetValue(account, out var session) ? session : null;
+    public bool HasReadyCharacter(ushort characterId) => sessions.Values.Any(session => session.IsReadyCharacter(characterId));
     // 比较与移除必须原子完成，旧连接的 finally 不能删掉已接管的新会话。
     public void Remove(string account, GameSession session) => ((ICollection<KeyValuePair<string, GameSession>>)sessions).Remove(new(account, session));
 }

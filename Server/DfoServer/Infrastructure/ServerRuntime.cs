@@ -42,10 +42,13 @@ internal static class ServerRuntime
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")));
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
         var questConnections = QuestConnectionCatalog.Load(pvf);
+        var titleCatalog = new TitleCatalog(pvf, quests);
+        var titleService = new Game.Titles.TitleAchievementService(titleCatalog, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var titleProjection = new TitleProjection(titleService);
         var growth = CharacterGrowthCatalog.Load(pvf, learning);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
         var debugSettings = new GameDebugSettings();
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings);
@@ -98,6 +101,7 @@ internal static class ServerRuntime
             new TownHandler(projection, log),
             new SettingsHandler(settings, log, projection),
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
+            new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items), titleProjection, inventoryProjection, projection, online),
             new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables), log),
             new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),

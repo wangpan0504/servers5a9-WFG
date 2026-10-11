@@ -13,10 +13,11 @@ namespace DfoServer.Network.Projection;
 
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
-    SkillLearningCatalog? learning = null)
+    SkillLearningCatalog? learning = null, TitleProjection? titles = null)
 {
     public async Task EnterAsync(GameConnectionContext context)
     {
+        titles?.PrepareInitialization(context);
         var settingReceipt = settings?.Capture(context);
         var c = context.Session.Selected ?? throw new InvalidOperationException("No selected character");
         await context.Reply(CmdPacketType.SELECT_CHARACTER, TownPackets.Select(c, context.Session.FatigueForClient(c)), "select_character");
@@ -48,6 +49,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
         if (mailbox is not null)
             await mailbox.InitializeAsync(context);
+        if (titles is not null)
+            await titles.InitializeAsync(context);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
         await LocationAsync(context, c, initial: true);
         // 显式恢复资源默认指令，不能只重发缺省field4并假定按住方向已经注册。

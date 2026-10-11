@@ -14,6 +14,8 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public byte Level { get; init; } = 1;
     public uint AcceptedStoryLevel { get; init; }
     public int[] CompletedQuests { get; init; } = [];
+    public ImmutableDictionary<int, DfoServer.Game.Titles.TitleProgress> TitleProgress { get; init; } = ImmutableDictionary<int, DfoServer.Game.Titles.TitleProgress>.Empty;
+    public ImmutableHashSet<int> TitleSections { get; init; } = ImmutableHashSet<int>.Empty;
     public ImmutableDictionary<int,byte> QuestAnswers { get; init; } = ImmutableDictionary<int,byte>.Empty;
     public int QuestCycleDay { get; init; }
     public ImmutableDictionary<int, int> QuestDailyClaims { get; init; } = ImmutableDictionary<int, int>.Empty;

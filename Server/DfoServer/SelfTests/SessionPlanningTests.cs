@@ -629,6 +629,11 @@ internal static class SessionPlanningTests
                   1,0,1,-1,'test','test',1,1,0,1,1);
                 INSERT INTO character_dungeon_card_rewards VALUES({{id}},'planning','instance','{}','{}',NULL,1);
                 INSERT INTO character_dungeon_card_options VALUES({{id}},'planning','instance','{}',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+                INSERT INTO character_inventory_items(item_uid,character_id,account,item_core)
+                  VALUES(95000,{{id}},'planning','{"ItemId":26596,"Kind":1,"Value":1}');
+                INSERT INTO character_title_book_slots VALUES({{id}},'planning',18,0,95000);
+                INSERT INTO character_title_progress VALUES({{id}},'planning',6501,1,2,3,0);
+                INSERT INTO character_title_sections VALUES({{id}},'planning',0,1);
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }

@@ -155,13 +155,14 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            SELECT i.item_uid,s.list_type,s.slot_index,i.item_core,a.detail,p.detail FROM character_inventory_items i
+            SELECT i.item_uid,COALESCE(s.list_type,b.list_type),COALESCE(s.slot_index,b.slot_index),i.item_core,a.detail,p.detail FROM character_inventory_items i
             LEFT JOIN character_inventory_slots s ON s.item_uid=i.item_uid AND s.account=i.account AND s.character_id IS i.character_id
+            LEFT JOIN character_title_book_slots b ON b.item_uid=i.item_uid AND b.account=i.account AND b.character_id=i.character_id
             LEFT JOIN inventory_avatar_details a ON a.item_uid=i.item_uid
             LEFT JOIN inventory_creature_details p ON p.item_uid=i.item_uid
             WHERE i.account=$account AND i.character_id IS $id
               AND NOT EXISTS(SELECT 1 FROM mailbox_attachments m WHERE m.item_uid=i.item_uid)
-            ORDER BY s.list_type,s.slot_index;
+            ORDER BY 2,3;
             """;
         command.Parameters.AddWithValue("$account", account);
         command.Parameters.AddWithValue("$id", (object?)characterId ?? DBNull.Value);
@@ -198,7 +199,7 @@ internal sealed partial class CharacterRepository
         foreach (var slot in slots)
         {
             BindSlot(slot);
-            command.CommandText = "DELETE FROM character_inventory_slots WHERE character_id IS $id AND account=$account AND list_type=$list AND slot_index=$slot";
+            command.CommandText = $"DELETE FROM {PositionTable(slot)} WHERE character_id IS $id AND account=$account AND list_type=$list AND slot_index=$slot";
             command.ExecuteNonQuery();
         }
 
@@ -277,7 +278,7 @@ internal sealed partial class CharacterRepository
                 command.CommandText = "INSERT INTO inventory_creature_details(item_uid,detail) VALUES($uid,$detail) ON CONFLICT(item_uid) DO UPDATE SET detail=excluded.detail";
                 command.ExecuteNonQuery();
             }
-            command.CommandText = "INSERT INTO character_inventory_slots(character_id,account,list_type,slot_index,item_uid) VALUES($id,$account,$list,$slot,$uid)";
+            command.CommandText = $"INSERT INTO {PositionTable(item.Position)}(character_id,account,list_type,slot_index,item_uid) VALUES($id,$account,$list,$slot,$uid)";
             command.ExecuteNonQuery();
             written.Add(item.Uid, (item, HashJson(core, avatar, creature)));
         }
@@ -317,6 +318,9 @@ internal sealed partial class CharacterRepository
         }
 
         return result;
+
+        static string PositionTable(InventorySlot slot) => DfoServer.Game.Titles.TitleBookService.IsBook(slot.List)
+            ? "character_title_book_slots" : "character_inventory_slots";
 
         void BindSlot(InventorySlot slot)
         {
