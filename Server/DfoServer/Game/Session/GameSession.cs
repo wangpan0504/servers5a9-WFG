@@ -50,7 +50,13 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public Character CreateCharacter(string name, CharacterProfile profile, SkillLearningCatalog? learning = null) =>
         CreateCharacter(name, profile, learning is null ? null : learning.Get);
 
+    public CharacterCreationReceipt CreateCharacterForClient(string name, CharacterProfile profile, SkillLearningCatalog? learning = null) =>
+        PrepareCharacterCreation(name, profile, learning is null ? null : learning.Get);
+
     internal Character CreateCharacter(string name, CharacterProfile profile, Func<byte, ushort, SkillLearningDefinition>? definition)
+        => PrepareCharacterCreation(name, profile, definition).Created;
+
+    CharacterCreationReceipt PrepareCharacterCreation(string name, CharacterProfile profile, Func<byte, ushort, SkillLearningDefinition>? definition)
     {
         long epoch = owner.Execute(() =>
         {
@@ -63,7 +69,9 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         {
             if (Selected is not null || SelectionEpoch != epoch)
                 throw new InvalidOperationException("Stale character creation state");
-            return repository.Create(owner, creation);
+            var created = repository.Create(owner, creation);
+            SelectionEpoch++;
+            return new CharacterCreationReceipt(created, CaptureRoster());
         });
     }
 
@@ -97,13 +105,17 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public bool MatchesSelection(long epoch, ushort characterId) =>
         Phase == SessionPhase.Town && SelectionEpoch == epoch && Selected?.Id == characterId;
 
-    public void Select(ushort slot, GoldLimitCatalog? goldLimits = null)
+    public void Select(ushort slot, GoldLimitCatalog? goldLimits = null) => SelectCharacter(slot, goldLimits, null);
+
+    void SelectCharacter(ushort slot, GoldLimitCatalog? goldLimits, CharacterRosterEntry? expected)
     {
         owner.Execute(() =>
         {
             if (Selected is not null)
                 throw new InvalidDataException("Invalid selection state");
             var character = repository.LoadCharacter(owner, slot);
+            if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
+                throw new InvalidOperationException("Selection published roster identity changed");
             if (questCatalog is not null && character.QuestCycleDay != DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow))
                 character = repository.AdvanceQuestCycle(owner, character, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow));
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
@@ -116,6 +128,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             return true;
         });
     }
+
+    public bool CanPublishCreation(CharacterCreationReceipt receipt) => owner.Execute(() =>
+        MatchesRoster(receipt.Roster) &&
+        Selected is null && Phase == SessionPhase.Unselected);
 
     public void MarkReady()
     {
@@ -171,6 +187,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     {
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         formalDungeon = null;
+        publishedRoster = null;
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
         pendingQuestCompletion = null;

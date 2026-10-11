@@ -111,6 +111,7 @@ internal static class DatabaseSchemaTests
             VerifyQuestSkipConstraints(root);
             VerifyDropCollectionSchema(root);
             VerifyExperienceCapMigration(root);
+            VerifyAccountQuestSourceMigration(root);
             VerifyFutureMigrations(path);
             string concurrent = Path.Combine(root, "concurrent.db");
             Task.WaitAll(Task.Run(() => new CharacterRepository(concurrent)), Task.Run(() => new AuthenticationRepository(concurrent)));
@@ -136,6 +137,7 @@ internal static class DatabaseSchemaTests
             AddDropDependencyFixture(db);
             Execute(db,"CREATE TABLE character_dungeon_growth_receipts_extra(character_id INTEGER,event_id TEXT,value TEXT DEFAULT 'character_dungeon_growth_receipts',FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id)); INSERT INTO character_dungeon_growth_receipts_extra(character_id,event_id) VALUES(1,'legacy')");
             RewindExperienceCaps(db);
+            RewindAccountQuestSource(db);
             Execute(db,"PRAGMA user_version=22");
             tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
             before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
@@ -145,14 +147,30 @@ internal static class DatabaseSchemaTests
         string original = Snapshot(rollback);
         Reject<SqliteException>(() => new CharacterRepository(rollback),"封顶迁移后段撞到视图时整笔失败");
         Check(Snapshot(rollback) == original,"失败回滚已复制父子表、索引、触发器、历史数据和版本");
+        string stageBefore = Snapshot(path);
+        using (var db = Open(path))
+        using (var tx = db.BeginTransaction())
+        {
+            ExperienceCapSchema.Upgrade(db, tx);
+            using var query = db.CreateCommand();
+            query.Transaction = tx;
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE name='character_dungeon_growth_receipts'";
+            Check(query.ExecuteScalar() is string growthDefinition && growthDefinition.Contains(
+                "CHECK(after_experience>=before_experience AND after_experience<=before_experience+amount)", StringComparison.Ordinal),
+                "独立v23步骤已接入封顶到账约束");
+            query.CommandText = "SELECT \"notnull\" FROM pragma_table_info('account_completed_quests') WHERE name='character_id'";
+            Check(query.ExecuteScalar() is 1L, "v23步骤保留旧账号任务来源约束，由后续v24单独接管");
+            tx.Rollback();
+        }
+        Check(Snapshot(path) == stageBefore, "独立v23步骤回滚后仍为完整原v22夹具");
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
             for (int index = 0; index < tables.Length; index++)
                 Check(Rows(db,tables[index],columns[index]) == before[index],"封顶迁移保留原表内容及rowid："+tables[index]);
-            Check(Query(db,"PRAGMA user_version") is 23L && Query(db,"PRAGMA integrity_check") is "ok" &&
+            Check(Query(db,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && Query(db,"PRAGMA integrity_check") is "ok" &&
                 Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,
-                "v22封顶迁移完整提交v23，动态外键后代保持一致");
+                "真实v22经v23封顶和v24来源升级完整提交当前版本，动态外键后代保持一致");
             Check(Query(db,"SELECT count(*) FROM sqlite_schema WHERE name IN ('drop_dependency_index','drop_dependency_guard')") is 2L,
                 "封顶迁移保留原集合索引与触发器，不重放触发器");
             Check(Query(db,"SELECT dflt_value FROM pragma_table_info('character_dungeon_growth_receipts_extra') WHERE name='value'") is "'character_dungeon_growth_receipts'",
@@ -163,7 +181,7 @@ internal static class DatabaseSchemaTests
         }
         string applied = Snapshot(path);
         _ = new CharacterRepository(path);
-        Check(Snapshot(path) == applied,"v23重开不重复迁移或改变回执");
+        Check(Snapshot(path) == applied,"封顶及后续迁移完成后重开不重复迁移或改变回执");
     }
 
     private static void VerifyDropCollectionSchema(string root)
@@ -659,6 +677,7 @@ internal static class DatabaseSchemaTests
                   VALUES(81,4,'legacy','abcdef1234567890abcdef1234567890',42,16408,9,7,'fatigue-old',6,7,'{"Used":6}','{"Used":7}');
                 """);
             RewindExperienceCaps(db);
+            RewindAccountQuestSource(db);
             Execute(db, $"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
             tables = TableNames(db).Where(table => table != "character_fatigue").ToArray();
             columns = tables.Select(table => ColumnNames(db, table)).ToArray();
@@ -719,6 +738,8 @@ internal static class DatabaseSchemaTests
     // 按实际v17回执约束及八列定义回退，保留疲劳和普通副本历史，不只改版本号。
     static void RewindQuestReceiptsToV17(SqliteConnection db)
     {
+        RewindExperienceCaps(db);
+        RewindAccountQuestSource(db);
         ChangeCompletionDefinition(db, sql => sql.Replace("44,49,64", "44,64").Replace("65,67,70)", "65,67)"));
         const string skip = "character_quest_skip_receipts";
         string[] names = ColumnNames(db, skip).Where(name => name is not "\"operation_id\"" and not "\"operation_kind\"").ToArray();
@@ -757,12 +778,13 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 20) RewindDropCollection(db);
                 else
                 {
-                    RewindExperienceCaps(db);
+                    if (oldVersion < 23) RewindExperienceCaps(db);
                     if (oldVersion == 20) Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE character_dungeon_card_rewards");
                     else if (oldVersion == 21) RewindPremiumCards(db);
                 }
                 if (oldVersion == 17) RewindQuestReceiptsToV17(db);
                 else if (oldVersion < 17) RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
+                if (oldVersion >= 17) RewindAccountQuestSource(db);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
                 if (oldVersion < 12) Execute(db, "DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos");
@@ -1046,6 +1068,99 @@ internal static class DatabaseSchemaTests
             """);
     }
 
+    private static void VerifyAccountQuestSourceMigration(string root)
+    {
+        string path = Path.Combine(root, "account-quest-source-v23.db");
+        _ = new CharacterRepository(path);
+        string originalRow;
+        using (var db = Open(path))
+        {
+            Execute(db, """
+                INSERT INTO accounts VALUES('quest-source',X'01',X'02',1,0,7);
+                INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
+                  VALUES(41,'quest-source',3,'Source',9,38,1,450,234,0);
+                INSERT INTO account_completed_quests(rowid,account,quest_id,character_id,acceptance_id,daily_period,answer)
+                  VALUES(87,'quest-source',29998,41,'1234567890abcdef1234567890abcdef',20261009,2);
+                ALTER TABLE account_completed_quests ADD COLUMN source_marker TEXT NOT NULL DEFAULT 'extension';
+                CREATE INDEX account_quest_source_index ON account_completed_quests(character_id,source_marker);
+                CREATE TRIGGER account_quest_source_guard BEFORE INSERT ON account_completed_quests
+                  WHEN NEW.quest_id=29999 BEGIN SELECT RAISE(ABORT,'source guard'); END;
+                """);
+            RewindAccountQuestSource(db);
+            Execute(db, "PRAGMA user_version=23");
+            originalRow = Rows(db, "account_completed_quests", ColumnNames(db, "account_completed_quests"));
+            Check(Query(db, "SELECT \"notnull\" FROM pragma_table_info('account_completed_quests') WHERE name='character_id'") is 1L,
+                "v23夹具保留来源角色非空约束");
+        }
+        foreach (bool lateFailure in new[] { false, true })
+        {
+            string failed = Path.Combine(root, "account-source-failure-" + lateFailure + ".db");
+            using (var from = Open(path))
+            using (var to = Open(failed))
+            {
+                from.BackupDatabase(to);
+                Execute(to, lateFailure ? "ALTER TABLE accounts DROP COLUMN disabled" :
+                    "CREATE VIEW account_completed_quests_source AS SELECT 1");
+            }
+            string before = Snapshot(failed);
+            RejectDatabase(() => new CharacterRepository(failed));
+            Check(Snapshot(failed) == before, "来源迁移早期DDL或末段结构失败回滚全部原行、DDL、索引、触发器与版本");
+        }
+        foreach (string shape in new[] { "type", "nullable", "primary", "source-check", "foreign-key", "dependent" })
+        {
+            string rejected = Path.Combine(root, "account-source-unknown-" + shape + ".db");
+            using (var from = Open(path))
+            using (var to = Open(rejected))
+            {
+                from.BackupDatabase(to);
+                if (shape == "dependent") Execute(to, """
+                    CREATE TABLE account_source_extension(account TEXT,quest_id INTEGER,
+                      FOREIGN KEY(account,quest_id) REFERENCES account_completed_quests(account,quest_id) ON DELETE CASCADE);
+                    INSERT INTO account_source_extension VALUES('quest-source',29998);
+                    """);
+                else ChangeReceiptDefinition(to, "account_completed_quests", sql => shape switch
+                {
+                    "type" => sql.Replace("character_id INTEGER NOT NULL,", "character_id TEXT NOT NULL,", StringComparison.Ordinal),
+                    "nullable" => sql.Replace("account TEXT NOT NULL REFERENCES", "account TEXT REFERENCES", StringComparison.Ordinal),
+                    "primary" => sql.Replace("PRIMARY KEY(account,quest_id)", "PRIMARY KEY(quest_id,account)", StringComparison.Ordinal),
+                    "source-check" => sql.Replace("PRIMARY KEY(account,quest_id),", "CHECK(character_id IS NOT NULL),PRIMARY KEY(account,quest_id),", StringComparison.Ordinal),
+                    "foreign-key" => sql.Replace("REFERENCES characters(id,account)", "REFERENCES characters(id,account) ON DELETE CASCADE", StringComparison.Ordinal),
+                    _ => throw new InvalidOperationException("未知来源测试形状")
+                });
+            }
+            string before = Snapshot(rejected);
+            Reject<InvalidDataException>(() => new CharacterRepository(rejected), "未知来源定义或外键扩展拒绝自动重建");
+            Check(Snapshot(rejected) == before, "未知扩展拒绝后不级联删除子行或改写来源、结构与版本");
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                Query(db, "SELECT \"notnull\" FROM pragma_table_info('account_completed_quests') WHERE name='character_id'") is 0L &&
+                Rows(db, "account_completed_quests", ColumnNames(db, "account_completed_quests")) == originalRow,
+                "v24仅放宽来源为空并保留原rowid、来源、回答、周期和接取身份");
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN('account_quest_source_index','account_quest_source_guard')") is 2L,
+                "来源迁移保留原索引和触发器");
+            Reject<SqliteException>(() => Execute(db, "INSERT INTO account_completed_quests(account,quest_id,character_id,acceptance_id,daily_period,answer) VALUES('quest-source',29999,41,'abcdef1234567890abcdef1234567890',0,NULL)"),
+                "来源迁移后历史触发器仍有效");
+            Execute(db, "UPDATE account_completed_quests SET character_id=NULL; DELETE FROM characters WHERE id=41");
+            Check(Query(db, "SELECT character_id IS NULL FROM account_completed_quests") is 1L &&
+                Query(db, "SELECT acceptance_id||':'||daily_period||':'||answer FROM account_completed_quests") is "1234567890abcdef1234567890abcdef:20261009:2" &&
+                Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "删除最后来源角色仍保留账号任务事实且外键完整");
+        }
+        string committed = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == committed, "来源可空迁移重开不改写或补发历史任务");
+    }
+
+    internal static void RewindAccountQuestSource(SqliteConnection db)
+    {
+        if (Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='account_completed_quests'") is 1L)
+            ChangeReceiptDefinition(db, "account_completed_quests",
+                sql => sql.Replace("character_id INTEGER,", "character_id INTEGER NOT NULL,", StringComparison.Ordinal));
+    }
+
     private static SqliteConnection Open(string path)
     {
         var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
@@ -1056,6 +1171,7 @@ internal static class DatabaseSchemaTests
     private static void RewindDropCollection(SqliteConnection db)
     {
         RewindExperienceCaps(db);
+        RewindAccountQuestSource(db);
         Execute(db,"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; DROP TABLE IF EXISTS character_dungeon_drop_pickups; DROP TABLE IF EXISTS character_dungeon_drop_objects; DROP TABLE IF EXISTS character_dungeon_drop_batches");
     }
 

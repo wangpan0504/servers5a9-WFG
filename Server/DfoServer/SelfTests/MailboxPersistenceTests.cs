@@ -22,6 +22,7 @@ internal static class MailboxPersistenceTests
         ClaimDeadline();
         ExpirationAndStorage();
         DailyGold();
+        CharacterDeletion();
         Migration();
         Console.WriteLine($"PASS {TestCheck.Count - before} 邮箱 SQLite 归属、资产原子性与迁移断言");
     }
@@ -83,6 +84,38 @@ internal static class MailboxPersistenceTests
             f.Query("SELECT count(*) FROM character_inventory_items i WHERE NOT EXISTS(SELECT 1 FROM character_inventory_slots s WHERE s.item_uid=i.item_uid) AND NOT EXISTS(SELECT 1 FROM mailbox_attachments m WHERE m.item_uid=i.item_uid)") is 0L,
             "领取结束无孤立或重复资产 owner");
         f.Integrity();
+    }
+
+    static void CharacterDeletion()
+    {
+        using var f = new Fixture();
+        var original = f.Sender.Inventory.Items;
+        var sent = f.Send([original[0], original[2], original[3]], 1000);
+        var page = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now);
+        var target = f.Repository.LoadDeletionTarget(f.SenderOwner, f.Sender.Slot);
+        f.Repository.Delete(f.SenderOwner, target);
+        TestCheck.That(JsonSerializer.Serialize(f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now)) == JsonSerializer.Serialize(page) &&
+            f.Query("SELECT count(*) FROM mailbox_audit_log WHERE character_id=" + target.Id) is 1L,
+            "删除发送者保留收件人的邮件、发件人快照、托管UID与寄送审计");
+        var claim = f.Claim([sent.MailId]);
+        TestCheck.That(claim.Accepted && f.Receiver.Inventory.Gold == 1000 &&
+            f.Receiver.Inventory.Items.Select(item => item.Uid).SequenceEqual(new[] { original[0].Uid, original[2].Uid, original[3].Uid }),
+            "发送者删除后仍可领取全部金币、原UID、装备和特殊详情");
+        f.Repository.Delete(f.ReceiverOwner, f.Repository.LoadDeletionTarget(f.ReceiverOwner, f.Receiver.Slot));
+        TestCheck.That(f.Query("SELECT count(*) FROM mailbox_messages") is 0L && f.Query("SELECT count(*) FROM mailbox_attachments") is 0L &&
+            f.Query("SELECT count(*) FROM mailbox_audit_log") is 0L &&
+            f.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=" + f.Receiver.Id) is 0L,
+            "删除收件者清理已领邮件历史、依赖审计和私人UID");
+        f.Integrity();
+
+        using var pending = new Fixture();
+        pending.Send([pending.Sender.Inventory.Items[2], pending.Sender.Inventory.Items[3]], 0);
+        pending.Repository.Delete(pending.ReceiverOwner, pending.Repository.LoadDeletionTarget(pending.ReceiverOwner, pending.Receiver.Slot));
+        TestCheck.That(pending.Query("SELECT count(*) FROM inventory_avatar_details") is 0L &&
+            pending.Query("SELECT count(*) FROM inventory_creature_details") is 0L &&
+            pending.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=" + pending.Receiver.Id) is 0L,
+            "删除收件者清理未领时装、宠物托管UID与级联详情，不残留孤立附件");
+        pending.Integrity();
     }
 
     static void Rollback()

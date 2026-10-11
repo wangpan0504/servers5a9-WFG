@@ -19,6 +19,8 @@ internal interface ICharacterRepository
     Character[] List(AccountOwners.Lease owner);
     bool NameExists(string name);
     Character Create(AccountOwners.Lease owner, NewCharacter character);
+    CharacterDeletion LoadDeletionTarget(AccountOwners.Lease owner, ushort slot);
+    CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected);
     Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint);
     Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null);
     Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning);

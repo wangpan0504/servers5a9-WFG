@@ -2,11 +2,17 @@ using static DfoServer.Testing.TestCheck;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Auth;
+using DfoServer.Game.Currency;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
+using DfoServer.Network.Parsers;
+using DfoServer.Network.Builders;
 using Microsoft.Data.Sqlite;
 using DfoServer.Testing;
 
@@ -21,6 +27,10 @@ internal static class SessionPlanningTests
     {
         int checks = TestCheck.Count;
         Creation();
+        Deletion();
+        DeletionCapacity();
+        DeletionRosterMapping();
+        PublishedRosterIdentity();
         Initialization();
         Learning();
         Layout();
@@ -84,6 +94,176 @@ internal static class SessionPlanningTests
         TestCheck.That(ReferenceEquals(snapshot, failed.Session.Selected) && Equal(snapshot!, failed.Read()), "初始化SQL失败整笔回滚且不替换Selected");
     }
 
+    static void Deletion()
+    {
+        using var f = new Fixture();
+        var original = f.Read();
+        var later = f.Repository.Create(f.Owner, new("Later", f.Towns.Room, f.Towns.InitialReturn));
+        var highest = f.Repository.Create(f.Owner, new("Highest", f.Towns.Room, f.Towns.InitialReturn));
+        var pieces = new EpicPieceCatalog("[piece list]\n2001 3001\n[/piece list]");
+        var paid = original.Inventory with
+        {
+            AccountWallet = original.Inventory.AccountWallet.Set(CurrencyKind.Cera, 77).Set(CurrencyKind.RentalPoint, 19),
+            AccountCargo = new(0, 8, 9), EpicPieces = EpicPieceBook.Empty.Set(pieces, 0, 12),
+            ShopPurchases = [new(1, 1001, true, false, 0, 2), new(1, 1001, false, true, 1, 3)],
+            Items = [new(0, new(InventoryListType.Main, 121), new(1001, ItemKind.Material, 3)),
+                new(0, new(InventoryListType.AccountCargo, 0), new(1001, ItemKind.Material, 7))]
+        };
+        original = f.Repository.CommitInventory(f.Owner, original, new(original.Inventory, paid, "delete-fixture"));
+        f.SeedDeletionGraph(original.Id);
+        var expected = f.Repository.LoadDeletionTarget(f.Owner, original.Slot);
+        string shared = f.SharedSnapshot();
+        string audits = f.Rows("SELECT * FROM inventory_audit_log WHERE character_id=" + original.Id + " ORDER BY audit_id");
+        string before = f.Snapshot();
+        Reject<InvalidOperationException>(() => f.Repository.Delete(f.Owner, expected with { Revision = expected.Revision - 1 }),
+            "删除拒绝旧revision且不触碰原存档");
+        TestCheck.That(f.Snapshot() == before, "过期删除不改变角色、私有和账号记录");
+        f.Select();
+        Reject<InvalidDataException>(() => f.Session.DeleteCharacter(original.Slot), "已选角会话不能删除任何角色");
+        f.Session.ReturnToRoster();
+        long epoch = f.Session.SelectionEpoch;
+        f.Sql("CREATE TRIGGER deletion_final_abort AFTER DELETE ON characters BEGIN SELECT RAISE(ABORT,'deletion rollback'); END");
+        before = f.Snapshot();
+        Reject<SqliteException>(() => f.Session.DeleteCharacter(original.Slot), "删除末段真实SQL失败向上传递");
+        TestCheck.That(f.Snapshot() == before && f.Session.SelectionEpoch == epoch && f.Session.Selected is null,
+            "末段失败回滚全部私有依赖、账号来源和资产，不推进epoch或返回成功");
+        f.Sql("DROP TRIGGER deletion_final_abort; CREATE TABLE deletion_extension(character_id INTEGER REFERENCES characters(id) ON DELETE CASCADE); INSERT INTO deletion_extension VALUES(" + original.Id + ")");
+        before = f.Snapshot();
+        Reject<InvalidDataException>(() => f.Session.DeleteCharacter(original.Slot), "未知扩展外键拒绝删除，不能依靠CASCADE移除不归本模块的记录");
+        TestCheck.That(f.Snapshot() == before && f.Session.SelectionEpoch == epoch, "未知依赖拒绝后全库和Session保持原样");
+        f.Sql("DROP TABLE deletion_extension");
+        var actual = f.Session.DeleteCharacter(original.Slot);
+        TestCheck.That(actual.Id == original.Id && actual.Slot == original.Slot && f.Session.SelectionEpoch == epoch + 1 &&
+            f.Session.Phase == SessionPhase.Unselected && f.Session.Selected is null && !f.Session.Ready,
+            "成功删除返回实际原身份并仅推进名册epoch，保留未选角会话");
+        TestCheck.That(f.PrivateRows(original.Id).All(value => value == 0) && f.SharedSnapshot() == shared &&
+            f.Scalar("SELECT character_id IS NULL FROM account_completed_quests") is 1L &&
+            f.Rows("SELECT * FROM inventory_audit_log WHERE character_id=" + original.Id + " ORDER BY audit_id") == audits,
+            "删除全部角色私有表，保留账号资产、完成事实和无外键资产审计");
+        TestCheck.That(f.Repository.ListRoster(f.Owner).Select(row => row.Slot).SequenceEqual(new ushort[] { 1, 2 }),
+            "删除名册不重新编号剩余角色槽位");
+        Reject<InvalidDataException>(() => f.Session.DeleteCharacter(original.Slot), "重复已删槽拒绝");
+        var created = f.Session.CreateCharacter(original.Name, Profile);
+        TestCheck.That(created.Slot == 0 && created.Id > highest.Id && created.Name == original.Name &&
+            created.AccountCompletedQuests.SequenceEqual(new[] { 900 }) && f.SharedSnapshot() == shared,
+            "同会话立即重用姓名和最小空槽，创建新ID且恢复账号任务事实");
+        Reject<InvalidOperationException>(() => f.Repository.Delete(f.Owner, expected), "旧删除身份不能删除重建的同槽角色");
+        f.Session.DeleteCharacter(later.Slot);
+        var middle = f.Session.CreateCharacter("Middle", Profile);
+        TestCheck.That(middle.Slot == 1 && f.Repository.ListRoster(f.Owner).Select(row => row.Slot).SequenceEqual(new ushort[] { 0, 1, 2 }),
+            "存在高槽角色时连续建角正确填补中间空槽");
+        f.Session.DeleteCharacter(highest.Slot);
+        var fresh = f.Session.CreateCharacter("Fresh", Profile);
+        fresh = f.Repository.CommitInventory(f.Owner, fresh, new(fresh.Inventory, fresh.Inventory with
+        {
+            Items = fresh.Inventory.Items.Add(new(0, new(InventoryListType.Main, 121), new(1001, ItemKind.Material, 1)))
+        }, "delete-uid-check"));
+        TestCheck.That(fresh.Id > middle.Id && fresh.Inventory.Items.Single(item => item.Position.List == InventoryListType.Main).Uid >
+            original.Inventory.Items.Single(item => item.Position.List == InventoryListType.Main).Uid,
+            "删除最高角色不回绕AUTOINCREMENT身份或复用历史UID");
+        var reopened = new CharacterRepository(f.Database);
+        TestCheck.That(reopened.ListRoster(f.Owner).Select(row => row.Id).SequenceEqual(new[] { created.Id, middle.Id, fresh.Id }) &&
+            reopened.LoadCharacter(f.Owner, created.Slot).AccountCompletedQuests.SequenceEqual(new[] { 900 }) &&
+            f.Scalar("PRAGMA integrity_check") is "ok" && f.Scalar("SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+            "重开恢复新名册、账号任务与完整外键，无删除角色或私有依赖复活");
+        using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
+        before = f.Snapshot();
+        Reject<InvalidOperationException>(() => f.Session.DeleteCharacter(created.Slot), "旧generation不能删除");
+        TestCheck.That(f.Snapshot() == before && reopened.ListRoster(replacement).Length == 3, "旧generation不改存档或释放新owner");
+    }
+
+    static void DeletionCapacity()
+    {
+        using var f = new Fixture();
+        for (int slot = 1; slot < 32; slot++) f.Session.CreateCharacter("Capacity" + slot, Profile);
+        string before = f.Snapshot();
+        Reject<InvalidDataException>(() => f.Session.CreateCharacter("Full", Profile), "32槽满时拒绝且不创建半份角色");
+        TestCheck.That(f.Snapshot() == before, "满槽建角保持全部存档和sequence");
+        f.Session.DeleteCharacter(17);
+        var created = f.Session.CreateCharacter("Capacity17", Profile);
+        TestCheck.That(created.Slot == 17 && f.Repository.ListRoster(f.Owner).Length == 32,
+            "满名册删除后同连接立即重建空槽和原姓名");
+    }
+
+    static void DeletionRosterMapping()
+    {
+        using var f = new Fixture();
+        var middle = f.Session.CreateCharacter("映射中间", Profile);
+        var highest = f.Session.CreateCharacter("映射高槽", Profile);
+        f.Session.MarkRosterPublished(f.Session.PrepareRoster());
+        byte[] body = [1, 0, 8, 0, 0, 0, 0xD3, 0xB3, 0xC9, 0xE4, 0xD6, 0xD0, 0xBC, 0xE4];
+        var parsed = CharacterRequests.Delete(body);
+        TestCheck.That(parsed.RosterIndex == 1 && parsed.ConfirmationName == middle.Name, "删除Parser独立CP936样本保留行索引与完整确认名");
+        foreach (byte[] invalid in new[] { body[..1], body[..6], body.Concat(new byte[] { 0 }).ToArray(),
+            new byte[] { 0, 0, 1, 0, 0, 0, 0x81 }, new byte[] { 0, 0, 13, 0, 0, 0 } })
+            Reject<InvalidDataException>(() => CharacterRequests.Delete(invalid), "删除Parser拒绝截断、未知尾、无效CP936或越界姓名");
+        string before = f.Snapshot();
+        var rejected = f.Session.DeleteCharacterFromRoster(1, "Wrong");
+        TestCheck.That(!rejected.Accepted && CharacterPackets.Deleted(rejected).AsSpan().SequenceEqual(new byte[] { 0, 123, 0 }) &&
+            f.Snapshot() == before, "确认名失配仅回复已证静默收尾123，存档不变");
+        rejected = f.Session.DeleteCharacterFromRoster(31, "Missing");
+        TestCheck.That(!rejected.Accepted && f.Snapshot() == before, "无名册行拒绝，不把行索引当角色ID");
+        var result = f.Session.DeleteCharacterFromRoster(parsed.RosterIndex, parsed.ConfirmationName);
+        var receipt = result.Receipt!;
+        TestCheck.That(result.Accepted && receipt.Deleted.Id == middle.Id && receipt.Deleted.Slot == 1 &&
+            receipt.Roster.Entries.Select(row => row.Slot).SequenceEqual(new ushort[] { 0, 2 }) &&
+            CharacterPackets.Deleted(result).AsSpan().SequenceEqual(new byte[] { 1, 0, 1, 0 }) && f.Session.CanPublishDeletion(receipt),
+            "中间行删除ACK回显行索引，提交名册保留高槽且原owner/epoch可发布");
+        f.Session.MarkRosterPublished(receipt.Roster);
+        f.Session.SelectFromRosterIndex(1);
+        TestCheck.That(f.Session.Selected is { } selected && selected.Id == highest.Id && selected.Slot == 2 && !f.Session.CanPublishDeletion(receipt),
+            "选角wire同样按当前名册行索引映射高槽，不能误选或当缺槽拒绝");
+        f.Session.ReturnToRoster();
+        f.Session.MarkRosterPublished(f.Session.PrepareRoster());
+        result = f.Session.DeleteCharacterFromRoster(1, highest.Name);
+        TestCheck.That(result.Receipt is { } highDeleted && highDeleted.Deleted.Id == highest.Id && highDeleted.Deleted.Slot == 2 &&
+            CharacterPackets.Deleted(result).AsSpan().SequenceEqual(new byte[] { 1, 0, 1, 0 }) && !f.Session.CanPublishDeletion(receipt),
+            "名册有缺口时行1映射持久槽2，后续删除使旧名册回执失效");
+        receipt = result.Receipt!;
+        var creation = f.Session.CreateCharacterForClient("Next", Profile);
+        TestCheck.That(!f.Session.CanPublishDeletion(receipt) && f.Session.CanPublishCreation(creation) &&
+            creation.Roster.Entries.Select(row => row.Name).SequenceEqual(new[] { "Fixture", "Next" }),
+            "同owner成功建角推进epoch，旧删除名册不能覆盖新角色，创建回执携带实际名册");
+        f.Select();
+        TestCheck.That(!f.Session.CanPublishCreation(creation), "选角后创建回执不能迟到发布ACK或旧名册");
+        before = f.Snapshot();
+        rejected = f.Session.DeleteCharacterFromRoster(0, "Fixture");
+        TestCheck.That(!rejected.Accepted && f.Snapshot() == before, "选角后网络删除为业务拒绝，不提交或误删当前角色");
+        f.Session.ReturnToRoster();
+        f.Session.MarkRosterPublished(f.Session.PrepareRoster());
+        result = f.Session.DeleteCharacterFromRoster(1, "Next");
+        using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
+        Reject<InvalidOperationException>(() => f.Session.CanPublishDeletion(result.Receipt!), "接管后旧generation不能发布删除ACK或名册");
+    }
+
+    static void PublishedRosterIdentity()
+    {
+        using var f = new Fixture();
+        var shown = f.Repository.Create(f.Owner, new("Shown", f.Towns.Room, f.Towns.InitialReturn));
+        Reject<InvalidDataException>(() => f.Session.SelectFromRosterIndex(0), "没有实际发布名册时不能选择索引");
+        TestCheck.That(!f.Session.DeleteCharacterFromRoster(0, "Fixture").Accepted, "没有已发布映射时删除拒绝");
+        f.Repository.Delete(f.Owner, f.Repository.LoadDeletionTarget(f.Owner, 0));
+        var roster = f.Session.PrepareRoster();
+        f.Session.MarkRosterPublished(roster);
+        // 同owner的直接存储写模拟未发布的新名册；线上用例必须沿Session的epoch推进。
+        var unseen = f.Repository.Create(f.Owner, new("Unseen", f.Towns.Room, f.Towns.InitialReturn));
+        f.Session.SelectFromRosterIndex(0);
+        TestCheck.That(f.Session.Selected is { } selected && selected.Id == shown.Id && selected.Slot == shown.Slot,
+            "外部填补空槽后按最近已发布名册索引选择原角色，不用新SQL行序解释旧请求");
+        f.Session.ReturnToRoster();
+        f.Session.MarkRosterPublished(roster);
+        Reject<InvalidDataException>(() => f.Session.SelectFromRosterIndex(0), "状态变化后的旧名册不能标记已发布或用于选择");
+        var current = f.Session.PrepareRoster();
+        f.Session.MarkRosterPublished(current);
+        f.Repository.Delete(f.Owner, f.Repository.LoadDeletionTarget(f.Owner, unseen.Slot));
+        var replacement = f.Repository.Create(f.Owner, new("Unseen", f.Towns.Room, f.Towns.InitialReturn));
+        string before = f.Snapshot();
+        Reject<InvalidOperationException>(() => f.Session.SelectFromRosterIndex(0), "同槽同名外部重建后选角核对原发布ID，不能选中新角色");
+        Reject<InvalidOperationException>(() => f.Session.DeleteCharacterFromRoster(0, "Unseen"), "删除同样拒绝已发布身份被同槽同名替换");
+        TestCheck.That(f.Snapshot() == before && replacement.Id > unseen.Id && f.Session.Selected is null,
+            "发布身份失配不会保存出生、删除新角色或安装在线状态");
+    }
+
     static void Learning()
     {
         using var f = new Fixture();
@@ -137,6 +317,13 @@ internal static class SessionPlanningTests
             });
             TestCheck.That(f.Session.Selected is null && f.Repository.List(f.Owner).Length == 1,
                 "建角规划期间选角再回列表，旧epoch不得创建角色");
+        }
+        using (var f = new Fixture())
+        {
+            await RaceAsync(f, definition => f.Session.CreateCharacter("AfterDelete", Profile, definition), () => f.Session.DeleteCharacter(0));
+            TestCheck.That(f.Repository.ListRoster(f.Owner).Length == 0, "建角锁外规划期间删除角色使旧epoch计划失效");
+            var fresh = f.Session.CreateCharacter("Fixture", Profile);
+            TestCheck.That(fresh.Slot == 0 && fresh.Id > 1, "删除后的新建角规划可继续且不复用旧身份");
         }
         using (var f = new Fixture())
         {
@@ -309,6 +496,7 @@ internal static class SessionPlanningTests
         public TownCatalog Towns { get; }
         public GameSession Session { get; }
         readonly ushort slot;
+        public string Database => Path.Combine(root, "game.db");
 
         public Fixture(bool initialized = true)
         {
@@ -337,6 +525,113 @@ internal static class SessionPlanningTests
         }
 
         public Character Read() => Repository.LoadCharacter(Owner, slot);
+
+        public void Sql(string sql)
+        {
+            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False;Foreign Keys=True");
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+
+        public object? Scalar(string sql)
+        {
+            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False;Foreign Keys=True");
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = sql;
+            return command.ExecuteScalar();
+        }
+
+        public string Rows(string sql)
+        {
+            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False;Foreign Keys=True");
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = sql;
+            using var reader = command.ExecuteReader();
+            var rows = new List<object?[]>();
+            while (reader.Read())
+            {
+                var values = new object[reader.FieldCount];
+                reader.GetValues(values);
+                rows.Add(values.Select(value => value is DBNull ? null : value).ToArray());
+            }
+            return JsonSerializer.Serialize(rows);
+        }
+
+        string[] Tables()
+        {
+            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False");
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name";
+            using var reader = command.ExecuteReader();
+            var tables = new List<string>();
+            while (reader.Read()) tables.Add(reader.GetString(0));
+            return tables.ToArray();
+        }
+
+        public string Snapshot() => Scalar("PRAGMA user_version") + ":" +
+            Rows("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name") + ":" +
+            string.Join('|', Tables().Select(table => Rows("SELECT rowid,* FROM \"" + table + "\" ORDER BY rowid")));
+
+        public string SharedSnapshot() => string.Join('|', Tables().Where(table => table.StartsWith("account", StringComparison.Ordinal) &&
+            table != "account_completed_quests").Select(table => Rows("SELECT rowid,* FROM \"" + table + "\" ORDER BY rowid"))) +
+            Rows("SELECT rowid,account,quest_id,acceptance_id,daily_period,answer FROM account_completed_quests ORDER BY rowid") +
+            Rows("SELECT * FROM character_inventory_items WHERE character_id IS NULL ORDER BY item_uid") +
+            Rows("SELECT * FROM character_inventory_slots WHERE character_id IS NULL ORDER BY item_uid") +
+            Rows("SELECT * FROM shop_purchase_counts WHERE character_id=0 ORDER BY rowid");
+
+        public long[] PrivateRows(ushort id) => Tables().Where(table => table.StartsWith("character_", StringComparison.Ordinal))
+            .Select(table => Convert.ToInt64(Scalar("SELECT count(*) FROM \"" + table + "\" WHERE character_id=" + id))).ToArray();
+
+        public void SeedDeletionGraph(ushort id)
+        {
+            new AuthenticationService(new AuthenticationRepository(Database)).Create(Owner.Account, "fixture-password");
+            Sql($$"""
+                INSERT INTO account_client_settings VALUES('planning',zeroblob(204));
+                INSERT INTO account_card_memberships VALUES('planning',9999999999,9999999999,7);
+                INSERT INTO account_expert_contracts VALUES('planning',9999999999);
+                INSERT INTO account_completed_quests VALUES('planning',900,{{id}},'1234567890abcdef1234567890abcdef',0,2);
+                INSERT INTO character_completed_quests VALUES({{id}},10,0,1);
+                INSERT INTO character_active_main_quests VALUES({{id}},0,30,1,'1234567890abcdef1234567890abcdef');
+                INSERT INTO character_skill_point_sources VALUES({{id}},1);
+                INSERT INTO character_tp_sources VALUES({{id}},2);
+                INSERT INTO character_skill_commands VALUES({{id}},0,5,X'0102');
+                INSERT INTO character_skill_combos VALUES({{id}},0,5,X'');
+                INSERT INTO character_client_settings VALUES({{id}},'planning',zeroblob(512));
+                INSERT INTO character_game_settings VALUES({{id}},'planning',zeroblob(204));
+                INSERT INTO character_dungeon_state VALUES({{id}},'planning',256,1,0,0,0);
+                INSERT INTO character_fatigue VALUES({{id}},'planning',0,156,0,156,0,0);
+                INSERT INTO character_dungeon_fatigue_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,1,1,1,'test',0,1,'{}','{}');
+                INSERT INTO character_gold_card_uses VALUES({{id}},'planning',20261011,2);
+                INSERT INTO mailbox_sent_gold VALUES({{id}},20261011,12);
+                INSERT INTO character_quest_lifecycle_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','Accept',30,
+                  '1234567890abcdef1234567890abcdef',0,1,'[]','[]','[]',NULL,NULL,NULL);
+                INSERT INTO character_quest_skip_receipts VALUES({{id}},'planning',NULL,NULL,NULL,0,1,'{}','abcdef1234567890abcdef1234567890','Manual');
+                INSERT INTO character_dungeon_growth_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,1,1,1,'test','test',1,1,1,1,0,1,1);
+                INSERT INTO character_dungeon_loot_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',1,1,1,1,'test','test',1,'{}',0,0,0);
+                INSERT INTO character_dungeon_pickup_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,'instance',1,1,0,121,1,'{}',1);
+                INSERT INTO character_dungeon_drop_batches VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,'test','test',1);
+                INSERT INTO character_dungeon_drop_objects VALUES({{id}},'1234567890abcdef1234567890abcdef',0,2,NULL,1,0,0,0);
+                INSERT INTO character_dungeon_drop_pickups VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',2,'instance',1,1,NULL,NULL,NULL,0,1,1,0,1);
+                INSERT INTO character_quest_drop_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',0,1,'{}','[]');
+                INSERT INTO character_quest_clear_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',30,0,
+                  '1234567890abcdef1234567890abcdef','instance',1,1,1,1,1,1);
+                INSERT INTO character_quest_completion_receipts(character_id,account,acceptance_id,quest_id,event_id,instance_id,task_attempt,epoch,
+                  generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,
+                  experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards,clear_acceptance_id)
+                  VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',30,'1234567890abcdef1234567890abcdef','instance',1,1,
+                    1,'test','test','test',0,1,0,'normal',1,1,0,1,1,0,1,0,1,'[]','1234567890abcdef1234567890abcdef');
+                INSERT INTO character_dungeon_settlement_receipts VALUES({{id}},'planning','settlement','instance',0,1,1,1,1,zeroblob(16),X'01',1,
+                  1,0,1,-1,'test','test',1,1,0,1,1);
+                INSERT INTO character_dungeon_card_rewards VALUES({{id}},'planning','instance','{}','{}',NULL,1);
+                INSERT INTO character_dungeon_card_options VALUES({{id}},'planning','instance','{}',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+                """);
+            TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
+        }
 
         public void FailSkillWrite()
         {

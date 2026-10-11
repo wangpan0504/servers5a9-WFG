@@ -5,6 +5,7 @@ using System.Text;
 namespace DfoServer.Network.Parsers;
 
 internal sealed record CreateCharacterRequest(byte Job, string Name, byte[] Tail);
+internal sealed record DeleteCharacterRequest(ushort RosterIndex, string ConfirmationName);
 internal static class CharacterRequests
 {
     public static bool IsRoster(ReadOnlySpan<byte> body) => body.SequenceEqual<byte>([255, 255, 2]);
@@ -21,6 +22,14 @@ internal static class CharacterRequests
         if (body.Length != CharacterName.Encoding.GetByteCount(name) + 4)
             throw new InvalidDataException("Name check tail");
         return name;
+    }
+
+    public static DeleteCharacterRequest Delete(ReadOnlySpan<byte> body)
+    {
+        string name = Name(body, 2);
+        if (body.Length != 6 + CharacterName.Encoding.GetByteCount(name))
+            throw new InvalidDataException("Deletion body tail");
+        return new(BinaryPrimitives.ReadUInt16LittleEndian(body), name);
     }
 
     public static string Name(ReadOnlySpan<byte> body, int at)

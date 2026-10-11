@@ -16,6 +16,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         commands.Register(CmdPacketType.SELECT_CHARACTER, SelectAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHECK_DOUBLE_CHARACTER_NAME, CheckNameAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CREATE_CHARACTER, CreateAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.DELETE_CHARACTER, DeleteAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.GET_USERINFO, RosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
     }
@@ -32,7 +33,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
 
     async Task<CommandResult> SelectAsync(GameConnectionContext context, Packet request)
     {
-        context.Session.Select(CharacterRequests.Select(request.Body), goldLimits);
+        context.Session.SelectFromRosterIndex(CharacterRequests.Select(request.Body), goldLimits);
         if (learning is not null)
         {
             var initialization = context.Session.InitializeLearning(learning);
@@ -61,9 +62,38 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
     async Task<CommandResult> CreateAsync(GameConnectionContext context, Packet request)
     {
         var parsed = CharacterRequests.ParseCreate(request.Body);
-        var created = context.Session.CreateCharacter(parsed.Name, characters.Get(parsed.Job), learning);
-        await context.Reply(CmdPacketType.CREATE_CHARACTER, CharacterPackets.Created(created), "create_committed");
-        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(context.Session.Roster()), "created_roster");
+        var receipt = context.Session.CreateCharacterForClient(parsed.Name, characters.Get(parsed.Job), learning);
+        bool CanSend() => context.Session.CanPublishCreation(receipt);
+        await context.Reply(CmdPacketType.CREATE_CHARACTER, CharacterPackets.Created(receipt.Created), "create_committed", CanSend);
+        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray()), "created_roster", CanSend);
+        context.Session.MarkRosterPublished(receipt.Roster);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> DeleteAsync(GameConnectionContext context, Packet request)
+    {
+        var parsed = CharacterRequests.Delete(request.Body);
+        var original = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var result = context.Session.DeleteCharacterFromRoster(parsed.RosterIndex, parsed.ConfirmationName);
+        log.Write(result.Accepted ? "character_deleted" : "character_delete_rejected", new
+        {
+            Connection = context.Id, RosterIndex = parsed.RosterIndex, result.Reason,
+            Character = result.Receipt?.Deleted.Id, Slot = result.Receipt?.Deleted.Slot,
+            Revision = result.Receipt?.Deleted.Revision, result.SelectionEpoch
+        });
+        bool CanSend() => result.Receipt is { } committed ? context.Session.CanPublishDeletion(committed) : context.Owner.Execute(() =>
+            context.Session.SelectionEpoch == original.SelectionEpoch && context.Session.Phase == original.Phase &&
+            ReferenceEquals(context.Session.Selected, original.Selected));
+        await context.Reply(CmdPacketType.DELETE_CHARACTER, CharacterPackets.Deleted(result),
+            result.Accepted ? "character_delete_committed" : "character_delete_rejected", CanSend);
+        if (result.Receipt is { } receipt)
+        {
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray()), "deleted_roster", CanSend);
+            context.Session.MarkRosterPublished(receipt.Roster);
+            // ACK6的消费者随后发空C2S645；新名册已主动下发，后续显式C2S8可以正常刷新。
+            context.RosterRequested = true;
+            context.SelectionRosterPushed = false;
+        }
         return CommandResult.Handled;
     }
 
@@ -79,7 +109,12 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
             return CommandResult.Handled;
         }
         if (context.RosterRequested)
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(context.Session.Roster()), "requested_roster");
+        {
+            var roster = context.Session.PrepareRoster();
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "requested_roster",
+                () => context.Session.CanPublishRoster(roster));
+            context.Session.MarkRosterPublished(roster);
+        }
         context.RosterRequested = true;
         return CommandResult.Handled;
     }

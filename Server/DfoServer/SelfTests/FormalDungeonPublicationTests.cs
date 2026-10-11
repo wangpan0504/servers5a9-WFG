@@ -544,6 +544,8 @@ internal static class FormalDungeonPublicationTests
         public Character[] List(AccountOwners.Lease owner) => inner.List(owner);
         public bool NameExists(string name) => inner.NameExists(name);
         public Character Create(AccountOwners.Lease owner, NewCharacter character) => inner.Create(owner, character);
+        public CharacterDeletion LoadDeletionTarget(AccountOwners.Lease owner, ushort slot) => inner.LoadDeletionTarget(owner, slot);
+        public CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected) => inner.Delete(owner, expected);
         public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back) => inner.Save(owner, expected, position, back);
         public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null) => inner.CommitLearning(owner, expected, learning, totalSp, totalTp);
         public Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitSkillLayout(owner, expected, learning);

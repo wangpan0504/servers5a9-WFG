@@ -80,6 +80,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         string title = kind switch
         {
             "selected" => "Character selected", "authenticated" => "Authentication accepted",
+            "character_deleted" => "Character deleted", "character_delete_rejected" => "Character deletion rejected",
             "auth_rejected" => "Authentication rejected", "owner_rejected" => "Account owner rejected",
             "closed" => "Connection closed", "channel" => "Channel handshake completed",
             "resource_warning" => "Resource warning", "exit" => "Exit request", "travel" => "Town travel",
@@ -129,7 +130,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
     static bool ShowsOnConsole(string kind) => kind is
         "startup" or "server_failed" or "listener_failed" or "listening" or "server_ready" or "stopped" or "resource_warning" or
         "connected" or "disconnected" or "closed" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
-        "selected" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
+        "selected" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
         "formal_dungeon_settlement" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_enter" or "dungeon_entry_probe" or "dungeon_probe_return" or
         "quest_lifecycle" or "quest_completion" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or

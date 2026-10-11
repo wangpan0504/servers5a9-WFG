@@ -5,7 +5,7 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class TownProtocolTcpTests
+internal static partial class TownProtocolTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -109,6 +109,8 @@ internal static class TownProtocolTcpTests
             peer.Send(692, Name("Other"));
             peer.Expect(1, 692, [1]);
         }
+
+        DeleteCharacters(fixture);
 
         using (var waiting = Open(fixture))
         {

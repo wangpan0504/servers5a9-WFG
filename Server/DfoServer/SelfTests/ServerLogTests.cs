@@ -36,10 +36,16 @@ internal static class ServerLogTests
                 log.Write("listening", new { ChannelName = "#ch.10", Channel = "127.0.0.1:23100", Game = "127.0.0.1:23101",
                     AdvertisedGame = "127.0.0.1:23101", Gm = "disabled", PacketCapture = "disabled", ServiceLog = "Logs/with spaces/server.jsonl" });
                 log.Write("travel", new { Connection = 1, Accepted = true, Position = new { Town = 2, X = 10 }, Tags = new[] { "first", "second" } });
+                log.Write("character_deleted", new { Connection = 1, RosterIndex = 1, Character = 7, Slot = 2, Revision = 3, SelectionEpoch = 4 });
+                log.Write("character_delete_rejected", new { Connection = 1, RosterIndex = 31, Reason = "index-absent" });
                 log.Write("resource_warning", new { MissingMaps = new[] { new { Path = "maps/with spaces/map.map", Error = "missing" } } });
                 string text = output.ToString();
                 TestCheck.That(text.Contains("[INFO] [server_ready] Server ready") && text.Contains("[WARN] [auth_rejected]") &&
                     text.Contains("[WARN] [formal_dungeon_entry]"), "English events expose readiness and rejection severity");
+                TestCheck.That(text.Contains("[INFO] [character_deleted] Character deleted") &&
+                    text.Contains("RosterIndex=1 Character=7 Slot=2 Revision=3 SelectionEpoch=4") &&
+                    text.Contains("[WARN] [character_delete_rejected] Character deletion rejected") && text.Contains("Reason=index-absent"),
+                    "删除日志区分提交身份、名册行索引和拒绝原因，使用英文INFO/WARN");
                 TestCheck.That(text.Contains("Phase=Town Kind=0x01 Opcode=65535 (0xFFFF) Name=65535 Length=3 Body=10ABFF") &&
                     text.Contains("Length=0 Body=empty") && text.Contains("Body=[login-redacted]"), "unhandled packet fields include full body, empty marker, and redaction");
                 TestCheck.That(text.All(character => character < 128), "console event templates and ASCII details remain English");
@@ -68,7 +74,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 80,
+            TestCheck.That(fileLines.Length == 82,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&

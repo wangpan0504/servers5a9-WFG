@@ -36,7 +36,10 @@ internal sealed class SessionHandler(TownProjection projection, ServerLog log) :
         context.RosterRequested = true;
         context.SelectionRosterPushed = true;
         await context.Reply(CmdPacketType.RETURN_SELECT_CHARACTER, SessionPackets.ReturnToSelection(), "return_selection_ack");
-        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(context.Session.Roster()), "return_selection_roster");
+        var roster = context.Session.PrepareRoster();
+        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "return_selection_roster",
+            () => context.Session.CanPublishRoster(roster));
+        context.Session.MarkRosterPublished(roster);
         return CommandResult.Handled;
     }
 

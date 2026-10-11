@@ -47,10 +47,15 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         using var transaction = db.BeginTransaction(deferred: false);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT count(*) FROM characters WHERE account=$account";
+        command.CommandText = "SELECT slot FROM characters WHERE account=$account ORDER BY slot";
         command.Parameters.AddWithValue("$account", owner.Account);
-        int slot = checked((int)(long)command.ExecuteScalar()!);
-        if (slot >= 32)
+        var occupied = new bool[32];
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                occupied[reader.GetInt32(0)] = true;
+        // 删除不改变其他角色的槽位；连续建角必须复用真正的空槽。
+        int slot = Array.FindIndex(occupied, value => !value);
+        if (slot < 0)
             throw new InvalidDataException("Character slots full");
         command.CommandText = """
             INSERT INTO characters(account,slot,name,town,area,x,y,direction,

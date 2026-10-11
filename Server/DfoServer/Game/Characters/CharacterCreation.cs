@@ -5,6 +5,8 @@ using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Characters;
 
+internal sealed record CharacterCreationReceipt(Character Created, CharacterRosterSnapshot Roster);
+
 internal static class CharacterCreation
 {
     public static NewCharacter Prepare(string name, CharacterProfile profile, Location room, Location initialReturn,

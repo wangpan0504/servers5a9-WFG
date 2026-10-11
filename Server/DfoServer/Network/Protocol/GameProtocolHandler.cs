@@ -29,7 +29,10 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         {
             online.Register(login.Owner, session);
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(options.AdvertisedAddress, options.GamePort), "endpoint");
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(session.Roster()), "roster");
+            var roster = session.PrepareRoster();
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "roster",
+                () => session.CanPublishRoster(roster));
+            session.MarkRosterPublished(roster);
             while (!connection.Stop.IsCancellationRequested)
             {
                 var request = GameFrame.ParseClient(await connection.ReadAsync());

@@ -78,7 +78,7 @@ CREATE TABLE character_quest_drop_receipts(
 CREATE TABLE account_completed_quests(
     account TEXT NOT NULL REFERENCES accounts(account_id),
     quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
-    character_id INTEGER NOT NULL,
+    character_id INTEGER,
     acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
     daily_period INTEGER NOT NULL DEFAULT 0 CHECK(daily_period=0 OR daily_period BETWEEN 19000101 AND 99991231),
     answer INTEGER CHECK(answer BETWEEN 0 AND 254),
