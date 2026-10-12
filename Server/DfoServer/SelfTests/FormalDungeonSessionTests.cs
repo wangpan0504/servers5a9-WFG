@@ -46,11 +46,41 @@ internal static class FormalDungeonSessionTests
         FrozenLootTransaction();
         PerMonsterDrops();
         OrdinaryLifecycle();
+        InfiniteFatigueProgress();
         OrdinaryRoutes();
         CharacterRevive();
         DeathReturnAndPurchase();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Session文件库、六房合成击杀、身份及回滚断言（非实机）");
         return Task.CompletedTask;
+
+        void InfiniteFatigueProgress()
+        {
+            var settings = new DfoServer.Game.Settings.GameDebugSettings();
+            using var f = new Fixture("FatigueStat", towns, characters, learning, quests, debugSettings: settings);
+            f.Sql("DELETE FROM character_active_main_quests; UPDATE character_fatigue SET used=maximum,remaining=0");
+            f.SelectEntry();
+            Check(f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is { Snapshot.ConsumedFatigue: 0 },
+                "无限模式真实零余额可入场，预留实例不计应耗疲劳");
+            var stored = f.Read();
+            var loaded = f.Session.CompleteFormalDungeonLoading()!;
+            Check(loaded.Snapshot.ConsumedFatigue == 1 && Same(stored, f.Read()) &&
+                f.Session.FatigueForClient(loaded.Character) is { Used: 0, Remaining: 156 } &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts")) == 0,
+                "无限模式零余额仍累计服务端应耗疲劳，余额及存档不变且客户端显示满值");
+            Check(f.Session.CompleteFormalDungeonLoading() is null &&
+                f.Session.CurrentFormalDungeonScene()!.Snapshot.ConsumedFatigue == 1,
+                "无限模式重复加载不重复计进度");
+            settings.InfiniteFatigue = false;
+            Check(f.Session.CurrentFormalDungeonScene()!.Snapshot.ConsumedFatigue == 1 &&
+                f.Session.FatigueForClient(loaded.Character).Remaining == 0 &&
+                f.Session.ReturnFromFormalDungeon() is not null &&
+                f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is null,
+                "关闭无限模式保留当局计数，恢复真实显示与零余额准入限制");
+            settings.InfiniteFatigue = true;
+            Check(f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is { Snapshot.ConsumedFatigue: 0 } &&
+                f.Session.CompleteFormalDungeonLoading() is { Snapshot.ConsumedFatigue: 1 },
+                "重新入场使用新实例计数，不继承上局应耗疲劳");
+        }
 
         void CharacterRevive()
         {
@@ -277,6 +307,8 @@ internal static class FormalDungeonSessionTests
                 {
                     if (index > 0) current = f.Session.MoveFormalDungeon(route[index].X, route[index].Y) ?? throw new InvalidOperationException("普通真实通路不能过房");
                     current = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("普通加载不能完成");
+                    Check(current.Snapshot.ConsumedFatigue == checked((uint)(index < 3 ? index + 1 : index)),
+                        "普通扣点与独立应耗疲劳累计一致，回访房间不重复计数");
                     Check(f.Session.CompleteFormalDungeonLoading() is null, "普通重复加载不重复扣点");
                     if (index == 3)
                         Check(current.Snapshot.LivingMonsters.Count == 0 && current.Character.Fatigue!.Used == 3, "普通支路回访不重生、不重复收疲劳");
@@ -1078,12 +1110,13 @@ internal static class FormalDungeonSessionTests
         public AccountOwners.Lease Owner { get; }
         public GameSession Session { get; }
         public Character Created { get; }
-        public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool secondCharacter = false, byte job = 0)
+        public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool secondCharacter = false, byte job = 0,
+            DfoServer.Game.Settings.GameDebugSettings? debugSettings = null)
         {
             Path = System.IO.Path.Combine(root, "game.db");
             Repository = new(Path, quests);
             Owner = Owners.Acquire("formal-session", () => { });
-            Session = new(Repository, towns, Owner);
+            Session = new(Repository, towns, Owner, debugSettings: debugSettings);
             if (secondCharacter) Session.CreateCharacter("RecordDummy", characters.Get(0), learning);
             Created = Repository.Create(Owner, CharacterCreation.Prepare(name, characters.Get(job), towns.Room, towns.InitialReturn, learning.Get)
                 with { ActiveMainQuests = [new(0,3145,1)] });

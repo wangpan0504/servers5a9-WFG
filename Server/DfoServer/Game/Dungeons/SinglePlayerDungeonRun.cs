@@ -13,6 +13,7 @@ internal sealed record DungeonRunSnapshot(DungeonRunIdentity Identity, SinglePla
 {
     public DungeonMapOperation MapOperation { get; init; }
     public DungeonMapPayload MapPayload { get; init; } = DungeonMapPayload.Build;
+    public uint ConsumedFatigue { get; init; }
 }
 internal sealed record DungeonLoadingFact(DungeonRunIdentity Identity, Guid ActionId, uint DungeonId, DungeonMap Map,
     int MazeSourceOrdinal, bool IsInitialLoading, bool DidInitializeMap, uint ConfirmedInitializationCount,
@@ -98,6 +99,7 @@ internal sealed class SinglePlayerDungeonRun
     private PreparedDungeonSettlement? committedSettlement;
     private Room current;
     private DungeonRunIdentity identity;
+    private uint consumedFatigue;
     public bool BossEntranceOpen { get; private set; }
     public bool BossEntranceReady => entry.Maze.BossEntrance is { Targets.Count: > 0 } condition &&
         condition.Targets.All(target => allRooms.Sum(room => room.Plan.Monsters.Count(monster =>
@@ -151,7 +153,7 @@ internal sealed class SinglePlayerDungeonRun
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
             !current.Culled.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()))
-        { MapOperation = mapOperation, MapPayload = mapPayload };
+        { MapOperation = mapOperation, MapPayload = mapPayload, ConsumedFatigue = consumedFatigue };
 
     // 父脚本子actor的收尾不进入普通击杀集合，不能借此触发清图、经验或任务事实。
     public DungeonRunOutcome RetireSpecialChild(ConfirmedDungeonMonsterDeath death)
@@ -286,6 +288,9 @@ internal sealed class SinglePlayerDungeonRun
         bool first = LastLoadingFact is null;
         bool initialized = InitializationCounterSupported && (!entry.IndividualMapMovement || !initializedMapSlots.Contains(slot));
         uint count = checked(ConfirmedInitializationCount + (!first && initialized && hasMatchingQuest ? 1u : 0u));
+        // 沿用本服每个首次房间一点的费用规则；独立于无限开关及余额，供活动进度读取。
+        if (entry.UsesFatigue && !current.Loaded)
+            consumedFatigue = checked(consumedFatigue + 1);
         acceptedActions.Add(actionId, new(expected, "loaded", null));
         current.Loaded = true;
         // NOTI28建立新Run并清统计；接取不重置。缓存安装与活跃任务计数分开，完成仍由真实清图判定。
@@ -428,7 +433,7 @@ internal sealed class SinglePlayerDungeonRun
             Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
                 !current.Culled.Contains(monster.ObjectKey) && !culled.Contains(monster.ObjectKey) &&
                 monster.ObjectKey != confirmed.MonsterKey).Select(monster => monster.ObjectKey).ToArray()))
-            { MapOperation = mapOperation,MapPayload = mapPayload };
+            { MapOperation = mapOperation,MapPayload = mapPayload, ConsumedFatigue = consumedFatigue };
         DungeonClearFact? clear = settles
             ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = current.Plan.Room.Map } : null;
         pendingDeath = new(confirmed, target,

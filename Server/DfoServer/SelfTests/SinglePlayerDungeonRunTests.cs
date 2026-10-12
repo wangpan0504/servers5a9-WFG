@@ -23,6 +23,38 @@ internal static class SinglePlayerDungeonRunTests
             "resource-qualified friendly actors preserve the full route and key namespace");
         var run = created!;
         run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
+        That(run.Snapshot.ConsumedFatigue == 0, "任务专用路线不计入普通房间疲劳");
+        var fatigueRoute = new DungeonFixedRoute([WithTeams(Plan(start, 30), 0), WithTeams(Plan(friendly, 31), 0),
+            BossPlan(boss, 32)], route.Connections);
+        That(SinglePlayerDungeonRun.TryCreate(entry with { QuestId = 0, RouteQuestId = 0, ActiveQuestSlot = byte.MaxValue }, 2, 200, fatigueRoute,
+            authority, out var fatigueRun, out _) && fatigueRun!.Snapshot.ConsumedFatigue == 0,
+            "普通实例在加载成功前不计应耗疲劳");
+        var fatigue = fatigueRun!;
+        var loadingIdentity = fatigue.Snapshot.Identity;
+        Guid loadingAction = Guid.NewGuid();
+        fatigue.CompleteLoading(loadingIdentity, loadingAction);
+        var firstFatigueRoom = fatigue.Snapshot;
+        That(firstFatigueRoom.ConsumedFatigue == 1 &&
+            fatigue.CompleteLoading(loadingIdentity, loadingAction).Outcome == DungeonRunOutcome.Duplicate &&
+            fatigue.CompleteLoading(fatigue.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Rejected &&
+            fatigue.Snapshot.ConsumedFatigue == 1, "首次房间计一点，重复加载及重放不重复计数");
+        fatigue.Move(fatigue.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
+        That(fatigue.Snapshot.ConsumedFatigue == 1, "过房预留不提前计应耗疲劳");
+        fatigue.CompleteLoading(fatigue.Snapshot.Identity, Guid.NewGuid());
+        fatigue.Move(fatigue.Snapshot.Identity, Guid.NewGuid(), start.Position);
+        fatigue.CompleteLoading(fatigue.Snapshot.Identity, Guid.NewGuid());
+        That(fatigue.Snapshot.ConsumedFatigue == 2 && firstFatigueRoom.ConsumedFatigue == 1 &&
+            fatigue.CompleteLoading(loadingIdentity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Rejected,
+            "回访已加载房间及旧身份不计数，已发布快照保持原累计值");
+        fatigue.Move(fatigue.Snapshot.Identity, Guid.NewGuid(), friendly.Position);
+        fatigue.CompleteLoading(fatigue.Snapshot.Identity, Guid.NewGuid());
+        fatigue.Move(fatigue.Snapshot.Identity, Guid.NewGuid(), boss.Position);
+        fatigue.CompleteLoading(fatigue.Snapshot.Identity, Guid.NewGuid());
+        That(fatigue.Snapshot.ConsumedFatigue == 3, "累计应耗疲劳来自实际首次加载，不重复计算回访");
+        var fatigueClear = fatigue.PrepareConfirmedDeath(authority.Death(fatigue.Snapshot.Identity, 32, 1)).Pending!;
+        That(fatigueClear.Result.Snapshot.ConsumedFatigue == 3 &&
+            fatigue.ConfirmCommittedDeath(fatigueClear).Snapshot.ConsumedFatigue == 3,
+            "Boss死亡的待提交与已提交结算快照都保留当局应耗疲劳");
         var original = run.Snapshot;
         That(original.LivingMonsters.SequenceEqual(new ushort[] { 10, 11 }) && run.CurrentLivingMonster(10) is { IsBlocking: true } &&
             run.CurrentLivingMonster(11) is null, "snapshot retains the friendly actor while combat qualification excludes it");
