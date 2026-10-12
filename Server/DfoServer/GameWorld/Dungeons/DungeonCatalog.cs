@@ -29,6 +29,7 @@ internal sealed record DungeonMaze(
     public IReadOnlyList<DungeonMap> ConditionalMaps { get; init; } = Array.Empty<DungeonMap>();
     public IReadOnlyList<DungeonClearCondition> ClearConditions { get; init; } = [];
     public string? ResourceError { get; init; }
+    public bool IsTrainingRoom { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
     public bool ConnectsQuest(uint questId, byte difficulty = 0, int state = 0) => QuestConnectionTokens.Count == 3 &&
         QuestConnectionTokens.All(token => token.Type == 0) &&

@@ -18,7 +18,7 @@ internal sealed class RecoveryConsumableCatalog
 
     public RecoveryConsumableCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
     {
-        foreach (int id in new[] { 1108, 1114 })
+        foreach (int id in new[] { 1065, 1107, 1108, 1114 })
             if (stackable.TryGetValue(id, out string? path))
             {
                 var raw = RecoveryConsumableFile.Parse(id, "stackable/" + path, archive.ReadTokens("stackable/" + path), archive.ResolveString);
@@ -34,16 +34,19 @@ internal sealed class RecoveryConsumableCatalog
     internal static RecoveryConsumableDefinition? Read(RecoveryConsumableFile file)
     {
         var raw = file.Stackable;
-        if (file.TemplateId is not (1108 or 1114) || file.Diagnostics.Length != 0 || file.DeclaredFields.Any(field => !KnownFields.Contains(field)) ||
+        int minimumLevel = file.TemplateId == 1065 ? 1 : file.TemplateId == 1107 ? 6 : 16;
+        int? hp = file.TemplateId == 1107 ? 180 : file.TemplateId == 1108 ? 410 : null;
+        int? mp = file.TemplateId == 1065 ? 115 : file.TemplateId == 1114 ? 330 : null;
+        if (file.TemplateId is not (1065 or 1107 or 1108 or 1114) || file.Diagnostics.Length != 0 || file.DeclaredFields.Any(field => !KnownFields.Contains(field)) ||
             raw.TypeDeclaration is not { Label: "[waste]", Parameters: [4] } || raw.DeclaredUsableJobs is not ["[all]"] ||
-            raw.DeclaredMinimumLevel != 16 || raw.DeclaredStackLimit != 1000 || raw.DeclaredItemGroupName != "potion" ||
-            file.CoolTime != 10000 || file.CoolGroup != (file.TemplateId == 1108 ? 0 : 1) ||
-            file.TemplateId == 1108 && (file.HpRecovery != new RecoveryDeclaration("+", 410, 1000, "myself") || file.MpRecovery is not null) ||
-            file.TemplateId == 1114 && (file.MpRecovery != new RecoveryDeclaration("+", 330, 1000, "myself") || file.HpRecovery is not null))
+            raw.DeclaredMinimumLevel != minimumLevel || raw.DeclaredStackLimit != 1000 || raw.DeclaredItemGroupName != (file.TemplateId == 1065 ? "plant stuff" : "potion") ||
+            file.CoolTime != 10000 || file.CoolGroup != (hp is not null ? 0 : 1) ||
+            file.HpRecovery != (hp is { } hpAmount ? new RecoveryDeclaration("+",hpAmount,1000,"myself") : null) ||
+            file.MpRecovery != (mp is { } mpAmount ? new RecoveryDeclaration("+",mpAmount,1000,"myself") : null))
             return null;
         static RecoveryConsumableTuple? Convert(RecoveryDeclaration? value) => value is null ? null :
             new(value.Operation, value.Amount, value.Auxiliary, value.Target);
-        return new(file.TemplateId, 16, file.CoolTime.Value, file.CoolGroup.Value, Convert(file.HpRecovery), Convert(file.MpRecovery));
+        return new(file.TemplateId, minimumLevel, file.CoolTime.Value, file.CoolGroup.Value, Convert(file.HpRecovery), Convert(file.MpRecovery));
     }
 
     public bool TryGet(int id, out RecoveryConsumableDefinition definition) => definitions.TryGetValue(id, out definition!);

@@ -13,7 +13,8 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
     public InventoryResult Sort(Character character, InventorySortRequest request) => InventorySortService.Plan(character.Inventory,
         request.Kind, request.Condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), request.List);
     public InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards) => InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, goldLimits, pieces);
-    public InventoryResult Delete(Character character, InventoryDeleteRequest request) => InventoryDeleteService.PlanBatch(character.Inventory, request);
+    public InventoryResult Delete(Character character, InventoryDeleteRequest request, bool preserveClearCube = false) =>
+        InventoryDeleteService.PlanBatch(character.Inventory, request, preserveClearCube);
     public InventoryResult UseGuardianGem(Character character, GuardianGemUseRequest request) =>
         InventoryGuardianGemService.Plan(character.Inventory, request, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     public InventoryResult Lock(Character character, InventorySlot slot, InventoryLockOperation operation) =>

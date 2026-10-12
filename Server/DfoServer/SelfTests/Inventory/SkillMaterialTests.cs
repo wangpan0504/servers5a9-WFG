@@ -30,6 +30,11 @@ internal static class SkillMaterialTests
             spent.Plan.After.Items.IsEmpty && inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 20, "无色足额扣钱包，不建立实体、不污染原快照");
         Bytes(InventoryPackets.Delete(request, spent),
             Convert.FromHexString("010D0000000800120708E602100518021800"), "ACK18返回本次消耗5，不能把剩余15再次扣除");
+        var preserved = InventoryDeleteService.PlanBatch(inventory,request,preserveClearCube: true);
+        That(preserved.Accepted && ReferenceEquals(preserved.Plan!.Before,preserved.Plan.After) && !preserved.Plan.Changed,
+            "修炼场足额无色保持原钱包快照，不生成写入");
+        Bytes(InventoryPackets.Delete(request,preserved),Convert.FromHexString("010D0000000800120708E602100018021800"),
+            "修炼场ACK18删除量为0，客户端不减本地无色");
         var single = request with { Items = [request.Items[0] with { Count = 1 }] };
         var large = inventory with { AccountWallet = AccountWallet.Empty.Set(CurrencyKind.ClearCube,1830) };
         var consumed = InventoryDeleteService.PlanBatch(large,single);
@@ -44,6 +49,25 @@ internal static class SkillMaterialTests
             "消费容器和重复槽拒绝");
         var material = new InventoryItem(1, new(InventoryListType.Main, 121), new(50000, ItemKind.Material, 3));
         var mixed = inventory with { Items = [material] };
+        var entityRequest = request with { Items = [new(2,121,3,1)] };
+        var entitySpent = InventoryDeleteService.PlanBatch(mixed,entityRequest,preserveClearCube: true);
+        That(entitySpent.Accepted && entitySpent.Plan!.After.Items[0].Core.Count == 2,
+            "修炼场实体技能材料正常消耗，仅无色豁免");
+        Bytes(InventoryPackets.Delete(entityRequest,entitySpent),Convert.FromHexString("010C000000080012060879100118021800"),
+            "修炼场实体材料ACK18仍回真实删除1");
+        var colored = inventory with { AccountWallet = inventory.AccountWallet.Set(CurrencyKind.BlueCube,8) };
+        var coloredRequest = request with { Items = [new(2,357,3036,5)] };
+        var coloredSpent = InventoryDeleteService.PlanBatch(colored,coloredRequest,preserveClearCube: true);
+        That(coloredSpent.Accepted && coloredSpent.Plan!.After.AccountWallet.Get(CurrencyKind.BlueCube) == 3 &&
+            coloredSpent.Plan.After.AccountWallet.Get(CurrencyKind.ClearCube) == 20,
+            "修炼场蓝色晶体照常扣5，不扩大无色范围");
+        Bytes(InventoryPackets.Delete(coloredRequest,coloredSpent),Convert.FromHexString("010D0000000800120708E502100518021800"),
+            "修炼场有色晶体ACK18仍回真实删除5");
+        var mixedRequest = request with { Items = [request.Items[0],new(0,121,3,1)] };
+        var mixedPreserved = InventoryDeleteService.PlanBatch(mixed,mixedRequest,preserveClearCube: true);
+        That(mixedPreserved.Accepted && mixedPreserved.Plan!.After.AccountWallet.Get(CurrencyKind.ClearCube) == 20 &&
+            mixedPreserved.Plan.After.Items[0].Core.Count == 2,
+            "修炼场混合包只豁免无色施法消耗，真实丢弃仍扣原实体");
         That(!InventoryDeleteService.PlanBatch(mixed, request with { Items = [request.Items[0], new(2, 121, 3, 4)] }).Accepted &&
             mixed.AccountWallet.Get(CurrencyKind.ClearCube) == 20 && mixed.Items[0] == material, "后一项不足整批拒绝，不部分扣钱包");
         var ordinary = InventoryRequests.Delete(Convert.FromHexString("10000000081210001A0808001041181420032000"));

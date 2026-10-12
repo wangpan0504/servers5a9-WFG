@@ -268,7 +268,7 @@ internal sealed class SinglePlayerDungeonRun
                     pending.Enqueue(edge.Item2);
             }
         }
-        if (reachable.Count != points.Count || keys.Count == 0)
+        if (reachable.Count != points.Count || keys.Count == 0 && !entry.IsTrainingRoom)
             return false;
         run = new(entry, taskAttempt, initialEpoch, approvedRoute, combatAuthority);
         reason = "domain-run-created";

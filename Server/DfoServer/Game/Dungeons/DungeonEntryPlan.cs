@@ -24,6 +24,8 @@ internal sealed record DungeonEntryPlan(
     public bool DisableClearReward { get; init; }
     public Guid QuestAcceptanceId { get; init; }
     public bool IsOrdinary => !IsTutorial && QuestId == 0 && RouteQuestId == 0;
+    public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
+    public bool UsesFatigue => IsOrdinary && !IsTrainingRoom;
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public uint RouteQuestId { get; init; } = QuestId;

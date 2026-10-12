@@ -62,6 +62,15 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             .SelectMany(row => row.CandidateIds.Count == 0 ? new[] { row.Id } : row.CandidateIds).ToHashSet();
         var pool = entries.Where(row => row.Dungeons.Contains(definition.Id) && !excluded.Contains(row.Id)).ToArray();
         var start = Choose(maze.Starts); var boss = Choose(maze.Bosses);
+        // 本版修炼场起点与终点重合，使用实际归属及坐标命名的start资源。
+        if (definition.Id == 5000 && maze.Width == 1 && maze.Height == 1 && maze.Starts.Count == 1 && maze.Bosses.Count == 1 &&
+            start == new DungeonPoint(0,0) && boss == start && maps.Count == 0 && maze.GreedGrid.Cells is [{ Index: 1 }])
+        {
+            var training = pool.Where(row => row.Kind == "[normal]" && (row.Layouts & 2) != 0 &&
+                row.Path.EndsWith("/11100(0,0)start.map",StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (training.Length != 1) return maze;
+            return maze with { IsTrainingRoom = true, MapSpecification = [new("boss",start,training[0].Id,training[0].Path)] };
+        }
         if (maps.Values.Any(row => row.Kind == "boss" && row.Position != boss)) return maze;
         foreach (var cell in maze.GreedGrid.Cells!)
         {

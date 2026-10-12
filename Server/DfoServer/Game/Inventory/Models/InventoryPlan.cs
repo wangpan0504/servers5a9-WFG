@@ -10,6 +10,7 @@ internal sealed class InventoryPlan
     public InventorySnapshot After { get; }
     public string Reason { get; }
     public InventoryCharacterPrecondition? CharacterPrecondition { get; }
+    public bool PreserveClearCube { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
     readonly Lazy<ImmutableArray<CurrencyKind>> currencies;

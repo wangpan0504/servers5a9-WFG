@@ -50,7 +50,8 @@ internal sealed partial class CharacterRepository
     public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => owner.Execute(() =>
     {
         var state = expected.DungeonState ?? throw new InvalidOperationException("副本owner未初始化");
-        if (nextObjectKey <= state.NextObjectKey || nextObjectKey > 65536 || state.LastAttempt == long.MaxValue)
+        // 修炼场没有静态演员时只推进尝试号；对象key保持高水位，仍禁止回绕。
+        if (nextObjectKey < state.NextObjectKey || nextObjectKey > 65536 || state.LastAttempt == long.MaxValue)
             throw new InvalidDataException("副本对象key或尝试号耗尽");
         using var db = database.Open();
         using var tx = db.BeginTransaction(deferred: false);

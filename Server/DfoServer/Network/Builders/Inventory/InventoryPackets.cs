@@ -121,7 +121,7 @@ internal static class InventoryPackets
                 Scalar(child, 1, checked((uint)item.Slot));
                 // 材料足额消费回本次数量；普通丢弃回归一后的实际删除量。
                 var slot = new InventorySlot(request.List,item.Slot);
-                int removed = item.Type == 2 ? item.Count : (plan.BeforeIndex.Find(slot)?.Core.Count ?? 0) -
+                int removed = item.Type == 2 ? (plan.PreserveClearCube && item.Slot == 358 && item.Value == 3037 ? 0 : item.Count) : (plan.BeforeIndex.Find(slot)?.Core.Count ?? 0) -
                     (current.Find(slot)?.Core.Count ?? 0);
                 Scalar(child, 2, checked((uint)removed));
                 Scalar(child, 3, item.Type);

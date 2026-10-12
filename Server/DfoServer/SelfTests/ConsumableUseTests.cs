@@ -65,10 +65,16 @@ internal static class ConsumableUseTests
         That(resources.RecoveryConsumables.TryGet(1108, out var hp) && hp == Hp &&
             resources.RecoveryConsumables.TryGet(1114, out var mp) && mp == Mp,
             "匹配PVF两种药保留最低等级、冷却原值/组和完整恢复四元组");
+        That(resources.RecoveryConsumables.TryGet(1107,out var lowHp) &&
+            lowHp == new RecoveryConsumableDefinition(1107,6,10000,0,new("+",180,1000,"myself"),null) &&
+            resources.RecoveryConsumables.TryGet(1065,out var flower) &&
+            flower == new RecoveryConsumableDefinition(1065,1,10000,1,null,new("+",115,1000,"myself")),
+            "现场1107入门HP药剂及1065魔力之花严格匹配完整PVF恢复声明");
         foreach (int id in new[] { 1016, 1047, 1051 })
             That(!resources.RecoveryConsumables.TryGet(id, out _), "额外材料、持续效果、随机及异常状态药不泛放");
-        foreach (int id in new[] { 1108, 1114 })
-            That(resources.Items.Get(id).Kind == ItemKind.Consumable && resources.Items.Get(id).MinimumLevel == 16,
+        foreach (int id in new[] { 1065, 1107, 1108, 1114 })
+            That(resources.Items.Get(id).Kind == ItemKind.Consumable && resources.Items.Get(id).MinimumLevel ==
+                (id == 1065 ? 1 : id == 1107 ? 6 : 16),
                 "使用目录与现有物品目录实际类别/等级一致，不能替代库存实例校验");
     }
 }

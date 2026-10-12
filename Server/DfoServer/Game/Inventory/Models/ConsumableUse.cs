@@ -8,4 +8,5 @@ internal sealed record ConsumableUseResult(ConsumableUseOutcome Outcome, string 
     ConsumableUseGuard? Guard = null)
 {
     public long? SourceUid { get; init; }
+    public bool PreserveSource { get; init; }
 }

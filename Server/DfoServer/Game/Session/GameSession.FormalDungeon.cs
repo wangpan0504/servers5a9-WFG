@@ -38,6 +38,7 @@ internal sealed partial class GameSession
         public ushort? TutorialClearTarget { get; set; }
     }
     FormalDungeon? formalDungeon;
+    bool PreservesTrainingItems => Phase == SessionPhase.Dungeon && formalDungeon?.Entry.IsTrainingRoom == true;
     sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey);
     public DungeonRunSnapshot? DungeonSnapshot => owner.Execute(() => formalDungeon?.Run.Snapshot);
 
@@ -67,7 +68,8 @@ internal sealed partial class GameSession
         bool training = expected.Tutorial is { Completed: false } pending && pending.DungeonId == dungeonId &&
             flow?.DungeonId == dungeonId && questId == 0 && difficulty == 0 &&
             tutorials!.Owns(expected.Job, dungeonId, catalog.Get(checked((int)dungeonId)));
-        if (!training && (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
+        bool trainingRoom = dungeonId == 5000 && questId == 0 && difficulty == 0;
+        if (!training && !trainingRoom && (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
             area.DungeonWorldMap is not { } worldMap || !towns.DungeonMaps.TryGetValue(worldMap,out var selectionMap) ||
             selectionMap.Error is not null || !selectionMap.Options.Any(option => option.DungeonId == dungeonId &&
                 (option.QuestId == -1 || (option.InProgress ? expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) :
@@ -104,8 +106,9 @@ internal sealed partial class GameSession
     {
         if (expected.DungeonState is not { } state) return null;
         state.Validate();
-        if (entry.IsOrdinary && (expected.Fatigue is null || debugSettings?.InfiniteFatigue != true && expected.Fatigue.Remaining == 0)) return null;
-        var ordinaryReturn = entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
+        if (entry.UsesFatigue && (expected.Fatigue is null || debugSettings?.InfiniteFatigue != true && expected.Fatigue.Remaining == 0)) return null;
+        var ordinaryReturn = entry.IsTrainingRoom ? expected.Position :
+            entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return null;
         QuestDropResources? questDrops = null;
         if (!entry.IsTutorial && questCatalog is not null && items is not null && pieces is not null)
@@ -228,7 +231,7 @@ internal sealed partial class GameSession
             if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading ||
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
-            if (dungeon.Entry.IsOrdinary && debugSettings?.InfiniteFatigue != true)
+            if (dungeon.Entry.UsesFatigue && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
                 Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run);

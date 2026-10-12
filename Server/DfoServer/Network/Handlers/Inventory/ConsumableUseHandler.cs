@@ -44,7 +44,11 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
         bool CanSend() => context.Session.CanPublishConsumable(guard);
         await context.Reply(CmdPacketType.USE_STACKABLE, ConsumableUsePackets.Ack(request, accepted),
             accepted ? "consumable_use_committed" : "consumable_use_rejected", CanSend);
-        // ACK44原生消费一次源数量；不推源14，但保留同事务更新的实际寻物任务条件。
+        // ACK44仍执行原生药效与pending收尾；1681沿同一条目解析静默还原数量，不触发获得提示。
+        if (accepted && result.PreserveSource)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE, InventoryPackets.Delta(guard.Character!.Inventory,
+                request.Position.List,[request.Position]), "training_consumable_source_preserved", CanSend);
+        // 保留实际库存事务更新的寻物任务条件；修炼场无库存变更，不虚构任务进度。
         if (result.Inventory?.Receipt is { } receipt && receipt.PreviousQuests is { } old &&
             !old.SequenceEqual(receipt.Character.ActiveMainQuests))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),

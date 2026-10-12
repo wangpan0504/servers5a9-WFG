@@ -44,12 +44,16 @@ internal sealed partial class GameSession
             var source = character.Inventory.Find(request.Position)!;
             if (source.Core.IsExpired(service.Clock.GetUtcNow().ToUnixTimeSeconds()))
                 return Reject("source-expired");
-            pendingConsumableUse = preliminary.Plan;
-            var result = CommitInventory(character, preliminary);
+            bool preserve = PreservesTrainingItems;
+            var actual = preserve ? new InventoryResult(true,0,new(character.Inventory,character.Inventory,
+                "training_use_recovery_consumable",new(character))) : preliminary;
+            pendingConsumableUse = actual.Plan;
+            var result = CommitInventory(character, actual);
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
             usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime);
-            return new ConsumableUseResult(ConsumableUseOutcome.Committed, "committed", result, UseGuard()) { SourceUid = source.Uid };
+            return new ConsumableUseResult(ConsumableUseOutcome.Committed, preserve ? "training-preserved" : "committed", result, UseGuard())
+                { SourceUid = source.Uid, PreserveSource = preserve };
         });
     }
 

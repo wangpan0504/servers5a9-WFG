@@ -49,6 +49,16 @@ internal static class DungeonMapPoolTests
         That(protectedPool.Resolve(definition with { Mazes = [maze,protectedStory] },maze,_ => 0).MapSpecification!
             .Select(map => map.Id).SequenceEqual([101,201]),"普通池排除剧情和叠层全部候选，不只排除首张地图");
         ExplicitCandidates();
+        var trainingMaze = new DungeonMaze(0,1,1,"BB",[new(0,0)],[new(0,0)],null,[]);
+        var trainingDefinition = new DungeonDefinition(5000,"dungeon/poongjintrainingroom/poongjintrainingroom.dgn",1,null,[trainingMaze],[]);
+        var trainingPool = new DungeonMapPool([new(36250,"map/poongjintrainingroom/11100(0,0)start.map",[5000],"[normal]",2)]);
+        var trainingRoom = trainingPool.Resolve(trainingDefinition,trainingMaze,_ => throw new InvalidOperationException());
+        That(trainingRoom.IsTrainingRoom && trainingRoom.Greed == "BB" && trainingRoom.StaticTopology is { Supported: true, Links.Count: 0 } &&
+            trainingRoom.MapSpecification is [{ Id: 36250, Kind: "boss" }],"修炼场同格起点终点使用归属start资源，保留BB而不建立越界邻接");
+        var invalidTrainingMaze = trainingMaze with { Bosses = [new(1,0)] };
+        That(ReferenceEquals(trainingPool.Resolve(trainingDefinition with { Id = 4999 },trainingMaze,_ => 0),trainingMaze) &&
+            ReferenceEquals(trainingPool.Resolve(trainingDefinition,invalidTrainingMaze,_ => 0),invalidTrainingMaze),
+            "修炼场资源放行不扩大到别的副本或不匹配坐标");
         Console.WriteLine($"PASS {Count-checks} 普通地图池归属、方向、随机与剧情隔离断言");
     }
 

@@ -18,6 +18,12 @@ internal sealed record DungeonStaticTopology(
             return Unsupported(grid.UnsupportedReason!);
         if (maze.MapSpecification is null)
             return Unsupported("未提供显式地图，不能生成静态连接");
+        // 修炼场BB保留资源原值；单房间没有实际邻接，不将其解释成普通越界门。
+        if (maze.IsTrainingRoom && maze.Width == 1 && maze.Height == 1 && maze.MapSpecification is [var training] &&
+            training.Kind == "boss" && training.Id >= 0 && !string.IsNullOrWhiteSpace(training.Path) &&
+            training.Position == new DungeonPoint(0,0) && maze.Starts.SequenceEqual([training.Position]) &&
+            maze.Bosses.SequenceEqual([training.Position]) && grid.Cells is [{ Index: 1 }])
+            return new([new(training,0)],[],null);
         var maps = new Dictionary<DungeonPoint, DungeonMap>();
         foreach (var map in maze.MapSpecification)
         {

@@ -61,7 +61,7 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
                 "delete_item_malformed");
             return CommandResult.Handled;
         }
-        var result = context.Session.MutateInventory(character => inventory.Delete(character, request), requireTown: IsCargo(request.List));
+        var result = context.Session.DeleteInventory(request, inventory);
         await context.Reply(CmdPacketType.DELETE_ITEM, InventoryPackets.Delete(request, result),
             result.Accepted ? "delete_item_committed" : "delete_item_rejected",
             result.Receipt is { } receipt ? () => context.Session.CanPublishInventory(receipt) : null);
