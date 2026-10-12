@@ -195,6 +195,8 @@ internal static class SinglePlayerDungeonRunTests
                 "ordinary loading fixture creates the existing identity-bound run");
             var run = created!;
             var firstIdentity = run.Snapshot.Identity;
+            That(run.Snapshot.MapPayload == DungeonMapPayload.Build,
+                "每个新实例首次入房独立构建地图，不借用其他实例缓存");
             var firstAction = Guid.NewGuid();
             That(run.ConfirmedInitializationCount == 0 && run.LastLoadingFact is null && run.MazeInitializationThreshold == 2 &&
                 run.CompleteLoading(firstIdentity with { InstanceId = Guid.NewGuid() }, firstAction, true).Outcome == DungeonRunOutcome.Rejected &&
@@ -212,11 +214,16 @@ internal static class SinglePlayerDungeonRunTests
             run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity, 10, 1));
             run.Move(run.Snapshot.Identity, Guid.NewGuid(), middle.Position);
             run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
+            That(run.Snapshot is { MapOperation: DungeonMapOperation.Current, MapPayload: DungeonMapPayload.Build },
+                "首次进入相邻房间保留完整地图与演员初始化");
             That(run.LastLoadingFact is { IsInitialLoading: false, DidInitializeMap: true, ConfirmedInitializationCount: 0 } &&
                 run.ClearFact is null && run.Phase == SinglePlayerDungeonPhase.Dungeon,
                 "a successful load without matching acceptance still installs cache but never completes a quest or dungeon");
             run.Move(run.Snapshot.Identity, Guid.NewGuid(), start.Position);
             var staleIdentity = run.Snapshot.Identity with { Epoch = firstIdentity.Epoch };
+            That(run.Snapshot is { MapOperation: DungeonMapOperation.Current, MapPayload: DungeonMapPayload.Cached } &&
+                run.Snapshot.LivingMonsters.Count == 0,
+                "回访使用原 MAP 缓存并保留死亡集，和任务初始化统计标志独立");
             var beforeRejected = run.LastLoadingFact;
             That(run.CompleteLoading(staleIdentity, Guid.NewGuid(), true).Outcome == DungeonRunOutcome.Rejected &&
                 ReferenceEquals(beforeRejected, run.LastLoadingFact) && run.ConfirmedInitializationCount == 0,
@@ -226,6 +233,8 @@ internal static class SinglePlayerDungeonRunTests
                 "individual movement reuses the first-room cache while ordinary revisit initializes it again");
             run.Move(run.Snapshot.Identity, Guid.NewGuid(), middle.Position);
             run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid(), true);
+            That(run.Snapshot.MapPayload == DungeonMapPayload.Cached,
+                "再次回访已加载中间房间不重建对象");
             That(run.LastLoadingFact!.DidInitializeMap == !reuse && run.ConfirmedInitializationCount == (reuse ? 0u : 2u),
                 "cache created before a matching quest is accepted stays reusable without retroactive progress");
             run.Move(run.Snapshot.Identity, Guid.NewGuid(), boss.Position);

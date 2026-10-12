@@ -124,6 +124,15 @@ internal static class DungeonMonsterPacketsTests
         That(BinaryPrimitives.ReadUInt32LittleEndian(specialBody.AsSpan(passive + 8)) == 109006903 && specialBody[passive + 12] == 0 &&
             specialBody[passive + 13] == 9 && specialBody[passive + 16] == 255 && specialBody[passive + 21] == 1,
             "机关父对象保留真实模板，类型9独立于普通怪物等级和死亡资格");
+        foreach (var operation in new[] { DungeonMapOperation.Current, DungeonMapOperation.RestoreBase })
+        {
+            byte[] cached = DungeonPackets.StartMap(ordinaryEntry, ordinaryMonsters, 0xF1234567,
+                operation, DungeonMapPayload.Cached);
+            That(cached.Length == 16 && cached[0] == ordinaryMap.Position.X && cached[1] == ordinaryMap.Position.Y &&
+                cached[2] == (byte)operation && BinaryPrimitives.ReadUInt32LittleEndian(cached.AsSpan(3)) == 0xF1234567 &&
+                cached[13] == 0 && cached[14] == 0 && cached[15] == byte.MaxValue,
+                "回访缓存体只保留格、操作和公共尾部，不重放地图 ID、机关父子或物品列表");
+        }
         Console.WriteLine($"PASS {Count - checks} dungeon monster packet assertions");
 
         void Reject<T>(Action action, string name) where T : Exception

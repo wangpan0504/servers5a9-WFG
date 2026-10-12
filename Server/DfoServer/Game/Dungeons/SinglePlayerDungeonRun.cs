@@ -70,6 +70,7 @@ internal sealed class SinglePlayerDungeonRun
         public DungeonElevatorState? Elevator { get; } = DungeonElevatorState.Create(plan);
         public HashSet<ushort> Dead { get; } = [];
         public HashSet<ushort> Culled { get; } = [];
+        public bool Loaded { get; set; }
         public bool Cleared => Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey) || Culled.Contains(monster.ObjectKey));
     }
     private sealed record ActionFact(DungeonRunIdentity Identity, string Kind, DungeonPoint? Target);
@@ -286,6 +287,7 @@ internal sealed class SinglePlayerDungeonRun
         bool initialized = InitializationCounterSupported && (!entry.IndividualMapMovement || !initializedMapSlots.Contains(slot));
         uint count = checked(ConfirmedInitializationCount + (!first && initialized && hasMatchingQuest ? 1u : 0u));
         acceptedActions.Add(actionId, new(expected, "loaded", null));
+        current.Loaded = true;
         // NOTI28建立新Run并清统计；接取不重置。缓存安装与活跃任务计数分开，完成仍由真实清图判定。
         if (InitializationCounterSupported)
             initializedMapSlots.Add(slot);
@@ -315,7 +317,7 @@ internal sealed class SinglePlayerDungeonRun
             next = replacement;
         current = next;
         mapOperation = DungeonMapOperation.Current;
-        mapPayload = DungeonMapPayload.Build;
+        mapPayload = current.Loaded ? DungeonMapPayload.Cached : DungeonMapPayload.Build;
         pendingLayerBaseAck = null;
         Phase = SinglePlayerDungeonPhase.Loading;
         Advance();

@@ -819,7 +819,7 @@ internal static partial class FormalDungeonTcpTests
         That(peer.Expect(0, 28).Body[7] == 0, "已完成主线的生产NOTI28选择真实普通maze0");
         byte[] map = peer.Expect(0, 29).Body;
         var route = new (byte X, byte Y, uint Map)[] { (0, 1, 58548), (1, 1, 58549), (1, 0, 58550),
-            (1, 1, 58549), (2, 1, 58551), (2, 0, 58552), (3, 0, 58553) };
+            (1, 1, 58549), (1, 0, 58550), (1, 1, 58549), (2, 1, 58551), (2, 0, 58552), (3, 0, 58553) };
         var visited = new HashSet<uint>();
         int ordinaryPicked = 0;
         byte[]? bossReport = null;
@@ -830,15 +830,19 @@ internal static partial class FormalDungeonTcpTests
                 byte[] move = new byte[100]; move[0] = route[room].X; move[1] = route[room].Y;
                 peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
             }
-            That(U32(map, 14) == route[room].Map, "已领奖角色普通挑战逐房沿真实连接，回访使用原清房状态");
+            bool revisit = visited.Contains(route[room].Map);
+            That(map[0] == route[room].X && map[1] == route[room].Y && map[2] == 0 &&
+                (revisit ? map.Length == 16 && map[13] == 0 && map[14] == 0 && map[15] == byte.MaxValue :
+                    map[13] == 1 && U32(map, 14) == route[room].Map),
+                "首次逐房初始化；普通及机关房回访按16B缓存正文恢复，不重建父子演员或地面对象");
             Load(peer);
             visited.Add(route[room].Map);
             ExpectFatigue(visited.Count);
             // 完整父子行仍由生产初始化消费；此处只对普通静态目标做合成战斗，不宣称机关奖励已验收。
-            var rows = Enumerable.Range(0, map[18]).Select(row => 19 + row * 22)
+            var rows = Enumerable.Range(0, revisit ? 0 : map[18]).Select(row => 19 + row * 22)
                 .Where(offset => map[offset + 13] != 9 && map[offset + 14] == 0)
                 .OrderBy(offset => map[offset + 13] == 3).ToArray();
-            if (room == 3) That(rows.Length == 0, "普通回访不重新生成已清静态怪物");
+            if (revisit) That(rows.Length == 0, "普通回访不重新生成已清静态怪物或机关父子演员");
             foreach (int offset in rows)
             {
                 ushort key = U16(map, offset + 6);

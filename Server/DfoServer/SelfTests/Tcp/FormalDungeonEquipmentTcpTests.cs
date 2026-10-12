@@ -66,7 +66,10 @@ internal static partial class FormalDungeonTcpTests
                 That(Assets() == assets, $"副本{family.Name}穿脱交换保留所有UID、核心和特殊详情");
                 byte[] move = new byte[100]; move[0] = room++ % 2 == 0 ? (byte)1 : (byte)0; move[1] = 1;
                 peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
-                That(U32(map, 14) == (move[0] == 0 ? 58548u : 58549u), $"副本{family.Name}换装后实际Handler45继续过房");
+                That(map[0] == move[0] && map[1] == move[1] && map[2] == 0 &&
+                    (room == 1 ? map[13] == 1 && U32(map, 14) == 58549 :
+                        map.Length == 16 && map[13] == 0 && map[14] == 0 && map[15] == byte.MaxValue),
+                    $"副本{family.Name}换装后实际Handler45继续过房，已清房间沿缓存模式恢复");
                 Load(peer);
                 peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 154, 0, 0, 0]);
                 if (room == 1) ClearRoom(map);

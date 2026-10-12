@@ -59,7 +59,8 @@ internal static class DungeonStoryEventPublicationTests
                 .GetConstructors(BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic)
                 .Single(ctor => ctor.GetParameters().Length == args.Length).Invoke(args);
             var dungeon = Nested("FormalDungeon",entry,route,run,authority,1u,new DungeonGroundState(run!,route.Rooms,[],""),
-                new Dictionary<int,DungeonExplicitDropPool>(),(Func<int,int>)(_ => 0));
+                new Dictionary<int,DungeonExplicitDropPool>(),(Func<int,int>)(_ => 0),null,
+                System.Collections.Immutable.ImmutableDictionary<ushort,DungeonDropGenerationPlan>.Empty);
             var prepared = Nested("PreparedFormalDungeon",expected,session.SelectionEpoch,dungeon,11u);
             That(typeof(GameSession).GetMethod("InstallFormalDungeon",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(session,[prepared]) is not null,
                 "合成安装沿原attempt/key预留事务，不绕过在线角色状态");
