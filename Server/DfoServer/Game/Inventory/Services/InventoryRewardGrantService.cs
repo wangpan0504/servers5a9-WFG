@@ -42,9 +42,9 @@ internal static class InventoryRewardGrantService
         => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow, shopExpiration, contracts, allowOverflowMail);
 
     public static InventoryResult TryGrantItems(Character character, IReadOnlyList<InventoryItem> instances, ItemCatalog catalog,
-        GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null)
+        GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null, bool allowOverflowMail = false)
         => Grant(character, instances.Select(item => new InventoryReward(item.Core.ItemId, item.Core.Count)).ToArray(),
-            instances, catalog, goldLimits, pieces, utcNow);
+            instances, catalog, goldLimits, pieces, utcNow, allowOverflowMail: allowOverflowMail);
 
     static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
         ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false,
@@ -252,7 +252,8 @@ internal static class InventoryRewardGrantService
                 {
                     int count = Math.Min(remaining, template.StackLimit);
                     var core = prototype.IsStackable ? prototype with { Value = count } : prototype;
-                    overflowItems!.Add(CreateItem(template, new(list, range.Start), core));
+                    overflowItems!.Add(instance is null ? CreateItem(template, new(list, range.Start), core) :
+                        instance with { Position = new(list, range.Start), Core = core });
                     remaining -= count;
                 }
                 return true;

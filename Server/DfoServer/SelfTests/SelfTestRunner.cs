@@ -16,6 +16,10 @@ internal static class SelfTestRunner
         CommandLineTests.Run();
         CashShopTests.RunCore();
         PremiumContractTests.RunCore();
+        EnchantmentTests.RunCore();
+        EnhancementTests.RunCore();
+        CreatureEggTests.RunCore();
+        AvatarPackageTests.RunCore();
         FrameCrcTests.Run();
         CreatureProjectionTests.RunCore();
         await BufferedLogTests.RunAsync();
@@ -148,6 +152,10 @@ internal static class SelfTestRunner
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
         PremiumContractTests.RunResources(itemResources, pvf);
+        EnchantmentTests.RunResources(itemResources, itemResources.Enchantments);
+        EnhancementTests.RunResources(itemResources, itemResources.Enhancements);
+        CreatureEggTests.RunResources(itemResources.CreatureEggs, itemResources.Items);
+        AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         MagicBoxTests.Run(towns, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);

@@ -28,7 +28,9 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         bool rebuildMain = silentMainMove && changedSlots.Where(slot => slot.List == InventoryListType.Main)
             .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
                 receipt.Index.FindUid(item.Uid)?.Core.Count != item.Core.Count);
-        if (changedSlots.Any(slot => receipt.Index.Find(slot)?.Creature is not null))
+        bool creatureDetailsChanged = changedSlots.Any(slot => receipt.Index.Find(slot)?.Creature is not null);
+        bool hatchCreature = plan.Reason == "hatch_creature_egg";
+        if (creatureDetailsChanged && !hatchCreature)
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
         // 开盒确认后客户端会立即读取完整容器。仅发送增量会让结果窗读取到旧槽位，
         // 双倍或十连奖励随后显示为加载中；普通背包操作仍沿用增量协议。
@@ -65,6 +67,9 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 receipt.Index.Find(slot) is { } now && old.Core.ItemId != now.Core.ItemId).ToArray();
             if (replaced.Length != 0)
                 await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(InventorySnapshot.Empty, list, replaced), "inventory_clear_replaced", CanSend);
+            // 孵化替换先清旧蛋模板，再提交完整详情，最后让新宠物引用已到达的详情。
+            if (hatchCreature && creatureDetailsChanged && list == InventoryListType.Pet)
+                await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index), "inventory_committed_delta", CanSend);
         }
         if (refreshEquipment && changedSlots.Any(slot => slot.List == InventoryListType.Equipment))

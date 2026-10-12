@@ -22,6 +22,10 @@ internal sealed class ItemResources
     public MagicBoxCatalog MagicBoxes { get; }
     public PremiumContractCatalog Contracts { get; }
     public RecoveryConsumableCatalog RecoveryConsumables { get; }
+    public EnchantmentCatalog Enchantments { get; }
+    public EnhancementCatalog Enhancements { get; }
+    public CreatureEggCatalog CreatureEggs { get; }
+    public AvatarPackageCatalog AvatarPackages { get; }
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
     readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
     public DungeonItemDropCatalog DungeonDropItems => dungeonDropItems.Value;
@@ -41,6 +45,10 @@ internal sealed class ItemResources
         Contracts = PremiumContractCatalog.Load(archive);
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate, Contracts.RecognizedItems);
         RecoveryConsumables = new(archive, stackable);
+        Enchantments = new(archive, stackable);
+        Enhancements = new(archive, stackable, equipment);
+        CreatureEggs = new(archive, equipment, Items);
+        AvatarPackages = new(archive, equipment, stackable);
         RandomOptions = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));

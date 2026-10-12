@@ -5,6 +5,11 @@ namespace DfoServer.Network.Parsers.Inventory;
 
 internal static class BoosterRequests
 {
+    public static short ReadSourceSlot(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 6) throw new InvalidDataException("礼包请求源字段未完整闭合");
+        return BinaryPrimitives.ReadInt16LittleEndian(body);
+    }
     // 普通物品选择的两段附加选项计数均为0；时装等扩展不能按此布局截断。
     public static bool IsItemSelection(ReadOnlySpan<byte> body) => body.Length >= 10 && (body.Length - 10) % 4 == 0 &&
         body[^2] == 0 && body[^1] == 0;
