@@ -86,7 +86,16 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
     {
         while (!stop.IsCancellationRequested)
         {
-            var client = await listener.AcceptTcpClientAsync(stop);
+            TcpClient client;
+            try
+            {
+                client = await listener.AcceptTcpClientAsync(stop);
+            }
+            catch (SocketException error) when (stop.IsCancellationRequested && error.SocketErrorCode == SocketError.OperationAborted)
+            {
+                // 只把本监听已取消的待接入操作视为正常停止，其他套接字故障继续传播。
+                break;
+            }
             if (client.Client.RemoteEndPoint is not IPEndPoint peer || active.Count >= 64)
             {
                 client.Dispose();

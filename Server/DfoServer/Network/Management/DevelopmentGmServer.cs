@@ -33,8 +33,13 @@ internal static class DevelopmentGmServer
                 {
                     client = await listener.AcceptTcpClientAsync(stop);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (stop.IsCancellationRequested)
                 {
+                    break;
+                }
+                catch (SocketException error) when (stop.IsCancellationRequested && error.SocketErrorCode == SocketError.OperationAborted)
+                {
+                    // Windows 取消待接入操作时可能返回 995，而非 OperationCanceledException。
                     break;
                 }
 

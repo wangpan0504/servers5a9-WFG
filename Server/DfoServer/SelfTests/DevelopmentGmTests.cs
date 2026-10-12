@@ -11,11 +11,76 @@ using DfoServer.Network.Parsers;
 using DfoServer.Network.Management;
 using DfoServer.Persistence;
 using PvfLib;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 
 namespace DfoServer;
 
 internal static class DevelopmentGmTests
 {
+    public static async Task RunCoreAsync()
+    {
+        int checks = Count;
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            using var stop = new CancellationTokenSource();
+            int handled = 0;
+            var (port, loop) = DevelopmentGmServer.StartEphemeral(_ => { handled++; return "OK"; }, stop.Token);
+            using var client = new TcpClient();
+            try
+            {
+                if (attempt == 7)
+                {
+                    // 完整回执确认监听可用，再以未完整命令覆盖接入/读取期间的取消。
+                    using var first = new TcpClient();
+                    await first.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TimeSpan.FromSeconds(3));
+                    await first.GetStream().WriteAsync("probe\n"u8.ToArray()).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+                    using var reader = new StreamReader(first.GetStream(), Encoding.UTF8);
+                    That(await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(3)) == "OK", "GM取消前已返回完整命令回执");
+                    await client.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TimeSpan.FromSeconds(3));
+                    await client.GetStream().WriteAsync("partial"u8.ToArray()).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+                }
+            }
+            finally
+            {
+                stop.Cancel();
+                stop.Cancel();
+                await loop.WaitAsync(TimeSpan.FromSeconds(3));
+            }
+            That(loop.IsCompletedSuccessfully && handled == (attempt == 7 ? 1 : 0), "GM待接入或未完整命令取消正常结束，重复取消不执行命令");
+            client.Dispose();
+            var released = new TcpListener(IPAddress.Loopback, port);
+            try
+            {
+                released.Start();
+                That(released.Server.IsBound, "GM停止后端口可重新绑定");
+            }
+            finally { released.Stop(); }
+        }
+
+        using var failureStop = new CancellationTokenSource();
+        var expected = new InvalidOperationException("synthetic GM handler failure");
+        var (failurePort, failed) = DevelopmentGmServer.StartEphemeral(_ => throw expected, failureStop.Token);
+        using var failureClient = new TcpClient();
+        bool propagated = false;
+        try
+        {
+            await failureClient.ConnectAsync(IPAddress.Loopback, failurePort).WaitAsync(TimeSpan.FromSeconds(3));
+            await failureClient.GetStream().WriteAsync("fail\n"u8.ToArray()).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+            await failed.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+        catch (InvalidOperationException error) when (ReferenceEquals(error, expected)) { propagated = true; }
+        finally
+        {
+            failureStop.Cancel();
+            try { await failed.WaitAsync(TimeSpan.FromSeconds(3)); }
+            catch (InvalidOperationException error) when (ReferenceEquals(error, expected)) { }
+        }
+        That(propagated, "GM未纳入单连接隔离的处理异常仍向宿主传播");
+        Console.WriteLine($"PASS {Count - checks} development GM cancellation assertions");
+    }
+
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         var learning = SkillLearningCatalog.Load(pvf);

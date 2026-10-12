@@ -122,6 +122,8 @@ internal static class ServerLogTests
                 TestCheck.That(reservation.Server.IsBound, "startup failure releases the earlier channel listener");
             }
             finally { reservation.Stop(); }
+
+            await CheckListenerCancellationAsync(options, root);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} server stdout log assertions");
@@ -130,5 +132,90 @@ internal static class ServerLogTests
     sealed class EmptyProtocol : IConnectionProtocol
     {
         public Task RunAsync(ConnectionContext connection) => Task.CompletedTask;
+    }
+
+    static async Task CheckListenerCancellationAsync(ServerOptions ports, string root)
+    {
+        foreach (bool reading in new[] { false, true })
+        {
+            string directory = Path.Combine(root, reading ? "cancel-reading" : "cancel-accept");
+            using var output = new StringWriter();
+            using var log = new ServerLog(directory, output);
+            using var stop = new CancellationTokenSource();
+            var channelProtocol = new WaitingProtocol();
+            var gameProtocol = new WaitingProtocol();
+            var host = new ServerHost(ports with { LogDirectory = directory }, channelProtocol, gameProtocol, null, () => { }, log);
+            Task running = host.RunAsync(stop.Token);
+            using var channel = new TcpClient();
+            using var game = new TcpClient();
+            try
+            {
+                if (reading)
+                {
+                    await channel.ConnectAsync(IPAddress.Loopback, ports.ChannelPort).WaitAsync(TimeSpan.FromSeconds(3));
+                    await game.ConnectAsync(IPAddress.Loopback, ports.GamePort).WaitAsync(TimeSpan.FromSeconds(3));
+                    await Task.WhenAll(channelProtocol.Started.Task, gameProtocol.Started.Task).WaitAsync(TimeSpan.FromSeconds(3));
+                }
+            }
+            finally
+            {
+                stop.Cancel();
+                stop.Cancel();
+                await running.WaitAsync(TimeSpan.FromSeconds(3));
+            }
+            TestCheck.That(running.IsCompletedSuccessfully && output.ToString().Contains("[stopped]") &&
+                !output.ToString().Contains("[listener_failed]"), "待接入或连接读取期间取消宿主正常结束，不记录监听失败");
+            if (reading)
+            {
+                TestCheck.That(channelProtocol.Released && gameProtocol.Released, "宿主退出前等待频道与游戏连接清理");
+                foreach (TcpClient client in new[] { channel, game })
+                    TestCheck.That(await client.GetStream().ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(3)) == 0,
+                        "宿主停止释放正在读取的客户端连接");
+            }
+        }
+
+        // 管理任务的真实错误不在 Accept 的取消边界内，即使同时请求停止也不能吞掉。
+        foreach (bool canceled in new[] { false, true })
+        {
+            string directory = Path.Combine(root, "management-failure-" + canceled);
+            using var output = new StringWriter();
+            using var log = new ServerLog(directory, output);
+            using var stop = new CancellationTokenSource();
+            var management = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var expected = new SocketException((int)(canceled ? SocketError.ConnectionReset : SocketError.OperationAborted));
+            var protocol = new EmptyProtocol();
+            Task running = new ServerHost(ports with { LogDirectory = directory }, protocol, protocol,
+                _ => management.Task, () => { }, log).RunAsync(stop.Token);
+            bool propagated = false;
+            try
+            {
+                if (canceled) stop.Cancel();
+                management.SetException(expected);
+                await running.WaitAsync(TimeSpan.FromSeconds(3));
+            }
+            catch (SocketException error) when (ReferenceEquals(error, expected)) { propagated = true; }
+            finally
+            {
+                stop.Cancel();
+                management.TrySetException(expected);
+                try { await running.WaitAsync(TimeSpan.FromSeconds(3)); }
+                catch (SocketException error) when (ReferenceEquals(error, expected)) { }
+            }
+            TestCheck.That(propagated, "未取消995及取消时其他真实套接字错误仍传播");
+        }
+    }
+
+    sealed class WaitingProtocol : IConnectionProtocol
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Released { get; private set; }
+
+        public async Task RunAsync(ConnectionContext connection)
+        {
+            ValueTask<int> reading = connection.Stream.ReadAsync(new byte[1], connection.Stop);
+            Started.TrySetResult();
+            try { await reading; }
+            finally { Released = true; }
+        }
     }
 }
