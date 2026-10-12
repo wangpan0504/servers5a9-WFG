@@ -116,6 +116,8 @@ internal sealed partial class CharacterRepository
         DungeonGroundPickupPreparation prepared, InventoryPlan plan) => owner.Execute(() =>
     {
         var ground = prepared.Ground;
+        if (ground.InventoryOrigin is not null)
+            return CommitDiscardPickup(owner, expected, prepared, plan);
         if (ground.UsesCollectionLedger)
             return CommitDropCollectionPickup(owner, expected, prepared, plan);
         ValidateLootCore(ground.Core);

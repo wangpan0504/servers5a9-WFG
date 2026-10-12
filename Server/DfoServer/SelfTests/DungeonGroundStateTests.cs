@@ -202,6 +202,7 @@ internal static class DungeonGroundStateTests
         }), "失败尝试不能重抽");
         That(failures == 1 && failed.Ground.Snapshot.Items.IsEmpty, "factory失败保留有界拒绝状态，未创建可拾取对象");
         MultipleGroundObjects();
+        InventoryGroundRevisit();
         Console.WriteLine($"PASS {Count - checks} 地面冻结与拾取生命周期纯合成断言");
 
         void MultipleGroundObjects()
@@ -269,6 +270,39 @@ internal static class DungeonGroundStateTests
 
         void RejectData(Action action, string name) => Reject<InvalidDataException>(action, name);
         void RejectState(Action action, string name) => Reject<InvalidOperationException>(action, name);
+    }
+
+    static void InventoryGroundRevisit()
+    {
+        var f = Fixture(withMiddle: true);
+        Load(f.Run);
+        var identity = f.Run.Snapshot.Identity;
+        var source = new InventoryItem(7, new(InventoryListType.Main, 61), Core());
+        var ground = new DungeonGroundObject(Guid.NewGuid(), identity, new(identity.CharacterId, 600, f.Plans[0].Room.Map, 500, 200, 0), source.Core)
+            { InventoryOrigin = new(source, 1, 17), ResourceIdentity = "inventory" };
+        That(!f.Ground.PrepareInventoryDrop(ground with { DeathIdentity = identity with { Epoch = identity.Epoch - 1 } }) &&
+            !f.Ground.PrepareInventoryDrop(ground with { Reservation = ground.Reservation with { GroundKey = 400 } }),
+            "旧epoch及与怪物预留掉落碰撞的丢弃key不能建立地面来源");
+        That(f.Ground.PrepareInventoryDrop(ground) && f.Ground.PrepareInventoryDrop(ground) && f.Ground.HasPendingOperation &&
+            f.Ground.FindAvailable(identity, 600) is null && !f.Ground.ExpireRun(),
+            "原准备精确重试，不在SQL确认前暴露物品或结束地面owner");
+        That(!f.Ground.ConfirmInventoryDrop(ground with { }) && f.Ground.ConfirmInventoryDrop(ground) &&
+            !f.Ground.HasPendingOperation && !f.Ground.ConfirmInventoryDrop(ground),
+            "只有原准备能发布一次丢弃；复制字段不能替代对象能力");
+        FreezeCommit(f, 100, 1, () => null);
+        FreezeCommit(f, 101, 2, () => null);
+        f.Run.Move(f.Run.Snapshot.Identity, Guid.NewGuid(), f.Plans[1].Room.Map.Position);
+        Load(f.Run);
+        That(f.Ground.FindAvailable(f.Run.Snapshot.Identity, 600) is null,
+            "物品所在MAP不变，其他房间不能拾取库存来源物品");
+        FreezeCommit(f, 102, 3, () => null);
+        f.Run.Move(f.Run.Snapshot.Identity, Guid.NewGuid(), f.Plans[0].Room.Map.Position);
+        Load(f.Run);
+        That(ReferenceEquals(f.Ground.FindAvailable(f.Run.Snapshot.Identity, 600), ground) &&
+            f.Ground.FindAvailable(identity, 600) is null, "回访保留完整源和core，以当前加载epoch拾取");
+        var pickup = f.Ground.PreparePickup(f.Run.Snapshot.Identity, ground)!;
+        That(f.Ground.ConfirmPickup(pickup) && f.Ground.FindAvailable(f.Run.Snapshot.Identity, 600) is null,
+            "回访丢弃物只能消费一次，已拾取对象不复活");
     }
 
     static FrozenDungeonGroundDeath FreezeCommit(GroundFixture fixture, ushort key, long sequence, Func<ItemCore?> factory)

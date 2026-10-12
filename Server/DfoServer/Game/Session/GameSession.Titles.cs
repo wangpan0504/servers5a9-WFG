@@ -35,7 +35,7 @@ internal sealed partial class GameSession
             ? !Ready && Phase == SessionPhase.Unselected
             : Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Dungeon or SessionPhase.Settlement &&
               !HasPendingQuestScene && pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null &&
-              pendingDungeonContinuation is null && !HasPendingQuestReplay && formalDungeon?.Ground.HasPendingPickup != true &&
+              pendingDungeonContinuation is null && !HasPendingQuestReplay && formalDungeon?.Ground.HasPendingOperation != true &&
               formalDungeon?.HasPendingFatigue != true && formalDungeon?.Run.HasPendingDeath != true && formalDungeon?.Run.HasPendingSettlement != true));
     }
     public bool CanPublishTitle(InventoryCommitReceipt receipt, bool initializing = false) => owner.Execute(() =>

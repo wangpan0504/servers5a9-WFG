@@ -15,6 +15,12 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
     public InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards) => InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, goldLimits, pieces);
     public InventoryResult Delete(Character character, InventoryDeleteRequest request, bool preserveClearCube = false) =>
         InventoryDeleteService.PlanBatch(character.Inventory, request, preserveClearCube);
+    public (InventoryDiscardPlan? Plan, ushort Error) Discard(Character character, InventoryDiscardRequest request)
+    {
+        if (request.Slot > short.MaxValue || character.Inventory.Find(new((InventoryListType)request.List, (short)request.Slot)) is not { } source)
+            return (null, 17);
+        return InventoryDiscardPlan.Prepare(character, request, catalog.Get(source.Core.ItemId), DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+    }
     public InventoryResult UseGuardianGem(Character character, GuardianGemUseRequest request) =>
         InventoryGuardianGemService.Plan(character.Inventory, request, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     public InventoryResult Lock(Character character, InventorySlot slot, InventoryLockOperation operation) =>

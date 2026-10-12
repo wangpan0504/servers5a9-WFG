@@ -30,6 +30,7 @@ internal sealed record DungeonGroundObject(Guid DeathEventId, DungeonRunIdentity
 {
     public string ResourceIdentity { get; init; } = "";
     public bool UsesCollectionLedger { get; init; }
+    public DungeonInventoryDiscardOrigin? InventoryOrigin { get; init; }
     public bool IsGold => Content.IsGold;
     public int GoldAmount => Content.GoldAmount;
     public ItemCore Core => Content.Item ?? throw new InvalidOperationException("地面金币使用数量模型，不提供虚假物品Core");
@@ -87,10 +88,12 @@ internal sealed class DungeonGroundState
         public bool Committed { get; set; }
     }
 
-    sealed class ItemState(DungeonGroundObject ground, DeathState death)
+    sealed class ItemState(DungeonGroundObject ground, DeathState? death)
     {
         public DungeonGroundObject Ground { get; } = ground;
-        public DeathState Death { get; } = death;
+        public DeathState? Death { get; } = death;
+        public bool Committed => Death?.Committed ?? (Ground.InventoryOrigin is not null &&
+            Status is DungeonGroundStatus.Available or DungeonGroundStatus.PickupPending or DungeonGroundStatus.Picked);
         public DungeonGroundStatus Status { get; set; } = DungeonGroundStatus.Frozen;
     }
 
@@ -101,7 +104,9 @@ internal sealed class DungeonGroundState
     readonly Dictionary<ushort, DeathState> frozen = [];
     readonly Dictionary<uint, ItemState> groundItems = [];
     readonly HashSet<ushort> failedOrCreating = [];
+    readonly HashSet<uint> occupiedKeys = [];
     DungeonGroundPickupPreparation? pendingPickup;
+    DungeonGroundObject? pendingInventoryDrop;
 
     // 预留范围是否已持久化、资源准入和RecordSlot合法常量由主调用方证明；这里只检查完整对象身份与碰撞。
     public DungeonGroundState(SinglePlayerDungeonRun run, IReadOnlyList<DungeonMonsterPlan> routePlans,
@@ -115,7 +120,8 @@ internal sealed class DungeonGroundState
         var initial = run.Snapshot;
         monsters = [];
         var maps = new Dictionary<ushort, DungeonMap>();
-        var occupied = new HashSet<uint> { initial.Identity.CharacterId };
+        var occupied = occupiedKeys;
+        occupied.Add(initial.Identity.CharacterId);
         foreach (var plan in routePlans)
         {
             foreach (var actor in plan.SpecialObjects)
@@ -149,6 +155,34 @@ internal sealed class DungeonGroundState
 
     public bool HasReservation(ushort monsterKey) => reservations.ContainsKey(monsterKey);
     public bool HasPendingPickup => pendingPickup is not null;
+    public bool HasPendingOperation => HasPendingPickup || pendingInventoryDrop is not null;
+
+    public bool PrepareInventoryDrop(DungeonGroundObject ground)
+    {
+        var current = SynchronizeRoom();
+        if (!CanPickup(current, ground.DeathIdentity) || HasPendingPickup || ground.InventoryOrigin is null || ground.IsGold ||
+            ground.DeathEventId == Guid.Empty || ground.Reservation.Map != current.CurrentMap ||
+            ground.Reservation.MonsterKey != current.Identity.CharacterId || ground.Reservation.GroundKey is 0 or > ushort.MaxValue)
+            return false;
+        if (pendingInventoryDrop is not null)
+            return ReferenceEquals(pendingInventoryDrop, ground);
+        ground.Content.Validate();
+        if (!occupiedKeys.Add(ground.Reservation.GroundKey)) return false;
+        groundItems.Add(ground.Reservation.GroundKey, new(ground, null));
+        pendingInventoryDrop = ground;
+        return true;
+    }
+
+    public bool ConfirmInventoryDrop(DungeonGroundObject ground)
+    {
+        var current = SynchronizeRoom();
+        if (!ReferenceEquals(pendingInventoryDrop, ground) || !CanPickup(current, ground.DeathIdentity) ||
+            !TryOriginal(ground, out var state) || state.Status != DungeonGroundStatus.Frozen ||
+            ground.Reservation.Map != current.CurrentMap) return false;
+        state.Status = DungeonGroundStatus.Available;
+        pendingInventoryDrop = null;
+        return true;
+    }
 
     public DungeonGroundSnapshot Snapshot
     {
@@ -249,7 +283,7 @@ internal sealed class DungeonGroundState
         var current = SynchronizeRoom();
         if (!CanPickup(current, expected))
             return null;
-        return groundItems.TryGetValue(groundKey, out var state) && state.Death.Committed &&
+        return groundItems.TryGetValue(groundKey, out var state) && state.Committed &&
             state.Status == DungeonGroundStatus.Available && state.Ground.Reservation.Map == current.CurrentMap
             ? state.Ground : null;
     }
@@ -262,7 +296,7 @@ internal sealed class DungeonGroundState
             return null;
         if (pendingPickup is not null)
             return pendingPickup.Identity == expected && ReferenceEquals(pendingPickup.Ground, original) ? pendingPickup : null;
-        if (!TryOriginal(original, out var state) || !state.Death.Committed || state.Status != DungeonGroundStatus.Available ||
+        if (pendingInventoryDrop is not null || !TryOriginal(original, out var state) || !state.Committed || state.Status != DungeonGroundStatus.Available ||
             original.Reservation.Map != current.CurrentMap)
             return null;
         pendingPickup = new(expected, original);
@@ -293,7 +327,7 @@ internal sealed class DungeonGroundState
     // HasPendingPickup仍由Session在Move/Return前核对，不能取消结果不明的资产提交。
     public bool ExpireRun()
     {
-        if (HasPendingPickup || run.Phase != SinglePlayerDungeonPhase.Returned)
+        if (HasPendingOperation || run.Phase != SinglePlayerDungeonPhase.Returned)
             return false;
         ExpireUnpicked();
         return true;

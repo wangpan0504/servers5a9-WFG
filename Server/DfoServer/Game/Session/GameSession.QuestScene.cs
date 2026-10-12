@@ -42,7 +42,7 @@ internal sealed partial class GameSession
         {
             var dungeon = formalDungeon;
             var character = Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement && dungeon is not null &&
-                !dungeon.Ground.HasPendingPickup && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && pendingQuestCompletion is null
+                !dungeon.Ground.HasPendingOperation && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && pendingQuestCompletion is null
                 ? Selected : null;
             var snapshot = dungeon?.Run.Snapshot;
             var room = snapshot is null ? null : dungeon!.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;

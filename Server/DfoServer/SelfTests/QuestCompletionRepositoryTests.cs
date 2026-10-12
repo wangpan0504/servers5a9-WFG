@@ -354,6 +354,8 @@ internal static class QuestCompletionRepositoryTests
         }
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected, DungeonGroundPickupPreparation prepared, InventoryPlan plan) =>
             inner.CommitDungeonPickup(owner, expected, prepared, plan);
+        public Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared) =>
+            inner.CommitDungeonDiscard(owner, prepared);
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan)
         {
             var result = inner.CommitInventory(owner, expected, plan);

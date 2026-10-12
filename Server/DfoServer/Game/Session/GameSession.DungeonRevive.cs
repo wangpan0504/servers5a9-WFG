@@ -38,5 +38,5 @@ internal sealed partial class GameSession
     bool CanChangeDungeonLife() => Ready && Selected is not null && Phase == SessionPhase.Dungeon &&
         formalDungeon is { } dungeon && dungeon.Run.Phase == SinglePlayerDungeonPhase.Dungeon &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue &&
-        !dungeon.Ground.HasPendingPickup && dungeon.PendingTutorialClear is null && !HasPendingQuestScene;
+        !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null && !HasPendingQuestScene;
 }

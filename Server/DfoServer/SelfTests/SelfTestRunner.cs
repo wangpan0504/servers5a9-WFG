@@ -94,6 +94,7 @@ internal static class SelfTestRunner
         InventoryWriteTests.Run();
         InventoryBatchTests.RunCore();
         InventoryCoreGrantTests.RunCore();
+        Testing.Inventory.InventoryDiscardTests.RunCore();
         SkillMaterialTests.Run();
         DungeonDeathProtocolTests.Run();
         NativeDungeonCombatAuthorityTests.Run();

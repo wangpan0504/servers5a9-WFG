@@ -23,6 +23,7 @@ internal sealed partial class GameSession
         ImmutableDictionary<ushort, DungeonDropGenerationPlan> DropPlans)
     {
         public bool HasPendingFatigue { get; set; }
+        public DungeonInventoryDiscardPreparation? PendingInventoryDiscard { get; set; }
         public bool CharacterDead { get; set; }
         public long DeathSerial { get; set; }
         public Location? OrdinaryReturnPosition { get; init; }
@@ -211,7 +212,7 @@ internal sealed partial class GameSession
         dungeon.Run.Snapshot.Identity == receipt.Snapshot.Identity && !dungeon.Run.HasPendingDeath &&
         receipt.Entry == (dungeon.Entry with { StartMap = dungeon.Run.Snapshot.CurrentMap }) &&
         !dungeon.Run.HasPendingSettlement && dungeon.Run.Snapshot.Identity.Epoch != long.MaxValue &&
-        !dungeon.HasPendingFatigue && !dungeon.Ground.HasPendingPickup && pendingQuestCompletion is null;
+        !dungeon.HasPendingFatigue && !dungeon.Ground.HasPendingOperation && pendingQuestCompletion is null;
 
     public FormalDungeonReceipt? CurrentFormalDungeonScene() => owner.Execute(() =>
         Ready && Selected is not null && formalDungeon is not null &&
@@ -254,7 +255,7 @@ internal sealed partial class GameSession
     public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
         if (!Ready || Selected is null || Phase != SessionPhase.Dungeon || formalDungeon is not { } dungeon || dungeon.CharacterDead ||
-            dungeon.Ground.HasPendingPickup || dungeon.PendingTutorialClear is not null || HasPendingQuestScene) return null;
+            dungeon.Ground.HasPendingOperation || dungeon.PendingTutorialClear is not null || HasPendingQuestScene) return null;
         if (moveKind > 1) return null;
         var target = new DungeonPoint(x,y);
         var result = moveKind == 1 || target == dungeon.Run.Snapshot.CurrentMap.Position && dungeon.Run.Snapshot.CurrentMap.Kind == "layered"
@@ -285,7 +286,7 @@ internal sealed partial class GameSession
     FormalDungeonDeathResult ObserveDungeonDeath(NativeDungeonDeathObservation? normal, NativeDungeonScriptedDeathObservation? scripted,
         DungeonKillExperienceCatalog rewards, CharacterGrowthCatalog growth) => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup || HasPendingQuestScene)
+        if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || HasPendingQuestScene)
             return new FormalDungeonDeathResult(DungeonRunOutcome.Rejected);
         uint objectKey = normal?.MonsterKey ?? scripted!.MonsterKey;
         var target = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Run.Snapshot.CurrentMap)
@@ -372,7 +373,10 @@ internal sealed partial class GameSession
         if (prepared is null) return new FormalDungeonPickupResult(DungeonRunOutcome.Rejected);
         var now = DateTimeOffset.UtcNow;
         InventoryResult plan;
-        if (original.UsesCollectionLedger && goldLimits is not null)
+        if (original.InventoryOrigin is not null && goldLimits is not null && original.Core.Kind is ItemKind.CreatureEquipment or ItemKind.GuildMedal)
+            plan = InventoryRewardGrantService.TryGrantItems(Selected, [new(0, new(InventoryListType.Main, 0), original.Core)],
+                items, goldLimits, pieces, now);
+        else if (original.UsesCollectionLedger && goldLimits is not null)
             plan = original.IsGold ? DungeonPickupPlanning.Gold(Selected, original.Content, goldLimits) :
                 DungeonPickupPlanning.Item(Selected, original.Content, items.Get(original.Core.ItemId), goldLimits, pieces, now);
         else
@@ -392,7 +396,7 @@ internal sealed partial class GameSession
 
     public TownTravelReceipt? ReturnFromFormalDungeon() => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
+        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement) return null;
         if (dungeon.PendingTutorialClear is not null) return null;
         // 普通挑战沿本次入口安全点返回；先提交位置，失败时保留原实例与完整角色资产。

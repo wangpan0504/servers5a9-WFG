@@ -86,7 +86,7 @@ internal sealed partial class GameSession
         DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0) => owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
-            dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
+            dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var previous = Selected!;
         var reward = dungeon.Settlement?.Pending.Reward ?? rewards.Calculate(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),
@@ -250,7 +250,7 @@ internal sealed partial class GameSession
 
     bool CanUseSettlementNpcServices() => Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
         dungeon.Settlement is { Committed: true } && dungeon.Run.ClearFact is not null &&
-        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingPickup &&
+        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         pendingQuestCompletion is null && !HasPendingQuestScene;
 
     public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop) => owner.Execute(() =>

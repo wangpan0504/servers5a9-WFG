@@ -29,7 +29,7 @@ internal sealed partial class GameSession
         {
             Character? current = Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
                 pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasPendingQuestScene &&
-                formalDungeon?.Ground.HasPendingPickup != true && formalDungeon?.Run.HasPendingDeath != true &&
+                formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
                 formalDungeon?.Run.HasPendingSettlement != true ? Selected : null;
             // 新的明确1714可替换尚未提交的手册或已安装缓存；仅提交结果待恢复时保留互斥。
             if (current is not null && pendingQuestQuickClear is { Plan.IsPreparedSkip: true, CommitStarted: false })
@@ -294,7 +294,7 @@ internal sealed partial class GameSession
     {
         Character? current = Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
             pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasPendingQuestScene &&
-            formalDungeon?.Ground.HasPendingPickup != true && formalDungeon?.Run.HasPendingDeath != true &&
+            formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
             formalDungeon?.Run.HasPendingSettlement != true ? Selected : null;
         var identity = formalDungeon?.Run.Snapshot.Identity;
         // 普通操作可继续更新Selected；未提交手册随原快照失效，不阻止无关玩法。

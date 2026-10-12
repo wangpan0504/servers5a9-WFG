@@ -27,7 +27,7 @@ internal sealed partial class GameSession
         result.Dungeon == formalDungeon?.Run.Snapshot.Identity && ReferenceEquals(result.Selected, Selected));
     bool CanPlanAdventureRepresentative() => Ready && Selected is not null && !HasPendingQuestScene &&
         pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null &&
-        pendingDungeonContinuation is null && !HasPendingQuestReplay && formalDungeon?.Ground.HasPendingPickup != true &&
+        pendingDungeonContinuation is null && !HasPendingQuestReplay && formalDungeon?.Ground.HasPendingOperation != true &&
         formalDungeon?.HasPendingFatigue != true && formalDungeon?.Run.HasPendingDeath != true && formalDungeon?.Run.HasPendingSettlement != true &&
         Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement;
 }

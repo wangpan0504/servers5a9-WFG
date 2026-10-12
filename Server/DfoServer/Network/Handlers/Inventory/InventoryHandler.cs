@@ -14,6 +14,7 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
         commands.Register(CmdPacketType.MOVE_ITEMSPACE, MoveAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.SORT_ITEM, SortAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.DELETE_ITEM, DeleteAsync, nameof(InventoryHandler));
+        commands.Register(CmdPacketType.DROP_ITEM, DiscardAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.USE_GEM, UseGuardianGemAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.REQUEST_ITEM_LOCK, (context, packet) => LockAsync(context, packet, InventoryLockOperation.EquipmentLock), nameof(InventoryHandler));
         commands.Register(CmdPacketType.REQUEST_ITEM_UNLOCK, (context, packet) => LockAsync(context, packet, InventoryLockOperation.EquipmentUnlock), nameof(InventoryHandler));

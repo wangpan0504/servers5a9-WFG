@@ -283,7 +283,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                 receipt.Character.Id, new byte[8], receipt.Character.Id, checked((ushort)destination.Index), 0);
         await context.Notify(NotiPacketType.GET_ITEM, notice, "formal_pickup_notice", Guard);
         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
-            InventoryListType.Main, [destination]), "formal_pickup_inventory", Guard);
+            destination.List, [destination]), "formal_pickup_inventory", Guard);
         await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "formal_pickup_ack", Guard);
         if (previousQuests is not null && !previousQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_pickup_quest_conditions", Guard);

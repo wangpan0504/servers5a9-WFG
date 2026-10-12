@@ -52,6 +52,7 @@ internal interface ICharacterRepository
         DungeonCardDelivery? premiumDelivery = null, bool grantLuckyStar = false, int luckyStarLimit = 0);
     DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
         DungeonGroundPickupPreparation prepared, InventoryPlan plan);
+    Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
     Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan);
     InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId);

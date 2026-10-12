@@ -62,7 +62,7 @@ internal sealed partial class GameSession
             ? new(error, expected, owner.Generation, SelectionEpoch, []) { Phase = Phase, Identity = capture.Identity } : null;
         bool CanReward() => Phase == SessionPhase.Dungeon &&
             formalDungeon is { Entry.IsTutorial: true, Run.Phase: SinglePlayerDungeonPhase.Dungeon } run &&
-            !run.Run.HasPendingDeath && !run.Run.HasPendingSettlement && !run.Ground.HasPendingPickup &&
+            !run.Run.HasPendingDeath && !run.Run.HasPendingSettlement && !run.Ground.HasPendingOperation &&
             !run.HasPendingFatigue && run.PendingTutorialClear is null && !HasPendingQuestScene;
     }
 
@@ -85,7 +85,7 @@ internal sealed partial class GameSession
     {
         if (!Ready || Selected?.Id != actorId || Selected.Tutorial is null || Phase != SessionPhase.Dungeon ||
             formalDungeon is not { Entry.IsTutorial: true } dungeon || dungeon.Run.TutorialCinematicTargets(targetKey) is null ||
-            dungeon.Ground.HasPendingPickup || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
+            dungeon.Ground.HasPendingOperation || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
         var identity = dungeon.Run.Snapshot.Identity;
         var checkpoint = dungeon.PendingTutorialClear ??= TutorialCheckpoint(Selected, "clear", Guid.NewGuid(), targetKey,
             0, identity, dungeon.Run.Snapshot.CurrentMap.Id, true);

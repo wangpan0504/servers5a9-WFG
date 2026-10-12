@@ -1,11 +1,19 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Parsers.Inventory;
 
 internal static class InventoryRequests
 {
+    public static InventoryDiscardRequest Discard(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 12) throw new InvalidDataException("CMD47丢弃请求宽度");
+        return new(BinaryPrimitives.ReadUInt16LittleEndian(body), BinaryPrimitives.ReadUInt16LittleEndian(body[2..]), body[4],
+            BinaryPrimitives.ReadUInt16LittleEndian(body[5..]), BinaryPrimitives.ReadUInt32LittleEndian(body[7..]), body[11]);
+    }
+
     public static InventorySlot Lock(ReadOnlySpan<byte> body)
     {
         // 036F3A42..036F3B17：五种锁请求均写入 u8 列表与 u16 槽位。

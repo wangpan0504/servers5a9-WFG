@@ -14,7 +14,8 @@ internal sealed partial class GameSession
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
     {
-        if (!Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingQuestScene || formalDungeon?.PendingTutorialClear is not null)
+        if (!Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingQuestScene ||
+            formalDungeon?.PendingTutorialClear is not null || formalDungeon?.PendingInventoryDiscard is not null)
             return InventoryResult.Reject(invalidStateError);
         var result = operation(Selected);
         return CommitInventory(Selected, result);
@@ -77,7 +78,7 @@ internal sealed partial class GameSession
             if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();
             return !HasPendingQuestScene && pendingQuestCompletion is null && pendingQuestLifecycle is null &&
                 pendingQuestQuickClear is null && pendingDungeonContinuation is null && !HasPendingQuestReplay &&
-                formalDungeon?.Ground.HasPendingPickup != true &&
+                formalDungeon?.Ground.HasPendingOperation != true &&
                 (Phase == SessionPhase.Town || Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
                     formalDungeon is { HasPendingFatigue: false } dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);
         }
