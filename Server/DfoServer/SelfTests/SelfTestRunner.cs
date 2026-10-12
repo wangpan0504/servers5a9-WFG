@@ -16,6 +16,7 @@ internal static class SelfTestRunner
         CommandLineTests.Run();
         CashShopTests.RunCore();
         FrameCrcTests.Run();
+        CreatureProjectionTests.RunCore();
         await BufferedLogTests.RunAsync();
         await ServerLogTests.RunAsync();
         await DevelopmentGmTests.RunCoreAsync();

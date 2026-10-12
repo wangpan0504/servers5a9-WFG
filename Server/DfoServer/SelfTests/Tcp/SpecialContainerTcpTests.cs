@@ -47,7 +47,9 @@ internal static class SpecialContainerTcpTests
             peer.Expect(0, 105, details);
             wornPet = peer.Expect(0, 14).Body;
             That(wornPet.Length == 126 && wornPet[0] == 3 && U32(wornPet, 9) == petUid, "pet equip sends linked identity before Player");
-            peer.Expect(0, 14); peer.Expect(0, 2); peer.Expect(0, 2);
+            peer.Expect(0, 14);
+            CreatureActor(peer.Expect(0, 2).Body, 63000, "穿戴提交后的Actor创建当前宠物实体");
+            peer.Expect(0, 2);
             peer.Send(19, Move(7, 140, 2680000, 3, 28, 0));
             peer.Expect(1, 19, Ack(7, 140, 3, 28));
             That(peer.Expect(0, 14).Body.Length == 126, "pet artifact uses ordinary core at Client slot28");
@@ -59,6 +61,7 @@ internal static class SpecialContainerTcpTests
         using (var peer = Open(fixture))
         {
             var packets = peer.Select();
+            CreatureActor(packets[2].Body, 63000, "重连Actor恢复原穿戴宠物模板");
             That(peer.SpecialContainers[0].Body[0] == 1 && U16(peer.SpecialContainers[1].Body, 3) == 1 && U16(peer.SpecialContainers[2].Body, 1) == 1,
                 "reconnect retains worn special items without duplicating bag entries");
             That(packets[3].Body[126] == 3, "reconnect Player includes avatar, pet and pet equipment together");
@@ -66,13 +69,15 @@ internal static class SpecialContainerTcpTests
             peer.Expect(1, 19, Ack(1, 2, 3, 0));
             var avatar = peer.Expect(0, 14).Body;
             Bytes(avatar.AsSpan(5), wornAvatar!.AsSpan(2), "reverse unequip keeps avatar extra data");
-            peer.Expect(0, 2); peer.Expect(0, 2);
+            CreatureActor(peer.Expect(0, 2).Body, 63000, "时装脱下不会清空仍穿戴的宠物");
+            peer.Expect(0, 2);
             peer.Send(19, Move(7, 5, 0, 3, 26, 63000));
             peer.Expect(1, 19, Ack(7, 5, 3, 26));
             peer.Expect(0, 105); peer.Expect(0, 14);
             var pet = peer.Expect(0, 14).Body;
             Bytes(pet.AsSpan(5), wornPet!.AsSpan(5), "reverse unequip retains complete pet core");
-            peer.Expect(0, 2); peer.Expect(0, 2);
+            CreatureActor(peer.Expect(0, 2).Body, 0, "宠物脱下提交后的Actor清除实体");
+            peer.Expect(0, 2);
             peer.Barrier();
             string before = Snapshot();
             fixture.Sql("CREATE TRIGGER fail_special_tcp BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'special failure'); END");
@@ -95,6 +100,14 @@ internal static class SpecialContainerTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM inventory_avatar_details ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM inventory_creature_details ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT revision FROM characters"));
+    }
+
+    static void CreatureActor(byte[] body, uint template, string message)
+    {
+        const int nameWidth = 10; // SpecialTcp的CP936字节数。
+        int offset = 156 + nameWidth + body[133 + nameWidth] * 25;
+        That(body[0] == 0 && U32(body, offset) == template && U32(body, offset + 4) == 0 &&
+            body[offset + 8] == 0, message);
     }
 
     static byte[] Move(byte fromList, short fromSlot, int fromId, byte toList, short toSlot, int toId) => Build(writer =>

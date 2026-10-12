@@ -1,6 +1,7 @@
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.GameWorld.Channels;
 
@@ -90,9 +91,11 @@ internal static class TownPackets
             writer.Write((byte)0);
             writer.Write(0u);
             writer.Write((byte)0);
-            writer.Write(0u);
-            PacketEncoding.WriteString(writer, "");
-            writer.Write((byte)0); // 0267B3B0.
+            var creature = character.Inventory.Find(new(InventoryListType.Equipment, 26));
+            // 0267B3B0读取模板/名称/死亡标志；Actor+330经02BAF647创建宠物实体，不能只同步槽26与105详情。
+            writer.Write(creature?.Creature is not null ? checked((uint)creature.Core.ItemId) : 0u);
+            PacketEncoding.WriteString(writer, creature?.Creature?.Name ?? "");
+            writer.Write((byte)0); // 当前详情没有死亡状态；零沿原合同表示存活。
             writer.Write(new byte[2]);
             writer.Write(0u);
             PacketEncoding.WriteString(writer, "");
