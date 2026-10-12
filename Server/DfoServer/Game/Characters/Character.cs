@@ -11,6 +11,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public byte EquipmentSlotFlags { get; init; }
     // 来自角色设置的场景显示位，不改写位置、进度或资产revision。
     public byte VisibilityFlags { get; init; } = 6;
+    public ushort Emotion { get; init; }
     public byte Level { get; init; } = 1;
     public DfoServer.Game.Tutorials.CharacterTutorialState? Tutorial { get; init; }
     public uint AcceptedStoryLevel { get; init; }

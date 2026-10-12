@@ -137,6 +137,8 @@ internal static class DungeonDropCollectionRepositoryTests
             {
                 using (var db = Open())
                 {
+                    DatabaseSchemaTests.RemoveEmotionSchema(db);
+                    DatabaseSchemaTests.RemoveHotkeySchema(db);
                     DatabaseSchemaTests.RemoveTutorialSchema(db);
                     DatabaseSchemaTests.RemoveTitleSchema(db);
                     DatabaseSchemaTests.RewindExperienceCaps(db);

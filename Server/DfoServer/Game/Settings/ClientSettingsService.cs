@@ -3,10 +3,12 @@ using DfoServer.Game.Accounts;
 
 namespace DfoServer.Game.Settings;
 
-internal sealed class ClientSettingsService(IClientSettingsStore store)
+internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServer.GameWorld.Characters.CharacterEmotionCatalog? emotions = null)
 {
     public const int GameOptionLength = 204;
     public const int CharacterOptionLength = 512;
+    public bool? SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion) =>
+        emotions?.CanSelect(emotion) == true ? store.SaveEmotion(owner, characterId, emotion) : null;
 
     public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort characterId)
     {

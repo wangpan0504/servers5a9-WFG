@@ -10,4 +10,5 @@ internal interface IClientSettingsStore
         ImmutableArray<byte> characterGameOptions = default);
     bool SaveCharacterOptions(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> payload);
     bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text);
+    bool SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion);
 }

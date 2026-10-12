@@ -78,6 +78,7 @@ internal static class SelfTestRunner
         ClientSettingsStoreTests.Run();
         StoryDigestTests.Run();
         SettingsProtocolTests.Run();
+        EmotionTests.RunCore();
         RepositoryBoundaryTests.Run();
         CharacterReadTests.Run();
         await SessionPlanningTests.RunAsync();

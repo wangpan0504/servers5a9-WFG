@@ -8,6 +8,20 @@ namespace DfoServer.Persistence;
 internal sealed class ClientSettingsRepository(string path) : IClientSettingsStore
 {
     readonly SqliteGameDatabase database = new(path);
+    public bool SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion) => owner.Execute(() =>
+    {
+        if (emotion > short.MaxValue) throw new InvalidDataException("心情编号越界");
+        using var db = database.Open(); using var command = db.CreateCommand();
+        command.CommandText = "SELECT emotion FROM characters WHERE id=$id AND account=$account";
+        command.Parameters.AddWithValue("$id", characterId); command.Parameters.AddWithValue("$account", owner.Account);
+        if (command.ExecuteScalar() is not long previous) throw new InvalidDataException("心情角色不属于当前账号");
+        if (previous == emotion) return false;
+        using var tx = db.BeginTransaction(deferred: false); command.Transaction = tx;
+        command.CommandText = "UPDATE characters SET emotion=$emotion WHERE id=$id AND account=$account AND emotion=$previous";
+        command.Parameters.AddWithValue("$emotion", emotion); command.Parameters.AddWithValue("$previous", previous);
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("心情保存快照已变化");
+        tx.Commit(); return true;
+    });
 
     public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort characterId) => owner.Execute(() =>
     {

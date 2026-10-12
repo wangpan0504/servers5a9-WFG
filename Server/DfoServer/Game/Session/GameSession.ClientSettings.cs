@@ -7,6 +7,17 @@ internal sealed record ClientSettingsReceipt(ClientSettingsSnapshot Settings, lo
 
 internal sealed partial class GameSession
 {
+    public (DfoServer.Game.Characters.Character? Character, ushort Error, bool Changed) ChangeEmotion(ClientSettingsService settings, ushort emotion) => owner.Execute(() =>
+    {
+        if (Selected is not { } character || !Ready)
+            return ((DfoServer.Game.Characters.Character?)null, (ushort)3, false);
+        bool? changed = settings.SaveEmotion(owner, character.Id, emotion);
+        if (changed is null) return ((DfoServer.Game.Characters.Character?)null, (ushort)1, false);
+        bool visibleChanged = character.Emotion != emotion;
+        if (visibleChanged) Selected = character with { Emotion = emotion };
+        return (Selected, (ushort)0, changed.Value || visibleChanged);
+    });
+
     public bool SaveHotkeys(ClientSettingsService settings, ImmutableArray<byte> text) => owner.Execute(() =>
     {
         var character = Selected ?? throw new InvalidDataException("保存键位时没有选中角色");

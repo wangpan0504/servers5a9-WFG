@@ -87,6 +87,7 @@ internal static class TcpRegressionTests
         ("inventory-persistence", (_, _, resources) =>
         {
             Inventory.InventoryCommitTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
+            DungeonDropCollectionRepositoryTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             DatabaseSchemaTests.Run();
             return Task.CompletedTask;
         }),
@@ -125,6 +126,7 @@ internal static class TcpRegressionTests
         ("authentication", AuthenticationTcpTests.RunAsync),
         ("native-login", NativeLoginTcpTests.RunAsync),
         ("settings", ClientSettingsTcpTests.RunAsync),
+        ("emotion", EmotionTcpTests.RunAsync),
         ("presence", TownPresenceTcpTests.RunAsync)
     ];
 

@@ -81,6 +81,8 @@ internal static class SqliteMigrations
         new(25, "称号簿实体位置、三计数进度与章节奖励", static (db, tx) => Execute(db, tx, TitleSchema)),
         new(26, "新角色训练状态及原子检查点", static (db, tx) => Execute(db, tx, TutorialSchema)),
         new(27, "账号分配置键位", static (db, tx) => Execute(db, tx, HotkeySettingsSchema)),
+        new(28, "角色基础心情", static (db, tx) =>
+            Execute(db, tx, "ALTER TABLE characters ADD COLUMN emotion INTEGER NOT NULL DEFAULT 0 CHECK(emotion BETWEEN 0 AND 32767)")),
     ];
 
     internal const string HotkeySettingsSchema = """
@@ -738,6 +740,7 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT emotion FROM characters LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",
         "SELECT character_id,account,event_id,kind,instance_id,task_attempt,epoch,map_id,subject,experience,before_revision,revision,plan_snapshot FROM character_tutorial_receipts LIMIT 0",

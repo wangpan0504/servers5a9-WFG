@@ -5,6 +5,14 @@ namespace DfoServer.Network.Builders;
 
 internal static class SettingsPackets
 {
+    public static byte[] Emotion(ushort value, bool success = true)
+    {
+        byte[] body = new byte[3];
+        body[0] = success ? (byte)1 : (byte)0;
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), value);
+        return body;
+    }
+
     public static byte[] Hotkeys(byte profile, ImmutableArray<byte> text)
     {
         if (profile > 1) throw new InvalidDataException("键位回放配置类型无效");

@@ -53,7 +53,8 @@ internal static class ServerRuntime
         var presence = new TownPresence(towns, channels.GameIdentity);
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
-        var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")));
+        var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")),
+            CharacterEmotionCatalog.Load(pvf));
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
         var questConnections = QuestConnectionCatalog.Load(pvf);
         var titleCatalog = new TitleCatalog(pvf, quests);

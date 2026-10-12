@@ -74,6 +74,8 @@ internal static class TownPackets
             // 0267DA80 reads 0x74 bytes. The two fixed UTF-16 names remain empty.
             byte[] state = new byte[116];
             state[7] = 1;
+            // Actor原始状态末尾u16为心情字段。
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(state.AsSpan(114), character.Emotion);
             writer.Write(state);
             writer.Write(character.Id);
             PacketEncoding.WriteString(writer, character.Name);

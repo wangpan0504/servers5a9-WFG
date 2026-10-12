@@ -15,6 +15,36 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_1, SaveGameAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_CHARACTER_OPTION, SaveCharacterAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_2, SaveHotkeysAsync, nameof(SettingsHandler));
+        commands.Register(CmdPacketType.CHANGE_EMOTION, ChangeEmotionAsync, nameof(SettingsHandler));
+    }
+
+    async Task<CommandResult> ChangeEmotionAsync(GameConnectionContext context, Packet packet)
+    {
+        if (packet.Body.Length != 2) throw new InvalidDataException("心情请求必须是完整u16");
+        ushort emotion = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(packet.Body);
+        long epoch = context.Session.SelectionEpoch;
+        var phase = context.Session.Phase;
+        var result = context.Session.ChangeEmotion(settings, emotion);
+        if (result.Character is not { } character)
+        {
+            await context.Reply(CmdPacketType.CHANGE_EMOTION, SettingsPackets.Emotion(result.Error, success: false), "emotion_rejected");
+            return CommandResult.Handled;
+        }
+        bool Guard() => context.Session.Ready && context.Session.SelectionEpoch == epoch && context.Session.Phase == phase &&
+            ReferenceEquals(context.Session.Selected, character);
+        log.Write("emotion_saved", new { Connection = context.Id, Character = character.Id, Emotion = emotion, result.Changed });
+        await context.Reply(CmdPacketType.CHANGE_EMOTION, SettingsPackets.Emotion(emotion), "emotion_saved", Guard);
+        // ACK确认UI选择；完整Actor只在城镇实体上下文刷新，其他场景的持久心情在后续入城回放。
+        if (result.Changed && phase is SessionPhase.Town or SessionPhase.MapSelect)
+        {
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel), "emotion_actor", Guard);
+            context.Owner.Execute(() =>
+            {
+                if (Guard() && phase == SessionPhase.Town && !context.BlocksTownActions) projection.Refresh(context);
+                return true;
+            });
+        }
+        return CommandResult.Handled;
     }
 
     Task<CommandResult> SaveHotkeysAsync(GameConnectionContext context, Packet packet)

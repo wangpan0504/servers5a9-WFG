@@ -210,7 +210,8 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         Level = checked((byte)reader.GetInt32(17)),
         AcceptedStoryLevel = checked((uint)reader.GetInt32(18)),
         QuestCycleDay = reader.GetInt32(reader.GetOrdinal("quest_cycle_day")),
-        EquipmentSlotFlags = checked((byte)reader.GetInt32(reader.GetOrdinal("equipment_slot_flags")))
+        EquipmentSlotFlags = checked((byte)reader.GetInt32(reader.GetOrdinal("equipment_slot_flags"))),
+        Emotion = checked((ushort)reader.GetInt32(reader.GetOrdinal("emotion")))
     };
     static Character ReadProgress(SqliteConnection db, Character character, SqliteTransaction? transaction = null, AccountInventory? shared = null,
         (int[] Completed, System.Collections.Immutable.ImmutableDictionary<int,int> Daily, System.Collections.Immutable.ImmutableDictionary<int,byte> Answers)? accountQuests = null)
