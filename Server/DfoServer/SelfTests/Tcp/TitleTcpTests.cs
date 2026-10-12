@@ -26,6 +26,18 @@ internal static class TitleTcpTests
         That(
             real.Slots.Count(pair => pair.Key.Category == 0) == 200 && real.Slots.Count(pair => pair.Key.Category == 1) == 170 &&
             real.Fits(4, 10, 26596) && !real.Fits(4, 0, 26596), "当前PVF称号任务、真实映射、分类容量、自由及关闭活动格合同");
+        int[][] sectionGroups = [Enumerable.Range(0, 17).ToArray(), [0, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            Enumerable.Range(0, 5).ToArray(), Enumerable.Range(0, 10).ToArray(), Enumerable.Range(0, 10).ToArray()];
+        for (int category = 0; category < sectionGroups.Length; category++)
+            That(real.Sections.Values.Where(section => section.Category == TitleCatalog.Categories[category])
+                .Select(section => section.Index).Order().SequenceEqual(sectionGroups[category]),
+                "真实称号簿全部章节按槽位组对应，包含活动保留栏: " + TitleCatalog.Categories[category]);
+        That(real.Sections[268].Emotion == 33 && real.Sections[268].PostalItem == 0 &&
+            real.SectionQuests[268].Order().SequenceEqual([6761, 6762]) &&
+            real.Sections[269].PostalItem == 100331574 && real.Sections[270].PostalItem == 100331746 &&
+            real.SectionQuests[270].Order().SequenceEqual([7003, 7004, 7005, 7006, 7007, 7008]) &&
+            real.Sections[271].PostalItem == 100331804,
+            "觉醒、卢克、超时空和苍穹的章节资格与各自奖励对应，不能串位");
         var definition = resources.Quests.Get(6501);
         var quests = new QuestCatalog(resources.Quests.All.ToDictionary(quest => quest.Id));
         // 三通道组合用合成条件；目标称号模板、称号簿映射和所有其他任务仍取共享原资源。
@@ -39,6 +51,7 @@ internal static class TitleTcpTests
         var core = InventoryRewardGrantService.Create(template) with { Attr = 7, Durability = 5, Marker16 = 3,
             EnchantCardId = 3185, EnchantUpgrade = 2, Extension97 = 0x12340056, Rune = 4, GuardianGemKeys = 0x10203040 };
         long manualUid;
+        ushort awakeningId;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var created = repo.Create(owner, new("TitleTcp", resources.Towns.Room, resources.Towns.InitialReturn)
@@ -46,13 +59,23 @@ internal static class TitleTcpTests
                 Level = 10, AcceptedStoryLevel = 1, CompletedQuests = [3], Skills = resources.Characters.Get(0).Skills,
                 Inventory = new([new(0, new(InventoryListType.Main, 9), core)], Gold: 500)
             });
+            // 显式准备旧存档：剩余三计数与章节标记彼此独立，标记不能封死未完成任务。
+            created = repo.CommitTitleAchievement(owner, new(created, new(created.Inventory, created.Inventory, "old_title_state", new(created)),
+                created.TitleProgress.Add(6501, new(new(3, 2, 4))), ImmutableHashSet.Create(0), [], [], []));
             manualUid = created.Inventory.Items.Single().Uid;
+            awakeningId = repo.Create(owner, new("AwakeTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 95, AcceptedStoryLevel = 95, GrowType = 33, Skills = resources.Characters.Get(0).Skills
+            }).Id;
         }
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
             peer.Send(417, Trigger(6501, 1, 0, 0)); peer.Expect(1, 417, [0, 2, 0, 101, 25, 0, 0]);
             peer.Select(prepared: true);
+            That(fixture.Query("SELECT remaining1,remaining2,remaining3 FROM character_title_progress WHERE quest_id=6501") is [[3L, 2L, 4L]] &&
+                fixture.Query("SELECT section_key FROM character_title_sections WHERE character_id=$p0", peer.Id) is [[0L]],
+                "旧的未完成三计数与已存章节标记按原值恢复，不被修复清空或换成其他任务");
             That(fixture.Query("SELECT quest_id,remaining1,remaining2,remaining3 FROM character_title_progress WHERE quest_id=6502") is [[6502L, 0L, 0L, 0L]] &&
                 fixture.Query("SELECT count(*) FROM character_active_main_quests") is [[0L]] &&
                 peer.TitleBooks[0].Body.Length == 45 && U32(peer.TitleBooks[0].Body, 13) == 26597,
@@ -61,7 +84,7 @@ internal static class TitleTcpTests
             peer.Expect(1, 417, [1, 101, 25, 0, 0, 2, 0, 2, 0, 4, 0]);
             peer.Expect(0, 359); peer.Barrier();
             That(fixture.Query("SELECT remaining1,remaining2,remaining3 FROM character_title_progress WHERE quest_id=6501") is [[2L, 2L, 4L]] &&
-                fixture.Query("SELECT count(*) FROM character_title_book_slots") is [[1L]], "部分进度只保存三计数，不提前发奖");
+                fixture.Query("SELECT count(*) FROM character_title_book_slots") is [[1L]], "旧未完成任务继续累计三计数，已有章节标记不阻挡任务推进或提前发奖");
             peer.Send(417, Trigger(6501, 65535, 1, 3));
             peer.Expect(1, 417, [1, 101, 25, 0, 0, 0, 0, 1, 0, 1, 0]); peer.Expect(0, 359);
             peer.Send(417, Trigger(6501, 0, 1, 1));
@@ -104,6 +127,16 @@ internal static class TitleTcpTests
             That(Read(InventoryListType.Equipment, 13)?.Core.ItemId == 26597 && Read(InventoryListType.Main, 9)?.Core.ItemId == 26596 &&
                 fixture.Query("SELECT count(*) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=26596") is [[2L]],
                 "替换穿戴的旧称号完整回包，两个既有物理实例不因穿戴多一份");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(slot: 1);
+            That(fixture.Query("SELECT quest_id FROM character_title_progress WHERE character_id=$p0 AND remaining1+remaining2+remaining3=0 ORDER BY quest_id", awakeningId)
+                is [[6761L], [6762L]] && fixture.Query("SELECT section_key FROM character_title_sections WHERE character_id=$p0", awakeningId) is [[268L]],
+                "二觉角色真实选角只补齐觉醒章节");
+            That(fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0", awakeningId) is [[0L]] &&
+                fixture.Query("SELECT json_extract(item_core,'$.ItemId') FROM character_inventory_items WHERE character_id=$p0 ORDER BY json_extract(item_core,'$.ItemId')", awakeningId)
+                    is [[100331607L], [100331608L]], "二觉选角只授力量苏醒、无上传奇，不寄超时空或其他章节称号");
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "TCP取放、重启和穿戴后外键完整");
         Console.WriteLine($"PASS {Count - checks} 称号进度、称号簿取放、穿戴和重启TCP断言");

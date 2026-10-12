@@ -70,8 +70,35 @@ internal static class TitleTests
         var progress = TitlePackets.Progress(character);
         That(progress.Length == 50 && U32(progress, 34) == 6503 && U32(progress, 38) == 6501 && U32(progress, 42) == 0 && U32(progress, 46) == 0,
             "进度表按ID排序，尾部按真实完成revision保存最多四ID");
+        SectionMapping();
         Persist(core);
         Console.WriteLine($"PASS {Count - start} 称号三计数、称号簿字节及原子资产/邮件断言");
+    }
+
+    static void SectionMapping()
+    {
+        var categories = TitleCatalog.Categories.Select(name => new PvfLib.TitleBookCategory(name, 50,
+            Enumerable.Range(0, 50).Select(index => name == "specific" && index is 0 or 10 or 40
+                ? new PvfLib.TitleBookRow(index, 0, 6501 + index, [26596 + index])
+                : name == "event" && index >= 10
+                    ? new PvfLib.TitleBookRow(index, 1, -1, [-1])
+                    : new PvfLib.TitleBookRow(index, -1, -1, [])).ToImmutableArray())).ToImmutableArray();
+        var sections = new PvfLib.TitleBookSection[]
+        {
+            new("specific", 0, "", 10, 0, 0, "", ""),
+            new("specific", 1, "", 11, 0, 0, "", ""),
+            new("specific", 2, "", 0, 1000, 1, "System", "Later chapter"),
+            new("event", 0, "Closed", 0, 0, 0, "", ""),
+            new("event", 1, "", 0, 0, 0, "", "")
+        }.ToImmutableArray();
+        var catalog = new TitleCatalog(new PvfLib.TitleBookFile(categories, sections, []), new QuestCatalog([]));
+        That(catalog.Sections[260].PostalItem == 1000 && catalog.SectionQuests[260].SequenceEqual([6541]),
+            "章节顺序跨过两组空槽后，奖励绑定实际40组而非20组");
+        That(!catalog.Sections.ContainsKey(258) && !catalog.Sections.ContainsKey(259) &&
+            catalog.Sections[256].Emotion == 10 && catalog.Sections[257].Emotion == 11,
+            "空槽组不挤占章节，空位前的章节奖励保持");
+        That(catalog.Sections[1024].LockMessage == "Closed" && !catalog.Fits(4, 0, 26596) && catalog.Fits(4, 10, 26596),
+            "活动关闭栏保留原组号，不能因全空而把锁移到自由展示栏");
     }
 
     static void Persist(ItemCore core)

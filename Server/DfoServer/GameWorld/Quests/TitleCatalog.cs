@@ -34,8 +34,21 @@ internal sealed class TitleCatalog
             throw new InvalidDataException("称号簿五种分类不完整");
         Slots = book.Categories.SelectMany(category => category.Rows.Select(row =>
             new KeyValuePair<(int, int), TitleSlotDefinition>((Array.IndexOf(Categories, category.Name), row.Index), new(row.Kind, row.QuestId, row.Items)))).ToFrozenDictionary();
-        Sections = book.Sections.Select(section => new TitleSectionDefinition(section.Category, section.Index, section.LockMessage, section.Emotion,
-            section.PostalItem, section.PostalCount, section.Sender, section.Message))
+        var sections = new List<TitleSectionDefinition>();
+        foreach (var category in book.Categories)
+        {
+            // 普通章节声明省略整组空槽；活动的关闭栏和空白栏仍占原位置。
+            var groups = category.Rows.Where(row => row.Kind != -1).Select(row => row.Index / 10).Distinct().Order().ToArray();
+            foreach (var section in book.Sections.Where(section => section.Category == category.Name))
+            {
+                if (section.Index < 0 || category.Name != "event" && section.Index >= groups.Length)
+                    throw new InvalidDataException("称号章节没有对应的槽位组");
+                int index = category.Name == "event" ? section.Index : groups[section.Index];
+                sections.Add(new(section.Category, index, section.LockMessage, section.Emotion,
+                    section.PostalItem, section.PostalCount, section.Sender, section.Message));
+            }
+        }
+        Sections = sections
             .ToFrozenDictionary(section => SectionKey(Array.IndexOf(Categories, section.Category), section.Index));
         Adjustments = book.Adjustments.Select(row => new TitleAdjustmentDefinition(row.QuestId, row.ItemId, row.AchievementId)).ToImmutableArray();
         QuestCategories = Slots.Where(pair => pair.Value.Kind != -1 && pair.Value.QuestId > 0).GroupBy(pair => pair.Value.QuestId)
