@@ -16,10 +16,11 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            SELECT a.game_options,c.character_options,g.game_options FROM characters r
+            SELECT a.game_options,c.character_options,g.game_options,h.hotkeys FROM characters r
             LEFT JOIN account_client_settings a ON a.account=r.account
             LEFT JOIN character_client_settings c ON c.character_id=r.id AND c.account=r.account
             LEFT JOIN character_game_settings g ON g.character_id=r.id AND g.account=r.account
+            LEFT JOIN account_hotkey_settings h ON h.account=r.account AND h.profile=CASE WHEN r.job=10 THEN 1 ELSE 0 END
             WHERE r.id=$id AND r.account=$account
             """;
         command.Parameters.AddWithValue("$id", characterId);
@@ -27,7 +28,36 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         using var reader = command.ExecuteReader();
         if (!reader.Read())
             throw new InvalidDataException("设置角色不属于当前账号");
-        return new ClientSettingsSnapshot(Read(reader, 0), Read(reader, 1), Read(reader, 2));
+        return new ClientSettingsSnapshot(Read(reader, 0), Read(reader, 1), Read(reader, 2), Read(reader, 3));
+    });
+
+    public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text) => owner.Execute(() =>
+    {
+        using var db = database.Open();
+        using (var read = db.BeginTransaction(deferred: true))
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = read;
+            query.CommandText = "SELECT h.hotkeys FROM accounts a LEFT JOIN account_hotkey_settings h ON h.account=a.account_id AND h.profile=$profile WHERE a.account_id=$account";
+            query.Parameters.AddWithValue("$profile", profile);
+            query.Parameters.AddWithValue("$account", owner.Account);
+            using var reader = query.ExecuteReader();
+            if (!reader.Read()) throw new InvalidDataException("键位账号不存在");
+            if (!reader.IsDBNull(0) && text.AsSpan().SequenceEqual((byte[])reader.GetValue(0))) return false;
+        }
+        using var tx = db.BeginTransaction(deferred: false);
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            INSERT INTO account_hotkey_settings(account,profile,hotkeys) VALUES($account,$profile,$text)
+            ON CONFLICT(account,profile) DO UPDATE SET hotkeys=excluded.hotkeys
+            """;
+        command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$profile", profile);
+        command.Parameters.Add("$text", SqliteType.Blob).Value = text.ToArray();
+        if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("账号键位未提交");
+        tx.Commit();
+        return true;
     });
 
     public bool SaveGameOptions(AccountOwners.Lease owner, ImmutableArray<byte> payload, ushort? characterId = null,

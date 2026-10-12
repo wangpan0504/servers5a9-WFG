@@ -3,10 +3,16 @@ using DfoServer.Game.Settings;
 
 namespace DfoServer.Game.Session;
 
-internal sealed record ClientSettingsReceipt(ClientSettingsSnapshot Settings, long Generation, long SelectionEpoch, ushort CharacterId, byte VisibilityFlags);
+internal sealed record ClientSettingsReceipt(ClientSettingsSnapshot Settings, long Generation, long SelectionEpoch, ushort CharacterId, byte VisibilityFlags, byte HotkeyProfile);
 
 internal sealed partial class GameSession
 {
+    public bool SaveHotkeys(ClientSettingsService settings, ImmutableArray<byte> text) => owner.Execute(() =>
+    {
+        var character = Selected ?? throw new InvalidDataException("保存键位时没有选中角色");
+        return settings.SaveHotkeys(owner, HotkeySettingsRules.Profile(character.Job), text);
+    });
+
     public bool SaveGameOptions(ClientSettingsService settings, ImmutableArray<byte> options) => owner.Execute(() =>
     {
         bool changed = settings.SaveGameOptions(owner, options, Selected?.Id);
@@ -28,10 +34,11 @@ internal sealed partial class GameSession
         byte flags = ClientSettingsRules.VisibilityFlags(restored.GameOptions);
         if (character.VisibilityFlags != flags)
             Selected = character with { VisibilityFlags = flags };
-        return new ClientSettingsReceipt(restored, owner.Generation, SelectionEpoch, character.Id, flags);
+        return new ClientSettingsReceipt(restored, owner.Generation, SelectionEpoch, character.Id, flags, HotkeySettingsRules.Profile(character.Job));
     });
 
     public bool CanPublishClientSettings(ClientSettingsReceipt receipt) => owner.Execute(() =>
         owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch && Selected is { } character &&
-        character.Id == receipt.CharacterId && character.VisibilityFlags == receipt.VisibilityFlags);
+        character.Id == receipt.CharacterId && character.VisibilityFlags == receipt.VisibilityFlags &&
+        HotkeySettingsRules.Profile(character.Job) == receipt.HotkeyProfile);
 }

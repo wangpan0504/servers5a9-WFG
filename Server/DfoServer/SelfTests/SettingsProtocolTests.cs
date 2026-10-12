@@ -47,8 +47,31 @@ internal static class SettingsProtocolTests
         Reject<InvalidDataException>(() => SettingsPackets.CharacterOptions([0]), "损坏角色设置不能回放");
         SelectionGuard(game, character);
         RoleScopedValues();
+        HotkeyProtocol();
         TownVisibility();
         Console.WriteLine($"PASS {Count - before} client settings parser, projection and selection assertions");
+    }
+
+    static void HotkeyProtocol()
+    {
+        byte[] text = "I01\t77\nI02\t55\nI03\t73\nI04\t58\nC00\t134\nJ00\t134\nK02\t31\n"u8.ToArray();
+        var parsed = SettingsRequests.Hotkeys(Body(text));
+        That(parsed.AsSpan().SequenceEqual(text), "198长度头之后为完整键位文本，不含echo、配置类型或参考版尾部");
+        foreach (byte profile in new byte[] { 0, 1 })
+            That(SettingsPackets.Hotkeys(profile, parsed).SequenceEqual(new byte[] { profile }.Concat(Body(text))),
+                "454独立预期为配置u8、长度u32及原样文本，无额外尾部");
+        That(HotkeySettingsRules.Profile(10) == 1 && Enumerable.Range(0, 16).Where(job => job != 10)
+            .All(job => HotkeySettingsRules.Profile((byte)job) == 0), "本版job10单独使用缔造者键位配置");
+        foreach (byte[] bad in new[] { Array.Empty<byte>(), Body(text)[..^1], Body(text).Concat(new byte[] { 0 }).ToArray(),
+            Body("I01\t\n"u8.ToArray()), Body("I01\t77x\n"u8.ToArray()), Body("I01\t77\0\n"u8.ToArray()), Body(new byte[1400]) })
+            Reject<InvalidDataException>(() => SettingsRequests.Hotkeys(bad), "键位截断、尾部、坏整数、NUL及原生不可读长度拒绝");
+        var unbound = SettingsRequests.Hotkeys(Body("I01\t134\nI02\t134\nI03\t134\nI04\t134\n"u8.ToArray()));
+        That(SettingsPackets.Hotkeys(0, unbound).AsSpan(5).SequenceEqual(unbound.AsSpan()),
+            "保留用户明确取消绑定的合法键值，不擅自补默认移动键");
+        var saved = new ClientSettingsSnapshot([.. new byte[204]], default, Hotkeys: parsed);
+        That(ClientSettingsRules.Project(saved).Hotkeys == parsed && !new ClientSettingsSnapshot(default, default, Hotkeys: parsed).IsDefault,
+            "角色主区协调不丢失独立账号键位，也不生成未保存主区");
+        Reject<InvalidDataException>(() => SettingsPackets.Hotkeys(2, parsed), "未知配置不能回放到另一原生键位bank");
     }
 
     static void SelectionGuard(byte[] game, byte[] character)
@@ -128,7 +151,8 @@ internal static class SettingsProtocolTests
         ImmutableArray<byte> main;
         readonly Dictionary<ushort, ImmutableArray<byte>> characters = [];
         readonly Dictionary<ushort, ImmutableArray<byte>> roleMain = [];
-        public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort id) => new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id));
+        ImmutableArray<byte> hotkeys;
+        public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort id) => new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id), hotkeys);
         public bool SaveGameOptions(AccountOwners.Lease owner, ImmutableArray<byte> payload, ushort? id = null, ImmutableArray<byte> characterGameOptions = default)
         {
             main = payload;
@@ -137,6 +161,7 @@ internal static class SettingsProtocolTests
             return true;
         }
         public bool SaveCharacterOptions(AccountOwners.Lease owner, ushort id, ImmutableArray<byte> payload) { characters[id] = payload; return true; }
+        public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text) { hotkeys = text; return true; }
     }
 
     static void RoleScopedValues()

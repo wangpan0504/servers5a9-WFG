@@ -40,7 +40,7 @@ internal static class ClientSettingsRules
             Write(copy, 49, Read(effective, 13));
             character = [.. copy];
         }
-        return new(effective, character, saved.CharacterGameOptions);
+        return saved with { GameOptions = effective, CharacterOptions = character };
     }
 
     public static byte VisibilityFlags(ImmutableArray<byte> main)

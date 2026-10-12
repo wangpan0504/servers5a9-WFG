@@ -93,6 +93,7 @@ internal static class DatabaseSchemaTests
             {
                 Execute(db, "CREATE TABLE old_data(value TEXT)");
                 Execute(db, "INSERT INTO old_data VALUES('keep')");
+                RemoveHotkeySchema(db);
                 RemoveTutorialSchema(db);
                 RemoveTitleSchema(db);
                 Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
@@ -152,6 +153,7 @@ internal static class DatabaseSchemaTests
             Execute(db,"CREATE TABLE character_dungeon_growth_receipts_extra(character_id INTEGER,event_id TEXT,value TEXT DEFAULT 'character_dungeon_growth_receipts',FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id)); INSERT INTO character_dungeon_growth_receipts_extra(character_id,event_id) VALUES(1,'legacy')");
             RewindExperienceCaps(db);
             RewindAccountQuestSource(db);
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db,"PRAGMA user_version=22");
@@ -211,6 +213,7 @@ internal static class DatabaseSchemaTests
                 Query(db, "SELECT count(*) FROM character_dungeon_drop_pickups") is 0L,
                 "新库直接建立v20完整空集合账本，不补发历史掉落");
             RewindDropCollection(db);
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
@@ -345,6 +348,7 @@ internal static class DatabaseSchemaTests
         {
             // 已发布任务v14有任务结构、旧回执，但尚未拥有普通分支疲劳表。
             RewindQuestReceiptsToV17(db);
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
@@ -426,6 +430,7 @@ internal static class DatabaseSchemaTests
         string[] tables; string[][] columns; string[] before;
         using (var db = Open(path))
         {
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
@@ -493,6 +498,7 @@ internal static class DatabaseSchemaTests
         string[] tables; string[][] columns; string[] before;
         using (var db = Open(path))
         {
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
@@ -539,6 +545,7 @@ internal static class DatabaseSchemaTests
         using (var db = Open(path))
         {
             RewindQuestReceiptsToV17(db);
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
@@ -603,6 +610,7 @@ internal static class DatabaseSchemaTests
         {
             // 原掉落v18有完整集合，但任务回执仍是master v17，不能只调整最终版本号。
             RewindQuestReceiptsToV17(db);
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=18");
@@ -651,6 +659,7 @@ internal static class DatabaseSchemaTests
         {
             RewindQuestReceiptsToV17(db);
             ChangeReceiptDefinition(db,"character_dungeon_fatigue_receipts",sql => sql.Replace("CHECK(map_id>0)","CHECK(map_id BETWEEN 76121 AND 76126)"));
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db,"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
@@ -706,6 +715,7 @@ internal static class DatabaseSchemaTests
                   rule_id,before_revision,revision,before_state,after_state)
                   VALUES(81,4,'legacy','abcdef1234567890abcdef1234567890',42,16408,9,7,'fatigue-old',6,7,'{"Used":6}','{"Used":7}');
                 """);
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             RewindExperienceCaps(db);
@@ -770,6 +780,7 @@ internal static class DatabaseSchemaTests
     // 按实际v17回执约束及八列定义回退，保留疲劳和普通副本历史，不只改版本号。
     static void RewindQuestReceiptsToV17(SqliteConnection db)
     {
+        RemoveHotkeySchema(db);
         RemoveTutorialSchema(db);
         RewindExperienceCaps(db);
         RewindAccountQuestSource(db);
@@ -806,11 +817,13 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
-                RemoveTutorialSchema(db);
+                RemoveHotkeySchema(db);
+                if (oldVersion < 26) RemoveTutorialSchema(db);
                 if (oldVersion < 25) RemoveTitleSchema(db);
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
-                RemoveTutorialSchema(db);
+                RemoveHotkeySchema(db);
+                if (oldVersion < 26) RemoveTutorialSchema(db);
                 if (oldVersion < 20) RewindDropCollection(db);
                 else
                 {
@@ -837,7 +850,8 @@ internal static class DatabaseSchemaTests
                     Execute(db, "DROP TABLE character_dungeon_growth_receipts");
                 if (oldVersion == 1)
                     Execute(db, "ALTER TABLE account_wallets DROP COLUMN rental_points");
-                RemoveTutorialSchema(db);
+                RemoveHotkeySchema(db);
+                if (oldVersion < 26) RemoveTutorialSchema(db);
                 if (oldVersion < 25) RemoveTitleSchema(db);
                 Execute(db, $"PRAGMA user_version={oldVersion}");
                 if (oldVersion == 13)
@@ -947,6 +961,7 @@ internal static class DatabaseSchemaTests
             Execute(db, "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages");
             Execute(db, "DROP TABLE character_dungeon_growth_receipts");
             Execute(db, "ALTER TABLE account_wallets DROP COLUMN rental_points");
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=1");
@@ -959,6 +974,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(clearRollback);
         using (var db = Open(clearRollback))
         {
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_dungeon_settlement_receipts; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=9; CREATE TABLE character_dungeon_settlement_receipts(collision INTEGER)");
@@ -971,6 +987,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(questRollback);
         using (var db = Open(questRollback))
         {
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=12");
@@ -998,6 +1015,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveHotkeySchema(db);
                 RemoveTutorialSchema(db);
                 RemoveTitleSchema(db);
                 Execute(db, """
@@ -1075,6 +1093,7 @@ internal static class DatabaseSchemaTests
     // 成功迁移夹具恢复完整已发布v13结构，不以改版本号冒充旧库。
     internal static void RewindQuestSystemToV13(SqliteConnection db, bool keepFatigue = false)
     {
+        RemoveHotkeySchema(db);
         RemoveTutorialSchema(db);
         RemoveTitleSchema(db);
         RewindDropCollection(db);
@@ -1096,6 +1115,7 @@ internal static class DatabaseSchemaTests
             Execute(db, "INSERT INTO " + table + "(rowid," + columns + ") SELECT old_rowid," + columns + " FROM temp.old_receipts");
             Execute(db, "DROP TABLE temp.old_receipts");
         }
+        RemoveHotkeySchema(db);
         RemoveTutorialSchema(db);
         RemoveTitleSchema(db);
         Execute(db, "PRAGMA user_version=13; PRAGMA foreign_keys=ON");
@@ -1128,6 +1148,7 @@ internal static class DatabaseSchemaTests
     // 冻结已发布v13的26列和约束，不能以v14表仅改user_version冒充旧库。
     internal static void RewindQuestCompletionToV13(SqliteConnection db)
     {
+        RemoveHotkeySchema(db);
         RemoveTutorialSchema(db);
         Execute(db, """
             CREATE TABLE character_quest_completion_receipts_v13(
@@ -1178,6 +1199,7 @@ internal static class DatabaseSchemaTests
                   WHEN NEW.quest_id=29999 BEGIN SELECT RAISE(ABORT,'source guard'); END;
                 """);
             RewindAccountQuestSource(db);
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "PRAGMA user_version=23");
@@ -1261,6 +1283,8 @@ internal static class DatabaseSchemaTests
         return db;
     }
 
+    internal static void RemoveHotkeySchema(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS account_hotkey_settings");
+
     internal static void RemoveTutorialSchema(SqliteConnection db) => Execute(db,
         "DROP TABLE IF EXISTS character_tutorial_receipts; DROP TABLE IF EXISTS character_tutorial_state");
 
@@ -1272,6 +1296,7 @@ internal static class DatabaseSchemaTests
         {
             Check(Query(db, "SELECT count(*) FROM character_tutorial_state") is 0L &&
                 Query(db, "SELECT count(*) FROM character_tutorial_receipts") is 0L, "新库创建空训练状态和回执，不携带玩家数据");
+            RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             Execute(db, "PRAGMA user_version=25");
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,gold) VALUES('old',0,'OldLevel1',7,38,1,450,234,0,1,123)");
@@ -1301,6 +1326,7 @@ internal static class DatabaseSchemaTests
     }
     private static void RewindDropCollection(SqliteConnection db)
     {
+        RemoveHotkeySchema(db);
         RemoveTutorialSchema(db);
         RewindExperienceCaps(db);
         RewindAccountQuestSource(db);

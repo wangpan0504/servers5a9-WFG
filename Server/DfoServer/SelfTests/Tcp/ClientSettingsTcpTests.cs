@@ -6,6 +6,9 @@ namespace DfoServer.Testing;
 
 internal static class ClientSettingsTcpTests
 {
+    const string HotkeyAccount = "keyowner";
+    static readonly byte[] CommonKeys = "I01\t77\nI02\t55\nI03\t73\nI04\t58\nI05\t60\nC00\t134\nJ00\t134\nK02\t31\n"u8.ToArray();
+    static readonly byte[] CreatorKeys = "I01\t134\nI02\t134\nI03\t134\nI04\t134\nC00\t77\nK02\t31\n"u8.ToArray();
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "settings"), resources: resources);
@@ -158,10 +161,84 @@ internal static class ClientSettingsTcpTests
             Select(peer, 0, shared, first);
             Exit(peer);
         }
+        HotkeyScope(fixture);
         await CharacterScopeAsync(fixture);
+        using (var peer = Open(fixture, HotkeyAccount))
+        {
+            SelectHotkeys(peer, 0, 0, CommonKeys);
+            ReturnSelection(peer);
+            SelectHotkeys(peer, 1, 0, CommonKeys);
+            ReturnSelection(peer);
+            SelectHotkeys(peer, 2, 1, CreatorKeys);
+            Exit(peer);
+        }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA user_version") is [[long version]] && version == DfoServer.Persistence.SqliteMigrations.CurrentVersion && fixture.Query("PRAGMA integrity_check") is [["ok"]]
             && fixture.Query("PRAGMA foreign_key_check").Length == 0, "设置TCP数据库版本及完整性正常");
+    }
+
+    static void SelectHotkeys(TcpPeer peer, ushort slot, byte profile, byte[] text)
+    {
+        peer.Select(slot, settings: [(454, [profile, .. Blob(text)])]);
+        That(peer.ClientSettings is [{ Opcode: 454 }], "没有主区存档时只回放454，不伪造173默认模板");
+        peer.Barrier();
+    }
+
+    static void HotkeyScope(TcpTestFixture fixture)
+    {
+        using (var peer = Open(fixture, HotkeyAccount))
+        {
+            peer.Create("KeyNormal");
+            peer.Create("KeyMage", 3);
+            peer.Create("KeyCreator", 10);
+            peer.Select();
+            string assets = Assets(fixture);
+            Save(peer, 198, CommonKeys);
+            peer.Barrier();
+            That(fixture.Query("SELECT profile,hex(hotkeys) FROM account_hotkey_settings WHERE account=$p0", HotkeyAccount)
+                is [[0L, string text]] && text == Convert.ToHexString(CommonKeys) && Assets(fixture) == assets,
+                "198真实分派静默保存账号键位，不回推454或改变角色资产");
+            Save(peer, 198, CommonKeys);
+            peer.Barrier();
+            ReturnSelection(peer);
+            SelectHotkeys(peer, 1, 0, CommonKeys);
+            ReturnSelection(peer);
+            peer.Select(2);
+            Save(peer, 198, CreatorKeys);
+            peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM account_hotkey_settings WHERE account=$p0", HotkeyAccount) is [[2L]],
+                "同账号普通职业与缔造者各存一份完整键位");
+            Exit(peer);
+        }
+        using (var peer = Open(fixture, "otherkeys"))
+        {
+            peer.Create("OtherKeys");
+            peer.Select();
+            That(peer.ClientSettings.Length == 0, "其他账号不接收已保存账号键位");
+            Exit(peer);
+        }
+        using (var peer = Open(fixture, HotkeyAccount))
+        {
+            SelectHotkeys(peer, 0, 0, CommonKeys);
+            string old = fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile"), assets = Assets(fixture);
+            fixture.Sql("CREATE TRIGGER hotkey_tcp_fail BEFORE UPDATE ON account_hotkey_settings BEGIN SELECT RAISE(ABORT,'hotkey failure'); END");
+            try
+            {
+                Save(peer, 198, CreatorKeys);
+                peer.Closed();
+                That(fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile") == old && Assets(fixture) == assets,
+                    "198 SQL失败无占位成功，保留原键位和角色资产");
+            }
+            finally { fixture.Sql("DROP TRIGGER hotkey_tcp_fail"); }
+        }
+        using (var peer = Open(fixture, HotkeyAccount))
+        {
+            SelectHotkeys(peer, 0, 0, CommonKeys);
+            peer.Send(198, [.. Blob(CommonKeys), 0]);
+            peer.Closed();
+            That(fixture.Query("SELECT hex(hotkeys) FROM account_hotkey_settings WHERE account=$p0 AND profile=0", HotkeyAccount)
+                is [[string text]] && text == Convert.ToHexString(CommonKeys), "不接受参考端额外尾部，畸形请求不覆盖键位");
+        }
     }
 
     static byte[] Payload(int length, int seed) => Enumerable.Range(0, length).Select(i => (byte)(i * 37 + seed)).ToArray();
@@ -407,8 +484,9 @@ internal static class ClientSettingsTcpTests
             && rows.Length == 1 && Equals(rows[0][0], account) && Equals(rows[0][1], Convert.ToHexString(payload)), "独立读库核对角色归属及完整设置字节");
     static string Settings(TcpTestFixture fixture) => fixture.Snapshot("SELECT * FROM account_client_settings ORDER BY account") +
         fixture.Snapshot("SELECT * FROM character_client_settings ORDER BY character_id") +
-        fixture.Snapshot("SELECT * FROM character_game_settings ORDER BY character_id");
+        fixture.Snapshot("SELECT * FROM character_game_settings ORDER BY character_id") +
+        fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile");
     static string Assets(TcpTestFixture fixture) => JsonSerializer.Serialize(fixture.Query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings') ORDER BY name")
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings') ORDER BY name")
         .Select(row => fixture.Query($"SELECT * FROM [{row[0]}] ORDER BY rowid")));
 }

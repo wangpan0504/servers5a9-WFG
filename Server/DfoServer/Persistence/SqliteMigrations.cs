@@ -80,7 +80,15 @@ internal static class SqliteMigrations
         new(24, "删除角色时保留账号任务完成事实", AccountQuestSourceSchema.Upgrade),
         new(25, "称号簿实体位置、三计数进度与章节奖励", static (db, tx) => Execute(db, tx, TitleSchema)),
         new(26, "新角色训练状态及原子检查点", static (db, tx) => Execute(db, tx, TutorialSchema)),
+        new(27, "账号分配置键位", static (db, tx) => Execute(db, tx, HotkeySettingsSchema)),
     ];
+
+    internal const string HotkeySettingsSchema = """
+        CREATE TABLE account_hotkey_settings(
+          account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),
+          hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
+          PRIMARY KEY(account,profile));
+        """;
 
     internal const string TutorialSchema = """
         CREATE TABLE character_tutorial_state(
@@ -730,6 +738,7 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",
         "SELECT character_id,account,event_id,kind,instance_id,task_attempt,epoch,map_id,subject,experience,before_revision,revision,plan_snapshot FROM character_tutorial_receipts LIMIT 0",
         "SELECT character_id,account,list_type,slot_index,item_uid FROM character_title_book_slots LIMIT 0",

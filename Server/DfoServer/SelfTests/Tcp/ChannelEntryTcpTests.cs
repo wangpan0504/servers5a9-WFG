@@ -61,14 +61,18 @@ internal static class ChannelEntryTcpTests
             writer.Write(keys.Length);
             writer.Write(keys);
         });
+        byte[] hotkeys = "I01\t77\nC00\t134\n"u8.ToArray();
+        byte[] hotkeyRequest = Build(writer => { writer.Write(hotkeys.Length); writer.Write(hotkeys); });
+        (ushort Opcode, byte[] Body)[] settings = [(390, keyRestore), (454, [0, .. hotkeyRequest])];
+        alpha.Send(198, hotkeyRequest);
         alpha.Send(447, keyRequest);
         alpha.Barrier();
         string location = fixture.Snapshot("SELECT town,area,x,y,direction,revision,return_town,return_area FROM characters WHERE id=$p0", id);
         alpha.Send(3, [1]);
         alpha.Expect(1, 3, [1]); alpha.Closed();
         using var switched = Open(fixture, "entrya", gamePort: endpoints[21], channelNumber: 21);
-        var reentry = switched.Select(resumeTown: true, room: false, settings: [(390, keyRestore)]);
-        That(switched.ClientSettings is [{ Kind: 0, Opcode: 390 }], "换频道的设置回放在最终24绑定后逐包核对，不丢失角色选项");
+        var reentry = switched.Select(resumeTown: true, room: false, settings: settings);
+        That(switched.ClientSettings is [{ Kind: 0, Opcode: 390 }, { Kind: 0, Opcode: 454 }], "换频道的设置回放在最终24绑定后逐包核对，保留角色选项与账号键位");
         That(switched.Id == id && fixture.Query("SELECT count(*) FROM characters WHERE account='entrya'") is [[1L]] &&
             fixture.Snapshot("SELECT town,area,x,y,direction,revision,return_town,return_area FROM characters WHERE id=$p0", id) == location,
             "非gate原生换频道保留完整位置与revision，不建第二份角色或重新发放资产");
@@ -99,7 +103,7 @@ internal static class ChannelEntryTcpTests
 
         using var takeover = Open(fixture, "entrya");
         switched.Closed(); beta.SendBarrier(); beta.Batch((0, 6), (1, 1347));
-        takeover.Select(settings: [(390, keyRestore)]); takeover.Barrier();
+        takeover.Select(settings: settings); takeover.Barrier();
         That(takeover.Id == id, "跨入口接管沿用唯一账号generation，旧连接清理不删除新owner");
         That(fixture.Snapshot("SELECT town,area,x,y FROM characters WHERE id=$p0", id) == "[[38,1,450,234]]",
             "普通名册选角与换频道分开，冷登录仍回map gate");
@@ -107,7 +111,7 @@ internal static class ChannelEntryTcpTests
         string gateLocation = fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", id);
         takeover.Send(3, [1]); takeover.Expect(1, 3, [1]); takeover.Closed();
         using var gateReentry = Open(fixture, "entrya", gamePort: endpoints[11], channelNumber: 11);
-        var gatePackets = gateReentry.Select(resumeTown: true, settings: [(390, keyRestore)]);
+        var gatePackets = gateReentry.Select(resumeTown: true, settings: settings);
         gateReentry.Barrier();
         That(gatePackets[^2] is { Kind: 0, Opcode: 124 } && gatePackets[^1] is { Kind: 0, Opcode: 24 } &&
             fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", id) == gateLocation,

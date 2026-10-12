@@ -5,6 +5,17 @@ namespace DfoServer.Network.Builders;
 
 internal static class SettingsPackets
 {
+    public static byte[] Hotkeys(byte profile, ImmutableArray<byte> text)
+    {
+        if (profile > 1) throw new InvalidDataException("键位回放配置类型无效");
+        DfoServer.Game.Settings.HotkeySettingsRules.Validate(text);
+        byte[] body = new byte[text.Length + 5];
+        body[0] = profile;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), checked((uint)text.Length));
+        text.AsSpan().CopyTo(body.AsSpan(5));
+        return body;
+    }
+
     public static byte[] Visibility(ushort id, byte flags)
     {
         byte[] body = new byte[3];

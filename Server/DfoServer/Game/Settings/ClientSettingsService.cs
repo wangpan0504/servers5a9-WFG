@@ -8,7 +8,18 @@ internal sealed class ClientSettingsService(IClientSettingsStore store)
     public const int GameOptionLength = 204;
     public const int CharacterOptionLength = 512;
 
-    public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort characterId) => store.Load(owner, characterId);
+    public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort characterId)
+    {
+        var saved = store.Load(owner, characterId);
+        if (!saved.Hotkeys.IsDefault) HotkeySettingsRules.Validate(saved.Hotkeys);
+        return saved;
+    }
+    public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text)
+    {
+        if (profile > 1) throw new InvalidDataException("键位配置类型无效");
+        HotkeySettingsRules.Validate(text);
+        return store.SaveHotkeys(owner, profile, text);
+    }
     public bool SaveGameOptions(AccountOwners.Lease owner, ImmutableArray<byte> payload, ushort? characterId = null)
     {
         Validate(payload, GameOptionLength);

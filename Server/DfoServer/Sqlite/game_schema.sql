@@ -645,3 +645,8 @@ BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
 CREATE TRIGGER mail_not_title_update BEFORE UPDATE ON mailbox_attachments
 WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
 BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+
+CREATE TABLE account_hotkey_settings(
+  account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),
+  hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
+  PRIMARY KEY(account,profile));
