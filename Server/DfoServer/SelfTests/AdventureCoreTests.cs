@@ -55,6 +55,8 @@ internal static class AdventureCoreTests
         Reject<InvalidDataException>(() => CharacterRequests.HiddenRoster([0]), "隐藏角色查询拒绝未知正文");
         That(AdventureRequests.Target([0x34, 0x12]) == 0x1234, "冒险团目标保留u16");
         Reject<InvalidDataException>(() => AdventureRequests.Target([0]), "冒险团查询不截断目标");
+        AdventureRequests.Empty([]);
+        Reject<InvalidDataException>(() => AdventureRequests.Empty([0]), "胶囊拒绝猜填附加字段");
         That(catalog.Experience[3] == 20 && catalog.CapsuleCapacity == 200 && catalog.Professions.ContainsKey((0, 1)),
             "基础资源读取等级、64位经验表和职业，不加载远征定义");
         var members = ImmutableArray.Create(new AdventureMember(1, 0, "HeroA", 0, 33, 95, 7, 0),

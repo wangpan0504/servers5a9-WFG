@@ -49,4 +49,8 @@ internal static class AdventureRequests
         if (body.Length != 2) throw new InvalidDataException("冒险团查询必须为角色u16");
         return BinaryPrimitives.ReadUInt16LittleEndian(body);
     }
+    public static void Empty(ReadOnlySpan<byte> body)
+    {
+        if (!body.IsEmpty) throw new InvalidDataException("该冒险团请求没有附加正文");
+    }
 }

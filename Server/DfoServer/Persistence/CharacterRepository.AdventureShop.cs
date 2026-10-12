@@ -42,8 +42,9 @@ internal sealed partial class CharacterRepository
         byte[] points = new byte[20];
         for (int index = 0; index < 5; index++) BinaryPrimitives.WriteUInt32LittleEndian(points.AsSpan(index * 4), after.Points[index]);
         command.Parameters.AddWithValue("$points", points); command.Parameters.AddWithValue("$month", after.Month);
+        command.Parameters.AddWithValue("$capsule", checked((long)after.CapsuleExperience));
         command.Parameters.AddWithValue("$before", before.Revision);
-        command.CommandText = "UPDATE account_adventures SET revision=revision+1,points=$points,month=$month WHERE account=$account AND revision=$before";
+        command.CommandText = "UPDATE account_adventures SET revision=revision+1,points=$points,month=$month,capsule_experience=$capsule WHERE account=$account AND revision=$before";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("冒险团余额或周期版本失配");
         command.Parameters.Clear(); command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$item", 0);
         // ReadAdventure已投影周期；必须比较数据库原月份，不能保存新月份却遗漏清空旧限购。

@@ -127,6 +127,7 @@ internal static class ServerRuntime
             new TutorialHandler(tutorials, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection),
             new AdventureShopHandler(new Game.Adventure.AdventureShopService(adventureCatalog, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, clock),
+            new AdventureCapsuleHandler(new Game.Adventure.AdventureCapsuleService(adventureCatalog, growth), levelProjection, clock),
             new SkillHandler(learning, log),
             new TownHandler(projection, log),
             new SettingsHandler(settings, log, projection),
