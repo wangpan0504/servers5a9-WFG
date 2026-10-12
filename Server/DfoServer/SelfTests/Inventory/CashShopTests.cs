@@ -37,6 +37,27 @@ internal static class CashShopTests
             "无期限配置正常保持永久，调试同样统一截止");
         That(DateTimeOffset.FromUnixTimeSeconds(absolute.ResolveShop(now)).ToOffset(TimeSpan.FromHours(8)) ==
             new DateTimeOffset(2038, 1, 19, 11, 14, 7, TimeSpan.FromHours(8)), "调试截止为UTC+8的2038协议上限");
+        long distantTime = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds();
+        foreach (var (value, expected) in new (string Value, long Expected)[]
+        {
+            ("2038-01-19 11:14:07", int.MaxValue),
+            ("2038-01-19 11:14:08", (long)int.MaxValue + 1),
+            ("2099-01-01 00:00:00", distantTime), ("2099-01-01", distantTime), ("20990101", distantTime),
+            (distantTime.ToString(System.Globalization.CultureInfo.InvariantCulture), distantTime),
+            (long.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture), long.MaxValue)
+        })
+        {
+            var expiration = ItemExpiration.Parse(new PvfLib.PvfDocument($"[expiration date]\n`{value}`"));
+            That(expiration.AbsoluteTime == expected && expiration.Resolve(now) == int.MaxValue && expiration.ResolveShop(now) == int.MaxValue,
+                "远期PVF原值与实例32位期限分开，不产生负值、永久或目录加载失败：" + value);
+        }
+        var distant = ItemExpiration.Parse(new PvfLib.PvfDocument("[expiration date]\n`2099-01-01`"));
+        That((distant with { Days = 7 }).Resolve(now) == now.AddDays(7).ToUnixTimeSeconds() &&
+            (distant with { Days = int.MaxValue }).Resolve(now) == int.MaxValue, "相对天数仍优先，宽整数计算后统一映射上限");
+        foreach (string value in new[] { "not-a-date", "2100-02-29", "1960-01-01", "9223372036854775808" })
+            Reject<InvalidDataException>(() => ItemExpiration.Parse(new PvfLib.PvfDocument($"[expiration date]\n`{value}`")),
+                "非法日期或超出64位的Unix值仍拒绝，不借兼容映射吞掉格式错误");
+        Reject<InvalidDataException>(() => ItemExpiration.Parse(new PvfLib.PvfDocument("[usable period]\n-1")), "负数使用天数仍拒绝");
         foreach (var kind in new[] { ItemKind.Equipment, ItemKind.Consumable, ItemKind.Avatar, ItemKind.Creature })
         {
             var template = new ItemTemplate(1106, kind, 0, 1, 10, 1, 0, 0, 1, "[free]", ushort.MaxValue, 0, "期限夹具")
@@ -47,6 +68,12 @@ internal static class CashShopTests
                 "2038覆盖进入实际核心或独立详情期限 " + kind);
             That(InventoryRewardGrantService.Create(template, utcNow: now).ExpireTime == now.ToUnixTimeSeconds() + 7 * 86400,
                 "其他创建入口保留原相对期限 " + kind);
+            var futureTemplate = template with { Expiration = distant };
+            var futureCore = InventoryRewardGrantService.Create(futureTemplate, utcNow: now);
+            var futureItem = InventoryRewardGrantService.CreateItem(futureTemplate, new(InventoryListType.Main, 65), futureCore);
+            That((futureItem.Avatar?.ExpireTime ?? futureItem.Creature?.ExpireTime ?? futureItem.Core.ExpireTime) == int.MaxValue &&
+                !futureItem.IsExpired(now.ToUnixTimeSeconds()) && futureItem.IsExpired(int.MaxValue) &&
+                futureTemplate.Expiration.AbsoluteTime == distantTime, "普通创建将远期声明映射到核心或detail，仍保留到期清理资格 " + kind);
         }
         That(CashShopPackets.Failure().SequenceEqual(new byte[] { 0, 0, 0 }), "商城失败包完整3字节，u16错误码为0");
         var capped = InventorySnapshot.Empty with { ReviveCoins = int.MaxValue - 6 };
