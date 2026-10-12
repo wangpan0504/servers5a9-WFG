@@ -46,6 +46,16 @@ public sealed class PvfDocument
     internal int DeclarationCount(string tag) => fields.TryGetValue(tag, out var field) ? field.Count : 0;
 
     public bool Has(string tag) => fields.ContainsKey(tag) || parent?.Has(tag) == true;
+    public bool TryGetInt32(string tag, out int value)
+    {
+        value = 0;
+        if (!fields.TryGetValue(tag, out var field))
+            return parent?.TryGetInt32(tag, out value) == true;
+        // 最近声明层必须是唯一完整整数；显式空或重复不能借父模板补成有效值。
+        return field.Count == 1 && int.TryParse(text.AsSpan(field.Start, field.End - field.Start).Trim(),
+            System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value);
+    }
+
     public string Section(string tag) => fields.TryGetValue(tag, out var field)
         ? text.AsSpan(field.Start, field.End - field.Start).TrimStart().ToString()
         : parent?.Section(tag) ?? "";

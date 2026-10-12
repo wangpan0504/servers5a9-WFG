@@ -1,5 +1,7 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Skills;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
@@ -269,6 +271,63 @@ internal static partial class InventoryTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "inventory rule changes retain SQLite integrity and instance ownership");
+        await fixture.StopAsync();
+        var broom = resources.ItemResources.Items.Get(106040040);
+        object broomUid;
+        int broomSkillCount;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var profile = characters.Get(3);
+            var learning = resources.Learning;
+            var role = repository.Create(owner, new NewCharacter("BroomTest", towns.Room, towns.InitialReturn)
+            {
+                Job = 3, AcceptedStoryLevel = 1, Skills = profile.Skills,
+                InitialLearning = SkillLearning.Initialize(3, profile.Skills, learning).State!,
+                Inventory = InventoryRewardGrantService.CreateStarter(profile)
+            });
+            var reset = new CharacterProgressReset(characters, learning, CharacterGrowthCatalog.Load(resources.Archive, learning));
+            role = repository.ResetProgress(owner, reset.Prepare(role, new(CharacterProgressField.Level, owner.Account, role.Name, 15, 0)));
+            role = repository.ResetProgress(owner, reset.Prepare(role, new(CharacterProgressField.Grow, owner.Account, role.Name, 5, 0)));
+            broomSkillCount = role.Learning.Trees.Sum(tree => tree.Skills.Count);
+            That(role.Skills.Any(skill => skill.Id == 368 && skill.Level > 0) && role.Skills.All(skill => skill.Id != 91),
+                "real enchantress grants black magic broom without inventing witch mastery");
+            repository.CommitInventory(owner, role, new(role.Inventory, role.Inventory with
+            {
+                Items = role.Inventory.Items.Add(new(0, new(InventoryListType.Main, 9), InventoryRewardGrantService.Create(broom)))
+            }, "fixture_enchantress_broom"));
+            broomUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", role.Id)[0][0]!;
+        }
+        await fixture.StartAsync("broom");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1);
+            int previousWeapon = characters.Get(3).Equipment.Single(item => item.Slot == 12).Template.Id;
+            var wear = MoveItem(0, 9, broom.Id, 1, 3, 12, previousWeapon);
+            peer.Send(19, wear);
+            peer.Expect(1, 19, MoveAck(0, 9, 1, 3, 12));
+            var cleared = peer.Expect(0, 14).Body;
+            That(cleared[0] == 0 && cleared.Length == 126 && U16(cleared, 1) == 1 && U16(cleared, 3) == 9 && U32(cleared, 5) == uint.MaxValue,
+                "broom swap clears replaced main-slot resource before publishing the other weapon");
+            DeltaAndAppearance(peer, 5, "BroomTest", broomSkillCount);
+            peer.Barrier();
+            That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=12", peer.Id)[0][0], broomUid),
+                "enchantress broom swap commits original UID before successful reply");
+            string before = Snapshot(fixture);
+            peer.Send(19, wear);
+            peer.Expect(1, 19, [0, 23, 0, 0, 3]);
+            peer.Barrier();
+            That(Snapshot(fixture) == before, "repeated broom swap preserves committed inventory");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1);
+            peer.Send(19, MoveItem(3, 12, broom.Id, 1, 0, 10, 0));
+            peer.Expect(1, 19, MoveAck(3, 12, 1, 0, 10));
+            DeltaAndAppearance(peer, 4, "BroomTest", broomSkillCount);
+            peer.Barrier();
+            That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=10", peer.Id)[0][0], broomUid),
+                "reconnected enchantress restores and unequips the same broom instance");
+        }
     }
 
     static string Snapshot(TcpTestFixture fixture) => JsonSerializer.Serialize(new
@@ -278,13 +337,14 @@ internal static partial class InventoryTcpTests
         Slots = fixture.Query("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index"),
         Audit = fixture.Query("SELECT * FROM inventory_audit_log ORDER BY audit_id")
     });
-    static void DeltaAndAppearance(TcpPeer peer, byte count)
+    static void DeltaAndAppearance(TcpPeer peer, byte count, string name = "BagGearTest", int totalSkills = 12)
     {
         var main = peer.Expect(0, 14).Body;
         That(main[0] == 0 && main.Length == 126, "ACK moves worn slots before committed main delta");
         var actor = peer.Expect(0, 2).Body;
         var player = peer.Expect(0, 2).Body;
-        That(actor[133 + NameWidth("BagGearTest")] == count && player[126] == count && player.Length == 203 + count * 91, "appearance and player agree after wear change");
+        That(actor[133 + NameWidth(name)] == count && player[126] == count && player.Length == 167 + count * 91 + totalSkills * 3,
+            "appearance and complete player skill tail agree after wear change");
     }
     static byte[] MoveItem(byte sourceList, short sourceSlot, int sourceItemId, int count, byte targetList, short targetSlot, int targetItemId) => Build(writer =>
     {

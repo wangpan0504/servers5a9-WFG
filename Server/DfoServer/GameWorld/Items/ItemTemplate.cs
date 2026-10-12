@@ -22,6 +22,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     ushort Durability, int StackLimit, int Weight, int Rarity, int Grade, string AttachType,
     ushort Jobs, ushort RequiredSkill, string Name, string StackableType = "")
 {
+    public int WeaponSubType { get; init; } = -1;
     public bool PersonalCargoForbidden { get; init; }
     public bool AccountCargoForbidden { get; init; }
     public ushort PersonalCargoUpgradeTarget { get; init; }

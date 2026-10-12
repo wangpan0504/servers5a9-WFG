@@ -27,6 +27,14 @@ internal static class ItemModelTests
         var child = new PvfDocument("[name]\n\n[price]\n0\n[items]\n[/items]", parent);
         That(child.Has("items") && child.Section("name") == "" && child.Section("price") == "0", "local empty and zero override parent");
         That(child.Block("items").Trim() == "" && parent.Block("items").Trim() == "1", "empty block shadows without mutating parent");
+        That(child.TryGetInt32("price", out int zero) && zero == 0, "strict integer preserves explicit zero override");
+        var subtypeParent = new PvfDocument("[sub type]\n4");
+        That(new PvfDocument("[name]\n`child`", subtypeParent).TryGetInt32("sub type", out int inherited) && inherited == 4,
+            "strict integer inherits the nearest declared parent");
+        foreach (string value in new[] { "", "4 19", "4.0", "`4`", "2147483648", "4\n[sub type]\n4" })
+            That(!new PvfDocument("[sub type]\n" + value, subtypeParent).TryGetInt32("sub type", out _),
+                "empty ambiguous or invalid integer cannot fall back to parent");
+        That(!new PvfDocument("").TryGetInt32("sub type", out _), "missing strict integer stays unknown");
         Reject<InvalidDataException>(() => new PvfDocument("[x]1[/x]\n[x]2[/x]").Block("x"));
         var scripts = new Dictionary<string, string>
         {

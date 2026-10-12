@@ -174,6 +174,8 @@ internal sealed class ItemCatalog
             jobMask, checked((ushort)Int("required skill", 0)),
             name, text.Section("stackable type").Replace("`", "").Trim())
         {
+            WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&
+                text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
             AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
             PersonalCargoUpgradeTarget = cargoTarget,

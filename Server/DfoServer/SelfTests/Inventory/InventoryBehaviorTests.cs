@@ -10,6 +10,34 @@ namespace DfoServer.Testing.Inventory;
 
 internal static class InventoryBehaviorTests
 {
+    public static void RunCore()
+    {
+        var broom = new ItemTemplate(1, ItemKind.Equipment, 12, 15, 45, 1, 25, 1, 0, "[free]", 8, 91, "Broom")
+        { WeaponSubType = 4 };
+        var enchantress = new Character(1, 0, "Broom", 0, new(0, 0, 0, 0), null)
+        { Job = 3, GrowType = 5, Level = 15, Skills = [new(368, 1)] };
+        foreach (byte grow in new byte[] { 5, 0x15, 0x25 })
+            Testing.TestCheck.That(InventoryMoveService.RequiredSkillSatisfied(enchantress with { GrowType = grow }, broom),
+                "enchantress broom qualification retains awakening stage " + grow);
+        foreach (var invalid in new[]
+        {
+            enchantress with { Job = 10 }, enchantress with { GrowType = 4 },
+            enchantress with { Skills = [] }, enchantress with { Skills = [new(368, 0)] }
+        })
+            Testing.TestCheck.That(!InventoryMoveService.RequiredSkillSatisfied(invalid, broom),
+                "broom substitution requires actual enchantress skill");
+        foreach (var other in new[]
+        {
+            broom with { WeaponSubType = -1 }, broom with { WeaponSubType = 0 },
+            broom with { EquipmentSlot = 14 }, broom with { Kind = ItemKind.Avatar }, broom with { RequiredSkill = 92 }
+        })
+            Testing.TestCheck.That(!InventoryMoveService.RequiredSkillSatisfied(enchantress, other),
+                "broom substitution does not widen another item requirement");
+        Testing.TestCheck.That(InventoryMoveService.RequiredSkillSatisfied(enchantress with { GrowType = 4, Skills = [new(91, 1)] }, broom) &&
+            InventoryMoveService.RequiredSkillSatisfied(enchantress with { Skills = [] }, broom with { RequiredSkill = 0 }),
+            "original learned skill and unrestricted equipment qualifications remain valid");
+    }
+
     public static void Run(Character character, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources, Action<bool, string> check)
     {
         var catalog = itemResources.Items;
@@ -113,6 +141,18 @@ internal static class InventoryBehaviorTests
         var unequip = service.Move(femaleCharacter with { Inventory = offhand.Plan!.After },
             new(Bag(8), 0, 0, new(InventoryListType.Equipment, 24), femaleWeapon.Core.ItemId, 0, -1, 0, 0));
         check(unequip.Accepted && unequip.Plan!.After.Find(Bag(8))?.Core == femaleWeapon.Core, "support weapon can return directly to quick slot");
+
+        var broom = catalog.Get(106040040);
+        check(broom is { Kind: ItemKind.Equipment, EquipmentSlot: 12, WeaponSubType: 4, RequiredSkill: 91 },
+            "matched broom retains weapon subtype and original skill declaration");
+        var broomItem = new InventoryItem(302, Bag(9), InventoryRewardGrantService.Create(broom));
+        var enchantress = character with { Job = 3, GrowType = 0x25, Level = 15, Skills = [new(368, 1)], Inventory = new([broomItem]) };
+        var wornBroom = service.Move(enchantress, Request(broomItem, new(InventoryListType.Equipment, 12)));
+        check(wornBroom.Accepted && wornBroom.Plan!.After.Find(new(InventoryListType.Equipment, 12)) ==
+            broomItem with { Position = new(InventoryListType.Equipment, 12) }, "enchantress wears matched broom with full core and UID intact");
+        check(!service.Move(enchantress with { Level = (byte)(broom.MinimumLevel - 1) }, Request(broomItem, new(InventoryListType.Equipment, 12))).Accepted &&
+            !service.Move(enchantress, Request(broomItem, new(InventoryListType.Equipment, 14))).Accepted,
+            "broom alternate skill does not bypass wear level or equipment slot");
 
         var sealedTemplate = PvfScript.List(pvf.ReadText("equipment/equipment.lst")).Keys.Select(TryGet)
             .First(item => item is { EquipmentSlot: 12 } && item.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase))!;

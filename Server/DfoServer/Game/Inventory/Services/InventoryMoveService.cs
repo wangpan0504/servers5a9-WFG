@@ -143,7 +143,18 @@ internal static class InventoryMoveService
             return matchesSlot;
         return matchesSlot && character.Level >= template.MinimumLevel &&
             (template.Jobs & (1 << character.Job)) != 0 &&
-            (template.RequiredSkill == 0 || character.Skills.Any(skill => skill.Id == template.RequiredSkill && skill.Level != 0));
+            RequiredSkillSatisfied(character, template);
+    }
+
+    internal static bool RequiredSkillSatisfied(Character character, ItemTemplate template)
+    {
+        if (template.RequiredSkill == 0 || HasSkill(template.RequiredSkill))
+            return true;
+        // 匹配 CHR 的小魔女扫把准入为技能368；不补赠魔道的91，也不推广到其他武器要求。
+        return template is { Kind: ItemKind.Equipment, EquipmentSlot: 12, WeaponSubType: 4, RequiredSkill: 91 } &&
+            character.Job == 3 && (character.GrowType & 0x0f) == 5 && HasSkill(368);
+
+        bool HasSkill(ushort id) => character.Skills.Any(skill => skill.Id == id && skill.Level != 0);
     }
 
     static InventoryItem PrepareForDestination(InventoryItem item, InventorySlot destination, InventoryItem? previous, ItemCatalog catalog)

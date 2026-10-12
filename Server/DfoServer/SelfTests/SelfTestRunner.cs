@@ -81,6 +81,7 @@ internal static class SelfTestRunner
         TownSelectionTests.Run();
         TownDungeonMapTests.Run();
         InventoryChangeTests.Run();
+        InventoryBehaviorTests.RunCore();
         InventoryProjectionTests.Run();
         InventoryWriteTests.Run();
         InventoryBatchTests.RunCore();
