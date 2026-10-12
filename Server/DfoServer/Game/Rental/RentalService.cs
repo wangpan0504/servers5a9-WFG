@@ -29,11 +29,6 @@ internal sealed class RentalService(RentalCatalog catalog, ItemCatalog items)
     {
         if (packedJob != character.Job)
             return InventoryResult.Reject();
-        int tier;
-        try { tier = catalog.TierForLevel(character.Level); }
-        catch (InvalidOperationException) { return InventoryResult.Reject(); }
-        if (packedTier > tier)
-            return InventoryResult.Reject();
 
         ItemTemplate template;
         int cost;
@@ -45,7 +40,7 @@ internal sealed class RentalService(RentalCatalog catalog, ItemCatalog items)
         catch (InvalidDataException) { return InventoryResult.Reject(); }
         catch (InvalidOperationException) { return InventoryResult.Reject(); }
         if (template.Kind != ItemKind.Equipment || template.EquipmentSlot is < 12 or > 24 ||
-            character.Level < template.MinimumLevel || (template.Jobs & (1 << character.Job)) == 0)
+            (template.Jobs & (1 << character.Job)) == 0)
             return InventoryResult.Reject();
 
         var before = character.Inventory;

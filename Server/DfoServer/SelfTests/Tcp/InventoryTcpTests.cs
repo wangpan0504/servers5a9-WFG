@@ -187,6 +187,7 @@ internal static partial class InventoryTcpTests
         await fixture.StopAsync();
         await VerifyRulesAsync(source, Path.Combine(root, "inventory-rules"), characters, towns, stack, resources);
         await VerifyLocksAsync(source, Path.Combine(root, "inventory-locks"), characters, towns, resources);
+        await VerifyRentalAsync(source, Path.Combine(root, "inventory-rental"), resources);
         Console.WriteLine("PASS C# TCP inventory: full list, split, merge, quick slot, equip, sort, discard, replay and restart");
     }
 

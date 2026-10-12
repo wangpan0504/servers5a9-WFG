@@ -7,6 +7,10 @@ using DfoServer.Network.Builders.Inventory;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Infrastructure;
+using System.Collections.Immutable;
 
 namespace DfoServer;
 
@@ -46,6 +50,48 @@ internal static class RentalTests
         That(valid.Accepted && valid.PointsAfter == 141 && valid.GoldAfter == 9_959_000, "租赁点充值原子计算");
         That(!RentalRules.ValidateCharge(500, 1_000, 41, 410, 100).Accepted, "金币不足拒绝充值");
         Console.WriteLine("PASS rental core assertions");
+    }
+
+    public static void RunResources(Character character, ItemResources resources)
+    {
+        var service = new RentalService(resources.Rental, resources.Items);
+        var before = character with
+        {
+            Level = 1,
+            Inventory = character.Inventory with { AccountWallet = character.Inventory.AccountWallet.Set(CurrencyKind.RentalPoint, 50) }
+        };
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        foreach (var (level, itemId, tier, cost) in new (byte, int, ushort, int)[]
+        {
+            (1, 408030023, 0, 3), (9, 408030023, 0, 3), (10, 408030023, 0, 3), (1, 408030030, 7, 40)
+        })
+        {
+            var result = service.Rent(before with { Level = level }, itemId, 14, tier, now);
+            That(result.Accepted && result.Plan!.After.AccountWallet.RentalPoints == 50 - cost,
+                "租赁按请求商品和档位扣费，不另按角色等级拒绝: " + level + "/" + tier);
+            var rented = result.Plan!.After.Find(new(InventoryListType.Main, 9))!;
+            That(rented.Uid == 0 && rented.Core.ItemId == itemId && rented.Core.IsRental &&
+                rented.ExpireTime == now.AddHours(24).ToUnixTimeSeconds() &&
+                rented.Core.Durability == resources.Items.Get(itemId).Durability,
+                "低等级领取保留模板耐久及24小时租期");
+            if (level == 1)
+                That(!InventoryMoveService.Allows(before, new(InventoryListType.Equipment, 12), rented.Core, resources.Items),
+                    "租赁领取放开不改变普通穿戴等级条件");
+        }
+        That(!service.Rent(before, 408030023, 0, 0, now).Accepted, "租赁职业回显不匹配仍拒绝");
+        That(!service.Rent(before, 408030023, 14, ushort.MaxValue, now).Accepted, "PVF未配置档位仍拒绝");
+        That(!service.Rent(before, 408030030, 14, 0, now).Accepted, "物品不在请求PVF档位仍拒绝");
+        var poor = before with { Inventory = before.Inventory with { AccountWallet = before.Inventory.AccountWallet.Set(CurrencyKind.RentalPoint, 2) } };
+        That(!service.Rent(poor, 408030023, 14, 0, now).Accepted, "低等级放开后余额不足仍拒绝");
+        var core = before.Inventory.Items.First().Core;
+        var full = before with { Inventory = before.Inventory with
+        {
+            Items = Enumerable.Range(9, 56).Select(slot => new InventoryItem(slot, new(InventoryListType.Main, (short)slot), core)).ToImmutableArray()
+        } };
+        That(service.Rent(full, 408030023, 14, 0, now) is { Accepted: false, Error: 17 }, "租赁满包仍返回原错误");
+        That(before.Inventory.Items.SequenceEqual(character.Inventory.Items) && before.Inventory.AccountWallet.RentalPoints == 50,
+            "租赁规划与拒绝不修改原快照");
+        Console.WriteLine("PASS rental resource assertions");
     }
 
     static void Reject(Action action, string message)

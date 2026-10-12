@@ -68,6 +68,7 @@ internal static class InventorySelfTests
                 That(repo.List(owner)[job].Inventory.Items.SequenceEqual(created.Inventory.Items), "starter persists across reread " + job);
             }
             That(repo.List(owner).SelectMany(character => character.Inventory.Items).Select(item => item.Uid).Distinct().Count() == 80, "central unique UID allocation");
+            RentalTests.RunResources(repo.List(owner)[14], itemResources);
             var current = repo.List(owner)[0];
             InventoryBehaviorTests.Run(current, pvf, characters, itemResources, That);
             InventoryStackLimitTests.Run(current, catalog, itemResources, That);
