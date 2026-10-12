@@ -54,6 +54,34 @@ internal static class QuestEligibilityTests
         var sequential = parent with { SubType = 2 };
         var related = new QuestCatalog(new[] { sequential, child1, child2 }.ToDictionary(quest => quest.Id));
         That(QuestRelationProgress.DialogueChild(child2, related), "确认的顺序父任务允许城镇子任务入口");
+        var zeroItemChild = child2 with { Attributes = ["not give exp quest"],
+            Rewards = [new(0,0,null),new(0,0,null)] };
+        That(QuestRelationProgress.ZeroRewardChild(zeroItemChild) &&
+            QuestRelationProgress.ZeroRewardChild(zeroItemChild with { RewardType = null, Rewards = [] }),
+            "禁经验子任务兼容明确0/0物品占位与旧空奖励声明");
+        foreach (var rewarded in new[]
+        {
+            zeroItemChild with { Attributes = [] }, zeroItemChild with { MainQuest = null },
+            zeroItemChild with { Rewards = [new(0,2058,null),new(0,1,null)] },
+            zeroItemChild with { Rewards = [new(0,0,null)] }, zeroItemChild with { RewardType = "[tp]" },
+            zeroItemChild with { DeclaredGoldMultiple = 1 },
+            zeroItemChild with { Definition = zeroItemChild.Definition! with { SelectRewards = [new(0,2058,null),new(0,1,null)] } }
+        })
+            That(!QuestRelationProgress.ZeroRewardChild(rewarded),"实际经验、奖励或不完整声明不能自动交付子任务");
+        var orphanCatalog = new QuestCatalog(new[] { sequential,child1,zeroItemChild }.ToDictionary(quest => quest.Id));
+        var orphan = origin with { CompletedQuests = [200], ActiveMainQuests = [new(0,202,0) { AcceptanceId = Guid.NewGuid() }] };
+        That(QuestRelationProgress.CompletedParentChild(orphan,zeroItemChild,orphanCatalog) == 200,
+            "已完成父任务和持久终末子接取允许零奖励归档");
+        foreach (var invalid in new[] { orphan with { CompletedQuests = [] },
+            orphan with { CompletedQuests = [], AccountCompletedQuests = [200] },
+            orphan with { ActiveMainQuests = [orphan.ActiveMainQuests[0] with { ConditionState = 1 }] },
+            orphan with { ActiveMainQuests = [orphan.ActiveMainQuests[0] with { AcceptanceId = Guid.Empty }] },
+            orphan with { ActiveMainQuests = [orphan.ActiveMainQuests[0],new(1,200,0) { AcceptanceId = Guid.NewGuid() }] } })
+            That(QuestRelationProgress.CompletedParentChild(invalid,zeroItemChild,orphanCatalog) is null,
+                "未完成父任务、账号记录、未达成子任务及仍在进行的父任务不能走历史归档");
+        That(QuestRelationProgress.CompletedParentChild(orphan,zeroItemChild with { MainQuest = 199 },orphanCatalog) is null &&
+            QuestRelationProgress.CompletedParentChild(orphan,zeroItemChild with { Rewards = [new(0,2058,null),new(0,1,null)] },orphanCatalog) is null,
+            "无真实反向归属或有奖励的子任务不能归档");
         That(QuestRelationProgress.Initial(sequential,related,[]) == 2 &&
             QuestRelationProgress.Initial(sequential,related,[202]) == 1 &&
             QuestRelationProgress.Initial(sequential,related,[201,202]) == 0,

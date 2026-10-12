@@ -146,6 +146,81 @@ internal static class QuestTownSceneTests
                 Finish(f,3187).Receipt?.Commit.ConditionType == 65 && f.Read().CompletedQuests.Contains(3187) &&
                 !f.Read().CompletedQuests.Contains(3188),"女王NPC148引导的演出122只完成自身，不补跳后继任务");
         }
+        using (var f = Make([3155,3156,3181,3223,3248,3609],new(42,2,788,222),95))
+        {
+            That(quests.Get(3249).IntData.SequenceEqual([3609,3610]) &&
+                QuestRelationProgress.ZeroRewardChild(quests.Get(3609)) && QuestRelationProgress.ZeroRewardChild(quests.Get(3610)),
+                "实际梅娅女王父子定义使用禁经验和0/0物品占位");
+            That(Change(f,3249,QuestLifecycleAction.Accept)?.Commit is not null &&
+                f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                    [new(10164786,1)],items.Items,items.GoldLimits,items.EpicPieces)).Accepted &&
+                Change(f,3610,QuestLifecycleAction.Accept)?.Commit is not null,
+                "按真实前置、父任务和信函库存接取末个寻物会面子任务");
+            var changed = f.Session.ChangeQuest(3610,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,
+                items.EpicPieces,new(0x20,0,0));
+            That(changed?.Commit is not null && f.Read().ActiveMainQuests.Single(row => row.QuestId == 3610).ConditionState == 0,
+                "实际NPC303场景接受与现场相同的20通道归零请求");
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            var before = f.Read();
+            f.Sql("CREATE TRIGGER maya_abort AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT RAISE(ABORT,'linked rollback'); END");
+            Reject<SqliteException>(() => Close(),"已归零梅娅子任务自动交付末段SQL失败");
+            That(QuestCompletionRepositoryTests.Same(before,f.Read()),"信函、子完成位和父条件整笔回滚，保留原归零接取");
+            f.Sql("DROP TRIGGER maya_abort");
+            var closed = Close();
+            That(closed?.Commit is { ExperienceReward.Amount: 0, Rewards.Length: 0, Consumed.Length: 1, GoldAmount: 0 } &&
+                f.Read().Inventory.Gold == before.Inventory.Gold &&
+                f.Read().ActiveMainQuests is [{ QuestId: 3249, ConditionState: 0 }] &&
+                f.Read().CompletedQuests.Contains(3610) && !f.Read().CompletedQuests.Contains(3249) &&
+                f.Read().Inventory.Items.All(item => item.Core.ItemId != 10164786),
+                "重选恢复已归零子任务，真实消费一次信函并更新父条件，不自动发父奖励");
+            var saved = f.Read();
+            That(Close() is null && QuestCompletionRepositoryTests.Same(saved,f.Read()),"重复恢复不再扣信函或保存完成回执");
+            That(Finish(f,3249).Outcome == QuestFinishOutcome.Committed && f.Read().CompletedQuests.Contains(3249),
+                "梅娅女王父任务按原34正式交付完成");
+            QuestCompletionReceipt? Close() => f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,
+                items.GoldLimits,items.EpicPieces,growth);
+        }
+        foreach (bool hasLetter in new[] { false,true })
+        using (var f = Make([3155,3156,3181,3223,3248,3249,3250,3609],new(42,0,300,250),95))
+        {
+            if (hasLetter)
+                That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                    [new(10164786,1)],items.Items,items.GoldLimits,items.EpicPieces)).Accepted,"历史残留信函按正常库存owner准备");
+            f.Sql("INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) SELECT id,5,3610,0,'8d9a7f7bb6d94979b1ab3f519b90a652' FROM characters");
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            var before = f.Read();
+            f.Sql("CREATE TRIGGER orphan_abort AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT RAISE(ABORT,'orphan rollback'); END");
+            Reject<SqliteException>(() => Close(),"历史孤立子任务归档末段失败整笔回滚");
+            That(QuestCompletionRepositoryTests.Same(before,f.Read()),"历史恢复失败保留父完成位、原子接取和全部资产");
+            f.Sql("DROP TRIGGER orphan_abort");
+            var closed = Close();
+            var saved = f.Read();
+            That(closed?.Commit is { ExperienceReward.Amount: 0, Rewards.Length: 0, Consumed.Length: 0, GoldAmount: 0 } &&
+                saved.ActiveMainQuests.Length == 0 && saved.CompletedQuests.SequenceEqual(before.CompletedQuests.Append(3610).Order()) &&
+                saved.Revision == before.Revision+1 && QuestCompletionRepositoryTests.Same(before with
+                    { ActiveMainQuests = saved.ActiveMainQuests, CompletedQuests = saved.CompletedQuests, Revision = saved.Revision },saved),
+                "复现111父3249已完成、子3610归零：只补子归档一次，不重新扣信函或发父子奖励");
+            That(Close() is null && Finish(f,3610).Outcome == QuestFinishOutcome.AlreadyCompleted &&
+                QuestCompletionRepositoryTests.Same(saved,f.Read()),"重选和重复34不再次写入历史恢复");
+            QuestCompletionReceipt? Close() => f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,
+                items.GoldLimits,items.EpicPieces,growth);
+        }
+        using (var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,[3155]))
+        foreach (var child in quests.All.Where(q => q.RewardType == "[item]" && QuestRelationProgress.ZeroRewardChild(q) &&
+            q.MainQuest is { } parentId && quests.TryGet(parentId,out var parent) && QuestRelationProgress.SequentialParent(parent,quests))
+            .GroupBy(q => q.Condition).Select(group => group.First()))
+        {
+            var expected = f.Read() with { CompletedQuests = [.. f.Read().CompletedQuests,child.MainQuest!.Value],
+                ActiveMainQuests = [new(5,checked((ushort)child.Id),0) { AcceptanceId = Guid.NewGuid() }] };
+            var prepared = QuestCompletionPlan.Prepare(expected,child,ushort.MaxValue,quests,parameters,items.Items,
+                items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow);
+            That(prepared.Plan is { Inventory.Changed: false, ExperienceReward.Amount: 0, GoldAmount: 0, Consumed.Length: 0 } plan &&
+                plan.CompletedParentId == child.MainQuest && plan.AuthoritativeClear is null,
+                "实际同类"+child.Condition+"终末子归档无需重造清图或材料，保留父完成位与全部资产");
+            That(QuestCompletionPlan.Prepare(expected with { ActiveMainQuests = [expected.ActiveMainQuests[0] with { ConditionState = 1 }] },
+                child,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Plan is null,
+                "同类历史归档不代替未达成的"+child.Condition+"条件");
+        }
         Console.WriteLine($"PASS {Count - checks} 实际城镇范围、演出121/122、寻物会面与自动交付及原子回滚断言（非实机）");
         QuestSceneTests.Fixture Make(int[] completed,Location position,byte level = 17)
         {

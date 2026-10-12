@@ -28,13 +28,18 @@ internal sealed class QuestCompletionPlan
         ImmutableArray<QuestPlannedItemReward> rewards, ImmutableArray<QuestConsumedItem> consumed,
         uint gold, int goldBase, int goldMultiple, int penalty, DateTimeOffset now, QuestCatalog quests, QuestClearReceipt? clear,
         byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
-        byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold)
+        byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold,
+        int? completedParentId = null)
     {
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
+        CompletedParentId = completedParentId;
         AuthoritativeClear = clear;
         ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
             "[quest clear]" => 44, "[clear multi quest]" => 70, "[question]" => 42, "[reach the range]" => 64, "[look cinematic]" => 65,
-            _ => QuestStateProgress.Type(quest) ?? (byte)4 }; RewardSelector = selector;
+            _ => QuestStateProgress.Type(quest) ?? (byte)4 };
+        // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
+        if (completedParentId is not null && ConditionType is 1 or 3) ConditionType = 4;
+        RewardSelector = selector;
         ExperienceReward = experience; Inventory = inventory; GrowthPlan = growth; Rewards = rewards; Consumed = consumed;
         Multiplier = multiplier;
         Currencies = currencies;
@@ -61,6 +66,12 @@ internal sealed class QuestCompletionPlan
         Snapshot = JsonSerializer.Serialize(new { QuestId, AcceptanceId, QuestSlot, ConditionType, RewardSelector, Multiplier,
             ExperienceReward, GoldAmount, goldBase, goldMultiple, penalty, Consumed, Rewards, Currencies, FrozenAt, DailyPeriod, AccountQuest,
             AuthoritativeClear, Answer, Learning = TargetLearning, Level = TargetLevel, GrowType = TargetGrowType, EquipmentSlotFlags = TargetEquipmentSlotFlags });
+        if (CompletedParentId is { } completedParent)
+        {
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot[nameof(CompletedParentId)] = completedParent;
+            Snapshot = snapshot.ToJsonString();
+        }
         if (CascadeMarkerQuestId is { } cascade)
         {
             // 普通任务保持历史Snapshot原字节；仅真实cascade规划追加已确认的关联ID。
@@ -99,6 +110,7 @@ internal sealed class QuestCompletionPlan
     public QuestClearReceipt? AuthoritativeClear { get; }
     public QuestClearReceipt Clear => AuthoritativeClear ?? throw new InvalidOperationException("此任务不使用清图凭据");
     public ushort QuestId { get; }
+    public int? CompletedParentId { get; }
     public Guid AcceptanceId { get; }
     public byte QuestSlot { get; }
     public byte ConditionType { get; }
@@ -150,12 +162,22 @@ internal sealed class QuestCompletionPlan
                 QuestLifecyclePlan.ValidSeeking(quest) && quest.RewardType == "[item]"))
                 throw new InvalidDataException("交付倍数只适用于具有实际材料的普通重复寻物任务");
             var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id);
+            var completedParent = QuestRelationProgress.CompletedParentChild(expected,quest,quests);
             if (active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
                 QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
                 QuestEligibility.InspectResource(quest).Entry != QuestResourceEntry.Ordinary && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) ||
-                !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests).Eligible)
+                completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests).Eligible)
                 throw new InvalidDataException("任务接取身份、完成位或当前资格不符");
+            if (completedParent is not null)
+            {
+                if (selector != ushort.MaxValue || multiplier != 1 || clear is not null)
+                    throw new InvalidDataException("已完成父任务的子任务归档不能附带领奖选择、倍数或清图交付");
+                var zero = QuestExperiencePolicy.Prepare(expected,quest,parameters,out int zeroPenalty);
+                return new(QuestCompletionOutcome.Accepted,new(expected,active,quest,selector,zero,
+                    new(expected.Inventory,expected.Inventory,"quest_completed_parent_child"),null,[],[],0,0,0,zeroPenalty,
+                    now,quests,null,null,null,1,[],expected.EquipmentSlotFlags,0,[],null,0,completedParent),"已完成父任务的终末子任务归档");
+            }
             bool threshold = QuestRelationProgress.ThresholdParent(quest,quests);
             bool parent = QuestRelationProgress.SequentialParent(quest,quests) || threshold;
             byte? profession = quest.RewardType is "[grow type]" or "[awakening type]"
@@ -280,7 +302,8 @@ internal sealed class QuestCompletionPlan
             for (int at = 0; at < requested.Count; at++) requested[at] = requested[at] with { Count = checked(requested[at].Count*multiplier) };
             int goldBase = 0, goldMultiple = quest.DeclaredGoldMultiple ?? 100;
             uint gold = 0;
-            if (definition.HasGoldMarker || quest.DeclaredGoldMultiple > 0)
+            // 禁经验子任务的0/0是零奖励占位，不能借普通任务的动态金币marker发奖。
+            if (!QuestRelationProgress.ZeroRewardChild(quest) && (definition.HasGoldMarker || quest.DeclaredGoldMultiple > 0))
             {
                 if (definition.FixedGoldAmount > 0 && quest.DeclaredGoldMultiple is not > 0)
                     gold = definition.FixedGoldAmount;

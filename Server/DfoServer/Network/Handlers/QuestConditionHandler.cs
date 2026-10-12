@@ -41,12 +41,23 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
         }
         uint scalar = clear is not null ? 0 : changed!.Character.ActiveMainQuests.SingleOrDefault(active => active.QuestId == request.QuestId)?.ConditionState ?? 1;
         QuestCompletionReceipt? closed = null;
-        if (scalar == 0 && changed?.Outcome != QuestLifecycleOutcome.Rejected && quests is not null && parameters is not null &&
+        bool parentCallback = false;
+        if (changed?.Outcome != QuestLifecycleOutcome.Rejected && quests is not null && parameters is not null &&
             items is not null && goldLimits is not null && pieces is not null && growth is not null &&
-            quests.TryGet(request.QuestId,out var quest) && QuestRelationProgress.ZeroRewardChild(quest))
+            quests.TryGet(request.QuestId,out var quest))
         {
-            // 匹配客户端子任务33后没有34；复用普通交付事务保存零奖励完成位和父任务进度。
-            closed = context.Session.FinishQuest(request.QuestId,ushort.MaxValue,quests,parameters,items,goldLimits,pieces,growth).Receipt;
+            // 原生NPC对话先确认子条件，再由父33或真实子34推进，不用574提前跳过对话。
+            bool dialogue = quest.RewardType == "[item]" && QuestRelationProgress.TownLinkedChild(quest);
+            if (scalar == 0 && QuestRelationProgress.ZeroRewardChild(quest) && !dialogue)
+                closed = context.Session.FinishQuest(request.QuestId,ushort.MaxValue,quests,parameters,items,goldLimits,pieces,growth).Receipt;
+            else if (changed is not null && request is { Channel: null, Value: 0, Reserved: 0 } &&
+                QuestRelationProgress.SequentialParent(quest,quests))
+            {
+                parentCallback = true;
+                closed = context.Session.FinishReadyQuestChildren(quests,parameters,items,goldLimits,pieces,growth,quest.Id);
+                if (closed is not null)
+                    scalar = closed.Commit.Character.ActiveMainQuests.Single(row => row.QuestId == request.QuestId).ConditionState;
+            }
             if (closed is { Commit.ProjectionCurrent: false }) return CommandResult.CloseConnection;
             if (closed is not null) log.Write("quest_child_closed",new { Connection = context.Id, request.QuestId, closed.Commit.AcceptanceId, closed.Commit.Duplicate });
         }
@@ -55,11 +66,15 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
         byte[] body = changed?.Outcome == QuestLifecycleOutcome.Rejected ? QuestPackets.Rejected(19) : QuestPackets.ClearTrigger(request.QuestId,scalar);
         // 02353232的error19直接静默收尾；终末NPC条件仅ACK33，不全量刷新打断对话。
         await context.Reply(CmdPacketType.SET_QUEST_TRIGGER, body, "quest_condition_result", Guard);
-        if (changed?.Commit?.Plan.Inventory.ChangedSlots is { Length: > 0 } slots)
+        var committedSlots = closed is null ? [] : changed is null ? closed.Commit.ChangedSlots :
+            new InventoryPlan(changed.Character.Inventory,closed.Commit.Character.Inventory,"子任务材料同步").ChangedSlots;
+        var slots = (changed?.Commit?.Plan.Inventory.ChangedSlots ?? []).Concat(committedSlots)
+            .Concat(closed?.Commit.ChangedSlots ?? []).Distinct().ToArray();
+        if (slots.Length != 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
-                InventoryPackets.Delta((closed?.Commit.Character ?? changed.Character).Inventory,
+                InventoryPackets.Delta((closed?.Commit.Character ?? changed!.Character).Inventory,
                     InventoryListType.Main,[.. slots]),"quest_scene_inventory",Guard);
-        if (closed is not null)
+        if (closed is not null && !parentCallback)
         {
             await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(closed.Commit.Character.ActiveMainQuests),"quest_child_parent_progress",Guard);
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(closed.Commit.Character),"quest_child_completed",Guard);

@@ -27,8 +27,9 @@ internal static class QuestSceneTests
         var quests = sharedQuests ?? QuestCatalog.Load(pvf); var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf);
         var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
         var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf); var kills = DungeonKillExperienceCatalog.Load(pvf);
-        foreach (bool lost in new[] { false,true })
+        foreach (var mode in new[] { "normal","lost","completedParent" })
         {
+            bool lost = mode == "lost";
             using var f = new Fixture(towns,characters,skills,growth,quests,lost);
             That(f.Session.LeaveRoom(), "正常剧情从赛丽亚房间回城");
             That(Change(3146,QuestLifecycleAction.Accept)?.Commit is not null && Change(3157,QuestLifecycleAction.Accept)?.Commit is not null,
@@ -84,6 +85,20 @@ internal static class QuestSceneTests
                 "中途新接子任务获得同实例末次死亡的持久清图凭据");
             // 复现da：清图后没有33/34，断线回城时仍保留本次接取的真实清图凭据。
             That(f.Session.ReturnFromFormalDungeon() is not null,"零奖励清图子任务未交付时可正常回城");
+            if (mode == "completedParent")
+            {
+                f.Sql("INSERT INTO character_completed_quests(character_id,quest_id,daily_period,answer) SELECT id,3146,0,NULL FROM characters; DELETE FROM character_active_main_quests WHERE quest_id=3146");
+                f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+                var orphanBefore = f.Read();
+                var recovered = f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
+                var orphanAfter = f.Read();
+                That(recovered?.Commit is { ConditionType: 4, Clear: null, ExperienceReward.Amount: 0, GoldAmount: 0, Consumed.Length: 0 } &&
+                    orphanAfter.CompletedQuests.Contains(3054) && orphanAfter.CompletedQuests.Contains(3146) &&
+                    orphanAfter.ActiveMainQuests.Length == 0 && Same(orphanBefore with { Revision = orphanAfter.Revision,
+                        ActiveMainQuests = orphanAfter.ActiveMainQuests, CompletedQuests = orphanAfter.CompletedQuests },orphanAfter),
+                    "实际持久清图已存在时仍只归档已完成父任务的终末子项，保留死亡经验与全部资产");
+                continue;
+            }
             f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             var last = f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
             That(last?.Commit is { Rewards.Length: 0, ExperienceReward.Amount: 0 } &&

@@ -72,9 +72,25 @@ internal static class QuestRelationProgress
         DialogueChild(child,quests) && child.MainQuest == entry.RouteQuestId &&
         character.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(row,entry));
 
-    public static bool ZeroRewardChild(StoryQuest quest) => quest.MainQuest is not null && quest.RewardType is null &&
-        quest.Attributes.Contains("not give exp quest") && quest.Rewards.Count == 0 &&
+    // 零物品占位与未声明奖励都属于禁经验子任务，实际奖励仍由普通交付处理。
+    public static bool ZeroRewardChild(StoryQuest quest) => quest.MainQuest is not null &&
+        (quest.RewardType is null && quest.Rewards.Count == 0 || quest.RewardType == "[item]" &&
+            quest.Rewards is [{ Type: 0, Value: 0, Text: null }, { Type: 0, Value: 0, Text: null }]) &&
+        quest.Attributes.Contains("not give exp quest") &&
         quest.Definition is { SelectRewards.Length: 0 } && quest.DeclaredGoldMultiple is null or 0;
+
+    public static bool TownLinkedChild(StoryQuest quest) => ZeroRewardChild(quest) &&
+        quest.Condition is "[meet npc]" or "[seek n meet npc]" or "[seeking]" or "[look cinematic]";
+
+    // 已完成父任务下的终末零奖励子任务只补归档；不重开父任务，也不重复消费跳过链的材料。
+    public static int? CompletedParentChild(Character character, StoryQuest child, QuestCatalog quests) =>
+        ZeroRewardChild(child) && QuestCoverage.HasOrdinaryDeclarations(child) &&
+        child.Definition is { AccountQuest: false, JobChange: 0 } && !child.Definition.Has("casecade clear") &&
+        !QuestCycle.Daily(child) && !QuestCycle.Repeat(child) && child.MainQuest is { } parentId &&
+        quests.TryGet(parentId,out var parent) && SequentialParent(parent,quests) && parent.IntData.Contains(child.Id) &&
+        character.CompletedQuests.Contains(parentId) && !character.ActiveMainQuests.Any(row => row.QuestId == parentId) &&
+        character.ActiveMainQuests.Any(row => row.QuestId == child.Id && row.ConditionState == 0 && row.AcceptanceId != Guid.Empty)
+            ? parentId : null;
 
     public static ImmutableArray<ActiveMainQuest> Refresh(IReadOnlyList<ActiveMainQuest> active,
         IReadOnlyCollection<int> completed, QuestCatalog quests)

@@ -43,7 +43,13 @@ internal sealed partial class CharacterRepository
             plan.ConditionType is not (0 or 42) && active.ConditionState != 0 ||
             reward.Amount == 0 && plan.GrowthPlan is not null || reward.Amount != 0 && plan.GrowthPlan is null ||
             plan.GrowthPlan is { } growth && (growth.CharacterId != expected.Id || growth.Revision != expected.Revision) ||
-            (plan.ConditionType is 1 or 3) != (clear is not null) || clear is not null && !QuestCompletionPlan.MatchesClearedActiveQuest(expected, clear))
+            (plan.ConditionType is 1 or 3) != (clear is not null) ||
+            clear is not null && !QuestCompletionPlan.MatchesClearedActiveQuest(expected, clear) ||
+            plan.CompletedParentId is { } parent && (!expected.CompletedQuests.Contains(parent) ||
+                expected.ActiveMainQuests.Any(row => row.QuestId == parent) || active.ConditionState != 0 ||
+                reward.Amount != 0 || plan.Inventory.Changed || plan.Consumed.Length != 0 || plan.Rewards.Length != 0 ||
+                plan.Currencies.Length != 0 || plan.GoldAmount != 0 || plan.UpdatesLearning || plan.ProfessionGrowType is not null ||
+                plan.TargetEquipmentSlotFlags != expected.EquipmentSlotFlags || plan.TpAmount != 0 || plan.CascadeMarkerQuestId is not null))
             throw new InvalidDataException("任务交付需要已确认类型、权威条件与一致成长规划");
         ValidateInventoryPlan(expected, plan.Inventory);
         using var db = database.Open(); using var tx = db.BeginTransaction(deferred: true);

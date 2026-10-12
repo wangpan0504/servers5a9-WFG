@@ -10,10 +10,11 @@ internal sealed partial class GameSession
 {
     // 只闭合已达成、禁经验且无奖励的真实对话子任务；清图仍复验本次接取的持久通关凭据。
     public QuestCompletionReceipt? FinishReadyQuestChildren(QuestCatalog quests, QuestRewardParameterCatalog parameters,
-        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth)
+        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth, int? parentQuestId = null)
     {
         var children = owner.Execute(() => Selected?.ActiveMainQuests.Where(row => row.ConditionState == 0 &&
-            quests.TryGet(row.QuestId,out var quest) && QuestRelationProgress.ZeroRewardChild(quest))
+            quests.TryGet(row.QuestId,out var quest) && QuestRelationProgress.ZeroRewardChild(quest) &&
+            (parentQuestId is null || quest.MainQuest == parentQuestId && QuestRelationProgress.TownLinkedChild(quest)))
             .Select(row => row.QuestId).ToArray() ?? []);
         QuestCompletionReceipt? last = null;
         foreach (ushort id in children)
@@ -48,7 +49,9 @@ internal sealed partial class GameSession
                 pending.SelectionEpoch == SelectionEpoch && pending.Phase == Phase && pending.DungeonIdentity == identity &&
                 pending.Plan.QuestId == questId && pending.Plan.RewardSelector == selector && pending.Plan.Multiplier == multiplier;
             // 提交已发生但返回值丢失时，Selected仍是原旧快照；先以原计划查receipt，不能先用旧revision重读活动槽。
-            var clear = !Selected.CompletedQuests.Contains(questId)
+            bool completedParentChild = quests.TryGet(questId,out var target) &&
+                QuestRelationProgress.CompletedParentChild(Selected,target,quests) is not null;
+            var clear = !Selected.CompletedQuests.Contains(questId) && !completedParentChild
                 ? samePending ? pending!.Plan.AuthoritativeClear : ReadClearedQuest(questId)?.Clear : null;
             return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion);
         });
@@ -60,7 +63,8 @@ internal sealed partial class GameSession
         if (QuestEligibility.Completed(expected).Contains(questId))
             return new(QuestFinishOutcome.AlreadyCompleted, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
-        if ((quest.Condition == "[clear map]" || dungeonClear) && captured.Clear is null)
+        if ((quest.Condition == "[clear map]" || dungeonClear) && captured.Clear is null &&
+            QuestRelationProgress.CompletedParentChild(expected,quest,quests) is null)
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。

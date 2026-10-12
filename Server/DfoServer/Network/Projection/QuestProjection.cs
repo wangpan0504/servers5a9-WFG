@@ -1,9 +1,12 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
@@ -15,11 +18,21 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
     public async Task<bool> CloseReadyChildrenAsync(GameConnectionContext context, bool refreshList = false)
     {
         if (parameters is null || items is null || goldLimits is null || pieces is null || growth is null) return false;
+        var before = context.Session.Selected?.Inventory;
         var receipt = context.Session.FinishReadyQuestChildren(quests,parameters,items,goldLimits,pieces,growth);
         if (receipt is null) return false;
         if (!receipt.Commit.ProjectionCurrent) throw new InvalidOperationException("子任务已提交，需要重连恢复");
         bool Guard() => context.Session.CanPublishQuestCompletion(receipt);
         var character = receipt.Commit.Character;
+        // 重选恢复可能关闭多个寻物子任务，按全部提交前后的库存差量同步材料扣除。
+        var changes = before is null ? null : new InventoryPlan(before,character.Inventory,"已达成子任务材料同步");
+        var slots = (changes?.ChangedSlots ?? receipt.Commit.ChangedSlots)
+            .Concat((changes?.ChangedCurrencies ?? []).Select(ItemSlotBoundService.CurrencySlot)
+                .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main,slot!.Value)))
+            .Distinct().ToArray();
+        if (slots.Length != 0)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                InventoryPackets.Delta(character.Inventory,InventoryListType.Main,[.. slots]),"quest_ready_children_inventory",Guard);
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),"quest_ready_children_progress",Guard);
         if (refreshList) await RefreshAsync(context,character,Guard, restoreCompleted: false);
         // 匹配客户端空574会清完成集合，356须放在完整任务投影最后。

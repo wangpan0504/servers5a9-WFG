@@ -22,8 +22,10 @@ internal static class QuestLifecycleTcpTests
                 SelectRewards = [new(0,10403,null),new(0,1,null),new(0,2058,null),new(0,2,null)] } };
         var parent = QuestEligibilityTests.Quest(29991) with { Condition = "[quest clear]", SubType = 2, IntData = [29992,29993],
             Attributes = ["not give exp quest"], Rewards = [new(0,2058,null),new(0,1,null)] };
-        var meeting = QuestEligibilityTests.Quest(29992) with { MainQuest = 29991, RewardType = null, Attributes = ["not give exp quest"] };
-        var seeking = synthetic with { Id = 29993, MainQuest = 29991, RewardType = null, Rewards = [],
+        var meeting = QuestEligibilityTests.Quest(29992) with { MainQuest = 29991,
+            Rewards = [new(0,0,null),new(0,0,null)], Attributes = ["not give exp quest"] };
+        var seeking = synthetic with { Id = 29993, MainQuest = 29991, Condition = "[seek n meet npc]", IntData = [10165055,3,3033,2,1],
+            Rewards = [new(0,0,null),new(0,0,null)],
             Definition = synthetic.Definition! with { SelectRewards = [] } };
         var hunting = QuestEligibilityTests.Quest(29994) with { Condition = "[hunt enemy]", IntData = [3,-1,1,1,2], Attributes = ["not give exp quest"],
             Definition = new([]) { Job = "[all]", Drops = [new(1,1,3,-1,10165055,1,100,2)] } };
@@ -180,6 +182,9 @@ internal static class QuestLifecycleTcpTests
                 f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id=29990 AND experience_amount=0 AND condition_type=0") is [[1L]],
                 "寻物扣除/奖励/清槽/零经验回执完整落库，其他余额保留");
         }
+        f.Sql("INSERT INTO account_wallets(account) SELECT account FROM characters WHERE id=1 ON CONFLICT(account) DO NOTHING; " +
+            "INSERT INTO account_currency_balances(account,currency_kind,balance) SELECT account,$p0,2 FROM characters WHERE id=1 ON CONFLICT(account,currency_kind) DO UPDATE SET balance=2",
+            (int)DfoServer.Game.Currency.CurrencyKind.BlackCube);
         using (var peer = Open(f))
         {
             peer.Select(prepared: true); peer.Travel(38,0,622,196,38,1,bottom: true);
@@ -192,30 +197,38 @@ internal static class QuestLifecycleTcpTests
             That(f.Snapshot() == before, "真实TCP不能跳接尚未到达的第二个子任务");
             peer.Send(31,Convert.FromHexString("1F002875")); peer.Expect(1,31,Convert.FromHexString("0128750100000000")); peer.Expect(0,21); peer.Expect(0,356);
             peer.Send(33,Convert.FromHexString("210028750000")); peer.Expect(1,33,Convert.FromHexString("01287500000000"));
-            peer.Expect(0,574); peer.Expect(0,356); peer.Barrier();
-            peer.Send(34,Convert.FromHexString("22002875FFFF0100FFFF")); Finished(peer,[0,19,0]); peer.Barrier();
+            peer.Barrier();
+            peer.Send(34,Convert.FromHexString("22002875FFFF0100FFFF")); Finished(peer,[1,40,117,4,0,0,0,0,0,0]);
+            peer.Expect(0,574); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             That(f.Query("SELECT quest_id,condition_state FROM character_active_main_quests") is [[29991L,1L]] &&
                 f.Query("SELECT count(*) FROM character_completed_quests WHERE quest_id=29992") is [[1L]],
-                "零奖励会面子任务经33闭合、父剩余更新为1，无需34；额外34不重复完成");
+                "零物品占位会面33保留对话，真实子34归档并推进父剩余为1，不发经验或金币");
             peer.Send(31,Convert.FromHexString("1F002975"));
             var accept = peer.Expect(1,31).Body;
-            That(accept.Length == 18 && BinaryPrimitives.ReadUInt32LittleEndian(accept.AsSpan(3)) == 0 && accept[7] == 1,
-                "第二个寻物子任务按真实赠品初始化为已达成，接取身份独立");
+            That(accept.Length == 18 && BinaryPrimitives.ReadUInt32LittleEndian(accept.AsSpan(3)) == 512 && accept[7] == 1,
+                "第二个寻物会面子任务赠品已足额，仍等待NPC通道，接取身份独立");
             ushort materialSlot = BinaryPrimitives.ReadUInt16LittleEndian(accept.AsSpan(8));
             peer.Expect(0,14); peer.Expect(0,21); peer.Expect(0,356);
             long revision = (long)f.Query("SELECT revision FROM characters")[0][0];
-            peer.Send(34,Convert.FromHexString("22002975FFFF0100FFFF"));
-            var complete = Finished(peer).Body;
-            That(complete.Length == 18 && complete[3] == 0 && BinaryPrimitives.ReadUInt32LittleEndian(complete.AsSpan(4)) == 0 &&
-                complete[8] == 1 && complete[9] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(complete.AsSpan(10)) == materialSlot &&
-                BinaryPrimitives.ReadUInt32LittleEndian(complete.AsSpan(12)) == 3 && complete[16] == 0 && complete[17] == 0,
-                "零奖励寻物子任务ACK34仅携带实际扣除，不伪造EXP或奖励数组");
-            peer.Expect(0,14); peer.Expect(0,574,Convert.FromHexString("01000000277500000000")); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            peer.Send(33,Convert.FromHexString("21002975100000")); peer.Expect(1,33,Convert.FromHexString("01297500020000")); peer.Barrier();
+            That((long)f.Query("SELECT revision FROM characters")[0][0] == revision,
+                "材料通道重算不代替NPC完成，也不生成无变化写入");
+            peer.Send(33,Convert.FromHexString("21002975200000")); peer.Expect(1,33,Convert.FromHexString("01297500000000"));
+            peer.Barrier();
+            That(f.Query("SELECT quest_id,condition_state FROM character_active_main_quests") is [[29991L,1L],[29993L,0L]],
+                "NPC终末33只持久化子归零，不提前重建任务引导或归档");
+            peer.Send(33,Convert.FromHexString("210027750000")); peer.Expect(1,33,Convert.FromHexString("01277500000000"));
+            var inventory = peer.Expect(0,14).Body;
+            That(U16(inventory,1) == 2 && U16(inventory,3) == materialSlot && U32(inventory,5) == uint.MaxValue &&
+                U16(inventory,126) == 354 && U32(inventory,132) == 0,
+                "父33同步实体材料删除及实际钱包扣除，保留原生对话边界");
+            peer.Barrier();
             That(f.Query("SELECT quest_id,condition_state FROM character_active_main_quests") is [[29991L,0L]] &&
-                f.Query("SELECT revision,experience,gold FROM characters") is [[long next,30L,101L]] && next == revision + 1 &&
+                f.Query("SELECT revision,experience,gold FROM characters") is [[long next,30L,101L]] && next == revision + 2 &&
                 f.Query("SELECT count(*) FROM character_completed_quests WHERE quest_id=29991") is [[0L]] &&
                 f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id IN(29992,29993)") is [[2L]],
-                "末子交付与父归零同一次revision，574随后发布，父未自动完成或领奖");
+                "NPC条件先持久化，末子交付与父归零同一次revision，父未自动完成或领奖");
+            peer.Send(33,Convert.FromHexString("210027750000")); peer.Expect(1,33,Convert.FromHexString("01277500000000")); peer.Barrier();
         }
         using (var peer = Open(f))
         {
@@ -233,6 +246,24 @@ internal static class QuestLifecycleTcpTests
             That(f.Query("SELECT revision,experience,gold FROM characters") is [[long next,30L,101L]] && next == revision + 1 &&
                 f.Query("SELECT condition_type,event_id IS NULL FROM character_quest_completion_receipts WHERE quest_id=29991") is [[44L,1L]],
                 "父交付同事务保存自身奖励与分类44回执，不伪造清图或经验");
+        }
+        // 模拟旧跳过留下的已完成父任务与终末子接取，复验选角后的574→21→356恢复。
+        f.Sql("DELETE FROM character_completed_quests WHERE quest_id=29993; INSERT INTO character_active_main_quests VALUES(1,5,29993,0,'8d9a7f7bb6d94979b1ab3f519b90a652')");
+        var orphanRevision = f.Query("SELECT revision,experience,gold FROM characters")[0];
+        using (var peer = Open(f))
+        {
+            peer.Select(prepared: true);
+            peer.Expect(0,574,[0,0,0,0]); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            That(f.Query("SELECT count(*) FROM character_active_main_quests") is [[0L]] &&
+                f.Query("SELECT count(*) FROM character_completed_quests WHERE quest_id IN(29991,29993)") is [[2L]] &&
+                f.Query("SELECT revision,experience,gold FROM characters") is [[long restored,long xp,long gold]] &&
+                restored == (long)orphanRevision[0]+2 && xp == (long)orphanRevision[1] && gold == (long)orphanRevision[2],
+                "TCP重选进入房间一次revision、孤立终末子归档一次revision，完成356位于清空574之后，资产保持");
+            That(f.Query("SELECT experience_amount,gold_amount,consumed FROM character_quest_completion_receipts WHERE acceptance_id='8d9a7f7bb6d94979b1ab3f519b90a652'") is [[0L,0L,"[]"]],
+                "历史归档复用原子回执，材料已缺失也不重新消费或发奖");
+            peer.Send(34,[34,0,41,117,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
+            That(f.Query("SELECT revision FROM characters") is [[long same]] && same == (long)orphanRevision[0]+2,
+                "归档后重复34不再次保存或制造奖励");
         }
         // 为猎杀隔离用例恢复本fixture的合法3145接取；不写现场库或据此证明完整剧情推进。
         f.Sql("INSERT INTO character_dungeon_state VALUES($p0,$p1,$p2,$p3,$p4,$p5,$p6)", dungeonState);
