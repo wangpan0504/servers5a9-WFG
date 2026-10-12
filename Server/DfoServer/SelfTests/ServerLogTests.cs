@@ -34,7 +34,7 @@ internal static class ServerLogTests
                 log.Write("startup", new { Stage = "PVF archive", State = "starting" });
                 log.Write("startup", new { Stage = "PVF archive", State = "complete", ElapsedMs = 12.5 });
                 log.Write("listening", new { ChannelName = "#ch.10", Channel = "127.0.0.1:23100", Game = "127.0.0.1:23101",
-                    AdvertisedGame = "127.0.0.1:23101", Gm = "disabled", PacketCapture = "disabled", ServiceLog = "Logs/with spaces/server.jsonl" });
+                    AdvertisedGame = "127.0.0.1:23101", Gm = "disabled", PacketHttp = "disabled", PacketCapture = "disabled", ServiceLog = "Logs/with spaces/server.jsonl" });
                 log.Write("travel", new { Connection = 1, Accepted = true, Position = new { Town = 2, X = 10 }, Tags = new[] { "first", "second" } });
                 log.Write("character_deleted", new { Connection = 1, RosterIndex = 1, Character = 7, Slot = 2, Revision = 3, SelectionEpoch = 4 });
                 log.Write("character_delete_rejected", new { Connection = 1, RosterIndex = 31, Reason = "index-absent" });
@@ -112,7 +112,7 @@ internal static class ServerLogTests
             bool rejected = false, ready = false;
             try
             {
-                await new ServerHost(options, protocol, protocol, null, () => ready = true, failedLog, listeners).RunAsync(CancellationToken.None);
+                await new ServerHost(options, protocol, protocol, null, static () => [], () => ready = true, failedLog, listeners).RunAsync(CancellationToken.None);
             }
             catch (SocketException) { rejected = true; }
             finally { occupied.Stop(); }
@@ -148,7 +148,7 @@ internal static class ServerLogTests
             var channelProtocol = new WaitingProtocol();
             var gameProtocol = new WaitingProtocol();
             var options = ports with { LogDirectory = directory };
-            var host = new ServerHost(options, channelProtocol, gameProtocol, null, () => { }, log, new GameChannelListeners(options, catalog));
+            var host = new ServerHost(options, channelProtocol, gameProtocol, null, static () => [], () => { }, log, new GameChannelListeners(options, catalog));
             Task running = host.RunAsync(stop.Token);
             using var channel = new TcpClient();
             using var game = new TcpClient();
@@ -190,7 +190,7 @@ internal static class ServerLogTests
             var protocol = new EmptyProtocol();
             var options = ports with { LogDirectory = directory };
             Task running = new ServerHost(options, protocol, protocol,
-                _ => management.Task, () => { }, log, new GameChannelListeners(options, catalog)).RunAsync(stop.Token);
+                _ => management.Task, static () => [], () => { }, log, new GameChannelListeners(options, catalog)).RunAsync(stop.Token);
             bool propagated = false;
             try
             {

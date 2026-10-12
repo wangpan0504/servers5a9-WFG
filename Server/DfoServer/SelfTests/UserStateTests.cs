@@ -74,6 +74,9 @@ internal static class UserStateTests
             using var owner = owners.Acquire("states", () => { });
             repository.Create(owner, new("StateRole", point, point));
             var session = new GameSession(repository, towns, owner, entry: new(new(2, 19), 23, "[raid]"));
+            var online = new OnlineSessionDirectory();
+            online.Register(owner, session);
+            That(online.Snapshot().Length == 0, "诊断查询不把未选角连接伪装成在线角色");
             That(session.ChannelEntry is { Identity.Number: 19, Type: 23, Group: "[raid]" } && session.GetState() == UserState.CharacterSelect,
                 "分类入口是会话只读上下文，未实现玩法不因入口标签自动改变user状态");
             using var stop = new CancellationTokenSource();
@@ -92,10 +95,14 @@ internal static class UserStateTests
                 await commands.DispatchAsync(context, packet) == CommandResult.Unhandled && called == 0,
                 "分派前基础门禁拒绝未选角，不执行Handler也不写成功帧");
             session.Select(0);
+            That(online.Snapshot() is [{ Account: "states", Name: "StateRole", Ready: false, State: UserState.EnteringWorld }],
+                "诊断查询从同一owner读取已选角但未就绪的角色");
             That(session.GetState() == UserState.EnteringWorld && session.CheckState(UserStateRequirement.CharacterSelected) &&
                 !session.CheckState(UserStateRequirement.WorldReady) && await commands.DispatchAsync(context, packet) == CommandResult.Unhandled,
                 "已经选角但124尚未完成时仍不放行世界请求");
             session.MarkReady();
+            That(online.Snapshot() is [{ Ready: true, Phase: SessionPhase.Town, State: UserState.Town }],
+                "诊断查询不维护另一份就绪或阶段状态");
             That(session.GetState() == UserState.Town && session.CheckState(UserState.Town) &&
                 await commands.DispatchAsync(context, packet) == CommandResult.Handled && called == 1 && stream.Length == 0,
                 "就绪后基础分派放行，门禁本身不伪造网络响应");
@@ -110,8 +117,10 @@ internal static class UserStateTests
             foreach (var state in Enum.GetValues<UserState>().Where(state => !UserStatePolicy.IsImplemented(state)))
                 That(!session.CheckState(state), "未实现玩法只定义状态，不可进入或通过门禁");
             session.ReturnToRoster();
+            That(online.Snapshot().Length == 0, "返回选角移除诊断在线角色");
             That(session.GetState() == UserState.CharacterSelect && !session.CheckState(UserStateRequirement.CharacterSelected), "回选角原实例状态清理");
             using var replacement = owners.Acquire("states", () => { });
+            That(online.Snapshot().Length == 0, "诊断查询不会发布旧generation的角色");
             Reject<InvalidOperationException>(() => session.GetState(), "旧generation不能读取当前权威状态");
             Reject<InvalidOperationException>(() => session.CheckState(UserStateRequirement.Owner), "旧generation连最低门禁也拒绝");
             session.End();

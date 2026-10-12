@@ -26,8 +26,9 @@ internal static class CommandLineTests
         That(ServerCommand.Parse([]) is { Kind: ServerCommandKind.Serve, PacketCapture: false }, "default entry needs no configuration");
         That(ServerCommand.Parse(["--help"]).Kind == ServerCommandKind.Help, "standalone help");
         That(ServerCommand.Parse(["--gm", "account", "--selftest", "list"]).Arguments.SequenceEqual(["account", "--selftest", "list"]), "command-like account name remains a GM argument");
-        var launch = ServerCommand.Parse(["--server-ip", "auto", "--packet-capture", "capture files"]);
-        That(launch.PacketCapture && launch.Options["--server-ip"] == "auto" && launch.Arguments.SequenceEqual(["capture files"]), "runtime options and capture path remain separate");
+        var launch = ServerCommand.Parse(["--server-ip", "auto", "--packet-http-port", "18081", "--packet-capture", "capture files"]);
+        That(launch.PacketCapture && launch.Options["--server-ip"] == "auto" && launch.Options["--packet-http-port"] == "18081" &&
+            launch.Arguments.SequenceEqual(["capture files"]), "runtime options and capture path remain separate");
         That(ServerCommand.Parse(["--packet-capture"]).Arguments.Length == 0, "capture defaults to fixed log directory");
         That(ServerOptions.Load(ServerCommand.Parse(["--channel-entry-port-base", "23103"]).Options).ChannelEntryPortBase == 23103,
             "分类入口端口范围使用正式CLI配置，启动脚本无需修改");
@@ -70,6 +71,10 @@ internal static class CommandLineTests
             ["--channel-port", "0"], ["--game-port", "65536"], ["--channel-port", "23101"],
             ["--channel-entry-port-base", "-1"], ["--channel-entry-port-base", "65536"],
             ["--gm-port", "23100"], ["--session-ttl", "29"], ["--game-port", "-1"],
+            ["--packet-http-port"], ["--packet-http-port", "-1"], ["--packet-http-port", "65536"],
+            ["--packet-http-port", "23100"], ["--packet-http-port", "23101"],
+            ["--gm-port", "23102", "--packet-http-port", "23102"],
+            ["--channel-entry-port-base", "23103", "--packet-http-port", "23103"],
             ["--dungeon-entry-probe", "Unknown"]
         ];
         foreach (string[] arguments in invalid)
@@ -83,10 +88,10 @@ internal static class CommandLineTests
         That(defaults.PvfPath == Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf") &&
             defaults.DataDirectory == Path.Combine(AppContext.BaseDirectory, "Data") &&
             defaults.LogDirectory == Path.Combine(AppContext.BaseDirectory, "Logs"), "fixed paths use executable directory");
-        That(defaults.GmPort == 0 && defaults.DuplicateLoginPolicy == Game.Accounts.DuplicateLoginPolicy.ReplaceExisting, "GM disabled and duplicate login always replaces old connection");
-        var custom = ServerOptions.Load(ServerCommand.Parse(["--listen-ip", "127.0.0.1", "--server-ip", "192.168.0.1", "--channel-port", "25000", "--game-port", "25001", "--session-ttl", "600"]).Options);
+        That(defaults.GmPort == 0 && defaults.PacketHttpPort == 0 && defaults.DuplicateLoginPolicy == Game.Accounts.DuplicateLoginPolicy.ReplaceExisting, "management endpoints disabled and duplicate login always replaces old connection");
+        var custom = ServerOptions.Load(ServerCommand.Parse(["--listen-ip", "127.0.0.1", "--server-ip", "192.168.0.1", "--channel-port", "25000", "--game-port", "25001", "--packet-http-port", "25002", "--session-ttl", "600"]).Options);
         That(custom.ListenAddress == "127.0.0.1" && custom.AdvertisedAddress == "192.168.0.1", "explicit listener wins independent of option order");
-        That(custom.ChannelPort == 25000 && custom.GamePort == 25001 && custom.SessionTtlSeconds == 600, "supported launch overrides");
+        That(custom.ChannelPort == 25000 && custom.GamePort == 25001 && custom.PacketHttpPort == 25002 && custom.SessionTtlSeconds == 600, "supported launch overrides");
         That(ServerOptions.Load(ServerCommand.Parse(["--server-ip", "192.168.0.1"]).Options).ListenAddress == "0.0.0.0", "LAN address enables external listener");
         string root = Path.Combine(Path.GetTempPath(), "S5A9-command-options-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);

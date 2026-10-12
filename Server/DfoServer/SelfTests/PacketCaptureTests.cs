@@ -69,6 +69,44 @@ internal static class PacketCaptureTests
             var faultConnection = new ConnectionContext(14, IPAddress.Loopback, faultBytes, stop, capture: failedCapture);
             await faultConnection.WriteAsync(sent);
             TestCheck.Bytes(faultBytes.ToArray(), sent, "capture I/O failure does not close or change transport");
+
+            using var history = new PacketCapture(null, retainRecent: true);
+            history.Register(1, false, new(IPAddress.Loopback, 12001));
+            history.Register(2, true, new(IPAddress.Loopback, 12002));
+            history.Register(1, false, new(IPAddress.Loopback, 12003));
+            history.Write(1, false, false, ClientFrame(65535, new byte[4097]));
+            TestCheck.That(history.Recent() is [{ ConnectionId: 1, BodyLength: 4097, BodyTruncated: true, Redacted: false, BodyHex.Length: 8192 }],
+                "内存包体保留最多4096字节，原长度与截断标记分开");
+            foreach (ushort opcode in new ushort[] { 1, 1562, 171 })
+                history.Write(1, false, false, ClientFrame(opcode, secret));
+            TestCheck.That(history.Recent().Skip(1).All(packet => packet.Redacted && !packet.BodyTruncated && packet.BodyHex == ""),
+                "内存查询与文件抓包共用全部认证正文脱敏");
+            var retained = history.Recent();
+            for (int i = 0; i < 402; i++)
+                history.Write(i % 2 + 1, false, true, GameFrame.Build(0, 65535, 0, [(byte)(i >> 8), (byte)i]));
+            TestCheck.That(history.Recent().Length == 400 && history.Recent()[0].BodyHex == "0002" && history.Recent()[^1].BodyHex == "0191",
+                "全局固定容量按实际记录顺序淘汰最旧包，不为客户端建立无界历史");
+            TestCheck.That(retained.Length == 4 && retained[0].BodyLength == 4097, "返回的历史快照不随后续记录修改");
+            var filtered = history.Recent(1);
+            TestCheck.That(filtered.Length == 200 && filtered.All(packet => packet.ConnectionId == 1) &&
+                filtered[0].BodyHex == "0002" && filtered[^1].BodyHex == "0190", "客户端过滤保留该连接的原有包序");
+            TestCheck.That(history.Recent(999).Length == 0 && history.TotalConnections == 2 && history.TotalReceived == 4 && history.TotalSent == 402,
+                "未知客户端为空，不重复计算已注册连接，总计数不因历史淘汰丢失");
+            history.Remove(1);
+            TestCheck.That(history.Sessions() is [{ ConnectionId: 2 }] && history.Recent(1).Length == 200,
+                "关闭连接仅移除在线传输摘要，已保留包仍可按原客户端查询");
+            Parallel.For(0, 500, _ => history.Write(2, true, false, channel));
+            TestCheck.That(history.Recent().Length == 400 && history.TotalReceived == 504 && history.Sessions()[0].ReceivedPackets == 500,
+                "并发记录保持容量及连接计数边界");
+            history.Dispose();
+            history.Register(3, false, new(IPAddress.Loopback, 12003));
+            history.Write(3, false, true, sent);
+            TestCheck.That(history.Recent().Length == 0 && history.Sessions().Length == 0,
+                "结束后释放记录与客户端摘要，迟到回调不复活旧历史");
+            using var failedHistory = new PacketCapture(blocked, retainRecent: true);
+            failedHistory.Write(1, false, true, sent);
+            TestCheck.That(!failedHistory.IsEnabled && failedHistory.Recent().Length == 1,
+                "文件抓包失败不关闭独立的HTTP内存记录");
         }
         finally
         {

@@ -18,6 +18,7 @@ internal sealed record ServerOptions
     public int ChannelEntryPortBase { get; init; }
     // 0 表示关闭。监听固定在 127.0.0.1，不跟随 ListenAddress。
     public int GmPort { get; init; }
+    public int PacketHttpPort { get; init; }
     public string PvfPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf");
     public string DataDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data");
     public string LogDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Logs");
@@ -48,6 +49,7 @@ internal sealed record ServerOptions
                     "--game-port" => value with { GamePort = Number(argument, name) },
                     "--channel-entry-port-base" => value with { ChannelEntryPortBase = Number(argument, name) },
                     "--gm-port" => value with { GmPort = Number(argument, name) },
+                    "--packet-http-port" => value with { PacketHttpPort = Number(argument, name) },
                     "--pvf-path" => value with { PvfPath = StoragePath(argument, name) },
                     "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
                     "--session-ttl" => value with { SessionTtlSeconds = Number(argument, name) },
@@ -60,8 +62,10 @@ internal sealed record ServerOptions
             throw new InvalidDataException("Invalid server IPv4 address");
         if (value.ChannelPort is < 1 or > 65535 || value.GamePort is < 1 or > 65535 || value.GamePort == value.ChannelPort ||
             value.ChannelEntryPortBase is < 0 or > 65535 ||
-            value.ChannelEntryPortBase != 0 && new[] { value.ChannelPort, value.GamePort, value.GmPort }.Contains(value.ChannelEntryPortBase) ||
-            value.GmPort is < 0 or > 65535 || value.GmPort != 0 && (value.GmPort == value.ChannelPort || value.GmPort == value.GamePort))
+            value.ChannelEntryPortBase != 0 && new[] { value.ChannelPort, value.GamePort, value.GmPort, value.PacketHttpPort }.Contains(value.ChannelEntryPortBase) ||
+            value.GmPort is < 0 or > 65535 || value.GmPort != 0 && (value.GmPort == value.ChannelPort || value.GmPort == value.GamePort) ||
+            value.PacketHttpPort is < 0 or > 65535 || value.PacketHttpPort != 0 &&
+                new[] { value.ChannelPort, value.GamePort, value.GmPort }.Contains(value.PacketHttpPort))
             throw new InvalidDataException("Invalid endpoint configuration");
         try
         {

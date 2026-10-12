@@ -41,6 +41,19 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public CharacterRosterEntry[] Roster() => repository.ListRoster(owner);
     public Character[] QueryCharacters() => repository.List(owner);
 
+    internal OnlineCharacterSnapshot? OnlineCharacter()
+    {
+        try
+        {
+            return owner.Execute(() => Selected is { } character
+                ? new OnlineCharacterSnapshot(owner.Account, character.Id, character.Name, Ready, Phase, ReadState(Phase)) : null);
+        }
+        catch (InvalidOperationException error) when (error.Message == "Stale account generation")
+        {
+            return null;
+        }
+    }
+
     public bool NameExists(string name) => owner.Execute(() =>
     {
         if (Selected is not null)

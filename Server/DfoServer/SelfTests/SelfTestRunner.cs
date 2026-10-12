@@ -21,6 +21,7 @@ internal static class SelfTestRunner
         await DevelopmentGmTests.RunCoreAsync();
         await GameSenderBudgetTests.RunAsync();
         await PacketCaptureTests.RunAsync();
+        await PacketHttpTests.RunAsync();
         ClientNoticeTests.Run();
         DungeonRequestTests.Run();
         DungeonSettlementProtocolTests.Run();

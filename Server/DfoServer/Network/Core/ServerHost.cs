@@ -4,10 +4,12 @@ using System.Net.Sockets;
 using System.Text.Json;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Management;
 
 namespace DfoServer.Network;
 
-internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol, Func<CancellationToken, Task>? runManagement, Action onStarted, ServerLog log, GameChannelListeners gameChannels)
+internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol,
+    Func<CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels)
 {
     readonly ConcurrentDictionary<int, Task> active = new();
     int counter;
@@ -15,11 +17,13 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
     public async Task RunAsync(CancellationToken stop)
     {
         Directory.CreateDirectory(options.LogDirectory);
-        using var packetCapture = options.PacketCaptureDirectory is { } directory ? new PacketCapture(directory) : null;
+        using var packetCapture = options.PacketCaptureDirectory is not null || options.PacketHttpPort != 0
+            ? new PacketCapture(options.PacketCaptureDirectory, retainRecent: options.PacketHttpPort != 0) : null;
         capture = packetCapture;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
         var channel = new TcpListener(IPAddress.Parse(options.ListenAddress), options.ChannelPort);
         Task gm = Task.CompletedTask;
+        Task http = Task.CompletedTask;
         Task[] listeners = [];
         string starting = "Channel listener";
         try
@@ -29,6 +33,10 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             if (runManagement is not null)
                 gm = runManagement(lifetime.Token);
             if (gm.IsFaulted) await gm;
+            starting = "Packet HTTP listener";
+            if (options.PacketHttpPort != 0)
+                http = PacketHttpServer.Run(options.PacketHttpPort, packetCapture!, options, onlineCharacters, DateTimeOffset.Now, log, lifetime.Token);
+            if (http.IsFaulted) await http;
             starting = "Game listeners";
             gameChannels.Start();
             var primary = gameChannels.Bound.Single(row => row.Endpoint.Entry.Identity.Number == GameWorld.Channels.ChannelCatalog.PrimaryChannelNumber);
@@ -36,6 +44,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
                 Channel = channel.LocalEndpoint.ToString(), Game = primary.Listener.LocalEndpoint.ToString(), ChannelEntries = gameChannels.Endpoints,
                 AdvertisedGame = $"{options.AdvertisedAddress}:{options.GamePort}",
                 Gm = options.GmPort == 0 ? "disabled" : $"127.0.0.1:{options.GmPort}",
+                PacketHttp = options.PacketHttpPort == 0 ? "disabled" : $"127.0.0.1:{options.PacketHttpPort}",
                 PacketCapture = packetCapture?.IsEnabled == true ? options.PacketCaptureDirectory : "disabled",
                 ServiceLog = Path.Combine(options.LogDirectory, "server.jsonl") });
             starting = "Readiness marker";
@@ -43,7 +52,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             log.Flush();
             File.WriteAllText(Path.Combine(options.LogDirectory, "ready.json"), JsonSerializer.Serialize(new
             {
-                options.ChannelPort, options.GamePort, options.GmPort, options.AdvertisedAddress, options.ListenAddress,
+                options.ChannelPort, options.GamePort, options.GmPort, options.PacketHttpPort, options.AdvertisedAddress, options.ListenAddress,
                 options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId, ChannelEntries = gameChannels.Endpoints
             }));
             log.Write("server_ready", new { Pid = Environment.ProcessId });
@@ -51,7 +60,11 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             listeners = [Accept(channel, channelProtocol, true, lifetime.Token),
                 .. gameChannels.Bound.Select(entry => Accept(entry.Listener, gameProtocol, false, lifetime.Token, entry.Endpoint))];
             // 某个监听失败时取消整个实例，避免 Task.WhenAll 永久等待另一个监听。
-            var workers = runManagement is null ? listeners : [.. listeners, gm];
+            Task[] workers = [.. listeners];
+            if (runManagement is not null)
+                workers = [.. workers, gm];
+            if (options.PacketHttpPort != 0)
+                workers = [.. workers, http];
             await await Task.WhenAny(workers);
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
@@ -69,7 +82,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             gameChannels.Stop();
             try
             {
-                await Task.WhenAll([.. listeners, gm]);
+                await Task.WhenAll([.. listeners, gm, http]);
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
             {
@@ -107,22 +120,23 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             }
 
             int id = Interlocked.Increment(ref counter);
-            Task task = Serve(client, protocol, channel, peer.Address, id, stop, endpoint);
+            Task task = Serve(client, protocol, channel, peer, id, stop, endpoint);
             active[id] = task;
             _ = task.ContinueWith(_ => active.TryRemove(id, out var ignored), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
 
-    async Task Serve(TcpClient client, IConnectionProtocol protocol, bool channel, IPAddress peer, int id, CancellationToken stop,
+    async Task Serve(TcpClient client, IConnectionProtocol protocol, bool channel, IPEndPoint peer, int id, CancellationToken stop,
         GameWorld.Channels.ChannelEndpoint? endpoint)
     {
         using var ownedClient = client;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
         try
         {
+            capture?.Register(id, channel, peer);
             log.Write("connected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME", Peer = client.Client.RemoteEndPoint?.ToString() });
             client.NoDelay = true;
-            await protocol.RunAsync(new(id, peer, client.GetStream(), lifetime, channel, capture, endpoint));
+            await protocol.RunAsync(new(id, peer.Address, client.GetStream(), lifetime, channel, capture, endpoint));
         }
         catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException or InvalidDataException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
         {
@@ -130,6 +144,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         }
         finally
         {
+            capture?.Remove(id);
             log.Write("disconnected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME" });
             connections.Release();
         }

@@ -60,7 +60,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         if (kind == "listening")
             return $"Channel {Value("ChannelName")} listening on TCP {Value("Channel")}\n" +
                 $"Game server listening on TCP {Value("Game")}\nAdvertised game endpoint: {Value("AdvertisedGame")}\n" +
-                $"GM control: {Value("Gm")}\nPacket capture: {Value("PacketCapture")}\nServer log: {Value("ServiceLog")}";
+                $"GM control: {Value("Gm")}\nPacket HTTP: {Value("PacketHttp")}\nPacket capture: {Value("PacketCapture")}\nServer log: {Value("ServiceLog")}";
         if (kind == "server_ready") return $"Server ready. PID={Value("Pid")}.";
         if (kind == "stopped") return $"Server stopped. PID={Value("Pid")}.";
         if (kind is "server_failed" or "listener_failed")

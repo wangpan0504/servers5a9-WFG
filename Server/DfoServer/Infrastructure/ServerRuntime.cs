@@ -173,7 +173,10 @@ internal static class ServerRuntime
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
-        return new ServerHost(options, channel, game, management, Started, log, gameChannels);
+        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels);
+        OnlineCharacterView[] OnlineCharacters() => online.Snapshot()
+            .Select(character => new OnlineCharacterView(character.Account, character.CharacterId, character.Name,
+                character.Ready, character.Phase.ToString(), character.State.ToString())).ToArray();
         void Started()
         {
             var missingMaps = towns.Areas.Values.SelectMany(area => area.Phases.Prepend(area.Default))

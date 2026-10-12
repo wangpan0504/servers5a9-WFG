@@ -30,7 +30,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly string pvfSource;
     string? previousPhase;
     public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null,
-        DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null)
+        DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null, bool packetHttp = false)
     {
         this.resources = resources;
         this.questCatalog = questCatalog;
@@ -38,7 +38,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         Root = Path.GetFullPath(root);
         Directory.CreateDirectory(Root);
         pvfSource = source.PvfPath;
-        TcpListener[] reservations = Enumerable.Range(0, gm ? 3 : 2).Select(_ => new TcpListener(IPAddress.Loopback, 0)).ToArray();
+        TcpListener[] reservations = Enumerable.Range(0, 2 + (gm ? 1 : 0) + (packetHttp ? 1 : 0)).Select(_ => new TcpListener(IPAddress.Loopback, 0)).ToArray();
         try
         {
             foreach (var listener in reservations)
@@ -51,6 +51,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 ChannelPort = ports[0],
                 GamePort = ports[1],
                 GmPort = gm ? ports[2] : 0,
+                PacketHttpPort = packetHttp ? ports[gm ? 3 : 2] : 0,
                 DataDirectory = Path.Combine(Root, "Data"),
                 PvfPath = Path.Combine(Root, "Data", "Pvf", "Script.pvf"),
                 LogDirectory = Path.Combine(Root, "Logs"),
@@ -83,6 +84,11 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             "--channel-port", Options.ChannelPort.ToString(), "--game-port", Options.GamePort.ToString(),
             "--gm-port", Options.GmPort.ToString(), "--session-ttl", Options.SessionTtlSeconds.ToString() })
             info.ArgumentList.Add(argument);
+        if (Options.PacketHttpPort != 0)
+        {
+            info.ArgumentList.Add("--packet-http-port");
+            info.ArgumentList.Add(Options.PacketHttpPort.ToString());
+        }
         foreach (string argument in arguments)
             info.ArgumentList.Add(argument);
         if (Options.DevelopmentDungeonEntryProbe != DungeonEntryProbeMode.Disabled)
