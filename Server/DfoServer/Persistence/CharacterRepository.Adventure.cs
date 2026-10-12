@@ -60,6 +60,10 @@ internal sealed partial class CharacterRepository
                     Points = points.ToImmutable(), Month = reader.GetInt32(9) };
             }
         }
+        query.CommandText = "SELECT item_id,count FROM account_adventure_purchases WHERE account=$account ORDER BY item_id";
+        var purchases = ImmutableDictionary.CreateBuilder<int, uint>();
+        using (var reader = query.ExecuteReader()) while (reader.Read()) purchases.Add(reader.GetInt32(0), checked((uint)reader.GetInt64(1)));
+        state = state with { Purchases = purchases.ToImmutable() };
         query.CommandText = "SELECT job,grow,character_id FROM account_adventure_representatives WHERE account=$account ORDER BY job,grow";
         var selections = ImmutableArray.CreateBuilder<AdventureSelection>();
         using (var reader = query.ExecuteReader()) while (reader.Read()) selections.Add(new(checked((byte)reader.GetInt32(0)),

@@ -23,15 +23,9 @@ internal sealed partial class CharacterRepository
         if (!current.Members.Any(member => member.Id == plan.ActorId) || !current.Members.SequenceEqual(plan.Before.Members) ||
             JsonSerializer.Serialize(current.State) != JsonSerializer.Serialize(plan.Before.State))
             throw new InvalidOperationException("远征或账号角色在规划后已变化");
+        WriteAdventureBalances(db, tx, owner.Account, current.State, plan.After, catalog);
         using var command = db.CreateCommand(); command.Transaction = tx;
-        byte[] points = new byte[20];
-        for (int index = 0; index < 5; index++) System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(points.AsSpan(index * 4), plan.After.Points[index]);
-        command.CommandText = "UPDATE account_adventures SET revision=revision+1,points=$points,month=$month WHERE account=$account AND revision=$before";
-        command.Parameters.AddWithValue("$account", owner.Account); command.Parameters.AddWithValue("$before", current.State.Revision);
-        command.Parameters.AddWithValue("$points", points);
-        command.Parameters.AddWithValue("$month", plan.After.Month);
-        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("远征账号revision失配");
-        command.Parameters.Clear(); command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$account", owner.Account);
         command.CommandText = "DELETE FROM account_adventure_expeditions WHERE account=$account";
         command.ExecuteNonQuery();
         foreach (var run in plan.After.Expeditions)

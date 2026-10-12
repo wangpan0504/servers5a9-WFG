@@ -20,13 +20,9 @@ internal sealed partial class CharacterRepository
         var after = current.State with { Representatives = plan.After };
         after.Validate(catalog);
         if (!plan.Changed) { tx.Commit(); return current; }
+        WriteAdventureBalances(db, tx, owner.Account, current.State, after, catalog);
         using var command = db.CreateCommand(); command.Transaction = tx;
-        command.Parameters.AddWithValue("$account", owner.Account); command.Parameters.AddWithValue("$before", current.State.Revision);
-        byte[] points = new byte[20];
-        for (int index = 0; index < 5; index++) System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(points.AsSpan(index * 4), current.State.Points[index]);
-        command.Parameters.AddWithValue("$points", points); command.Parameters.AddWithValue("$month", current.State.Month);
-        command.CommandText = "UPDATE account_adventures SET revision=revision+1,points=$points,month=$month WHERE account=$account AND revision=$before";
-        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("冒险团代表提交revision失配");
+        command.Parameters.AddWithValue("$account", owner.Account);
         command.CommandText = "DELETE FROM account_adventure_representatives WHERE account=$account";
         command.ExecuteNonQuery();
         foreach (var row in plan.After)

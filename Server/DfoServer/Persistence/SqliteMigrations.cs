@@ -86,6 +86,7 @@ internal static class SqliteMigrations
         new(29, "账号冒险团基础进度与名称", static (db, tx) => Execute(db, tx, AdventureSchema)),
         new(30, "冒险团代表职业选择", static (db, tx) => Execute(db, tx, AdventureRepresentativeSchema)),
         new(31, "账号远征及冻结成员", static (db, tx) => Execute(db, tx, AdventureExpeditionSchema)),
+        new(32, "冒险团商店账号限购", static (db, tx) => Execute(db, tx, AdventurePurchasesSchema)),
     ];
 
     internal const string HotkeySettingsSchema = """
@@ -119,6 +120,12 @@ internal static class SqliteMigrations
             WHERE NOT EXISTS(SELECT 1 FROM character_fatigue f WHERE f.character_id=c.id)
               AND NOT EXISTS(SELECT 1 FROM character_dungeon_fatigue_receipts r WHERE r.character_id=c.id)
             """);
+
+    internal const string AdventurePurchasesSchema = """
+        CREATE TABLE account_adventure_purchases(
+          account TEXT NOT NULL REFERENCES account_adventures(account),item_id INTEGER NOT NULL CHECK(item_id>0),
+          count INTEGER NOT NULL CHECK(count BETWEEN 1 AND 4294967295),PRIMARY KEY(account,item_id));
+        """;
 
     internal const string AdventureExpeditionSchema = """
         CREATE TABLE account_adventure_expeditions(
@@ -780,6 +787,7 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT account,item_id,count FROM account_adventure_purchases LIMIT 0",
         "SELECT account,area,run_id,started,ends,reward,extra_reward,attributes FROM account_adventure_expeditions LIMIT 0",
         "SELECT account,area,ordinal,character_id,member_snapshot FROM account_adventure_expedition_members LIMIT 0",
         "SELECT account,event_id,character_id,action,amount,before_revision,revision FROM account_adventure_receipts LIMIT 0",

@@ -11,6 +11,7 @@ internal sealed record AdventureMember(ushort Id, ushort Slot, string Name, byte
 internal sealed record AdventureState(long Revision, string Name, int CreatedDate, int Level, ulong Experience, decimal Remainder,
     ulong CapsuleExperience, ulong BraveExperience, ImmutableArray<uint> Points, int Month)
 {
+    public ImmutableDictionary<int, uint> Purchases { get; init; } = ImmutableDictionary<int, uint>.Empty;
     public ImmutableArray<AdventureSelection> Representatives { get; init; } = [];
     public ImmutableArray<AdventureExpedition> Expeditions { get; init; } = [];
     public static AdventureState Initial(string account, DateTimeOffset now) => new(0, account.Length <= 16 ? account : account[..16],
@@ -23,6 +24,7 @@ internal sealed record AdventureState(long Revision, string Name, int CreatedDat
             Level < catalog.MaximumLevel && Experience >= catalog.Experience[Level + 1] ||
             CapsuleExperience > catalog.CapsuleCapacity || Points.Length != 5 ||
             Points.Where((count, index) => catalog.Shops.TryGetValue((byte)index, out var shop) && count > shop.Maximum).Any() ||
+            Purchases.Count > 256 || Purchases.Any(pair => pair.Key <= 0 || pair.Value == 0) ||
             Representatives.Any(row => !catalog.Professions.ContainsKey((row.Job, row.Grow))) ||
             Representatives.Select(row => (row.Job, row.Grow)).Distinct().Count() != Representatives.Length ||
             Expeditions.Any(run => run.Id == Guid.Empty || run.Area == 0 || run.Started < 0 || run.Ends <= run.Started ||
@@ -57,6 +59,8 @@ internal static class AdventurePeriod
         if (month <= state.Month) return state;
         var points = state.Points.ToBuilder();
         foreach (var shop in catalog.Shops.Values.Where(shop => shop.MonthlyReset)) points[shop.Index] = 0;
-        return state with { Month = month, Points = points.ToImmutable() };
+        var purchases = state.Purchases.Where(pair => !catalog.Products.Values.Any(product => product.ItemId == pair.Key && product.ResetType == 3))
+            .ToImmutableDictionary();
+        return state with { Month = month, Points = points.ToImmutable(), Purchases = purchases };
     }
 }

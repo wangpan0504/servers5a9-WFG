@@ -8,8 +8,12 @@ namespace DfoServer;
 
 internal static class DatabaseSchemaTests
 {
-    internal static void RemoveAdventureExpeditions(SqliteConnection db) => Execute(db,
-        "DROP TABLE IF EXISTS account_adventure_receipts; DROP TABLE IF EXISTS account_adventure_expedition_members; DROP TABLE IF EXISTS account_adventure_expeditions");
+    internal static void RemoveAdventurePurchases(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS account_adventure_purchases");
+    internal static void RemoveAdventureExpeditions(SqliteConnection db)
+    {
+        RemoveAdventurePurchases(db);
+        Execute(db, "DROP TABLE IF EXISTS account_adventure_receipts; DROP TABLE IF EXISTS account_adventure_expedition_members; DROP TABLE IF EXISTS account_adventure_expeditions");
+    }
     internal static void RemoveAdventureRepresentatives(SqliteConnection db)
     {
         RemoveAdventureExpeditions(db);
@@ -857,6 +861,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 29) RemoveAdventureSchema(db);
                 if (oldVersion < 30) RemoveAdventureRepresentatives(db);
                 if (oldVersion < 31) RemoveAdventureExpeditions(db);
+                if (oldVersion < 32) RemoveAdventurePurchases(db);
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
                 if (oldVersion < 20) RewindDropCollection(db);
@@ -892,6 +897,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 29) RemoveAdventureSchema(db);
                 if (oldVersion < 30) RemoveAdventureRepresentatives(db);
                 if (oldVersion < 31) RemoveAdventureExpeditions(db);
+                if (oldVersion < 32) RemoveAdventurePurchases(db);
                 Execute(db, $"PRAGMA user_version={oldVersion}");
                 if (oldVersion == 13)
                     AddDropDependencyFixture(db);

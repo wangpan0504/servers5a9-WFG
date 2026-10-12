@@ -44,6 +44,11 @@ internal static class AdventurePackets
             U32(raw, ShopOffset + i * 8, snapshot.State.Points[i]);
             if (i == 0) U32(raw, ShopOffset + 4, checked((uint)snapshot.State.BraveExperience));
         }
+        at = 0;
+        foreach (var pair in snapshot.State.Purchases.OrderBy(pair => pair.Key))
+        {
+            U32(raw, PurchasesOffset + at * 8, checked((uint)pair.Key)); U32(raw, PurchasesOffset + at++ * 8 + 4, pair.Value);
+        }
         for (byte group = 0; group < 20; group++)
         {
             raw[ProfessionsOffset + group * 3] = group;

@@ -10,6 +10,11 @@ internal static class AdventureRequests
         if (body.Length != 1) throw new InvalidDataException("远征操作必须为地区u8");
         return body[0];
     }
+    public static (byte Category, int Item) Purchase(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 5) throw new InvalidDataException("冒险团购买必须为类别u8及商品u32");
+        return (body[0], BinaryPrimitives.ReadInt32LittleEndian(body[1..]));
+    }
     public static void Information(ReadOnlySpan<byte> body)
     {
         if (body.Length == 0 || body[0] + 1 != body.Length || body[1..].ToArray().Distinct().Count() != body[0])
