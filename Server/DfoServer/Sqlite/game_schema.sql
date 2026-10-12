@@ -654,6 +654,10 @@ BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
 CREATE TRIGGER mail_not_title_update BEFORE UPDATE ON mailbox_attachments
 WHEN EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid)
 BEGIN SELECT RAISE(ABORT,'item is in title book'); END;
+CREATE TABLE account_adventure_representatives(
+  account TEXT NOT NULL REFERENCES account_adventures(account),job INTEGER NOT NULL CHECK(job BETWEEN 0 AND 15),
+  grow INTEGER NOT NULL CHECK(grow BETWEEN 1 AND 15),character_id INTEGER,
+  PRIMARY KEY(account,job,grow),FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
 
 CREATE TABLE account_hotkey_settings(
   account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),

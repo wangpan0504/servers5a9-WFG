@@ -84,6 +84,7 @@ internal static class SqliteMigrations
         new(28, "角色基础心情", static (db, tx) =>
             Execute(db, tx, "ALTER TABLE characters ADD COLUMN emotion INTEGER NOT NULL DEFAULT 0 CHECK(emotion BETWEEN 0 AND 32767)")),
         new(29, "账号冒险团基础进度与名称", static (db, tx) => Execute(db, tx, AdventureSchema)),
+        new(30, "冒险团代表职业选择", static (db, tx) => Execute(db, tx, AdventureRepresentativeSchema)),
     ];
 
     internal const string HotkeySettingsSchema = """
@@ -117,6 +118,13 @@ internal static class SqliteMigrations
             WHERE NOT EXISTS(SELECT 1 FROM character_fatigue f WHERE f.character_id=c.id)
               AND NOT EXISTS(SELECT 1 FROM character_dungeon_fatigue_receipts r WHERE r.character_id=c.id)
             """);
+
+    internal const string AdventureRepresentativeSchema = """
+        CREATE TABLE account_adventure_representatives(
+          account TEXT NOT NULL REFERENCES account_adventures(account),job INTEGER NOT NULL CHECK(job BETWEEN 0 AND 15),
+          grow INTEGER NOT NULL CHECK(grow BETWEEN 1 AND 15),character_id INTEGER,
+          PRIMARY KEY(account,job,grow),FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
+        """;
 
     internal const string AdventureSchema = """
         CREATE TABLE account_adventures(
@@ -751,6 +759,7 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT account,job,grow,character_id FROM account_adventure_representatives LIMIT 0",
         "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month FROM account_adventures LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",

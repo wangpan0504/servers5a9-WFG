@@ -67,7 +67,8 @@ internal static class EmotionTests
             That(new CharacterRepository(path).LoadCharacter(owner, 0).Emotion == 300, "重开数据库读取完整u16心情");
             using var replacement = owners.Acquire("mood-a", () => { });
             Reject<InvalidOperationException>(() => store.SaveEmotion(owner, first.Id, 0), "过期generation不能保存心情");
-            Execute("DROP TABLE account_adventures; ALTER TABLE characters DROP COLUMN emotion; PRAGMA user_version=27");
+            DatabaseSchemaTests.RemoveAdventureSchema(path);
+            Execute("ALTER TABLE characters DROP COLUMN emotion; PRAGMA user_version=27");
             Execute("INSERT INTO character_title_progress VALUES(1,'mood-a',6501,1,2,3,0); INSERT INTO character_title_sections VALUES(1,'mood-a',0,1)");
             Execute("INSERT INTO character_tutorial_state VALUES(1,'mood-a',7115,0,0); INSERT INTO account_hotkey_settings VALUES('mood-a',0,X'4930310937370A')");
             // 必需列检查位于ALTER之后，缺失旧账号列应回滚新列与版本。

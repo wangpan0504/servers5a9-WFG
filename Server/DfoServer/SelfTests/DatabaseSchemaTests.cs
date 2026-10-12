@@ -8,7 +8,18 @@ namespace DfoServer;
 
 internal static class DatabaseSchemaTests
 {
-    internal static void RemoveAdventureSchema(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS account_adventures");
+    internal static void RemoveAdventureRepresentatives(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS account_adventure_representatives");
+    internal static void RemoveAdventureSchema(SqliteConnection db)
+    {
+        RemoveAdventureRepresentatives(db);
+        Execute(db, "DROP TABLE IF EXISTS account_adventures");
+    }
+
+    internal static void RemoveAdventureSchema(string path)
+    {
+        using var db = Open(path);
+        RemoveAdventureSchema(db);
+    }
     internal static void RemoveTitleSchema(SqliteConnection db)
     {
         RemoveAdventureSchema(db);
@@ -838,6 +849,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 26) RemoveTutorialSchema(db);
                 if (oldVersion < 25) RemoveTitleSchema(db);
                 if (oldVersion < 29) RemoveAdventureSchema(db);
+                if (oldVersion < 30) RemoveAdventureRepresentatives(db);
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
                 if (oldVersion < 20) RewindDropCollection(db);
@@ -871,6 +883,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 26) RemoveTutorialSchema(db);
                 if (oldVersion < 25) RemoveTitleSchema(db);
                 if (oldVersion < 29) RemoveAdventureSchema(db);
+                if (oldVersion < 30) RemoveAdventureRepresentatives(db);
                 Execute(db, $"PRAGMA user_version={oldVersion}");
                 if (oldVersion == 13)
                     AddDropDependencyFixture(db);

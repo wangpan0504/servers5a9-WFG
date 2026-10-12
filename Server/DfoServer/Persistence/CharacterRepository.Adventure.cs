@@ -59,6 +59,11 @@ internal sealed partial class CharacterRepository
                     Points = points.ToImmutable(), Month = reader.GetInt32(9) };
             }
         }
+        query.CommandText = "SELECT job,grow,character_id FROM account_adventure_representatives WHERE account=$account ORDER BY job,grow";
+        var selections = ImmutableArray.CreateBuilder<AdventureSelection>();
+        using (var reader = query.ExecuteReader()) while (reader.Read()) selections.Add(new(checked((byte)reader.GetInt32(0)),
+            checked((byte)reader.GetInt32(1)), reader.IsDBNull(2) ? null : checked((ushort)reader.GetInt32(2))));
+        state = state with { Representatives = selections.ToImmutable() };
         state.Validate(catalog);
         // 账号联动只读取身份、成长和版本，不装载其他角色的背包或技能树。
         query.CommandText = """

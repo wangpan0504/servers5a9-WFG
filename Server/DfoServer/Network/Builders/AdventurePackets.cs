@@ -34,7 +34,7 @@ internal static class AdventurePackets
         foreach (var profession in catalog.Professions.Values.OrderBy(row => row.Job).ThenBy(row => row.Grow))
         {
             var member = representatives.SingleOrDefault(row => row.Job == profession.Job && row.ProfessionGrow == profession.Grow);
-            if (member is null) continue;
+            if (member is null && !snapshot.State.Representatives.Any(row => row.Job == profession.Job && row.Grow == profession.Grow)) continue;
             var row = raw.AsSpan(RosterOffset + 52 * at++, 52);
             row[0] = profession.Job; row[1] = profession.Grow;
             if (member is not null) WriteCollection(row, member, region);
@@ -64,6 +64,25 @@ internal static class AdventurePackets
         writer.Write(raw.Length); writer.Write(raw); writer.Write(new byte[4]);
     });
     public static uint Claims(AdventureState state, AdventureCatalog catalog) => checked((uint)(state.CapsuleExperience / catalog.Capsule.MinimumExperience));
+
+    public static byte[] Candidates(IReadOnlyList<AdventureMember> rows, byte region) => Build(writer =>
+    {
+        writer.Write((byte)1); writer.Write(rows.Count == 0 ? (byte)0 : (byte)1);
+        if (rows.Count == 0) return;
+        writer.Write(region); writer.Write(checked((byte)rows.Count));
+        foreach (var member in rows)
+        {
+            var row = new byte[52]; row[0] = region;
+            U32(row, 4, member.Proficiency); U32(row, 8, member.Level); U32(row, 12, member.Id);
+            Name(row.AsSpan(20, 30), member.Name); writer.Write(row);
+        }
+    });
+    public static byte[] Representative(AdventureProfession profession, ushort count, AdventureMember member, byte region) => Build(writer =>
+    {
+        writer.Write((byte)1); writer.Write(3u); writer.Write(profession.Group); writer.Write(count);
+        var row = new byte[52]; WriteCollection(row, member, region);
+        writer.Write(52u); writer.Write(row);
+    });
 
     static void WriteCollection(Span<byte> row, AdventureMember member, byte region)
     {

@@ -130,7 +130,8 @@ internal static class AdventureCoreTests
                 _ = new CharacterRepository(path);
                 using (var db = Open(path))
                 {
-                    Execute(db, "DROP TABLE account_adventures; PRAGMA user_version=28; INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('legacy',0,'Legacy',9,38,1,450,234,0,123)");
+                    DatabaseSchemaTests.RemoveAdventureSchema(db);
+                    Execute(db, "PRAGMA user_version=28; INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('legacy',0,'Legacy',9,38,1,450,234,0,123)");
                     if (fail) Execute(db, "CREATE VIEW account_adventures AS SELECT 1 AS collision");
                 }
                 if (fail)

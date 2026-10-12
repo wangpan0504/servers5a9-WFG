@@ -61,7 +61,9 @@ internal static class ServerRuntime
         var titleCatalog = new TitleCatalog(pvf, quests);
         var titleService = new Game.Titles.TitleAchievementService(titleCatalog, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var titleProjection = new TitleProjection(titleService);
-        var adventureProjection = new AdventureProjection(adventureCatalog ?? new GameWorld.Adventure.AdventureCatalog(pvf));
+        adventureCatalog ??= new GameWorld.Adventure.AdventureCatalog(pvf);
+        var adventureProjection = new AdventureProjection(adventureCatalog);
+        var adventureRepresentatives = new Game.Adventure.AdventureRepresentativeService(adventureCatalog);
         var growth = CharacterGrowthCatalog.Load(pvf, learning);
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
@@ -116,7 +118,7 @@ internal static class ServerRuntime
         [
             new SessionHandler(projection, log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection),
-            new AdventureHandler(adventureProjection),
+            new AdventureHandler(adventureProjection, adventureRepresentatives),
             new TutorialHandler(tutorials, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection),
             new SkillHandler(learning, log),
             new TownHandler(projection, log),

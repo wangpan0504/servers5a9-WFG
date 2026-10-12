@@ -61,6 +61,12 @@ internal sealed partial class CharacterRepository
         // 账号任务完成事实独立于来源角色；仅解除来源，不改派到其他角色。
         command.CommandText = "UPDATE account_completed_quests SET character_id=NULL WHERE account=$account AND character_id=$id";
         command.ExecuteNonQuery();
+        command.CommandText = "UPDATE account_adventure_representatives SET character_id=NULL WHERE account=$account AND character_id=$id";
+        if (command.ExecuteNonQuery() != 0)
+        {
+            command.CommandText = "UPDATE account_adventures SET revision=revision+1 WHERE account=$account";
+            command.ExecuteNonQuery();
+        }
         command.CommandText = "DELETE FROM shop_purchase_counts WHERE account=$account AND character_id=$id";
         command.ExecuteNonQuery();
         // 发给其他角色的邮件保留发送者快照；本角色收件邮箱连同历史和托管资产一并清理。
@@ -86,7 +92,7 @@ internal sealed partial class CharacterRepository
     {
         var affected = DeletionTables.Concat(["characters", "character_inventory_items", "character_inventory_slots",
             "inventory_avatar_details", "inventory_creature_details", "mailbox_messages", "mailbox_attachments", "mailbox_audit_log",
-            "shop_purchase_counts", "account_completed_quests"])
+            "shop_purchase_counts", "account_completed_quests", "account_adventure_representatives", "account_adventures"])
             .ToHashSet(StringComparer.Ordinal);
         using var query = db.CreateCommand();
         query.Transaction = tx;
