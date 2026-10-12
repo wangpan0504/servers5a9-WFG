@@ -477,9 +477,10 @@ internal sealed class QuestQuickClearPlan
         }};
     }
 
-    static StoryQuest SkipMainDeclaration(Character current,StoryQuest quest,QuestCatalog quests,bool areaQuest)
+    static StoryQuest SkipMainDeclaration(Character current,StoryQuest quest,QuestCatalog quests,bool areaQuest,
+        StoryQuest? areaDeclaration = null)
     {
-        var declaration=areaQuest ? SkipAreaDeclaration(quest) : quest;
+        var declaration=areaQuest ? areaDeclaration ?? SkipAreaDeclaration(quest) : quest;
         if(QuestEligibility.TransferredStoryAlternative(quest,quests,current.Job))
             return declaration with {Definition=declaration.Definition! with {JobChange=0}};
         if(quest.Grade!="[epic]" || quest.Rewards is not [{Type:0,Text:null,Value:>=1 and <=5} reward] ||
@@ -621,28 +622,49 @@ internal sealed class QuestQuickClearPlan
         var access = AreaQuestScope(quests,towns);
         var completed = QuestEligibility.Completed(expected);
         var added = ImmutableArray.CreateBuilder<StoryQuest>();
+        // 资源形状只在本次规划内复用；职业改写后的完整声明分别验证，不缓存角色资格。
+        var areaDeclarations = new Dictionary<int, StoryQuest>();
+        var validation = new Dictionary<StoryQuest, bool>();
+        var candidates = access.Select(quests.Get).Where(quest => quest.Grade == "[epic]" && !completed.Contains(quest.Id) &&
+            quest.MinimumLevel >= 1 && quest.MinimumLevel <= cutoff && quest.Definition is { ExposedByNpc: true }).ToList();
+        int snapshotAdded = -1;
+        int[] completedSnapshot = [];
         bool progressed;
         do
         {
             progressed = false;
-            foreach (int id in access)
+            for (int at = 0; at < candidates.Count; at++)
             {
-                var quest = quests.Get(id);
-                if (quest.Grade!="[epic]" || completed.Contains(id) || quest.MinimumLevel is < 1 || quest.MinimumLevel > cutoff ||
-                    quest.Definition is not { ExposedByNpc:true }) continue;
+                var quest = candidates[at];
+                int id = quest.Id;
+                var definition = quest.Definition!;
+                if (definition.PrerequisiteGroups.Length != 0 && !definition.PrerequisiteGroups.Any(group =>
+                    group.Length != 0 && group.All(required => quests.TryGet(required,out _) && completed.Contains(required)))) continue;
+                // 完成集合不变时共用只读数组；新增任务后立即重建，保持原合并顺序。
+                if (snapshotAdded != added.Count)
+                {
+                    completedSnapshot = expected.CompletedQuests.Concat(added.Select(row => row.Id)).Distinct().ToArray();
+                    snapshotAdded = added.Count;
+                }
                 var current = expected with
                 {
-                    CompletedQuests = expected.CompletedQuests.Concat(added.Select(row => row.Id)).Distinct().ToArray(),
+                    CompletedQuests = completedSnapshot,
                     ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != id && !completed.Contains(row.QuestId)).ToArray()
                 };
-                var declaration=SkipMainDeclaration(current,quest,quests,areaQuest:true);
-                if(!CanSkipManual(declaration,quests,areaQuest:true)) continue;
+                if (!areaDeclarations.TryGetValue(id,out var areaDeclaration))
+                    areaDeclarations[id] = areaDeclaration = SkipAreaDeclaration(quest);
+                var declaration = SkipMainDeclaration(current,quest,quests,areaQuest:true,areaDeclaration);
+                if (!validation.TryGetValue(declaration,out bool valid))
+                    validation[declaration] = valid = CanSkipManual(declaration,quests,areaQuest:true);
+                if (!valid) continue;
                 // 章节跳过不能猜造范围外的问答；只有既有持久回答才能推进该解锁链。
                 if (quest.Condition == "[question]" &&
                     (!current.QuestAnswers.TryGetValue(id,out byte answer) || !QuestQuestionProgress.TryCount(quest,out int count) ||
                         answer >= count || !QuestQuestionProgress.OrdinaryChoice(quest,answer,quests)) ||
                     !QuestEligibility.Evaluate(current,declaration,quests).Eligible) continue;
-                completed.Add(id); added.Add(quest); progressed = true;
+                completed.Add(id); added.Add(quest);
+                candidates.RemoveAt(at--);
+                progressed = true;
             }
         } while (progressed);
         return added.ToImmutable();
