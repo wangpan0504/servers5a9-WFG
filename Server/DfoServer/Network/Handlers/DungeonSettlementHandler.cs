@@ -33,7 +33,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     async Task<CommandResult> BossAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonSettlementRequests.TryParseBossCheck(request.Body, out var parsed)) return CommandResult.Unhandled;
-        var receipt = context.Session.ConfirmFormalDungeonBoss(parsed!.ActorId, parsed.BossKey, parsed.SpawnLevel, parsed.SpawnHp);
+        var receipt = context.Session.ConfirmFormalDungeonBoss(parsed!.ActorId, parsed.BossKey, parsed.SpawnLevel, parsed.SpawnHp)
+            ?? context.Session.ConfirmTutorialCinematic(parsed.ActorId, parsed.BossKey);
         if (receipt is null) return CommandResult.Unhandled;
         if (context.Session.EnableFormalDungeonSettlement(parsed.BossKey) is { } completion)
         {

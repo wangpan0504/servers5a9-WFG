@@ -29,7 +29,10 @@ internal sealed partial class GameSession
             throw new InvalidOperationException("Dungeon-selection phase changed");
         ValidateDungeonSelection();
         // 先提交入口外落点，再消费选择身份；提交失败仍保留原MapSelect，不发送回城成功。
-        if (restorePosition && Selected!.Position != CurrentDungeonSelection.ReturnPosition)
+        if (CurrentDungeonSelection.IsTutorial && Selected!.Tutorial is { Completed: false })
+            Selected = repository.CommitTutorialCheckpoint(owner, TutorialCheckpoint(Selected, "skip", Guid.NewGuid(), 0, 0,
+                null, 0, true)).Character;
+        else if (restorePosition && Selected!.Position != CurrentDungeonSelection.ReturnPosition)
             Selected = repository.Save(owner, Selected, CurrentDungeonSelection.ReturnPosition, Selected.Return);
         CurrentDungeonSelection = null;
         pendingQuestReplay = null;

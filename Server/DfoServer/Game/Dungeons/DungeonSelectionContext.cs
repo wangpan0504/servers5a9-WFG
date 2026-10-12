@@ -3,5 +3,12 @@ using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Dungeons;
 
-internal sealed record DungeonSelectionContext(long Id, long SelectionEpoch, ushort CharacterId, Location OriginPosition, Location ReturnPosition);
-internal sealed record DungeonSelectionReceipt(Character Character, long Generation, long SelectionEpoch, long SelectionId);
+internal sealed record DungeonSelectionContext(long Id, long SelectionEpoch, ushort CharacterId, Location OriginPosition, Location ReturnPosition)
+{
+    public bool IsTutorial { get; init; }
+}
+internal sealed record DungeonSelectionReceipt(Character Character, long Generation, long SelectionEpoch, long SelectionId)
+{
+    public bool Tutorial { get; init; }
+    public bool OpensClientSelector { get; init; }
+}

@@ -21,7 +21,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
     CharacterGrowthCatalog growth, DungeonKillExperienceCatalog rewards, TownProjection town, CharacterLevelProjection levelProjection,
     DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null,
     GoldLimitCatalog? goldLimits = null, QuestProjection? quests = null,
-    Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null) : IGameCommandModule
+    Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+    TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -111,7 +112,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             return await RejectAsync();
         var receipt = replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
             context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms,
-                drops, items, pieces: pieces, prepareDrops: prepareDrops);
+                drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes);
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Request = selection, receipt?.Snapshot.Identity });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);

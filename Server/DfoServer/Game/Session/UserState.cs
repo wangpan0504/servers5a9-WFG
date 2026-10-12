@@ -26,7 +26,7 @@ internal enum UserStateRequirement { Owner, CharacterSelected, WorldReady, Dunge
 internal static class UserStatePolicy
 {
     public static bool IsImplemented(UserState state) => state is UserState.CharacterSelect or UserState.EnteringWorld or
-        UserState.Town or UserState.DungeonSelect or UserState.Dungeon;
+        UserState.Town or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon;
 
     public static bool Meets(UserState state, UserStateRequirement requirement)
     {
@@ -46,7 +46,7 @@ internal static class UserStatePolicy
     {
         if (!selected && (phase != SessionPhase.Unselected || ready || selectingDungeon || dungeon is not null) ||
             !ready && phase != SessionPhase.Unselected || selectingDungeon && dungeon is not null ||
-            tutorial && dungeon is null)
+            tutorial && dungeon is null && !(phase == SessionPhase.MapSelect && selectingDungeon))
             throw new InvalidOperationException("用户状态与角色、就绪或实例所有权不一致");
         return phase switch
         {

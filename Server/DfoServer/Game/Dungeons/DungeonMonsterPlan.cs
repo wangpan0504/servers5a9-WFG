@@ -13,6 +13,7 @@ internal sealed record DungeonPlannedMonster(
     public byte SpawnType { get; init; }
     public bool IsBlocking { get; init; } = true;
     public bool IsSpecialChild => Source?.SpecialChild is not null;
+    public bool IsScriptedRetirement => Source?.ScriptedRetirement == true;
     public int EnemyType => AiCharacter is null ? 1 : 2;
     public bool CanReportDeath => AiCharacter is null ? IsBlocking : AiCharacter.Faction == "[monster]";
     public bool IsBoss => CanReportDeath && (Source?.RankKind == "[boss]" || AiCharacter?.RankKind == "[boss]");
@@ -32,7 +33,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
     public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey, int? basisLevel = null)
         => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel);
 
-    internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null)
+    internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
+        bool includeSpecial = true)
     {
         if (basisLevel is < 1 or > byte.MaxValue)
             throw new InvalidDataException("副本基准等级超出演员创建范围");
@@ -69,7 +71,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             {
                 SpawnType = source.RankKind switch { "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => (byte)0 },
                 // team 与资源行同索引；0为友方任务对象，缺项沿用普通阻塞行为。
-                IsBlocking = room.MonsterTeams is not { } monsterTeams || index >= monsterTeams.Count || monsterTeams[index] != 0
+                IsBlocking = !source.ScriptedRetirement &&
+                    (room.MonsterTeams is not { } monsterTeams || index >= monsterTeams.Count || monsterTeams[index] != 0)
             });
             nextKey++;
         }
@@ -94,7 +97,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         }
 
         var objects = new List<DungeonPlannedSpecialObject>();
-        foreach (var parent in room.SpecialObjects)
+        foreach (var parent in includeSpecial ? room.SpecialObjects : [])
         {
             if (parent.SourceOrdinal is < 0 or > sbyte.MaxValue || parent.RawValues.Count != 5 || parent.RawValues[0] != parent.ObjectId ||
                 parent.RawValues[4] != parent.Children.Count)

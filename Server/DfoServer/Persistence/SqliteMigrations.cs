@@ -79,7 +79,25 @@ internal static class SqliteMigrations
         new(23, "成长经验封顶与实际到账回执", ExperienceCapSchema.Upgrade),
         new(24, "删除角色时保留账号任务完成事实", AccountQuestSourceSchema.Upgrade),
         new(25, "称号簿实体位置、三计数进度与章节奖励", static (db, tx) => Execute(db, tx, TitleSchema)),
+        new(26, "新角色训练状态及原子检查点", static (db, tx) => Execute(db, tx, TutorialSchema)),
     ];
+
+    internal const string TutorialSchema = """
+        CREATE TABLE character_tutorial_state(
+          character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),
+          completed INTEGER NOT NULL CHECK(completed IN(0,1)),reward_received INTEGER NOT NULL CHECK(reward_received IN(0,1)),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        CREATE TABLE character_tutorial_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL CHECK(length(event_id)=32),
+          kind TEXT NOT NULL CHECK(kind IN('death','settlement','reward','skip','clear')),
+          instance_id TEXT NOT NULL CHECK(length(instance_id)=32),task_attempt INTEGER NOT NULL CHECK(task_attempt>=0),
+          epoch INTEGER NOT NULL CHECK(epoch>=0),map_id INTEGER NOT NULL CHECK(map_id>=0),subject INTEGER NOT NULL CHECK(subject>=0),
+          experience INTEGER NOT NULL CHECK(experience BETWEEN 0 AND 4294967295),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          plan_snapshot TEXT NOT NULL CHECK(length(plan_snapshot)>0),
+          PRIMARY KEY(character_id,event_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
+          FOREIGN KEY(character_id) REFERENCES character_tutorial_state(character_id));
+        """;
 
     private static void BackfillDungeonFatigue(SqliteConnection db, SqliteTransaction tx) => Execute(db, tx, """
             INSERT INTO character_fatigue(character_id,account,used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary)
@@ -712,6 +730,8 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",
+        "SELECT character_id,account,event_id,kind,instance_id,task_attempt,epoch,map_id,subject,experience,before_revision,revision,plan_snapshot FROM character_tutorial_receipts LIMIT 0",
         "SELECT character_id,account,list_type,slot_index,item_uid FROM character_title_book_slots LIMIT 0",
         "SELECT character_id,account,quest_id,remaining1,remaining2,remaining3,completed_revision FROM character_title_progress LIMIT 0",
         "SELECT character_id,account,section_key,revision FROM character_title_sections LIMIT 0",

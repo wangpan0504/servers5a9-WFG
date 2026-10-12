@@ -12,6 +12,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     // 来自角色设置的场景显示位，不改写位置、进度或资产revision。
     public byte VisibilityFlags { get; init; } = 6;
     public byte Level { get; init; } = 1;
+    public DfoServer.Game.Tutorials.CharacterTutorialState? Tutorial { get; init; }
     public uint AcceptedStoryLevel { get; init; }
     public int[] CompletedQuests { get; init; } = [];
     public ImmutableDictionary<int, DfoServer.Game.Titles.TitleProgress> TitleProgress { get; init; } = ImmutableDictionary<int, DfoServer.Game.Titles.TitleProgress>.Empty;
@@ -44,6 +45,7 @@ internal sealed record NewCharacter(string Name, Location Position, Location? Re
     public byte GrowType { get; init; }
     public byte EquipmentSlotFlags { get; init; }
     public byte Level { get; init; } = 1;
+    public DfoServer.Game.Tutorials.CharacterTutorialState? Tutorial { get; init; }
     public uint AcceptedStoryLevel { get; init; }
     public int[] CompletedQuests { get; init; } = [];
     public CharacterSkill[] Skills { get; init; } = [];
@@ -68,6 +70,7 @@ internal sealed record NewCharacter(string Name, Location Position, Location? Re
                 ActiveMainQuests.Count(quest => quest.AcceptanceId != Guid.Empty))
             throw new InvalidDataException("Invalid active main quests");
         InitialLearning.Validate();
+        Tutorial?.Validate();
         DungeonState?.Validate();
         Inventory.Validate(allocating: true);
         if (!Inventory.AccountWallet.Same(DfoServer.Game.Currency.AccountWallet.Empty))

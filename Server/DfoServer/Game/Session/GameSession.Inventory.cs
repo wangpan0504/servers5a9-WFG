@@ -11,7 +11,7 @@ internal sealed partial class GameSession
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
     {
-        if (!Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingQuestScene)
+        if (!Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingQuestScene || formalDungeon?.PendingTutorialClear is not null)
             return InventoryResult.Reject(invalidStateError);
         var result = operation(Selected);
         return CommitInventory(Selected, result);
@@ -32,7 +32,7 @@ internal sealed partial class GameSession
         ReferenceEquals(Selected, receipt.Character));
 
     public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1,
-        bool requireTown = true) => PlanAndCommitInventory(plan, invalidStateError, requireTown, allowSettlement: false);
+        bool requireTown = true, SessionPhase? requiredPhase = null) => PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase);
 
     public InventoryResult RepairEquipment(RepairEquipmentRequest request, InventoryRepairService repair) =>
         PlanAndCommitInventory(character => repair.Repair(character, request), 19, requireTown: true, allowSettlement: true);
@@ -47,7 +47,7 @@ internal sealed partial class GameSession
     }
 
     InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError,
-        bool requireTown, bool allowSettlement)
+        bool requireTown, bool allowSettlement, SessionPhase? requiredPhase = null)
     {
         var capture = owner.Execute(() => (Character: CanPlan() ? Selected : null,
             SelectionEpoch, Phase, Dungeon: formalDungeon, Identity: formalDungeon?.Run.Snapshot.Identity));
@@ -68,7 +68,8 @@ internal sealed partial class GameSession
 
         bool CanPlan()
         {
-            if (!Ready || Selected is null || HasPendingQuestScene) return false;
+            if (!Ready || Selected is null || HasPendingQuestScene ||
+                requiredPhase is { } expected && Phase != expected || formalDungeon?.PendingTutorialClear is not null) return false;
             // 既有城镇用例保持原资格；只有专用跨场景取放核对未完成事务与副本上下文。
             if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();
             return !HasPendingQuestScene && pendingQuestCompletion is null && pendingQuestLifecycle is null &&

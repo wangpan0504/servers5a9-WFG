@@ -33,6 +33,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool DisjointForbidden { get; init; }
     public int DisjointValue { get; init; }
     public int PortableDisjointLevel { get; init; } = -1;
+    public bool UseForbidden { get; init; }
     public RefinementTicketDefinition? RefinementTicket { get; init; }
     public AvatarSocketTypes AvatarSockets { get; init; }
     public bool CloneAvatar { get; init; }

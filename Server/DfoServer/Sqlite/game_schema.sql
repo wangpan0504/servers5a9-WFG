@@ -1,4 +1,18 @@
 -- S5A9 当前完整数据库结构；账号与游戏数据统一保存。
+CREATE TABLE character_tutorial_state(
+  character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),
+  completed INTEGER NOT NULL CHECK(completed IN(0,1)),reward_received INTEGER NOT NULL CHECK(reward_received IN(0,1)),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+CREATE TABLE character_tutorial_receipts(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL CHECK(length(event_id)=32),
+  kind TEXT NOT NULL CHECK(kind IN('death','settlement','reward','skip','clear')),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),task_attempt INTEGER NOT NULL CHECK(task_attempt>=0),
+  epoch INTEGER NOT NULL CHECK(epoch>=0),map_id INTEGER NOT NULL CHECK(map_id>=0),subject INTEGER NOT NULL CHECK(subject>=0),
+  experience INTEGER NOT NULL CHECK(experience BETWEEN 0 AND 4294967295),
+  before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+  plan_snapshot TEXT NOT NULL CHECK(length(plan_snapshot)>0),
+  PRIMARY KEY(character_id,event_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
+  FOREIGN KEY(character_id) REFERENCES character_tutorial_state(character_id));
 
 CREATE TABLE schema_metadata(
     key TEXT NOT NULL PRIMARY KEY,

@@ -34,6 +34,8 @@ internal sealed partial class GameSession
         public Dictionary<(DungeonMap Map, int Template), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
+        public DfoServer.Game.Tutorials.TutorialCheckpointPlan? PendingTutorialClear { get; set; }
+        public ushort? TutorialClearTarget { get; set; }
     }
     FormalDungeon? formalDungeon;
     sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey);
@@ -43,29 +45,35 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null,
         Func<int, int>? draw = null, EpicPieceCatalog? pieces = null, Character? requiredCharacter = null,
         FormalDungeonReceipt? retry = null,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null)
+        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null)
     {
-        var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,prepareDrops);
+        var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,prepareDrops,tutorials,tutorialScenes);
         return prepared is null ? null : owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
     }
 
     PreparedFormalDungeon? PrepareFormalDungeon(uint dungeonId, uint questId, byte difficulty,
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         Func<int, int>? draw, EpicPieceCatalog? pieces, Character? requiredCharacter, FormalDungeonReceipt? retry,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null)
+        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null)
     {
         var (expected, epoch) = owner.Execute(() => (Ready && CanEnterFormalDungeon(retry) &&
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch));
         if (expected is null || expected.DungeonState is null)
             return null;
         var done = QuestEligibility.Completed(expected);
-        if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
+        var flow = tutorials?.Get(expected.Job);
+        bool training = expected.Tutorial is { Completed: false } pending && pending.DungeonId == dungeonId &&
+            flow?.DungeonId == dungeonId && questId == 0 && difficulty == 0 &&
+            tutorials!.Owns(expected.Job, dungeonId, catalog.Get(checked((int)dungeonId)));
+        if (!training && (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
             area.DungeonWorldMap is not { } worldMap || !towns.DungeonMaps.TryGetValue(worldMap,out var selectionMap) ||
             selectionMap.Error is not null || !selectionMap.Options.Any(option => option.DungeonId == dungeonId &&
                 (option.QuestId == -1 || (option.InProgress ? expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) :
                     done.Contains(option.QuestId)))) ||
             !area.Map(done).DungeonGates.Any(gate =>
-                gate.Quests.All(done.Contains) && gate.Conditions.Length == 0)) return null;
+                gate.Quests.All(done.Contains) && gate.Conditions.Length == 0))) return null;
         StoryQuest? quest = null;
         if (questCatalog is not null && questId != 0)
         {
@@ -80,24 +88,27 @@ internal sealed partial class GameSession
             return null;
         if (entry!.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
             return null;
+        if (entry.IsTutorial && !training) return null;
         if (questId == 0 && entry.RouteQuestId > 0 && questCatalog is not null &&
             expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId) &&
             !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
                 questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return null;
-        return PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops);
+        return PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
+            training ? flow!.Destination : null,tutorialScenes);
     }
 
     PreparedFormalDungeon? PrepareFormalDungeonResources(Character expected,long epoch,DungeonEntryPlan entry,
         DungeonRoomCatalog rooms,DungeonMonsterDropCatalog? drops,ItemCatalog? items,Func<int,int>? draw,EpicPieceCatalog? pieces,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null)
+        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+        Location? tutorialReturn = null, TutorialScenes? tutorialScenes = null)
     {
         if (expected.DungeonState is not { } state) return null;
         state.Validate();
         if (entry.IsOrdinary && (expected.Fatigue is null || debugSettings?.InfiniteFatigue != true && expected.Fatigue.Remaining == 0)) return null;
-        var ordinaryReturn = entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
+        var ordinaryReturn = entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return null;
         QuestDropResources? questDrops = null;
-        if (questCatalog is not null && items is not null && pieces is not null)
+        if (!entry.IsTutorial && questCatalog is not null && items is not null && pieces is not null)
         {
             try { questDrops = QuestDropResources.Create(expected,questCatalog,items,pieces); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return null; }
@@ -113,7 +124,10 @@ internal sealed partial class GameSession
             foreach (var map in entry.Maze.MapSpecification!.Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps))
             {
                 if (next > ushort.MaxValue) return null;
-                var plan = DungeonMonsterPlan.FromRoom(rooms.Get(map, requirePassiveDefinitions: false), expected.Id, checked((ushort)next), entry.BasisLevel);
+                var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
+                if (entry.IsTutorial) room = (tutorialScenes ?? throw new InvalidDataException("训练动作目录未装配")).Apply(room);
+                var plan = DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.BasisLevel,
+                    includeSpecial: !entry.IsTutorial);
                 plans.Add(plan);
                 if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0) next = plan.NextObjectKey;
             }
@@ -236,7 +250,8 @@ internal sealed partial class GameSession
 
     public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || Phase != SessionPhase.Dungeon || formalDungeon is not { } dungeon || dungeon.CharacterDead || dungeon.Ground.HasPendingPickup || HasPendingQuestScene) return null;
+        if (!Ready || Selected is null || Phase != SessionPhase.Dungeon || formalDungeon is not { } dungeon || dungeon.CharacterDead ||
+            dungeon.Ground.HasPendingPickup || dungeon.PendingTutorialClear is not null || HasPendingQuestScene) return null;
         if (moveKind > 1) return null;
         var target = new DungeonPoint(x,y);
         var result = moveKind == 1 || target == dungeon.Run.Snapshot.CurrentMap.Position && dungeon.Run.Snapshot.CurrentMap.Kind == "layered"
@@ -287,7 +302,8 @@ internal sealed partial class GameSession
         if (issued.Outcome == DungeonRunOutcome.Duplicate && dungeon.Route.Rooms.Any(room => room.Monsters.Any(monster =>
             monster.IsSpecialChild && monster.ObjectKey == issued.Death.MonsterKey)))
             return new FormalDungeonDeathResult(DungeonRunOutcome.Duplicate) { ReportedTarget = target };
-        if (dungeon.Run.CurrentLivingMonster(issued.Death.MonsterKey) is { IsSpecialChild: true })
+        if (dungeon.Run.CurrentLivingMonster(issued.Death.MonsterKey) is { } retiring &&
+            (retiring.IsSpecialChild || dungeon.Entry.IsTutorial && (retiring.IsScriptedRetirement || retiring.AiCharacter?.Faction is "[character]" or "[neutral]")))
         {
             var retired = dungeon.Run.RetireSpecialChild(issued.Death);
             var elevator = retired == DungeonRunOutcome.Accepted && dungeon.Run.CurrentElevator is { } state &&
@@ -375,8 +391,12 @@ internal sealed partial class GameSession
     {
         if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement) return null;
+        if (dungeon.PendingTutorialClear is not null) return null;
         // 普通挑战沿本次入口安全点返回；先提交位置，失败时保留原实例与完整角色资产。
-        if (dungeon.OrdinaryReturnPosition is { } back && Selected.Position != back)
+        if (dungeon.Entry.IsTutorial && Selected.Tutorial is { Completed: false })
+            Selected = repository.CommitTutorialCheckpoint(owner, TutorialCheckpoint(Selected, "skip", Guid.NewGuid(), 0, 0,
+                dungeon.Run.Snapshot.Identity, dungeon.Run.Snapshot.CurrentMap.Id, true)).Character;
+        else if (dungeon.OrdinaryReturnPosition is { } back && Selected.Position != back)
             Selected = repository.Save(owner, Selected, back, Selected.Return);
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRun();

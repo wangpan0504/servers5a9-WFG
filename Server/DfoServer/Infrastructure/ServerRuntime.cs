@@ -39,7 +39,8 @@ internal static class ServerRuntime
     }
 
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
-        SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests)
+        SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,
+        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null)
     {
         var channels = LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
         var gameChannels = new GameChannelListeners(options, channels);
@@ -59,6 +60,7 @@ internal static class ServerRuntime
         var titleService = new Game.Titles.TitleAchievementService(titleCatalog, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var titleProjection = new TitleProjection(titleService);
         var growth = CharacterGrowthCatalog.Load(pvf, learning);
+        tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection);
@@ -77,6 +79,7 @@ internal static class ServerRuntime
         {
             var dungeonCatalog = DungeonCatalog.Load(pvf);
             var rooms = DungeonRoomCatalog.Load(pvf);
+            tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;
             var drops = DungeonMonsterDropCatalog.Load(pvf);
             var dropRules = DungeonDropRuleCatalog.Load(pvf);
@@ -91,7 +94,7 @@ internal static class ServerRuntime
                 specialDrops.Compatibility });
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
-                drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops);
+                drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -109,14 +112,15 @@ internal static class ServerRuntime
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
-            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning),
+            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials),
+            new TutorialHandler(tutorials, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection),
             new SkillHandler(learning, log),
             new TownHandler(projection, log),
             new SettingsHandler(settings, log, projection),
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
             new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items), titleProjection, inventoryProjection, projection, online),
             new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
-            new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables), log),
+            new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables), log, tutorials, itemResources.Items, inventoryProjection),
             new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
@@ -131,7 +135,7 @@ internal static class ServerRuntime
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
                 debugSettings: debugSettings), inventoryProjection),
-            new DungeonSelectionHandler(projection, log),
+            new DungeonSelectionHandler(projection, log, tutorials),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new QuestHiddenHandler(quests,log),
             new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning),

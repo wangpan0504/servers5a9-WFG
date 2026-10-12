@@ -38,6 +38,8 @@ internal sealed partial class GameSession
             return ((FormalDungeonReceipt, ushort)?)null;
         var snapshot = dungeon.Run.Snapshot;
         if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort)?)null;
+        if (dungeon.Entry.IsTutorial && dungeon.TutorialClearTarget is { } tutorialTarget)
+            return (FormalReceipt(), tutorialTarget);
         // 剧情终点可以只有普通阻挡敌人；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。
         var terminal = dungeon.Route.Rooms.Single(room => room.Room.Map == snapshot.CurrentMap).Monsters
             .Where(monster => (monster.IsBoss || monster.IsBlocking && monster.CanReportDeath) &&
@@ -89,12 +91,13 @@ internal sealed partial class GameSession
         var previous = Selected!;
         var reward = dungeon.Settlement?.Pending.Reward ?? rewards.Calculate(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),
             dungeon.Entry.Difficulty, rankPoint);
-        if (dungeon.Settlement is null && !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
+        if (dungeon.Settlement is null && !(dungeon.Entry.IsTutorial && reward.TotalExperience == 0) &&
+            !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
-        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null ? cards?.Prepare(
+        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !dungeon.Entry.IsTutorial ? cards?.Prepare(
             dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count) : null);
         var options = dungeon.Settlement?.Pending.Options;
-        if (dungeon.Settlement is null && cards is not null)
+        if (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && cards is not null)
         {
             var now = DateTimeOffset.UtcNow;
             var membership = repository.LoadCardMembership(owner,Selected!.Id,now);
@@ -116,18 +119,32 @@ internal sealed partial class GameSession
             if (!ReferenceEquals(Selected, expected) || !ReferenceEquals(formalDungeon, dungeon) || fact.Identity.CharacterId != expected.Id ||
                 !dungeon.Run.IsPendingSettlement(prepared.Pending))
                 throw new InvalidOperationException("通关结算owner或待提交实例已失效");
-            var planned = prepared.Pending.Card is { } frozen && cards is not null ? cards.PlanInventory(expected, frozen,
-                CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, growth).Plan!.TargetLevel) : default;
-            DungeonCardDelivery? premium = null;
-            if (prepared.Pending.Options is { } premiumOptions && cards is not null)
+            DungeonSettlementCommit commit;
+            if (dungeon.Entry.IsTutorial)
             {
-                DungeonCardReward[] requested = premiumOptions.BlackDiamond is { } bonus ? [prepared.Pending.Card!,bonus] : [prepared.Pending.Card!];
-                premium = cards.PlanDelivery(expected,requested,CharacterGrowthPlan.AddExperience(expected,reward.TotalExperience,growth).Plan!.TargetLevel);
+                var checkpoint = TutorialCheckpoint(expected, "settlement", prepared.Pending.EventId, 0,
+                    reward.TotalExperience, fact.Identity, prepared.Pending.MapId, true, growth);
+                var saved = repository.CommitTutorialCheckpoint(owner, checkpoint);
+                commit = new(saved.Character, saved.Duplicate, reward)
+                {
+                    GainedExperience = checked((uint)(saved.Character.Learning.Experience - expected.Learning.Experience))
+                };
             }
-            bool grantLuckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(
-                dungeons.Get(checked((int)dungeon.Entry.DungeonId)), expected.Level);
-            var commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
-                planned.Inventory, planned.MailItem, premium, grantLuckyStar, luckyStarLimit);
+            else
+            {
+                var planned = prepared.Pending.Card is { } frozen && cards is not null ? cards.PlanInventory(expected, frozen,
+                    CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, growth).Plan!.TargetLevel) : default;
+                DungeonCardDelivery? premium = null;
+                if (prepared.Pending.Options is { } premiumOptions && cards is not null)
+                {
+                    DungeonCardReward[] requested = premiumOptions.BlackDiamond is { } bonus ? [prepared.Pending.Card!,bonus] : [prepared.Pending.Card!];
+                    premium = cards.PlanDelivery(expected,requested,CharacterGrowthPlan.AddExperience(expected,reward.TotalExperience,growth).Plan!.TargetLevel);
+                }
+                bool grantLuckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(
+                    dungeons.Get(checked((int)dungeon.Entry.DungeonId)), expected.Level);
+                commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
+                    planned.Inventory, planned.MailItem, premium, grantLuckyStar, luckyStarLimit);
+            }
             if (commit.Character.Id != expected.Id || commit.Character.Revision < expected.Revision ||
                 dungeon.Run.ConfirmCommittedSettlement(prepared.Pending) != DungeonRunOutcome.Accepted)
                 throw new InvalidOperationException("已提交通关结算不能确认原准备");

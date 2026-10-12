@@ -77,6 +77,9 @@ internal sealed record DungeonMaze(
 
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
+    public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: 1 }] }];
+    public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
     public bool RoomMoveKeepState { get; init; }
     public bool IndividualMapMovement { get; init; }
 

@@ -135,7 +135,8 @@ internal sealed class SinglePlayerDungeonRun
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
         Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
         !current.Dead.Contains(key) && !current.Culled.Contains(key)
-            ? current.Plan.Monsters.SingleOrDefault(monster => (monster.CanReportDeath || monster.IsSpecialChild) && monster.ObjectKey == key) : null;
+            ? current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key && (monster.CanReportDeath || monster.IsSpecialChild ||
+                entry.IsTutorial && (monster.IsScriptedRetirement || monster.AiCharacter?.Faction is "[character]" or "[neutral]"))) : null;
     internal bool IsCulledMonster(ushort key) => Phase == SinglePlayerDungeonPhase.Settlement && ClearFact is not null && current.Culled.Contains(key);
     // 友方、非敌对对象退场只更新显示集合，不加入持久击杀或清图事实；未知key不改变实例。
     internal void RetireNonCombatObject(ushort key)
@@ -156,7 +157,8 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (!ReferenceEquals(death.Authority, authority) || death.Identity != identity || Phase != SinglePlayerDungeonPhase.Dungeon ||
             death.EventId == Guid.Empty || death.CombatSequence <= 0 || pendingDeath is not null || pendingSettlement is not null ||
-            !current.Plan.Monsters.Any(monster => monster.IsSpecialChild && !monster.IsBlocking && monster.ObjectKey == death.MonsterKey))
+            !current.Plan.Monsters.Any(monster => !monster.IsBlocking && monster.ObjectKey == death.MonsterKey &&
+                (monster.IsSpecialChild || entry.IsTutorial && (monster.IsScriptedRetirement || monster.AiCharacter?.Faction is "[character]" or "[neutral]"))))
             return DungeonRunOutcome.Rejected;
         return current.Dead.Add(death.MonsterKey) ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate;
     }
@@ -199,7 +201,7 @@ internal sealed class SinglePlayerDungeonRun
             reason = "invalid: 实例身份或任务尝试无效";
             return false;
         }
-        if (entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" ||
+        if (entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" && !(entry.IsTutorial && entry.BaseBossMap.Kind == "map") ||
             entry.Maze.MapSpecification is not { Count: > 0 } maps ||
             entry.Maze.ConditionalMaps.Any(map => !map.IsConditional || entry.Maze.BossEntrance is null ||
                 !maps.Any(source => source.Position == map.Position && source.Kind == map.Kind)) ||
@@ -219,7 +221,8 @@ internal sealed class SinglePlayerDungeonRun
             DungeonMonsterPlan resourcePlan;
             try
             {
-                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel);
+                // 入场与复验采用同一训练策略；普通副本继续要求完整特殊父子演员。
+                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel, includeSpecial: !entry.IsTutorial);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException)
             {
@@ -474,7 +477,7 @@ internal sealed class SinglePlayerDungeonRun
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
         if (!ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
-            pendingDeath is not null || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 ||
+            pendingDeath is not null || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial ||
             (ulong)reward.BaseExperience + reward.RankExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
             string.IsNullOrWhiteSpace(reward.ResourceSource) || reward.ResourceSource.Length > 1024)
@@ -543,6 +546,9 @@ internal sealed class SinglePlayerDungeonRun
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。
         if (!IsTerminalRoom() || HasPendingBossDeaths(preparedMonsterKey))
             return false;
+        if (entry.IsTutorial && current.Plan.Room.TutorialCinematics.Any(movie => movie.DestroyTargets.Count > 0) &&
+            current.Plan.Monsters.Any(monster => monster.IsBlocking && !current.Dead.Contains(monster.ObjectKey) &&
+                monster.ObjectKey != preparedMonsterKey)) return false;
         if (current.Plan.Monsters.All(monster => !monster.IsBlocking || current.Dead.Contains(monster.ObjectKey) ||
             monster.ObjectKey == preparedMonsterKey))
             return true;
@@ -556,6 +562,33 @@ internal sealed class SinglePlayerDungeonRun
                 return false;
         }
         return hasBlockingBoss;
+    }
+    internal IReadOnlyList<ushort>? TutorialCinematicTargets(ushort targetKey)
+    {
+        if (!entry.IsTutorial || Phase != SinglePlayerDungeonPhase.Dungeon || !IsTerminalRoom() ||
+            pendingDeath is not null || pendingSettlement is not null || !CanAdvance()) return null;
+        if (current.Plan.Monsters.Any(monster => monster.AiCharacter?.Faction == "[monster]" &&
+            !current.Dead.Contains(monster.ObjectKey) && !current.Culled.Contains(monster.ObjectKey))) return null;
+        var target = current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == targetKey &&
+            monster.AiCharacter is null && !monster.IsSpecialChild);
+        if (target is null) return null;
+        var remaining = current.Plan.Monsters.Where(monster => monster.IsBlocking &&
+            !current.Dead.Contains(monster.ObjectKey) && !current.Culled.Contains(monster.ObjectKey)).ToArray();
+        if (remaining.Any(monster => monster.AiCharacter is not null) || !current.Plan.Room.TutorialCinematics.Any(movie =>
+            movie.DestroyTargets.Contains(target.SourceOrdinal) && remaining.All(monster => movie.MonsterActors.Contains(monster.SourceOrdinal))))
+            return null;
+        return remaining.Select(monster => monster.ObjectKey).Append(targetKey).Distinct().ToArray();
+    }
+
+    internal DungeonRunResult CompleteTutorialCinematic(DungeonRunIdentity expected, ushort targetKey)
+    {
+        if (!Matches(expected) || TutorialCinematicTargets(targetKey) is not { } targets) return Result(DungeonRunOutcome.Rejected);
+        current.Dead.UnionWith(targets);
+        Phase = SinglePlayerDungeonPhase.Settlement;
+        Advance();
+        // 剧情销毁不伪造战斗死亡，完成检查点另有自己的持久回执。
+        ClearFact = new(identity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.ToArray())) { ClearMap = current.Plan.Room.Map };
+        return new(DungeonRunOutcome.Accepted, Snapshot, ClearFact);
     }
     private bool Matches(DungeonRunIdentity expected) => identity == expected && Phase != SinglePlayerDungeonPhase.Returned;
     private bool CanAdvance() => identity.Epoch < long.MaxValue - 2;

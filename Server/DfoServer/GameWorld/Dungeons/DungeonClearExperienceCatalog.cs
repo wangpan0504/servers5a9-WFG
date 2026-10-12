@@ -65,7 +65,7 @@ internal sealed class DungeonClearExperienceCatalog
         {
             decimal basic = decimal.Floor(baseExperience[level - 1] * weight * difficultyRates[difficulty]);
             decimal rank = bonusIndex < 0 ? 0 : decimal.Floor(basic * rankRates[bonusIndex]);
-            if (basic <= 0 || basic > uint.MaxValue || rank > uint.MaxValue || basic + rank > uint.MaxValue)
+            if (basic < 0 || basic == 0 && !dungeon.IsTutorial || basic > uint.MaxValue || rank > uint.MaxValue || basic + rank > uint.MaxValue)
                 throw new InvalidDataException("通关经验超出正数u32奖励范围");
             return new((uint)basic, (uint)rank, (uint)(basic + rank), bonusIndex, RuleId,
                 $"{QuestParameterPath};{ServerParameterPath};{RankSystemPath};{dungeon.Path}");
@@ -125,7 +125,7 @@ internal sealed class DungeonClearExperienceCatalog
             if (token.Type == 0 && token.Value < 0 || token.Type == 2 && float.IsFinite(rawFloat) && rawFloat < 0)
                 continue;
             decimal value = Number(token, "experience increasing point");
-            if (value <= 0)
+            if (value <= 0 && !dungeon.IsTutorial)
                 throw new InvalidDataException("副本通关经验权重不能为零");
             // 与参考公式一致：缺失或负值采用中性权重，显式正值保留。
             weight = value;

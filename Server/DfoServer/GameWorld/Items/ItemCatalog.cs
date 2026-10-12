@@ -189,6 +189,7 @@ internal sealed class ItemCatalog
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
+            UseForbidden = Regex.Matches(impossible, @"`([^`]+)`").Any(match => match.Groups[1].Value.Equals("enable", StringComparison.OrdinalIgnoreCase)),
             // 分解采用模板价值及基础出售倍率，不使用NPC售出时的耐久和90%折价。
             DisjointValue = isEquipment ? (int)Math.Clamp((long)baseValue * equipmentSellRate / 1000, 1, int.MaxValue) : 0,
             PortableDisjointLevel = Int("portable disjoint", -1) switch { 0 => 30, 1 => 50, 2 => 70, 3 => 85, 4 => 95, _ => -1 }

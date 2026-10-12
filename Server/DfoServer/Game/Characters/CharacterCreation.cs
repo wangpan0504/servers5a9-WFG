@@ -10,7 +10,7 @@ internal sealed record CharacterCreationReceipt(Character Created, CharacterRost
 internal static class CharacterCreation
 {
     public static NewCharacter Prepare(string name, CharacterProfile profile, Location room, Location initialReturn,
-        Func<byte, ushort, SkillLearningDefinition>? definition)
+        Func<byte, ushort, SkillLearningDefinition>? definition, TutorialFlow? tutorial = null)
     {
         profile.Validate();
         var skills = profile.Skills.ToArray();
@@ -38,6 +38,7 @@ internal static class CharacterCreation
             Job = profile.Job,
             Skills = skills,
             AcceptedStoryLevel = 1,
+            Tutorial = tutorial is null ? null : new(tutorial.DungeonId),
             InitialLearning = initialization?.State ?? CharacterLearningState.Uninitialized,
             DungeonState = CharacterDungeonState.NewOrdinary,
             Inventory = InventoryRewardGrantService.CreateStarter(profile)

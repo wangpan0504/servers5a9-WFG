@@ -93,7 +93,37 @@ internal sealed partial class CharacterRepository
         // 自动等级、双树余额和既有主树投影随同一经验事实提交。
         WriteLearning(db, tx, expected.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
-        command.Parameters.Clear();
+        WriteDungeonGrowthReceipt(db, tx, owner, expected, prepared, reward, plan);
+        if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
+        SaveDungeonLoot(db, tx, owner.Account, expected, prepared, loot);
+        SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
+        if (quests is not null)
+        {
+            var active = prepared.Monster.AiCharacter is null
+                ? QuestHuntProgress.MonsterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster)
+                : QuestHuntProgress.AiCharacterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster.MonsterId);
+            active = QuestHuntProgress.QuestObjectRoomClear(active,run.Entry,quests,prepared.Result.ClearFact);
+            if (questDrops is not null) active = QuestInventoryProgress.Refresh(active,inventoryCharacter.Inventory,quests,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            active = QuestStateProgress.Refresh(active,current with { Level = plan.TargetLevel, Learning = plan.Learning,
+                Inventory = inventoryCharacter.Inventory },quests);
+            WriteQuestConditions(db,tx,expected.Id,current.ActiveMainQuests,active);
+        }
+        var committed = Require(db, tx, owner.Account, expected.Name);
+        if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
+            throw new InvalidOperationException("持久成长结果与候选不一致");
+        tx.Commit();
+        return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience));
+    });
+
+    static void WriteDungeonGrowthReceipt(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx,
+        AccountOwners.Lease owner, Character expected, PreparedDungeonDeath prepared,
+        DungeonExperienceReward reward, CharacterGrowthPlan plan)
+    {
+        var death = prepared.Death;
+        var identity = death.Identity;
+        ulong amount = reward.Amount;
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);
         command.Parameters.AddWithValue("$account", owner.Account);
         command.Parameters.AddWithValue("$event", death.EventId.ToString("N"));
@@ -123,24 +153,5 @@ internal sealed partial class CharacterRepository
               $rule,$resource,$monster,$monsterLevel,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision)
             """;
         command.ExecuteNonQuery();
-        if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
-        SaveDungeonLoot(db, tx, owner.Account, expected, prepared, loot);
-        SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
-        if (quests is not null)
-        {
-            var active = prepared.Monster.AiCharacter is null
-                ? QuestHuntProgress.MonsterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster)
-                : QuestHuntProgress.AiCharacterDeath(current.ActiveMainQuests,run.Entry,quests,prepared.Monster.MonsterId);
-            active = QuestHuntProgress.QuestObjectRoomClear(active,run.Entry,quests,prepared.Result.ClearFact);
-            if (questDrops is not null) active = QuestInventoryProgress.Refresh(active,inventoryCharacter.Inventory,quests,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            active = QuestStateProgress.Refresh(active,current with { Level = plan.TargetLevel, Learning = plan.Learning,
-                Inventory = inventoryCharacter.Inventory },quests);
-            WriteQuestConditions(db,tx,expected.Id,current.ActiveMainQuests,active);
-        }
-        var committed = Require(db, tx, owner.Account, expected.Name);
-        if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
-            throw new InvalidOperationException("持久成长结果与候选不一致");
-        tx.Commit();
-        return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience));
-    });
+    }
 }

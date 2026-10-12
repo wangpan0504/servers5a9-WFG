@@ -9,7 +9,7 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class CharacterHandler(CharacterCatalog characters, TownProjection projection, ServerLog log, GoldLimitCatalog goldLimits,
-    SkillLearningCatalog? learning = null) : IGameCommandModule
+    SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -64,7 +64,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
     async Task<CommandResult> CreateAsync(GameConnectionContext context, Packet request)
     {
         var parsed = CharacterRequests.ParseCreate(request.Body);
-        var receipt = context.Session.CreateCharacterForClient(parsed.Name, characters.Get(parsed.Job), learning);
+        var receipt = context.Session.CreateCharacterForClient(parsed.Name, characters.Get(parsed.Job), learning, tutorials?.Get(parsed.Job));
         bool CanSend() => context.Session.CanPublishCreation(receipt);
         await context.Reply(CmdPacketType.CREATE_CHARACTER, CharacterPackets.Created(receipt.Created), "create_committed", CanSend);
         await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray()), "created_roster", CanSend);

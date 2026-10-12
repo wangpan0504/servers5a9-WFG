@@ -5,6 +5,7 @@ namespace DfoServer.GameWorld.Dungeons;
 // 只保存匹配地图的资源行；整数和标记尚未全部映射到生成规则、战斗状态或 wire 字段。
 internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string RankKind, string Path)
 {
+    public bool ScriptedRetirement { get; init; }
     // 冠军/命名品级的附加数量独立于八整数；当前只恢复空附加集合，不截断未知正数量。
     public IReadOnlyList<string> Modifiers { get; init; } = Array.Empty<string>();
     public int? RankParameterCount { get; init; }
@@ -17,7 +18,7 @@ internal sealed record DungeonRoomPassiveObject(int ObjectId, IReadOnlyList<int>
 }
 internal sealed record DungeonRoomSpecialChild(int SourceOrdinal, string Kind, IReadOnlyList<int> RawValues, string? Path);
 internal sealed record DungeonRoomSpecialObject(int SourceOrdinal, int ObjectId, IReadOnlyList<int> RawValues,
-    string Path, IReadOnlyList<DungeonRoomSpecialChild> Children);
+    string? Path, IReadOnlyList<DungeonRoomSpecialChild> Children);
 internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level);
 internal sealed record DungeonRoomDefinition(
     DungeonMap Map,
@@ -29,6 +30,7 @@ internal sealed record DungeonRoomDefinition(
     public IReadOnlyList<DungeonRoomSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonRoomSpecialObject>();
     public IReadOnlyList<DungeonRoomAiCharacter> AiCharacters { get; init; } = Array.Empty<DungeonRoomAiCharacter>();
     public IReadOnlyList<int> EventMonsterPositions { get; init; } = Array.Empty<int>();
+    public IReadOnlyList<DfoServer.GameWorld.Characters.TutorialCinematicEvidence> TutorialCinematics { get; init; } = [];
 }
 
 internal sealed class DungeonRoomCatalog
@@ -71,14 +73,14 @@ internal sealed class DungeonRoomCatalog
         return paths.AsReadOnly();
     }
 
-    public DungeonRoomDefinition Get(DungeonMap map, bool requirePassiveDefinitions = true)
+    public DungeonRoomDefinition Get(DungeonMap map, bool requirePassiveDefinitions = true, bool allowUnresolvedSpecialMetadata = false)
     {
         string path = PvfArchive.NormalizePath(map.Path);
         if (map.Id < 0 || !path.StartsWith("map/", StringComparison.Ordinal) || !path.EndsWith(".map", StringComparison.Ordinal)
             || !archive.Contains(path))
             throw new InvalidDataException("房间地图路径或索引无效");
         return ParseResource(map with { Path = path }, archive.ReadTokens(path), archive.ResolveString, monsters, passiveObjects, archive.Contains,
-            requirePassiveDefinitions,ResolveAiCharacter);
+            requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
     }
 
     DungeonRoomAiCharacter ResolveAiCharacter(PvfAiCharacterSpawn row)
@@ -105,7 +107,8 @@ internal sealed class DungeonRoomCatalog
 
     internal static DungeonRoomDefinition ParseResource(DungeonMap map, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve,
         IReadOnlyDictionary<int, string> monsterPaths, IReadOnlyDictionary<int, string> objectPaths, Func<string, bool> exists,
-        bool requirePassiveDefinitions = true, Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter>? resolveAiCharacter = null)
+        bool requirePassiveDefinitions = true, Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter>? resolveAiCharacter = null,
+        bool allowUnresolvedSpecialMetadata = false)
     {
         var sections = new Dictionary<string, IReadOnlyList<PvfToken>>(StringComparer.Ordinal);
         for (int i = 0; i < tokens.Count;)
@@ -184,23 +187,18 @@ internal sealed class DungeonRoomCatalog
         var specialObjects = new List<DungeonRoomSpecialObject>();
         if (sections.TryGetValue("[special passive object]", out var specialTokens))
         {
-            for (int at = 0; at < specialTokens.Count;)
+            foreach (var objectRow in MapSpecialObjects.Read(specialTokens, resolve))
             {
-                if (specialTokens.Count - at < 5)
-                    throw new NotSupportedException("unsupported: 特殊被动对象缺少完整父行与子数量");
-                var raw = Integers(specialTokens.Skip(at).Take(5));
-                if (raw[4] < 0 || raw[4] > (specialTokens.Count - at - 5) / 6)
-                    throw new InvalidDataException("特殊被动对象的子数量越过资源块");
-                string path = Resolve(raw[0], objectPaths, "special passive object");
-                at += 5;
+                var raw = objectRow.Values;
+                // 仅训练保留已从LST移除的历史hellparty声明，不生成新演员或奖励。
+                string? path = allowUnresolvedSpecialMetadata && objectRow.Children.All(child => child.Kind == "[hellparty]")
+                    ? objectPaths.TryGetValue(raw[0], out var listed) && listed.Length != 0 && exists(listed) ? listed : null
+                    : Resolve(raw[0], objectPaths, "special passive object");
                 var children = new List<DungeonRoomSpecialChild>();
-                for (int index = 0; index < raw[4]; index++)
+                for (int index = 0; index < objectRow.Children.Length; index++)
                 {
-                    if (specialTokens[at].Type != 6)
-                        throw new NotSupportedException("unsupported: 特殊对象子类型不是字符串");
-                    string kind = resolve(specialTokens[at++].Value);
-                    var values = Integers(specialTokens.Skip(at).Take(5));
-                    at += 5;
+                    string kind = objectRow.Children[index].Kind;
+                    var values = objectRow.Children[index].Values;
                     string? childPath = kind == "[monster]" ? Resolve(values[0], monsterPaths, "special monster") : null;
                     // 未解释的机关/奖励原整数仍完整保留；解析不授予生成、掉落或任务资格。
                     children.Add(new(index, kind, values, childPath));

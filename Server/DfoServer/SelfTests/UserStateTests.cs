@@ -35,7 +35,7 @@ internal static class UserStateTests
                 UserState.CharacterSelect => requirement == UserStateRequirement.Owner,
                 UserState.EnteringWorld => requirement is UserStateRequirement.Owner or UserStateRequirement.CharacterSelected,
                 UserState.Town or UserState.DungeonSelect => requirement != UserStateRequirement.DungeonContext,
-                UserState.Dungeon => true,
+                UserState.Dungeon or UserState.TutorialDungeon => true,
                 _ => false
             };
             That(UserStatePolicy.Meets(state, requirement) == expected, "最低生命周期门禁不以玩法枚举排序推断资格");

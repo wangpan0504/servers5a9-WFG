@@ -629,6 +629,9 @@ internal static class SessionPlanningTests
                   1,0,1,-1,'test','test',1,1,0,1,1);
                 INSERT INTO character_dungeon_card_rewards VALUES({{id}},'planning','instance','{}','{}',NULL,1);
                 INSERT INTO character_dungeon_card_options VALUES({{id}},'planning','instance','{}',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+                INSERT INTO character_tutorial_state VALUES({{id}},'planning',7115,0,0);
+                INSERT INTO character_tutorial_receipts VALUES({{id}},'planning','abcdef1234567890abcdef1234567890','skip',
+                  '1234567890abcdef1234567890abcdef',0,0,0,0,0,0,1,'{}');
                 INSERT INTO character_inventory_items(item_uid,character_id,account,item_core)
                   VALUES(95000,{{id}},'planning','{"ItemId":26596,"Kind":1,"Value":1}');
                 INSERT INTO character_title_book_slots VALUES({{id}},'planning',18,0,95000);

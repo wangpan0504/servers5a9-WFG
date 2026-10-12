@@ -21,7 +21,17 @@ internal sealed partial class GameSession
             throw new InvalidOperationException("副本成长的选角、角色快照或待提交死亡已失效");
 
         // 存储失败或提交结果不明时保留候选和Selected；不能在这里撤销后生成新ID重试。
-        var committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops);
+        DungeonGrowthCommit committed;
+        if (run.Entry.IsTutorial)
+        {
+            var checkpoint = TutorialCheckpoint(expected, "death", prepared.Death.EventId, prepared.Death.MonsterKey,
+                reward.Amount, prepared.Death.Identity, prepared.Result.Snapshot.CurrentMap.Id,
+                prepared.Result.ClearFact is not null, catalog) with { Death = prepared, DeathReward = reward, Loot = loot };
+            var tutorial = repository.CommitTutorialCheckpoint(owner, checkpoint);
+            committed = new(tutorial.Character, tutorial.Duplicate,
+                checked((uint)(tutorial.Character.Learning.Experience - expected.Learning.Experience)));
+        }
+        else committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops);
         if (committed.Character.Id != expected.Id || committed.Character.Revision < expected.Revision)
             throw new InvalidOperationException("副本成长提交结果不属于原角色或revision回退");
         var death = run.ConfirmCommittedDeath(prepared);

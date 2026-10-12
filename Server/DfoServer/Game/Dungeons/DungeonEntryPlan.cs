@@ -20,8 +20,10 @@ internal sealed record DungeonEntryPlan(
     DungeonMap BossMap)
 {
     public int? BasisLevel { get; init; }
+    public bool IsTutorial { get; init; }
+    public bool DisableClearReward { get; init; }
     public Guid QuestAcceptanceId { get; init; }
-    public bool IsOrdinary => QuestId == 0 && RouteQuestId == 0;
+    public bool IsOrdinary => !IsTutorial && QuestId == 0 && RouteQuestId == 0;
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public uint RouteQuestId { get; init; } = QuestId;
@@ -156,7 +158,7 @@ internal sealed record DungeonEntryPlan(
         if (maze.StoryStages.Count > 0 && starts.Length > 1)
             starts = [starts.FirstOrDefault(map => map.StoryStageIndex < 0) ?? starts[0]];
         var bosses = maze.StoryStages.Count > 0 ? new[] { maze.StoryStages[^1] } : maps.Where(map => map.Position == boss).ToArray();
-        if (starts.Length != 1 || bosses.Length != 1 || bosses[0].Kind != "boss")
+        if (starts.Length != 1 || bosses.Length != 1 || bosses[0].Kind != "boss" && !(definition.IsTutorial && bosses[0].Kind == "map"))
         {
             reason = "quest-maze-map-unavailable";
             return false;
@@ -186,6 +188,8 @@ internal sealed record DungeonEntryPlan(
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, maze, starts[0], terminal)
         {
             BasisLevel = definition.BasisLevel,
+            IsTutorial = definition.IsTutorial,
+            DisableClearReward = definition.DisableClearReward,
             MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],

@@ -8,7 +8,8 @@ using DfoServer.Game.Session;
 namespace DfoServer.Network.Handlers;
 
 // 正式与诊断实例共用已经确认的选图界面入口，不负责建立副本实例。
-internal sealed class DungeonSelectionHandler(TownProjection projection, ServerLog log) : IGameCommandModule
+internal sealed class DungeonSelectionHandler(TownProjection projection, ServerLog log,
+    DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -70,7 +71,8 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         }
         if (context.BlocksTownActions)
             return CommandResult.Unhandled;
-        var receipt = context.Session.BeginDungeonSelection();
+        var receipt = tutorials is not null ? context.Session.BeginTutorialSelection(entry.DungeonIndex, tutorials) : null;
+        receipt ??= context.Session.BeginDungeonSelection();
         if (!await projection.DetachForDungeonSelectionAsync(context, receipt))
             return CommandResult.Handled;
         bool CanSend() => context.Session.CanPublishDungeonSelection(receipt);
@@ -80,7 +82,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "dungeon_entry_opened", CanSend);
         // 同步客户端选图状态，触发旧城镇实体清理；仅切服务端阶段不会结束客户端旧动作。
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "dungeon_selection_state", CanSend);
-        if (dungeon == 0)
+        if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector)
             await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(), "dungeon_select_notice", CanSend);
         return CommandResult.Handled;
     }

@@ -120,6 +120,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
 
         WriteLearning(db, transaction, id, character.InitialLearning);
         CreateDungeonState(db, transaction, owner.Account, id, character.DungeonState);
+        CreateTutorial(db, transaction, owner.Account, id, character.Tutorial);
         if (character.DungeonState is not null) CreateFatigue(db, transaction, owner.Account, id);
         var learning = ReadLearning(db, id, transaction);
         // 新角色尚无实体；读取同账号已有仓库后合入角色初始物品，不能重写共享资产。
@@ -273,6 +274,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             Learning = ReadLearning(db, character.Id, transaction),
             Inventory = ReadInventory(db, character.Id, transaction, shared),
             DungeonState = ReadDungeonState(db, character.Id, transaction),
+            Tutorial = ReadTutorial(db, character.Id, transaction),
             Fatigue = ReadFatigue(db, character.Id, transaction),
             TitleProgress = ReadTitleProgress(db, character.Id, transaction),
             TitleSections = ReadTitleSections(db, character.Id, transaction)

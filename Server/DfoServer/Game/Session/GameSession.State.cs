@@ -7,7 +7,8 @@ internal sealed partial class GameSession
     public bool CheckState(UserState expected) => owner.Execute(() => UserStatePolicy.IsImplemented(expected) && ReadState(Phase) == expected);
 
     UserState ReadState(SessionPhase phase) => UserStatePolicy.Read(phase, Selected is not null, Ready,
-        CurrentDungeonSelection is not null, formalDungeon?.Run.Phase, false);
+        CurrentDungeonSelection is not null, formalDungeon?.Run.Phase,
+        CurrentDungeonSelection?.IsTutorial == true || formalDungeon?.Entry.IsTutorial == true);
 
     // 业务在原owner内完成上下文安装/提交后调用；旧连接收尾也只能清理自己的会话。
     void SetState(SessionPhase next)

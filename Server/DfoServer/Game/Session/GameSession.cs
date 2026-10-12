@@ -48,16 +48,17 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         return repository.NameExists(name);
     });
 
-    public Character CreateCharacter(string name, CharacterProfile profile, SkillLearningCatalog? learning = null) =>
-        CreateCharacter(name, profile, learning is null ? null : learning.Get);
+    public Character CreateCharacter(string name, CharacterProfile profile, SkillLearningCatalog? learning = null,
+        TutorialFlow? tutorial = null) => CreateCharacter(name, profile, learning is null ? null : learning.Get, tutorial);
 
-    public CharacterCreationReceipt CreateCharacterForClient(string name, CharacterProfile profile, SkillLearningCatalog? learning = null) =>
-        PrepareCharacterCreation(name, profile, learning is null ? null : learning.Get);
+    public CharacterCreationReceipt CreateCharacterForClient(string name, CharacterProfile profile, SkillLearningCatalog? learning = null,
+        TutorialFlow? tutorial = null) => PrepareCharacterCreation(name, profile, learning is null ? null : learning.Get, tutorial);
 
-    internal Character CreateCharacter(string name, CharacterProfile profile, Func<byte, ushort, SkillLearningDefinition>? definition)
-        => PrepareCharacterCreation(name, profile, definition).Created;
+    internal Character CreateCharacter(string name, CharacterProfile profile, Func<byte, ushort, SkillLearningDefinition>? definition,
+        TutorialFlow? tutorial = null) => PrepareCharacterCreation(name, profile, definition, tutorial).Created;
 
-    CharacterCreationReceipt PrepareCharacterCreation(string name, CharacterProfile profile, Func<byte, ushort, SkillLearningDefinition>? definition)
+    CharacterCreationReceipt PrepareCharacterCreation(string name, CharacterProfile profile, Func<byte, ushort, SkillLearningDefinition>? definition,
+        TutorialFlow? tutorial = null)
     {
         long epoch = owner.Execute(() =>
         {
@@ -65,7 +66,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                 throw new InvalidDataException("Create after selection");
             return SelectionEpoch;
         });
-        var creation = CharacterCreation.Prepare(name, profile, towns.Room, towns.InitialReturn, definition);
+        var creation = CharacterCreation.Prepare(name, profile, towns.Room, towns.InitialReturn, definition, tutorial);
         return owner.Execute(() =>
         {
             if (Selected is not null || SelectionEpoch != epoch)

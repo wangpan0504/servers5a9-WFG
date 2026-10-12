@@ -18,6 +18,7 @@ internal sealed class TcpPeer : IDisposable
         NoDelay = true
     };
     readonly NetworkStream stream;
+    TcpTestFixture? fixture;
     ushort sequence;
     bool requestedRoster;
     readonly byte channelNumber;
@@ -65,6 +66,7 @@ internal sealed class TcpPeer : IDisposable
     public static TcpPeer Open(TcpTestFixture fixture, string account = "10000", string? digest = null, int? gamePort = null, byte channelNumber = 10)
     {
         var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber);
+        peer.fixture = fixture;
         try
         {
             peer.Expect(0, 1);
@@ -177,13 +179,16 @@ internal sealed class TcpPeer : IDisposable
     public static int NameWidth(string name) => names.GetByteCount(name);
     public static string DecodeName(byte[] body, int at, int width) => names.GetString(body, at, width);
     public static byte[] CreateBody(string name, byte job = 0, byte variant = 0) => [job, .. Name(name), 0, 0, 0, 0, 0, 0, 255, 0, variant, 0, 0, 0];
-    public byte[] Create(string name, byte job = 0, byte variant = 0)
+    public byte[] Create(string name, byte job = 0, byte variant = 0, bool withTutorial = false)
     {
         Send(5, CreateBody(name, job, variant));
         var ack = Expect(1, 5).Body;
         TestCheck.That(ack[0] == 1, "creation committed");
         Id = U16(ack, 1);
         Roster = Expect(0, 2).Body;
+        // 既有业务用例从已完成训练的角色开始；训练专组保留真实建角状态，不在每组重玩整段剧情。
+        if (!withTutorial && fixture is not null)
+            fixture.Sql("UPDATE character_tutorial_state SET completed=1 WHERE character_id=$p0", Id);
         return Roster;
     }
 

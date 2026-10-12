@@ -44,14 +44,18 @@ internal static class TownPackets
             writer.Write(0u);
             writer.Write(new byte[16]); // 020296D0: four quest bookmarks.
             writer.Write(character.Position.Town); // 02341BCA 读初始城镇，02341E12 用它切换城镇；此处不是职业。
-            writer.Write(new byte[] { 0, 1, 31 }); // 03B32D50: tutorial flag, count, completed step.
+            bool training = character.Tutorial is { Completed: false };
+            // 03B32D50逐项设置完成位；空列表保留客户端按TutorialFlow选择首个训练副本的路径。
+            writer.Write((byte)0);
+            writer.Write(training ? (byte)0 : (byte)1);
+            if (!training) writer.Write((byte)31);
             writer.Write(fatigue.SelectionAuxiliary);
             writer.Write(fatigue.Remaining);
             writer.Write((byte)0);
             writer.Write(fatigue.ContextAuxiliary);
             writer.Write((byte)0);
             writer.Write((byte)0); // Tail quest count and premium flag.
-            if (stream.Length != 235)
+            if (stream.Length != (training ? 234 : 235))
                 throw new InvalidDataException("Client select size changed");
             return stream.ToArray();
         }
