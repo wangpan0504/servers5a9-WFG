@@ -23,6 +23,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         var elevator = new DungeonElevatorProjection(context, log);
         context.Elevator = elevator;
+        var death = new DungeonDeathProjection(context, projection, log);
+        context.Death = death;
         if (mailbox is not null)
             session.MailboxArrived = receipt => mailbox.Alarm(context, receipt);
         try
@@ -59,6 +61,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         finally
         {
+            await death.DisposeAsync();
             if (context.Cards is not null) await context.Cards.DisposeAsync();
             await elevator.DisposeAsync();
             online.Remove(login.Owner.Account, session);

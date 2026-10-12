@@ -12,6 +12,23 @@ internal static class DungeonRequestTests
     {
         int checks = Count;
 
+        That(DungeonRequests.TryParseCharacterDeath([0x34, 0xF2, 0xFF, 0xFF], out var dead) &&
+            dead == new DungeonCharacterDeathRequest(0xF234, ushort.MaxValue), "角色死亡保留两个完整u16坐标");
+        That(DungeonRequests.TryParseUseCoin([0xCD, 0xAB], out ushort reviveKey) && reviveKey == 0xABCD,
+            "复活请求保留完整u16角色key");
+        That(DungeonRequests.TryParseCharacterDeath([0x74, 0, 4, 1, 0, 0], out dead) &&
+            dead == new DungeonCharacterDeathRequest(116, 260, 0), "现场普通角色6B死亡正文完整解析");
+        That(DungeonRequests.TryParseCharacterDeath([0, 0, 0, 0, 0xFE, 0xAB], out dead) && dead.Context == 0xABFE,
+            "死亡扩展u16保留原值，不推断额外字段枚举");
+        foreach (int width in new[] { 0, 1, 2, 3, 5, 8 })
+            if (width != 4) That(!DungeonRequests.TryParseCharacterDeath(new byte[width], out _), "拒绝角色死亡宽度 " + width);
+        foreach (int width in new[] { 0, 1, 3, 4, 6 })
+            That(!DungeonRequests.TryParseUseCoin(new byte[width], out _), "拒绝复活请求宽度 " + width);
+        That(DungeonPackets.CoinUsed(0xABCD).SequenceEqual(new byte[] { 1, 0xCD, 0xAB, 0 }),
+            "本版复活ACK完整编码成功、u16角色key及标志");
+        That(DungeonPackets.CharacterLife(0xABCD, false).SequenceEqual(new byte[] { 0xCD, 0xAB, 0, 0 }) &&
+            DungeonPackets.CharacterLife(0xABCD, true).SequenceEqual(new byte[] { 0xCD, 0xAB, 1, 0 }), "死亡及复活32状态字节独立核对");
+
         That(DungeonRequests.ParseEntry([0, 0, 0, 0]).DungeonIndex == 0, "zero entry remains an entrance request value");
         using (var rejection = new BinaryReader(new MemoryStream(DungeonPackets.SelectionRejected())))
             That(rejection.ReadByte() == 0 && rejection.ReadUInt16() == 9 && rejection.ReadByte() == 0 &&

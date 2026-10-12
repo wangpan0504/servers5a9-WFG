@@ -42,7 +42,7 @@ internal static partial class FormalDungeonTcpTests
                 var character = repository.LoadCharacter(owner, 0);
                 var items = resources.ItemResources;
                 var grants = new DfoServer.Game.Inventory.Services.InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-                character = DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character, grants.Grant(character, [new(1000, 5)]));
+                character = DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character, grants.Grant(character, [new(1000, 5), new(1, 2)]));
                 PrepareDelilahServices(repository,owner,character,resources);
             }
             peer.Select();
@@ -59,6 +59,7 @@ internal static partial class FormalDungeonTcpTests
                 Load(peer);
                 if (room == 0)
                 {
+                    VerifyRevive(fixture, peer);
                     peer.Send(191, [0,0]);
                     That(peer.Expect(0,170).Body.SequenceEqual(new byte[] { (byte)peer.Id,(byte)(peer.Id >> 8),0,0 }),
                         "实收普通演出暂停请求只同步本人170");
@@ -1034,6 +1035,39 @@ internal static partial class FormalDungeonTcpTests
             That(fixture.Snapshot() == beforeDuplicate, "重复拾取不增加角色、账号钱包或物品资产");
         }
         return count;
+    }
+
+    static void VerifyRevive(TcpTestFixture fixture, TcpPeer peer)
+    {
+        byte[] key = [(byte)peer.Id, (byte)(peer.Id >> 8)];
+        string Wallet() => JsonSerializer.Serialize(fixture.Query("SELECT revision,revive_coins FROM characters WHERE id=$p0", peer.Id));
+        string before = Wallet();
+        peer.Send(41, key);
+        peer.Barrier();
+        That(Wallet() == before, "活角色复活请求无扣币或成功包");
+        for (int remaining = 1; remaining >= 0; remaining--)
+        {
+            peer.Send(40, [0x74, 0, 4, 1, 0, 0]);
+            peer.Expect(0, 32, [key[0], key[1], 0, 0]);
+            peer.Send(41, [0xFF, 0xFF]);
+            peer.Barrier();
+            That(Wallet() == before, "错误复活目标key无扣币");
+            peer.Send(41, key);
+            peer.Expect(1, 41, [1, key[0], key[1], 0]);
+            peer.Expect(0, 32, [key[0], key[1], 1, 0]);
+            byte[] balance = new byte[126];
+            balance[1] = 1;
+            balance[3] = 1;
+            balance[5] = 1;
+            BinaryPrimitives.WriteInt32LittleEndian(balance.AsSpan(9), remaining);
+            peer.Expect(0, 14, balance);
+            before = Wallet();
+            peer.Send(41, key);
+            peer.Barrier();
+            That(fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0", peer.Id) is [[var coins]] &&
+                Convert.ToInt32(coins) == remaining && Wallet() == before, "完整ACK41→32→余额14及重复请求只消费一次");
+        }
+        // 两次复活后继续本组原有击杀、过房、结算与冷启动链。
     }
 
     static ulong U64(byte[] body, int at) => BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(at));

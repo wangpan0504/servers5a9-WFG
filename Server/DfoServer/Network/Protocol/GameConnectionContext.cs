@@ -16,6 +16,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public GameConnectionSender Sender { get; } = sender;
     public DfoServer.Network.Projection.DungeonElevatorProjection? Elevator { get; set; }
     public ChannelIdentity Channel => Session.ChannelEntry?.Identity ?? channel;
+    public DfoServer.Network.Projection.DungeonDeathProjection? Death { get; set; }
     public DfoServer.Network.Projection.DungeonCardProjection? Cards { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。
     public bool RosterRequested { get; set; }

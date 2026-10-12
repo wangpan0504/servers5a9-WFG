@@ -28,10 +28,55 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.FINISH_LOADING, LoadedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DIE_MONSTER, DeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.DIE_CHARACTER, CharacterDeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.USE_COIN, UseCoinAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.MOVE_MAP, MoveAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+    }
+
+    async Task<CommandResult> CharacterDeathAsync(GameConnectionContext context, Packet request)
+    {
+        if (!DungeonRequests.TryParseCharacterDeath(request.Body, out var position)) return CommandResult.Unhandled;
+        var receipt = context.Session.ReportFormalCharacterDeath();
+        log.Write("formal_character_death", new { Connection = context.Id, Accepted = receipt is not null, position.X, position.Y, position.Context,
+            Character = receipt?.Character.Id, receipt?.Snapshot.Identity });
+        if (receipt is not null)
+        {
+            if (context.Death is not null) await context.Death.StartAsync();
+            await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(receipt.Character.Id, false),
+                "formal_character_dead", () => context.Session.CanPublishFormalDungeon(receipt));
+        }
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseCoinAsync(GameConnectionContext context, Packet request)
+    {
+        if (!DungeonRequests.TryParseUseCoin(request.Body, out ushort targetKey)) return CommandResult.Unhandled;
+        var scene = context.Session.CurrentFormalDungeonScene();
+        var result = context.Session.ReviveFormalCharacter(targetKey);
+        log.Write("formal_character_revive", new { Connection = context.Id, Target = targetKey, Accepted = result?.Accepted == true,
+            Coins = result?.Receipt?.Character.Inventory.ReviveCoins });
+        if (result is null) return CommandResult.Handled;
+        if (!result.Accepted)
+        {
+            await context.Reply(CmdPacketType.USE_COIN, [0, (byte)result.Error, (byte)(result.Error >> 8)],
+                "formal_revive_rejected", () => scene is not null && context.Session.CanPublishFormalDungeon(scene));
+            return CommandResult.Handled;
+        }
+        var receipt = result.Receipt ?? throw new InvalidOperationException("复活缺少扣币提交回执");
+        if (context.Death is not null) await context.Death.StopAsync();
+        bool Guard() => context.Session.CanPublishInventory(receipt);
+        await context.Reply(CmdPacketType.USE_COIN, DungeonPackets.CoinUsed(targetKey), "formal_revive_ack", Guard);
+        await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(targetKey, true), "formal_character_revived", Guard);
+        await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+            InventoryPackets.Delta(receipt.Character.Inventory, InventoryListType.Main, [new(InventoryListType.Main, 1)]),
+            "formal_revive_coin_balance", Guard);
+        if (receipt.PreviousQuests is { } old && !old.SequenceEqual(receipt.Character.ActiveMainQuests))
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
+                "formal_revive_quest_conditions", Guard);
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> StoryPauseAsync(GameConnectionContext context, Packet request)
@@ -261,6 +306,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (request.Body.Length != 0) return CommandResult.Unhandled;
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
+        if (context.Death is not null) await context.Death.StopAsync();
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack", Guard);
         await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_return_town");

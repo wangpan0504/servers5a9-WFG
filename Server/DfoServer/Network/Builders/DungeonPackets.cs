@@ -15,6 +15,17 @@ internal sealed record DungeonDropPacketItem(uint ObjectKey, short RecordSlot, I
 
 internal static class DungeonPackets
 {
+    public static byte[] CharacterLife(ushort characterKey, bool revived)
+    {
+        byte[] body = new byte[4];
+        BinaryPrimitives.WriteUInt16LittleEndian(body, characterKey);
+        body[2] = revived ? (byte)1 : (byte)0;
+        return body;
+    }
+
+    // 本版 ACK41 在公共成功字节后固定读取角色 key:u16 和标志:u8。
+    public static byte[] CoinUsed(ushort characterKey) => [1, (byte)characterKey, (byte)(characterKey >> 8), 0];
+
     public static byte[] BossEntranceOpened() => new byte[5];
     public static byte[] Elevator(DungeonElevatorNotice notice) => [notice.Counter, notice.State];
 

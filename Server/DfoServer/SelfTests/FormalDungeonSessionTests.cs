@@ -47,8 +47,129 @@ internal static class FormalDungeonSessionTests
         PerMonsterDrops();
         OrdinaryLifecycle();
         OrdinaryRoutes();
+        CharacterRevive();
+        DeathReturnAndPurchase();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Session文件库、六房合成击杀、身份及回滚断言（非实机）");
         return Task.CompletedTask;
+
+        void CharacterRevive()
+        {
+            using var f = new Fixture("Revive", towns, characters, learning, quests);
+            f.Sql("UPDATE characters SET revive_coins=3");
+            f.SelectEntry();
+            Check(f.Session.ReportFormalCharacterDeath() is null && f.Session.ReviveFormalCharacter(f.Created.Id) is null,
+                "城镇死亡或复活不改变资产");
+            Enter(f);
+            Check(f.Session.ReportFormalCharacterDeath() is null, "未加载副本不能报角色死亡");
+            var loaded = f.Session.CompleteFormalDungeonLoading()!;
+            Check(f.Session.ReviveFormalCharacter(f.Created.Id) is null, "活角色不能消费复活币");
+            var dead = f.Session.ReportFormalCharacterDeath()!;
+            var before = f.Session.Selected!;
+            Check(f.Session.ReportFormalCharacterDeath() is not null && Same(before, f.Read()), "重复死亡不写角色或钱包");
+            Check(f.Session.ReviveFormalCharacter(unchecked((ushort)(f.Created.Id + 1))) is null, "只能复活本实例本人key");
+            f.Sql("CREATE TRIGGER revive_late_failure BEFORE INSERT ON currency_audit_log BEGIN SELECT RAISE(ABORT,'revive failure'); END;");
+            bool failed = false;
+            try { f.Session.ReviveFormalCharacter(f.Created.Id); }
+            catch (SqliteException) { failed = true; }
+            Check(failed && ReferenceEquals(f.Session.Selected, before) && Same(before, f.Read()),
+                "晚审计SQL失败回滚扣币及revision，在线角色保持死亡");
+            f.Sql("DROP TRIGGER revive_late_failure");
+            var used = f.Session.ReviveFormalCharacter(f.Created.Id)!;
+            var committed = used.Receipt!.Character;
+            Check(used.Accepted && committed.Inventory.ReviveCoins == 2 && committed.Revision == before.Revision + 1 &&
+                Same(committed, f.Read()) && JsonSerializer.Serialize(committed.Inventory with { ReviveCoins = 3 }) == JsonSerializer.Serialize(before.Inventory) &&
+                committed.Skills.SequenceEqual(before.Skills), "失败后同一死亡可重试，扣一币并保完整资产、技能与冷读");
+            Check(f.Session.DungeonSnapshot!.Identity == loaded.Snapshot.Identity && !f.Session.CanPublishFormalDungeon(dead) &&
+                f.Session.CanPublishInventory(used.Receipt), "复活保持原Run及房间，仅提交后回执可发布");
+            Check(f.Session.ReviveFormalCharacter(f.Created.Id) is null && Same(committed, f.Read()), "重复复活不再次扣币");
+            f.Session.ReportFormalCharacterDeath();
+            long revision = f.Session.Selected!.Revision;
+            f.Sql("UPDATE characters SET revision=revision+1");
+            bool stale = false;
+            try { f.Session.ReviveFormalCharacter(f.Created.Id); }
+            catch (InvalidOperationException) { stale = true; }
+            Check(stale && f.Read().Inventory.ReviveCoins == 2 && f.Session.Selected.Revision == revision,
+                "revision冲突不扣币或发布复活");
+            f.Sql($"UPDATE characters SET revision={revision}");
+            for (int remaining = 1; remaining >= 0; remaining--)
+            {
+                f.Session.ReportFormalCharacterDeath();
+                Check(f.Session.ReviveFormalCharacter(f.Created.Id)?.Receipt?.Character.Inventory.ReviveCoins == remaining,
+                    "再次死亡可逐次使用剩余复活币");
+            }
+            f.Session.ReportFormalCharacterDeath();
+            var empty = f.Session.Selected!;
+            Check(f.Session.ReviveFormalCharacter(f.Created.Id) is { Accepted: false } && ReferenceEquals(empty, f.Session.Selected) &&
+                Same(empty, f.Read()), "零余额不复活、不写revision、不生成免费币");
+            Check(f.Session.ReportFormalCharacterDeath() is not null && f.Session.ReturnFromFormalDungeon() is not null &&
+                f.Session.ReviveFormalCharacter(f.Created.Id) is null, "死亡仍可放弃返回城镇，旧Run不能再扣币");
+            Enter(f);
+            f.Session.CompleteFormalDungeonLoading();
+            Check(f.Session.ReviveFormalCharacter(f.Created.Id) is null, "新实例不继承旧死亡资格");
+            f.Session.ReportFormalCharacterDeath();
+            using var fresh = f.Owners.Acquire("formal-session", () => { });
+            bool oldGeneration = false;
+            try { f.Session.ReviveFormalCharacter(f.Created.Id); }
+            catch (InvalidOperationException) { oldGeneration = true; }
+            Check(oldGeneration, "旧generation不能使用死亡资格");
+        }
+
+        void DeathReturnAndPurchase()
+        {
+            using var f = new Fixture("DeathShop", towns, characters, learning, quests);
+            var product = itemResources.CashShop.Product(100004)!;
+            Check(product is { ItemId: 1, Count: 1, CeraPrice: 100 }, "匹配PVF死亡窗口商品100004是一币100点券");
+            InventoryService.Commit(f.Repository, f.Owner, f.Read(),
+                new DfoServer.Game.Currency.CurrencyService(itemResources.GoldLimits).Grant(f.Read(), DfoServer.Game.Currency.CurrencyKind.Cera, product.CeraPrice));
+            var shop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces);
+            var request = DfoServer.Network.Parsers.Inventory.CashShopRequests.Buy(
+                Convert.FromHexString("0000010000FF00A48601000000000000000000"));
+            InventoryResult Buy() => f.Session.PlanAndCommitInventory(character => shop.Buy(character, request, out _), 17, requireTown: false);
+            f.SelectEntry();
+            Enter(f);
+            Check(!Buy().Accepted, "商城跨场景购买仍拒绝加载中状态");
+            f.Session.CompleteFormalDungeonLoading();
+            f.Session.ReportFormalCharacterDeath();
+            var previous = f.Session.CurrentDungeonDeathReturn()!;
+            f.Session.ReportFormalCharacterDeath();
+            var scheduled = f.Session.CurrentDungeonDeathReturn()!;
+            Check(previous != scheduled && f.Session.ReturnFromFormalDungeonOnDeath(previous) is null, "重复死亡重置计时，旧回调不能提前回城");
+            var before = f.Read();
+            f.Sql("CREATE TRIGGER death_shop_late_failure BEFORE INSERT ON currency_audit_log WHEN NEW.action_name='cash_shop_buy' BEGIN SELECT RAISE(ABORT,'death shop failure'); END");
+            Reject<SqliteException>(() => Buy(), "死亡现场购买真实晚SQL失败");
+            Check(Same(before, f.Read()) && Same(before, f.Session.Selected!) &&
+                f.Session.CurrentDungeonDeathReturn() == scheduled, "现场购买失败完整回滚资产且保留原死亡计时");
+            f.Sql("DROP TRIGGER death_shop_late_failure");
+            var bought = Buy();
+            Check(bought.Accepted && f.Read().Inventory.ReviveCoins == 1 && f.Read().Inventory.AccountWallet.Get(DfoServer.Game.Currency.CurrencyKind.Cera) == 0 &&
+                f.Session.CurrentDungeonDeathReturn() == scheduled, "死亡现场购买扣100点券发一币，替换快照不丢失或重置计时");
+            before = f.Read();
+            Check(!Buy().Accepted && Same(before, f.Read()) && f.Session.CurrentDungeonDeathReturn() == scheduled,
+                "点券不足不改变钱包、币或死亡计时");
+            Check(f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is not null && f.Session.Phase == SessionPhase.Town &&
+                f.Read().Inventory.ReviveCoins == 1 && f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is null,
+                "购买后未复活仍可由原计时返回且仅执行一次，不自动消费新币");
+            Enter(f); f.Session.CompleteFormalDungeonLoading(); f.Session.ReportFormalCharacterDeath();
+            scheduled = f.Session.CurrentDungeonDeathReturn()!;
+            Check(f.Session.ReviveFormalCharacter(f.Created.Id) is { Accepted: true } &&
+                f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is null && f.Session.CurrentDungeonDeathReturn() is null,
+                "复活提交后旧回调失效，保持副本");
+            f.Session.ReportFormalCharacterDeath();
+            var newDeath = f.Session.CurrentDungeonDeathReturn()!;
+            Check(f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is null &&
+                f.Session.ReviveFormalCharacter(f.Created.Id) is { Accepted: false } && f.Session.CurrentDungeonDeathReturn() == newDeath,
+                "再次死亡旧回调无效，零币失败保持新死亡计时");
+            Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.ReturnFromFormalDungeonOnDeath(newDeath) is null,
+                "主动回城使死亡回调失效");
+            Enter(f); f.Session.CompleteFormalDungeonLoading(); f.Session.ReportFormalCharacterDeath();
+            scheduled = f.Session.CurrentDungeonDeathReturn()!;
+            f.Session.ReturnToRoster();
+            Check(f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is null, "返回选角使死亡回调失效");
+            f.SelectEntry(); Enter(f); f.Session.CompleteFormalDungeonLoading(); f.Session.ReportFormalCharacterDeath();
+            scheduled = f.Session.CurrentDungeonDeathReturn()!;
+            f.Session.End();
+            Check(f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is null, "断线结束使死亡回调失效");
+        }
 
         void OrdinaryRoutes()
         {

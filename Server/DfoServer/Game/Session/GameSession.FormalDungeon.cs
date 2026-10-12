@@ -23,6 +23,8 @@ internal sealed partial class GameSession
         ImmutableDictionary<ushort, DungeonDropGenerationPlan> DropPlans)
     {
         public bool HasPendingFatigue { get; set; }
+        public bool CharacterDead { get; set; }
+        public long DeathSerial { get; set; }
         public Location? OrdinaryReturnPosition { get; init; }
         public long StartedTimestamp { get; } = System.Diagnostics.Stopwatch.GetTimestamp();
         public uint KillExperienceTotal { get; set; }
@@ -234,7 +236,7 @@ internal sealed partial class GameSession
 
     public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || Phase != SessionPhase.Dungeon || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingPickup || HasPendingQuestScene) return null;
+        if (!Ready || Selected is null || Phase != SessionPhase.Dungeon || formalDungeon is not { } dungeon || dungeon.CharacterDead || dungeon.Ground.HasPendingPickup || HasPendingQuestScene) return null;
         if (moveKind > 1) return null;
         var target = new DungeonPoint(x,y);
         var result = moveKind == 1 || target == dungeon.Run.Snapshot.CurrentMap.Position && dungeon.Run.Snapshot.CurrentMap.Kind == "layered"

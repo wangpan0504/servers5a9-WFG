@@ -86,6 +86,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "resource_warning" => "Resource warning", "exit" => "Exit request", "travel" => "Town travel",
             "room_exit" => "Room exit", "dungeon_entry" => "Dungeon selection",
             "formal_dungeon_entry" => "Dungeon entry", "formal_dungeon_settlement" => "Dungeon settlement",
+            "formal_character_death" => "Dungeon character death", "formal_character_revive" => "Dungeon character revive",
             "dungeon_selection_return" => "Dungeon selection return", "formal_dungeon_return" => "Returned to town",
             "quest_lifecycle" => "Quest update", "quest_completion" => "Quest completion", "gm" => "GM command",
             "consumable_use" => "Consumable use",
@@ -132,7 +133,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         "startup" or "server_failed" or "listener_failed" or "listening" or "server_ready" or "stopped" or "resource_warning" or
         "connected" or "disconnected" or "closed" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
         "selected" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
-        "formal_dungeon_settlement" or "dungeon_selection_return" or "formal_dungeon_return" or
+        "formal_dungeon_settlement" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_enter" or "dungeon_entry_probe" or "dungeon_probe_return" or
         "quest_lifecycle" or "quest_completion" or "consumable_use" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
         "quest_ticket_use" or "gm" or "unimplemented" ||

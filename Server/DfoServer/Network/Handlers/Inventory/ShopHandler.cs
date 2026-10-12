@@ -24,8 +24,8 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
         try
         {
             var request = CashShopRequests.Buy(packet.Body);
-            result = context.BlocksTownActions ? InventoryResult.Reject(17) :
-                context.Session.MutateInventory(character => cashShop.Buy(character, request, out receipt), 17);
+            result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(17) :
+                context.Session.PlanAndCommitInventory(character => cashShop.Buy(character, request, out receipt), 17, requireTown: false);
         }
         catch (InvalidDataException)
         {
@@ -37,10 +37,11 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
             await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM, CashShopPackets.Failure(), "cash_shop_buy_rejected");
             return CommandResult.Handled;
         }
+        var committed = result.Receipt ?? throw new InvalidOperationException("商城购买缺少提交回执");
         foreach (var product in receipt.Products)
             await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM,
                 CashShopPackets.Success(product, receipt.Bonuses.GetValueOrDefault(product.CommodityId)),
-                "cash_shop_buy_success");
+                "cash_shop_buy_success", () => context.Session.CanPublishInventory(committed));
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }
