@@ -23,7 +23,10 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
 internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
     bool ProjectionCurrent, CurrencyKind? Currency = null, int Amount = 0);
 internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
-    DungeonGroundObject? Ground = null, DungeonPickupCommit? Commit = null);
+    DungeonGroundObject? Ground = null, DungeonPickupCommit? Commit = null)
+{
+    public bool CapacityRejected { get; init; }
+}
 internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds, byte RankPoint, byte RankGrade,
     uint MonsterExperience);
 internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,

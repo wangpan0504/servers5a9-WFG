@@ -345,9 +345,41 @@ internal static class FormalDungeonPublicationTests
                 "生产死亡Handler发布完整物品和金币两行，不截成首件或将位置写入上下文");
             uint itemKey = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(4));
             uint goldKey = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(135));
+            var sourceIdentity = f.Session.DungeonSnapshot!.Identity;
+            foreach (var monster in entry.Monsters.Monsters.Skip(1).Where(monster => monster.CanReportDeath))
+                await commands.DispatchAsync(context, new(1, 39, Death(monster.ObjectKey, entry.Character.Id, checked((byte)monster.CandidateLevel))));
+            byte[] move = new byte[100];
+            move[0] = 1; move[1] = 1;
+            await commands.DispatchAsync(context, new(1, 45, move));
+            await RejectPickupAsync(itemKey);
+            var adjacent = f.Session.CompleteFormalDungeonLoading()!;
+            await RejectPickupAsync(itemKey);
+            await RejectPickupAsync(goldKey);
+            foreach (var monster in adjacent.Monsters.Monsters.Where(monster => monster.CanReportDeath))
+                await commands.DispatchAsync(context, new(1, 39, Death(monster.ObjectKey, entry.Character.Id, checked((byte)monster.CandidateLevel))));
+            move[0] = checked((byte)entry.Snapshot.CurrentMap.Position.X);
+            move[1] = checked((byte)entry.Snapshot.CurrentMap.Position.Y);
+            await commands.DispatchAsync(context, new(1, 45, move));
+            Check(stream.Frames[^1].AsSpan(16).Length == 16 && stream.Frames[^1][29] == 0,
+                "原物品及金币回访使用缓存 MAP，不重放死亡与掉落创建通知");
+            f.Session.CompleteFormalDungeonLoading();
+            Check(f.Session.DungeonSnapshot!.Identity.InstanceId == sourceIdentity.InstanceId &&
+                f.Session.DungeonSnapshot.Identity.Epoch > sourceIdentity.Epoch,
+                "回访仍归原实例，但拾取使用当前加载epoch，不改写原死亡来源");
             int before = stream.Frames.Count;
             byte[] get = new byte[20];
             BinaryPrimitives.WriteUInt32LittleEndian(get, goldKey);
+            var currency = new CurrencyService(items.GoldLimits);
+            int capacity = currency.CarryLimit(f.Session.Selected!);
+            Check(f.Session.MutateInventory(character => currency.Grant(character, CurrencyKind.Gold, capacity), requireTown: false).Accepted,
+                "沿正式钱包提交填满真实携带上限，不伪造失败结果");
+            var full = f.Read();
+            await commands.DispatchAsync(context, new(1, 43, get));
+            Check(stream.Frames.Count == before + 1 && stream.Frames[^1].AsSpan(16).SequenceEqual(new byte[] { 0, 22, 0 }) &&
+                Same(full, f.Read()), "真实携带上限不足才报22，失败不消费回访金币或写入拾取回执");
+            Check(f.Session.MutateInventory(character => CurrencyService.Spend(character.Inventory, CurrencyKind.Gold, capacity), requireTown: false).Accepted,
+                "正式恢复携带空间后仍可拾取原冻结金币");
+            before = stream.Frames.Count;
             await commands.DispatchAsync(context, new(1, 43, get));
             Check(stream.Opcodes.Skip(before).SequenceEqual(new ushort[] { 39, 14, 43 }) &&
                 stream.Frames[before].Length == 63 && stream.Frames[before + 1].Length == 142 &&
@@ -367,8 +399,19 @@ internal static class FormalDungeonPublicationTests
             var actual = f.Read();
             int sent = stream.Frames.Count;
             await commands.DispatchAsync(context, new(1, 43, get));
-            Check(stream.Frames.Count == sent + 1 && stream.Frames[^1].AsSpan(16).SequenceEqual(new byte[] { 0, 22, 0 }) && Same(actual, f.Read()),
+            Check(stream.Frames.Count == sent + 1 && stream.Frames[^1].AsSpan(16).SequenceEqual(new byte[] { 0, 19, 0 }) && Same(actual, f.Read()),
                 "集合生产重复拾取只拒绝一次，实际库存与金币保持不变");
+
+            async Task RejectPickupAsync(uint key)
+            {
+                var old = f.Read();
+                int count = stream.Frames.Count;
+                byte[] request = new byte[20];
+                BinaryPrimitives.WriteUInt32LittleEndian(request, key);
+                await commands.DispatchAsync(context, new(1, 43, request));
+                Check(stream.Frames.Count == count + 1 && stream.Frames[^1].AsSpan(16).SequenceEqual(new byte[] { 0, 19, 0 }) &&
+                    Same(old, f.Read()), "加载或其他房间拾取仅静默收尾，不报背包满，不消费旧房金币或物品");
+            }
         }
 
         async Task PickupLostResultAsync()

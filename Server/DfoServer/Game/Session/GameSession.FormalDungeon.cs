@@ -381,7 +381,7 @@ internal sealed partial class GameSession
         if (!plan.Accepted)
         {
             dungeon.Ground.CancelPickup(prepared);
-            return new FormalDungeonPickupResult(DungeonRunOutcome.Rejected);
+            return new FormalDungeonPickupResult(DungeonRunOutcome.Rejected) { CapacityRejected = plan.Error == 17 };
         }
         // 存储异常/结果不明保留同一准备；原key重试只读已提交receipt，不重发资产。
         var commit = repository.CommitDungeonPickup(owner, Selected, prepared, plan.Plan!);

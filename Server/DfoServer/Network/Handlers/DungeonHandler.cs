@@ -267,8 +267,9 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         var result = context.Session.PickFormalDungeonItem(parsed.GroundObjectKey, items, pieces, goldLimits);
         if (result.Outcome != DungeonRunOutcome.Accepted || result.Receipt is not { } receipt || result.Commit is not { } commit)
         {
-            // 本服普通拒绝用已证可解除等待且保留原地面核心的22，不命名为原版满包错误。
-            await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Rejected(22), "formal_pickup_rejected");
+            // 22显示空间/携带上限不足；无效key、重复或错误阶段沿19静默清除等待。
+            await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Rejected(result.CapacityRejected ? (ushort)22 : (ushort)19),
+                "formal_pickup_rejected");
             return CommandResult.Handled;
         }
         if (!commit.ProjectionCurrent) return CommandResult.CloseConnection;

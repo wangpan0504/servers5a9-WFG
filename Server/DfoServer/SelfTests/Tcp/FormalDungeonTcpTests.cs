@@ -1034,7 +1034,7 @@ internal static partial class FormalDungeonTcpTests
                     "实体拾取使用已提交UID及目的槽");
             }
             string beforeDuplicate = fixture.Snapshot();
-            peer.Send(43, pickup); peer.Expect(1, 43, [0, 22, 0]); peer.Barrier();
+            peer.Send(43, pickup); peer.Expect(1, 43, [0, 19, 0]); peer.Barrier();
             That(fixture.Snapshot() == beforeDuplicate, "重复拾取不增加角色、账号钱包或物品资产");
         }
         return count;
