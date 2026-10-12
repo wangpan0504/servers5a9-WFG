@@ -7,10 +7,11 @@ using DfoServer.Network.Builders;
 
 namespace DfoServer.Network;
 
-internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol, Func<CancellationToken, Task>? runManagement, Action onStarted, ServerLog log)
+internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol, Func<CancellationToken, Task>? runManagement, Action onStarted, ServerLog log, GameChannelListeners gameChannels)
 {
     readonly ConcurrentDictionary<int, Task> active = new();
     int counter;
+    readonly SemaphoreSlim connections = new(64, 64);
     public async Task RunAsync(CancellationToken stop)
     {
         Directory.CreateDirectory(options.LogDirectory);
@@ -18,20 +19,21 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         capture = packetCapture;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
         var channel = new TcpListener(IPAddress.Parse(options.ListenAddress), options.ChannelPort);
-        var game = new TcpListener(IPAddress.Parse(options.ListenAddress), options.GamePort);
         Task gm = Task.CompletedTask;
         Task[] listeners = [];
         string starting = "Channel listener";
         try
         {
             channel.Start();
-            starting = "Game listener";
-            game.Start();
             starting = "GM listener";
             if (runManagement is not null)
                 gm = runManagement(lifetime.Token);
-            log.Write("listening", new { ChannelName = ChannelPackets.ChannelName,
-                Channel = channel.LocalEndpoint.ToString(), Game = game.LocalEndpoint.ToString(),
+            if (gm.IsFaulted) await gm;
+            starting = "Game listeners";
+            gameChannels.Start();
+            var primary = gameChannels.Bound.Single(row => row.Endpoint.Entry.Identity.Number == GameWorld.Channels.ChannelCatalog.PrimaryChannelNumber);
+            log.Write("listening", new { ChannelName = "#ch." + primary.Endpoint.Entry.Identity.Number,
+                Channel = channel.LocalEndpoint.ToString(), Game = primary.Listener.LocalEndpoint.ToString(), ChannelEntries = gameChannels.Endpoints,
                 AdvertisedGame = $"{options.AdvertisedAddress}:{options.GamePort}",
                 Gm = options.GmPort == 0 ? "disabled" : $"127.0.0.1:{options.GmPort}",
                 PacketCapture = packetCapture?.IsEnabled == true ? options.PacketCaptureDirectory : "disabled",
@@ -42,11 +44,12 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             File.WriteAllText(Path.Combine(options.LogDirectory, "ready.json"), JsonSerializer.Serialize(new
             {
                 options.ChannelPort, options.GamePort, options.GmPort, options.AdvertisedAddress, options.ListenAddress,
-                options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId
+                options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId, ChannelEntries = gameChannels.Endpoints
             }));
             log.Write("server_ready", new { Pid = Environment.ProcessId });
             starting = "Running listeners";
-            listeners = [Accept(channel, channelProtocol, true, lifetime.Token), Accept(game, gameProtocol, false, lifetime.Token)];
+            listeners = [Accept(channel, channelProtocol, true, lifetime.Token),
+                .. gameChannels.Bound.Select(entry => Accept(entry.Listener, gameProtocol, false, lifetime.Token, entry.Endpoint))];
             // 某个监听失败时取消整个实例，避免 Task.WhenAll 永久等待另一个监听。
             var workers = runManagement is null ? listeners : [.. listeners, gm];
             await await Task.WhenAny(workers);
@@ -63,7 +66,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         {
             lifetime.Cancel();
             channel.Stop();
-            game.Stop();
+            gameChannels.Stop();
             try
             {
                 await Task.WhenAll([.. listeners, gm]);
@@ -82,7 +85,8 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
 
     PacketCapture? capture;
 
-    async Task Accept(TcpListener listener, IConnectionProtocol protocol, bool channel, CancellationToken stop)
+    async Task Accept(TcpListener listener, IConnectionProtocol protocol, bool channel, CancellationToken stop,
+        GameWorld.Channels.ChannelEndpoint? endpoint = null)
     {
         while (!stop.IsCancellationRequested)
         {
@@ -96,20 +100,21 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
                 // 只把本监听已取消的待接入操作视为正常停止，其他套接字故障继续传播。
                 break;
             }
-            if (client.Client.RemoteEndPoint is not IPEndPoint peer || active.Count >= 64)
+            if (client.Client.RemoteEndPoint is not IPEndPoint peer || !connections.Wait(0))
             {
                 client.Dispose();
                 continue;
             }
 
             int id = Interlocked.Increment(ref counter);
-            Task task = Serve(client, protocol, channel, peer.Address, id, stop);
+            Task task = Serve(client, protocol, channel, peer.Address, id, stop, endpoint);
             active[id] = task;
             _ = task.ContinueWith(_ => active.TryRemove(id, out var ignored), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
 
-    async Task Serve(TcpClient client, IConnectionProtocol protocol, bool channel, IPAddress peer, int id, CancellationToken stop)
+    async Task Serve(TcpClient client, IConnectionProtocol protocol, bool channel, IPAddress peer, int id, CancellationToken stop,
+        GameWorld.Channels.ChannelEndpoint? endpoint)
     {
         using var ownedClient = client;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
@@ -117,7 +122,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         {
             log.Write("connected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME", Peer = client.Client.RemoteEndPoint?.ToString() });
             client.NoDelay = true;
-            await protocol.RunAsync(new(id, peer, client.GetStream(), lifetime, channel, capture));
+            await protocol.RunAsync(new(id, peer, client.GetStream(), lifetime, channel, capture, endpoint));
         }
         catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException or InvalidDataException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
         {
@@ -126,6 +131,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         finally
         {
             log.Write("disconnected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME" });
+            connections.Release();
         }
     }
 }

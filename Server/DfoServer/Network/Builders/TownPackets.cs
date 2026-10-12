@@ -2,6 +2,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
 using DfoServer.Network.Builders.Inventory;
+using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Network.Builders;
 // Client 包体构造。只读取角色快照，不修改会话或访问数据库。
@@ -56,14 +57,16 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Actor(Character character)
+    public static byte[] Actor(Character character, ChannelIdentity channel = default)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
             writer.Write((byte)0);
             writer.Write((ushort)1);
-            writer.Write(new byte[2]);
+            // 0267DA20按这两字节与NOTI1身份比较，决定本地角色表或跨频道缓存。
+            writer.Write(channel.ServerIndex);
+            writer.Write(channel.Number);
             // 0267DA80 reads 0x74 bytes. The two fixed UTF-16 names remain empty.
             byte[] state = new byte[116];
             state[7] = 1;
@@ -143,14 +146,16 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Player(Character character, CharacterStats attributes)
+    public static byte[] Player(Character character, CharacterStats attributes, ChannelIdentity channel = default)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
             writer.Write((byte)1);
             writer.Write((ushort)1);
-            writer.Write(new byte[19]);
+            writer.Write(channel.ServerIndex);
+            writer.Write(channel.Number);
+            writer.Write(new byte[17]);
             writer.Write(character.Id);
             writer.Write(character.Learning.Experience); // 02678520 的完整u64累计经验。
             byte[] stats = CharacterStatsPackets.Build(attributes);

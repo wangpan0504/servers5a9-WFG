@@ -15,6 +15,7 @@ internal sealed record ServerOptions
     public string AdvertisedAddress { get; init; } = "127.0.0.1";
     public int ChannelPort { get; init; } = 23100;
     public int GamePort { get; init; } = 23101;
+    public int ChannelEntryPortBase { get; init; }
     // 0 表示关闭。监听固定在 127.0.0.1，不跟随 ListenAddress。
     public int GmPort { get; init; }
     public string PvfPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf");
@@ -45,6 +46,7 @@ internal sealed record ServerOptions
                     "--listen-ip" => value with { ListenAddress = argument },
                     "--channel-port" => value with { ChannelPort = Number(argument, name) },
                     "--game-port" => value with { GamePort = Number(argument, name) },
+                    "--channel-entry-port-base" => value with { ChannelEntryPortBase = Number(argument, name) },
                     "--gm-port" => value with { GmPort = Number(argument, name) },
                     "--pvf-path" => value with { PvfPath = StoragePath(argument, name) },
                     "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
@@ -57,6 +59,8 @@ internal sealed record ServerOptions
         if (!IPAddress.TryParse(value.ListenAddress, out var listen) || listen.AddressFamily != AddressFamily.InterNetwork)
             throw new InvalidDataException("Invalid server IPv4 address");
         if (value.ChannelPort is < 1 or > 65535 || value.GamePort is < 1 or > 65535 || value.GamePort == value.ChannelPort ||
+            value.ChannelEntryPortBase is < 0 or > 65535 ||
+            value.ChannelEntryPortBase != 0 && new[] { value.ChannelPort, value.GamePort, value.GmPort }.Contains(value.ChannelEntryPortBase) ||
             value.GmPort is < 0 or > 65535 || value.GmPort != 0 && (value.GmPort == value.ChannelPort || value.GmPort == value.GamePort))
             throw new InvalidDataException("Invalid endpoint configuration");
         try

@@ -106,10 +106,13 @@ internal static class ServerLogTests
             using var failedLog = new ServerLog(failedRoot, failureOutput);
             var protocol = new EmptyProtocol();
             var options = new ServerOptions { ChannelPort = channelPort, GamePort = gamePort, LogDirectory = failedRoot };
+            var catalog = DfoServer.GameWorld.Channels.ChannelCatalog.Parse(
+                "[server]\n2\n10 `<chn_channel_info_028>` 22 `[granfloris]` 5 0 0 0 0 0 0 0 0 0 0 ``\n[/server]\n");
+            var listeners = new GameChannelListeners(options, catalog);
             bool rejected = false, ready = false;
             try
             {
-                await new ServerHost(options, protocol, protocol, null, () => ready = true, failedLog).RunAsync(CancellationToken.None);
+                await new ServerHost(options, protocol, protocol, null, () => ready = true, failedLog, listeners).RunAsync(CancellationToken.None);
             }
             catch (SocketException) { rejected = true; }
             finally { occupied.Stop(); }
@@ -123,7 +126,7 @@ internal static class ServerLogTests
             }
             finally { reservation.Stop(); }
 
-            await CheckListenerCancellationAsync(options, root);
+            await CheckListenerCancellationAsync(options, root, catalog);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} server stdout log assertions");
@@ -134,7 +137,7 @@ internal static class ServerLogTests
         public Task RunAsync(ConnectionContext connection) => Task.CompletedTask;
     }
 
-    static async Task CheckListenerCancellationAsync(ServerOptions ports, string root)
+    static async Task CheckListenerCancellationAsync(ServerOptions ports, string root, DfoServer.GameWorld.Channels.ChannelCatalog catalog)
     {
         foreach (bool reading in new[] { false, true })
         {
@@ -144,7 +147,8 @@ internal static class ServerLogTests
             using var stop = new CancellationTokenSource();
             var channelProtocol = new WaitingProtocol();
             var gameProtocol = new WaitingProtocol();
-            var host = new ServerHost(ports with { LogDirectory = directory }, channelProtocol, gameProtocol, null, () => { }, log);
+            var options = ports with { LogDirectory = directory };
+            var host = new ServerHost(options, channelProtocol, gameProtocol, null, () => { }, log, new GameChannelListeners(options, catalog));
             Task running = host.RunAsync(stop.Token);
             using var channel = new TcpClient();
             using var game = new TcpClient();
@@ -184,8 +188,9 @@ internal static class ServerLogTests
             var management = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var expected = new SocketException((int)(canceled ? SocketError.ConnectionReset : SocketError.OperationAborted));
             var protocol = new EmptyProtocol();
-            Task running = new ServerHost(ports with { LogDirectory = directory }, protocol, protocol,
-                _ => management.Task, () => { }, log).RunAsync(stop.Token);
+            var options = ports with { LogDirectory = directory };
+            Task running = new ServerHost(options, protocol, protocol,
+                _ => management.Task, () => { }, log, new GameChannelListeners(options, catalog)).RunAsync(stop.Token);
             bool propagated = false;
             try
             {

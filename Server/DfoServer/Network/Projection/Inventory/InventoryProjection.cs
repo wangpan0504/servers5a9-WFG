@@ -43,8 +43,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         {
             // 副本及结算沿用当前玩家对象；完整Actor刷新只用于城镇/选图。
             if (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect)
-                await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(current), "equipment_actor", CanSend);
-            await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current)), "equipment_player", CanSend);
+                await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(current, context.Channel), "equipment_actor", CanSend);
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
                 if (CanSend() && context.Session.Phase == SessionPhase.Town)

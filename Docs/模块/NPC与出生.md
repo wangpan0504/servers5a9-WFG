@@ -25,7 +25,7 @@ NPC地图坐标只用于资源身份，不能推出传送坐标公式。上述�
 [GameSession.Select](../../Server/DfoServer/Game/Session/GameSession.cs)按账号与 slot 装载目标角色，[CharacterSelection](../../Server/DfoServer/Game/Characters/CharacterSelection.cs)负责入城准备规则：
 
 1. 从当前地区、已有Return和PVF解析最后可返回地区。街道优先自身城镇可用房间入口；房间优先已有Return；无Return的NPC特殊区尝试反向NPC所在地区；最终默认艾尔文防线。
-2. 统一出生共享赛丽亚房间38/1的gate 450,234，Direction按Room默认值重置，不恢复离线站立x/y。
+2. 普通名册选角统一出生共享赛丽亚房间38/1的gate 450,234，Direction按Room默认值重置，不恢复离线站立x/y。原生换频道直接选角保留合法的已提交城镇位置，包序见[原生换频道重连](../协议/角色与入城.md#原生换频道重连)。
 3. 若出生和返回点尚未规范化，在当前generation及角色revision内提交位置/返回字段；已规范化时不重复写入。
 4. 按[物品规则](背包与装备.md#owner生命周期与并发)清理到期实例，再按资源初始化金币携带上限；每一步使用上一笔提交返回的实际角色，无变化不重复写库。
 5. 全部准备成功后由 Session 安装 Selected 和完成任务集合、递增选角 epoch，发送完整入城序列；房间24后发送1379返回town，最后空124，随后Ready=true。

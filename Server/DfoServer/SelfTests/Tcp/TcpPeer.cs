@@ -19,7 +19,10 @@ internal sealed class TcpPeer : IDisposable
     };
     readonly NetworkStream stream;
     ushort sequence;
+    bool requestedRoster;
+    readonly byte channelNumber;
     public byte[] Roster { get; private set; } = [];
+    public byte[] LoginEndpoint { get; private set; } = [];
     public byte[] SkillInfo { get; private set; } = [];
     public byte[] SceneSkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
@@ -40,8 +43,9 @@ internal sealed class TcpPeer : IDisposable
         names = Encoding.GetEncoding(936, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
     }
 
-    public TcpPeer(int port, string? localAddress = null)
+    public TcpPeer(int port, string? localAddress = null, byte channelNumber = 10)
     {
+        this.channelNumber = channelNumber;
         try
         {
             if (localAddress is not null)
@@ -58,9 +62,9 @@ internal sealed class TcpPeer : IDisposable
         }
     }
 
-    public static TcpPeer Open(TcpTestFixture fixture, string account = "10000", string? digest = null)
+    public static TcpPeer Open(TcpTestFixture fixture, string account = "10000", string? digest = null, int? gamePort = null, byte channelNumber = 10)
     {
-        var peer = new TcpPeer(fixture.Options.GamePort);
+        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber);
         try
         {
             peer.Expect(0, 1);
@@ -68,7 +72,7 @@ internal sealed class TcpPeer : IDisposable
             peer.Expect(1, 1562, [1]);
             digest ??= account == "10000" ? "e10adc3949ba59abbe56e057f20f883e" : NativeLoginWire.Digest;
             peer.Send(1, NativeLoginWire.Login(account, digest));
-            peer.Expect(1, 1);
+            peer.LoginEndpoint = peer.Expect(1, 1).Body;
             peer.Roster = peer.Expect(0, 2).Body;
             return peer;
         }
@@ -102,6 +106,8 @@ internal sealed class TcpPeer : IDisposable
         body.CopyTo(frame, 13);
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(7), Crc(frame.AsSpan(11)));
         stream.Write(frame);
+        if (opcode == 8 && body.AsSpan().SequenceEqual(new byte[] { 255, 255, 2 })) requestedRoster = true;
+        if (opcode == 7 && body.Length == 0) requestedRoster = false;
     }
 
     public WirePacket Read()
@@ -118,6 +124,10 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(Crc(frame.AsSpan(11)) == BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(7)), "S2C CRC");
         if (header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 356)
             CompletedQuestHistory = frame[16..];
+        if (header[0] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 6 && frame.Length > 16 && frame[16] == 1)
+            requestedRoster = true;
+        if (header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 2 && frame.Length >= 21 && frame[16] is 0 or 1)
+            TestCheck.Bytes(frame.AsSpan(19, 2), [2, channelNumber], "本人、同屏和刷新USERINFO均进入接收者当前频道的本地Actor表");
         return new(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..]);
     }
 
@@ -200,10 +210,15 @@ internal sealed class TcpPeer : IDisposable
 
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
         (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,
-        byte[]? sceneSkills = null, byte[]? combos = null)
+        byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true)
     {
+        if (!resumeTown && !requestedRoster)
+            Send(8, [255, 255, 2]);
         Send(4, Build(w => w.Write(slot)));
         var expected = prepared ? PreparedEntry : Entry;
+        if (resumeTown)
+            expected = [.. expected.Where(p => p != ((byte)0, (ushort)24) && p != ((byte)0, (ushort)1379) && p != ((byte)0, (ushort)124)),
+                .. (room ? new (byte Kind, ushort Opcode)[] { (0, 1379) } : []), (0, 124), (0, 24)];
         int afterCargo = prepared ? 9 : 8;
         // 保留普通入城断言的返回索引，特殊容器单独暴露；线上顺序仍逐包严格验证。
         var prefix = Batch(expected[..2]);
@@ -240,37 +255,8 @@ internal sealed class TcpPeer : IDisposable
             tail.Add(Expect(notice.Kind, notice.Opcode));
         foreach (var notice in expected.Skip(afterCargo))
         {
-            // 设置必须在地区绑定后、入城完成前回放；单独保留以免改变旧用例的包索引。
-            if (notice == ((byte)0, (ushort)124))
-            {
-                if (SkillInfo.Length > 0)
-                {
-                    SceneSkillInfo = Expect(0, 19, sceneSkills).Body;
-                    var originalTrees = SkillPacketsTests.DecodeInitialized(SkillInfo);
-                    var sceneTrees = SkillPacketsTests.DecodeInitialized(SceneSkillInfo);
-                    TestCheck.That(originalTrees.Length == sceneTrees.Length && originalTrees.Zip(sceneTrees).All(pair =>
-                        pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
-                        pair.First.Skills.Length == pair.Second.Skills.Length && pair.First.Skills.Zip(pair.Second.Skills).All(skills =>
-                            skills.First.Slot == skills.Second.Slot && skills.First.Id == skills.Second.Id && skills.First.Level == skills.Second.Level &&
-                            (skills.First.Command.Length == 0 || skills.First.Command == skills.Second.Command))),
-                        "场景后仅可补默认指令，完整两树余额、绑定、等级与已保存指令保持");
-                }
-                if (combos is not null) Expect(0, 447, combos);
-                ClientSettings = (settings ?? []).Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
-                if (appearanceFlags.HasValue)
-                    Expect(0, 357, Build(w =>
-                    {
-                        w.Write(U16(prefix[0].Body, 9));
-                        w.Write(appearanceFlags.Value);
-                    }));
-                AvailableQuests = Expect(0, 21).Body;
-                if (prepared)
-                {
-                    CompletedQuestHistory = Expect(0, 356).Body;
-                    TestCheck.Bytes(CompletedQuestHistory, middle.Single(packet => packet.Opcode == 356).Body,
-                        "入城21后恢复同一角色完成历史，保留前面的场景完成位");
-                }
-            }
+            // 普通入城在124前恢复；换频道等最终24绑定后恢复。
+            if (!resumeTown && notice == ((byte)0, (ushort)124)) ReadSceneInitialization();
             if (notice == ((byte)0, (ushort)3))
             {
                 var packet = Read();
@@ -295,6 +281,8 @@ internal sealed class TcpPeer : IDisposable
             }
             else tail.Add(Expect(notice.Kind, notice.Opcode));
         }
+        if (resumeTown)
+            ReadSceneInitialization();
         Mailbox = mails.ToArray();
         WirePacket[] packets = [.. prefix, .. middle, .. tail];
         Id = U16(packets[0].Body, 9);
@@ -306,8 +294,39 @@ internal sealed class TcpPeer : IDisposable
         ushort expansionSlots = U16(packets[4].Body, 1);
         TestCheck.That(expansionSlots % 8 == 0 && (expansionSlots >> 3) <= 3,
             "client expansion reader stays within its three-stage table");
-        TestCheck.That(packets[^1].Body.Length == 0, "entry complete body empty");
+        TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
         return packets.ToArray();
+
+        void ReadSceneInitialization()
+        {
+            if (SkillInfo.Length > 0)
+            {
+                SceneSkillInfo = Expect(0, 19, sceneSkills).Body;
+                var originalTrees = SkillPacketsTests.DecodeInitialized(SkillInfo);
+                var sceneTrees = SkillPacketsTests.DecodeInitialized(SceneSkillInfo);
+                TestCheck.That(originalTrees.Length == sceneTrees.Length && originalTrees.Zip(sceneTrees).All(pair =>
+                    pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
+                    pair.First.Skills.Length == pair.Second.Skills.Length && pair.First.Skills.Zip(pair.Second.Skills).All(skills =>
+                        skills.First.Slot == skills.Second.Slot && skills.First.Id == skills.Second.Id && skills.First.Level == skills.Second.Level &&
+                        (skills.First.Command.Length == 0 || skills.First.Command == skills.Second.Command))),
+                    "场景后仅可补默认指令，完整两树余额、绑定、等级与已保存指令保持");
+            }
+            if (combos is not null) Expect(0, 447, combos);
+            ClientSettings = (settings ?? []).Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
+            if (appearanceFlags.HasValue)
+                Expect(0, 357, Build(w =>
+                {
+                    w.Write(U16(prefix[0].Body, 9));
+                    w.Write(appearanceFlags.Value);
+                }));
+            AvailableQuests = Expect(0, 21).Body;
+            if (prepared)
+            {
+                CompletedQuestHistory = Expect(0, 356).Body;
+                TestCheck.Bytes(CompletedQuestHistory, middle.Single(packet => packet.Opcode == 356).Body,
+                    "入城21后恢复同一角色完成历史，保留前面的场景完成位");
+            }
+        }
     }
 
     public static byte[] Move(ushort x, ushort y, bool motion = false) => Build(w =>

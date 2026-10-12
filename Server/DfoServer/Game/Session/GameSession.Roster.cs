@@ -28,11 +28,11 @@ internal sealed partial class GameSession
     CharacterRosterEntry? PublishedRosterEntry(ushort index) => publishedRoster is { } roster && MatchesRoster(roster) &&
         index < roster.Entries.Length ? roster.Entries[index] : null;
 
-    public void SelectFromRosterIndex(ushort index, GoldLimitCatalog? goldLimits = null) => owner.Execute(() =>
+    public void SelectFromRosterIndex(ushort index, GoldLimitCatalog? goldLimits = null, bool resumeTown = false) => owner.Execute(() =>
     {
         if (Selected is not null) throw new InvalidDataException("Invalid selection state");
         var entry = PublishedRosterEntry(index) ?? throw new InvalidDataException("Selection published roster index absent");
-        SelectCharacter(entry.Slot, goldLimits, entry);
+        SelectCharacter(entry.Slot, goldLimits, entry, resumeTown);
         return true;
     });
 }

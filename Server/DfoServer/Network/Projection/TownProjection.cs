@@ -15,7 +15,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
     SkillLearningCatalog? learning = null, TitleProjection? titles = null)
 {
-    public async Task EnterAsync(GameConnectionContext context)
+    public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
     {
         titles?.PrepareInitialization(context);
         var settingReceipt = settings?.Capture(context);
@@ -27,8 +27,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // 首次创建本人UI前先初始化主设置；地区绑定后仍回放完整设置，补齐依赖角色实体的应用。
         if (settings is not null && settingReceipt is not null)
             await settings.InitializeGameOptionsAsync(context, settingReceipt, "account_settings_before_player");
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(c), "actor");
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c)), "player");
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(c, context.Channel), "actor");
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c), context.Channel), "player");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
         await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
         if (c.CompletedQuests.Length > 0 || c.AccountCompletedQuests.Length > 0)
@@ -52,7 +52,13 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (titles is not null)
             await titles.InitializeAsync(context);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
-        await LocationAsync(context, c, initial: true);
+        await LocationAsync(context, c, initial: true, transition: !resumeTown);
+        if (resumeTown)
+        {
+            // 124会恢复换频道前的地图；最终24必须在它之后绑定本人，不能在恢复前宣布场景完成。
+            await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "channel_reentry_world_complete");
+            await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c), "channel_reentry_transition");
+        }
         // 显式恢复资源默认指令，不能只重发缺省field4并假定按住方向已经注册。
         if (c.Learning.Initialized)
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(c.Learning,
@@ -63,18 +69,20 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await settings.InitializeAsync(context, settingReceipt);
         if (quests is not null)
             await quests.InitializeAsync(context, c);
-        await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "enter_gameworld_complete");
+        if (!resumeTown)
+            await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "enter_gameworld_complete");
     }
 
     public Task ReconcileQuestsAsync(GameConnectionContext context) => quests?.CloseReadyChildrenAsync(context,refreshList: true) ?? Task.CompletedTask;
 
-    async Task LocationAsync(GameConnectionContext context, Character c, bool initial = false, Func<bool>? canSend = null)
+    async Task LocationAsync(GameConnectionContext context, Character c, bool initial = false, Func<bool>? canSend = null, bool transition = true)
     {
         // 切图前不在旧场景移动实体；124 只属于选角入城。
         if (initial)
             await context.Notify(NotiPacketType.USER_POSITION, TownPackets.Position(c, false), "position", canSend);
         await context.Notify(NotiPacketType.USER_AREA, TownPackets.Position(c, true), "area", canSend);
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c), "transition", canSend);
+        if (transition)
+            await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c), "transition", canSend);
         var completed = DfoServer.Game.Quests.QuestEligibility.Completed(c);
         if (towns.IsRoom(c.Position, completed) && (c.Return ?? towns.DefaultReturn(c.Position, completed)) is { } back)
             await context.Notify(NotiPacketType.PREV_VILLAGE, TownPackets.RoomReturnTown(back), "room_return_town", canSend);
@@ -98,7 +106,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Owner.Execute(() =>
         {
             if (CanSend())
-                presence?.Join(context.Owner, context.Sender, receipt.Character);
+                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel);
             return true;
         });
     }
@@ -106,7 +114,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     public void Join(GameConnectionContext context)
     {
         if (context.Session.Ready && context.Session.Selected is { } c)
-            presence?.Join(context.Owner, context.Sender, c);
+            presence?.Join(context.Owner, context.Sender, c, context.Channel);
     }
 
     public async Task<bool> DetachForDungeonSelectionAsync(GameConnectionContext context, DungeonSelectionReceipt receipt)
@@ -133,7 +141,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Owner.Execute(() =>
         {
             if (CanSend())
-                presence?.Join(context.Owner, context.Sender, receipt.Character);
+                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel);
             return true;
         });
     }

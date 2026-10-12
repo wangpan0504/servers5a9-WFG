@@ -20,9 +20,10 @@ internal enum SessionPhase : byte
 }
 
 internal sealed partial class GameSession(ICharacterRepository repository, TownCatalog towns, AccountOwners.Lease owner, AuthenticatedIdentity? identity = null,
-    DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, GameDebugSettings? debugSettings = null)
+    DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, GameDebugSettings? debugSettings = null, GameWorld.Channels.ChannelEntry? entry = null)
 {
     public AuthenticatedIdentity? Identity { get; } = identity;
+    public GameWorld.Channels.ChannelEntry? ChannelEntry { get; } = entry;
     public Character? Selected { get; private set; }
     public bool Ready { get; private set; }
     public SessionPhase Phase { get; private set; } = SessionPhase.Unselected;
@@ -105,9 +106,9 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public bool MatchesSelection(long epoch, ushort characterId) =>
         Phase == SessionPhase.Town && SelectionEpoch == epoch && Selected?.Id == characterId;
 
-    public void Select(ushort slot, GoldLimitCatalog? goldLimits = null) => SelectCharacter(slot, goldLimits, null);
+    public void Select(ushort slot, GoldLimitCatalog? goldLimits = null, bool resumeTown = false) => SelectCharacter(slot, goldLimits, null, resumeTown);
 
-    void SelectCharacter(ushort slot, GoldLimitCatalog? goldLimits, CharacterRosterEntry? expected)
+    void SelectCharacter(ushort slot, GoldLimitCatalog? goldLimits, CharacterRosterEntry? expected, bool resumeTown = false)
     {
         owner.Execute(() =>
         {
@@ -119,7 +120,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (questCatalog is not null && character.QuestCycleDay != DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow))
                 character = repository.AdvanceQuestCycle(owner, character, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow));
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
-            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits);
+            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumeTown);
             Selected = character;
             completed = quests;
             Ready = false;

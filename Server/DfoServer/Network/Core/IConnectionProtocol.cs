@@ -8,10 +8,12 @@ internal interface IConnectionProtocol
 }
 
 // 生命周期由 Host 持有；协议只能取消自己的连接。
-internal sealed class ConnectionContext(int id, IPAddress peer, Stream stream, CancellationTokenSource lifetime, bool channel = false, PacketCapture? capture = null)
+internal sealed class ConnectionContext(int id, IPAddress peer, Stream stream, CancellationTokenSource lifetime, bool channel = false,
+    PacketCapture? capture = null, DfoServer.GameWorld.Channels.ChannelEndpoint? channelEndpoint = null)
 {
     public int Id { get; } = id;
     public IPAddress Peer { get; } = peer;
+    public DfoServer.GameWorld.Channels.ChannelEndpoint? ChannelEndpoint { get; } = channelEndpoint;
     public Stream Stream { get; } = stream;
     public CancellationToken Stop => lifetime.Token;
     internal CancellationTokenSource Lifetime => lifetime;

@@ -19,7 +19,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (login is null)
             return;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = Convert.ToHexString(body.Span) }), connection.CaptureSent);
-        var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings);
+        var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         var elevator = new DungeonElevatorProjection(context, log);
         context.Elevator = elevator;
@@ -28,7 +28,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         try
         {
             online.Register(login.Owner, session);
-            await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(options.AdvertisedAddress, options.GamePort), "endpoint");
+            await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(options.AdvertisedAddress, login.Channel.Port), "endpoint");
             var roster = session.PrepareRoster();
             await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "roster",
                 () => session.CanPublishRoster(roster));

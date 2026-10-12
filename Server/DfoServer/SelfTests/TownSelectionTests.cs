@@ -24,6 +24,7 @@ internal static class TownSelectionTests
         int before = TestCheck.Count;
         Rules();
         Selection();
+        ChannelSelection();
         SelectionFailures();
         TravelCommits();
         Console.WriteLine($"PASS {TestCheck.Count - before} town rules/selection/receipt assertions");
@@ -113,6 +114,35 @@ internal static class TownSelectionTests
         f.Session.MarkReady();
         TestCheck.That(!f.Session.Travel(new(3, 0, 77, 78, 5, 1, 0, 5)) && f.Session.TravelReason == "target-quest-required",
             "重选后采用新的完成任务快照");
+    }
+
+    static void ChannelSelection()
+    {
+        using var f = new Fixture();
+        f.Session.Select(0, Limits, resumeTown: true);
+        var selected = f.Session.Selected!;
+        That(selected.Position == f.Original.Position && selected.Return == f.Original.Return && selected.Revision == 2,
+            "换频道保留原地图、坐标、方向与返回地区，不执行出生写入");
+        That(selected.Inventory.Items.Length == 1 && selected.Inventory.GoldCarryLimit == 500 && Equal(selected, f.Read()),
+            "换频道仍完成到期清理及金币上限，安装实际提交的角色");
+        That(f.Session.GetState() == UserState.EnteringWorld && !f.Session.Ready && f.Session.SelectionEpoch == 1,
+            "恢复原位置不跳过EnteringWorld或提前宣告Ready");
+        f.Session.MarkReady();
+        That(f.Session.Move(new(90, 91, 0, 0, 0, 0)) && f.Session.Selected!.Position == new Location(2, 0, 90, 91, 3),
+            "换频道完成后按原地区几何移动，保留方向");
+        f.Session.ReturnToRoster();
+        f.Session.Select(0, Limits);
+        That(f.Session.Selected!.Position == f.Towns.Room && f.Session.Selected.Return == f.Towns.InitialReturn,
+            "普通选角仍重置到map gate，换频道规则不改变冷登录出生");
+        f.Session.ReturnToRoster();
+        var room = f.Repository.Save(f.Owner, f.Read(), f.Towns.Room with { X = 31, Y = 32, Direction = 3 }, f.Towns.InitialReturn);
+        f.Session.Select(0, Limits, resumeTown: true);
+        That(Equal(f.Session.Selected!, room), "gate内换频道也保留原坐标且无变化不写库");
+        f.Session.ReturnToRoster();
+        var unavailable = f.Repository.Save(f.Owner, f.Read(), new(255, 0, 31, 32), f.Towns.InitialReturn);
+        Reject<InvalidDataException>(() => f.Session.Select(0, Limits, resumeTown: true), "未知原地图不借重连建立新场景");
+        That(f.Session.Selected is null && !f.Session.Ready && Equal(f.Read(), unavailable),
+            "重连地图拒绝不安装角色、不发送成功也不覆盖存档");
     }
 
     static void SelectionFailures()

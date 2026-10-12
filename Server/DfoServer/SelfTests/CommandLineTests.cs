@@ -29,6 +29,8 @@ internal static class CommandLineTests
         var launch = ServerCommand.Parse(["--server-ip", "auto", "--packet-capture", "capture files"]);
         That(launch.PacketCapture && launch.Options["--server-ip"] == "auto" && launch.Arguments.SequenceEqual(["capture files"]), "runtime options and capture path remain separate");
         That(ServerCommand.Parse(["--packet-capture"]).Arguments.Length == 0, "capture defaults to fixed log directory");
+        That(ServerOptions.Load(ServerCommand.Parse(["--channel-entry-port-base", "23103"]).Options).ChannelEntryPortBase == 23103,
+            "分类入口端口范围使用正式CLI配置，启动脚本无需修改");
         (string[] Arguments, ServerCommandKind Kind)[] supported =
         [
             (["--inspect"], ServerCommandKind.InspectTowns),
@@ -66,6 +68,7 @@ internal static class CommandLineTests
             ["--packet-capture", " "], ["--packet-capture", "capture", "extra"],
             ["--server-ip", "::1"], ["--server-ip", "0.0.0.0"], ["--listen-ip", "bad"],
             ["--channel-port", "0"], ["--game-port", "65536"], ["--channel-port", "23101"],
+            ["--channel-entry-port-base", "-1"], ["--channel-entry-port-base", "65536"],
             ["--gm-port", "23100"], ["--session-ttl", "29"], ["--game-port", "-1"],
             ["--dungeon-entry-probe", "Unknown"]
         ];

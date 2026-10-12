@@ -68,6 +68,7 @@ internal static class SelfTestRunner
         AuthenticationRepositoryTests.Run();
         await AccountCredentialStoreTests.RunAsync();
         NativeLoginTests.Run();
+        ChannelCatalogTests.Run();
         await AccountConcurrencyTests.RunAsync();
         await UserStateTests.RunCoreAsync();
         await AccountDatabaseConcurrencyTests.RunAsync();

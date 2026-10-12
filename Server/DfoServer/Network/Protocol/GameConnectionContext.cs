@@ -1,11 +1,12 @@
 using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
 using System.Net;
+using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Network.Protocol;
 
 internal sealed class GameConnectionContext(ConnectionContext connection, AccountOwners.Lease owner, GameSession session, GameConnectionSender sender,
-    IGameConnectionActivity? activity = null)
+    IGameConnectionActivity? activity = null, ChannelIdentity channel = default)
 {
     public int Id => connection.Id;
     public IPAddress Peer => connection.Peer;
@@ -14,6 +15,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public GameSession Session { get; } = session;
     public GameConnectionSender Sender { get; } = sender;
     public DfoServer.Network.Projection.DungeonElevatorProjection? Elevator { get; set; }
+    public ChannelIdentity Channel => Session.ChannelEntry?.Identity ?? channel;
     public DfoServer.Network.Projection.DungeonCardProjection? Cards { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。
     public bool RosterRequested { get; set; }

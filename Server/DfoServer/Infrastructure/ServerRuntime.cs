@@ -22,21 +22,34 @@ using DfoServer.Game.Rental;
 using DfoServer.Game.Settings;
 using DfoServer.Game.Dungeons;
 using System.Diagnostics;
+using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Infrastructure;
 // 唯一装配入口：按领域增加模块及依赖，不在协议循环中维护业务分支。
 internal static class ServerRuntime
 {
+    internal static ChannelCatalog LoadChannels(string path)
+    {
+        // 单文件发行包只携带内置脚本；目录部署仍优先使用外置配置。
+        using var stream = File.Exists(path) ? File.OpenRead(path) :
+            typeof(ServerRuntime).Assembly.GetManifestResourceStream("DfoServer.Resources.channel.txt")
+            ?? throw new InvalidDataException("程序缺少内置频道脚本");
+        using var reader = new StreamReader(stream);
+        return ChannelCatalog.Parse(reader.ReadToEnd());
+    }
+
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests)
     {
+        var channels = LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
+        var gameChannels = new GameChannelListeners(options, channels);
         log.Write("startup", new { Stage = "Runtime assembly", State = "starting" });
         var timer = Stopwatch.StartNew();
         var owners = new AccountOwners();
         var online = new OnlineSessionDirectory();
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
         accounts.EnsureDevelopmentAccount();
-        var presence = new TownPresence(towns);
+        var presence = new TownPresence(towns, channels.GameIdentity);
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")));
@@ -136,12 +149,12 @@ internal static class ServerRuntime
         questReplay?.Register(commands);
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
-        var login = new LoginHandler(options, owners, accounts, log);
+        var login = new LoginHandler(options, owners, accounts, channels, log);
         var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings);
-        var channel = new ChannelProtocolHandler(options, log);
+        var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
-        return new ServerHost(options, channel, game, management, Started, log);
+        return new ServerHost(options, channel, game, management, Started, log, gameChannels);
         void Started()
         {
             var missingMaps = towns.Areas.Values.SelectMany(area => area.Phases.Prepend(area.Default))
@@ -152,6 +165,7 @@ internal static class ServerRuntime
             {
                 options.ChannelPort,
                 options.GamePort,
+                ChannelEntries = gameChannels.Endpoints,
                 options.GmPort,
                 options.DevelopmentAccount,
                 options.DevelopmentDungeonEntryProbe,

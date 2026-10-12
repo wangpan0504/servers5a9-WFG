@@ -8,7 +8,7 @@ namespace DfoServer.Network.Projection;
 internal sealed class CharacterLevelProjection(CharacterStatComputer stats, QuestProjection? quests = null)
 {
     public Task PlayerAsync(GameConnectionContext context, Character committed, string action, Func<bool> canSend) =>
-        context.Notify(NotiPacketType.USERINFO,TownPackets.Player(committed,stats.Compute(committed)),action,canSend);
+        context.Notify(NotiPacketType.USERINFO,TownPackets.Player(committed,stats.Compute(committed), context.Channel),action,canSend);
 
     public async Task RefreshAsync(GameConnectionContext context, Character committed, byte previousLevel,
         string action, Func<bool> canSend, byte? previousGrowType = null, bool restoreCompletedQuests = true)
@@ -21,7 +21,7 @@ internal sealed class CharacterLevelProjection(CharacterStatComputer stats, Ques
         // 沿两端的职业重建链刷新真实分支；89B仅携带CHR基础，不重复累计装备和技能。
         if (previousGrowType is { } grow && grow != committed.GrowType ||
             context.Owner.Execute(() => context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect))
-            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(committed), action + "_actor", canSend);
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(committed, context.Channel), action + "_actor", canSend);
         await PlayerAsync(context,committed,action + "_player",canSend);
         if (quests is not null)
             await quests.RefreshAsync(context, committed, canSend, restoreCompletedQuests);

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Network.Builders;
 
@@ -8,7 +9,7 @@ internal static class LoginPackets
     // 023B7870 -> 0041B8A0；field 2/varint 写对象 +40h，唯一必填标志是 has_bits & 2。
     // 握手初始化 14 个 codec，固定读取 334B key。
     // field 3 的长度为 varint CE 02；此兼容数据不用于账号身份或传输保密。
-    public static byte[] ChannelInfo()
+    public static byte[] ChannelInfo(ChannelIdentity channel)
     {
         using var buffer = new MemoryStream();
         using var writer = new BinaryWriter(buffer);
@@ -16,6 +17,11 @@ internal static class LoginPackets
         writer.Write(new byte[] { 0x10, 1, 0x1a });
         writer.Write7BitEncodedInt(334);
         writer.Write(System.Security.Cryptography.RandomNumberGenerator.GetBytes(334));
+        // 使用本连接入口身份；各分类共用业务，但不能合并客户端的频道上下文。
+        writer.Write7BitEncodedInt(7 << 3);
+        writer.Write7BitEncodedInt(channel.ServerIndex);
+        writer.Write7BitEncodedInt(8 << 3);
+        writer.Write7BitEncodedInt(channel.Number);
         // 0041BF07/0041BF59 -> 对象 +78/+7C；0239B280 核对双方完整枚举数量。
         writer.Write7BitEncodedInt(30004 << 3);
         writer.Write7BitEncodedInt((int)CmdPacketType.END);

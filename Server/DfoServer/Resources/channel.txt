@@ -28,6 +28,35 @@
 [/dungeon]
 
 [server]
-0
-10 `<chn_channel_info_028>` 22 `[none]` 5 0 0 0 0 0 0 0 0 0 0 ``
+2
+1 `<channel_info_dname_0>` 22 `[elven_guard]` 10 0 0 0 0 0 0 0 0 0 0 ``
+10 `<chn_channel_info_028>` 22 `[granfloris]` 5 0 0 0 0 0 0 0 0 0 0 ``
+11 `<chn_channel_info_029>` 22 `[sky_catle]` 3 0 0 0 0 0 0 0 0 0 0 ``
+12 `<chn_channel_info_030>` 22 `[behemoth]` 2 0 0 0 0 0 0 0 0 0 0 ``
+13 `<chn_channel_info_031>` 22 `[Alfhlyra]` 2 0 0 0 0 0 0 0 0 0 0 ``
+14 `<chn_channel_info_032>` 22 `[Noirpera]` 2 0 0 0 0 0 0 0 0 0 0 ``
+15 `<chn_channel_info_005>` 22 `[Charnak]` 2 0 0 0 0 0 0 0 0 0 0 ``
+16 `<chn_channel_info_003>` 22 `[Abnoba]` 2 0 0 0 0 0 0 0 0 0 0 ``
+17 `<chn_channel_info_004>` 22 `[Meltdown]` 2 0 0 0 0 0 0 0 0 0 0 ``
+18 `<chn_channel_info_006>` 22 `[FallsToTheSky]` 2 0 0 0 0 0 0 0 0 0 0 ``
+19 `<chn_channel_info_036>` 23 `[raid]` 0 0 0 0 0 0 0 0 0 0 0 ``
+20 `<chn_channel_info_037>` 32 `[luke_raid]` 0 0 0 0 0 0 0 0 0 0 0 ``
+21 `<chn_channel_info_024>` 22 `[metro]` 2 0 0 0 0 0 0 0 0 0 0 ``
+22 `<chn_channel_info_034>` 22 `[north_myre]` 2 0 0 0 0 0 0 0 0 0 0 ``
+23 `<chn_channel_info_001>` 11 `[deathtower]` 0 0 0 0 0 0 0 0 0 0 0 ``
+24 `<chn_channel_info_014>` 22 `[ancient]` 0 0 0 0 0 0 0 0 0 0 0 ``
+25 `<chn_channel_info_008>` 22 `[Antwer]` 2 0 0 0 0 0 0 0 0 0 0 ``
+26 `<chn_channel_info_013>` 22 `[impossible]` 0 0 0 0 0 0 0 0 0 0 0 ``
+27 `<chn_channel_info_009>` 22 `[seatrain]` 2 0 0 0 0 0 0 0 0 0 0 ``
+28 `<chn_channel_info_033>` 22 `[stormpass]` 2 0 0 0 0 0 0 0 0 0 0 ``
+29 `<chn_channel_info_011>` 22 `[timedoor]` 2 0 0 0 0 0 0 0 0 0 0 ``
+30 `<chn_channel_info_010>` 22 `[powerstation]` 2 0 0 0 0 0 0 0 0 0 0 ``
+31 `<chn_channel_info_019>` 18 `[attackzone]` 0 0 0 0 0 0 0 0 0 0 0 ``
+32 `<chn_channel_info_002>` 30 `[goldenroad]` 0 0 0 0 0 0 0 0 0 0 0 ``
+33 `<chn_channel_info_015>` 22 `[noblsky]` 2 0 0 0 0 0 0 0 0 0 0 ``
+34 `<chn_channel_info_020>` 22 `[CastleofDead]` 2 0 0 0 0 0 0 0 0 0 0 ``
+35 `<chn_channel_info_046>` 22 `[crack]` 0 0 0 0 0 0 0 0 0 0 0 ``
+36 `<chn_channel_info_017>` 26 `[sainthorn]` 0 0 0 0 0 0 0 0 0 0 0 ``
+37 `<chn_channel_info_050>` 22 `[harlem]` 2 0 0 0 0 0 0 0 0 0 0 ``
+38 `<chn_channel_info_050>` 22 `[east harlem]` 2 0 0 0 0 0 0 0 0 0 0 ``
 [/server]

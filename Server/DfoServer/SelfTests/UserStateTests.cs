@@ -73,7 +73,9 @@ internal static class UserStateTests
             var owners = new AccountOwners();
             using var owner = owners.Acquire("states", () => { });
             repository.Create(owner, new("StateRole", point, point));
-            var session = new GameSession(repository, towns, owner);
+            var session = new GameSession(repository, towns, owner, entry: new(new(2, 19), 23, "[raid]"));
+            That(session.ChannelEntry is { Identity.Number: 19, Type: 23, Group: "[raid]" } && session.GetState() == UserState.CharacterSelect,
+                "分类入口是会话只读上下文，未实现玩法不因入口标签自动改变user状态");
             using var stop = new CancellationTokenSource();
             using var stream = new MemoryStream();
             await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });

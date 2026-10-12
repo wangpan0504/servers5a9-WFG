@@ -49,7 +49,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
                 .PlayerAsync(context,receipt.Character,"quest_ticket_slots",Guard);
         if (receipt.Commit.Plan.ProfessionGrowType is not null)
         {
-            await context.Notify(NotiPacketType.USERINFO,TownPackets.Actor(receipt.Character),"quest_ticket_profession_actor",Guard);
+            await context.Notify(NotiPacketType.USERINFO,TownPackets.Actor(receipt.Character, context.Channel),"quest_ticket_profession_actor",Guard);
             await (levelProjection ?? throw new InvalidOperationException("觉醒券发布缺少角色投影"))
                 .PlayerAsync(context,receipt.Character,"quest_ticket_profession_player",Guard);
         }

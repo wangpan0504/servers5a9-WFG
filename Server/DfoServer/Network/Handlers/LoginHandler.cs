@@ -3,16 +3,18 @@ using DfoServer.Game.Auth;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class LoginHandler(ServerOptions options, AccountOwners owners, ILoginAuthenticator accounts, ServerLog log)
+internal sealed class LoginHandler(ServerOptions options, AccountOwners owners, ILoginAuthenticator accounts, ChannelCatalog channels, ServerLog log)
 {
-    internal sealed class Login(AccountOwners.Lease owner, AuthenticatedIdentity identity, ushort sequence) : IDisposable
+    internal sealed class Login(AccountOwners.Lease owner, AuthenticatedIdentity identity, ushort sequence, ChannelEndpoint channel) : IDisposable
     {
         public AccountOwners.Lease Owner { get; } = owner;
         public AuthenticatedIdentity Identity { get; } = identity;
         public ushort Sequence { get; } = sequence;
+        public ChannelEndpoint Channel { get; } = channel;
         public void Dispose() => Owner.Dispose();
     }
 
@@ -23,7 +25,8 @@ internal sealed class LoginHandler(ServerOptions options, AccountOwners owners, 
         try
         {
             ushort sequence = 0;
-            await connection.WriteAsync(GameFrame.Build(0, (ushort)NotiPacketType.CHANNELINFO, sequence++, LoginPackets.ChannelInfo()));
+            var channel = connection.ChannelEndpoint ?? new(channels.Entry(ChannelCatalog.PrimaryChannelNumber), options.GamePort);
+            await connection.WriteAsync(GameFrame.Build(0, (ushort)NotiPacketType.CHANNELINFO, sequence++, LoginPackets.ChannelInfo(channel.Entry.Identity)));
             var precheck = GameFrame.ParseClient(await connection.ReadAsync());
             if (precheck.Opcode != (ushort)CmdPacketType.LOGIN_PRECHECK)
                 throw new InvalidDataException($"Expected native login precheck; received opcode={precheck.Opcode}, length={precheck.Body.Length}");
@@ -51,9 +54,9 @@ internal sealed class LoginHandler(ServerOptions options, AccountOwners owners, 
             }
             connection.Stop.ThrowIfCancellationRequested();
             owner.Execute(() => true);
-            log.Write("authenticated", new { Connection = connection.Id, Account = identity.AccountId, owner.Generation });
+            log.Write("authenticated", new { Connection = connection.Id, Account = identity.AccountId, owner.Generation, Channel = channel.Entry });
             transferred = true;
-            return new(owner, identity, sequence);
+            return new(owner, identity, sequence, channel);
         }
         finally
         {

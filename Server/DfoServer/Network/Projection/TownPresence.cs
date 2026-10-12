@@ -2,19 +2,21 @@ using DfoServer.Game.Accounts;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
 using DfoServer.Network.Builders;
+using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class TownPresence(TownCatalog towns)
+internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = default)
 {
     sealed record Scene(byte Town, byte Area, string Map, string? RoomAccount);
-    sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial)
+    sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, ChannelIdentity channel)
     {
         public AccountOwners.Lease Owner { get; } = owner;
         public GameConnectionSender Sender { get; } = sender;
         public Scene Scene { get; } = scene;
         public Character Character { get; set; } = character;
         public long Serial { get; } = serial;
+        public ChannelIdentity Channel { get; } = channel;
     }
 
     readonly object gate = new();
@@ -36,10 +38,18 @@ internal sealed class TownPresence(TownCatalog towns)
                 source.Scene == target.Scene && source.Owner.IsCurrent && target.Owner.IsCurrent;
     }
     readonly record struct Bodies(ReadOnlyMemory<byte> Actor, ReadOnlyMemory<byte> State, ReadOnlyMemory<byte> Position);
-    static Bodies Capture(Member source)
+    Bodies Capture(Member source, ChannelIdentity receiver)
     {
         var c = source.Character;
-        return new(TownPackets.Actor(c), TownPackets.ActorState(c.Id), TownPackets.Position(c, false));
+        return new(TownPackets.Actor(c, receiver), TownPackets.ActorState(c.Id), TownPackets.Position(c, false));
+    }
+    Dictionary<ChannelIdentity, Bodies> Capture(Member source, Member[] targets)
+    {
+        var result = new Dictionary<ChannelIdentity, Bodies>();
+        // 不隔离场景；同一角色按接收者身份进入其本地Actor表，包体仅在本次投递内复用。
+        foreach (var target in targets)
+            if (!result.ContainsKey(target.Channel)) result.Add(target.Channel, Capture(source, target.Channel));
+        return result;
     }
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>
         new(source.Character.Id, source.Serial, bodies.Actor, bodies.State, bodies.Position, () => Visible(source, target));
@@ -62,7 +72,7 @@ internal sealed class TownPresence(TownCatalog towns)
             target.Sender.Leave(departed.Character.Id, departed.Serial);
     }
 
-    public void Join(AccountOwners.Lease owner, GameConnectionSender sender, Character character) => owner.Execute(() =>
+    public void Join(AccountOwners.Lease owner, GameConnectionSender sender, Character character, ChannelIdentity? entry = null) => owner.Execute(() =>
     {
         lock (gate)
         {
@@ -70,7 +80,7 @@ internal sealed class TownPresence(TownCatalog towns)
             // 同一角色被新generation选中时，只清理旧连接成员，不允许其稍后删掉新成员。
             if (characters.TryGetValue(character.Id, out var old))
                 RemoveCore(old.Sender);
-            var joined = new Member(owner, sender, SceneOf(owner, character), character, ++serial);
+            var joined = new Member(owner, sender, SceneOf(owner, character), character, ++serial, entry ?? channel);
             members.Add(sender, joined);
             characters.Add(character.Id, joined);
             if (!scenes.TryGetValue(joined.Scene, out var scene))
@@ -79,11 +89,11 @@ internal sealed class TownPresence(TownCatalog towns)
             var peers = Peers(joined);
             if (peers.Length == 0)
                 return true;
-            var bodies = Capture(joined);
+            var bodies = Capture(joined, peers);
             foreach (var peer in peers)
             {
-                sender.Enter(Projection(peer, joined, Capture(peer)));
-                peer.Sender.Enter(Projection(joined, peer, bodies));
+                sender.Enter(Projection(peer, joined, Capture(peer, joined.Channel)));
+                peer.Sender.Enter(Projection(joined, peer, bodies[peer.Channel]));
             }
 
             return true;
@@ -99,9 +109,9 @@ internal sealed class TownPresence(TownCatalog towns)
             var peers = Peers(source);
             if (peers.Length == 0)
                 return true;
-            var bodies = Capture(source);
+            var bodies = Capture(source, peers);
             foreach (var target in peers)
-                target.Sender.Move(Projection(source, target, bodies));
+                target.Sender.Move(Projection(source, target, bodies[target.Channel]));
             return true;
         }
     });
@@ -116,9 +126,9 @@ internal sealed class TownPresence(TownCatalog towns)
             var peers = Peers(source);
             if (peers.Length == 0)
                 return true;
-            var bodies = Capture(source);
+            var bodies = Capture(source, peers);
             foreach (var target in peers)
-                target.Sender.Refresh(Projection(source, target, bodies));
+                target.Sender.Refresh(Projection(source, target, bodies[target.Channel]));
             return true;
         }
     });
