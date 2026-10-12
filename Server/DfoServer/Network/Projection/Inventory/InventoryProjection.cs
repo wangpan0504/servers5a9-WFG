@@ -12,7 +12,7 @@ namespace DfoServer.Network.Projection.Inventory;
 internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces)
 {
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
-        IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true)
+        IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true, bool silentMainMove = false)
     {
         if (!result.Accepted || result.Plan is not { Changed: true } plan)
             return;
@@ -24,10 +24,26 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         var changedSlots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
             .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct().ToArray();
         var slots = changedSlots.Where(slot => acknowledgedSlots?.Contains(slot) != true).ToArray();
+        bool rebuildMain = silentMainMove && changedSlots.Where(slot => slot.List == InventoryListType.Main)
+            .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
+                receipt.Index.FindUid(item.Uid)?.Core.Count != item.Core.Count);
         if (changedSlots.Any(slot => receipt.Index.Find(slot)?.Creature is not null))
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
         foreach (var list in slots.Select(slot => slot.List).Distinct().Order())
         {
+            if (silentMainMove && list == InventoryListType.Main)
+            {
+                // ACK19已移动整件；数量变化才用13载入。1681仍会执行STK的新物品图标标记，不能代替无动画同步。
+                if (rebuildMain)
+                {
+                    var emptySlots = slots.Where(slot => slot.List == InventoryListType.Main && receipt.Index.Find(slot) is null).ToArray();
+                    if (emptySlots.Length != 0)
+                        await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, emptySlots, index: receipt.Index),
+                            "inventory_main_move_empty", CanSend);
+                    await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_main_move_counts", CanSend);
+                }
+                continue;
+            }
             if (DfoServer.Game.Titles.TitleBookService.IsBook(list))
             {
                 await context.Notify(NotiPacketType.TITLE_BOOK_LIST, TitlePackets.Book(current.Inventory, (byte)list - 18), "title_book_committed", CanSend);
@@ -52,7 +68,9 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 return true;
             });
         }
-        await RestoreLocksAsync(context, current.Inventory, changedSlots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
+        var lockSlots = rebuildMain ? changedSlots.Concat(current.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main)
+            .Select(item => item.Position)) : changedSlots;
+        await RestoreLocksAsync(context, current.Inventory, lockSlots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
         if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera and <= DfoServer.Game.Currency.CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
         if (plan.ChangedEpicPieces.Length != 0)

@@ -613,7 +613,6 @@ internal static partial class FormalDungeonTcpTests
             writer.Write((byte)0); writer.Write(to); writer.Write(0); writer.Write(0); writer.Write(-1); writer.Write((ushort)0);
         }));
         peer.Expect(1, 19, Build(writer => { writer.Write((byte)1); writer.Write((byte)0); writer.Write(from); writer.Write(5); writer.Write((byte)0); writer.Write(to); }));
-        peer.Expect(0, 14);
         peer.Send(713, [0, 3, 0]); peer.Expect(1, 713, [1, 0, 3, 0]);
         peer.Send(714, [0, 3, 0]); peer.Expect(1, 714, [1, 0, 3, 0]);
         peer.Barrier();

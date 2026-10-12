@@ -54,7 +54,6 @@ internal static partial class InventoryTcpTests
             That(Snapshot(fixture) == before, "locked final page slot stays fixed and repeated sorting lock is idempotent");
             peer.Send(19, MoveItem(0, 64, weaponId, 1, 0, 8, 0));
             peer.Expect(1, 19, MoveAck(0, 64, 1, 0, 8));
-            peer.Expect(0, 14);
             peer.Expect(1, 714, [1, 0, 8, 0]);
             peer.Expect(0, 251, [1, 0, 0, 8, 0, 1]);
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=0 AND slot_index=8")[0][0], uid),

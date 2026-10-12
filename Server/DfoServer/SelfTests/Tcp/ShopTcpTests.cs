@@ -86,9 +86,7 @@ internal static class ShopTcpTests
                 w.Write((byte)0); w.Write((short)3); w.Write(0); w.Write(0); w.Write(-1); w.Write((ushort)0);
             }));
             peer.Expect(1, 19, [1, 0, 121, 0, 10, 0, 0, 0, 0, 3, 0]);
-            delta = peer.Expect(0, 14).Body;
-            Entry(delta, 3, 3175, 10);
-            Entry(delta, 121, -1, 0);
+            peer.Barrier();
             Sell(peer, 0, 3, 3);
             gold += 3;
             peer.Expect(1, 22, Build(w => { w.Write((byte)1); w.Write(gold); w.Write((byte)0); w.Write((short)3); w.Write(3); }));

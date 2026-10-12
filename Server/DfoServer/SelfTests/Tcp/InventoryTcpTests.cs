@@ -25,14 +25,19 @@ internal static partial class InventoryTcpTests
         var towns = resources.Towns;
         var owners = new AccountOwners();
         var repository = new CharacterRepository(fixture.Database);
-        ItemTemplate stack;
+        ItemTemplate stack, otherStack;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
-            stack = PvfScript.List(resources.Archive.ReadText("stackable/stackable.lst")).Keys.Where(id => id > 2)
-                .Select(id => TryGet(id)).First(item => item is { Kind: ItemKind.Consumable, StackLimit: >= 30, Expiration: { AbsoluteTime: 0, Days: 0 } })!;
+            var stacks = PvfScript.List(resources.Archive.ReadText("stackable/stackable.lst")).Keys.Where(id => id > 2)
+                .Select(id => TryGet(id)).Where(item => item is { Kind: ItemKind.Consumable, StackLimit: >= 30, Expiration: { AbsoluteTime: 0, Days: 0 } })
+                .Take(2).ToArray();
+            stack = stacks[0]!;
+            otherStack = stacks[1]!;
             var character = new GameSession(repository, towns, owner).CreateCharacter("BagStackTest", characters.Get(0));
             var inventory = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            InventoryService.Commit(repository, owner, character, inventory.Grant(character, [new(stack.Id, 20)]));
+            character = InventoryService.Commit(repository, owner, character, inventory.Grant(character, [new(stack.Id, 20), new(otherStack.Id, 3), new(0, 1234)]));
+            InventoryService.Commit(repository, owner, character, inventory.Move(character,
+                new(new(InventoryListType.Main, 66), otherStack.Id, 0, new(InventoryListType.Main, 67), 0, 0, -1, 0, 0)));
         }
         ItemTemplate? TryGet(int id)
         {
@@ -44,12 +49,15 @@ internal static partial class InventoryTcpTests
         using (var peer = Open(fixture))
         {
             var entry = peer.Select();
-            That(entry[4].Body.Length == 1973 && U16(entry[4].Body, 3) == 16 && U16(entry[4].Body, 374) == 65 && U32(entry[4].Body, 380) == 20, "full inventory contains virtual balances and preseeded stack");
+            That(entry[4].Body.Length == 2096 && U16(entry[4].Body, 3) == 17 && U16(entry[4].Body, 374) == 65 && U32(entry[4].Body, 380) == 20,
+                "full inventory contains virtual balances and preseeded stacks");
+            var stackUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=65", peer.Id)[0][0];
             var split = MoveItem(0, 65, stack.Id, 7, 0, 66, 0);
             peer.Send(19, split);
             peer.Expect(1, 19, MoveAck(0, 65, 7, 0, 66));
-            var delta = peer.Expect(0, 14).Body;
-            That(delta.Length == 249 && U32(delta, 9) == 13 && U32(delta, 132) == 7, "split delta reports exact two counts");
+            var full = peer.Expect(0, 13).Body;
+            FullStack(full, 65, stack.Id, 13, 1234);
+            FullStack(full, 66, stack.Id, 7, 1234);
             string before = Snapshot(fixture);
             peer.Send(19, split);
             peer.Expect(1, 19, [0, 23, 0, 0, 0]);
@@ -57,13 +65,90 @@ internal static partial class InventoryTcpTests
             That(Snapshot(fixture) == before, "replayed TCP split causes no duplicate core, audit or revision");
             peer.Send(19, MoveItem(0, 66, stack.Id, 0, 0, 65, stack.Id));
             peer.Expect(1, 19, MoveAck(0, 66, 7, 0, 65));
-            delta = peer.Expect(0, 14).Body;
-            That(U32(delta, 9) == 20 && U32(delta, 128) == uint.MaxValue, "merge clears consumed slot and retains sum");
+            Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 66, 0, 255, 255, 255, 255], "页内整堆合并只清空耗尽的源格，不重新标记目标物品");
+            FullStack(peer.Expect(0, 13).Body, 65, stack.Id, 20, 1234);
+            peer.Send(19, MoveItem(0, 65, stack.Id, 0, 0, 66, 0));
+            peer.Expect(1, 19, MoveAck(0, 65, 20, 0, 66));
+            peer.Barrier();
+            peer.Send(19, MoveItem(0, 66, stack.Id, 0, 0, 67, otherStack.Id));
+            peer.Expect(1, 19, MoveAck(0, 66, 1, 0, 67));
+            peer.Barrier();
+            That(fixture.Query("SELECT s.slot_index,json_extract(i.item_core,'$.ItemId'),json_extract(i.item_core,'$.Value') FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE s.list_type=0 ORDER BY s.slot_index")
+                is [[66L, long firstId, 3L], [67L, long secondId, 20L]] && firstId == otherStack.Id && secondId == stack.Id,
+                "页内整堆移动及不同模板交换只有ACK，保留完整物品数量");
+            peer.Send(19, MoveItem(0, 67, stack.Id, 0, 0, 66, otherStack.Id));
+            peer.Expect(1, 19, MoveAck(0, 67, 1, 0, 66));
+            peer.Barrier();
+            peer.Send(19, MoveItem(0, 66, stack.Id, 0, 0, 65, 0));
+            peer.Expect(1, 19, MoveAck(0, 66, 20, 0, 65));
+            peer.Barrier();
             peer.Send(19, MoveItem(0, 65, stack.Id, 0, 0, 3, 0));
             peer.Expect(1, 19, MoveAck(0, 65, 20, 0, 3));
-            peer.Expect(0, 14);
             peer.Barrier();
-            That(fixture.Query("SELECT slot_index FROM character_inventory_slots WHERE list_type=0") is [[3L]], "consumable moves into quick slot");
+            That(fixture.Query("SELECT slot_index FROM character_inventory_slots WHERE list_type=0 ORDER BY slot_index") is [[3L], [67L]],
+                "consumable moves into quick slot without moving the other stack");
+            peer.Send(19, MoveItem(0, 3, stack.Id, 0, 0, 67, otherStack.Id));
+            peer.Expect(1, 19, MoveAck(0, 3, 1, 0, 67));
+            peer.Barrier();
+            That(fixture.Query("SELECT s.slot_index,json_extract(i.item_core,'$.ItemId'),json_extract(i.item_core,'$.Value') FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE s.list_type=0 ORDER BY s.slot_index")
+                is [[3L, long quickId, 3L], [67L, long pageId, 20L]] && quickId == otherStack.Id && pageId == stack.Id,
+                "背包与快捷栏交换只有ACK，不清槽补回物品，并保持各自数量");
+            That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=0 AND slot_index=67")[0][0], stackUid),
+                "整堆移动和交换不重建实例UID");
+            before = Snapshot(fixture);
+            peer.Send(19, MoveItem(0, 67, stack.Id, 0, 0, 67, stack.Id));
+            peer.Expect(1, 19, MoveAck(0, 67, 0, 0, 67));
+            peer.Barrier();
+            That(Snapshot(fixture) == before, "同格零变化只有ACK，不发送物品差量或写库");
+            peer.Send(19, MoveItem(0, 65, 0, 5, 0, 67, stack.Id));
+            peer.Expect(1, 19, MoveAck(0, 65, 5, 0, 67));
+            full = peer.Expect(0, 13).Body;
+            FullStack(full, 65, stack.Id, 5, 1234);
+            FullStack(full, 67, stack.Id, 15, 1234);
+            peer.Send(19, MoveItem(0, 65, stack.Id, 2, 0, 67, stack.Id));
+            peer.Expect(1, 19, MoveAck(0, 65, 2, 0, 67));
+            full = peer.Expect(0, 13).Body;
+            FullStack(full, 65, stack.Id, 3, 1234);
+            FullStack(full, 67, stack.Id, 17, 1234);
+            peer.Send(19, MoveItem(0, 65, stack.Id, 0, 0, 67, stack.Id));
+            peer.Expect(1, 19, MoveAck(0, 65, 3, 0, 67));
+            Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 65, 0, 255, 255, 255, 255], "页内部分合并后耗尽源堆时只清源格");
+            FullStack(peer.Expect(0, 13).Body, 67, stack.Id, 20, 1234);
+            peer.Barrier();
+            That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=0 AND slot_index=67")[0][0], stackUid) &&
+                fixture.Query("SELECT SUM(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1", peer.Id, stack.Id) is [[20L]],
+                "拆分合并保留目标UID及物品总量");
+            peer.Send(19, MoveItem(0, 67, stack.Id, 7, 0, 4, 0));
+            peer.Expect(1, 19, MoveAck(0, 67, 7, 0, 4));
+            full = peer.Expect(0, 13).Body;
+            FullStack(full, 4, stack.Id, 7, 1234);
+            FullStack(full, 67, stack.Id, 13, 1234);
+            peer.Send(19, MoveItem(0, 4, stack.Id, 2, 0, 67, stack.Id));
+            peer.Expect(1, 19, MoveAck(0, 4, 2, 0, 67));
+            full = peer.Expect(0, 13).Body;
+            FullStack(full, 4, stack.Id, 5, 1234);
+            FullStack(full, 67, stack.Id, 15, 1234);
+            peer.Send(19, MoveItem(0, 4, stack.Id, 0, 0, 67, stack.Id));
+            peer.Expect(1, 19, MoveAck(0, 4, 5, 0, 67));
+            Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 4, 0, 255, 255, 255, 255], "快捷栏合并耗尽只发送无获得效果的清槽条目");
+            full = peer.Expect(0, 13).Body;
+            FullStack(full, 67, stack.Id, 20, 1234);
+            That(!Enumerable.Range(0, U16(full, 3)).Any(index => U16(full, 5 + 123 * index) == 4), "完整载入不保留合并耗尽的快捷栏源堆");
+            peer.Barrier();
+            peer.Send(19, MoveItem(0, 3, otherStack.Id, 0, 0, 8, 0));
+            peer.Expect(1, 19, MoveAck(0, 3, 3, 0, 8));
+            peer.Barrier();
+            That(fixture.Query("SELECT s.slot_index,json_extract(i.item_core,'$.Value') FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=$p0", otherStack.Id) is [[8L, 3L]],
+                "快捷栏格间整堆移动同样只有ACK，保持实际槽位和数量");
+            peer.Send(19, MoveItem(0, 8, otherStack.Id, 1, 0, 7, 0));
+            peer.Expect(1, 19, MoveAck(0, 8, 1, 0, 7));
+            full = peer.Expect(0, 13).Body;
+            FullStack(full, 8, otherStack.Id, 2, 1234);
+            FullStack(full, 7, otherStack.Id, 1, 1234);
+            peer.Send(19, MoveItem(0, 7, otherStack.Id, 0, 0, 8, otherStack.Id));
+            peer.Expect(1, 19, MoveAck(0, 7, 1, 0, 8));
+            Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 7, 0, 255, 255, 255, 255], "快捷栏格间合并只清除耗尽源格");
+            FullStack(peer.Expect(0, 13).Body, 8, otherStack.Id, 3, 1234);
             peer.Send(7);
             peer.Expect(1, 7, [1]);
             peer.Expect(0, 2);
@@ -81,9 +166,7 @@ internal static partial class InventoryTcpTests
             var quickRequest = Convert.FromHexString("0003000000000000000000001500E047000000000000FFFFFFFF0000");
             peer.Send(19, quickRequest);
             peer.Expect(1, 19, Convert.FromHexString("0100030001000000001500"));
-            var quickDelta = peer.Expect(0, 14).Body;
-            That(quickDelta.Length == 249 && U16(quickDelta, 3) == 3 && U32(quickDelta, 5) == 18400 &&
-                U16(quickDelta, 126) == 21 && U32(quickDelta, 128) == uint.MaxValue, "captured empty-first request places equipment into quick slot and clears page slot");
+            peer.Barrier();
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=3", characterId)[0][0], quickUid), "equipment quick slot retains persisted UID");
             string quickSnapshot = Snapshot(fixture);
             peer.Send(19, quickRequest);
@@ -108,9 +191,9 @@ internal static partial class InventoryTcpTests
             DeltaAndAppearance(peer, 4);
             peer.Send(19, MoveItem(0, 8, pantsId, 0, 0, 3, 0));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 0, 3));
-            quickDelta = peer.Expect(0, 14).Body;
-            That(U16(quickDelta, 3) == 3 && U32(quickDelta, 5) == 18400 && U16(quickDelta, 126) == 8 &&
-                U32(quickDelta, 128) == uint.MaxValue, "equipment moves between first and last quick slot");
+            peer.Barrier();
+            That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=3", characterId)[0][0], quickUid),
+                "装备快捷栏首尾换格只有ACK，并保留原实例UID");
             peer.Send(19, MoveItem(0, 3, pantsId, 1, 3, 17, 0));
             peer.Expect(1, 19, MoveAck(0, 3, 1, 3, 17));
             DeltaAndAppearance(peer, 5);
@@ -173,7 +256,7 @@ internal static partial class InventoryTcpTests
             That(Snapshot(fixture) == beforeReplay, "replayed discard does not mutate storage");
             peer.Send(19, MoveItem(0, 8, 0, 0, 0, 10, weaponId));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 0, 10));
-            peer.Expect(0, 14);
+            peer.Barrier();
         }
         await fixture.StopAsync();
         await fixture.StartAsync("reopened", isolatedProcess: true);
@@ -224,15 +307,29 @@ internal static partial class InventoryTcpTests
             That(Snapshot(fixture) == before, "insufficient merge space preserves all database rows and revision");
             peer.Send(19, MoveItem(0, 65, stack.Id, 2, 0, 66, stack.Id));
             peer.Expect(1, 19, MoveAck(0, 65, 2, 0, 66));
-            var merged = peer.Expect(0, 14).Body;
-            That(U32(merged, 9) == 18 && U32(merged, 132) == stack.StackLimit && merged[98] == 1,
-                "merge uses exact count despite differing sort locks");
+            var merged = peer.Expect(0, 13).Body;
+            FullStack(merged, 65, stack.Id, 18);
+            FullStack(merged, 66, stack.Id, stack.StackLimit);
+            int lockedOffset = Enumerable.Range(0, U16(merged, 3)).Select(index => 5 + 123 * index).Single(index => U16(merged, index) == 65);
+            That(merged[lockedOffset + 95] == 1, "页内合并完整载入保留源堆排序锁字段");
             peer.Expect(1, 713, [1, 0, 65, 0]);
+            peer.Expect(0, 251, [1, 0, 0, 20, 0, 1]);
             peer.Send(19, MoveItem(0, 65, stack.Id, 0, 0, 4, 0));
             peer.Expect(1, 19, MoveAck(0, 65, 18, 0, 4));
-            var moved = peer.Expect(0, 14).Body;
-            That(U16(moved, 3) == 4 && moved[98] == 0, "quick slot delta clears only sorting lock");
             peer.Expect(1, 714, [1, 0, 4, 0]);
+            That(fixture.Query("SELECT json_extract(i.item_core,'$.SortLockFlag') FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.list_type=0 AND s.slot_index=4") is [[0L]],
+                "无动画整堆移动仍清除排序锁并同步专属锁通知");
+            peer.Send(19, MoveItem(0, 4, stack.Id, 3, 0, 65, 0));
+            peer.Expect(1, 19, MoveAck(0, 4, 3, 0, 65));
+            var full = peer.Expect(0, 13).Body;
+            FullStack(full, 4, stack.Id, 15);
+            FullStack(full, 65, stack.Id, 3);
+            peer.Expect(0, 251, [1, 0, 0, 20, 0, 1]);
+            peer.Send(19, MoveItem(0, 65, stack.Id, 0, 0, 4, stack.Id));
+            peer.Expect(1, 19, MoveAck(0, 65, 3, 0, 4));
+            Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [0, 1, 0, 65, 0, 255, 255, 255, 255], "快捷栏合并只清除真正耗尽的源格");
+            FullStack(peer.Expect(0, 13).Body, 4, stack.Id, 18);
+            peer.Expect(0, 251, [1, 0, 0, 20, 0, 1]);
             peer.Send(20, Convert.FromHexString("0900000008141000180120FF01"));
             peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
             var sorted = peer.Expect(0, 14).Body;
@@ -346,6 +443,13 @@ internal static partial class InventoryTcpTests
         var player = peer.Expect(0, 2).Body;
         That(actor[133 + NameWidth(name)] == count && player[126] == count && player.Length == 167 + count * 91 + totalSkills * 3,
             "appearance and complete player skill tail agree after wear change");
+    }
+    static void FullStack(byte[] body, short slot, int itemId, int count, uint gold = 0)
+    {
+        That(body[0] == 0 && U16(body, 1) == 24 && body.Length == 5 + 123 * U16(body, 3), "Main内数量变动使用完整载入头和条目");
+        int offset = Enumerable.Range(0, U16(body, 3)).Select(index => 5 + 123 * index).Single(index => U16(body, index) == slot);
+        That(U32(body, offset + 2) == itemId && U32(body, offset + 6) == count, "无图标获得动画载入保留实际模板与绝对数量");
+        That(U16(body, 5) == 0 && U32(body, 11) == gold, "数量同步不改金币钱包或伪造金币获得");
     }
     static byte[] MoveItem(byte sourceList, short sourceSlot, int sourceItemId, int count, byte targetList, short targetSlot, int targetItemId) => Build(writer =>
     {
