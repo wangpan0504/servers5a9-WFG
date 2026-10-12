@@ -6,6 +6,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Quests;
 
@@ -25,7 +26,7 @@ internal sealed record QuestTicketSource(InventoryItem Item,QuestTicketDefinitio
     }
 }
 
-// 无普通奖励的跳过规划；任务券附带实际消费及资源授权的槽位/逐级觉醒状态，不拥有在线角色状态。
+// 主线跳过只核算特殊任务物品；槽位/觉醒由专用券授权，不拥有在线角色状态。
 internal sealed class QuestQuickClearPlan
 {
     readonly QuestConnectionUnit? unit;
@@ -34,27 +35,32 @@ internal sealed class QuestQuickClearPlan
     readonly StoryQuest? marker;
 
     QuestQuickClearPlan(Character expected, QuestConnectionUnit unit, ActiveMainQuest active,
-        StoryQuest question, StoryQuest marker, ImmutableArray<StoryQuest> interval, byte answer, QuestCatalog quests)
+        StoryQuest question, StoryQuest marker, ImmutableArray<StoryQuest> interval, byte answer, QuestCatalog quests,
+        ImmutableArray<StoryQuest> areaQuests)
     {
         Expected = expected; EquipmentSlotFlagsAfter = expected.EquipmentSlotFlags; TargetLearning=expected.Learning;
+        Inventory=new(expected.Inventory,expected.Inventory,"quest_skip");
         this.unit = unit; activeQuestion = active; this.question = question; this.marker = marker;
         OperationId = active.AcceptanceId;
         Interval = interval; Answer = answer;
-        // 匹配客户端完成消费者会把终点casecade关联marker加入当前角色完成集；与普通账号任务分开保存。
-        var scope = interval.Select(quest => quest.Id).Prepend(question.Id).Append(marker.Id).ToHashSet();
+        AreaQuests = areaQuests;
+        // 终点marker归当前角色；显式账号同步位同时加入账号完成集，不共享分支回答。
+        var scope = interval.Concat(areaQuests).Select(quest => quest.Id).Prepend(question.Id).Append(marker.Id).ToHashSet();
         ScopeQuestIds = scope.Order().ToImmutableArray();
         var completed = QuestEligibility.Completed(expected);
         NewCompletedQuestIds = scope.Where(id => !completed.Contains(id)).Order().ToImmutableArray();
         CompletedAfter = expected.CompletedQuests.Concat(NewCompletedQuestIds).Distinct().Order().ToImmutableArray();
         AnswersAfter = expected.QuestAnswers.SetItem(question.Id,answer);
-        AccountCompletedAfter = expected.AccountCompletedQuests.ToImmutableArray();
+        SyncedQuestIds = ScopeQuestIds.Where(id => QuestRelationProgress.IsAccountSyncMarker(quests.Get(id)))
+            .Except(expected.AccountCompletedQuests).ToImmutableArray();
+        AccountCompletedAfter = expected.AccountCompletedQuests.Concat(SyncedQuestIds).Distinct().Order().ToImmutableArray();
         AccountAnswersAfter = expected.AccountQuestAnswers;
         RemovedActive = expected.ActiveMainQuests.Where(row => scope.Contains(row.QuestId)).ToImmutableArray();
         var remaining = QuestRelationProgress.Refresh(expected.ActiveMainQuests.Where(row => !scope.Contains(row.QuestId)).ToArray(),
             CompletedAfter.Concat(AccountCompletedAfter).ToArray(),quests);
         ActiveAfter = QuestStateProgress.Refresh(remaining,expected with
         {
-            CompletedQuests = CompletedAfter.ToArray(), QuestAnswers = AnswersAfter
+            CompletedQuests = CompletedAfter.ToArray(), AccountCompletedQuests = AccountCompletedAfter.ToArray(), QuestAnswers = AnswersAfter
         },quests);
         Snapshot = JsonSerializer.Serialize(new
         {
@@ -72,6 +78,12 @@ internal sealed class QuestQuickClearPlan
             BeforeAnswers = expected.QuestAnswers.OrderBy(row => row.Key).ToArray(), AnswersAfter = AnswersAfter.OrderBy(row => row.Key).ToArray(),
             AccountCompletedAfter, AccountAnswersAfter = AccountAnswersAfter.OrderBy(row => row.Key).ToArray()
         });
+        if (!areaQuests.IsEmpty)
+        {
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot[nameof(AreaQuests)] = JsonSerializer.SerializeToNode(areaQuests.Select(quest => quest.Id));
+            Snapshot = snapshot.ToJsonString();
+        }
     }
 
     QuestQuickClearPlan(Character expected, Guid operationId, int cutoff, ImmutableArray<StoryQuest> scope,
@@ -79,6 +91,7 @@ internal sealed class QuestQuickClearPlan
         byte? equipmentSlots = null,byte? profession = null,CharacterLearningState? learning = null)
     {
         Expected = expected; OperationId = operationId; IsManual = ticket is null; Ticket = ticket; CutoffLevel = cutoff;
+        Inventory=ticket?.Inventory ?? new(expected.Inventory,expected.Inventory,"quest_skip");
         EquipmentSlotFlagsAfter = equipmentSlots ?? expected.EquipmentSlotFlags;
         ProfessionGrowType=profession; TargetLearning=learning ?? expected.Learning;
         Interval = scope; ManualAnswers = answers; PendingQuestions = questions;
@@ -87,7 +100,9 @@ internal sealed class QuestQuickClearPlan
         NewCompletedQuestIds = ScopeQuestIds.Where(id => !completed.Contains(id)).ToImmutableArray();
         CompletedAfter = expected.CompletedQuests.Concat(NewCompletedQuestIds).Distinct().Order().ToImmutableArray();
         AnswersAfter = expected.QuestAnswers.SetItems(answers);
-        AccountCompletedAfter = expected.AccountCompletedQuests.ToImmutableArray();
+        SyncedQuestIds = ScopeQuestIds.Where(id => QuestRelationProgress.IsAccountSyncMarker(quests.Get(id)))
+            .Except(expected.AccountCompletedQuests).ToImmutableArray();
+        AccountCompletedAfter = expected.AccountCompletedQuests.Concat(SyncedQuestIds).Distinct().Order().ToImmutableArray();
         AccountAnswersAfter = expected.AccountQuestAnswers;
         RemovedActive = expected.ActiveMainQuests.Where(row => ScopeQuestIds.Contains(row.QuestId)).ToImmutableArray();
         var retained = expected.ActiveMainQuests.Where(row => !ScopeQuestIds.Contains(row.QuestId)).ToArray();
@@ -96,7 +111,7 @@ internal sealed class QuestQuickClearPlan
             CompletedAfter.Concat(AccountCompletedAfter).ToArray(),quests);
         ActiveAfter = QuestStateProgress.Refresh(remaining,expected with
         {
-            CompletedQuests = CompletedAfter.ToArray(), QuestAnswers = AnswersAfter,EquipmentSlotFlags=EquipmentSlotFlagsAfter,
+            CompletedQuests = CompletedAfter.ToArray(), AccountCompletedQuests = AccountCompletedAfter.ToArray(), QuestAnswers = AnswersAfter,EquipmentSlotFlags=EquipmentSlotFlagsAfter,
             GrowType=profession ?? expected.GrowType,Learning=TargetLearning
         },quests);
         Snapshot = JsonSerializer.Serialize(new
@@ -127,9 +142,11 @@ internal sealed class QuestQuickClearPlan
     }
 
     public Character Expected { get; }
-    public byte EquipmentSlotFlagsAfter { get; }
-    public byte? ProfessionGrowType { get; }
-    public CharacterLearningState TargetLearning { get; }
+    public byte EquipmentSlotFlagsAfter { get; private set; }
+    public byte? ProfessionGrowType { get; private set; }
+    public CharacterLearningState TargetLearning { get; private set; }
+    public InventoryPlan Inventory { get; private set; } = null!;
+    public QuestEffectPlan? Effects { get; private set; }
     // 1714保留真实question合同；手册与任务券不制造question或普通接取身份。
     public QuestConnectionUnit Unit => unit ?? throw new InvalidOperationException("手册或任务券没有旅程单元");
     public ActiveMainQuest ActiveQuestion => activeQuestion ?? throw new InvalidOperationException("手册或任务券没有普通问题接取槽");
@@ -151,31 +168,54 @@ internal sealed class QuestQuickClearPlan
     public ImmutableArray<int> PendingQuestions { get; } = [];
     public ImmutableArray<int> ScopeQuestIds { get; }
     public ImmutableArray<StoryQuest> Interval { get; }
+    public ImmutableArray<StoryQuest> AreaQuests { get; } = [];
     public ImmutableArray<int> NewCompletedQuestIds { get; }
     public ImmutableArray<int> CompletedAfter { get; }
     public ImmutableDictionary<int,byte> AnswersAfter { get; }
     public ImmutableArray<int> AccountCompletedAfter { get; }
+    public ImmutableArray<int> SyncedQuestIds { get; }
     public ImmutableDictionary<int,byte> AccountAnswersAfter { get; }
     public ImmutableArray<ActiveMainQuest> RemovedActive { get; }
-    public ImmutableArray<ActiveMainQuest> ActiveAfter { get; }
-    public string Snapshot { get; }
+    public ImmutableArray<ActiveMainQuest> ActiveAfter { get; private set; }
+    public string Snapshot { get; private set; }
+
+    // 仅在锁外构建阶段附加效果；pending保存后始终复用这份冻结计划。
+    public void PrepareEffects(QuestSkipEffects? effects,QuestCatalog quests)
+    {
+        Inventory = Ticket?.Inventory ?? new(Expected.Inventory,Expected.Inventory,"quest_skip");
+        if (effects is null) return;
+        var ordered=IsPreparedSkip ? Interval : Interval.Prepend(Question).Concat(AreaQuests).Append(quests.Get(MarkerQuestId)).ToImmutableArray();
+        Effects = effects.Prepare(Expected,ordered.Where(quest=>NewCompletedQuestIds.Contains(quest.Id)),Inventory,EquipmentSlotFlagsAfter,
+            ProfessionGrowType ?? Expected.GrowType,TargetLearning,
+            characterState:Ticket?.Definition.ActionIndex is QuestTicketDefinition.SpecifiedAction or QuestTicketDefinition.FirstAwakeningAction or QuestTicketDefinition.SecondAwakeningAction);
+        Inventory=Effects.Inventory; EquipmentSlotFlagsAfter=Effects.EquipmentSlots;
+        ProfessionGrowType=Effects.GrowType==Expected.GrowType ? ProfessionGrowType : Effects.GrowType;
+        TargetLearning=Effects.Learning;
+        var current = Expected with { Inventory=Inventory.After,GrowType=Effects.GrowType,EquipmentSlotFlags=EquipmentSlotFlagsAfter,
+            Learning=TargetLearning,CompletedQuests=CompletedAfter.ToArray(),AccountCompletedQuests=AccountCompletedAfter.ToArray(),QuestAnswers=AnswersAfter };
+        ActiveAfter=QuestStateProgress.Refresh(QuestInventoryProgress.Refresh(ActiveAfter.ToArray(),Inventory.After,quests,
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds()),current,quests);
+        if (Effects.Changed)
+            Snapshot=JsonSerializer.Serialize(new { State=JsonSerializer.Deserialize<JsonElement>(Snapshot),
+                Effects=new { InventoryAfter=Inventory.After,EquipmentSlotFlagsAfter,ProfessionGrowType,TargetLearning } });
+    }
 
     // Full03手册确认窗：Lv90..94截止89，Lv95截止94，其余截止实际等级减一。
     public static int ManualCutoff(byte level) => level < 95 && level - 1 >= 90 ? 89 : level - 1;
 
     public static bool TryCreateManual(Character expected, Guid operationId, QuestCatalog quests,
-        ImmutableDictionary<int,byte> answers, out QuestQuickClearPlan? plan, out string reason)
-        => TryCreateRange(expected,operationId,quests,answers,null,out plan,out reason);
+        ImmutableDictionary<int,byte> answers, out QuestQuickClearPlan? plan, out string reason, TownCatalog? towns = null)
+        => TryCreateRange(expected,operationId,quests,answers,null,out plan,out reason,towns);
 
     public static bool TryCreateTicket(Character expected,Guid operationId,QuestCatalog quests,QuestTicketSource ticket,
-        ImmutableDictionary<int,byte> answers,out QuestQuickClearPlan? plan,out string reason,SkillLearningCatalog? skills=null)
+        ImmutableDictionary<int,byte> answers,out QuestQuickClearPlan? plan,out string reason,SkillLearningCatalog? skills=null,TownCatalog? towns=null)
     {
         if (ticket.Definition.AwakeningStage!=0)
             return TryCreateAwakeningTicket(expected,operationId,quests,ticket,answers,skills,out plan,out reason);
         if (ticket.Definition.ActionIndex==QuestTicketDefinition.SpecifiedAction)
             return TryCreateSpecifiedTicket(expected,operationId,quests,ticket,answers,out plan,out reason);
         if (ticket.Definition.ActionIndex==QuestTicketDefinition.Action)
-            return TryCreateRange(expected,operationId,quests,answers,ticket,out plan,out reason);
+            return TryCreateRange(expected,operationId,quests,answers,ticket,out plan,out reason,towns);
         plan=null; reason="任务券动作尚未接入"; return false;
     }
 
@@ -320,7 +360,7 @@ internal sealed class QuestQuickClearPlan
     }
 
     static bool TryCreateRange(Character expected, Guid operationId, QuestCatalog quests,
-        ImmutableDictionary<int,byte> answers,QuestTicketSource? ticket,out QuestQuickClearPlan? plan,out string reason)
+        ImmutableDictionary<int,byte> answers,QuestTicketSource? ticket,out QuestQuickClearPlan? plan,out string reason,TownCatalog? towns)
     {
         plan = null;
         try
@@ -332,6 +372,7 @@ internal sealed class QuestQuickClearPlan
                 (!ReferenceEquals(ticket.Inventory.Before,expected.Inventory) || expected.Inventory.Find(ticket.Item.Position) != ticket.Item))
                 throw new InvalidDataException("手册需要实际角色、操作身份及有效截止等级");
             var ordered = quests.All.ToArray();
+            var access = AreaQuestScope(quests,towns);
             var scope = new List<StoryQuest>(); var scoped = new HashSet<int>();
             var completed = QuestEligibility.Completed(expected);
             var remainingAnswers = answers.Keys.ToHashSet();
@@ -343,14 +384,17 @@ internal sealed class QuestQuickClearPlan
                 progressed = false; questions.Clear();
                 foreach (var quest in ordered)
                 {
+                    bool areaQuest = access.Contains(quest.Id);
                     if (!(quest.Grade == "[epic]" || ticket is not null && quest.Grade is (null or "" or "[normal]")) ||
                         quest.MainQuest is not null || quest.MinimumLevel is < 1 ||
-                        quest.MinimumLevel > cutoff || completed.Contains(quest.Id) || quest.Definition is not { ExposedByNpc: true }) continue;
+                        quest.MinimumLevel > Math.Min(expected.Level,cutoff) || completed.Contains(quest.Id) ||
+                        quest.Definition is not { ExposedByNpc: true }) continue;
                     var current = Current();
+                    var declaration=SkipMainDeclaration(current,quest,quests,areaQuest);
                     if (!QuestEligibility.Evaluate(current with
-                        { ActiveMainQuests = current.ActiveMainQuests.Where(row => row.QuestId != quest.Id).ToArray() },quest,quests).Eligible) continue;
+                        { ActiveMainQuests = current.ActiveMainQuests.Where(row => row.QuestId != quest.Id).ToArray() },declaration,quests).Eligible) continue;
                     // 专用或坏定义隔离，不写其完成记录；后继仍须满足真实前置，不能阻断独立普通主线。
-                    if (!CanSkipManual(quest,quests)) continue;
+                    if (!CanSkipManual(declaration,quests,areaQuest)) continue;
                     if (quest.Condition == "[question]")
                     {
                         if (!QuestQuestionProgress.TryCount(quest,out int count) ||
@@ -393,12 +437,13 @@ internal sealed class QuestQuickClearPlan
                 foreach (int id in parent.IntData.Distinct())
                 {
                     if (!quests.TryGet(id,out var child) || child.MainQuest != parent.Id || !QuestRelationProgress.ZeroRewardChild(child) ||
-                        child.MinimumLevel is < 1 || child.MinimumLevel > cutoff || completed.Contains(id)) continue;
+                        child.MinimumLevel is < 1 || child.MinimumLevel > Math.Min(expected.Level,cutoff) || completed.Contains(id)) continue;
                     // 显式反向父引用授权子范围；只移除已校验的父入口要求，不伪造普通接取槽。
                     var current = Current();
+                    var declaration=SkipMainDeclaration(current,child,quests,access.Contains(id));
                     if (!QuestEligibility.Evaluate(current with
-                        { ActiveMainQuests = current.ActiveMainQuests.Where(row => row.QuestId != id).ToArray() },child with { MainQuest = null },quests).Eligible) continue;
-                    if (!CanSkipManual(child,quests) || child.Condition == "[question]") continue;
+                        { ActiveMainQuests = current.ActiveMainQuests.Where(row => row.QuestId != id).ToArray() },declaration with { MainQuest = null },quests).Eligible) continue;
+                    if (!CanSkipManual(declaration,quests,access.Contains(child.Id)) || child.Condition == "[question]") continue;
                     Add(child); AddLinked(child);
                 }
             }
@@ -410,11 +455,62 @@ internal sealed class QuestQuickClearPlan
         }
     }
 
-    static bool CanSkipManual(StoryQuest quest,QuestCatalog quests)
+    static bool CanSkipManual(StoryQuest quest,QuestCatalog quests,bool areaQuest = false)
     {
-        try { ValidateManual(quest,quests); return true; }
+        try
+        {
+            if(areaQuest && (QuestCycle.Daily(quest) || QuestCycle.Repeat(quest))) return false;
+            if(areaQuest) quest=SkipAreaDeclaration(quest);
+            ValidateManual(quest,quests); return true;
+        }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) { return false; }
     }
+
+    static StoryQuest SkipAreaDeclaration(StoryQuest quest)
+    {
+        if(quest.Definition is not { } definition) return quest;
+        return quest with {Definition=definition with
+        {
+            Fields=definition.Fields.Where(field=>!SkipAreaDecoration(field)).ToImmutableArray(),
+            FirstExposedByNpc=definition.Fields.Any(field=>field.Name=="first exposed by npc" && SkipAreaDecoration(field))
+                ? null : definition.FirstExposedByNpc
+        }};
+    }
+
+    static StoryQuest SkipMainDeclaration(Character current,StoryQuest quest,QuestCatalog quests,bool areaQuest)
+    {
+        var declaration=areaQuest ? SkipAreaDeclaration(quest) : quest;
+        if(QuestEligibility.TransferredStoryAlternative(quest,quests,current.Job))
+            return declaration with {Definition=declaration.Definition! with {JobChange=0}};
+        if(quest.Grade!="[epic]" || quest.Rewards is not [{Type:0,Text:null,Value:>=1 and <=5} reward] ||
+            quest.Definition is not {SelectRewards.IsEmpty:true,AcceptanceRewards.IsEmpty:true} definition) return declaration;
+        int branch=current.GrowType&15,stage=current.GrowType>>4;
+        byte previous;
+        if(quest.RewardType=="[grow type]" && branch==reward.Value) previous=0;
+        else if(quest.RewardType=="[awakening type]" && reward.Value<=2 && (stage==reward.Value-1 || stage>=reward.Value) &&
+            (branch>0 || current.Job is 9 or 10)) previous=(byte)(branch | (reward.Value-1)<<4);
+        else return declaration;
+        var candidate=current with {GrowType=previous,ActiveMainQuests=current.ActiveMainQuests.Where(row=>row.QuestId!=quest.Id).ToArray()};
+        if(!QuestEligibility.Evaluate(candidate,quest,quests).Eligible) return declaration;
+        if(definition.Collisions.Any(id=>quests.TryGet(id,out var alternative) &&
+            alternative is {Grade:"[epic]",RewardType:"[item]",Definition:{JobChange:0 or 1}} &&
+            alternative.Rewards is [{Type:0,Text:null,Value:0},{Type:0,Text:null,Value:0}] &&
+            QuestEligibility.Evaluate(current,alternative,quests).Eligible &&
+            (alternative.Definition.JobChange==0 || QuestEligibility.TransferredStoryAlternative(alternative,quests,current.Job))))
+            return declaration;
+        // 主线只登记完成，不执行职业奖励；独立补充任务仍按实际职业状态接取。
+        return declaration with {RewardType="[item]",Rewards=[],Definition=definition with {JobChange=0,GrowType=-1,TargetCharacters=[]}};
+    }
+
+    static bool SkipAreaDecoration(QuestField field) => field.Children.IsEmpty && field.Name switch
+    {
+        "mail time" => field.Values is [{ Type:0,Text:null,Value:>=0 }],
+        "mail title" or "mail contents" => field.Values is [{ Type:6,Text:not null }],
+        "npc visivility not revert" or "episode town use" => field.Values.IsEmpty,
+        "synchronization account quest" => field.Values is [{ Type:0,Text:null,Value:0 or 1 }],
+        "first exposed by npc" => field.Values is [{ Type:0,Text:null,Value:0 or 1 }],
+        _ => false
+    };
 
     static void ValidateManual(StoryQuest quest, QuestCatalog quests)
     {
@@ -424,7 +520,7 @@ internal sealed class QuestQuickClearPlan
         if (definition.AccountQuest) throw new NotSupportedException("手册账号任务事务尚未接入: " + quest.Id);
         if (definition.JobChange != 0) throw new NotSupportedException("手册不代替职业变化: " + quest.Id);
         if (quest.RewardType is not (null or "[item]")) throw new NotSupportedException("手册专用状态尚未接入: " + quest.Id + ": " + quest.RewardType);
-        // 手册不发普通奖励/赠品，也不消耗寻物材料；仅校验声明，不套1714区间的持有域限制。
+        // 不发普通奖励或扣普通材料；特殊任务物品由冻结效果计划核算。
         _ = QuestFixedRewardDefinition.Parse(quest,allowGold:true);
         _ = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition.SelectRewards });
         _ = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition.AcceptanceRewards });
@@ -433,7 +529,7 @@ internal sealed class QuestQuickClearPlan
     }
 
     public static bool TryCreate(Character expected, uint parentKey, QuestCatalog quests, QuestConnectionCatalog connections,
-        out QuestQuickClearPlan? plan, out string reason)
+        out QuestQuickClearPlan? plan, out string reason,TownCatalog? towns = null)
     {
         plan = null;
         try
@@ -466,6 +562,10 @@ internal sealed class QuestQuickClearPlan
             if (start < 0 || end < start) throw new InvalidDataException("quick clear 起止任务不在合法原序区间");
             // 按 sequence 的端点位置裁剪是资源推断；不是已恢复的原服遍历规则，也不按数字范围或依赖图扩展。
             var interval = unit.Sequence.Skip(start).Take(end-start+1).Select(row => quests.Get(row.QuestId)).ToImmutableArray();
+            if(question.Grade!="[epic]" || interval.Any(quest=>quest.Grade!="[epic]" &&
+                !(quest.Grade=="[sub]" && quest.MainQuest is { } parent && interval.Prepend(question)
+                    .Any(main=>main.Id==parent && main.Grade=="[epic]" && main.IntData.Contains(quest.Id)))))
+                throw new NotSupportedException("主线章节跳过不能完成独立支线、外传或普通任务");
             if (!quests.TryGet(quick.MarkerQuestId,out var marker) || marker.Definition is not { Diagnostics.Length: 0 } ||
                 marker.Id == questionId || interval.Any(quest => quest.Id == marker.Id))
                 throw new InvalidDataException("显式 marker 定义缺失或与实际完成范围重叠");
@@ -476,14 +576,22 @@ internal sealed class QuestQuickClearPlan
                 throw new NotSupportedException("marker 声明尚未确认: " + marker.Id + ": " + string.Join(",",markerUnknown));
             Validate(question,quick.MarkerQuestId,quests);
             var completed = QuestEligibility.Completed(expected);
+            var intervalCharacter=expected with {CompletedQuests=expected.CompletedQuests.Append(question.Id).Distinct().ToArray()};
             foreach (var quest in interval)
             {
-                Validate(quest,quick.MarkerQuestId,quests);
+                Validate(SkipMainDeclaration(intervalCharacter,quest,quests,areaQuest:false),quick.MarkerQuestId,quests);
                 if (quest.Condition == "[question]" && quest.Id != questionId && !completed.Contains(quest.Id))
                     throw new NotSupportedException("区间内问题尚无持久回答，不能猜造分支: " + quest.Id);
+                intervalCharacter=intervalCharacter with {CompletedQuests=intervalCharacter.CompletedQuests.Append(quest.Id).Distinct().ToArray()};
             }
-            // marker按匹配完成消费者加入本角色；其跨角色同步不套用普通AccountQuest规则。
-            plan = new(expected,unit,active,question,marker,interval,checked((byte)quick.Answer),quests);
+            // marker按完成消费者归档；账号同步资格与普通AccountQuest领奖分别保存。
+            var after = expected with
+            {
+                CompletedQuests = expected.CompletedQuests.Concat(interval.Select(quest => quest.Id)).Append(question.Id).Append(marker.Id).Distinct().ToArray(),
+                QuestAnswers = expected.QuestAnswers.SetItem(question.Id,checked((byte)quick.Answer))
+            };
+            var areaQuests = CompleteAreaQuests(after,quests,towns,interval.Select(quest => quest.MinimumLevel).Append(question.MinimumLevel).Max());
+            plan = new(expected,unit,active,question,marker,interval,checked((byte)quick.Answer),quests,areaQuests);
             reason = "显式原序区间可无奖励跳过";
             return true;
         }
@@ -494,14 +602,60 @@ internal sealed class QuestQuickClearPlan
         }
     }
 
+    static HashSet<int> AreaQuestScope(QuestCatalog quests,TownCatalog? towns)
+    {
+        var scope = towns?.AccessQuestIds.Where(id => quests.TryGet(id,out _)).ToHashSet() ?? [];
+        var pending = new Queue<int>(scope);
+        while (pending.TryDequeue(out int id))
+        {
+            var quest = quests.Get(id);
+            foreach (int prerequisite in (quest.Definition?.PrerequisiteGroups.SelectMany(group => group) ?? [])
+                .Concat(quest.Definition?.RequiredAnswers.Select(answer => answer.QuestId) ?? []))
+                if (quests.TryGet(prerequisite,out _) && scope.Add(prerequisite)) pending.Enqueue(prerequisite);
+        }
+        return scope;
+    }
+
+    static ImmutableArray<StoryQuest> CompleteAreaQuests(Character expected,QuestCatalog quests,TownCatalog? towns,int cutoff)
+    {
+        var access = AreaQuestScope(quests,towns);
+        var completed = QuestEligibility.Completed(expected);
+        var added = ImmutableArray.CreateBuilder<StoryQuest>();
+        bool progressed;
+        do
+        {
+            progressed = false;
+            foreach (int id in access)
+            {
+                var quest = quests.Get(id);
+                if (quest.Grade!="[epic]" || completed.Contains(id) || quest.MinimumLevel is < 1 || quest.MinimumLevel > cutoff ||
+                    quest.Definition is not { ExposedByNpc:true }) continue;
+                var current = expected with
+                {
+                    CompletedQuests = expected.CompletedQuests.Concat(added.Select(row => row.Id)).Distinct().ToArray(),
+                    ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != id && !completed.Contains(row.QuestId)).ToArray()
+                };
+                var declaration=SkipMainDeclaration(current,quest,quests,areaQuest:true);
+                if(!CanSkipManual(declaration,quests,areaQuest:true)) continue;
+                // 章节跳过不能猜造范围外的问答；只有既有持久回答才能推进该解锁链。
+                if (quest.Condition == "[question]" &&
+                    (!current.QuestAnswers.TryGetValue(id,out byte answer) || !QuestQuestionProgress.TryCount(quest,out int count) ||
+                        answer >= count || !QuestQuestionProgress.OrdinaryChoice(quest,answer,quests)) ||
+                    !QuestEligibility.Evaluate(current,declaration,quests).Eligible) continue;
+                completed.Add(id); added.Add(quest); progressed = true;
+            }
+        } while (progressed);
+        return added.ToImmutable();
+    }
+
     static void Validate(StoryQuest quest, int markerId, QuestCatalog quests)
     {
         var definition = quest.Definition ?? throw new InvalidDataException("跳过任务没有完整定义: " + quest.Id);
         if (definition.Diagnostics.Length != 0) throw new InvalidDataException("跳过任务定义不可用: " + quest.Id + ": " + string.Join(",",definition.Diagnostics));
         if (definition.AccountQuest) throw new NotSupportedException("跳过范围包含账号任务: " + quest.Id);
         if (definition.JobChange != 0) throw new NotSupportedException("跳过范围包含职业变化: " + quest.Id);
-        if (definition.AcceptanceRewards.Length != 0) throw new NotSupportedException("跳过范围包含接取赠品: " + quest.Id);
-        if (quest.Condition is "[seeking]" or "[seek n meet npc]") throw new NotSupportedException("跳过范围包含寻物消耗: " + quest.Id);
+        if (quest.Condition is "[seeking]" or "[seek n meet npc]" && !QuestLifecyclePlan.ValidSeeking(quest))
+            throw new InvalidDataException("跳过寻物声明不完整: " + quest.Id);
         if (quest.RewardType is not (null or "[item]")) throw new NotSupportedException("跳过范围包含特殊奖励: " + quest.Id + ": " + quest.RewardType);
         if (definition.NpcVisibility.Any(row =>
             !(row.Condition is "[accept]" or "[clear]" && row.Visibility is "[show]" or "[hide]") &&
@@ -526,6 +680,7 @@ internal sealed class QuestQuickClearPlan
             throw new InvalidDataException("跳过任务必需引用缺失: " + quest.Id);
         _ = QuestFixedRewardDefinition.Parse(quest,allowGold: true);
         _ = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition.SelectRewards });
+        _ = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition.AcceptanceRewards });
     }
 }
 

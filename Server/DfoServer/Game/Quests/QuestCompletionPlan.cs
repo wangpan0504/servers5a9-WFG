@@ -46,7 +46,6 @@ internal sealed class QuestCompletionPlan
         GoldAmount = gold; MailedGoldAmount = mailedGold; FrozenAt = now;
         DailyPeriod = QuestCycle.Daily(quest) ? QuestCycle.Day(now) : 0;
         AccountQuest = quest.Definition!.AccountQuest;
-        AccountCompletedAfter = (AccountQuest ? expected.AccountCompletedQuests.Append(quest.Id) : expected.AccountCompletedQuests).Order().ToImmutableArray();
         AccountDailyClaimsAfter = AccountQuest && DailyPeriod != 0 ? expected.AccountQuestDailyClaims.SetItem(quest.Id,DailyPeriod) : expected.AccountQuestDailyClaims;
         Answer = quest.Condition == "[question]" ? checked((byte)active.ConditionState) : null;
         AnswersAfter = Answer is { } answer ? expected.QuestAnswers.SetItem(quest.Id,answer) : expected.QuestAnswers;
@@ -54,6 +53,10 @@ internal sealed class QuestCompletionPlan
         ProfessionGrowType = profession; RewardLearning = rewardLearning; TargetEquipmentSlotFlags = equipmentSlots; TpAmount = tpAmount;
         ClosedChildren = closedChildren;
         CascadeMarkerQuestId = QuestRelationProgress.CascadeMarker(quest,quests);
+        SyncedQuestIds = (CascadeMarkerQuestId is { } synced && QuestRelationProgress.IsAccountSyncMarker(quests.Get(synced))
+            ? new[] { synced } : []).Except(expected.AccountCompletedQuests).ToImmutableArray();
+        AccountCompletedAfter = (AccountQuest ? expected.AccountCompletedQuests.Append(quest.Id) : expected.AccountCompletedQuests)
+            .Concat(SyncedQuestIds).Distinct().Order().ToImmutableArray();
         NewCompletedQuestIds = new[] { (int)quest.Id }.Concat(CascadeMarkerQuestId is { } marker ? new[] { marker } : [])
             .Except(QuestEligibility.Completed(expected)).Order().ToImmutableArray();
         CompletedAfter = expected.CompletedQuests.Concat(NewCompletedQuestIds).Distinct().Order().ToImmutableArray();
@@ -136,6 +139,7 @@ internal sealed class QuestCompletionPlan
     public ImmutableArray<ActiveMainQuest> ActiveAfter { get; }
     public ImmutableArray<int> CompletedAfter { get; }
     public int? CascadeMarkerQuestId { get; }
+    public ImmutableArray<int> SyncedQuestIds { get; }
     public ImmutableArray<int> NewCompletedQuestIds { get; }
     public DateTimeOffset FrozenAt { get; }
     public int DailyPeriod { get; }

@@ -23,7 +23,18 @@ internal static class TcpRegressionTests
         ("quest-gold-mail", QuestGoldMailTcpTests.RunAsync),
         ("quest-continuation", QuestLifecycleTcpTests.RunContinuationAsync),
         ("story-digest", StoryDigestTcpTests.RunAsync),
-        ("quest-manual-skip", (_, _, resources) => QuestManualSkipTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Learning)),
+        ("quest-manual-skip", async (_, _, resources) =>
+        {
+            QuestQuickClearPlanTests.Run(resources.Archive,resources.Quests);
+            QuestQuickClearRepositoryTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources);
+            await QuestManualSkipTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Learning);
+        }),
+        ("quest-question-state", (_, _, resources) =>
+        {
+            QuestProtocolTests.Run();
+            QuestOrdinaryCompletionTests.RunQuestionState(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning);
+            return Task.CompletedTask;
+        }),
         ("quest-ticket", (_, _, resources) => QuestTicketTests.RunAsync(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning)),
         ("quest-specified-ticket", (_, _, resources) => QuestSpecifiedTicketTests.RunAsync(resources.Towns,resources.Archive,
             resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
@@ -55,6 +66,7 @@ internal static class TcpRegressionTests
         {
             QuestLifecycleTests.Run(resources.Towns, resources.ItemResources);
             QuestOrdinaryCompletionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            QuestCascadeCompletionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             QuestCharacterRewardTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             QuestTpRewardTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);
             QuestThresholdRelationTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);

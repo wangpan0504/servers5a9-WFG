@@ -2,6 +2,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders;
+using DfoServer.Game.Quests;
 using DfoServer.Network.Parsers;
 
 namespace DfoServer;
@@ -43,6 +44,9 @@ internal static class QuestProtocolTests
             QuestPackets.GivenUp(3145).SequenceEqual(Convert.FromHexString("01490C")), "ACK31完整8B与ACK32完整3B无赠品形状");
         Check(QuestPackets.ActiveList([new(29, 100, 0), new(0, 3145, 1)]).SequenceEqual(Convert.FromHexString("02000000490C01000000640000000000")),
             "NOTI574保持槽位顺序与全宽条件状态");
+        Check(QuestPackets.Accepted(3868,QuestQuestionProgress.Unanswered,[]).SequenceEqual(Convert.FromHexString("011C0F0100000000")) &&
+            QuestPackets.ActiveList([new(0,3868,QuestQuestionProgress.Unanswered)]).SequenceEqual(Convert.FromHexString("010000001C0F01000000")),
+            "未回答只在存档用哨兵，ACK31和574不得让客户端误判活动问题不存在");
         Check(QuestPackets.Finish(100, 4, 0, [], 0, []).SequenceEqual(Convert.FromHexString("01640004000000000000")),
             "普通会面零经验、零物品完整10B成功合同");
         Check(QuestPackets.Finish(100, 0, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640000000000000100B100030000000000")),

@@ -96,13 +96,15 @@ internal static class QuestEligibility
         int grow = character.GrowType & 15, awakening = character.GrowType >> 4;
         if (definition.TargetCharacters.Length != 0 && !definition.TargetCharacters.Any(target =>
             (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
-            (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening)))
+            (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening ||
+                target.Awakening==1 && awakening==2 && AwakenedStoryAlternative(quest,catalog,character.Job,grow))))
             return Reject("目标转职或觉醒不符");
         if (definition.NonTargetCharacters.Any(target => (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
             (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening)))
             return Reject("角色符合任务排除职业条件");
         bool selfAwakening = character.Job is 9 or 10 && quest.Grade == "[realization]";
-        if (definition.JobChange == 1 && quest.RewardType == "[grow type]" && grow != 0 ||
+        if (definition.JobChange == 1 && (quest.RewardType == "[grow type]" && grow != 0 ||
+                quest.RewardType != "[grow type]" && (TransferredStoryAlternative(quest,catalog,character.Job) ? grow == 0 : grow != 0)) ||
             definition.JobChange == 2 && ((!selfAwakening && grow == 0) || awakening != 0) ||
             definition.JobChange == 3 && ((!selfAwakening && grow == 0) || awakening != 1) ||
             definition.GrowType != -1 && definition.JobChange is not (1 or 10 or 20) &&
@@ -138,6 +140,30 @@ internal static class QuestEligibility
         bool visible = access.Entry == QuestResourceEntry.Ordinary && !definition.HideOnCompletedQuests.Any(completed.Contains);
         return new(true, visible, visible ? "资格满足" : "需要专用任务入口");
     }
+
+    // 50级主线以互斥分支区分觉醒任务和已觉醒角色的普通衔接任务；二觉仍满足后者的一觉资格。
+    // 只接受同职业/分支、同前置的零奖励普通替代，不放宽其他精确觉醒条件，也不完成觉醒任务。
+    static bool AwakenedStoryAlternative(StoryQuest quest,QuestCatalog catalog,byte job,int grow)
+        => quest is {Grade:"[epic]",Condition:"[clear map]",RewardType:"[item]",Definition:{JobChange:0} definition} &&
+            quest.Rewards is [{Type:0,Text:null,Value:0},{Type:0,Text:null,Value:0}] && definition.SelectRewards.IsEmpty &&
+            definition.PrerequisiteGroups.Length>0 && definition.Collisions.Any(id=>catalog.TryGet(id,out var sibling) &&
+                sibling.RewardType=="[awakening type]" && sibling.Rewards is [{Type:0,Text:null,Value:1}] &&
+                sibling.MinimumLevel==quest.MinimumLevel && sibling.Condition==quest.Condition &&
+                sibling.Definition is {JobChange:2} other && other.Job==Jobs[job] && other.GrowType==grow &&
+                definition.PrerequisiteGroups.Length==other.PrerequisiteGroups.Length &&
+                definition.PrerequisiteGroups.Zip(other.PrerequisiteGroups).All(pair=>pair.First.SequenceEqual(pair.Second)));
+
+    // 转职主线的零奖励互斥替代仅服务已转职角色；GM设置状态也不要求伪造旧转职任务记录。
+    public static bool TransferredStoryAlternative(StoryQuest quest,QuestCatalog catalog,byte job)
+        => job<Jobs.Length && quest is {Grade:"[epic]",Condition:"[clear map]",RewardType:"[item]",Definition:{JobChange:1} definition} &&
+            quest.Rewards is [{Type:0,Text:null,Value:0},{Type:0,Text:null,Value:0}] && definition.SelectRewards.IsEmpty &&
+            definition.TargetCharacters is [{GrowType:-1,Awakening:-1} target] && target.Job==Jobs[job] &&
+            definition.PrerequisiteGroups.Length>0 && definition.Collisions.Any(id=>catalog.TryGet(id,out var sibling) &&
+                sibling.RewardType=="[grow type]" && sibling.Rewards is [{Type:0,Text:null,Value:>=1 and <=5}] &&
+                sibling.MinimumLevel==quest.MinimumLevel && sibling.Condition==quest.Condition &&
+                sibling.Definition is {JobChange:1} other && other.TargetCharacters.Any(row=>row.Job==Jobs[job] && row.GrowType==0) &&
+                definition.PrerequisiteGroups.Length==other.PrerequisiteGroups.Length &&
+                definition.PrerequisiteGroups.Zip(other.PrerequisiteGroups).All(pair=>pair.First.SequenceEqual(pair.Second)));
 
     private static QuestEligibilityResult Reject(string reason) => new(false, false, reason);
 }

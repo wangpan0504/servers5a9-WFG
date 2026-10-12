@@ -55,8 +55,8 @@ internal static class QuestQuickClearRepositoryTests
                 "无奖励跳过任务、答案和回执只推进一次revision");
             That(result.Character.CompletedQuests.SequenceEqual([100,101,200,201,202,900,6381]) &&
                 result.Character.QuestAnswers[100] == 2 && result.Character.QuestAnswers[201] == 1 && result.Character.QuestAnswers[900] == 2 &&
-                result.Character.AccountCompletedQuests.SequenceEqual([901]) && result.Character.AccountQuestAnswers[901] == 1,
-                "原序插入任务与级联标记只写当前角色完成表，零基跳过答案及旧答案保持");
+                result.Character.AccountCompletedQuests.SequenceEqual([101,901]) && result.Character.AccountQuestAnswers[901] == 1,
+                "级联标记同步账号，旅程零基答案与旧账号答案保持独立");
             That(result.Character.ActiveMainQuests.Select(row => (int)row.QuestId).SequenceEqual([300,302,400]) &&
                 result.Character.ActiveMainQuests.Single(row => row.QuestId == 300).ConditionState == 1 &&
                 result.Character.ActiveMainQuests.Single(row => row.QuestId == 302).ConditionState == 0,
@@ -171,7 +171,7 @@ internal static class QuestQuickClearRepositoryTests
     static bool Same(Character first,Character second) => JsonSerializer.Serialize(first) == JsonSerializer.Serialize(second);
     static string Assets(Character character) => JsonSerializer.Serialize(new { character.Job,character.GrowType,character.Level,
         character.EquipmentSlotFlags,character.AcceptedStoryLevel,character.Skills,character.Learning,character.Inventory,character.DungeonState,
-        character.Position,character.Return,character.AccountCompletedQuests,character.AccountQuestAnswers,character.AccountQuestDailyClaims,character.QuestCycleDay });
+        character.Position,character.Return,character.AccountQuestAnswers,character.AccountQuestDailyClaims,character.QuestCycleDay });
 
     static QuestConnectionCatalog Connections(int parent)
     {

@@ -11,6 +11,7 @@ internal static class QuestCatalogTests
 {
     public static void RunCore()
     {
+        RunClosingTags();
         int checks = TestCheck.Count;
         var paths = new Dictionary<int,string> { [100] = "valid.qst", [101] = "missing.qst", [102] = "invalid.qst", [103] = "obsolete.qst" };
         var catalog = QuestCatalog.LoadDefinitions(paths, (id,path) => id switch
@@ -35,6 +36,37 @@ internal static class QuestCatalogTests
         TestCheck.Reject<IOException>(() => QuestCatalog.LoadDefinitions(paths, (_,_) => throw new IOException("storage failure")),
             "存储故障不误当失效旧任务吞掉");
         Console.WriteLine($"PASS {TestCheck.Count - checks} 失效旧任务资源隔离与已用资源严格校验断言");
+    }
+
+    public static void RunClosingTags()
+    {
+        int checks=TestCheck.Count;
+        var strings=new Dictionary<int,string>{[1]="[level]",[2]="[type]",[3]="[meet npc]",
+            [4]="[pre required quest]",[5]="[/pre required quest]",[6]="[int data]",[7]="[npc index]",[8]="[/level]",[9]="[pre required quest answer]"};
+        var prefix=new List<PvfToken>{new(3,1),new(0,1),new(0,99),new(3,2),new(6,3),new(3,6),new(0,1),new(3,7),new(0,1)};
+        var tokens=prefix.Concat(new PvfToken[]{new(3,4),new(0,100),new(3,5),new(3,5),new(3,5)}).ToArray();
+        var quest=QuestDefinitionReader.Read(101,"fixture/redundant-end.qst",tokens,id=>strings[id]);
+        var parent=QuestEligibilityTests.Quest(100);var catalog=new QuestCatalog(new() {[100]=parent,[101]=quest});
+        var character=new Character(1,0,"Quest",1,new Location(38,2,450,240),null);
+        TestCheck.That(quest.Definition is {Diagnostics.IsEmpty:true} && quest.Prerequisites.SequenceEqual([100]) &&
+            quest.Definition.Fields.All(field=>field.Name!="/pre required quest"),"重复空前置闭合沿external忽略，完整前置仍保存");
+        TestCheck.That(!QuestEligibility.Evaluate(character,quest,catalog).Eligible &&
+            QuestEligibility.Evaluate(character with {CompletedQuests=[100]},quest,catalog).Eligible,
+            "普通接取与跳过共用读取结果，不能因忽略空闭合绕过真实前置");
+        TestCheck.That(new PvfTokenDocument(tokens,id=>strings[id],preserveExtraEndTags:true).Diagnostics.Length==2,
+            "任务读取兼容不放宽通用PVF嵌套解析器");
+        foreach(var tail in new PvfToken[][]
+        {
+            [new(3,5)],[new(3,4),new(6,3),new(3,5),new(3,5)],
+            [new(3,4),new(0,100),new(3,5),new(3,8)],
+            [new(3,4),new(0,100),new(3,5),new(3,5),new(3,9),new(0,100)]
+        })
+            TestCheck.That(QuestDefinitionReader.Read(101,"fixture/invalid-end.qst",prefix.Concat(tail).ToArray(),id=>strings[id])
+                .Definition is {Diagnostics.Length:>0},"孤立/非整数/其他多余闭合及额外错误仍不可用");
+        TestCheck.Reject<InvalidDataException>(()=>QuestDefinitionReader.Read(101,"fixture/value-end.qst",
+            prefix.Concat(new PvfToken[]{new(3,4),new(0,100),new(3,5),new(3,5),new(0,1)}).ToArray(),id=>strings[id]),
+            "闭合后的无标签数值不能被当作无害空闭合");
+        Console.WriteLine($"PASS {TestCheck.Count-checks} external重复空闭合与真实前置读取断言");
     }
 
     public static void Run(PvfArchive pvf)

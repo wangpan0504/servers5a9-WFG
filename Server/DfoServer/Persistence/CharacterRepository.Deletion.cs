@@ -18,6 +18,7 @@ internal sealed partial class CharacterRepository
         "character_dungeon_growth_receipts", "character_dungeon_settlement_receipts",
         "character_dungeon_fatigue_receipts", "character_gold_card_uses",
         "character_quest_skip_receipts", "character_quest_lifecycle_receipts",
+        "character_quest_special_reward_claims", "character_quest_effect_receipts",
         "character_active_main_quests", "character_completed_quests", "character_skill_bindings",
         "character_skill_points", "character_skills", "character_skill_commands", "character_skill_combos",
         "character_skill_point_sources", "character_tp_sources", "character_client_settings", "character_game_settings",

@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.GameWorld.Channels;
+using DfoServer.Game.Quests;
 
 namespace DfoServer.Network.Builders;
 // Client 包体构造。只读取角色快照，不修改会话或访问数据库。
@@ -35,7 +36,7 @@ internal static class TownPackets
                     if (active.Slot != i)
                         continue;
                     quest = active.QuestId;
-                    conditionState = active.ConditionState;
+                    conditionState = QuestQuestionProgress.ClientState(active.ConditionState);
                 }
 
                 writer.Write(quest);

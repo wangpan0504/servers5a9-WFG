@@ -155,6 +155,7 @@ internal static class DatabaseSchemaTests
             VerifyExperienceCapMigration(root);
             VerifyAccountQuestSourceMigration(root);
             VerifyFutureMigrations(path);
+            VerifyQuestEffectsMigration(root);
             string concurrent = Path.Combine(root, "concurrent.db");
             Task.WaitAll(Task.Run(() => new CharacterRepository(concurrent)), Task.Run(() => new AuthenticationRepository(concurrent)));
             using (var db = Open(concurrent))
@@ -165,6 +166,56 @@ internal static class DatabaseSchemaTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
+    }
+
+    private static void VerifyQuestEffectsMigration(string root)
+    {
+        foreach(bool local32 in new[]{false,true})
+        {
+            string path=Path.Combine(root,local32 ? "quest-effects-local32.db" : "quest-effects-v33.db");
+            _=new CharacterRepository(path);
+            new AuthenticationService(new AuthenticationRepository(path)).Create("effects-upgrade","fixture-password");
+            using(var db=Open(path))
+            {
+                Execute(db,"INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('effects-upgrade',0,'EffectOld',7,38,1,450,234,0)");
+                Execute(db,"INSERT INTO account_wallets(account,revision,rental_points,seria_luck) VALUES('effects-upgrade',11,23,0)");
+                if(local32)
+                {
+                    Execute(db,"""
+                        INSERT INTO character_quest_effect_receipts VALUES(1,'00112233445566778899aabbccddeeff',6,7,'[100]','[]');
+                        INSERT INTO character_quest_special_reward_claims VALUES(1,100,'00112233445566778899aabbccddeeff');
+                        DROP TABLE account_adventure_purchases;
+                        ALTER TABLE account_wallets DROP COLUMN seria_luck;
+                        PRAGMA user_version=32;
+                        """);
+                }
+                else Execute(db,"DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts; PRAGMA user_version=33");
+            }
+            _=new CharacterRepository(path);
+            using(var db=Open(path))
+            {
+                Check(Query(db,"PRAGMA user_version") is 34L && Query(db,"SELECT revision FROM characters") is 7L &&
+                    Query(db,"SELECT revision FROM account_wallets") is 11L && Query(db,"SELECT rental_points FROM account_wallets") is 23L &&
+                    Query(db,"SELECT seria_luck FROM account_wallets") is 0L,"正式v33及本地任务v32升级34保留角色与账号资产/revision");
+                Check(Query(db,"SELECT count(*) FROM account_adventure_purchases") is 0L &&
+                    (long)Query(db,"SELECT count(*) FROM character_quest_effect_receipts")! == (local32 ? 1 : 0) &&
+                    (long)Query(db,"SELECT count(*) FROM character_quest_special_reward_claims")! == (local32 ? 1 : 0),
+                    "只补空表，已有任务补领回执及领取资格保留");
+                if(local32) Check(Query(db,"SELECT claimed_quests FROM character_quest_effect_receipts") is "[100]" &&
+                    Query(db,"SELECT quest_id FROM character_quest_special_reward_claims") is 100L,"本地旧32真实任务账本值不重写或重领");
+                Check(Query(db,"PRAGMA integrity_check") is "ok" && Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                    "任务账本升级保留完整外键");
+            }
+            string saved=Snapshot(path);_=new CharacterRepository(path);
+            Check(Snapshot(path)==saved,"升级后反复初始化只读保留完整状态");
+        }
+        string broken=Path.Combine(root,"quest-effects-v33-failure.db");_=new CharacterRepository(broken);
+        using(var db=Open(broken)) Execute(db,"""
+            DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts;
+            CREATE TABLE character_quest_special_reward_claims(bad INTEGER); PRAGMA user_version=33;
+            """);
+        string original=Snapshot(broken);RejectDatabase(()=>new CharacterRepository(broken));
+        Check(Snapshot(broken)==original,"末段列校验失败回滚新增任务表与版本，保留原库");
     }
 
     private static void VerifyExperienceCapMigration(string root)

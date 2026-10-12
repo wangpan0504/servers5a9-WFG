@@ -615,6 +615,56 @@ internal static class QuestOrdinaryCompletionTests
             new(towns, characters, learning, growth, parameters, items, quest, materialCount, locked, fullEquipment, loseResult);
     }
 
+    public static void RunQuestionState(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items,
+        SkillLearningCatalog learning)
+    {
+        int checks=Count;
+        var growth=CharacterGrowthCatalog.Load(pvf,learning);
+        var parameters=QuestRewardParameterCatalog.Load(pvf);
+        var actual=QuestCatalog.Load(pvf).Get(3868);
+        // 复用真实三选项，NPC/等级和前置映射到已有合成场景；不将此测试当作Windows对话验收。
+        var question=actual with {MinimumLevel=1,Npc=1,IntData=[2],Prerequisites=[],
+            Definition=actual.Definition! with {PrerequisiteGroups=[]}};
+        var branches=Enumerable.Range(0,3).Select(answer=>QuestEligibilityTests.Quest(100+answer) with
+            {Definition=new([]) {RequiredAnswers=[new(3868,answer)]}}).ToArray();
+        foreach(byte choice in new byte[]{0,1,2})
+        {
+            using var f=new Fixture(towns,characters,learning,growth,parameters,items,question,materialCount:0,
+                active:[],definitions:[question,..branches],configure:source=>source with {Level=2,
+                    InitialLearning=SkillPointLedger.Synchronize(source.Job,source.GrowType,2,
+                        source.InitialLearning with {Experience=growth.GetLevelStartExperience(2)},learning)});
+            f.Change(3868,QuestLifecycleAction.Accept);
+            var unanswered=f.Read();
+            That(unanswered.ActiveMainQuests.Single().ConditionState==QuestQuestionProgress.Unanswered &&
+                QuestCompletionPlan.Prepare(unanswered,question,ushort.MaxValue,f.Catalog,parameters,items.Items,
+                    items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Plan is null && !unanswered.QuestAnswers.ContainsKey(3868),
+                "已接取未回答与未接取/已回答/已完成分别保存，不能默认完成阵营选择");
+            var accepted=DfoServer.Network.Builders.QuestPackets.Accepted(3868,unanswered.ActiveMainQuests.Single().ConditionState,[]);
+            var active=DfoServer.Network.Builders.QuestPackets.ActiveList(unanswered.ActiveMainQuests);
+            var selected=DfoServer.Network.Builders.TownPackets.Select(unanswered);
+            That(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(accepted.AsSpan(3))==1 &&
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(active.AsSpan(6))==1 &&
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(selected.AsSpan(24))==1,
+                "接取ACK31、跳过刷新574及重选ACK4均投影为已接取进行中，不输出不存在哨兵");
+            That(QuestQuickClearPlan.TryCreateManual(unanswered,Guid.NewGuid(),f.Catalog,
+                System.Collections.Immutable.ImmutableDictionary<int,byte>.Empty,out var pending,out _) && pending!.PendingQuestions.Contains(3868),
+                "已接取未回答的问题仍可进入手册批量选择，不因活动状态丢掉真实选项");
+            f.Session.ReturnToRoster();f.Session.Select(0);f.Session.MarkReady();
+            That(f.Read().ActiveMainQuests.Single().ConditionState==QuestQuestionProgress.Unanswered &&
+                QuestCompletionPlan.Prepare(f.Read(),question,ushort.MaxValue,f.Catalog,parameters,items.Items,
+                    items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Plan is null,"重选不把客户端进行中1写回成第二个答案");
+            f.Change(3868,QuestLifecycleAction.Condition,new(null,choice,0));
+            That(f.Read().ActiveMainQuests.Single().ConditionState==choice &&
+                QuestQuestionProgress.ClientState(choice)==choice,"选择0/1/2继续保留原零基答案");
+            var finished=f.Finish(ushort.MaxValue,3868).Receipt!.Commit.Character;
+            That(finished.QuestAnswers[3868]==choice && !finished.ActiveMainQuests.Any(row=>row.QuestId==3868) &&
+                DfoServer.Network.Builders.TownPackets.CompletedQuests(finished)[4+3868]==choice+1 &&
+                branches.Count(branch=>QuestEligibility.Evaluate(finished,branch,f.Catalog).Eligible)==1,
+                "完成后清接取槽、记录真实答案，只开放被选择的阵营");
+        }
+        Console.WriteLine($"PASS {Count-checks} 问答未接取/未回答/已回答/完成及三种投影状态断言");
+    }
+
     internal sealed class Fixture : IDisposable
     {
         readonly string root = Path.Combine(Path.GetTempPath(), "S5A9-ordinary-quest-" + Guid.NewGuid().ToString("N"));
@@ -626,12 +676,12 @@ internal static class QuestOrdinaryCompletionTests
         public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, CharacterGrowthCatalog growth,
             QuestRewardParameterCatalog parameters, ItemResources items, StoryQuest quest, int materialCount = 5, bool locked = false,
             bool fullEquipment = false, bool loseResult = false, StoryQuest[]? definitions = null, ActiveMainQuest[]? active = null,
-            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false)
+            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null)
         {
             this.items = items; this.growth = growth; this.parameters = parameters;
             Catalog = new((definitions ?? [quest]).ToDictionary(row => row.Id));
             Repository = new(Path.Combine(root, "game.db"), Catalog); Owner = owners.Acquire("ordinary-quest", () => { });
-            if ((definitions ?? [quest]).Any(row => row.Definition?.AccountQuest == true))
+            if (Catalog.All.Any(row => row.Definition?.AccountQuest == true || QuestRelationProgress.IsAccountSyncMarker(row)))
                 new AuthenticationService(new AuthenticationRepository(Path.Combine(root,"game.db"))).Create("ordinary-quest","fixture-password");
             var candidate = CharacterCreation.Prepare("Ordinary", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get);
             if (configure is not null) candidate = configure(candidate);
@@ -646,7 +696,7 @@ internal static class QuestOrdinaryCompletionTests
             }
             Repository.Create(Owner, candidate with { ActiveMainQuests = active ?? [new(0, (ushort)quest.Id, 1)], Inventory = candidate.Inventory with { Items = inventory.ToImmutable() } });
             Lost = loseResult ? new(Repository) : null;
-            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null); Session.Select(0); Session.MarkReady();
+            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null,questEffects:questEffects); Session.Select(0); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner, 0);
         public QuestCompletionPreparation Prepare(ushort selector, ushort multiplier = 1) => QuestCompletionPlan.Prepare(Read(), Catalog.Get(100), selector,

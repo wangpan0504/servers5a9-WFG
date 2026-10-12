@@ -99,6 +99,8 @@ internal static class QuestManualSkipTests
         SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
+        QuestCatalogTests.RunClosingTags();
+        VerifyAreaScope();
         var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf);
         var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
         string logRoot = Path.Combine(Path.GetTempPath(),"S5A9-manual-skip-"+Guid.NewGuid().ToString("N"));
@@ -106,6 +108,71 @@ internal static class QuestManualSkipTests
         try
         {
             using var log = new ServerLog(logRoot);
+            var realQuests = QuestCatalog.Load(pvf);
+            var bell=realQuests.Get(3992);
+            var bellCharacter=new Character(1,0,"Bell",0,towns.Room,null) {Level=95,GrowType=0x25};
+            That(bell.Definition is {Diagnostics.IsEmpty:true} && bell.Prerequisites.SequenceEqual([3991]) &&
+                !QuestEligibility.Evaluate(bellCharacter,bell,realQuests).Eligible &&
+                QuestEligibility.Evaluate(bellCharacter with {CompletedQuests=[3991]},bell,realQuests).Eligible,
+                "真实3992重复闭合兼容普通接取，仍须先完成3991");
+            foreach(var state in new (byte Job,byte Grow)[]{(0,0x11),(0,0x21),(13,0x13),(13,0x23),(9,0x10),(10,0x20)})
+            {
+                var gm=new Character(1,0,"GmStory",0,towns.Room,null) {Job=state.Job,GrowType=state.Grow,Level=95};
+                That(QuestQuickClearPlan.TryCreateManual(gm,Guid.NewGuid(),realQuests,ImmutableDictionary<int,byte>.Empty,out var reached,out _,towns) &&
+                    reached!.CompletedAfter.Contains(3155) && reached.CompletedAfter.Contains(3427) &&
+                    reached.ProfessionGrowType is null && reached.EquipmentSlotFlagsAfter==gm.EquipmentSlotFlags &&
+                    ReferenceEquals(reached.TargetLearning,gm.Learning),"GM已有转职/觉醒、无对应任务记录仍衔接主线，不改变职业技能或槽位");
+            }
+            var transferred=new Character(1,0,"GmTransfer",0,towns.Room,null) {GrowType=1,Level=95};
+            That(QuestQuickClearPlan.TryCreateManual(transferred,Guid.NewGuid(),realQuests,ImmutableDictionary<int,byte>.Empty,out var transferOnly,out _,towns) &&
+                transferOnly!.CompletedAfter.Contains(3155) && transferOnly.CompletedAfter.Contains(3427) &&
+                transferOnly.CompletedAfter.Contains(3368) && transferOnly.ProfessionGrowType is null,
+                "未觉醒角色可完成对应主线记录并接续剧情，实际一觉状态保持");
+            var advanced=new Character(1,0,"StoryBridge",0,towns.Room,null) {Job=13,GrowType=0x23,Level=95,CompletedQuests=[3356]};
+            That(QuestEligibility.Evaluate(advanced,realQuests.Get(3418),realQuests) is {Eligible:true,Visible:true} &&
+                !QuestEligibility.Evaluate(advanced,realQuests.Get(3421),realQuests).Eligible,
+                "真实PVF已二觉魔枪士普通3418主线可接，专用3421觉醒不被重新完成");
+            That(QuestQuickClearPlan.TryCreateManual(advanced,Guid.NewGuid(),realQuests,ImmutableDictionary<int,byte>.Empty,out var bridgePlan,out _,towns),"真实转职主线可通过新手册跳过接续");
+            var bridge=bridgePlan!.Interval;
+            That(bridge.Any(quest=>quest.Id==3418) && bridge.Any(quest=>quest.Id==3427) &&
+                bridge.All(quest=>(quest.Grade is "[epic]" or "[sub]" || QuestRelationProgress.IsCascadeMarker(quest)) &&
+                    quest.RewardType is (null or "[item]") &&
+                    (quest.Definition?.JobChange==0 || QuestEligibility.TransferredStoryAlternative(quest,realQuests,advanced.Job))),
+                "新主线跳过完成普通转职/觉醒衔接及西海岸码头3427，不增加职业奖励或槽位任务");
+            var bridgeCompleted=advanced.CompletedQuests.Concat(bridge.Select(quest=>quest.Id)).ToHashSet();
+            That(!towns.IsPosition(new(40,1,1689,146),advanced.CompletedQuests.ToHashSet()) &&
+                towns.IsPosition(new(40,1,1689,146),bridgeCompleted),"真实西海岸码头入口由不可走变为可走");
+            VerifyProfessionSupplements(realQuests,towns);
+            await QuestSkipEffectsTests.RunAsync(towns,characters,items,skills,growth,parameters,log,realQuests);
+            // 所有主线已有完成记录时，区域入场引用不能再授权独立支线或外传。
+            var mainCompleted = realQuests.All.Where(quest => quest.Grade == "[epic]").Select(quest => quest.Id).Order().ToArray();
+            using (var f = new QuestOrdinaryCompletionTests.Fixture(towns,characters,skills,growth,parameters,items,realQuests.Get(10100),
+                materialCount:0,definitions:realQuests.All.ToArray(),active:[],configure:candidate => candidate with
+                {
+                    Level=95,CompletedQuests=mainCompleted,InitialLearning=SkillPointLedger.Synchronize(candidate.Job,candidate.GrowType,95,
+                        candidate.InitialLearning with { Experience=growth.GetLevelStartExperience(95) },skills)
+                }))
+            {
+                int[] access = [2670,2941,6170,6928,8664,8665,8672,8703,8709,10100,6880,4391,4539,2002,2900,6080,6081,10112];
+                var before = f.Read();
+                That(f.Session.PrepareManualQuestSkip(f.Catalog)?.Prepared is null && Same(before,f.Read()) &&
+                    access.All(id=>!f.Read().CompletedQuests.Contains(id)) && Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts")==0,
+                    "真实PVF主线均完成后，区域支线、外传、普通及星空深渊任务不再由主线手册完成");
+            }
+            using (var f = Fixture([Question(400),Branch(501,400,1),QuestEligibilityTests.Quest(500) with { MinimumLevel=17 },
+                QuestEligibilityTests.Quest(999) with { Grade="[invisible]",IntData=[-1],Definition=new([new("synchronization account quest",[new(0,1,null)],[])]) },
+                QuestEligibilityTests.Quest(10100) with { Grade="[side]",MinimumLevel=17,Definition=new([]) { PrerequisiteGroups=[[500]] } }],
+                [Active(0,400,QuestQuestionProgress.Unanswered)]))
+            {
+                var before = f.Read();
+                var receipt = f.Session.QuickClearQuest(1007,f.Catalog,Connections())!;
+                That(receipt.Commit is not null && receipt.Commit.Plan.Interval.Select(row => row.Id).SequenceEqual([500]) &&
+                    receipt.Commit.Plan.AreaQuests.IsEmpty &&
+                    !f.Read().CompletedQuests.Contains(10100) && Assets(before) == Assets(f.Read()),
+                    "1714只完成原主线章节区间，不扩展同等级区域支线");
+                That(f.Repository.CommitQuestQuickClear(f.Owner,receipt.Commit!.Plan) is { Duplicate:true,ProjectionCurrent:true } &&
+                    Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts") == 1,"1714主线范围沿冻结回执精确只读恢复");
+            }
             using (var f = Fixture(PlainDefinitions(),[Active(0,100),Active(1,300),Active(2,103)]))
             {
                 var before = f.Read(); using var output = new ControlledOutput(); using var stop = new CancellationTokenSource();
@@ -228,7 +295,7 @@ internal static class QuestManualSkipTests
             }
             foreach (bool installed in new[] {false,true})
             using (var f = Fixture(QuestionDefinitions(chained:false).Concat(new[] {
-                Question(400) with { Grade="[side]" },QuestEligibilityTests.Quest(500) with { Grade="[side]" },
+                Question(400) with { MinimumLevel=20 },QuestEligibilityTests.Quest(500) with { MinimumLevel=20 },
                 QuestEligibilityTests.Quest(999) with { Grade="[invisible]",IntData=[-1],
                     Definition=new([new("synchronization account quest",[new(0,1,null)],[])]) }
                 }).ToArray(),[Active(0,400,QuestQuestionProgress.Unanswered)]))
@@ -319,6 +386,78 @@ internal static class QuestManualSkipTests
         }
         finally { Directory.Delete(logRoot,true); }
         Console.WriteLine($"PASS {Count-checks} 手册真实Handler、1381/1431/1457、SQL原子与恢复断言（非主线实机）");
+    }
+
+    static void VerifyProfessionSupplements(QuestCatalog quests,TownCatalog towns)
+    {
+        string[] jobs=["[swordman]","[fighter]","[gunner]","[mage]","[priest]","[at gunner]","[thief]","[at fighter]",
+            "[at mage]","[demonic swordman]","[creator mage]","[at swordman]","[knight]","[demonic lancer]","[at priest]","[gun blader]"];
+        for(byte job=0;job<jobs.Length;job++)
+        {
+            var source=new Character(1,0,"Supplement",job,towns.Room,null) {Job=job,Level=95};
+            That(QuestQuickClearPlan.TryCreateManual(source,Guid.NewGuid(),quests,ImmutableDictionary<int,byte>.Empty,out var plan,out _,towns) &&
+                plan!.CompletedAfter.Contains(3155) && plan.CompletedAfter.Contains(3427) && plan.ProfessionGrowType is null &&
+                !plan.Interval.Any(q=>q.RewardType=="[grow type]"),"未转职主线跳过使用普通衔接，不猜转职分支: "+jobs[job]);
+            var after=source with {CompletedQuests=plan!.CompletedAfter.ToArray()};
+            int change=job is 9 or 10 ? 2 : 1;
+            That(quests.All.Any(q=>q.Grade!="[epic]" && q.Definition?.JobChange==change &&
+                QuestEligibility.Evaluate(after,q,quests).Visible),"主线跳过后独立转职/自觉入口仍可见: "+jobs[job]);
+        }
+        foreach(var main in quests.All.Where(q=>q.Grade=="[epic]" && q.RewardType=="[awakening type]" &&
+            q.Rewards is [{Value:1}] && q.Definition is {JobChange:2,GrowType:>0}))
+        {
+            var definition=main.Definition!; byte job=checked((byte)Array.IndexOf(jobs,definition.Job));
+            byte branch=checked((byte)definition.GrowType);
+            var source=new Character(1,0,"Supplement",job,towns.Room,null) {Job=job,GrowType=branch,Level=95};
+            That(QuestQuickClearPlan.TryCreateManual(source,Guid.NewGuid(),quests,ImmutableDictionary<int,byte>.Empty,out var plan,out _,towns) &&
+                plan!.CompletedAfter.Contains(main.Id) && plan.CompletedAfter.Contains(3427) && plan.ProfessionGrowType is null &&
+                ReferenceEquals(plan.TargetLearning,source.Learning),"一觉主线只记完成，不改职业技能: "+main.Id);
+            var after=source with {CompletedQuests=plan!.CompletedAfter.ToArray()};
+            That(quests.All.Any(q=>q.Grade!="[epic]" && q.Definition?.JobChange==2 && QuestEligibility.Evaluate(after,q,quests).Visible) &&
+                quests.All.Any(q=>q.Grade!="[epic]" && q.Definition?.JobChange==3 &&
+                    QuestEligibility.Evaluate(after with {GrowType=(byte)(branch|0x10)},q,quests).Visible),
+                "各职业一觉补充入口不与主线完成互斥，二觉入口仍要求实际一觉: "+main.Id);
+        }
+        That(!quests.All.Any(q=>q.Grade=="[epic]" && q.RewardType=="[awakening type]" && q.Rewards is [{Value:2}]),
+            "匹配PVF二觉奖励链全部在主线之外");
+    }
+
+    static void VerifyAreaScope()
+    {
+        var map = new TownMap("fixture/area.map",[new(new(0,0,1000,1000),[],[])],[],false,[]);
+        var towns = new TownCatalog(new()
+        {
+            [(38,0)] = new(38,0,1,[600,601,603,604,605,606],[],[608],null,map,[],[])
+        },new(38,0,10,10),new(38,0,10,10),new(0,[],[]),[],new Dictionary<uint,uint[]>(),new Dictionary<int,TownDungeonMap>()
+        {
+            [1] = new(1,"fixture/worldmap",[new(1,609,true)])
+        });
+        var definitions = new[]
+        {
+            QuestEligibilityTests.Quest(100),QuestEligibilityTests.Quest(610) with { MinimumLevel=19 },
+            QuestEligibilityTests.Quest(600) with { MinimumLevel=20,Definition=new([]) { PrerequisiteGroups=[[610]] } },
+            QuestEligibilityTests.Quest(601) with { Grade="[episode]",MinimumLevel=19 },
+            QuestEligibilityTests.Quest(602) with { Grade="[side]" },
+            QuestEligibilityTests.Quest(603) with { Grade="[side]",MinimumLevel=21 },
+            QuestEligibilityTests.Quest(604) with { Grade="[side]",Definition=new([]) { Job="[mage]" } },
+            QuestEligibilityTests.Quest(605) with { Grade="[side]",Definition=new([]) { AccountQuest=true } },
+            QuestEligibilityTests.Quest(606) with { Grade="[side]",Definition=new([new("unconfirmed",[],[])]) },
+            QuestEligibilityTests.Quest(608) with { Grade="[side]" },QuestEligibilityTests.Quest(609) with { Grade="[side]" }
+        };
+        var source = new Character(1,0,"Access",0,new(38,0,10,10),null) { Level=20 };
+        var catalog=new QuestCatalog(definitions.ToDictionary(row=>row.Id));
+        That(QuestQuickClearPlan.TryCreateManual(source,Guid.NewGuid(),catalog,
+            ImmutableDictionary<int,byte>.Empty,out var plan,out _,towns) && plan!.ScopeQuestIds.SequenceEqual([100,610]),
+            "主线区域任务遵守手册截止，入场引用不扩展独立支线或外传");
+        That(!towns.AccessQuestIds.Contains(608) && !towns.AccessQuestIds.Contains(609),"排除条件和进行中选择地图不反向当作解锁");
+        var admission=definitions.Single(q=>q.Id==601) with {Grade="[side]",RewardType="[hell challenge]",Rewards=[new(0,1,null)]};
+        That(!QuestQuickClearPlan.TryCreateManual(source with {CompletedQuests=[100,610]},Guid.NewGuid(),
+            new(definitions.Select(q=>q.Id==601 ? admission : q).ToDictionary(q=>q.Id)),ImmutableDictionary<int,byte>.Empty,out _,out _,towns),
+            "区域深渊专用奖励链不由主线跳过完成");
+        var choices = new QuestCatalog(new() { [600]=Question(600) with {Grade="[side]"},[601]=Branch(601,600,1) with {Grade="[side]"} });
+        That(!QuestQuickClearPlan.TryCreateManual(source,Guid.NewGuid(),choices,ImmutableDictionary<int,byte>.Empty,out _,out _,towns) &&
+            !QuestQuickClearPlan.TryCreateManual(source,Guid.NewGuid(),choices,ImmutableDictionary<int,byte>.Empty.Add(600,1),out _,out _,towns),
+            "独立区域支线问题不排进主线问答，也不能提交其回答");
     }
 
     static StoryQuest[] PlainDefinitions()

@@ -58,9 +58,22 @@ internal static class QuestDefinitionReader
         {
             ["dialog depend on job"] = "dialog"
         }, preserveExtraEndTags: true);
-        var fields = document.Sections.Select(Convert).ToImmutableArray();
+        var retained = ImmutableArray.CreateBuilder<QuestField>();
+        int redundantEnds = 0;
+        foreach (var field in document.Sections.Select(Convert))
+        {
+            // external将闭合标签作为独立段；完整整数前置后的重复空闭合不改变前置语义。
+            if (field is {Name:"/pre required quest",Values.IsEmpty:true,Children.IsEmpty:true} && retained.Count>0 &&
+                retained[^1] is {Name:"pre required quest",Children.IsEmpty:true} previous && !previous.Values.IsEmpty &&
+                previous.Values.All(value=>value is {Type:0,Text:null,Value:>0}))
+            { redundantEnds++; continue; }
+            retained.Add(field);
+        }
+        var fields = retained.ToImmutable();
         var errors = ImmutableArray.CreateBuilder<string>();
-        errors.AddRange(document.Diagnostics);
+        foreach (string diagnostic in document.Diagnostics)
+            if (redundantEnds>0 && diagnostic=="多余闭合标签: /pre required quest") redundantEnds--;
+            else errors.Add(diagnostic);
         var level = Integers("level");
         if (level.Length != 2)
             errors.Add("level不是完整上下限");

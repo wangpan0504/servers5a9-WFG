@@ -20,7 +20,7 @@ internal sealed partial class CharacterRepository
                 plan.ManualAnswers.Keys.All(scope.Contains)
             : plan.OperationId == plan.AcceptanceId && plan.AcceptanceId != Guid.Empty && plan.Unit.ParentKey >= 0 &&
                 expected.ActiveMainQuests.Contains(plan.ActiveQuestion) && plan.ActiveQuestion.QuestId == plan.Question.Id &&
-                scope.SetEquals(plan.Interval.Select(quest => quest.Id).Append(plan.Question.Id).Append(plan.MarkerQuestId));
+                scope.SetEquals(plan.Interval.Concat(plan.AreaQuests).Select(quest => quest.Id).Append(plan.Question.Id).Append(plan.MarkerQuestId));
         var expectedAnswers = plan.IsPreparedSkip ? expected.QuestAnswers.SetItems(plan.ManualAnswers) : expected.QuestAnswers.SetItem(plan.Question.Id,plan.Answer);
         if (expected.Id == 0 || !validIdentity ||
             !plan.NewCompletedQuestIds.SequenceEqual(newCompleted) ||
@@ -29,28 +29,32 @@ internal sealed partial class CharacterRepository
             !plan.ActiveAfter.Select(row => (row.Slot,row.QuestId,row.AcceptanceId)).SequenceEqual(
                 expected.ActiveMainQuests.Where(row => !scope.Contains(row.QuestId)).Select(row => (row.Slot,row.QuestId,row.AcceptanceId))) ||
             !QuestCycle.SameAnswers(plan.AnswersAfter,expectedAnswers) ||
-            !plan.AccountCompletedAfter.SequenceEqual(expected.AccountCompletedQuests) ||
+            plan.SyncedQuestIds.Any(id => !scope.Contains(id)) ||
+            !plan.AccountCompletedAfter.SequenceEqual(expected.AccountCompletedQuests.Concat(plan.SyncedQuestIds).Distinct().Order()) ||
             !QuestCycle.SameAnswers(plan.AccountAnswersAfter,expected.AccountQuestAnswers))
             throw new InvalidDataException("无奖励跳过规划必须保留原接取、完整范围及无关任务状态");
-        if (plan.Ticket?.Definition.ActionIndex != QuestTicketDefinition.SpecifiedAction &&
-            plan.EquipmentSlotFlagsAfter != expected.EquipmentSlotFlags)
-            throw new InvalidDataException("仅指定券目标声明可以改变槽位状态");
+        byte slots=expected.EquipmentSlotFlags;
+        foreach(var quest in plan.Interval.Concat(plan.AreaQuests).Where(quest=>plan.NewCompletedQuestIds.Contains(quest.Id)))
+            slots=QuestCharacterReward.EquipmentSlots(expected with { EquipmentSlotFlags=slots },quest);
+        if(plan.EquipmentSlotFlagsAfter!=slots) throw new InvalidDataException("槽位变化必须来自实际完成任务的合法奖励");
         if (plan.ProfessionGrowType is { } professionGrow)
         {
-            if (plan.Ticket?.Definition.AwakeningStage is not (1 or 2) ||
-                (professionGrow>>4)!=plan.Ticket.Definition.AwakeningStage || (professionGrow&15)!=(expected.GrowType&15) ||
-                (professionGrow>>4)!=(expected.GrowType>>4)+1 || !plan.TargetLearning.Initialized ||
+            var endpoints=plan.Interval.Concat(plan.AreaQuests).Where(quest=>quest.RewardType=="[awakening type]" &&
+                plan.NewCompletedQuestIds.Contains(quest.Id)).Select(quest=>quest.Rewards[0].Value).ToHashSet();
+            if ((professionGrow&15)!=(expected.GrowType&15) || (professionGrow>>4)<=(expected.GrowType>>4) || (professionGrow>>4)>2 ||
+                !Enumerable.Range((expected.GrowType>>4)+1,(professionGrow>>4)-(expected.GrowType>>4)).All(endpoints.Contains) || !plan.TargetLearning.Initialized ||
                 plan.TargetLearning.Experience!=expected.Learning.Experience ||
                 plan.TargetLearning.BonusSp!=expected.Learning.BonusSp || plan.TargetLearning.BonusTp!=expected.Learning.BonusTp)
                 throw new InvalidDataException("觉醒券必须保留本职业、经验及两树额外来源并逐级推进");
             plan.TargetLearning.Validate();
         }
-        var inventory = plan.Ticket?.Inventory ?? new InventoryPlan(expected.Inventory,expected.Inventory,"quest_skip_comparison");
+        var inventory = plan.Inventory;
+        var persistedInventory=inventory.After;
         ValidateInventoryPlan(expected,inventory);
         if (plan.Ticket is { } ticket)
         {
             var verified = QuestTicketSource.Create(expected,ticket.Item.Position,ticket.Definition,ticket.UtcSeconds);
-            if (verified.Item != ticket.Item || !SameInventory(inventory.After,new(verified.Inventory.After,verified.Inventory.After,"quest_ticket_comparison")))
+            if (verified.Item != ticket.Item || !SameInventory(ticket.Inventory.After,new(verified.Inventory.After,verified.Inventory.After,"quest_ticket_comparison")))
                 throw new InvalidDataException("任务券只能消费原实例的一张且保留其他资产");
         }
         using var db = database.Open();
@@ -71,6 +75,7 @@ internal sealed partial class CharacterRepository
                     reader.GetString(4) != plan.Snapshot || reader.GetString(5) != plan.OperationKind ||
                     (reader.IsDBNull(6) ? null : reader.GetString(6)) != (plan.IsPreparedSkip ? null : plan.AcceptanceId.ToString("N")))
                     throw new InvalidDataException("相同跳过接取身份的范围、答案或冻结规划发生变化");
+                persistedInventory=RestoreQuestEffectInventory(db,tx,expected,plan.OperationId,inventory.After);
                 return new QuestQuickClearCommit(current,plan,true,Matches(current,After()));
             }
         }
@@ -84,8 +89,8 @@ internal sealed partial class CharacterRepository
                 throw new InvalidOperationException("任务券在提交前资格变化");
         }
         command.Parameters.AddWithValue("$before",expected.Revision);
-        if (plan.IsTicket)
-            _ = CommitInventoryInTransaction(db,tx,owner,expected,inventory);
+        if (inventory.Changed)
+            persistedInventory=CommitInventoryInTransaction(db,tx,owner,expected,inventory).Inventory;
         else
         {
             command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$before";
@@ -108,6 +113,8 @@ internal sealed partial class CharacterRepository
             command.Parameters.RemoveAt("$growBefore"); command.Parameters.RemoveAt("$growAfter");
             WriteLearning(db,tx,expected.Id,plan.TargetLearning); WriteCanonicalSkills(db,tx,expected.Id,plan.TargetLearning);
         }
+        else if(!SameLearning(plan.TargetLearning,expected.Learning))
+        { WriteLearning(db,tx,expected.Id,plan.TargetLearning); WriteCanonicalSkills(db,tx,expected.Id,plan.TargetLearning); }
         foreach (var active in plan.RemovedActive)
         {
             command.Parameters.AddWithValue("$slot",active.Slot);
@@ -130,6 +137,7 @@ internal sealed partial class CharacterRepository
             command.ExecuteNonQuery();
             command.Parameters.RemoveAt("$quest"); command.Parameters.RemoveAt("$answer");
         }
+        WriteAccountSyncMarkers(db,tx,owner.Account,plan.SyncedQuestIds,plan.OperationId);
         command.Parameters.AddWithValue("$acceptance",plan.IsPreparedSkip ? DBNull.Value : plan.AcceptanceId.ToString("N"));
         command.Parameters.AddWithValue("$parent",plan.ParentKey is { } parent ? parent : DBNull.Value);
         command.Parameters.AddWithValue("$question",plan.QuestionQuestId is { } question ? question : DBNull.Value);
@@ -141,15 +149,17 @@ internal sealed partial class CharacterRepository
             VALUES($id,$account,$acceptance,$parent,$question,$before,$revision,$snapshot,$operation,$kind)
             """;
         command.ExecuteNonQuery();
+        if(plan.Effects is { Changed:true } effects)
+            WriteQuestEffectReceipt(db,tx,expected,plan.OperationId,inventory,persistedInventory);
         var committed = Require(db,tx,owner.Account,expected.Name);
         if (!Matches(committed,After())) throw new InvalidOperationException("持久无奖励跳过结果与完整规划不同");
         tx.Commit();
         return new QuestQuickClearCommit(committed,plan,false,true);
 
         Character After() => expected with { Revision = checked(expected.Revision+1), ActiveMainQuests = plan.ActiveAfter.ToArray(),
-            CompletedQuests = plan.CompletedAfter.ToArray(), QuestAnswers = plan.AnswersAfter, Inventory = inventory.After,
+            CompletedQuests = plan.CompletedAfter.ToArray(), AccountCompletedQuests = plan.AccountCompletedAfter.ToArray(), QuestAnswers = plan.AnswersAfter, Inventory = persistedInventory,
             EquipmentSlotFlags=plan.EquipmentSlotFlagsAfter,GrowType=plan.ProfessionGrowType ?? expected.GrowType,
-            Learning=plan.TargetLearning,Skills=plan.ProfessionGrowType is null ? expected.Skills :
+            Learning=plan.TargetLearning,Skills=SameLearning(plan.TargetLearning,expected.Learning) ? expected.Skills :
                 plan.TargetLearning.Trees.Single(row=>row.Context==0).Skills.Select(row=>new CharacterSkill(row.Id,row.Level)).OrderBy(row=>row.Id).ToArray() };
 
         bool Matches(Character actual,Character target) => actual.Id == target.Id && actual.Slot == target.Slot &&

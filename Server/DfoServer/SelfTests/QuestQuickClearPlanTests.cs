@@ -52,8 +52,8 @@ internal static class QuestQuickClearPlanTests
         That(plan.Answer == 2 && plan.AnswersAfter[100] == 2 && plan.AnswersAfter[201] == 1 && plan.AnswersAfter[900] == 2 &&
             !plan.NewCompletedQuestIds.Contains(201),"保存零基跳过答案，既有普通完成项及其回答保持原值");
         That(plan.MarkerQuestId == 101 && ReferenceEquals(plan.MarkerDefinition,marker) && plan.CompletedAfter.Contains(101) &&
-            plan.AccountCompletedAfter.SequenceEqual(source.AccountCompletedQuests) && ReferenceEquals(plan.AccountAnswersAfter,source.AccountQuestAnswers),
-            "marker按已证级联消费者只加入本角色，不冒充普通账号任务");
+            plan.AccountCompletedAfter.SequenceEqual(new[]{101,901}) && ReferenceEquals(plan.AccountAnswersAfter,source.AccountQuestAnswers),
+            "显式marker同步账号资格，旅程回答仍保持角色独立");
         That(QuestQuickClearPlan.TryCreate(source with { AccountCompletedQuests = [901,6381] },1007,quests,connections,out var shared,out _) &&
             !shared!.NewCompletedQuestIds.Contains(6381) && !shared.CompletedAfter.Contains(6381) && shared.AccountCompletedAfter.Contains(6381),
             "已有账号完成项原样保留，不复制成新的角色完成记录");
@@ -67,6 +67,8 @@ internal static class QuestQuickClearPlanTests
             "尚未交付的普通选项不会被当作已完成分支，专用跳过入口仍可选择真实 skip 答案");
         That(TryReplace(last with { Definition = last.Definition! with { Fields = [TitleNotification("clear")] } },out _),
             "完成标题动画路径与五整数 fade 声明可保留为显示定义");
+        That(!TryReplace(last with {Grade="[side]"},out _) && !TryReplace(last with {Grade="[episode]"},out _),
+            "1714章节区间不授权独立支线或外传");
         That(TryReplace(last with { Definition = last.Definition! with { Fields = [TitleNotification("accept") with
             { Children = TitleNotification("accept").Children.Reverse().ToImmutableArray() }] } },out _),
             "标题显示子段顺序不改变无奖励规划");
@@ -97,8 +99,8 @@ internal static class QuestQuickClearPlanTests
         {
             last with { Definition = last.Definition! with { AccountQuest = true } },
             last with { Definition = last.Definition! with { JobChange = 1 } },
-            last with { Definition = last.Definition! with { AcceptanceRewards = [new(0,1,null),new(0,1,null)] } },
-            last with { Condition = "[seeking]", IntData = [1,1] },
+            last with { Definition = last.Definition! with { AcceptanceRewards = [new(0,1,null)] } },
+            last with { Condition = "[seeking]", IntData = [1,0] },
             last with { RewardType = "[skill point]" },
             last with { Definition = last.Definition! with { Fields = [new("future domain rule",[],[])] } },
             last with { Definition = last.Definition! with { Fields = [new("casecade clear",[new(0,999,null)],[])] } },
@@ -153,7 +155,7 @@ internal static class QuestQuickClearPlanTests
             var quick = unit.QuickClear!.Value;
             That(plan!.Interval[0].Id == quick.StartQuestId && plan.Interval[^1].Id == quick.EndQuestId &&
                 plan.Answer == quick.Answer && plan.CompletedAfter.Contains(question.Id) && plan.CompletedAfter.Contains(quick.MarkerQuestId) &&
-                plan.AccountCompletedAfter.IsEmpty && plan.ActiveAfter.IsEmpty,"真实定义起止、零基答案与角色cascade marker保持合同: " + key);
+                plan.AccountCompletedAfter.SequenceEqual(new[]{plan.MarkerQuestId}) && plan.ActiveAfter.IsEmpty,"真实定义起止、零基答案与账号cascade marker保持合同: " + key);
             foreach (var quest in plan.Interval)
             foreach (var title in quest.Definition!.Fields.Where(field => field.Name == "quest title noti"))
             {

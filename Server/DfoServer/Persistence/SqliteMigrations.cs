@@ -87,8 +87,22 @@ internal static class SqliteMigrations
         new(30, "冒险团代表职业选择", static (db, tx) => Execute(db, tx, AdventureRepresentativeSchema)),
         new(31, "账号远征及冻结成员", static (db, tx) => Execute(db, tx, AdventureExpeditionSchema)),
         new(32, "冒险团商店账号限购", static (db, tx) => Execute(db, tx, AdventurePurchasesSchema)),
-        new(33, "账号赛丽亚幸运值", AddSeriaLuckColumn)
+        new(33, "账号赛丽亚幸运值", AddSeriaLuckColumn),
+        new(34, "任务跳过实际效果账本", AddQuestEffects)
     ];
+
+    internal const string QuestEffectsSchema = """
+        CREATE TABLE IF NOT EXISTS character_quest_effect_receipts(
+          character_id INTEGER NOT NULL REFERENCES characters(id),operation_id TEXT NOT NULL CHECK(length(operation_id)=32),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+          claimed_quests TEXT NOT NULL CHECK(json_valid(claimed_quests) AND json_type(claimed_quests)='array'),
+          changed_items TEXT NOT NULL CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+          PRIMARY KEY(character_id,operation_id));
+        CREATE TABLE IF NOT EXISTS character_quest_special_reward_claims(
+          character_id INTEGER NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),operation_id TEXT NOT NULL,
+          PRIMARY KEY(character_id,quest_id),
+          FOREIGN KEY(character_id,operation_id) REFERENCES character_quest_effect_receipts(character_id,operation_id));
+        """;
 
     internal const string HotkeySettingsSchema = """
         CREATE TABLE account_hotkey_settings(
@@ -592,6 +606,19 @@ internal static class SqliteMigrations
         """;
     public static int CurrentVersion => Steps.Length == 0 ? BaselineVersion : Steps[^1].Version;
 
+    static void AddQuestEffects(SqliteConnection db,SqliteTransaction tx)
+    {
+        using var query=db.CreateCommand(); query.Transaction=tx;
+        // 本地旧v32使用任务账本编号，未执行master的商店v32；只接管这两张已存在的账本形状。
+        query.CommandText="""
+            SELECT count(*) FROM sqlite_schema WHERE type='table'
+              AND name IN('character_quest_effect_receipts','character_quest_special_reward_claims')
+              AND NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='account_adventure_purchases')
+            """;
+        if(Convert.ToInt32(query.ExecuteScalar())==2) Execute(db,tx,AdventurePurchasesSchema);
+        Execute(db,tx,QuestEffectsSchema);
+    }
+
     static void AddSeriaLuckColumn(SqliteConnection db, SqliteTransaction tx)
     {
         using var query = db.CreateCommand();
@@ -797,6 +824,8 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,operation_id,before_revision,revision,claimed_quests,changed_items FROM character_quest_effect_receipts LIMIT 0",
+        "SELECT character_id,quest_id,operation_id FROM character_quest_special_reward_claims LIMIT 0",
         "SELECT account,item_id,count FROM account_adventure_purchases LIMIT 0",
         "SELECT account,area,run_id,started,ends,reward,extra_reward,attributes FROM account_adventure_expeditions LIMIT 0",
         "SELECT account,area,ordinal,character_id,member_snapshot FROM account_adventure_expedition_members LIMIT 0",

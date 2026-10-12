@@ -455,7 +455,7 @@ internal static class QuestLifecycleTcpTests
                 "寻物按虚拟Main槽扣晶体，奖励行回实际红色晶体增量");
             inventory = peer.Expect(0,14).Body; MainBalance(inventory,354,3033,4); MainBalance(inventory,356,3035,4);
             peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
-            peer.Send(31,[31,0,32,117]); peer.Expect(1,31,[1,32,117,255,255,255,255,0]); peer.Expect(0,21); peer.Expect(0,356);
+            peer.Send(31,[31,0,32,117]); peer.Expect(1,31,[1,32,117,1,0,0,0,0]); peer.Expect(0,21); peer.Expect(0,356);
             peer.Send(33,[33,0,32,117,1,0]); peer.Expect(1,33,[1,32,117,1,0,0,0]);
             peer.Send(34,[34,0,32,117,255,255,1,0,255,255]); peer.Expect(1,34,[1,32,117,42,0,0,0,0,0,0]);
             int[] available = List(peer.Expect(0,21).Body,1);

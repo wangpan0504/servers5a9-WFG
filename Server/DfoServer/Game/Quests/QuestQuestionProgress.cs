@@ -8,6 +8,10 @@ internal static class QuestQuestionProgress
     // 未选择使用独立哨兵，不能把普通任务的初值1误认成第二个回答。
     public const uint Unanswered = uint.MaxValue;
 
+    // FFFFFFFF在客户端活动查询中代表任务不存在；内部未回答哨兵只能投影为进行中1。
+    // 已回答的零基序号保持原值，不能把未回答状态写成答案0或1。
+    public static uint ClientState(uint state) => state==Unanswered ? 1u : state;
+
     public static bool TryCount(StoryQuest quest,out int count)
     {
         count = 0;

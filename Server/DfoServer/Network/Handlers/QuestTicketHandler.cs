@@ -5,6 +5,8 @@ using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
+using DfoServer.Network.Builders.Inventory;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Characters;
 
 namespace DfoServer.Network.Handlers;
@@ -44,6 +46,10 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,QuestTicketPackets.Used(request),"quest_ticket_used",Guard);
             context.Session.MarkQuestTicketAcknowledged(receipt);
         }
+        var added=receipt.Commit.Plan.Inventory.ChangedSlots.Where(slot=>receipt.Commit.Plan.Inventory.Before.Find(slot)?.Core.Kind==ItemKind.Quest ||
+            receipt.Character.Inventory.Find(slot)?.Core.Kind==ItemKind.Quest).ToArray();
+        if(added.Length>0)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,InventoryListType.Main,added),"quest_ticket_special_items",Guard);
         if (receipt.Character.EquipmentSlotFlags!=receipt.Commit.Plan.Expected.EquipmentSlotFlags)
             await (levelProjection ?? throw new InvalidOperationException("指定券槽位发布缺少角色投影"))
                 .PlayerAsync(context,receipt.Character,"quest_ticket_slots",Guard);

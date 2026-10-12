@@ -129,6 +129,30 @@ internal static class QuestEligibilityTests
         var hide = first with { Definition = first.Definition! with { HideOnCompletedQuests = [202] } };
         That(QuestEligibility.Evaluate(origin with { CompletedQuests = [202] }, hide, catalog) is { Eligible: true, Visible: false },
             "资源隐藏条件影响展示，不冒充完成或废弃任务");
+        var story=Quest(120) with {MinimumLevel=50,Condition="[clear map]",Rewards=[new(0,0,null),new(0,0,null)],
+            Definition=new([]) {TargetCharacters=[new("[demonic lancer]",3,1)],PrerequisiteGroups=[[100]],Collisions=[121]}};
+        var awakening=Quest(121) with {MinimumLevel=50,Condition="[clear map]",RewardType="[awakening type]",Rewards=[new(0,1,null)],
+            Definition=new([]) {Job="[demonic lancer]",GrowType=3,JobChange=2,PrerequisiteGroups=[[100]]}};
+        var storyCatalog=new QuestCatalog(new[]{first,story,awakening}.ToDictionary(row=>row.Id));
+        var advanced=origin with {Job=13,GrowType=0x23,Level=95,CompletedQuests=[100]};
+        That(QuestEligibility.Evaluate(advanced,story,storyCatalog) is {Eligible:true,Visible:true} &&
+            QuestEligibility.Candidates(advanced,storyCatalog).Contains(120),"已二觉角色仍可见同职业普通主线替代分支");
+        That(QuestEligibility.Evaluate(advanced with {GrowType=0x13},story,storyCatalog).Eligible &&
+            !QuestEligibility.Evaluate(advanced with {GrowType=3},story,storyCatalog).Eligible,"保留一觉原资格，未觉醒不能借普通替代跳过觉醒");
+        That(!QuestEligibility.Evaluate(advanced,awakening,storyCatalog).Eligible &&
+            !QuestEligibility.Evaluate(advanced with {GrowType=0x22},story,storyCatalog).Eligible,"不重做觉醒或替其他职业分支取得衔接资格");
+        That(!QuestEligibility.Evaluate(advanced with {CompletedQuests=[]},story,storyCatalog).Eligible &&
+            !QuestEligibility.Evaluate(advanced with {CompletedQuests=[100,121]},story,storyCatalog).Eligible,"衔接仍检查真实前置和互斥已完成记录");
+        var unrelated=new QuestCatalog(new[]{first,story,awakening with {Definition=awakening.Definition! with {PrerequisiteGroups=[[102]]}}}.ToDictionary(row=>row.Id));
+        That(!QuestEligibility.Evaluate(advanced,story,unrelated).Eligible,"没有同前置觉醒互斥分支的普通任务保留精确觉醒条件");
+        var transferStory=story with {MinimumLevel=15,Definition=story.Definition! with {JobChange=1,
+            TargetCharacters=[new("[demonic lancer]",-1,-1)]}};
+        var transferGoal=awakening with {MinimumLevel=15,RewardType="[grow type]",Rewards=[new(0,3,null)],
+            Definition=new([]) {JobChange=1,TargetCharacters=[new("[demonic lancer]",0,-1)],PrerequisiteGroups=[[100]]}};
+        var transferCatalog=new QuestCatalog(new[]{first,transferStory,transferGoal}.ToDictionary(row=>row.Id));
+        That(QuestEligibility.Evaluate(advanced,transferStory,transferCatalog).Visible &&
+            !QuestEligibility.Evaluate(advanced with {GrowType=0},transferStory,transferCatalog).Eligible,
+            "GM已转职可以使用零奖励普通替代，未转职不能借其越过转职");
         Console.WriteLine($"PASS {Count - checks} 任务资源入口、等级/职业及前置/子任务资格断言");
     }
 

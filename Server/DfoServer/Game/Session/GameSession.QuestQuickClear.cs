@@ -46,8 +46,9 @@ internal sealed partial class GameSession
                 return receipt with { Reason = "前一跳过事务尚待恢复" };
             plan = pending.Plan;
         }
-        else if (!QuestQuickClearPlan.TryCreate(expected,parentKey,quests,connections,out plan,out string reason))
+        else if (!QuestQuickClearPlan.TryCreate(expected,parentKey,quests,connections,out plan,out string reason,towns))
             return receipt with { Reason = reason };
+        if(capture.Pending is null && !FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
         return owner.Execute(() =>
         {
             if (!CanPublishQuestQuickClear(receipt)) throw new InvalidOperationException("跳过规划的原选角或场景已失效");
@@ -73,8 +74,9 @@ internal sealed partial class GameSession
                 return receipt with { Reason = "前一跳过事务尚待恢复" };
             plan = pending.Plan;
         }
-        else if (!QuestQuickClearPlan.TryCreateManual(expected,Guid.NewGuid(),quests,ImmutableDictionary<int,byte>.Empty,out plan,out string reason))
+        else if (!QuestQuickClearPlan.TryCreateManual(expected,Guid.NewGuid(),quests,ImmutableDictionary<int,byte>.Empty,out plan,out string reason,towns))
             return receipt with { Reason = reason };
+        if(capture.Pending is null && !FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
         return owner.Execute(() =>
         {
             if (!CanPublishQuestQuickClear(receipt)) throw new InvalidOperationException("手册规划的原选角或场景已失效");
@@ -112,8 +114,9 @@ internal sealed partial class GameSession
                 var source = QuestTicketSource.Create(expected,item.Position,items.QuestTicket((int)templateId),now);
                 if (source.Definition.VillageOnly && capture.Phase!=SessionPhase.Town)
                     return receipt with {Reason="实际觉醒券声明仅在城镇使用"};
-                if (!QuestQuickClearPlan.TryCreateTicket(expected,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out plan,out string reason,skills))
+                if (!QuestQuickClearPlan.TryCreateTicket(expected,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out plan,out string reason,skills,towns))
                     return receipt with { Reason = reason };
+                if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
                 pending = null;
             }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or OverflowException)
@@ -154,8 +157,9 @@ internal sealed partial class GameSession
                     // 1430只带template；首次真实515才冻结所报slot的实例，不消费准备时借用的另一张。
                     if (expected.Inventory.Find(position) is not { } item || item.Core.ItemId != pending.Plan.Ticket!.Definition.TemplateId) return receipt;
                     var source = QuestTicketSource.Create(expected,position,pending.Plan.Ticket.Definition,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                    if (!QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,source,pending.Plan.ManualAnswers,out var plan,out string reason,skills))
+                    if (!QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,source,pending.Plan.ManualAnswers,out var plan,out string reason,skills,towns))
                         return receipt with { Reason = reason };
+                    if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
                     if (!plan!.ScopeQuestIds.SequenceEqual(pending.Plan.ScopeQuestIds) || !plan.PendingQuestions.IsEmpty ||
                         !QuestCycle.SameAnswers(plan.AnswersAfter,pending.Plan.AnswersAfter) ||
                         plan.EquipmentSlotFlagsAfter!=pending.Plan.EquipmentSlotFlagsAfter ||
@@ -179,8 +183,9 @@ internal sealed partial class GameSession
                 if (source.Definition.ActionIndex!=action) return receipt with { Reason="515动作与实际券声明不符" };
                 if (source.Definition.VillageOnly && capture.Phase!=SessionPhase.Town)
                     return receipt with {Reason="实际觉醒券声明仅在城镇使用"};
-                if (!QuestQuickClearPlan.TryCreateTicket(expected,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out var plan,out string reason,skills))
+                if (!QuestQuickClearPlan.TryCreateTicket(expected,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out var plan,out string reason,skills,towns))
                     return receipt with { Reason = reason };
+                if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
                 if (plan!.PendingQuestions.Length != 0) return receipt with { Reason = "任务券问题尚未准备回答" };
                 pending = new(plan,capture.SelectionEpoch,capture.Phase,capture.Identity);
             }
@@ -244,10 +249,11 @@ internal sealed partial class GameSession
             choices = choices.SetItem(checked((int)row.QuestId),checked((byte)row.Answer));
         }
         bool created = pending.Plan.Ticket is { } ticket
-            ? QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,ticket,choices,out var plan,out string reason)
-            : QuestQuickClearPlan.TryCreateManual(expected,pending.Plan.OperationId,quests,choices,out plan,out reason);
+            ? QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,ticket,choices,out var plan,out string reason,towns:towns)
+            : QuestQuickClearPlan.TryCreateManual(expected,pending.Plan.OperationId,quests,choices,out plan,out reason,towns);
         if (!created)
             return receipt with { Reason = reason };
+        if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
         return owner.Execute(() =>
         {
             if (!CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,pending))

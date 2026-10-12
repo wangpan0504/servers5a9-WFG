@@ -46,6 +46,18 @@ internal sealed class TownCatalog
     public IReadOnlyDictionary<uint, uint[]> NpcMoves { get; }
     public IReadOnlyDictionary<int, TownDungeonMap> DungeonMaps { get; }
 
+    // 只收集完成后开放区域的条件；except quest和进行中任务不能当作解锁任务。
+    public IEnumerable<int> AccessQuestIds => Areas.Values.SelectMany(area =>
+        area.Quests.Concat(area.AnyQuests).Concat(area.Shifts.Select(shift => shift.Quest))
+            .Concat(area.Phases.Prepend(area.Default).SelectMany(map =>
+                map.Bounds.Concat(map.DungeonGates).SelectMany(region => region.Quests)
+                    .Concat(map.Links.SelectMany(link => link.Quests)))))
+        .Concat(RoomPortals.Select(portal => portal.Quest))
+        .Concat(Dock.Stops.Select(stop => stop.Quest)).Append(Dock.OpenQuest)
+        .Concat(Dock.Shifts.Select(shift => shift.Quest))
+        .Concat(DungeonMaps.Values.SelectMany(map => map.Options.Where(option => !option.InProgress).Select(option => option.QuestId)))
+        .Where(id => id > 0).Distinct();
+
     internal TownCatalog(Dictionary<(byte, byte), TownArea> areas, Location room, Location initialReturn, TownDock dock, RoomPortal[] portals, IReadOnlyDictionary<uint, uint[]> npcMoves,
         IReadOnlyDictionary<int,TownDungeonMap>? dungeonMaps = null)
     {

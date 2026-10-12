@@ -8,6 +8,8 @@ using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
+using DfoServer.Network.Builders.Inventory;
+using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Network.Handlers;
 
@@ -94,6 +96,11 @@ internal sealed class QuestQuickClearHandler(QuestCatalog quests, QuestConnectio
 
     async Task PublishCompletedAsync(GameConnectionContext context,QuestQuickClearReceipt receipt,Func<bool> guard,string action)
     {
+        var plan=receipt.Commit!.Plan;
+        var added=plan.Inventory.ChangedSlots.Where(slot=>plan.Inventory.Before.Find(slot)?.Core.Kind==ItemKind.Quest ||
+            receipt.Character.Inventory.Find(slot)?.Core.Kind==ItemKind.Quest).ToArray();
+        if(added.Length>0)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,InventoryListType.Main,added),action+"_items",guard);
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),action+"_active",guard);
         await projection.RefreshAsync(context,receipt.Character,guard, restoreCompleted: false);
         // 完成表放在完整活动/可接投影之后，恢复答案和本角色级联标记。

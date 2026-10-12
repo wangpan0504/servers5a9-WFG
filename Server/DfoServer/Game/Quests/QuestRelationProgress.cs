@@ -14,10 +14,23 @@ internal static class QuestRelationProgress
         if (quest.Definition?.Has("casecade clear") != true) return null;
         if (!QuestCoverage.HasOrdinaryCascade(quest)) throw new InvalidDataException("casecade clear不是唯一合法marker声明: " + quest.Id);
         int marker = quest.Definition.Fields.Single(field => field.Name == "casecade clear").Values[0].Value;
-        if (marker == quest.Id || !quests.TryGet(marker,out var target) || !IsCascadeMarker(target))
+        if (marker == quest.Id || !quests.TryGet(marker,out var target) ||
+            !IsCascadeMarker(target) && !IsAlternativeTerminal(quest,target,quests))
             throw new InvalidDataException("casecade clear引用缺失、自指或不是无奖励角色同步marker: " + quest.Id + "→" + marker);
         return marker;
     }
+
+    // Full03 02038090只登记直接目标；简短旅程终点可引用同奖励的长旅程终点，不重复领奖或递归推进。
+    static bool IsAlternativeTerminal(StoryQuest quest,StoryQuest target,QuestCatalog quests) =>
+        quest.Grade=="[epic]" && target.Grade=="[epic]" && quest.Condition=="[meet npc]" && target.Condition==quest.Condition &&
+        quest.MinimumLevel==target.MinimumLevel && quest.MaximumLevel==target.MaximumLevel &&
+        quest.RewardType is null or "[item]" && quest.RewardType==target.RewardType && quest.Rewards.SequenceEqual(target.Rewards) && quest.DeclaredGoldMultiple==target.DeclaredGoldMultiple &&
+        quest.Definition is {AccountQuest:false,JobChange:0} source &&
+        target.Definition is {Diagnostics.Length:0,AccountQuest:false,JobChange:0,AcceptanceRewards.Length:0,SelectRewards.Length:0} definition &&
+        definition.Job==source.Job && definition.GrowType==source.GrowType && definition.Has("casecade clear") &&
+        QuestCoverage.HasOrdinaryCascade(target) &&
+        quests.TryGet(definition.Fields.Single(field=>field.Name=="casecade clear").Values[0].Value,out var marker) &&
+        IsAccountSyncMarker(marker);
 
     public static bool IsCascadeMarker(StoryQuest marker) =>
         marker.Definition is { Diagnostics.Length: 0, AccountQuest: false, JobChange: 0, AcceptanceRewards.Length: 0, SelectRewards.Length: 0 } definition &&
@@ -26,6 +39,9 @@ internal static class QuestRelationProgress
         (marker.Rewards.Count == 0 || marker.Rewards is [{ Type: 0, Value: 0, Text: null },{ Type: 0, Value: 0, Text: null }]) &&
         definition.Fields.Where(field => field.Name == "synchronization account quest").ToArray() is
             [{ Children.Length: 0, Values: [{ Type: 0, Text: null }] }];
+
+    public static bool IsAccountSyncMarker(StoryQuest marker) => IsCascadeMarker(marker) && !QuestCycle.Daily(marker) && !QuestCycle.Repeat(marker) &&
+        marker.Definition!.Fields.Single(field => field.Name == "synchronization account quest").Values[0].Value == 1;
 
     public static bool SequentialParent(StoryQuest parent, QuestCatalog quests) =>
         parent.Condition == "[quest clear]" && parent.SubType == 2 && parent.MainQuest is null &&

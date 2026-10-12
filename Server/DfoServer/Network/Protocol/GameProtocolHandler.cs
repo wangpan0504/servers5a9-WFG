@@ -12,7 +12,7 @@ namespace DfoServer.Network.Protocol;
 internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler loginHandler, GameCommandRegistry commands, ICharacterRepository repository, TownCatalog towns, OnlineSessionDirectory online, TownProjection projection, ServerLog log,
     Func<GameSession, IGameConnectionActivity>? createActivity = null, MailboxProjection? mailbox = null,
     DfoServer.GameWorld.Quests.QuestCatalog? quests = null, GameDebugSettings? debugSettings = null,
-    AdventureProjection? adventure = null) : IConnectionProtocol
+    AdventureProjection? adventure = null, DfoServer.Game.Quests.QuestSkipEffects? questEffects=null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -20,7 +20,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (login is null)
             return;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = Convert.ToHexString(body.Span) }), connection.CaptureSent);
-        var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry);
+        var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         var elevator = new DungeonElevatorProjection(context, log);
         context.Elevator = elevator;

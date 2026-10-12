@@ -36,7 +36,9 @@ internal sealed partial class CharacterRepository
                 expected.ActiveMainQuests.Where(row => row.AcceptanceId != plan.AcceptanceId && !closed.Contains(row.AcceptanceId)).Select(row => (row.Slot, row.QuestId, row.AcceptanceId))) ||
             !plan.NewCompletedQuestIds.SequenceEqual(newCompleted) ||
             !plan.CompletedAfter.SequenceEqual(expected.CompletedQuests.Concat(newCompleted).Distinct().Order()) ||
-            !plan.AccountCompletedAfter.SequenceEqual((plan.AccountQuest ? expected.AccountCompletedQuests.Append((int)plan.QuestId) : expected.AccountCompletedQuests).Order()))
+            plan.SyncedQuestIds.Any(id => id != plan.CascadeMarkerQuestId) ||
+            !plan.AccountCompletedAfter.SequenceEqual((plan.AccountQuest ? expected.AccountCompletedQuests.Append((int)plan.QuestId) : expected.AccountCompletedQuests)
+                .Concat(plan.SyncedQuestIds).Distinct().Order()))
             throw new InvalidDataException("领奖必须使用原接取、完整资产和成长规划");
         if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 25 or 31 or 39 or 40 or 42 or 44 or 49 or 64 or 65 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
             plan.Snapshot is null || plan.MailedGoldAmount != 0 && plan.MailedGoldAmount != plan.GoldAmount ||
@@ -169,6 +171,7 @@ internal sealed partial class CharacterRepository
             command.ExecuteNonQuery();
             command.Parameters.RemoveAt("$marker");
         }
+        WriteAccountSyncMarkers(db,tx,owner.Account,plan.SyncedQuestIds,plan.AcceptanceId);
         if (plan.AccountQuest)
         {
             command.CommandText = "INSERT INTO account_completed_quests(account,quest_id,character_id,acceptance_id,daily_period,answer) VALUES($account,$quest,$id,$acceptance,$period,$answer)";

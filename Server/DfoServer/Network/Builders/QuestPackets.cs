@@ -1,6 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Quests;
 
 namespace DfoServer.Network.Builders;
 
@@ -61,7 +62,7 @@ internal static class QuestPackets
         foreach (var quest in active.OrderBy(value => value.Slot))
         {
             writer.Write(quest.QuestId);
-            writer.Write(quest.ConditionState);
+            writer.Write(QuestQuestionProgress.ClientState(quest.ConditionState));
         }
         return bytes.ToArray();
     }
@@ -74,7 +75,7 @@ internal static class QuestPackets
         using var writer = new BinaryWriter(bytes);
         writer.Write((byte)1);
         writer.Write(questId);
-        writer.Write(scalar);
+        writer.Write(QuestQuestionProgress.ClientState(scalar));
         writer.Write((byte)gifts.Count);
         // Full03 0236DF22/2E/3A：接取赠品为10B短行，不使用领奖19B行。
         foreach (var gift in gifts)
@@ -161,7 +162,7 @@ internal static class QuestPackets
         using var writer = new BinaryWriter(stream);
         writer.Write((byte)1);
         writer.Write(questId);
-        writer.Write(scalar);
+        writer.Write(QuestQuestionProgress.ClientState(scalar));
         return stream.ToArray();
     }
 
