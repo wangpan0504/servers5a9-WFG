@@ -60,12 +60,12 @@ internal static class ClientSettingsStoreTests
         Reject<InvalidOperationException>(() => f.Service.SaveHotkeys(f.Owner, 0, keys), "旧generation不能覆盖新账号键位");
         Check(Same(reopened.Load(replacement, f.First.Id).Hotkeys, keys), "拒绝旧owner后存档仍可恢复");
 
-        f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; PRAGMA user_version=26");
+        f.Execute("DROP TABLE account_adventures; ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; PRAGMA user_version=26");
         string existing = f.ExistingSettings();
         _ = new ClientSettingsRepository(f.Path);
         Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.Query("SELECT count(*) FROM account_hotkey_settings") is 0L &&
             f.ExistingSettings() == existing && f.Assets() == assets, "v26增量只建空键位表，保留称号进度、训练状态、原设置与资产");
-        f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; PRAGMA user_version=26; CREATE TABLE account_hotkey_settings(collision INTEGER)");
+        f.Execute("DROP TABLE account_adventures; ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; PRAGMA user_version=26; CREATE TABLE account_hotkey_settings(collision INTEGER)");
         string rollbackAssets = f.Assets();
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "键位迁移碰撞不吞错误");
         Check(f.Query("PRAGMA user_version") is 26L && f.Assets() == rollbackAssets, "键位DDL失败回滚版本并保留资产");

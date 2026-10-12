@@ -40,7 +40,8 @@ internal static class ServerRuntime
 
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,
-        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null)
+        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
+        GameWorld.Adventure.AdventureCatalog? adventureCatalog = null)
     {
         var channels = LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
         var gameChannels = new GameChannelListeners(options, channels);
@@ -60,11 +61,12 @@ internal static class ServerRuntime
         var titleCatalog = new TitleCatalog(pvf, quests);
         var titleService = new Game.Titles.TitleAchievementService(titleCatalog, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var titleProjection = new TitleProjection(titleService);
+        var adventureProjection = new AdventureProjection(adventureCatalog ?? new GameWorld.Adventure.AdventureCatalog(pvf));
         var growth = CharacterGrowthCatalog.Load(pvf, learning);
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
         var debugSettings = new GameDebugSettings();
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings);
@@ -113,7 +115,8 @@ internal static class ServerRuntime
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
-            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials),
+            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection),
+            new AdventureHandler(adventureProjection),
             new TutorialHandler(tutorials, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection),
             new SkillHandler(learning, log),
             new TownHandler(projection, log),
@@ -155,7 +158,7 @@ internal static class ServerRuntime
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });

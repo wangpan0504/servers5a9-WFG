@@ -14,6 +14,7 @@ internal sealed class TcpTestResources : IDisposable
     readonly Lazy<TownCatalog> towns;
     readonly Lazy<SkillLearningCatalog> learning;
     readonly Lazy<DfoServer.GameWorld.Quests.QuestCatalog> quests;
+    readonly Lazy<DfoServer.GameWorld.Adventure.AdventureCatalog> adventure;
     readonly Lazy<TutorialCatalog> tutorials;
     readonly Lazy<TutorialScenes> tutorialScenes;
     public PvfArchive Archive => archive.Value;
@@ -22,6 +23,7 @@ internal sealed class TcpTestResources : IDisposable
     public TownCatalog Towns => towns.Value;
     public SkillLearningCatalog Learning => learning.Value;
     public DfoServer.GameWorld.Quests.QuestCatalog Quests => quests.Value;
+    public DfoServer.GameWorld.Adventure.AdventureCatalog Adventure => adventure.Value;
     public TutorialCatalog Tutorials => tutorials.Value;
     public TutorialScenes TutorialScenes => tutorialScenes.Value;
     public bool IsLoaded => archive.IsValueCreated;
@@ -40,6 +42,7 @@ internal sealed class TcpTestResources : IDisposable
         towns = new(() => TownCatalog.Load(Archive));
         learning = new(() => SkillLearningCatalog.Load(Archive));
         quests = new(() => DfoServer.GameWorld.Quests.QuestCatalog.Load(Archive));
+        adventure = new(() => new DfoServer.GameWorld.Adventure.AdventureCatalog(Archive));
         tutorials = new(() => new TutorialCatalog(Archive));
         tutorialScenes = new(() => new TutorialScenes(Archive, Tutorials, DfoServer.GameWorld.Dungeons.DungeonCatalog.Load(Archive)));
     }

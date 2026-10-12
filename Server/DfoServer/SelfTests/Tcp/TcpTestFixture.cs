@@ -172,7 +172,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 using var log = new ServerLog(options.LogDirectory);
                 await ServerRuntime.Create(options, resources.Archive, new CharacterRepository(Database, quests), resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null).RunAsync(hostStop.Token);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure).RunAsync(hostStop.Token);
             });
         }
         else

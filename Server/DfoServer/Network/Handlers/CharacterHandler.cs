@@ -9,7 +9,7 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class CharacterHandler(CharacterCatalog characters, TownProjection projection, ServerLog log, GoldLimitCatalog goldLimits,
-    SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null) : IGameCommandModule
+    SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null, AdventureProjection? adventure = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -18,6 +18,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         commands.Register(CmdPacketType.CREATE_CHARACTER, CreateAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.DELETE_CHARACTER, DeleteAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.GET_USERINFO, RosterAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CHARAC_VIEW_HIDDEN_CHARAC_INFO, HiddenRosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
     }
 
@@ -96,6 +97,17 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
             context.RosterRequested = true;
             context.SelectionRosterPushed = false;
         }
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> HiddenRosterAsync(GameConnectionContext context, Packet request)
+    {
+        CharacterRequests.HiddenRoster(request.Body);
+        if (!context.Session.CheckState(DfoServer.Game.Session.UserState.CharacterSelect)) return CommandResult.Unhandled;
+        long epoch = context.Session.SelectionEpoch;
+        bool Guard() => context.Session.SelectionEpoch == epoch && context.Session.CheckState(DfoServer.Game.Session.UserState.CharacterSelect);
+        await context.Reply(CmdPacketType.CHARAC_VIEW_HIDDEN_CHARAC_INFO, CharacterPackets.HiddenRoster(), "hidden_character_roster", Guard);
+        if (adventure is not null && Guard()) await adventure.InformationAsync(context);
         return CommandResult.Handled;
     }
 

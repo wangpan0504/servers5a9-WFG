@@ -8,6 +8,10 @@ internal sealed record CreateCharacterRequest(byte Job, string Name, byte[] Tail
 internal sealed record DeleteCharacterRequest(ushort RosterIndex, string ConfirmationName);
 internal static class CharacterRequests
 {
+    public static void HiddenRoster(ReadOnlySpan<byte> body)
+    {
+        if (!body.IsEmpty) throw new InvalidDataException("隐藏角色查询正文必须为空");
+    }
     public static bool IsRoster(ReadOnlySpan<byte> body) => body.SequenceEqual<byte>([255, 255, 2]);
     public static ushort Select(ReadOnlySpan<byte> body)
     {

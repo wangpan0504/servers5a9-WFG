@@ -15,6 +15,7 @@ internal static class TcpRegressionTests
         ("channel-entry", ChannelEntryTcpTests.RunAsync),
         ("quests", QuestLifecycleTcpTests.RunAsync),
         ("titles", TitleTcpTests.RunAsync),
+        ("adventure", AdventureCoreTcpTests.RunAsync),
         ("quest-gold-mail", QuestGoldMailTcpTests.RunAsync),
         ("quest-continuation", QuestLifecycleTcpTests.RunContinuationAsync),
         ("story-digest", StoryDigestTcpTests.RunAsync),

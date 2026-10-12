@@ -13,11 +13,12 @@ namespace DfoServer.Network.Projection;
 
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
-    SkillLearningCatalog? learning = null, TitleProjection? titles = null)
+    SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null)
 {
     public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
     {
         titles?.PrepareInitialization(context);
+        adventure?.Prepare(context);
         var settingReceipt = settings?.Capture(context);
         var c = context.Session.Selected ?? throw new InvalidOperationException("No selected character");
         await context.Reply(CmdPacketType.SELECT_CHARACTER, TownPackets.Select(c, context.Session.FatigueForClient(c)), "select_character");
@@ -51,6 +52,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await mailbox.InitializeAsync(context);
         if (titles is not null)
             await titles.InitializeAsync(context);
+        if (adventure is not null)
+            await adventure.InformationAsync(context, initialization: true);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
         if (resumeTown)

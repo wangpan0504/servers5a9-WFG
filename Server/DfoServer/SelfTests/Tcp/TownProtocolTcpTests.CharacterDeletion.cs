@@ -31,8 +31,13 @@ internal static partial class TownProtocolTcpTests
             That(fixture.Query("SELECT id,slot FROM characters WHERE account=$p0 ORDER BY slot", account) is var rows &&
                 rows.Length == 2 && Convert.ToUInt16(rows[0][0]) == first && Convert.ToUInt16(rows[1][0]) == highest &&
                 Convert.ToUInt16(rows[1][1]) == 2, "中间行删除不改剩余角色真实身份和高槽");
-            // ACK6消费者随后发空645；该功能未实现，不能伪造ACK，仍允许下一合法请求。
+            // ACK6消费者随后确认选角上下文，冒险团回放使用未选角色的owner0。
             peer.Send(645);
+            peer.Expect(1, 645, [1, 0]);
+            var adventure = peer.Expect(0, 1343).Body;
+            That(U16(adventure, 0) == 0 && U32(adventure, 14) == 7440 &&
+                adventure.Length == 22 + 7440 + U32(adventure, 18 + 7440),
+                "删除后仍按原账号初始化owner0、7440B主体和原生名称的选角冒险团信息");
             peer.Send(692, Name("删除中"));
             peer.Expect(1, 692, [1]);
             peer.Select(1);

@@ -36,6 +36,8 @@ internal sealed class TcpPeer : IDisposable
     public byte[] ExpertContract { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] InitialGameOptions { get; private set; } = [];
+    public byte[] AdventureInfo { get; private set; } = [];
+    public byte[] AdventureRefresh { get; private set; } = [];
 
     static readonly Encoding names;
     static TcpPeer()
@@ -280,6 +282,10 @@ internal sealed class TcpPeer : IDisposable
                         "本人称号簿owner为0，五种分类均下发空或完整表");
                     return book;
                 }).ToArray();
+                packet = Read();
+                TestCheck.That(packet.Kind == 0 && packet.Opcode == 1343, "冒险团信息在角色资产后初始化");
+                AdventureInfo = packet.Body;
+                AdventureRefresh = Expect(0, 1349).Body;
                 packet = Read();
                 TestCheck.That(mails.Count > 0 && packet.Kind == 0 && packet.Opcode == 3, "mailbox initializes after account assets and before town state");
                 tail.Add(packet);

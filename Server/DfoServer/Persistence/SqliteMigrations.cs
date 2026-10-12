@@ -83,6 +83,7 @@ internal static class SqliteMigrations
         new(27, "账号分配置键位", static (db, tx) => Execute(db, tx, HotkeySettingsSchema)),
         new(28, "角色基础心情", static (db, tx) =>
             Execute(db, tx, "ALTER TABLE characters ADD COLUMN emotion INTEGER NOT NULL DEFAULT 0 CHECK(emotion BETWEEN 0 AND 32767)")),
+        new(29, "账号冒险团基础进度与名称", static (db, tx) => Execute(db, tx, AdventureSchema)),
     ];
 
     internal const string HotkeySettingsSchema = """
@@ -116,6 +117,16 @@ internal static class SqliteMigrations
             WHERE NOT EXISTS(SELECT 1 FROM character_fatigue f WHERE f.character_id=c.id)
               AND NOT EXISTS(SELECT 1 FROM character_dungeon_fatigue_receipts r WHERE r.character_id=c.id)
             """);
+
+    internal const string AdventureSchema = """
+        CREATE TABLE account_adventures(
+          account TEXT PRIMARY KEY REFERENCES accounts(account_id),revision INTEGER NOT NULL CHECK(revision>=0),
+          name TEXT NOT NULL CHECK(length(name)>0),created_date INTEGER NOT NULL CHECK(created_date BETWEEN 19000101 AND 99991231),
+          level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 255),experience INTEGER NOT NULL CHECK(experience>=0),
+          remainder TEXT NOT NULL,capsule_experience INTEGER NOT NULL CHECK(capsule_experience>=0),
+          brave_experience INTEGER NOT NULL CHECK(brave_experience>=0),points BLOB NOT NULL CHECK(length(points)=20),
+          month INTEGER NOT NULL CHECK(month BETWEEN 190001 AND 999912));
+        """;
 
     internal const string TitleSchema = """
         CREATE TABLE character_title_book_slots(
@@ -740,6 +751,7 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month FROM account_adventures LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",

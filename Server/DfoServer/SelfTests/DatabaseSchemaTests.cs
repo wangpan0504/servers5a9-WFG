@@ -8,12 +8,17 @@ namespace DfoServer;
 
 internal static class DatabaseSchemaTests
 {
-    internal static void RemoveTitleSchema(SqliteConnection db) => Execute(db, """
+    internal static void RemoveAdventureSchema(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS account_adventures");
+    internal static void RemoveTitleSchema(SqliteConnection db)
+    {
+        RemoveAdventureSchema(db);
+        Execute(db, """
         DROP TRIGGER IF EXISTS title_book_exclusive_insert; DROP TRIGGER IF EXISTS title_book_exclusive_update;
         DROP TRIGGER IF EXISTS inventory_not_title_insert; DROP TRIGGER IF EXISTS inventory_not_title_update;
         DROP TRIGGER IF EXISTS mail_not_title_insert; DROP TRIGGER IF EXISTS mail_not_title_update;
         DROP TABLE IF EXISTS character_title_book_slots; DROP TABLE IF EXISTS character_title_progress; DROP TABLE IF EXISTS character_title_sections;
         """);
+    }
 
     public static void Run()
     {
@@ -828,15 +833,13 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
-                RemoveEmotionSchema(db);
+                if (oldVersion < 28) RemoveEmotionSchema(db);
                 if (oldVersion < 27) RemoveHotkeySchema(db);
                 if (oldVersion < 26) RemoveTutorialSchema(db);
                 if (oldVersion < 25) RemoveTitleSchema(db);
+                if (oldVersion < 29) RemoveAdventureSchema(db);
                 if (oldVersion < 15)
                     Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
-                RemoveEmotionSchema(db);
-                if (oldVersion < 27) RemoveHotkeySchema(db);
-                if (oldVersion < 26) RemoveTutorialSchema(db);
                 if (oldVersion < 20) RewindDropCollection(db);
                 else
                 {
@@ -863,10 +866,11 @@ internal static class DatabaseSchemaTests
                     Execute(db, "DROP TABLE character_dungeon_growth_receipts");
                 if (oldVersion == 1)
                     Execute(db, "ALTER TABLE account_wallets DROP COLUMN rental_points");
-                RemoveEmotionSchema(db);
+                if (oldVersion < 28) RemoveEmotionSchema(db);
                 if (oldVersion < 27) RemoveHotkeySchema(db);
                 if (oldVersion < 26) RemoveTutorialSchema(db);
                 if (oldVersion < 25) RemoveTitleSchema(db);
+                if (oldVersion < 29) RemoveAdventureSchema(db);
                 Execute(db, $"PRAGMA user_version={oldVersion}");
                 if (oldVersion == 13)
                     AddDropDependencyFixture(db);
@@ -1307,6 +1311,7 @@ internal static class DatabaseSchemaTests
 
     internal static void RemoveEmotionSchema(SqliteConnection db)
     {
+        RemoveAdventureSchema(db);
         if (Query(db, "SELECT count(*) FROM pragma_table_info('characters') WHERE name='emotion'") is 1L)
             Execute(db, "ALTER TABLE characters DROP COLUMN emotion");
     }

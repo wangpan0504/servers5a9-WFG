@@ -11,7 +11,8 @@ namespace DfoServer.Network.Protocol;
 
 internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler loginHandler, GameCommandRegistry commands, ICharacterRepository repository, TownCatalog towns, OnlineSessionDirectory online, TownProjection projection, ServerLog log,
     Func<GameSession, IGameConnectionActivity>? createActivity = null, MailboxProjection? mailbox = null,
-    DfoServer.GameWorld.Quests.QuestCatalog? quests = null, GameDebugSettings? debugSettings = null) : IConnectionProtocol
+    DfoServer.GameWorld.Quests.QuestCatalog? quests = null, GameDebugSettings? debugSettings = null,
+    AdventureProjection? adventure = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -30,6 +31,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         try
         {
             online.Register(login.Owner, session);
+            adventure?.Prepare(context);
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(options.AdvertisedAddress, login.Channel.Port), "endpoint");
             var roster = session.PrepareRoster();
             await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "roster",
