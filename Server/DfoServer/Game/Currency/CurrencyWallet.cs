@@ -17,9 +17,14 @@ internal enum CurrencyKind
 }
 
 // 账号余额随选中角色载入不可变快照；换角重读，不为每个角色复制持久余额。
-internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<CurrencyKind, int> Balances, int RentalPoints = 0)
+internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<CurrencyKind, int> Balances, int RentalPoints = 0, int SeriaLuck = 0)
 {
     public static AccountWallet Empty { get; } = new(0, ImmutableSortedDictionary<CurrencyKind, int>.Empty);
+    public AccountWallet SetSeriaLuck(int value)
+    {
+        if (value is < 0 or > 8) throw new InvalidDataException("无效赛丽亚幸运值");
+        return this with { SeriaLuck = value };
+    }
     public int Get(CurrencyKind kind) => kind == CurrencyKind.RentalPoint ? RentalPoints : Balances.GetValueOrDefault(kind);
     public AccountWallet Set(CurrencyKind kind, int count)
     {
@@ -29,10 +34,10 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
             return this with { RentalPoints = count };
         return this with { Balances = count == 0 ? Balances.Remove(kind) : Balances.SetItem(kind, count) };
     }
-    public bool Same(AccountWallet other) => Revision == other.Revision && RentalPoints == other.RentalPoints && Balances.SequenceEqual(other.Balances);
+    public bool Same(AccountWallet other) => Revision == other.Revision && RentalPoints == other.RentalPoints && SeriaLuck == other.SeriaLuck && Balances.SequenceEqual(other.Balances);
     public void Validate()
     {
-        if (Revision < 0 || RentalPoints < 0 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key == CurrencyKind.RentalPoint || pair.Value <= 0))
+        if (Revision < 0 || RentalPoints < 0 || SeriaLuck is < 0 or > 8 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key == CurrencyKind.RentalPoint || pair.Value <= 0))
             throw new InvalidDataException("无效账号钱包快照");
     }
 }

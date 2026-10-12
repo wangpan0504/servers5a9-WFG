@@ -29,4 +29,5 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
 
     public Task Reply(CmdPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.Send(1, (ushort)opcode, body, action, canSend);
     public Task Notify(NotiPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.Send(0, (ushort)opcode, body, action, canSend);
+    public Task NotifyProtected(NotiPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.SendProtected(0, (ushort)opcode, body, action, canSend);
 }

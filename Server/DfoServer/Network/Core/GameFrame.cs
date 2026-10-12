@@ -43,6 +43,20 @@ internal static class GameFrame
         return result;
     }
 
+    public static byte[] BuildProtected(byte kind, ushort opcode, ReadOnlySpan<byte> body)
+    {
+        if (kind > 1 || body.Length > 65520)
+            throw new InvalidDataException("Frame bounds");
+        byte[] result = new byte[16 + body.Length];
+        result[0] = kind;
+        BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(1), opcode);
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(3), result.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(7), 1u);
+        result[15] = 1;
+        body.CopyTo(result.AsSpan(16));
+        return result;
+    }
+
     public static Packet ParseClient(ReadOnlySpan<byte> frame)
     {
         if (frame.Length is < 13 or > 65536 || frame[0] != 1 || BinaryPrimitives.ReadInt32LittleEndian(frame[3..]) != frame.Length || Crc(frame[11..]) != BinaryPrimitives.ReadUInt32LittleEndian(frame[7..]))

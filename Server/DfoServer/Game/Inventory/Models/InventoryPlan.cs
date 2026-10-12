@@ -38,7 +38,7 @@ internal sealed class InventoryPlan
     public ImmutableArray<InventorySlot> ChangedSlots => slots.Value;
     public ImmutableArray<CurrencyKind> ChangedCurrencies => currencies.Value;
     public ImmutableArray<int> ChangedEpicPieces => pieces.Value;
-    public bool Changed => ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.Expansion != After.Expansion ||
+    public bool Changed => ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || Before.Expansion != After.Expansion ||
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || !ShopPurchaseCount.Same(Before.ShopPurchases, After.ShopPurchases) ||

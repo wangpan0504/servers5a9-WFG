@@ -10,7 +10,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 {
     // 按包体及帧头计费，包含活动消息；共享包体在每个接收连接独立计费。
     internal const long MaxPendingBytes = 2 * 1024 * 1024;
-    sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null);
+    sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false);
     sealed record Message(long Epoch, Output? Own = null, RemoteTownActor? Enter = null, (ushort, long)? Move = null, (ushort, long)? Leave = null, TaskCompletionSource? Clear = null, RemoteTownActor? Refresh = null, long Bytes = 0);
     readonly AccountOwners.Lease owner;
     readonly Stream stream;
@@ -55,6 +55,14 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!Enqueue(new(Epoch, new(kind, opcode, body, action, done, canSend))))
+            done.TrySetException(new IOException("Game send queue unavailable"));
+        return done.Task;
+    }
+
+    public Task SendProtected(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!Enqueue(new(Epoch, new(kind, opcode, body, action, done, canSend, Protected: true))))
             done.TrySetException(new IOException("Game send queue unavailable"));
         return done.Task;
     }
@@ -147,16 +155,17 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         }
     }
 
-    async Task Write(byte kind, ushort opcode, ReadOnlyMemory<byte> body, string action)
+    async Task Write(byte kind, ushort opcode, ReadOnlyMemory<byte> body, string action, bool protectedFrame = false)
     {
         owner.Execute(() => true);
-        byte[] frame = GameFrame.Build(kind, opcode, sequence++, body.Span);
+        ushort sentSequence = sequence;
+        byte[] frame = protectedFrame ? GameFrame.BuildProtected(kind, opcode, body.Span) : GameFrame.Build(kind, opcode, sequence++, body.Span);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(connection.Token);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         await stream.WriteAsync(frame, timeout.Token);
         capture?.Invoke(frame);
         owner.Execute(() => true);
-        sent(kind, opcode, (ushort)(sequence - 1), body, action);
+        sent(kind, opcode, protectedFrame ? sentSequence : (ushort)(sequence - 1), body, action);
     }
 
     bool Visible(RemoteTownActor actor, long expected) => owner.Execute(() => Epoch == expected && actor.Visible());
@@ -198,7 +207,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                     if (message.Own is { } own)
                     {
                         if (owner.Execute(() => own.CanSend?.Invoke() ?? true))
-                            await Write(own.Kind, own.Opcode, own.Body, own.Action);
+                            await Write(own.Kind, own.Opcode, own.Body, own.Action, own.Protected);
                     }
                     else if (message.Clear is { } clear)
                     {

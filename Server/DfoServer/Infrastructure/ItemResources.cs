@@ -19,6 +19,7 @@ internal sealed class ItemResources
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
     public CashShopCatalog CashShop { get; }
+    public MagicBoxCatalog MagicBoxes { get; }
     public RecoveryConsumableCatalog RecoveryConsumables { get; }
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
     readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
@@ -43,6 +44,7 @@ internal sealed class ItemResources
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
         Boosters = new(archive, stackable);
         CashShop = CashShopCatalog.Load(archive);
+        MagicBoxes = new(archive, stackable);
         Rental = RentalCatalog.Load(archive);
     }
 }

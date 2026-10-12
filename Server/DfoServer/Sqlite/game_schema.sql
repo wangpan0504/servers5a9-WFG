@@ -215,7 +215,8 @@ CREATE TABLE inventory_audit_log(
 CREATE TABLE account_wallets(
     account TEXT PRIMARY KEY,
     revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
-    rental_points INTEGER NOT NULL DEFAULT 0 CHECK(rental_points BETWEEN 0 AND 2147483647)
+    rental_points INTEGER NOT NULL DEFAULT 0 CHECK(rental_points BETWEEN 0 AND 2147483647),
+    seria_luck INTEGER NOT NULL DEFAULT 0 CHECK(seria_luck BETWEEN 0 AND 8)
 );
 
 CREATE TABLE account_currency_balances(

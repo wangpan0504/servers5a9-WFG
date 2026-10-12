@@ -143,6 +143,7 @@ internal static class SelfTestRunner
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
+        MagicBoxTests.Run(towns, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);
         ConsumableUseSessionTests.Run(towns, characters, pvf);

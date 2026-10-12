@@ -56,6 +56,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await adventure.InformationAsync(context, initialization: true);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
+        await context.NotifyProtected(NotiPacketType.EVENT_INFO, SeriaLuckPackets.EventInfoCompressed(), "seria_luck_event_initialize");
+        await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
+            c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");
         if (resumeTown)
         {
             // 124会恢复换频道前的地图；最终24必须在它之后绑定本人，不能在恢复前宣布场景完成。

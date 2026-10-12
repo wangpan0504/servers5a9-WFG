@@ -21,6 +21,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         if (!CanSend())
             return;
         var current = receipt.Character;
+        bool seriaLuckChanged = plan.Before.AccountWallet.SeriaLuck != current.Inventory.AccountWallet.SeriaLuck;
         var changedSlots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
             .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct().ToArray();
         var slots = changedSlots.Where(slot => acknowledgedSlots?.Contains(slot) != true).ToArray();
@@ -29,7 +30,18 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 receipt.Index.FindUid(item.Uid)?.Core.Count != item.Core.Count);
         if (changedSlots.Any(slot => receipt.Index.Find(slot)?.Creature is not null))
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
-        foreach (var list in slots.Select(slot => slot.List).Distinct().Order())
+        // 开盒确认后客户端会立即读取完整容器。仅发送增量会让结果窗读取到旧槽位，
+        // 双倍或十连奖励随后显示为加载中；普通背包操作仍沿用增量协议。
+        if (plan.Reason == "magic_box_open")
+        {
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.AccountCargo), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Avatar), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Pet), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.GuildMedal), "inventory_committed_full_list", CanSend);
+        }
+        else foreach (var list in slots.Select(slot => slot.List).Distinct().Order())
         {
             if (silentMainMove && list == InventoryListType.Main)
             {
@@ -75,6 +87,9 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
         if (plan.ChangedEpicPieces.Length != 0)
             await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(current.Inventory.EpicPieces, pieces, plan.ChangedEpicPieces), "epic_book_committed_delta", CanSend);
+        if (seriaLuckChanged)
+            await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(plan.Before.AccountWallet.SeriaLuck,
+                current.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_committed", CanSend);
         if (plan.Before.CargoCapacity != current.Inventory.CargoCapacity)
         {
             await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "personal_cargo_capacity", CanSend);

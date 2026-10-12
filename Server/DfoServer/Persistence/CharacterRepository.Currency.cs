@@ -18,20 +18,22 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$account", account);
-        command.CommandText = "SELECT revision,rental_points FROM account_wallets WHERE account=$account";
+        command.CommandText = "SELECT revision,rental_points,seria_luck FROM account_wallets WHERE account=$account";
         long revision = 0;
         int rentalPoints = 0;
+        int seriaLuck = 0;
         using (var walletReader = command.ExecuteReader())
             if (walletReader.Read())
             {
                 revision = walletReader.GetInt64(0);
                 rentalPoints = walletReader.GetInt32(1);
+                seriaLuck = walletReader.GetInt32(2);
             }
         command.CommandText = "SELECT currency_kind,balance FROM account_currency_balances WHERE account=$account ORDER BY currency_kind";
         var balances = ImmutableSortedDictionary.CreateBuilder<CurrencyKind, int>();
         using (var reader = command.ExecuteReader())
             while (reader.Read()) balances.Add((CurrencyKind)reader.GetInt32(0), reader.GetInt32(1));
-        var wallet = new AccountWallet(revision, balances.ToImmutable(), rentalPoints);
+        var wallet = new AccountWallet(revision, balances.ToImmutable(), rentalPoints, seriaLuck);
         wallet.Validate();
         return wallet;
     }
@@ -54,7 +56,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$auction", after.AuctionGoldLimit);
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("钱包角色所有权变化");
         var changes = plan.ChangedCurrencies;
-        if (changes.Any(CurrencyWallet.IsAccount))
+        bool seriaLuckChanged = before.AccountWallet.SeriaLuck != after.AccountWallet.SeriaLuck;
+        if (changes.Any(CurrencyWallet.IsAccount) || seriaLuckChanged)
         {
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$account", owner.Account);
@@ -62,7 +65,8 @@ internal sealed partial class CharacterRepository
             command.CommandText = "INSERT INTO account_wallets(account) VALUES($account) ON CONFLICT(account) DO NOTHING";
             command.ExecuteNonQuery();
             command.Parameters.AddWithValue("$rental", after.AccountWallet.RentalPoints);
-            command.CommandText = "UPDATE account_wallets SET revision=revision+1,rental_points=$rental WHERE account=$account AND revision=$revision";
+            command.Parameters.AddWithValue("$luck", after.AccountWallet.SeriaLuck);
+            command.CommandText = "UPDATE account_wallets SET revision=revision+1,rental_points=$rental,seria_luck=$luck WHERE account=$account AND revision=$revision";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("账号钱包版本变化");
             command.CommandText = "DELETE FROM account_currency_balances WHERE account=$account";
             command.ExecuteNonQuery();

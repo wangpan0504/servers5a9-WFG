@@ -87,6 +87,7 @@ internal static class SqliteMigrations
         new(30, "冒险团代表职业选择", static (db, tx) => Execute(db, tx, AdventureRepresentativeSchema)),
         new(31, "账号远征及冻结成员", static (db, tx) => Execute(db, tx, AdventureExpeditionSchema)),
         new(32, "冒险团商店账号限购", static (db, tx) => Execute(db, tx, AdventurePurchasesSchema)),
+        new(33, "账号赛丽亚幸运值", AddSeriaLuckColumn)
     ];
 
     internal const string HotkeySettingsSchema = """
@@ -590,6 +591,15 @@ internal static class SqliteMigrations
         FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
         """;
     public static int CurrentVersion => Steps.Length == 0 ? BaselineVersion : Steps[^1].Version;
+
+    static void AddSeriaLuckColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='seria_luck'";
+        if ((long)query.ExecuteScalar()! == 0)
+            Execute(db, tx, "ALTER TABLE account_wallets ADD COLUMN seria_luck INTEGER NOT NULL DEFAULT 0 CHECK(seria_luck BETWEEN 0 AND 8)");
+    }
     private const string SkillMetadataSchema = """
         CREATE TABLE character_tp_sources(
          character_id INTEGER PRIMARY KEY,bonus_tp INTEGER NOT NULL CHECK(bonus_tp BETWEEN 0 AND 65535),
