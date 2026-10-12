@@ -34,12 +34,16 @@ internal sealed partial class CharacterRepository
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
-        command.CommandText = "SELECT id,slot,name,revision FROM characters WHERE account=$account AND slot=$slot";
+        command.CommandText = """
+            SELECT c.id,c.slot,c.name,c.revision,EXISTS(SELECT 1 FROM account_adventure_expedition_members m WHERE m.account=$account AND m.character_id=c.id)
+            FROM characters c WHERE c.account=$account AND c.slot=$slot
+            """;
         command.Parameters.AddWithValue("$account", account);
         command.Parameters.AddWithValue("$slot", slot);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) throw new InvalidDataException("Deletion slot absent");
-        return new(checked((ushort)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), reader.GetString(2), reader.GetInt64(3));
+        return new(checked((ushort)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), reader.GetString(2), reader.GetInt64(3))
+            { AdventureBusy = reader.GetBoolean(4) };
     }
 
     public CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected) => owner.Execute(() =>
@@ -48,6 +52,7 @@ internal sealed partial class CharacterRepository
         using var tx = db.BeginTransaction(deferred: false);
         if (ReadDeletionTarget(db, tx, owner.Account, expected.Slot) != expected)
             throw new InvalidOperationException("Character deletion identity or revision changed");
+        if (expected.AdventureBusy) throw new InvalidDataException("Character participates in an adventure expedition");
         RequireDeletionDependencies(db, tx);
         using var command = db.CreateCommand();
         command.Transaction = tx;
@@ -60,6 +65,8 @@ internal sealed partial class CharacterRepository
         }
         // 账号任务完成事实独立于来源角色；仅解除来源，不改派到其他角色。
         command.CommandText = "UPDATE account_completed_quests SET character_id=NULL WHERE account=$account AND character_id=$id";
+        command.ExecuteNonQuery();
+        command.CommandText = "UPDATE account_adventure_receipts SET character_id=NULL WHERE account=$account AND character_id=$id";
         command.ExecuteNonQuery();
         command.CommandText = "UPDATE account_adventure_representatives SET character_id=NULL WHERE account=$account AND character_id=$id";
         if (command.ExecuteNonQuery() != 0)
@@ -92,7 +99,8 @@ internal sealed partial class CharacterRepository
     {
         var affected = DeletionTables.Concat(["characters", "character_inventory_items", "character_inventory_slots",
             "inventory_avatar_details", "inventory_creature_details", "mailbox_messages", "mailbox_attachments", "mailbox_audit_log",
-            "shop_purchase_counts", "account_completed_quests", "account_adventure_representatives", "account_adventures"])
+            "shop_purchase_counts", "account_completed_quests", "account_adventure_representatives", "account_adventures",
+            "account_adventure_receipts", "account_adventure_expedition_members", "account_adventure_expeditions"])
             .ToHashSet(StringComparer.Ordinal);
         using var query = db.CreateCommand();
         query.Transaction = tx;

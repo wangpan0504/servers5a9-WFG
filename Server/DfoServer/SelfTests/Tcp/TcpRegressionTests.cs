@@ -17,6 +17,7 @@ internal static class TcpRegressionTests
         ("titles", TitleTcpTests.RunAsync),
         ("adventure", AdventureCoreTcpTests.RunAsync),
         ("adventure-representatives", AdventureRepresentativeTcpTests.RunAsync),
+        ("adventure-expeditions", AdventureExpeditionTcpTests.RunAsync),
         ("quest-gold-mail", QuestGoldMailTcpTests.RunAsync),
         ("quest-continuation", QuestLifecycleTcpTests.RunContinuationAsync),
         ("story-digest", StoryDigestTcpTests.RunAsync),
@@ -78,6 +79,11 @@ internal static class TcpRegressionTests
             await FormalDungeonSessionTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             await FormalDungeonPublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         }),
+        ("dungeon-drop-storage", (_, _, resources) =>
+        {
+            DungeonDropCollectionRepositoryTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("jobs", TownProtocolTcpTests.JobsAsync),
         ("inventory", InventoryTcpTests.RunAsync),
         ("consumable-use", ConsumableUseTcpTests.RunAsync),
@@ -135,7 +141,7 @@ internal static class TcpRegressionTests
 
     public static IEnumerable<string> GroupNames => Groups.Select(group => group.Name);
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
-    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("dungeon-entry-plan" or "quest-continuation" or "quest-manual-skip" or "quest-ticket" or "quest-specified-ticket" or "quest-awakening-ticket" or "quest-play-only" or "quest-auto-meet" or "quest-npc-mapping" or "quest-hidden" or "quest-replay" or "quest-initialization" or "dungeon-story-events" or "quest-core-rewards" or "dungeon-settlement" or "inventory-persistence" or "resource-survey" or "consumable-use-rules"));
+    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("dungeon-entry-plan" or "quest-continuation" or "quest-manual-skip" or "quest-ticket" or "quest-specified-ticket" or "quest-awakening-ticket" or "quest-play-only" or "quest-auto-meet" or "quest-npc-mapping" or "quest-hidden" or "quest-replay" or "quest-initialization" or "dungeon-story-events" or "quest-core-rewards" or "dungeon-settlement" or "dungeon-drop-storage" or "inventory-persistence" or "resource-survey" or "consumable-use-rules"));
     public static bool IsValidSelection(string selection)
     {
         string[] names = selection.Split(',');

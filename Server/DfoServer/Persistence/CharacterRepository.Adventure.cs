@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
@@ -64,6 +65,28 @@ internal sealed partial class CharacterRepository
         using (var reader = query.ExecuteReader()) while (reader.Read()) selections.Add(new(checked((byte)reader.GetInt32(0)),
             checked((byte)reader.GetInt32(1)), reader.IsDBNull(2) ? null : checked((ushort)reader.GetInt32(2))));
         state = state with { Representatives = selections.ToImmutable() };
+        query.CommandText = "SELECT area,ordinal,character_id,member_snapshot FROM account_adventure_expedition_members WHERE account=$account ORDER BY area,ordinal";
+        var members = new Dictionary<byte, List<ushort>>();
+        var frozen = new Dictionary<byte, List<ExpeditionMember>>();
+        using (var reader = query.ExecuteReader()) while (reader.Read())
+        {
+            byte area = checked((byte)reader.GetInt32(0));
+            if (!members.TryGetValue(area, out var rows)) { members.Add(area, rows = []); frozen.Add(area, []); }
+            rows.Add(checked((ushort)reader.GetInt32(2)));
+            frozen[area].Add(JsonSerializer.Deserialize<ExpeditionMember>(reader.GetString(3)) ?? throw new InvalidDataException("远征冻结成员缺失"));
+        }
+        query.CommandText = "SELECT area,run_id,started,ends,reward,extra_reward,attributes FROM account_adventure_expeditions WHERE account=$account ORDER BY area";
+        var expeditions = ImmutableArray.CreateBuilder<AdventureExpedition>();
+        using (var reader = query.ExecuteReader()) while (reader.Read())
+        {
+            byte area = checked((byte)reader.GetInt32(0));
+            expeditions.Add(new(area, Guid.ParseExact(reader.GetString(1), "N"), reader.GetInt64(2), reader.GetInt64(3),
+                checked((uint)reader.GetInt64(4)), checked((uint)reader.GetInt64(5)),
+                JsonSerializer.Deserialize<ImmutableArray<byte>>(reader.GetString(6)), members[area].ToImmutableArray())
+                { FrozenMembers = frozen[area].ToImmutableArray() });
+        }
+        state = state with { Expeditions = expeditions.ToImmutable() };
+        state = AdventurePeriod.Apply(state, catalog, now);
         state.Validate(catalog);
         // 账号联动只读取身份、成长和版本，不装载其他角色的背包或技能树。
         query.CommandText = """

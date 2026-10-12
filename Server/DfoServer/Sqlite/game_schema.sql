@@ -658,6 +658,23 @@ CREATE TABLE account_adventure_representatives(
   account TEXT NOT NULL REFERENCES account_adventures(account),job INTEGER NOT NULL CHECK(job BETWEEN 0 AND 15),
   grow INTEGER NOT NULL CHECK(grow BETWEEN 1 AND 15),character_id INTEGER,
   PRIMARY KEY(account,job,grow),FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
+CREATE TABLE account_adventure_expeditions(
+  account TEXT NOT NULL REFERENCES account_adventures(account),area INTEGER NOT NULL CHECK(area BETWEEN 1 AND 255),
+  run_id TEXT NOT NULL UNIQUE CHECK(length(run_id)=32),started INTEGER NOT NULL CHECK(started>=0),
+  ends INTEGER NOT NULL CHECK(ends>started),reward INTEGER NOT NULL CHECK(reward BETWEEN 0 AND 4294967295),
+  extra_reward INTEGER NOT NULL CHECK(extra_reward BETWEEN 0 AND 4294967295),
+  attributes TEXT NOT NULL CHECK(json_valid(attributes)),PRIMARY KEY(account,area));
+CREATE TABLE account_adventure_expedition_members(
+  account TEXT NOT NULL,area INTEGER NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 3),
+  character_id INTEGER NOT NULL,member_snapshot TEXT NOT NULL CHECK(json_valid(member_snapshot)),
+  PRIMARY KEY(account,area,ordinal),UNIQUE(account,character_id),
+  FOREIGN KEY(account,area) REFERENCES account_adventure_expeditions(account,area) ON DELETE CASCADE,
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+CREATE TABLE account_adventure_receipts(
+  account TEXT NOT NULL REFERENCES account_adventures(account),event_id TEXT NOT NULL,
+  character_id INTEGER,action TEXT NOT NULL,amount INTEGER NOT NULL CHECK(amount>=0),
+  before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision>before_revision),
+  PRIMARY KEY(account,event_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
 CREATE TABLE account_hotkey_settings(
   account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),

@@ -10,6 +10,7 @@ internal sealed partial class GameSession
         var capture = owner.Execute(() => (Character: CanPlanAdventureRepresentative() ? Selected : null, SelectionEpoch, Phase,
             Identity: formalDungeon?.Run.Snapshot.Identity, Snapshot: repository.ReadAdventure(owner, service.Catalog, now)));
         if (capture.Character is not { } character) return new(false, 3);
+        if (service.Busy(capture.Snapshot, job, grow)) return new(false, 227);
         var plan = service.Prepare(capture.Snapshot, character.Id, job, grow, id);
         if (plan is null) return new(false, 3);
         return owner.Execute(() =>

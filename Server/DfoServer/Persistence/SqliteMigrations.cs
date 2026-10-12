@@ -85,6 +85,7 @@ internal static class SqliteMigrations
             Execute(db, tx, "ALTER TABLE characters ADD COLUMN emotion INTEGER NOT NULL DEFAULT 0 CHECK(emotion BETWEEN 0 AND 32767)")),
         new(29, "账号冒险团基础进度与名称", static (db, tx) => Execute(db, tx, AdventureSchema)),
         new(30, "冒险团代表职业选择", static (db, tx) => Execute(db, tx, AdventureRepresentativeSchema)),
+        new(31, "账号远征及冻结成员", static (db, tx) => Execute(db, tx, AdventureExpeditionSchema)),
     ];
 
     internal const string HotkeySettingsSchema = """
@@ -118,6 +119,26 @@ internal static class SqliteMigrations
             WHERE NOT EXISTS(SELECT 1 FROM character_fatigue f WHERE f.character_id=c.id)
               AND NOT EXISTS(SELECT 1 FROM character_dungeon_fatigue_receipts r WHERE r.character_id=c.id)
             """);
+
+    internal const string AdventureExpeditionSchema = """
+        CREATE TABLE account_adventure_expeditions(
+          account TEXT NOT NULL REFERENCES account_adventures(account),area INTEGER NOT NULL CHECK(area BETWEEN 1 AND 255),
+          run_id TEXT NOT NULL UNIQUE CHECK(length(run_id)=32),started INTEGER NOT NULL CHECK(started>=0),
+          ends INTEGER NOT NULL CHECK(ends>started),reward INTEGER NOT NULL CHECK(reward BETWEEN 0 AND 4294967295),
+          extra_reward INTEGER NOT NULL CHECK(extra_reward BETWEEN 0 AND 4294967295),
+          attributes TEXT NOT NULL CHECK(json_valid(attributes)),PRIMARY KEY(account,area));
+        CREATE TABLE account_adventure_expedition_members(
+          account TEXT NOT NULL,area INTEGER NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 3),
+          character_id INTEGER NOT NULL,member_snapshot TEXT NOT NULL CHECK(json_valid(member_snapshot)),
+          PRIMARY KEY(account,area,ordinal),UNIQUE(account,character_id),
+          FOREIGN KEY(account,area) REFERENCES account_adventure_expeditions(account,area) ON DELETE CASCADE,
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        CREATE TABLE account_adventure_receipts(
+          account TEXT NOT NULL REFERENCES account_adventures(account),event_id TEXT NOT NULL,
+          character_id INTEGER,action TEXT NOT NULL,amount INTEGER NOT NULL CHECK(amount>=0),
+          before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision>before_revision),
+          PRIMARY KEY(account,event_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+        """;
 
     internal const string AdventureRepresentativeSchema = """
         CREATE TABLE account_adventure_representatives(
@@ -759,6 +780,9 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT account,area,run_id,started,ends,reward,extra_reward,attributes FROM account_adventure_expeditions LIMIT 0",
+        "SELECT account,area,ordinal,character_id,member_snapshot FROM account_adventure_expedition_members LIMIT 0",
+        "SELECT account,event_id,character_id,action,amount,before_revision,revision FROM account_adventure_receipts LIMIT 0",
         "SELECT account,job,grow,character_id FROM account_adventure_representatives LIMIT 0",
         "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month FROM account_adventures LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",

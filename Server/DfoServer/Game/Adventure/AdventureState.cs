@@ -12,6 +12,7 @@ internal sealed record AdventureState(long Revision, string Name, int CreatedDat
     ulong CapsuleExperience, ulong BraveExperience, ImmutableArray<uint> Points, int Month)
 {
     public ImmutableArray<AdventureSelection> Representatives { get; init; } = [];
+    public ImmutableArray<AdventureExpedition> Expeditions { get; init; } = [];
     public static AdventureState Initial(string account, DateTimeOffset now) => new(0, account.Length <= 16 ? account : account[..16],
         Date(now), 1, 0, 0, 0, 0, [0, 0, 0, 0, 0], Date(now) / 100);
     public static int Date(DateTimeOffset now) => int.Parse(now.ToOffset(TimeSpan.FromHours(8)).ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture));
@@ -23,7 +24,12 @@ internal sealed record AdventureState(long Revision, string Name, int CreatedDat
             CapsuleExperience > catalog.CapsuleCapacity || Points.Length != 5 ||
             Points.Where((count, index) => catalog.Shops.TryGetValue((byte)index, out var shop) && count > shop.Maximum).Any() ||
             Representatives.Any(row => !catalog.Professions.ContainsKey((row.Job, row.Grow))) ||
-            Representatives.Select(row => (row.Job, row.Grow)).Distinct().Count() != Representatives.Length)
+            Representatives.Select(row => (row.Job, row.Grow)).Distinct().Count() != Representatives.Length ||
+            Expeditions.Any(run => run.Id == Guid.Empty || run.Area == 0 || run.Started < 0 || run.Ends <= run.Started ||
+                run.Members.Length is < 1 or > 4 || run.FrozenMembers.Length != run.Members.Length ||
+                !run.FrozenMembers.Select(row => row.Id).SequenceEqual(run.Members)) ||
+            Expeditions.Select(run => run.Area).Distinct().Count() != Expeditions.Length ||
+            Expeditions.SelectMany(run => run.Members).Distinct().Count() != Expeditions.Sum(run => run.Members.Length))
             throw new InvalidDataException("账号冒险团持久状态非法");
     }
 }
@@ -40,5 +46,17 @@ internal sealed record AdventureSnapshot(AdventureState State, ImmutableArray<Ad
             result.Add(group.FirstOrDefault(row => row.Id == selected.CharacterId) ?? group.First());
         }
         return result.ToImmutable();
+    }
+}
+
+internal static class AdventurePeriod
+{
+    public static AdventureState Apply(AdventureState state, AdventureCatalog catalog, DateTimeOffset now)
+    {
+        int month = AdventureState.Date(now) / 100;
+        if (month <= state.Month) return state;
+        var points = state.Points.ToBuilder();
+        foreach (var shop in catalog.Shops.Values.Where(shop => shop.MonthlyReset)) points[shop.Index] = 0;
+        return state with { Month = month, Points = points.ToImmutable() };
     }
 }

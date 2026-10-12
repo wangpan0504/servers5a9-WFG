@@ -92,6 +92,35 @@ internal static class AdventurePackets
     }
 
 
+    public static byte[] Expedition(AdventureSnapshot snapshot, DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog catalog, IReadOnlyList<AdventureMember> representatives,
+        IReadOnlyDictionary<byte, byte[]> attributes, DateTimeOffset now, bool ack = true) => Build(writer =>
+    {
+        // NOTI同步和ACK441均先读一个success/状态字节，再消费同一远征信息列表。
+        if (ack) writer.Write((byte)1);
+        writer.Write(checked((byte)(catalog.Areas.Count + 1)));
+        WriteArea(0, null, [], representatives.Select((row, selector) => new ExpeditionMember(row.Id, checked((byte)selector),
+            row.Name, row.Job, row.ProfessionGrow, row.Level)).Where(row => !snapshot.State.Expeditions.Any(run => run.Members.Contains(row.Id))).ToArray());
+        foreach (var area in catalog.Areas.Keys.Order())
+        {
+            var run = snapshot.State.Expeditions.SingleOrDefault(row => row.Area == area);
+            WriteArea(area, run, run?.Attributes.ToArray() ?? attributes[area], run is null ? [] :
+                run.FrozenMembers.ToArray());
+        }
+        void WriteArea(byte area, AdventureExpedition? run, byte[] desired, IReadOnlyList<ExpeditionMember> members)
+        {
+            writer.Write(area); writer.Write(run is null ? (byte)0 : run.Ends <= now.ToUnixTimeSeconds() ? (byte)2 : (byte)1);
+            writer.Write(checked((uint)(run?.Started ?? 0))); writer.Write(checked((uint)(run?.Ends ?? 0)));
+            writer.Write(checked((byte)desired.Length)); writer.Write(desired);
+            writer.Write(checked((ushort)members.Count));
+            foreach (var member in members)
+            {
+                writer.Write((ushort)member.Selector); PacketEncoding.WriteString(writer, member.Name);
+                writer.Write((uint)member.Level); writer.Write(member.Job); writer.Write(member.Grow); writer.Write((byte)0);
+            }
+        }
+    });
+    public static byte[] ExpeditionReward(uint reward) => Build(writer => { writer.Write((byte)1); writer.Write(reward); });
+
     static void Name(Span<byte> target, string name)
     {
         byte[] bytes = CharacterName.Encoding.GetBytes(name);

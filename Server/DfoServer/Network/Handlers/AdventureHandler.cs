@@ -7,8 +7,10 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed partial class AdventureHandler(AdventureProjection projection, AdventureRepresentativeService representatives) : IGameCommandModule
+internal sealed partial class AdventureHandler(AdventureProjection projection, AdventureRepresentativeService representatives,
+    AdventureExpeditionProjection expeditions, TimeProvider? clock = null) : IGameCommandModule
 {
+    DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.REQUEST_ADVENTURE_INFO, Information, nameof(AdventureHandler));

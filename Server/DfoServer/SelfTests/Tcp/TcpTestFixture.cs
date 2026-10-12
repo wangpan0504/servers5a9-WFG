@@ -25,14 +25,16 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     CancellationTokenSource? hostStop;
     readonly TcpTestResources? resources;
     readonly DfoServer.GameWorld.Quests.QuestCatalog? questCatalog;
+    readonly TimeProvider? clock;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
     public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null,
-        DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null)
+        DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null)
     {
         this.resources = resources;
         this.questCatalog = questCatalog;
+        this.clock = clock;
         Root = Path.GetFullPath(root);
         Directory.CreateDirectory(Root);
         pvfSource = source.PvfPath;
@@ -172,7 +174,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 using var log = new ServerLog(options.LogDirectory);
                 await ServerRuntime.Create(options, resources.Archive, new CharacterRepository(Database, quests), resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure).RunAsync(hostStop.Token);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock).RunAsync(hostStop.Token);
             });
         }
         else

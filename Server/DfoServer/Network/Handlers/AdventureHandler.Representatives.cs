@@ -15,7 +15,7 @@ internal sealed partial class AdventureHandler
         byte[] body = AdventurePackets.Ack(3);
         if (context.Session.Ready && selected is not null && representatives.Catalog.Professions.ContainsKey(request))
         {
-            var snapshot = context.Session.ReadAdventure(representatives.Catalog, DateTimeOffset.UtcNow);
+            var snapshot = context.Session.ReadAdventure(representatives.Catalog, Now);
             body = AdventurePackets.Candidates(snapshot.Members.Where(row => row.Job == request.Job && row.ProfessionGrow == request.Grow &&
                 representatives.Catalog.Eligible(row.Job, row.Grow, row.Level)).ToArray(), context.Channel.ServerIndex);
         }
@@ -26,7 +26,9 @@ internal sealed partial class AdventureHandler
     async Task<CommandResult> Set(GameConnectionContext context, Packet packet)
     {
         var request = AdventureRequests.Representative(packet.Body);
-        var result = context.Session.SetAdventureRepresentative(representatives, request.Job, request.Grow, request.Character, DateTimeOffset.UtcNow);
+        var result = request.Region == context.Channel.ServerIndex ?
+            context.Session.SetAdventureRepresentative(representatives, request.Job, request.Grow, request.Character, Now) :
+            new AdventureRepresentativeResult(false, 3);
         byte[] body = AdventurePackets.Ack(result.Error);
         if (result.Accepted && result.Snapshot is { } snapshot)
         {
@@ -44,7 +46,7 @@ internal sealed partial class AdventureHandler
     async Task<CommandResult> Remove(GameConnectionContext context, Packet packet)
     {
         var request = AdventureRequests.Profession(packet.Body);
-        var result = context.Session.SetAdventureRepresentative(representatives, request.Job, request.Grow, null, DateTimeOffset.UtcNow);
+        var result = context.Session.SetAdventureRepresentative(representatives, request.Job, request.Grow, null, Now);
         await context.Reply(CmdPacketType.REMOVE_REPRESENT_CHARAC_JOB, AdventurePackets.Ack(result.Error), "adventure_representative_remove",
             result.Accepted ? () => context.Session.CanPublishAdventureRepresentative(result) : null);
         await Publish(context, result);
@@ -53,6 +55,7 @@ internal sealed partial class AdventureHandler
     async Task Publish(GameConnectionContext context, AdventureRepresentativeResult result)
     {
         if (!result.Accepted || result.Snapshot is not { } snapshot || result.Selected is not { } selected) return;
+        await expeditions.RepresentativesAsync(context, result);
         bool Guard() => context.Session.CanPublishAdventureRepresentative(result);
         await context.Notify(NotiPacketType.ADVENTURE_INFO, AdventurePackets.Information(selected.Id, snapshot, representatives.Catalog,
             snapshot.Representatives(representatives.Catalog), context.Channel.ServerIndex), "adventure_representative_information", Guard);

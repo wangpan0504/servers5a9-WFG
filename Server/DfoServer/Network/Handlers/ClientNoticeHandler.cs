@@ -11,7 +11,7 @@ internal sealed class ClientNoticeHandler(ServerLog log) : IGameCommandModule
         {
             CmdPacketType.USE_SKILL,
             CmdPacketType.REQUEST_BLACKLIST,
-            CmdPacketType.GUILD_ALL_MEMBER_LIST, CmdPacketType.MERCENARY_INFO, CmdPacketType.SECURITY_STATUS,
+            CmdPacketType.GUILD_ALL_MEMBER_LIST, CmdPacketType.SECURITY_STATUS,
             CmdPacketType.FPS_PERFORMANCE_STATISTIC, CmdPacketType.SEARCH_GUILD_RANKING
         })
             commands.Register(opcode, NoticeAsync, nameof(ClientNoticeHandler));

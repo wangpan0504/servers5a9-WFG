@@ -41,7 +41,8 @@ internal static class ServerRuntime
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
-        GameWorld.Adventure.AdventureCatalog? adventureCatalog = null)
+        GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
+        GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null)
     {
         var channels = LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
         var gameChannels = new GameChannelListeners(options, channels);
@@ -64,6 +65,9 @@ internal static class ServerRuntime
         adventureCatalog ??= new GameWorld.Adventure.AdventureCatalog(pvf);
         var adventureProjection = new AdventureProjection(adventureCatalog);
         var adventureRepresentatives = new Game.Adventure.AdventureRepresentativeService(adventureCatalog);
+        expeditionCatalog ??= new GameWorld.Adventure.AdventureExpeditionCatalog(pvf);
+        var expeditionService = new Game.Adventure.AdventureExpeditionService(adventureCatalog, expeditionCatalog);
+        var expeditionProjection = new AdventureExpeditionProjection(expeditionService, clock);
         var growth = CharacterGrowthCatalog.Load(pvf, learning);
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
@@ -118,7 +122,8 @@ internal static class ServerRuntime
         [
             new SessionHandler(projection, log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection),
-            new AdventureHandler(adventureProjection, adventureRepresentatives),
+            new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock),
+            new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new TutorialHandler(tutorials, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection),
             new SkillHandler(learning, log),
             new TownHandler(projection, log),

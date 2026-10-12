@@ -17,6 +17,7 @@ internal sealed partial class GameSession
         var target = repository.LoadDeletionTarget(owner, entry.Slot);
         if (target.Id != entry.Id || target.Name != entry.Name)
             throw new InvalidOperationException("Character deletion roster changed");
+        if (target.AdventureBusy) return new CharacterDeletionResult(null, SelectionEpoch, "adventure-expedition-busy");
         var deleted = repository.Delete(owner, target);
         SelectionEpoch++;
         return new CharacterDeletionResult(new(index, deleted, CaptureRoster()), SelectionEpoch, "committed");

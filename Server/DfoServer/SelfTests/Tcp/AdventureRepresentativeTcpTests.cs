@@ -29,22 +29,23 @@ internal static class AdventureRepresentativeTcpTests
             var ack = peer.Expect(1, 1477).Body;
             That(ack.Length == 64 && U32(ack, 1) == 3 && U32(ack, 8) == 52 && DecodeName(ack, 24, 9) == "RepSecond",
                 "真实1477成功先返回职业和收藏记录，再同步完整账号信息");
-            peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
+            peer.Expect(0, 1345); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
             That(fixture.Query("SELECT character_id FROM account_adventure_representatives WHERE account='representative'") is [[long chosen]] && chosen == second,
                 "账号绑定真实第二名角色，不仍使用第一候选");
             string state = fixture.Snapshot("SELECT revision,name,level,experience FROM account_adventures");
-            peer.Send(1477, Set(second)); peer.Expect(1, 1477); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
+            peer.Send(1477, Set(second)); peer.Expect(1, 1477); peer.Expect(0, 1345); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
             That(fixture.Snapshot("SELECT revision,name,level,experience FROM account_adventures") == state, "合法重复设置应答但不重复writer或revision");
             peer.Send(1477, Set(actor)); peer.Expect(1, 1477, [0, 3, 0]); peer.Barrier();
             That(fixture.Snapshot("SELECT revision,name,level,experience FROM account_adventures") == state, "未合格当前角色不能冒充满级二觉代表");
             peer.Send(1478, [0, 33]); peer.Expect(1, 1478, [1]);
+            peer.Expect(0, 1345);
             var removed = peer.Expect(0, 1343).Body;
             peer.Expect(0, 1349); peer.Barrier();
             That(removed[18 + 72] == 0 && removed[18 + 73] == 1 && U32(removed, 18 + 72 + 48) == 0 &&
                 fixture.Query("SELECT character_id FROM account_adventure_representatives") is [[DBNull]],
                 "解除返回职业空收藏格，保留NULL绑定，不重新回到默认第一角色");
             string removedState = fixture.Snapshot("SELECT revision FROM account_adventures");
-            peer.Send(1478, [0, 33]); peer.Expect(1, 1478, [1]); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
+            peer.Send(1478, [0, 33]); peer.Expect(1, 1478, [1]); peer.Expect(0, 1345); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
             That(fixture.Snapshot("SELECT revision FROM account_adventures") == removedState, "重复解除不改变账号版本");
         }
         await fixture.StopAsync();
@@ -53,7 +54,7 @@ internal static class AdventureRepresentativeTcpTests
         {
             peer.Select();
             That(U32(peer.AdventureInfo, 18 + 72 + 48) == 0, "进程重启保留显式解除状态");
-            peer.Send(1477, Set(first)); peer.Expect(1, 1477); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
+            peer.Send(1477, Set(first)); peer.Expect(1, 1477); peer.Expect(0, 1345); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "TCP设置、解除与重启保持所有权外键");
         Console.WriteLine($"PASS {Count - checks} 代表查询、设置、解除及进程重启TCP断言");
