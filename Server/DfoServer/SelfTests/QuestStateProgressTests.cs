@@ -45,7 +45,7 @@ internal static class QuestStateProgressTests
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         int checks = Count;
-        var skills = SkillLearningCatalog.Load(pvf); var growth = CharacterGrowthCatalog.Load(pvf,skills);
+        var skills = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf,skills);
         var parameters = QuestRewardParameterCatalog.Load(pvf);
         var trigger = QuestEligibilityTests.Quest(100) with { Npc = 2, CompleteNpc = 2, IntData = [2] };
         var level = trigger with { Id = 101, Condition = "[level up]", IntData = [2], Attributes = ["not give exp quest"] };

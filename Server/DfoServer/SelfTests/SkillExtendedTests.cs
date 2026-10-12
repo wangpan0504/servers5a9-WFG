@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
@@ -41,7 +42,7 @@ internal static class SkillExtendedTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         int start = TestCheck.Count;
-        var catalog = SkillLearningCatalog.Load(pvf);
+        var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf, catalog);
         Check(catalog.TotalTp(49) == 0 && catalog.TotalTp(50) == 1 && catalog.TotalTp(60) == 11 && catalog.TotalTp(95) == 46,
             "匹配TP表逐等级累计，不能用当前级单项覆盖");

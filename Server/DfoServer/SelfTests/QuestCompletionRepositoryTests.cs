@@ -157,7 +157,7 @@ internal static class QuestCompletionRepositoryTests
     internal sealed class Resources(PvfArchive archive, ItemResources items, QuestCatalog? questCatalog = null)
     {
         public ItemResources Items { get; } = items;
-        public SkillLearningCatalog Learning { get; } = SkillLearningCatalog.Load(archive);
+        public SkillLearningCatalog Learning { get; } = SkillLearningCatalog.Load(archive, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(archive).ExpertSkillLevels);
         public CharacterGrowthCatalog Growth { get; } = CharacterGrowthCatalog.Load(archive);
         public DungeonKillExperienceCatalog Kills { get; } = DungeonKillExperienceCatalog.Load(archive);
         public DungeonCatalog Dungeons { get; } = DungeonCatalog.Load(archive);

@@ -20,7 +20,7 @@ internal static class SkillProtocolTcpTests
         var pvf = resources.Archive;
         var characters = resources.Characters;
         var towns = resources.Towns;
-        var catalog = SkillLearningCatalog.Load(pvf);
+        var catalog = resources.Learning;
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         var growth = CharacterGrowthCatalog.Load(pvf);

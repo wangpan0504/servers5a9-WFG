@@ -16,7 +16,7 @@ internal static class CharacterProgressTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "gm-progress"), gm: true, resources: resources);
-        var catalog = SkillLearningCatalog.Load(resources.Archive);
+        var catalog = resources.Learning;
         var growth = CharacterGrowthCatalog.Load(resources.Archive, catalog);
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();

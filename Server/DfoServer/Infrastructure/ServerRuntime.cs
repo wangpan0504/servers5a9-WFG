@@ -75,7 +75,8 @@ internal static class ServerRuntime
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
         var debugSettings = new GameDebugSettings();
-        var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings);
+        var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces,
+            debugSettings, itemResources.Contracts);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
@@ -133,9 +134,10 @@ internal static class ServerRuntime
             new TownHandler(projection, log),
             new SettingsHandler(settings, log, projection),
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
-            new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items), titleProjection, inventoryProjection, projection, online),
-            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
-            new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables), log, tutorials, itemResources.Items, inventoryProjection),
+            new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, projection, online),
+            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts), inventoryProjection),
+            new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables), log, tutorials, itemResources.Items, inventoryProjection,
+                new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock)),
             new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
@@ -149,8 +151,9 @@ internal static class ServerRuntime
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
-                debugSettings: debugSettings), inventoryProjection),
-            new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+                debugSettings: debugSettings, contracts: itemResources.Contracts), inventoryProjection),
+            new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
+                contracts: itemResources.Contracts), inventoryProjection),
             new DungeonSelectionHandler(projection, log, tutorials),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new QuestHiddenHandler(quests,log),

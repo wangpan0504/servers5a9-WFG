@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
 using PvfLib;
@@ -39,7 +40,7 @@ internal static class SkillRepositoryTests
         string path = Path.Combine(root, "game.db");
         try
         {
-            var catalog = SkillLearningCatalog.Load(pvf);
+            var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("skill-repository", () => { });

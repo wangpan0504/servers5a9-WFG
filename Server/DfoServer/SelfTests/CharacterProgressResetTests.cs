@@ -5,6 +5,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
@@ -18,7 +19,7 @@ internal static class CharacterProgressResetTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         int start = Count;
-        var skills = SkillLearningCatalog.Load(pvf);
+        var skills = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf, skills);
         var reset = new CharacterProgressReset(characters, skills, growth);
         var owners = new AccountOwners();

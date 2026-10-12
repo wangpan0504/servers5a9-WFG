@@ -81,7 +81,7 @@ internal static class QuestTicketTests
         SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
-        var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf);
+        var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
         var definition = items.Items.QuestTicket(TicketId);
         That(definition is { MinimumLevel:0,MaximumLevel:84,Jobs:ushort.MaxValue } && definition.Expiration.AbsoluteTime > 0,

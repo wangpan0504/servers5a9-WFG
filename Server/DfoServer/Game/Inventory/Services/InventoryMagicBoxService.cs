@@ -5,7 +5,7 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCatalog boxes, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    Random? random = null)
+    Random? random = null, PremiumContractCatalog? contracts = null)
 {
     public InventoryResult Open(Character character, MagicBoxOpenRequest request, out MagicBoxReceipt? receipt, DateTimeOffset? utcNow = null)
     {
@@ -22,6 +22,19 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
         var definition = boxes.Get(box.Core.ItemId);
         if (!definition.Available)
             return InventoryResult.Reject(19);
+        // 全部正权重候选须具有完整交付能力；未知premium在抽取前拒绝，不能抽后重选或只写期限。
+        try
+        {
+            foreach (int id in definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId).Distinct())
+            {
+                if (Currency.CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id)) continue;
+                if (contracts?.TryConsumableContract(id, out _) == true) continue;
+                if (contracts?.Recognizes(id) == true)
+                    return InventoryResult.Reject(19);
+                if (catalog.Get(id).IsPremiumService) return InventoryResult.Reject(19);
+            }
+        }
+        catch (InvalidDataException) { return InventoryResult.Reject(19); }
 
         int opens = Math.Min(request.Count, box.Core.Count);
         int required = 0;
@@ -84,14 +97,6 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
             }
             if (totals.Count is 0 or > 256)
                 return InventoryResult.Reject(19);
-            foreach (int id in totals.Keys)
-            {
-                if (Currency.CurrencyWallet.RewardKind(id) is not null)
-                    continue;
-                if (pieces.ByPiece.ContainsKey(id))
-                    return InventoryResult.Reject(19);
-                _ = catalog.Get(id);
-            }
         }
         catch (Exception error) when (error is InvalidDataException or OverflowException)
         {
@@ -116,8 +121,10 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
             .GroupBy(pair => pair.Key)
             .Select(group => new InventoryReward(group.Key, checked(group.Sum(pair => pair.Value))))
             .ToArray();
+        if (!InventoryCashShopService.CanGrantCurrencies(paid, rewards, new Currency.CurrencyService(goldLimits).CarryLimit(character)))
+            return InventoryResult.Reject(4);
         var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, rewards, catalog,
-            goldLimits, pieces, now);
+            goldLimits, pieces, now, contracts: contracts, allowOverflowMail: true);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
 
@@ -130,6 +137,16 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
                 if (Currency.CurrencyWallet.RewardKind(pair.Key) is { } currency)
                 {
                     result.Add(new(pair.Key, pair.Value, ItemSlotBoundService.CurrencySlot(currency) ?? (short)-1, 0, false));
+                    continue;
+                }
+                if (pieces.ByPiece.ContainsKey(pair.Key))
+                {
+                    result.Add(new(pair.Key, pair.Value, -1, 0, false));
+                    continue;
+                }
+                if (contracts?.TryConsumableContract(pair.Key, out _) == true)
+                {
+                    result.Add(new(pair.Key, pair.Value, -1, 0, false));
                     continue;
                 }
                 var template = catalog.Get(pair.Key);
@@ -162,7 +179,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
         // 赛丽亚无材料协议使用客户端约定的 -1 哨兵；回显盒子槽位会让结果读取器错位到奖励行，成功发奖后触发客户端崩溃。
         receipt = new(box.Core.ItemId, box.Position.Index, material?.Position.Index ?? (short)-1, opens, rows,
             request.RawListType, doubleRows, seriaSource ? luckBefore : 0, seriaSource ? luck : 0, displayRows);
-        var plan = new InventoryPlan(before, after, "magic_box_open");
+        var plan = new InventoryPlan(before, after, "magic_box_open", overflowItems: grant.Plan.OverflowItems);
         return new(true, 0, plan);
     }
 }

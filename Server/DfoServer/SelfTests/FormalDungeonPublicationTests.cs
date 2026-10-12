@@ -34,7 +34,7 @@ internal static class FormalDungeonPublicationTests
     {
         int before = TestCheck.Count;
         var computer = new CharacterStatComputer(characters);
-        var learning = SkillLearningCatalog.Load(pvf);
+        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf);
         var kills = DungeonKillExperienceCatalog.Load(pvf);
         var catalog = DungeonCatalog.Load(pvf);

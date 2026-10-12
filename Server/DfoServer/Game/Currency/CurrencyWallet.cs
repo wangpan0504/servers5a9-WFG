@@ -17,14 +17,11 @@ internal enum CurrencyKind
 }
 
 // 账号余额随选中角色载入不可变快照；换角重读，不为每个角色复制持久余额。
-internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<CurrencyKind, int> Balances, int RentalPoints = 0, int SeriaLuck = 0)
+internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<CurrencyKind, int> Balances, int RentalPoints = 0,
+    int SeriaLuck = 0, ImmutableSortedDictionary<int, long>? Contracts = null)
 {
     public static AccountWallet Empty { get; } = new(0, ImmutableSortedDictionary<CurrencyKind, int>.Empty);
-    public AccountWallet SetSeriaLuck(int value)
-    {
-        if (value is < 0 or > 8) throw new InvalidDataException("无效赛丽亚幸运值");
-        return this with { SeriaLuck = value };
-    }
+    public ImmutableSortedDictionary<int, long> PremiumContracts => Contracts ?? ImmutableSortedDictionary<int, long>.Empty;
     public int Get(CurrencyKind kind) => kind == CurrencyKind.RentalPoint ? RentalPoints : Balances.GetValueOrDefault(kind);
     public AccountWallet Set(CurrencyKind kind, int count)
     {
@@ -34,10 +31,28 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
             return this with { RentalPoints = count };
         return this with { Balances = count == 0 ? Balances.Remove(kind) : Balances.SetItem(kind, count) };
     }
-    public bool Same(AccountWallet other) => Revision == other.Revision && RentalPoints == other.RentalPoints && SeriaLuck == other.SeriaLuck && Balances.SequenceEqual(other.Balances);
+    public AccountWallet ActivateContract(int type, long durationSeconds, DateTimeOffset now, int count = 1)
+    {
+        if (type <= 0 || durationSeconds <= 0 || count <= 0)
+            throw new InvalidDataException("无效契约期限");
+        long current = PremiumContracts.GetValueOrDefault(type);
+        long start = Math.Max(current, now.ToUnixTimeSeconds());
+        long expiry = checked(start + checked(durationSeconds * count));
+        return this with { Contracts = PremiumContracts.SetItem(type, expiry) };
+    }
+    public long ContractExpiry(int type) => PremiumContracts.GetValueOrDefault(type);
+    public AccountWallet SetSeriaLuck(int value)
+    {
+        if (value is < 0 or > 8)
+            throw new InvalidDataException("无效赛丽亚幸运值");
+        return this with { SeriaLuck = value };
+    }
+    public bool Same(AccountWallet other) => Revision == other.Revision && RentalPoints == other.RentalPoints && SeriaLuck == other.SeriaLuck &&
+        Balances.SequenceEqual(other.Balances) && PremiumContracts.SequenceEqual(other.PremiumContracts);
     public void Validate()
     {
-        if (Revision < 0 || RentalPoints < 0 || SeriaLuck is < 0 or > 8 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key == CurrencyKind.RentalPoint || pair.Value <= 0))
+        if (Revision < 0 || RentalPoints < 0 || SeriaLuck is < 0 or > 8 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key == CurrencyKind.RentalPoint || pair.Value <= 0) ||
+            PremiumContracts.Any(pair => pair.Key <= 0 || pair.Value <= 0))
             throw new InvalidDataException("无效账号钱包快照");
     }
 }

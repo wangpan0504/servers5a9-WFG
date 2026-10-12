@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
@@ -24,7 +25,7 @@ internal static class SkillPublicationTests
         Directory.CreateDirectory(root);
         try
         {
-            var catalog = SkillLearningCatalog.Load(pvf);
+            var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
             await CommittedFailureAsync(towns, catalog, characters, root);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: true);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: false);
@@ -46,7 +47,7 @@ internal static class SkillPublicationTests
         Directory.CreateDirectory(root);
         try
         {
-            var catalog = SkillLearningCatalog.Load(pvf);
+            var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
             await CommittedMoveFailureAsync(towns, catalog, characters, root);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: true, layout: true);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: false, layout: true);

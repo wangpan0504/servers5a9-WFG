@@ -7,9 +7,23 @@ using DfoServer.Game.Settings;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    Random? random = null, GameDebugSettings? debugSettings = null)
+    Random? random = null, GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null)
 {
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
+        => OpenCore(character, request, out receipt, utcNow, ceraPackage: false);
+
+    public InventoryResult OpenCeraPackage(Character character, CeraPackageOpenRequest request, out BoosterReceipt? receipt,
+        DateTimeOffset? utcNow = null)
+    {
+        receipt = null;
+        // 非零列表是独立的时装选择合同；在资格和属性未实现前保留整包，不能忽略玩家选择。
+        if (request.Choices.Length != 0)
+            return InventoryResult.Reject(19);
+        return OpenCore(character, new(request.Slot, 1), out receipt, utcNow, ceraPackage: true);
+    }
+
+    InventoryResult OpenCore(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt,
+        DateTimeOffset? utcNow, bool ceraPackage)
     {
         receipt = null;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
@@ -20,7 +34,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
         var definition = boosters.Get(source.Core.ItemId);
-        if (!definition.Available)
+        if (!definition.Available || ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty)
             return InventoryResult.Reject(19);
         BoosterChoice[]? choices = null;
         if (definition.Selection is { } selection)
@@ -36,15 +50,21 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         // 随机池预检全部有权重的候选，选择型仅预检实际所选奖励，不过滤候选或改换玩家选择。
         try
         {
-            var ids = choices is not null ? choices.Select(row => row.ItemId) :
-                definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
+            var ids = choices is not null ? choices.Select(row => row.ItemId) : ceraPackage
+                ? definition.PackageRewards.Select(row => row.ItemId)
+                : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
             foreach (int id in ids.Distinct())
             {
-                if (boosters.DirectActivationItems.Contains(id))
-                    return InventoryResult.Reject(19);
                 if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
                     continue;
+                if (contracts?.TryConsumableContract(id, out _) == true)
+                    continue;
+                // 仅已实现的普通契约可直接写入账号期限；其他premium服务可能还有即时奖励，
+                // 必须拒绝整包，不能只记期限，也不能跳过实体模板与期限的预检。
+                if (contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id))
+                    return InventoryResult.Reject(19);
                 var template = catalog.Get(id);
+                if (template.IsPremiumService) return InventoryResult.Reject(19);
                 if (InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration).IsExpired(now.ToUnixTimeSeconds()))
                     return InventoryResult.Reject(19);
             }
@@ -105,6 +125,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     }
                 }
             }
+            if (!definition.PackageRewards.IsDefaultOrEmpty)
+                foreach (var row in definition.PackageRewards)
+                    Add(row.ItemId, row.Count, request.Count);
         }
         catch (OverflowException)
         {
@@ -164,11 +187,11 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         else
             grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
         var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, grants, catalog, goldLimits, pieces, now,
-            shopExpiration: shopExpiration);
+            shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: !definition.PackageRewards.IsDefaultOrEmpty);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
-        return new(true, 0, new(before, grant.Plan!.After, "booster_open"));
+        return new(true, 0, new(before, grant.Plan!.After, "booster_open", overflowItems: grant.Plan.OverflowItems));
 
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));
     }

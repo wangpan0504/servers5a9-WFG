@@ -134,6 +134,8 @@ internal static class TcpRegressionTests
         ("cargo", CargoTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
         ("cash-shop", CashShopTcpTests.RunAsync),
+        ("cera-package", CeraPackageTcpTests.RunAsync),
+        ("premium-contract", PremiumContractTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),
         ("gm-assets", DevelopmentAssetTcpTests.RunAsync),
         ("repair", RepairTcpTests.RunAsync),

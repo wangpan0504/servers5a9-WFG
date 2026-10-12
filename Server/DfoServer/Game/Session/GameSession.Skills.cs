@@ -12,7 +12,7 @@ internal sealed partial class GameSession
         if (!result.Success) return result;
         try
         {
-            int contractLevels = result.State!.ExpertContractExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds() ? 5 : 0;
+            int contractLevels = catalog.ActiveExpertContractLevels(result.State!.ExpertContractExpiresAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             var state = SkillPointLedger.Synchronize(character.Job, character.GrowType, character.Level, result.State!, catalog, contractLevels);
             return result with { State = state, TotalSp = state.BonusSp is int bonus ? checked(catalog.TotalSp(character.Level) + bonus) : null,
                 TotalTp = state.BonusTp is int tpBonus ? checked(catalog.TotalTp(character.Level) + tpBonus) : null };

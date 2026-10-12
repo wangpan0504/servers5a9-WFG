@@ -1,9 +1,13 @@
 using DfoServer.Infrastructure;
+using System.Text.Json;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
+using DfoServer.Persistence;
 using PvfLib;
 
 namespace DfoServer.Testing.Inventory;
@@ -36,6 +40,59 @@ internal static class InventoryBehaviorTests
         Testing.TestCheck.That(InventoryMoveService.RequiredSkillSatisfied(enchantress with { GrowType = 4, Skills = [new(91, 1)] }, broom) &&
             InventoryMoveService.RequiredSkillSatisfied(enchantress with { Skills = [] }, broom with { RequiredSkill = 0 }),
             "original learned skill and unrestricted equipment qualifications remain valid");
+
+        const long now = 2_000_000_000;
+        var active = AccountWallet.Empty.ActivateContract(22, 60, DateTimeOffset.FromUnixTimeSeconds(now));
+        var withContract = enchantress with { Inventory = enchantress.Inventory with { AccountWallet = active } };
+        var groups = new Dictionary<int, IReadOnlyList<string>>
+        {
+            [1] = ["[weapon]"], [2] = ["[coat]"], [3] = ["[hat avatar]"], [4] = ["[hair avatar]"]
+        };
+        var contracts = new PremiumContractCatalog(new Dictionary<int, PremiumContract>(),
+            conquerorEquipmentLevels: new Dictionary<int, int> { [1] = 3, [2] = 7, [3] = 0, [4] = 7 },
+            conquerorEquipmentGroups: groups);
+        foreach (var (kind, slot, allowance) in new[]
+        {
+            (ItemKind.Equipment, (byte)12, 3), (ItemKind.Equipment, (byte)14, 7), (ItemKind.Avatar, (byte)1, 7)
+        })
+        {
+            var higher = broom with { Kind = kind, EquipmentSlot = slot, MinimumLevel = checked((byte)(enchantress.Level + allowance)) };
+            Testing.TestCheck.That(!InventoryMoveService.WearLevelSatisfied(enchantress, higher, now, contracts) &&
+                InventoryMoveService.WearLevelSatisfied(withContract, higher, now, contracts) &&
+                !InventoryMoveService.WearLevelSatisfied(withContract, higher with { MinimumLevel = (byte)(higher.MinimumLevel + 1) }, now, contracts),
+                "霸王按当前声明组的3或7级增量判定，不能借另一组较大值 " + kind + "/" + slot);
+            Testing.TestCheck.That(InventoryMoveService.WearLevelSatisfied(withContract, higher, now + 59, contracts) &&
+                !InventoryMoveService.WearLevelSatisfied(withContract, higher, now + 60, contracts) &&
+                !InventoryMoveService.WearLevelSatisfied(withContract, higher, now + 61, contracts),
+                "契约穿戴资格在准确到期秒失效 " + kind);
+            foreach (int type in new[] { 27, 84, 97 })
+            {
+                var otherContract = enchantress with { Inventory = enchantress.Inventory with
+                { AccountWallet = AccountWallet.Empty.ActivateContract(type, 60, DateTimeOffset.FromUnixTimeSeconds(now)) } };
+                Testing.TestCheck.That(!InventoryMoveService.WearLevelSatisfied(otherContract, higher, now, contracts),
+                    "其他普通契约不放宽穿戴等级 " + type + "/" + kind);
+            }
+        }
+        var highWeapon = broom with { MinimumLevel = 18 };
+        var noGroups = new PremiumContractCatalog(new Dictionary<int, PremiumContract>(),
+            conquerorEquipmentLevels: new Dictionary<int, int> { [1] = 7 });
+        Testing.TestCheck.That(!InventoryMoveService.WearLevelSatisfied(withContract, highWeapon, now) &&
+            !InventoryMoveService.WearLevelSatisfied(withContract, highWeapon, now, noGroups) &&
+            !InventoryMoveService.WearLevelSatisfied(withContract, broom with { Kind = ItemKind.Avatar, EquipmentSlot = 0, MinimumLevel = 16 }, now, contracts),
+            "未装配目录、没有显式名单或声明增量零时不放宽等级");
+        foreach (byte slot in new byte[] { 9, 10, 11 })
+            Testing.TestCheck.That(!InventoryMoveService.WearLevelSatisfied(withContract,
+                broom with { Kind = ItemKind.Avatar, EquipmentSlot = slot, MinimumLevel = 16 }, now, contracts),
+                "未在名单声明的光环或武器装扮不借普通Avatar类别获得加成 " + slot);
+        foreach (var kind in new[] { ItemKind.Creature, ItemKind.CreatureEquipment, ItemKind.GuildMedal, ItemKind.GuardianGem })
+            Testing.TestCheck.That(!InventoryMoveService.WearLevelSatisfied(withContract, broom with { Kind = kind, MinimumLevel = 16 }, now, contracts),
+                "霸王等级加成不扩展宠物、勋章或守护珠规则 " + kind);
+        var largeAllowance = new PremiumContractCatalog(new Dictionary<int, PremiumContract>(),
+            conquerorEquipmentLevels: new Dictionary<int, int> { [1] = int.MaxValue },
+            conquerorEquipmentGroups: new Dictionary<int, IReadOnlyList<string>> { [1] = ["[weapon]"] });
+        Testing.TestCheck.That(InventoryMoveService.WearLevelSatisfied(withContract, broom with { MinimumLevel = 255 }, now, largeAllowance) &&
+            InventoryMoveService.WearLevelSatisfied(enchantress with { Level = 255 }, broom with { MinimumLevel = 255 }, now),
+            "极大PVF增量用宽整数计算，byte原等级上界仍保留原本合格资格");
     }
 
     public static void Run(Character character, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources, Action<bool, string> check)
@@ -154,6 +211,75 @@ internal static class InventoryBehaviorTests
             !service.Move(enchantress, Request(broomItem, new(InventoryListType.Equipment, 14))).Accepted,
             "broom alternate skill does not bypass wear level or equipment slot");
 
+        long wearNow = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long contractExpiry = wearNow + 60;
+        // 实际资源参数允许零或很大数值；到期事务代表另用显式合成正增量目录。
+        var levelTemplate = catalog.Get(100050791);
+        check(levelTemplate is { Kind: ItemKind.Equipment, EquipmentSlot: 14, MinimumLevel: > 2 },
+            "霸王完整规划复用实际资源的普通上衣模板");
+        var actualContracts = itemResources.Contracts;
+        int actualAllowance = actualContracts.EquipmentLevelAllowance(levelTemplate);
+        int allowance = Math.Min(3, levelTemplate.MinimumLevel - 2);
+        var contracts = new PremiumContractCatalog(actualContracts.ByItem, actualContracts.ExpertSkillLevels,
+            new Dictionary<int, int> { [1] = allowance },
+            new Dictionary<int, IReadOnlyList<string>> { [1] = new[] { "[coat]" } });
+        var levelGear = new InventoryItem(304, Bag(9), InventoryRewardGrantService.Create(levelTemplate));
+        byte levelJob = (byte)Enumerable.Range(0, 16).First(job => (levelTemplate.Jobs & (1 << job)) != 0);
+        var conqueror = character with
+        {
+            Job = levelJob, Level = checked((byte)(levelTemplate.MinimumLevel - allowance)),
+            Skills = levelTemplate.RequiredSkill == 0 ? [] : [new(levelTemplate.RequiredSkill, 1)],
+            Inventory = new([levelGear])
+            { AccountWallet = AccountWallet.Empty.ActivateContract(22, 60, DateTimeOffset.FromUnixTimeSeconds(wearNow)) }
+        };
+        var destination = new InventorySlot(InventoryListType.Equipment, 14);
+        var actualRole = conqueror with { Level = 1 };
+        check(InventoryMoveService.Plan(actualRole, Request(levelGear, destination), catalog, wearNow, actualContracts).Accepted ==
+            ((long)actualRole.Level + actualAllowance >= levelTemplate.MinimumLevel),
+            "当前PVF的零、小值或大等级增量均按完整long门槛生效，不收窄合法配置");
+        var contractWear = InventoryMoveService.Plan(conqueror, Request(levelGear, destination), catalog, wearNow, contracts);
+        var wornCore = levelGear.Core.SealFlag != 0 && levelTemplate.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase)
+            ? levelGear.Core with { SealFlag = 0 } : levelGear.Core;
+        check(contractWear.Accepted && contractWear.Plan!.After.Find(destination)?.Uid == levelGear.Uid &&
+            contractWear.Plan.After.Find(destination)?.Core == wornCore &&
+            contractWear.Plan.CharacterPrecondition!.Matches(conqueror, contractExpiry - 1) &&
+            !contractWear.Plan.CharacterPrecondition.Matches(conqueror, contractExpiry),
+            "越级穿戴保留原UID和合法解除封装后的完整Core，规划记录的霸王期限在提交前到期即失效");
+        check(!InventoryMoveService.Plan(conqueror with { Level = (byte)(conqueror.Level - 1) }, Request(levelGear, destination), catalog, wearNow, contracts).Accepted,
+            "有效霸王契约仍拒绝超过本组资源增量一等级的实际装备");
+        var activeBroomRole = enchantress with { Inventory = enchantress.Inventory with { AccountWallet = conqueror.Inventory.AccountWallet } };
+        foreach (var invalid in new[]
+        {
+            activeBroomRole with { Job = 0 }, activeBroomRole with { Skills = [] }, activeBroomRole with { GrowType = 4 }
+        })
+            check(!InventoryMoveService.Plan(invalid, Request(broomItem, new(InventoryListType.Equipment, 12)), catalog, wearNow, contracts).Accepted,
+                "有效霸王契约仍保留匹配扫把的职业、实际技能及转职资格限制");
+        check(!InventoryMoveService.Plan(conqueror, Request(levelGear, new(InventoryListType.Equipment, 12)), catalog, wearNow, contracts).Accepted &&
+            !InventoryMoveService.Plan(conqueror, Request(levelGear, destination), catalog, contractExpiry, contracts).Accepted,
+            "霸王不能改变真实部位或延长已到期穿戴资格");
+        var withoutBonus = conqueror with { Level = levelTemplate.MinimumLevel };
+        var ordinaryWear = InventoryMoveService.Plan(withoutBonus, Request(levelGear, destination), catalog, wearNow, contracts);
+        check(ordinaryWear.Accepted && ordinaryWear.Plan!.CharacterPrecondition!.Matches(withoutBonus, contractExpiry),
+            "原等级已合格的普通穿戴不额外依赖霸王期限");
+        var wornWithExpiredContract = conqueror with { Inventory = contractWear.Plan!.After };
+        var wornItem = wornWithExpiredContract.Inventory.Find(destination)!;
+        var unequipExpired = InventoryMoveService.Plan(wornWithExpiredContract, Request(wornItem, Bag(9)), catalog, contractExpiry, contracts);
+        check(unequipExpired.Accepted && unequipExpired.Plan!.After.Find(Bag(9))?.Core == wornCore &&
+            unequipExpired.Plan.CharacterPrecondition!.Matches(wornWithExpiredContract, contractExpiry + 1),
+            "契约到期后允许原越级装备正常卸下，不制造强制删除或永久穿戴锁");
+        var swapSource = levelGear with { Uid = 305 };
+        var swapRole = wornWithExpiredContract with { Inventory = wornWithExpiredContract.Inventory with
+        { Items = wornWithExpiredContract.Inventory.Items.Add(swapSource) } };
+        var reverseSwap = InventoryMoveService.Plan(swapRole, Request(wornItem, swapSource.Position, swapSource.Core.ItemId), catalog, wearNow, contracts);
+        check(reverseSwap.Accepted && reverseSwap.Plan!.After.Find(destination)?.Uid == swapSource.Uid &&
+            !reverseSwap.Plan.CharacterPrecondition!.Matches(swapRole, contractExpiry),
+            "从穿戴栏拖向背包的交换也冻结反向越级穿戴期限");
+        var expiredRental = levelGear with { Core = levelGear.Core with { IsRental = true, ExpireTime = checked((int)wearNow) } };
+        check(!InventoryMoveService.Plan(conqueror with { Inventory = conqueror.Inventory with { Items = [expiredRental] } },
+            Request(expiredRental, destination), catalog, wearNow, contracts).Accepted,
+            "有效霸王契约不允许穿戴已经到期的租赁实例");
+        VerifyExpiredWearCommit();
+
         var sealedTemplate = PvfScript.List(pvf.ReadText("equipment/equipment.lst")).Keys.Select(TryGet)
             .First(item => item is { EquipmentSlot: 12 } && item.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase))!;
         var sealedItem = new InventoryItem(401, Bag(9), InventoryRewardGrantService.Create(sealedTemplate) with { TradeRestriction = 2 });
@@ -175,6 +301,37 @@ internal static class InventoryBehaviorTests
         {
             try { return catalog.Get(id); }
             catch (InvalidDataException) { return null; }
+        }
+
+        void VerifyExpiredWearCommit()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "S5A9-conqueror-wear-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var repository = new CharacterRepository(Path.Combine(root, "game.db"));
+                using var owner = new AccountOwners().Acquire("conqueror-wear", () => { });
+                var saved = repository.Create(owner, new("ExpiredWear", conqueror.Position, conqueror.Return)
+                {
+                    Job = conqueror.Job, GrowType = conqueror.GrowType, Level = conqueror.Level, Skills = conqueror.Skills,
+                    Inventory = new([levelGear with { Uid = 0 }])
+                });
+                long actualNow = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                long expiredAt = actualNow - 100;
+                var wallet = saved.Inventory.AccountWallet.ActivateContract(22, 100, DateTimeOffset.FromUnixTimeSeconds(actualNow - 200));
+                saved = repository.CommitInventory(owner, saved, new(saved.Inventory,
+                    saved.Inventory with { AccountWallet = wallet }, "conqueror_expiry_fixture"));
+                string before = JsonSerializer.Serialize(repository.List(owner).Single());
+                var source = saved.Inventory.Find(Bag(9))!;
+                var candidate = InventoryMoveService.Plan(saved, Request(source, destination), catalog, expiredAt - 1, contracts);
+                check(candidate.Accepted, "期限前的冻结规划可生成完整越级穿戴候选，不靠等待构造时间边界");
+                bool rejected = false;
+                try { repository.CommitInventory(owner, saved, candidate.Plan!); }
+                catch (InvalidOperationException) { rejected = true; }
+                check(rejected && before == JsonSerializer.Serialize(new CharacterRepository(Path.Combine(root, "game.db")).List(owner).Single()),
+                    "真实库存提交复验当前时间并拒绝已到期候选，重开后角色、源、账号期限和版本均不变");
+            }
+            finally { Directory.Delete(root, recursive: true); }
         }
     }
 

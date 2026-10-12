@@ -60,9 +60,13 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("Character revision or owner changed");
         var inventory = WriteInventory(db, transaction, owner, expected.Id, plan, plan.After, retained, incoming);
         inventory = WriteWallet(db, transaction, owner, expected.Id, plan, inventory);
+        var learning = current.Learning;
+        if (plan.Before.AccountWallet.ContractExpiry(27) != inventory.AccountWallet.ContractExpiry(27))
+            learning = learning with { ExpertContractExpiresAt = ReadEffectiveExpertContractExpiry(db, expected.Id, transaction) };
         inventory = WriteCargo(db, transaction, owner, expected.Id, plan, inventory);
         WriteShopPurchases(db, transaction, owner.Account, expected.Id, plan.Before, inventory);
         inventory = WriteEpicPieces(db, transaction, owner, expected.Id, plan.Before, inventory, plan.Reason);
+        WriteOverflowMail(db, transaction, owner, current, plan);
         var active = current.ActiveMainQuests;
         if (quests is not null && !plan.Reason.StartsWith("quest_", StringComparison.Ordinal))
         {
@@ -71,7 +75,7 @@ internal sealed partial class CharacterRepository
             active = refreshed.ToArray();
         }
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
-        return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active };
+        return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning };
     }
 
     static void WriteQuestConditions(SqliteConnection db, SqliteTransaction transaction, ushort characterId,

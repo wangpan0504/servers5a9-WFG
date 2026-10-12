@@ -3,6 +3,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
 using DfoServer.Persistence;
@@ -17,7 +18,7 @@ internal static class SkillPointLedgerTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         int before = TestCheck.Count;
-        var catalog = SkillLearningCatalog.Load(pvf);
+        var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf, catalog);
         const byte level = 20;
         const int bonus = 137;
@@ -49,12 +50,24 @@ internal static class SkillPointLedgerTests
         Check(ReferenceEquals(SkillPointLedger.Reset(0, 0, level, reset.State!, 0, catalog, 0).State, reset.State),
             "重复无付费技能重置不产生新状态");
         var contract = state with { ExpertContractExpiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 };
-        var over = SkillLearning.Plan(0, 0, level, contract, new(0, 0, [new(5, false, 12)]), catalog);
-        Check(over.Success && over.Changes.Single().Level == 13, "达人允许角色等级加五范围，按正常成本扣点");
-        Check(SkillLearning.Plan(0, 0, level, state, new(0, 0, [new(5, false, 12)]), catalog).Failure == SkillLearningFailure.RequiredLevel,
-            "无契约不允许超等级学习");
-        var expired = SkillPointLedger.Synchronize(0, 0, level, over.State!, catalog);
-        Check(expired.Trees[0].Skills.Single(skill => skill.Id == 5).Level == 10 && expired.Trees[0].Sp == total - 135 &&
+        var ghost = catalog.Get(0, 5);
+        int Cap(int extra)
+        {
+            int rank = Math.Min(ghost.GetMaximum(0), ghost.DeclaredMaximumLevels![0]);
+            while (rank > 0 && ghost.GetOrdinaryNextRequiredCharacterLevel(rank - 1) > (long)level + extra) rank--;
+            return rank;
+        }
+        int baseRank = state.Trees[0].Skills.Single(skill => skill.Id == 5).Level;
+        int ordinaryCap = Cap(0), contractCap = Cap(catalog.ExpertContractLevels);
+        var request = new SkillLearningCommand(0, 0, [new(5, false, checked((byte)(contractCap - baseRank)))]);
+        var over = SkillLearning.Plan(0, 0, level, contract, request, catalog);
+        Check(over.Success && over.Changes.Single().Level == contractCap, "达人按显式装配的声明放宽资格，正常费用与资源上限保留");
+        var without = SkillLearning.Plan(0, 0, level, state, request, catalog);
+        Check(contractCap > ordinaryCap ? without.Failure == SkillLearningFailure.RequiredLevel : without.Success,
+            "无契约只有普通等级资格，零加成声明不制造额外放行");
+        var expired = SkillPointLedger.Synchronize(0, 0, level, over.State! with { ExpertContractExpiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 1 }, catalog);
+        int ordinaryCost = Enumerable.Range(baseRank, ordinaryCap - baseRank).Sum(rank => ghost.GetPointCost(rank, 0));
+        Check(expired.Trees[0].Skills.Single(skill => skill.Id == 5).Level == ordinaryCap && expired.Trees[0].Sp == total - ordinaryCost &&
             expired.BonusSp == bonus, "契约到期回落普通等级，退款并保留额外SP");
         foreach (byte job in Enumerable.Range(0, 16).Where(job => job is not (9 or 10)).Select(job => (byte)job))
         {

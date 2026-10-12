@@ -190,8 +190,7 @@ internal sealed partial class CharacterRepository
         int? bonus = command.ExecuteScalar() is long value ? checked((int)value) : null;
         command.CommandText = "SELECT bonus_tp FROM character_tp_sources WHERE character_id=$id";
         int? tpBonus = command.ExecuteScalar() is long tpValue ? checked((int)tpValue) : null;
-        command.CommandText = "SELECT expires_at FROM account_expert_contracts WHERE account=(SELECT account FROM characters WHERE id=$id)";
-        long expires = command.ExecuteScalar() is long expiry ? expiry : 0;
+        long expires = ReadEffectiveExpertContractExpiry(db, id, transaction);
         command.CommandText = """
             SELECT p.context,p.sp,p.tp,b.slot,b.skill_id,b.level,c.keys
             FROM character_skill_points p LEFT JOIN character_skill_bindings b
@@ -233,5 +232,33 @@ internal sealed partial class CharacterRepository
         { BonusSp = bonus, BonusTp = tpBonus, ExpertContractExpiresAt = expires };
         state.Validate();
         return state;
+    }
+
+    private static long ReadEffectiveExpertContractExpiry(SqliteConnection db, ushort id, SqliteTransaction? transaction)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.Parameters.AddWithValue("$id", id);
+        command.CommandText = """
+            SELECT e.expires_at,json_extract(w.premium_contracts,'$."27"'),json_type(w.premium_contracts,'$."27"')
+            FROM characters c
+            LEFT JOIN account_expert_contracts e ON e.account=c.account
+            LEFT JOIN account_wallets w ON w.account=c.account
+            WHERE c.id=$id
+            """;
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) throw new InvalidDataException("达人契约角色不存在");
+        long legacy = reader.IsDBNull(0) ? 0 : reader.GetInt64(0);
+        long purchased = 0;
+        if (!reader.IsDBNull(2))
+        {
+            if (reader.GetString(2) != "integer" || reader.IsDBNull(1))
+                throw new InvalidDataException("账号达人契约期限必须是正整数");
+            purchased = reader.GetInt64(1);
+            if (purchased <= 0) throw new InvalidDataException("账号达人契约期限必须是正整数");
+        }
+        if (legacy < 0) throw new InvalidDataException("账号达人契约期限非法");
+        // 两个来源均属于账号；学习状态只携带有效期限，不向角色表复制权益。
+        return Math.Max(legacy, purchased);
     }
 }

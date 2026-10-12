@@ -10,9 +10,9 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record BoosterReward(int ItemId, long Weight, int Count);
 internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewards);
 internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, string? PendingRule = null,
-    BoosterSelectionDefinition? Selection = null)
+    BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default)
 {
-    public bool Available => PendingRule is null && (Pools.Length != 0 || Selection is not null);
+    public bool Available => PendingRule is null && (Pools.Length != 0 || Selection is not null || !PackageRewards.IsDefaultOrEmpty);
 }
 
 internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
@@ -27,9 +27,9 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
     internal static BoosterDefinition Parse(string text)
     {
         string type = Regex.Match(PvfScript.Section(text, "stackable type"), @"`\[([^\]]+)\]`").Groups[1].Value;
-        if (type is not ("booster" or "cera booster" or "booster random" or "booster selection"))
+        if (type is not ("usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection"))
             return new([], "其他开箱入口");
-        // 这些字段需要独立资格、持久账本或奖励属性，普通开箱不能忽略它们。
+        // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
         string tags = Regex.Replace(text, "`[^`]*`", "");
         foreach (string tag in new[] { "cooltime maintenance", "effect maintenance", "total usable count", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime", "usable first growtype",
@@ -38,6 +38,23 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             "daybreak drop item", "battle royal", "action usable server type", "usable game server type", "usable server type" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);
+        if (type == "usable cera package")
+        {
+            var packageBlocks = Regex.Matches(text, @"\[package data\](.*?)\[/package data\]", RegexOptions.Singleline);
+            if (packageBlocks.Count != 1)
+                return new([], "礼包内容缺失或重复");
+            string package = packageBlocks[0].Groups[1].Value;
+            string[] tokens = package.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0 || tokens.Length % 2 != 0)
+                return new([], "礼包内容缺失或行宽无效");
+            var rewards = ImmutableArray.CreateBuilder<BoosterReward>(tokens.Length / 2);
+            for (int i = 0; i < tokens.Length; i += 2)
+                if (!int.TryParse(tokens[i], out int id) || id <= 0 || !int.TryParse(tokens[i + 1], out int count) || count <= 0)
+                    return new([], "礼包内容物品或数量无效");
+                else
+                    rewards.Add(new(id, 1, count));
+            return new([], null, null, rewards.ToImmutable());
+        }
         if (type == "booster selection")
             return BoosterSelectionDefinition.Parse(text);
         var blocks = Regex.Matches(text, @"\[booster info\](.*?)\[/booster info\]", RegexOptions.Singleline);

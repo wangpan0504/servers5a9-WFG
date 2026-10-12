@@ -58,7 +58,7 @@ internal static class QuestAwakeningTicketTests
         QuestCatalog? sharedQuests=null,SkillLearningCatalog? sharedSkills=null)
     {
         int checks=Count;
-        var quests=sharedQuests ?? QuestCatalog.Load(pvf); var skills=sharedSkills ?? SkillLearningCatalog.Load(pvf);
+        var quests=sharedQuests ?? QuestCatalog.Load(pvf); var skills=sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth=CharacterGrowthCatalog.Load(pvf,skills); var parameters=QuestRewardParameterCatalog.Load(pvf);
         var first=items.Items.QuestTicket(FirstTicket); var second=items.Items.QuestTicket(SecondTicket);
         That(first is {ActionIndex:119,AwakeningStage:1,MinimumLevel:50,VillageOnly:true} && second is {ActionIndex:122,AwakeningStage:2,MinimumLevel:75,VillageOnly:true},

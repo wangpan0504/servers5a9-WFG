@@ -402,6 +402,40 @@ internal sealed partial class CharacterRepository
         return new(MailboxError.None, MailId: id) { Recipient = delivery.Recipient };
     }
 
+    static void WriteOverflowMail(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner,
+        Character character, InventoryPlan plan)
+    {
+        if (plan.OverflowItems.IsEmpty)
+            return;
+        var recipient = new MailboxRecipient(character.Id, owner.Account, character.Name,
+            character.Job, character.GrowType, character.Level);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        // 复用真实邮件及附件存储，参与库存事务；不另开连接、事务或平行暂存表。
+        for (int offset = 0; offset < plan.OverflowItems.Length; offset += 10)
+        {
+            var items = plan.OverflowItems.Skip(offset).Take(10).ToImmutableArray();
+            foreach (var item in items)
+            {
+                if (item.Uid != 0)
+                    throw new InvalidDataException("溢出奖励必须是本次规划的新实例");
+                item.Core.Validate();
+                item.ValidateDetails(allocating: true);
+            }
+            string key = $"inventory-overflow:{character.Id}:{character.Revision + 1}:{offset / 10}";
+            string content = JsonSerializer.Serialize(new { plan.Reason, Items = items });
+            uint id = InsertMail(db, tx, recipient, 0, "奖励发放", "背包空间不足，奖励已通过邮件发放。", 0,
+                now, null, key, content);
+            var held = ImmutableArray.CreateBuilder<InventoryItem>(items.Length);
+            for (int index = 0; index < items.Length; index++)
+            {
+                var item = HoldMailItem(db, tx, recipient, items[index], owner.Account, character.Id);
+                InsertMailAttachment(db, tx, id, index, 0, item);
+                held.Add(item);
+            }
+            AuditMail(db, tx, id, owner.Account, character.Id, owner.Generation, "inventory_overflow", now,
+                new { Key = key, plan.Reason, Items = held.ToImmutable() });
+        }
+    }
     static string MailDeliveryContent(MailboxDelivery delivery) => JsonSerializer.Serialize(new
     {
         delivery.Recipient.Id, delivery.Recipient.Account, delivery.SenderName,

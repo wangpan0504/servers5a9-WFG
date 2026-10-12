@@ -29,7 +29,7 @@ internal static partial class FormalDungeonTcpTests
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var repository = new CharacterRepository(fixture.Database);
-            var catalog = SkillLearningCatalog.Load(resources.Archive);
+            var catalog = resources.Learning;
             var learning = SkillLearning.Initialize(0, profile.Skills, catalog).State! with
             { Experience = CharacterGrowthCatalog.Load(resources.Archive, catalog).GetLevelStartExperience(95) };
             learning = SkillPointLedger.Synchronize(0, 0, 95, learning, catalog);

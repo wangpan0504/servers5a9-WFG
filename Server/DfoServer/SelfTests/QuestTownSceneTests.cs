@@ -18,7 +18,7 @@ internal static class QuestTownSceneTests
         QuestCatalog? sharedQuests = null, SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
-        var quests = sharedQuests ?? QuestCatalog.Load(pvf); var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf);
+        var quests = sharedQuests ?? QuestCatalog.Load(pvf); var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
         using (var f = Make([3155],new(38,3,300,250)))
         {

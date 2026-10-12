@@ -111,7 +111,7 @@ internal sealed class CharacterGrowthPlan
         var learning = expected.Learning with { Experience = targetExperience, Trees = Array.AsReadOnly(trees) };
         if (catalog.Learning is { } skills && expected.Learning.BonusSp.HasValue)
             learning = SkillPointLedger.Synchronize(expected.Job, expected.GrowType, targetLevel, learning, skills,
-                learning.ExpertContractExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds() ? 5 : 0);
+                skills.ActiveExpertContractLevels(learning.ExpertContractExpiresAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         return new(CharacterGrowthFailure.None, new(expected, targetLevel, learning, spDelta, requestedExperience));
 
         bool WithinLevel(int level, ulong experience) => experience >= catalog.GetLevelStartExperience(level) &&

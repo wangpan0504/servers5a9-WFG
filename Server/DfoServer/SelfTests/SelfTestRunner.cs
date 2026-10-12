@@ -15,6 +15,7 @@ internal static class SelfTestRunner
     {
         CommandLineTests.Run();
         CashShopTests.RunCore();
+        PremiumContractTests.RunCore();
         FrameCrcTests.Run();
         CreatureProjectionTests.RunCore();
         await BufferedLogTests.RunAsync();
@@ -136,7 +137,7 @@ internal static class SelfTestRunner
     {
         await RunCoreAsync();
         var sharedQuests = QuestCatalog.Load(pvf);
-        var sharedSkills = SkillLearningCatalog.Load(pvf);
+        var sharedSkills = SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels);
         PacketCompatibilityTests.Run(characters);
         CharacterBoundaryTests.Run(towns, characters);
         SelfTests.Run(towns);
@@ -146,6 +147,7 @@ internal static class SelfTestRunner
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
+        PremiumContractTests.RunResources(itemResources, pvf);
         MagicBoxTests.Run(towns, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);
@@ -169,6 +171,7 @@ internal static class SelfTestRunner
         BoosterTests.Run(towns, characters, itemResources);
         BoosterSelectionTests.Run(towns, characters, itemResources);
         BoosterEquipmentTests.Run(towns, characters, itemResources);
+        ItemUsePersistenceTests.Run(towns, itemResources);
         ItemTemplateImportTests.Run(towns, pvf, characters, itemResources);
         InventoryCommitTests.Run(towns, characters, itemResources);
         await InventoryReceiptTests.RunAsync(towns, characters, itemResources);

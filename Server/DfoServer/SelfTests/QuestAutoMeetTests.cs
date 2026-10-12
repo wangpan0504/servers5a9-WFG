@@ -59,7 +59,7 @@ internal static class QuestAutoMeetTests
         try
         {
             using var log = new ServerLog(root);
-            var actual = sharedQuests ?? QuestCatalog.Load(pvf); var learning = sharedSkills ?? SkillLearningCatalog.Load(pvf);
+            var actual = sharedQuests ?? QuestCatalog.Load(pvf); var learning = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
             var growth = CharacterGrowthCatalog.Load(pvf,learning); var parameters = QuestRewardParameterCatalog.Load(pvf);
             var computer = new CharacterStatComputer(characters);
             var ordinary = actual.All.Where(quest => quest.Condition == "[meet npc]" && quest.SubType == 1 &&

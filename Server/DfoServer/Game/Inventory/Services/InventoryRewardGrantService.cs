@@ -37,8 +37,9 @@ internal static class InventoryRewardGrantService
     public static InventorySnapshot CreateStarter(CharacterProfile profile) => new(
         profile.Equipment.Select(item => CreateItem(item.Template, new(InventoryListType.Equipment, item.Slot), Create(item.Template))).ToImmutableArray());
 
-    public static InventoryResult TryGrantBatch(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null, bool shopExpiration = false)
-        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow, shopExpiration: shopExpiration);
+    public static InventoryResult TryGrantBatch(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
+        DateTimeOffset? utcNow = null, bool shopExpiration = false, PremiumContractCatalog? contracts = null, bool allowOverflowMail = false)
+        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow, shopExpiration, contracts, allowOverflowMail);
 
     public static InventoryResult TryGrantItems(Character character, IReadOnlyList<InventoryItem> instances, ItemCatalog catalog,
         GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null)
@@ -46,12 +47,14 @@ internal static class InventoryRewardGrantService
             instances, catalog, goldLimits, pieces, utcNow);
 
     static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
-        ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false)
+        ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false,
+        PremiumContractCatalog? contracts = null, bool allowOverflowMail = false)
     {
         var inventory = character.Inventory;
         var wallet = inventory;
         var currencies = new CurrencyService(goldLimits);
-        var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId));
+        var overflow = new List<InventoryItem>();
+        var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId), allowOverflowMail, overflow);
         var now = utcNow ?? DateTimeOffset.UtcNow;
         for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
@@ -76,7 +79,20 @@ internal static class InventoryRewardGrantService
                 wallet = currencies.Grant(character with { Inventory = wallet }, currency, reward.Count).Plan!.After;
                 continue;
             }
+            if (instances is null && contracts?.Recognizes(reward.ItemId) == true)
+            {
+                if (!contracts.TryConsumableContract(reward.ItemId, out var contract) || reward.Upgrade != 0 || reward.Refinement != 0)
+                    return InventoryResult.Reject(19);
+                try
+                {
+                    wallet = wallet with { AccountWallet = wallet.AccountWallet.ActivateContract(contract.Type, contract.DurationSeconds, now, reward.Count) };
+                }
+                catch (OverflowException) { return InventoryResult.Reject(19); }
+                continue;
+            }
             var template = catalog.Get(reward.ItemId);
+            if (instances is null && template.IsPremiumService)
+                return InventoryResult.Reject(19);
             if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
                 return InventoryResult.Reject();
             var prototype = instances is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement, shopExpiration: shopExpiration) : instances[rewardIndex].Core;
@@ -90,7 +106,7 @@ internal static class InventoryRewardGrantService
 
         var after = wallet with { Items = placement.Items() };
         after.Validate(allocating: true);
-        return new(true, 0, new(inventory, after, "reward_grant"));
+        return new(true, 0, new(inventory, after, "reward_grant", overflowItems: overflow));
     }
 
     // 地面等业务提供已冻结的完整核心；此入口不接存量UID，不确认来源资格或重复拾取。
@@ -133,14 +149,19 @@ internal static class InventoryRewardGrantService
     {
         readonly InventorySnapshot inventory;
         readonly IEnumerable<int> itemIds;
+        readonly bool allowOverflowMail;
+        readonly List<InventoryItem>? overflowItems;
         readonly Dictionary<InventorySlot, InventoryItem> planned;
         Dictionary<(InventoryListType List, int ItemId), List<short>>? stacks;
         readonly Dictionary<(InventoryListType List, short Start, short End), short> freeSlots = [];
 
-        public RewardPlacement(InventorySnapshot inventory, IEnumerable<int> itemIds)
+        public RewardPlacement(InventorySnapshot inventory, IEnumerable<int> itemIds, bool allowOverflowMail = false,
+            List<InventoryItem>? overflowItems = null)
         {
             this.inventory = inventory;
             this.itemIds = itemIds;
+            this.allowOverflowMail = allowOverflowMail;
+            this.overflowItems = overflowItems;
             planned = inventory.Items.ToDictionary(item => item.Position);
         }
 
@@ -154,7 +175,7 @@ internal static class InventoryRewardGrantService
             if (prototype.IsStackable)
             {
                 // 自动发放只向首个兼容堆叠完整入库，不能靠拆成新格绕过该次入库上限。
-                if (remaining > template.StackLimit)
+                if (!allowOverflowMail && remaining > template.StackLimit)
                     return false;
                 // 索引只缩小候选范围，完整属性兼容仍由同一个堆叠规则决定。
                 if (stacks is null)
@@ -186,10 +207,19 @@ internal static class InventoryRewardGrantService
                     }
                 if (item is not null)
                 {
-                    if (!InventoryStackRuleService.CanMerge(prototype, item.Core, remaining, template.StackLimit))
+                    if (InventoryStackRuleService.CanMerge(prototype, item.Core, remaining, template.StackLimit))
+                    {
+                        planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + remaining) } };
+                        remaining = 0;
+                    }
+                    else if (allowOverflowMail)
+                    {
+                        int moved = Math.Min(Math.Max(0, template.StackLimit - item.Core.Count), remaining);
+                        planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + moved) } };
+                        remaining -= moved;
+                    }
+                    else
                         return false;
-                    planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + remaining) } };
-                    remaining = 0;
                 }
             }
 
@@ -216,6 +246,17 @@ internal static class InventoryRewardGrantService
             // 发放只新增或合并，不产生空格；本次操作内的页面游标可单调前进。
             freeSlots[page] = slot;
 
+            if (remaining != 0 && allowOverflowMail)
+            {
+                while (remaining > 0)
+                {
+                    int count = Math.Min(remaining, template.StackLimit);
+                    var core = prototype.IsStackable ? prototype with { Value = count } : prototype;
+                    overflowItems!.Add(CreateItem(template, new(list, range.Start), core));
+                    remaining -= count;
+                }
+                return true;
+            }
             return remaining == 0;
         }
     }

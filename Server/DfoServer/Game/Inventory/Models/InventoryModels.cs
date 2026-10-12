@@ -90,7 +90,7 @@ internal sealed record InventoryDeleteRequest(InventoryListType List, InventoryD
     public byte? ClientState { get; init; }
 }
 // 移动资格必须属于生成计划时的角色；不能把旧计划重新绑定到刷新后的expected。
-internal sealed class InventoryCharacterPrecondition(Character character)
+internal sealed class InventoryCharacterPrecondition(Character character, long? qualificationExpiresAt = null)
 {
     readonly ushort id = character.Id;
     readonly long revision = character.Revision;
@@ -99,8 +99,10 @@ internal sealed class InventoryCharacterPrecondition(Character character)
     readonly byte level = character.Level;
     readonly ImmutableArray<CharacterSkill> skills = character.Skills.OrderBy(skill => skill.Id).ToImmutableArray();
 
-    public bool Matches(Character value) => value.Id == id && value.Revision == revision && value.Job == job &&
-        value.GrowType == grow && value.Level == level && skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id));
+    // 时间资格也在提交前复验，不能凭到期前的规划继续穿戴越级装备。
+    public bool Matches(Character value, long? utcSeconds = null) => value.Id == id && value.Revision == revision && value.Job == job &&
+        value.GrowType == grow && value.Level == level && skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) &&
+        (qualificationExpiresAt is null || (utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()) < qualificationExpiresAt.Value);
 }
 
 internal sealed record InventoryResult(bool Accepted, ushort Error, InventoryPlan? Plan = null, int MoveCount = 0,

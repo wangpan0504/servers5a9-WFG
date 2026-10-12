@@ -29,7 +29,7 @@ internal static class QuestReplayPublicationTests
         {
             using var log = new ServerLog(root);
             var computer = new CharacterStatComputer(characters);
-            var growth = CharacterGrowthCatalog.Load(pvf,sharedSkills ?? SkillLearningCatalog.Load(pvf));
+            var growth = CharacterGrowthCatalog.Load(pvf,sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels));
             var kills = DungeonKillExperienceCatalog.Load(pvf);
             var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf);
             await LoadingAsync();

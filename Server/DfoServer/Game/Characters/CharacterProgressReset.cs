@@ -20,7 +20,7 @@ internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillL
         var option = GetOptions(before.Job).GrowTypes.SingleOrDefault(value => value.Value == (grow & 15));
         if (option is null || (grow >> 4) > option.Awakenings.Count || !SkillPointLedger.SupportsGrowth(grow, before.Job))
             throw new InvalidDataException("当前职业不支持所选分支或觉醒阶段");
-        int contractLevels = before.Learning.ExpertContractExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds() ? 5 : 0;
+        int contractLevels = skills.ActiveExpertContractLevels(before.Learning.ExpertContractExpiresAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         var free = SkillPointLedger.FreeBaseline(before.Job, grow, level, skills, contractLevels)
             .OrderBy(pair => pair.Key).Select(pair => new CharacterSkill(pair.Key, pair.Value)).ToArray();
         var initial = SkillLearning.Initialize(before.Job, free, skills);

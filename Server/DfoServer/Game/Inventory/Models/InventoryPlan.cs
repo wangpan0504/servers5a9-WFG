@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Services;
 
 namespace DfoServer.Game.Inventory.Models;
 
@@ -10,6 +11,7 @@ internal sealed class InventoryPlan
     public InventorySnapshot After { get; }
     public string Reason { get; }
     public InventoryCharacterPrecondition? CharacterPrecondition { get; }
+    public ImmutableArray<InventoryItem> OverflowItems { get; }
     public bool PreserveClearCube { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
@@ -18,12 +20,14 @@ internal sealed class InventoryPlan
     readonly Lazy<ImmutableArray<InventorySlot>> slots;
 
     public InventoryPlan(InventorySnapshot before, InventorySnapshot after, string reason,
-        InventoryCharacterPrecondition? characterPrecondition = null)
+        InventoryCharacterPrecondition? characterPrecondition = null,
+        IReadOnlyList<InventoryItem>? overflowItems = null)
     {
         Before = before;
         After = after;
         Reason = reason;
         CharacterPrecondition = characterPrecondition;
+        OverflowItems = overflowItems is null ? [] : overflowItems.ToImmutableArray();
         beforeIndex = new(() => new(before));
         afterIndex = new(() => new(after));
         currencies = new(() => Enum.GetValues<CurrencyKind>()
@@ -38,7 +42,7 @@ internal sealed class InventoryPlan
     public ImmutableArray<InventorySlot> ChangedSlots => slots.Value;
     public ImmutableArray<CurrencyKind> ChangedCurrencies => currencies.Value;
     public ImmutableArray<int> ChangedEpicPieces => pieces.Value;
-    public bool Changed => ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || Before.Expansion != After.Expansion ||
+    public bool Changed => OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || !ShopPurchaseCount.Same(Before.ShopPurchases, After.ShopPurchases) ||

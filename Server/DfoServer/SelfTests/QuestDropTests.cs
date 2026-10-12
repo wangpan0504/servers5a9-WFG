@@ -46,7 +46,7 @@ internal static class QuestDropTests
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         int before = Count;
-        var original = QuestCatalog.Load(pvf); var skills = SkillLearningCatalog.Load(pvf);
+        var original = QuestCatalog.Load(pvf); var skills = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf,skills); var rooms = DungeonRoomCatalog.Load(pvf);
         var dungeons = DungeonCatalog.Load(pvf); var kills = DungeonKillExperienceCatalog.Load(pvf); var drops = DungeonMonsterDropCatalog.Load(pvf);
         var seeking = QuestEligibilityTests.Quest(29987) with { Condition = "[seeking]", IntData = [10165055,2],

@@ -9,6 +9,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Session;
+using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
@@ -51,6 +52,139 @@ internal static class BoosterTests
         That(Parse("[etc]\n1\n[/etc]\n[etc]\n1 1106 100 1\n[/etc]").Pools.Length == 1, "empty PVF placeholder is not a fake reward");
         That(!itemResources.Boosters.Get(10162064).Available && !itemResources.Boosters.Get(490704415).Available && !itemResources.Boosters.Get(1106).Available,
             "quota, advancement pools and ordinary consumables are not silently treated as simple boxes");
+        var package = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[/stackable type]\n[package data]\n1106 2 1112 1\n[/package data]");
+        That(package.Available && package.PackageRewards.SequenceEqual(new BoosterReward[] { new(1106, 1, 2), new(1112, 1, 1) }),
+            "fixed CERA packages expose every PVF package reward without dropping rows");
+        foreach (string body in new[] { "", "1106", "1106 0", "0 1", "1106 2147483648" })
+            That(!BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[package data]\n" + body + "\n[/package data]").Available,
+                "固定礼包拒绝缺失、非法和超界奖励行");
+        That(!BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[package data]\n1106 1\n[/package data]\n" +
+            "[package data]\n1112 1\n[/package data]").Available, "固定礼包拒绝重复奖励段，不能只采用第一段");
+        That(!BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[total usable count]\n1\n[package data]\n1106 1\n[/package data]").Available,
+            "固定礼包不能绕过未实现的开包资格和使用次数限制");
+        That(CeraPackageRequests.Read([65, 0, 0]) is { Slot: 65, Choices.Length: 0 }, "固定礼包原生请求保留空选择列表");
+        var packageChoice = CeraPackageRequests.Read([65, 0, 1, 0x12, 0x04, 0, 0, 0xff]);
+        That(packageChoice.Choices is [{ ItemId: 1042, Option: 255 }], "时装选择字段完整保留，不解释未知属性byte");
+        foreach (byte[] body in new byte[][] { [], [65, 0], [65, 0, 0, 0], [65, 0, 1], [255, 255, 0],
+            [65, 0, 1, 0, 0, 0, 0, 0], [65, 0, 2, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1] })
+            Reject(() => CeraPackageRequests.Read(body), "礼包请求拒绝截断、尾段、无效槽位及重复选择");
+
+        var packageService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
+            itemResources.EpicPieces, debugSettings: new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true },
+            contracts: itemResources.Contracts);
+        foreach (int id in new[] { 490705385, 490705386, 490705483 })
+        {
+            var expected = itemResources.Boosters.Get(id).PackageRewards.GroupBy(row => row.ItemId)
+                .ToDictionary(group => group.Key, group => group.Sum(row => row.Count));
+            var role = current with { Inventory = new([new(1, Bag(65), InventoryRewardGrantService.Create(catalog.Get(id), utcNow: now, shopExpiration: true))]) };
+            var opened = packageService.OpenCeraPackage(role, new(65, []), out var packageReceipt, now);
+            That(opened.Accepted && packageReceipt!.Rewards.Length == expected.Count &&
+                packageReceipt.Rewards.All(row => expected[row.ItemId] == row.Count), "众神降世礼包完整发放匹配PVF的全部固定奖励 " + id);
+            That(role.Inventory.Find(Bag(65))!.Core.Count == 1 && opened.Plan!.After.Items.Sum(row => (long)row.Core.Count) == expected.Values.Sum(value => (long)value),
+                "固定开包在提交前不改源，规划奖励数量与资源一致 " + id);
+            That(packageService.OpenCeraPackage(role, new(65, [new(1042, 255)]), out var rejectedReceipt, now) is { Accepted: false } && rejectedReceipt is null &&
+                !packageService.Open(role, new(65, 1), out _, now).Accepted, "非空时装选择和普通开箱入口均不能消费固定商城包 " + id);
+            var expiredSource = role with { Inventory = new([new(1, Bag(65), InventoryRewardGrantService.Create(catalog.Get(id), utcNow: now))]) };
+            That(!service.OpenCeraPackage(expiredSource, new(65, []), out _, now).Accepted,
+                "按PVF原期限创建的2020礼包已经过期，不能消费源 " + id);
+        }
+        var ordinarySource = current with { Inventory = new([new(1, Bag(65), Core(7542))]) };
+        That(!packageService.OpenCeraPackage(ordinarySource, new(65, []), out _, now).Accepted, "商城开包命令不能消费普通随机盒");
+        var contractRole = current with { Inventory = InventorySnapshot.Empty with { AccountWallet = AccountWallet.Empty } };
+        foreach (int type in new[] { 22, 27 })
+        {
+            string rule = type == 22 ? "[overequip list] 1 `[weapon]` [/overequip list]\n[type]22\n[over equipinfo]1 1 10\n" :
+                "[type]27\n[over skill]7\n";
+            var contractCatalog = PremiumContractCatalog.Parse(rule + "[target item]7001\n[term]1");
+            var contractGrant = InventoryRewardGrantService.TryGrantBatch(contractRole, [new(7001, 1)], catalog,
+                itemResources.GoldLimits, itemResources.EpicPieces, now, contracts: contractCatalog);
+            That(contractGrant.Accepted && contractGrant.Plan!.After.Items.IsEmpty &&
+                contractGrant.Plan.After.AccountWallet.ContractExpiry(type) == now.ToUnixTimeSeconds() + 86400,
+                "具有完整参数的已支持契约礼包奖励写入账号期限而不创建实体槽 " + type);
+        }
+        That(!InventoryRewardGrantService.TryGrantBatch(contractRole, [new(10000387, 1)], catalog,
+            itemResources.GoldLimits, itemResources.EpicPieces, now).Accepted,
+            "统一grant缺契约依赖时拒绝新premium奖励，不因[contract]/[etc]宽类别发成普通实体");
+        var existingPremium = new InventoryItem(99, Bag(65), Core(10000387) with { Marker16 = 77, SortLockFlag = 1 });
+        var restoredPremium = InventoryRewardGrantService.TryGrantItems(contractRole, [existingPremium], catalog,
+            itemResources.GoldLimits, itemResources.EpicPieces, now);
+        That(restoredPremium.Accepted && restoredPremium.Plan!.After.Items.Single() == existingPremium &&
+            restoredPremium.Plan.After.AccountWallet.PremiumContracts.Count == 0,
+            "完整既有premium实例转移保留UID及核心，不重新激活或误丢弃；消费仍须独立能力门禁");
+        foreach (int type in new[] { 84, 97, 29 })
+        {
+            var unsupportedContract = PremiumContractCatalog.Parse("[type] " + type + "\n[target item] 1106\n[term] 1\n[/type]");
+            var rejectedGrant = InventoryRewardGrantService.TryGrantBatch(contractRole, [new(42, 1), new(1106, 1)], catalog,
+                itemResources.GoldLimits, itemResources.EpicPieces, now, contracts: unsupportedContract);
+            That(rejectedGrant is { Accepted: false, Plan: null } && contractRole.Inventory == InventorySnapshot.Empty,
+                "已识别但效果未完整实现的premium整批拒绝，不退回实体或只发前项复活币 " + type);
+        }
+        var contractRandom = new EdgeRandom();
+        var injectedContracts = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
+            itemResources.EpicPieces, contractRandom, contracts: itemResources.Contracts);
+        var pending = current with { Inventory = new([new(1, Bag(3), Core(38))]) };
+        That(!injectedContracts.Open(pending, new(3, 1), out var rejected, now).Accepted && rejected is null &&
+            pending.Inventory.Find(Bag(3))!.Core.Count == 1 && contractRandom.Calls == 0,
+            "提供完整契约目录也不能忽略38的独立detail合同，源和所有奖项完整保留");
+        var premiumBox = itemResources.Boosters.Get(762);
+        That(premiumBox.Available && premiumBox.Selection is null && premiumBox.PackageRewards.IsDefaultOrEmpty,
+            "762真实奖池保持全部原池、抽数和正权重候选，不凭名称猜包含哪些契约");
+        bool unsupportedPremium = premiumBox.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0)
+            .Any(row => CurrencyWallet.RewardKind(row.ItemId) is null && !itemResources.EpicPieces.ByPiece.ContainsKey(row.ItemId) &&
+                !itemResources.Contracts.TryConsumableContract(row.ItemId, out _) &&
+                (itemResources.Contracts.Recognizes(row.ItemId) || itemResources.Boosters.DirectActivationItems.Contains(row.ItemId)));
+        var premiumRole = current with { Inventory = new([new(1, Bag(3), Core(762))]) };
+        var premiumOpen = injectedContracts.Open(premiumRole, new(3, 1), out var premiumReceipt, now);
+        if (unsupportedPremium)
+        {
+            That(premiumOpen is { Accepted: false, Plan: null } && premiumReceipt is null && contractRandom.Calls == 0 &&
+                premiumRole.Inventory.Find(Bag(3))!.Core.Count == 1 && premiumRole.Inventory.AccountWallet.PremiumContracts.Count == 0,
+                "实际含未支持premium的762在随机前拒绝整包，源、账号期限和全部奖项保持不变");
+        }
+        else
+        {
+            // EdgeRandom命中每个独立池的首个正权重候选，按原抽数和数量独立合计全部预期。
+            var expectedRewards = premiumBox.Pools.Select(pool => (Pool: pool, Reward: pool.Rewards.First(row => row.Weight > 0)))
+                .GroupBy(row => row.Reward.ItemId).ToDictionary(group => group.Key, group => group.Sum(row => row.Pool.Draws * row.Reward.Count));
+            var expectedExpiries = expectedRewards.Where(pair => itemResources.Contracts.TryConsumableContract(pair.Key, out _))
+                .GroupBy(pair => itemResources.Contracts.Get(pair.Key)!.Type)
+                .ToDictionary(group => group.Key, group => now.ToUnixTimeSeconds() +
+                    group.Sum(pair => itemResources.Contracts.Get(pair.Key)!.DurationSeconds * pair.Value));
+            That(premiumOpen.Accepted && premiumReceipt!.Rewards.Length == expectedRewards.Count &&
+                premiumReceipt.Rewards.All(row => expectedRewards[row.ItemId] == row.Count) &&
+                premiumOpen.Plan!.After.AccountWallet.PremiumContracts.Count == expectedExpiries.Count &&
+                expectedExpiries.All(pair => premiumOpen.Plan.After.AccountWallet.ContractExpiry(pair.Key) == pair.Value) &&
+                premiumRole.Inventory.Find(Bag(3))!.Core.Count == 1 && premiumOpen.Plan.After.Find(Bag(3)) is null,
+                "全部真实候选已支持的762完整消费并按全部实际数量激活期限，原源快照不变");
+            foreach (var group in expectedRewards.GroupBy(pair => CurrencyWallet.RewardKind(pair.Key)))
+                if (group.Key is { } kind)
+                    That(CurrencyWallet.Get(premiumOpen.Plan!.After, kind) == group.Sum(pair => (long)pair.Value), "762完整保留虚拟货币收益");
+            var expectedPhysical = expectedRewards.Where(pair => CurrencyWallet.RewardKind(pair.Key) is null &&
+                !itemResources.EpicPieces.ByPiece.ContainsKey(pair.Key) && !itemResources.Contracts.TryConsumableContract(pair.Key, out _))
+                .ToDictionary(pair => pair.Key, pair => pair.Value);
+            var actualPhysical = premiumOpen.Plan!.After.Items.GroupBy(item => item.Core.ItemId)
+                .ToDictionary(group => group.Key, group => group.Sum(item => (long)item.Core.Count));
+            That(actualPhysical.Count == expectedPhysical.Count && expectedPhysical.All(pair => actualPhysical.GetValueOrDefault(pair.Key) == pair.Value),
+                "762完整实物奖励与虚拟权益分别保存，不创建契约伪实体或丢弃已支持实物");
+            foreach (var pair in expectedRewards.Where(pair => itemResources.EpicPieces.ByPiece.ContainsKey(pair.Key)))
+                That(premiumOpen.Plan.After.EpicPieces.Get(itemResources.EpicPieces.ByPiece[pair.Key].Index) == pair.Value,
+                    "762完整保留账号图鉴碎片收益");
+        }
+        var randomPool = itemResources.Boosters.Get(2058);
+        int syntheticPremiumId = randomPool.Pools.SelectMany(pool => pool.Rewards)
+            .First(row => row.Weight > 0 && CurrencyWallet.RewardKind(row.ItemId) is null && !itemResources.EpicPieces.ByPiece.ContainsKey(row.ItemId)).ItemId;
+        foreach (int type in new[] { 84, 97 })
+        {
+            var syntheticContracts = new PremiumContractCatalog(new Dictionary<int, PremiumContract>
+            { [syntheticPremiumId] = new(syntheticPremiumId, type, 86400) });
+            var rejectRandom = new EdgeRandom();
+            var rejectService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
+                itemResources.EpicPieces, rejectRandom, contracts: syntheticContracts);
+            var source = current with { Inventory = new([new(1, Bag(3), Core(2058))]) };
+            That(rejectService.Open(source, new(3, 1), out var rejectedReceipt, now) is { Accepted: false, Plan: null } &&
+                rejectedReceipt is null && rejectRandom.Calls == 0 && source.Inventory.Find(Bag(3))!.Core.Count == 1,
+                "合成未支持premium候选在实际多候选随机池抽取前拒绝，池和权重均不修改 " + type);
+        }
 
         current = current with { Inventory = new([new(1, Bag(3), Core(7542, 2)), new(2, Bag(65), Core(1108, 990) with { SortLockFlag = 1 })], Gold: 12345) };
         var before = current.Inventory;
@@ -71,6 +205,13 @@ internal static class BoosterTests
             I32(ack, 8) == 0 && I32(ack, 12) == 0 && U16(ack, 16) == 3 && I32(ack, 18) == 1108 && I32(ack, 22) == 40,
             "Client success has full 18-byte header followed by item/count pairs");
         That(BoosterPackets.Opened(InventoryResult.Reject(19), null).SequenceEqual(new byte[] { 0, 19, 0 }), "failure uses common u16 result code");
+        var fullEquipment = Enumerable.Range(9, 56).Select(slot => new InventoryItem(slot - 8, Bag((short)slot), Core(10400))).ToImmutableArray();
+        var overflowGrant = InventoryRewardGrantService.TryGrantBatch(current with { Inventory = new(fullEquipment) },
+            [new(10400, 1)], catalog, itemResources.GoldLimits, itemResources.EpicPieces, now, allowOverflowMail: true);
+        That(overflowGrant.Accepted && overflowGrant.Plan!.OverflowItems is { Length: 1 } &&
+            overflowGrant.Plan.OverflowItems[0].Core.ItemId == 10400 &&
+            overflowGrant.Plan.After.Items.Length == fullEquipment.Length,
+            "package overflow keeps the source transaction successful and records the complete reward for mail delivery");
         That(BoosterRequests.Read([3, 0, 2, 0, 0, 0]) == new BoosterOpenRequest(3, 2), "ordinary request carries u16 slot and i32 count");
         foreach (int width in new[] { 0, 2, 5, 7, 9 })
             Reject(() => BoosterRequests.Read(new byte[width]), "parser rejects nonordinary width " + width);

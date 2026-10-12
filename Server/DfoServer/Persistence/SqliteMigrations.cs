@@ -88,7 +88,8 @@ internal static class SqliteMigrations
         new(31, "账号远征及冻结成员", static (db, tx) => Execute(db, tx, AdventureExpeditionSchema)),
         new(32, "冒险团商店账号限购", static (db, tx) => Execute(db, tx, AdventurePurchasesSchema)),
         new(33, "账号赛丽亚幸运值", AddSeriaLuckColumn),
-        new(34, "任务跳过实际效果账本", AddQuestEffects)
+        new(34, "任务跳过实际效果账本", AddQuestEffects),
+        new(35, "账号契约账本及已知旧分支v34兼容", UpgradePremiumContracts)
     ];
 
     internal const string QuestEffectsSchema = """
@@ -606,6 +607,23 @@ internal static class SqliteMigrations
         """;
     public static int CurrentVersion => Steps.Length == 0 ? BaselineVersion : Steps[^1].Version;
 
+    static void UpgradePremiumContracts(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_effect_receipts','character_quest_special_reward_claims')";
+        int effects = Convert.ToInt32(query.ExecuteScalar());
+        if (effects != 2)
+        {
+            // 只接管已发布本分支的完整v34形状，不能借迁移修补未知缺表库。
+            query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='premium_contracts' AND upper(type)='TEXT' AND \"notnull\"=1 AND dflt_value='''{}'''";
+            if (effects != 0 || Convert.ToInt32(query.ExecuteScalar()) != 1)
+                throw new InvalidDataException("未知v34任务或契约账本结构");
+            AddQuestEffects(db, tx);
+        }
+        AddPremiumContractsColumn(db, tx);
+    }
+
     static void AddQuestEffects(SqliteConnection db,SqliteTransaction tx)
     {
         using var query=db.CreateCommand(); query.Transaction=tx;
@@ -626,6 +644,21 @@ internal static class SqliteMigrations
         query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='seria_luck'";
         if ((long)query.ExecuteScalar()! == 0)
             Execute(db, tx, "ALTER TABLE account_wallets ADD COLUMN seria_luck INTEGER NOT NULL DEFAULT 0 CHECK(seria_luck BETWEEN 0 AND 8)");
+    }
+
+    static void AddPremiumContractsColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='premium_contracts'";
+        if ((long)query.ExecuteScalar()! == 0)
+            Execute(db, tx, "ALTER TABLE account_wallets ADD COLUMN premium_contracts TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(premium_contracts) AND json_type(premium_contracts)='object')");
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='premium_contracts' AND upper(type)='TEXT' AND \"notnull\"=1 AND dflt_value='''{}'''";
+        if (Convert.ToInt32(query.ExecuteScalar()) != 1)
+            throw new InvalidDataException("账号契约列结构不兼容");
+        query.CommandText = "SELECT count(*) FROM account_wallets WHERE NOT json_valid(premium_contracts) OR json_type(premium_contracts)!='object'";
+        if (Convert.ToInt32(query.ExecuteScalar()) != 0)
+            throw new InvalidDataException("账号契约账本非法");
     }
     private const string SkillMetadataSchema = """
         CREATE TABLE character_tp_sources(
@@ -873,7 +906,7 @@ internal static class SqliteMigrations
         "SELECT [character_id],[context],[sp],[tp] FROM [character_skill_points] LIMIT 0",
         "SELECT [character_id],[context],[slot],[skill_id],[level] FROM [character_skill_bindings] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[list_type],[slot_index],[item_uid_before],[item_uid_after],[item_id_before],[item_id_after],[value_before],[value_after],[item_kind_before],[item_kind_after],[count_before],[count_after],[count_delta],[core_hash_before],[core_hash_after] FROM [inventory_audit_log] LIMIT 0",
-        "SELECT [account],[revision],[rental_points] FROM [account_wallets] LIMIT 0",
+        "SELECT [account],[revision],[rental_points],[seria_luck],[premium_contracts] FROM [account_wallets] LIMIT 0",
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",

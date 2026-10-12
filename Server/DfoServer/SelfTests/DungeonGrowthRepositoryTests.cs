@@ -26,7 +26,7 @@ internal static class DungeonGrowthRepositoryTests
         try
         {
             var growth = CharacterGrowthCatalog.Load(pvf);
-            var learning = SkillLearningCatalog.Load(pvf);
+            var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("growth-repository", () => { });
@@ -224,7 +224,7 @@ internal static class DungeonGrowthRepositoryTests
         {
             var catalog = CharacterGrowthCatalog.Load(pvf);
             var rewards = DungeonKillExperienceCatalog.Load(pvf);
-            var learning = SkillLearningCatalog.Load(pvf);
+            var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("growth-session", () => { });

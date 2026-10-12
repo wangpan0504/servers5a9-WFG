@@ -138,7 +138,7 @@ internal static class QuestQuickClearRepositoryTests
     {
         int checks = Count;
         var quests = QuestCatalog.Load(pvf); var connections = QuestConnectionCatalog.Load(pvf);
-        var skills = SkillLearningCatalog.Load(pvf); var growth = CharacterGrowthCatalog.Load(pvf,skills);
+        var skills = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf,skills);
         foreach (int key in new[] { 19,21,23 })
         {
             That(connections.TryGet(key,out var unit),"真实quick clear关联单元可读取: " + key);

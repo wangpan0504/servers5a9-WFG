@@ -134,36 +134,60 @@ internal static class MagicBoxTests
             "Seria box fallback path is also available to ordinary inventory movement");
         Check(SeriaLuckPackets.Gauge(0, 8).SequenceEqual(new byte[] { 0, 40 }),
             "Seria luck HUD uses the eight-stage gauge contract");
-        var service = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits, resources.EpicPieces, new FirstRandom());
+        var random = new FirstRandom();
+        var service = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits, resources.EpicPieces,
+            random, contracts: resources.Contracts);
         var character = new Character(1, 0, "MagicBox", 0, towns.Room, towns.InitialReturn)
         {
             Inventory = new([new(0, new(InventoryListType.Main, 70), new(2682272, ItemKind.Consumable, 10))])
         };
         var opened = service.Open(character, noMaterial with { Count = 1 }, out var receipt);
-        Check(opened.Accepted && receipt is { OpenCount: 1, MaterialSlot: -1 } && opened.Plan!.After.Find(new(InventoryListType.Main, 70)) is { Core.Value: 9 },
-            "PVF-defined no-material box consumes one box and commits its rewards");
-        var luckyCharacter = character with
+        var unsupportedSeria = seriaDefinition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0 &&
+            CurrencyWallet.RewardKind(row.ItemId) is null && resources.Contracts.Recognizes(row.ItemId) &&
+            !resources.Contracts.TryConsumableContract(row.ItemId, out _)).Select(row => row.ItemId).Distinct().ToArray();
+        if (unsupportedSeria.Length != 0)
         {
-            Inventory = character.Inventory with
+            Check(!opened.Accepted && opened.Plan is null && receipt is null && random.Calls == 0 &&
+                character.Inventory.Find(new(InventoryListType.Main, 70))!.Core.Count == 10,
+                "赛丽亚池含未完整支持premium时在随机前整包拒绝，保留全部源和奖项：" + string.Join(",", unsupportedSeria));
+            Console.WriteLine($"PASS magic-box unsupported premium sample={unsupportedSeria[0]} type={resources.Contracts.Get(unsupportedSeria[0])?.Type}");
+        }
+        else
+        {
+            Check(opened.Accepted && receipt is { OpenCount: 1, MaterialSlot: -1 } && opened.Plan!.After.Find(new(InventoryListType.Main, 70)) is { Core.Value: 9 },
+                "PVF-defined no-material box consumes one box and commits its rewards");
+            var luckyCharacter = character with
             {
-                AccountWallet = AccountWallet.Empty with { SeriaLuck = 8 },
-                Items = [new(0, new(InventoryListType.Main, 70), new(2682272, ItemKind.Consumable, 2))]
-            }
-        };
-        var luckyOpened = service.Open(luckyCharacter, noMaterial with { BoxItemId = 2682272, Count = 2 }, out var luckyReceipt);
-        Check(luckyOpened.Accepted && luckyReceipt is { SeriaLuckBefore: 8, SeriaLuckAfter: 1 } && (luckyReceipt.DoubleRewards?.Count ?? 0) != 0,
-            "Seria lucky threshold doubles one draw and persists the post-open gauge");
-        var luckyAck = MagicBoxPackets.OpenedSeriaExpand(luckyReceipt!);
-        int luckyPrimaryCount = BitConverter.ToInt16(luckyAck, 9);
-        int luckyDoubleCountOffset = 11 + luckyPrimaryCount * ItemListProtocolWriter.EntrySize + 2;
-        var visibleDoubled = luckyReceipt!.DoubledRewards.Where(row => row.Slot >= 0).ToArray();
-        Check(visibleDoubled.Length > 0 &&
-            BitConverter.ToInt16(luckyAck, luckyDoubleCountOffset) == visibleDoubled.Length &&
-            BitConverter.ToInt32(luckyAck, luckyDoubleCountOffset + 4) == visibleDoubled[0].ItemId,
-            "Seria lucky threshold response renders the doubled reward in the right-hand list");
-        var bulkOpened = service.Open(character, noMaterial, out var bulkReceipt);
-        Check(bulkOpened.Accepted && bulkReceipt is { OpenCount: 10, MaterialSlot: -1 } && bulkOpened.Plan!.After.Find(new(InventoryListType.Main, 70)) is null,
-            "PVF-defined Seria ten-open consumes all requested boxes when reward space is available");
+                Inventory = character.Inventory with
+                {
+                    AccountWallet = AccountWallet.Empty with { SeriaLuck = 8 },
+                    Items = [new(0, new(InventoryListType.Main, 70), new(2682272, ItemKind.Consumable, 2))]
+                }
+            };
+            var luckyOpened = service.Open(luckyCharacter, noMaterial with { BoxItemId = 2682272, Count = 2 }, out var luckyReceipt);
+            Check(luckyOpened.Accepted && luckyReceipt is { SeriaLuckBefore: 8, SeriaLuckAfter: 1 } && (luckyReceipt.DoubleRewards?.Count ?? 0) != 0,
+                "Seria lucky threshold doubles one draw and persists the post-open gauge");
+            var luckyAck = MagicBoxPackets.OpenedSeriaExpand(luckyReceipt!);
+            int luckyPrimaryCount = BitConverter.ToInt16(luckyAck, 9);
+            int luckyDoubleCountOffset = 11 + luckyPrimaryCount * ItemListProtocolWriter.EntrySize + 2;
+            var visibleDoubled = luckyReceipt!.DoubledRewards.Where(row => row.Slot >= 0).ToArray();
+            Check(visibleDoubled.Length > 0 &&
+                BitConverter.ToInt16(luckyAck, luckyDoubleCountOffset) == visibleDoubled.Length &&
+                BitConverter.ToInt32(luckyAck, luckyDoubleCountOffset + 4) == visibleDoubled[0].ItemId,
+                "Seria lucky threshold response renders the doubled reward in the right-hand list");
+            var bulkOpened = service.Open(character, noMaterial, out var bulkReceipt);
+            Check(bulkOpened.Accepted && bulkReceipt is { OpenCount: 10, MaterialSlot: -1 } && bulkOpened.Plan!.After.Find(new(InventoryListType.Main, 70)) is null,
+                "PVF-defined Seria ten-open consumes all requested boxes when reward space is available");
+        }
+        var unsupportedId = seriaDefinition.Pools.SelectMany(pool => pool.Rewards)
+            .First(row => CurrencyWallet.RewardKind(row.ItemId) is null && !resources.EpicPieces.ByPiece.ContainsKey(row.ItemId)).ItemId;
+        var unsupportedCatalog = new PremiumContractCatalog(new Dictionary<int, PremiumContract> { [unsupportedId] = new(unsupportedId, 97, 86400) });
+        var rejectRandom = new FirstRandom();
+        var rejectingService = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits, resources.EpicPieces,
+            rejectRandom, unsupportedCatalog);
+        Check(rejectingService.Open(character, noMaterial with { Count = 1 }, out var rejected) is { Accepted: false, Plan: null } &&
+            rejected is null && rejectRandom.Calls == 0 && character.Inventory.Find(new(InventoryListType.Main, 70))!.Core.Count == 10,
+            "已识别的未支持premium候选在任何随机之前拒绝，不抽后重选或单独吞掉权益");
         var regularCharacter = character with
         {
             Inventory = new([
@@ -180,6 +204,11 @@ internal static class MagicBoxTests
 
     sealed class FirstRandom : Random
     {
-        public override long NextInt64(long maxValue) => 0;
+        public int Calls { get; private set; }
+        public override long NextInt64(long maxValue)
+        {
+            Calls++;
+            return 0;
+        }
     }
 }

@@ -10,14 +10,15 @@ internal static class InventoryMoveService
     // ACK19 的 23 显示“无法移动该物品”；1 是地区限制，不能用于普通物品校验失败。
     const ushort CannotMoveItem = 23;
 
-    public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds)
+    public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds,
+        PremiumContractCatalog? contracts = null)
     {
         if (request.Source.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent ||
             request.Destination.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent)
             return InventoryResult.Reject(CannotMoveItem);
         // 调用方在owner内取得稳定输入；复制技能数组，后续资格读取和前提使用同一份快照。
         character = character with { Skills = [.. character.Skills] };
-        var precondition = new InventoryCharacterPrecondition(character);
+        long? qualificationExpiresAt = null;
         var before = character.Inventory;
         var source = before.Find(request.Source);
         var destination = before.Find(request.Destination);
@@ -35,18 +36,18 @@ internal static class InventoryMoveService
         if (source is null || source.IsExpired(utcSeconds) || destination?.IsExpired(utcSeconds) == true)
             return InventoryResult.Reject(CannotMoveItem);
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
-        if (count <= 0 || !Allows(character, destinationSlot, source.Core, catalog) ||
+        if (count <= 0 || !AllowsAt(destinationSlot, source.Core) ||
             sourceSlot.List != destinationSlot.List && !InventoryCargoService.AllowsInsert(source.Core, destinationSlot.List, catalog.Get(source.Core.ItemId)))
             return InventoryResult.Reject(CannotMoveItem);
         if (sourceSlot == destinationSlot)
-            return new(true, 0, new(before, before, "move_no_change", precondition));
+            return new(true, 0, new(before, before, "move_no_change", Precondition()));
         if (source.Core.IsStackable && sourceSlot.List != destinationSlot.List)
         {
             // 跨容器存取优先完整合并，不能合并时仍允许空格；同容器手动拆分不走自动选格。
             int limit = catalog.Get(source.Core.ItemId).StackLimit;
             var mergeTarget = before.Items.Where(item => item.Position.List == destinationSlot.List &&
                 InventoryStackRuleService.CanMerge(source.Core, item.Core, count, limit) &&
-                Allows(character, item.Position, source.Core, catalog)).MinBy(item => item.Position.Index);
+                AllowsAt(item.Position, source.Core)).MinBy(item => item.Position.Index);
             if (mergeTarget is not null)
             {
                 destinationSlot = mergeTarget.Position;
@@ -54,7 +55,7 @@ internal static class InventoryMoveService
             }
             else if (destination is not null)
             {
-                var empty = FindEmptyDestination(character, source.Core, destinationSlot.List, catalog);
+                var empty = FindEmptyDestination(character, source.Core, destinationSlot.List, catalog, utcSeconds, contracts);
                 if (empty is null)
                     return InventoryResult.Reject(CannotMoveItem);
                 destinationSlot = empty.Value;
@@ -73,7 +74,7 @@ internal static class InventoryMoveService
         }
         else if (destination is not null)
         {
-            if (count != source.Core.Count || !Allows(character, sourceSlot, destination.Core, catalog) ||
+            if (count != source.Core.Count || !AllowsAt(sourceSlot, destination.Core) ||
                 sourceSlot.List != destinationSlot.List && !InventoryCargoService.AllowsInsert(destination.Core, sourceSlot.List, catalog.Get(destination.Core.ItemId)))
                 return InventoryResult.Reject(CannotMoveItem);
             planned[sourceSlot] = PrepareForDestination(destination, sourceSlot, source, catalog);
@@ -96,8 +97,21 @@ internal static class InventoryMoveService
         after.Validate(allocating: true);
         // 自动合并必须按实际移动方向回复；其他移动（尤其穿脱）仍保持原请求顺序。
         bool forward = sourceSlot == request.Source || source.Core.IsStackable && sourceSlot.List != destinationSlot.List;
-        return new(true, 0, new(before, after, "move_item", precondition), count,
+        return new(true, 0, new(before, after, "move_item", Precondition()), count,
             forward ? sourceSlot : destinationSlot, forward ? destinationSlot : sourceSlot);
+
+        InventoryCharacterPrecondition Precondition() => new(character, qualificationExpiresAt);
+
+        bool AllowsAt(InventorySlot position, ItemCore core)
+        {
+            if (!Allows(character, position, core, catalog, utcSeconds, contracts))
+                return false;
+            // 只有本次实际穿戴依赖霸王等级加成时冻结期限；卸装、普通移格和原等级合格不受其到期限制。
+            if (position.List == InventoryListType.Equipment && core.Kind is (ItemKind.Equipment or ItemKind.Avatar) &&
+                character.Level < catalog.Get(core.ItemId).MinimumLevel)
+                qualificationExpiresAt = character.Inventory.AccountWallet.ContractExpiry(22);
+            return true;
+        }
 
         void DecreaseSource()
         {
@@ -108,7 +122,8 @@ internal static class InventoryMoveService
         }
     }
 
-    static InventorySlot? FindEmptyDestination(Character character, ItemCore core, InventoryListType list, ItemCatalog catalog)
+    static InventorySlot? FindEmptyDestination(Character character, ItemCore core, InventoryListType list, ItemCatalog catalog, long utcSeconds,
+        PremiumContractCatalog? contracts)
     {
         var inventory = character.Inventory;
         var range = ItemSlotBoundService.Range(core.Kind, inventory.Expansion);
@@ -119,13 +134,14 @@ internal static class InventoryMoveService
         for (short slot = range.Start; slot <= range.End; slot++)
         {
             var position = new InventorySlot(list, slot);
-            if (inventory.Find(position) is null && Allows(character, position, core, catalog))
+            if (inventory.Find(position) is null && Allows(character, position, core, catalog, utcSeconds, contracts))
                 return position;
         }
         return null;
     }
 
-    public static bool Allows(Character character, InventorySlot position, ItemCore core, ItemCatalog catalog)
+    public static bool Allows(Character character, InventorySlot position, ItemCore core, ItemCatalog catalog, long? utcSeconds = null,
+        PremiumContractCatalog? contracts = null)
     {
         if (!ItemSlotBoundService.Allows(character.Inventory, position, core.Kind))
             return false;
@@ -141,10 +157,16 @@ internal static class InventoryMoveService
         // 宠物容器先核对物品部位；角色等级、职业和技能不能代替宠物成长系统的规则。
         if (core.Kind is ItemKind.Creature or ItemKind.CreatureEquipment)
             return matchesSlot;
-        return matchesSlot && character.Level >= template.MinimumLevel &&
+        return matchesSlot && WearLevelSatisfied(character, template, utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts) &&
             (template.Jobs & (1 << character.Job)) != 0 &&
             RequiredSkillSatisfied(character, template);
     }
+
+    internal static bool WearLevelSatisfied(Character character, ItemTemplate template, long utcSeconds,
+        PremiumContractCatalog? contracts = null) =>
+        character.Level >= template.MinimumLevel || template.Kind is (ItemKind.Equipment or ItemKind.Avatar) &&
+        character.Inventory.AccountWallet.ContractExpiry(22) > utcSeconds &&
+        (long)character.Level + (contracts?.EquipmentLevelAllowance(template) ?? 0) >= template.MinimumLevel;
 
     internal static bool RequiredSkillSatisfied(Character character, ItemTemplate template)
     {

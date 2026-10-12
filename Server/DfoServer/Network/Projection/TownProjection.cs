@@ -47,6 +47,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await InventoryProjection.RestoreLocksAsync(context, c.Inventory, c.Inventory.Items.Select(item => item.Position));
         await context.Notify(NotiPacketType.UPGRADE_CARRY_GOLD, CurrencyPackets.GoldLimit(c.Inventory), "gold_limit_initialize");
         await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(c.Inventory.AccountWallet), "account_cera_initialize");
+        if (c.Inventory.AccountWallet.PremiumContracts.Count != 0)
+            await context.Notify(NotiPacketType.PREMIUM_INFO_LIST, PremiumPackets.SelectEntries(c.Inventory.AccountWallet), "premium_info_initialize");
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
         if (mailbox is not null)
             await mailbox.InitializeAsync(context);

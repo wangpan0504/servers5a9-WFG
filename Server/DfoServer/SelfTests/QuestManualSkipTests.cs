@@ -101,7 +101,7 @@ internal static class QuestManualSkipTests
         int checks = Count;
         QuestCatalogTests.RunClosingTags();
         VerifyAreaScope();
-        var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf);
+        var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
         string logRoot = Path.Combine(Path.GetTempPath(),"S5A9-manual-skip-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(logRoot);

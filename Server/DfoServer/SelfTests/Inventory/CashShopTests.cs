@@ -102,7 +102,9 @@ internal static class CashShopTests
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
     {
         var product = resources.CashShop.Products.Values
-            .First(row => row.CeraPrice > 0 && row.Section is not ("visual" or "selectable character premium" or "charac premium package") && resources.Items.Get(row.ItemId).Kind is not ItemKind.Equipment);
+            .First(row => row.CeraPrice > 0 && row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
+                CurrencyWallet.RewardKind(row.ItemId) is null && !resources.Contracts.Recognizes(row.ItemId) &&
+                resources.Items.Get(row.ItemId).Kind is not ItemKind.Equipment);
         string path = Path.Combine(Path.GetTempPath(), "s5a9-cash-shop-" + Guid.NewGuid().ToString("N"), "game.db");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var repo = new CharacterRepository(path);
@@ -121,11 +123,12 @@ internal static class CashShopTests
                 AccountWallet = AccountWallet.Empty.Set(CurrencyKind.Cera, 100_000)
             }
         };
-        var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces)
+        var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, contracts: resources.Contracts)
             { IgnoreAbsoluteExpiration = false };
         var now = DateTimeOffset.UtcNow;
         var expired = resources.CashShop.Products.Values.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
             row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
+            !resources.Contracts.Recognizes(row.ItemId) && CurrencyWallet.RewardKind(row.ItemId) is null &&
             resources.Items.Get(row.ItemId).Expiration is { Days: 0, AbsoluteTime: > 0 } expiration && expiration.AbsoluteTime <= now.ToUnixTimeSeconds());
         var expiredRequest = new DfoServer.Game.Inventory.Models.CashShopPurchaseRequest(0, [new(expired.CommodityId, 0)]);
         That(!service.IgnoreAbsoluteExpiration && !service.Buy(character, expiredRequest, out _, now).Accepted,
@@ -168,7 +171,27 @@ internal static class CashShopTests
         That(!service.Buy(character, new(0, [new(int.MaxValue, 0)]), out _).Accepted,
             "unknown cash shop commodity is rejected without a charge");
         VerifyFullRewards(repo, owner, character.Slot, towns, resources);
+        VerifyUnsupportedPremiumPurchases(character, resources);
         Console.WriteLine("PASS cash shop purchase parser, Cera charge, reward placement and ACK assertions");
+    }
+
+    static void VerifyUnsupportedPremiumPurchases(Character character, ItemResources resources)
+    {
+        foreach (int type in new[] { 84, 97, 29 })
+        {
+            var contract = resources.Contracts.ByItem.Values.First(row => row.Type == type &&
+                CurrencyWallet.RewardKind(row.ItemId) is null && !resources.EpicPieces.ByPiece.ContainsKey(row.ItemId));
+            var shop = CashShopCatalog.Parse("[premium]\n700301 " + contract.ItemId + " 1 0 0 13 0 0 0\n" +
+                "700302 1108 1 0 0 5 0 0 0", "[bonus item]\n700302 " + contract.ItemId + " 1\n[/bonus item]");
+            var service = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits, resources.EpicPieces, contracts: resources.Contracts);
+            var before = character.Inventory;
+            foreach (var request in new CashShopPurchaseRequest[]
+            {
+                new(0, [new(700301, 0)]), new(0, [new(700302, 0)]), new(0, [new(700302, 0), new(700301, 0)])
+            })
+                That(service.Buy(character, request, out var receipt) is { Accepted: false, Plan: null } && receipt is null && character.Inventory == before,
+                    "未完整支持的premium主商品/附赠/混合购买整笔拒绝，不扣点券、发实体或吞奖励 " + type);
+        }
     }
 
     static void VerifyFullRewards(CharacterRepository repository, AccountOwners.Lease owner, ushort slot,

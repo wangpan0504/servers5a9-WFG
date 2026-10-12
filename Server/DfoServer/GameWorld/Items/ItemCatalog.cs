@@ -11,6 +11,7 @@ internal sealed class ItemCatalog
     readonly PvfArchive pvf;
     readonly IReadOnlyDictionary<int, string> equipment;
     readonly IReadOnlyDictionary<int, string> stackable;
+    readonly IReadOnlySet<int> premiumServiceItems;
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
     readonly ConcurrentDictionary<int, Lazy<ItemTemplate>> pendingTemplates = new();
     readonly ConcurrentDictionary<int, QuestTicketDefinition> questTickets = new();
@@ -46,11 +47,12 @@ internal sealed class ItemCatalog
     readonly int equipmentSellRate;
 
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
-        IReadOnlyDictionary<int, string> stackable, int equipmentSellRate)
+        IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null)
     {
         pvf = archive;
         this.equipment = equipment;
         this.stackable = stackable;
+        this.premiumServiceItems = premiumServiceItems ?? new HashSet<int>();
         this.equipmentSellRate = equipmentSellRate;
     }
 
@@ -174,6 +176,7 @@ internal sealed class ItemCatalog
             jobMask, checked((ushort)Int("required skill", 0)),
             name, text.Section("stackable type").Replace("`", "").Trim())
         {
+            IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text),
             WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&
                 text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
@@ -197,6 +200,10 @@ internal sealed class ItemCatalog
 
         int Int(string tag, int fallback) => Integers(text.Section(tag)).FirstOrDefault(fallback);
     }
+
+    internal static bool IsPremiumStackable(PvfDocument text) =>
+        Regex.Match(text.Section("stackable type"), @"\[([^\]]+)\]").Groups[1].Value
+            .Equals("contract", StringComparison.OrdinalIgnoreCase);
 
     internal static ImmutableHashSet<string> ReadGuardianGemEffects(PvfDocument text) =>
         Regex.Matches(text.Block("enchant"), @"\[([^\]/]+)\]")

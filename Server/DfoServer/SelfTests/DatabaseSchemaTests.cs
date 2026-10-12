@@ -1,8 +1,13 @@
 using static DfoServer.Testing.TestCheck;
 using DfoServer.Persistence;
 using DfoServer.Game.Auth;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Currency;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 using DfoServer.Testing;
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
 
 namespace DfoServer;
 
@@ -139,6 +144,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(failed);
 
             VerifyReleasedMigrations(root);
+            VerifyPremiumContractsMigration(root);
             VerifyMasterQuest14Compatibility(root);
             VerifyQuestSystemMigration(root);
             VerifyExistingQuestSystemV14(root);
@@ -194,9 +200,9 @@ internal static class DatabaseSchemaTests
             _=new CharacterRepository(path);
             using(var db=Open(path))
             {
-                Check(Query(db,"PRAGMA user_version") is 34L && Query(db,"SELECT revision FROM characters") is 7L &&
+                Check(Query(db,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && Query(db,"SELECT revision FROM characters") is 7L &&
                     Query(db,"SELECT revision FROM account_wallets") is 11L && Query(db,"SELECT rental_points FROM account_wallets") is 23L &&
-                    Query(db,"SELECT seria_luck FROM account_wallets") is 0L,"正式v33及本地任务v32升级34保留角色与账号资产/revision");
+                    Query(db,"SELECT seria_luck FROM account_wallets") is 0L,"正式v33及本地任务v32升级当前版本保留角色与账号资产/revision");
                 Check(Query(db,"SELECT count(*) FROM account_adventure_purchases") is 0L &&
                     (long)Query(db,"SELECT count(*) FROM character_quest_effect_receipts")! == (local32 ? 1 : 0) &&
                     (long)Query(db,"SELECT count(*) FROM character_quest_special_reward_claims")! == (local32 ? 1 : 0),
@@ -902,6 +908,10 @@ internal static class DatabaseSchemaTests
                 Execute(db, "INSERT INTO character_skill_points VALUES(1,0,12,0),(1,1,34,0)");
                 Execute(db, "INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES(1,0,3145,1,'1234567890abcdef1234567890abcdef')");
                 Execute(db, "INSERT INTO account_wallets(account,revision,rental_points) VALUES('migrated',5,17)");
+                if (oldVersion < 35)
+                    Execute(db, "ALTER TABLE account_wallets DROP COLUMN premium_contracts");
+                if (oldVersion < 34)
+                    Execute(db, "DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts");
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
@@ -1003,6 +1013,8 @@ internal static class DatabaseSchemaTests
                     "v14保留旧角色资产，不因等级、GM跳过或旧任务完成位补造装备槽解锁");
                 Check(Query(db, "SELECT rental_points FROM account_wallets WHERE account='migrated'") is long rental &&
                     rental == (oldVersion == 1 ? 0 : 17), "v1租赁默认值与v2既有租赁余额分别保留");
+                Check(Query(db, "SELECT premium_contracts FROM account_wallets WHERE account='migrated'") is "{}",
+                    "真实旧版缺少契约列时升级为空账本，不补造历史契约");
                 Check(Query(db, "SELECT revision||':'||level||':'||experience||':'||gold FROM characters WHERE id=1") is "7:2:60:123" &&
                     Query(db, "SELECT group_concat(context||':'||sp,',') FROM (SELECT context,sp FROM character_skill_points ORDER BY context)") is "0:12,1:34" &&
                     Query(db, "SELECT quest_id||':'||condition_state FROM character_active_main_quests WHERE character_id=1") is "3145:1" &&
@@ -1103,6 +1115,144 @@ internal static class DatabaseSchemaTests
                 Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='character_dungeon_state'") is 0L &&
                 Query(db, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='rental_points'") is 0L,
                 "回滚恢复真实v1结构");
+        }
+    }
+
+    private static void VerifyPremiumContractsMigration(string root)
+    {
+        var core = new ItemCore(1106, ItemKind.Consumable, 3) { Marker16 = 77, SortLockFlag = 1 };
+        const long gmExpiry = 1_800_000_000;
+        const long legacyExpiry = 1_900_000_000;
+        foreach (bool legacyColumn in new[] { false, true })
+        {
+            string path = Path.Combine(root, legacyColumn ? "premium-local-v34.db" : "premium-master-v34.db");
+            using (var source = Open(Path.Combine(root, "released-v34.db")))
+            using (var target = Open(path))
+                source.BackupDatabase(target);
+            new AuthenticationService(new AuthenticationRepository(path)).Create("migrated", "fixture-password");
+            using (var db = Open(path))
+            {
+                Execute(db, "UPDATE account_wallets SET seria_luck=7 WHERE account='migrated'");
+                Execute(db, $"INSERT INTO account_currency_balances VALUES('migrated',{(int)CurrencyKind.Cera},321)");
+                Execute(db, $"INSERT INTO account_expert_contracts VALUES('migrated',{gmExpiry})");
+                using var command = db.CreateCommand();
+                command.CommandText = "INSERT INTO character_inventory_items(item_uid,character_id,account,item_core) VALUES(12345,1,'migrated',$core)";
+                command.Parameters.AddWithValue("$core", JsonSerializer.Serialize(core));
+                command.ExecuteNonQuery();
+                Execute(db, "INSERT INTO character_inventory_slots(character_id,account,list_type,slot_index,item_uid) VALUES(1,'migrated',0,65,12345)");
+                if (legacyColumn)
+                {
+                    Execute(db, $"UPDATE account_wallets SET premium_contracts='{{\"27\":{legacyExpiry}}}' WHERE account='migrated'");
+                    Execute(db, "DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts");
+                }
+                else
+                {
+                    Execute(db, "ALTER TABLE account_wallets DROP COLUMN premium_contracts");
+                    Execute(db, """
+                        INSERT INTO character_quest_effect_receipts VALUES(1,'00112233445566778899aabbccddeeff',6,7,'[100]','[]');
+                        INSERT INTO character_quest_special_reward_claims VALUES(1,100,'00112233445566778899aabbccddeeff');
+                        """);
+                }
+                Execute(db, "PRAGMA user_version=34");
+                Check(Query(db, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='premium_contracts'") is long columns &&
+                    columns == (legacyColumn ? 1 : 0) &&
+                    Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_effect_receipts','character_quest_special_reward_claims')") is long effects &&
+                    effects == (legacyColumn ? 0 : 2), "v34夹具分别覆盖主线任务账本及本分支契约账本的明确形状");
+            }
+            {
+                string failed = Path.Combine(root, legacyColumn ? "premium-local-v35-rollback.db" : "premium-master-v35-rollback.db");
+                using (var source = Open(path))
+                using (var target = Open(failed))
+                {
+                    source.BackupDatabase(target);
+                    Execute(target, "ALTER TABLE accounts DROP COLUMN disabled");
+                }
+                string before = Snapshot(failed);
+                Reject<SqliteException>(() => new CharacterRepository(failed), "v35承接旧结构后末段必需列校验失败拒绝启动");
+                Check(Snapshot(failed) == before, "v35晚期失败回滚新增DDL、版本、钱包及物品UID");
+                using var failedDb = Open(failed);
+                Check(Query(failedDb, "PRAGMA user_version") is 34L &&
+                    Query(failedDb, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='premium_contracts'") is long columns &&
+                    columns == (legacyColumn ? 1 : 0) &&
+                    Query(failedDb, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_effect_receipts','character_quest_special_reward_claims')") is long effects &&
+                    effects == (legacyColumn ? 0 : 2), "失败库继续保持各自明确的v34原结构");
+            }
+            if (legacyColumn)
+            {
+                foreach (bool partialEffects in new[] { false, true })
+                {
+                    string damaged = Path.Combine(root, partialEffects ? "premium-v34-partial-effects.db" : "premium-v34-unknown-shape.db");
+                    using (var source = Open(path))
+                    using (var target = Open(damaged))
+                    {
+                        source.BackupDatabase(target);
+                        if (partialEffects)
+                        {
+                            Execute(target, SqliteMigrations.QuestEffectsSchema);
+                            Execute(target, "DROP TABLE character_quest_special_reward_claims");
+                        }
+                        else
+                            Execute(target, "ALTER TABLE account_wallets DROP COLUMN premium_contracts");
+                    }
+                    string damagedBefore = Snapshot(damaged);
+                    RejectDatabase(() => new CharacterRepository(damaged));
+                    Check(Snapshot(damaged) == damagedBefore, "未知v34缺列或部分任务表不能冒充本分支契约版并被自动修补");
+                }
+            }
+            foreach (var (name, declaration, value) in new[]
+            {
+                ("integer", "INTEGER NOT NULL DEFAULT 0", "0"),
+                ("nullable", "TEXT DEFAULT '{}'", "'{}'"),
+                ("default-array", "TEXT NOT NULL DEFAULT '[]'", "'{}'"),
+                ("value-array", "TEXT NOT NULL DEFAULT '{}'", "'[]'")
+            })
+            {
+                string damaged = Path.Combine(root, $"premium-v34-{legacyColumn}-column-{name}.db");
+                using (var source = Open(path))
+                using (var target = Open(damaged))
+                {
+                    source.BackupDatabase(target);
+                    if (legacyColumn) Execute(target, "ALTER TABLE account_wallets DROP COLUMN premium_contracts");
+                    Execute(target, "ALTER TABLE account_wallets ADD COLUMN premium_contracts " + declaration);
+                    Execute(target, "UPDATE account_wallets SET premium_contracts=" + value);
+                }
+                string damagedBefore = Snapshot(damaged);
+                RejectDatabase(() => new CharacterRepository(damaged));
+                Check(Snapshot(damaged) == damagedBefore, "两种v34均拒绝同名但结构或JSON对象不兼容的契约列，失败完整回滚");
+            }
+            var repository = new CharacterRepository(path);
+            using var owner = new AccountOwners().Acquire("migrated", () => { });
+            var character = repository.List(owner).Single();
+            Check(character.Revision == 7 && character.Inventory.Find(new(InventoryListType.Main, 65)) is { Uid: 12345 } item && item.Core == core &&
+                character.Inventory.AccountWallet.Revision == 5 && character.Inventory.AccountWallet.RentalPoints == 17 &&
+                character.Inventory.AccountWallet.SeriaLuck == 7 && character.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 321 &&
+                character.Inventory.AccountWallet.ContractExpiry(27) == (legacyColumn ? legacyExpiry : 0),
+                "两种明确v34升级保留角色、钱包、幸运值、旧契约和完整物品UID，不提前续期");
+            using (var db = Open(path))
+            {
+                Check(Query(db, "SELECT expires_at FROM account_expert_contracts WHERE account='migrated'") is gmExpiry &&
+                    Query(db, "SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'") is 12345L &&
+                    Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                    "旧GM达人契约和物品分配序号保留，结构版本准确升级");
+                Check(Query(db, "SELECT count(*) FROM character_quest_effect_receipts") is long receipts && receipts == (legacyColumn ? 0 : 1) &&
+                    Query(db, "SELECT count(*) FROM character_quest_special_reward_claims") is long claims && claims == (legacyColumn ? 0 : 1) &&
+                    (legacyColumn || Query(db, "SELECT claimed_quests||':'||changed_items FROM character_quest_effect_receipts") is "[100]:[]" &&
+                        Query(db, "SELECT quest_id FROM character_quest_special_reward_claims") is 100L),
+                    "主线v34任务效果及资格历史完整保留，本分支v34仅补空账本不补发奖励");
+            }
+            string upgraded = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == upgraded, "契约升级重开幂等，不重发物品或更改到期时间");
+            var after = character.Inventory with { AccountWallet = character.Inventory.AccountWallet.ActivateContract(22, 60,
+                DateTimeOffset.FromUnixTimeSeconds(gmExpiry)) };
+            repository.CommitInventory(owner, character, new(character.Inventory, after, "premium_migration_test", new(character)));
+            var recovered = new CharacterRepository(path).List(owner).Single();
+            Check(recovered.Revision == 8 && recovered.Inventory.AccountWallet.Revision == 6 &&
+                recovered.Inventory.AccountWallet.ContractExpiry(22) == gmExpiry + 60 &&
+                recovered.Inventory.AccountWallet.ContractExpiry(27) == (legacyColumn ? legacyExpiry : 0) &&
+                recovered.Inventory.AccountWallet.SeriaLuck == 7 && recovered.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 321 &&
+                recovered.Inventory.Find(new(InventoryListType.Main, 65)) is { Uid: 12345 } saved && saved.Core == core,
+                "升级后新契约沿库存事务可写并重开恢复，旧资产及期限保持");
         }
     }
 

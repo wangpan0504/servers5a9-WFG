@@ -27,7 +27,7 @@ internal static class QuestOrdinaryCompletionTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items)
     {
         int checks = Count;
-        var learning = SkillLearningCatalog.Load(pvf); var growth = CharacterGrowthCatalog.Load(pvf, learning);
+        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf, learning);
         var parameters = QuestRewardParameterCatalog.Load(pvf);
         QuestGoldMailTests.Run(towns, characters, items, learning, growth, parameters);
         QuestRewardToken[] Rows(params int[] values) => values.Select(value => new QuestRewardToken(0, value, null)).ToArray();

@@ -28,7 +28,7 @@ internal static class FormalDungeonSessionTests
     public static Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         int before = TestCheck.Count;
-        var learning = SkillLearningCatalog.Load(pvf);
+        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         var growth = CharacterGrowthCatalog.Load(pvf);
         var kills = DungeonKillExperienceCatalog.Load(pvf);
         var catalog = DungeonCatalog.Load(pvf);

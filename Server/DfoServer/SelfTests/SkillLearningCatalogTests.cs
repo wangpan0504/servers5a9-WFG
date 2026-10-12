@@ -1,5 +1,6 @@
 using static DfoServer.Testing.TestCheck;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using PvfLib;
 
 namespace DfoServer;
@@ -90,7 +91,10 @@ internal static class SkillLearningCatalogTests
 
     public static void Run(PvfArchive pvf)
     {
-        var catalog = SkillLearningCatalog.Load(pvf);
+        var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
+        That(catalog.ActiveExpertContractLevels(1001, 1000) == catalog.ExpertContractLevels &&
+            catalog.ActiveExpertContractLevels(1000, 1000) == 0 && catalog.ActiveExpertContractLevels(0, 1000) == 0,
+            "目录只在契约有效时提供显式装配的资源加成，到期和无契约均为零");
         var ghost = catalog.Get(0, 5);
         That(ghost.Type == SkillType.Active && ghost.SlotGroup == 3 && ghost.SkillClass == 3 && ghost.SkillFitnessGrowtypeCount == 6,
             "真实鬼斩保留主动类型、分组及方向数量");

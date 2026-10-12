@@ -111,7 +111,7 @@ internal static class SkillLearning
             return Fail(SkillLearningFailure.Unsupported);
         try
         {
-            int contractLevels = current.ExpertContractExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds() ? 5 : 0;
+            int contractLevels = catalog.ActiveExpertContractLevels(current.ExpertContractExpiresAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             var synchronized = SkillPointLedger.Synchronize(job, growtype, characterLevel, current, catalog, contractLevels);
             var result = Plan(job, growtype, characterLevel, synchronized, command, catalog.Get,
                 SkillPointLedger.FreeBaseline(job, growtype, characterLevel, catalog, contractLevels),
@@ -175,7 +175,7 @@ internal static class SkillLearning
                 return Fail(SkillLearningFailure.Unsupported);
             if (target > maximum || target > byte.MaxValue || !entry.Decrease && target <= level)
                 return Fail(SkillLearningFailure.Mastered);
-            if (!entry.Decrease && characterLevel + (resource.IsFeatureSkill ? 0 : contractLevels) < resource.GetOrdinaryNextRequiredCharacterLevel(target - 1))
+            if (!entry.Decrease && (long)characterLevel + (resource.IsFeatureSkill ? 0 : contractLevels) < resource.GetOrdinaryNextRequiredCharacterLevel(target - 1))
                 return Fail(SkillLearningFailure.RequiredLevel);
             foreach (SkillPrerequisite prerequisite in entry.Decrease ? [] : resource.Prerequisites!)
             {

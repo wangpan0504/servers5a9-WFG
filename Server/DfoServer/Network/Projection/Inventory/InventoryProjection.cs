@@ -90,6 +90,13 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         if (seriaLuckChanged)
             await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(plan.Before.AccountWallet.SeriaLuck,
                 current.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_committed", CanSend);
+        if (!plan.Before.AccountWallet.PremiumContracts.SequenceEqual(current.Inventory.AccountWallet.PremiumContracts))
+            await context.Notify(NotiPacketType.PREMIUM_INFO_LIST, PremiumPackets.SelectEntries(current.Inventory.AccountWallet), "premium_info_committed", CanSend);
+        if (plan.Before.AccountWallet.ContractExpiry(27) != current.Inventory.AccountWallet.ContractExpiry(27))
+            await context.Notify(NotiPacketType.CERA_SPECIALITEM, SkillPackets.ExpertContract(current.Learning.ExpertContractExpiresAt,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds()), "expert_contract_committed", CanSend);
+        if (!plan.OverflowItems.IsEmpty)
+            await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "overflow_mail_committed", CanSend);
         if (plan.Before.CargoCapacity != current.Inventory.CargoCapacity)
         {
             await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "personal_cargo_capacity", CanSend);

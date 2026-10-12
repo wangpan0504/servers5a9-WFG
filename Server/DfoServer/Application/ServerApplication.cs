@@ -173,7 +173,7 @@ public static class ServerApplication
                 return 0;
             }
 
-            var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf));
+            var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
             stage = "Runtime and listeners";
             await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!);
             return 0;

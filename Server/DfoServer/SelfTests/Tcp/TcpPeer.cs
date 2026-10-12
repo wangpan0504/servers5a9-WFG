@@ -35,6 +35,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] TitleProgress { get; private set; } = [];
     public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
+    public byte[] PremiumInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] InitialGameOptions { get; private set; } = [];
     public byte[] AdventureInfo { get; private set; } = [];
@@ -231,7 +232,7 @@ internal sealed class TcpPeer : IDisposable
 
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
         (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,
-        byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true)
+        byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false)
     {
         if (!resumeTown && !requestedRoster)
             Send(8, [255, 255, 2]);
@@ -305,7 +306,12 @@ internal sealed class TcpPeer : IDisposable
                 TestCheck.That(mails.Count > 0 && packet.Kind == 0 && packet.Opcode == 3, "mailbox initializes after account assets and before town state");
                 tail.Add(packet);
             }
-            else tail.Add(Expect(notice.Kind, notice.Opcode));
+            else
+            {
+                tail.Add(Expect(notice.Kind, notice.Opcode));
+                if (notice == ((byte)0, (ushort)53))
+                    PremiumInfo = premiumContracts ? Expect(0, 1760).Body : [];
+            }
         }
         if (resumeTown)
             ReadSceneInitialization();

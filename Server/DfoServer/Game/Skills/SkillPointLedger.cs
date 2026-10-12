@@ -116,7 +116,7 @@ internal static class SkillPointLedger
     {
         if (context > 1 || !SupportsGrowth(growth, job) || !state.Initialized)
             return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>());
-        int contractLevels = state.ExpertContractExpiresAt > now ? 5 : 0;
+        int contractLevels = catalog.ActiveExpertContractLevels(state.ExpertContractExpiresAt, now);
         var synchronized = Synchronize(job, growth, level, state, catalog, contractLevels);
         if (synchronized.BonusSp is not int bonus || synchronized.BonusTp is not int tpBonus)
             return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>());

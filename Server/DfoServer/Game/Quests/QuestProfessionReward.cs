@@ -43,7 +43,7 @@ internal static class QuestProfessionReward
         if (!learning.Initialized || learning.BonusSp is null || learning.BonusTp is null)
             throw new NotSupportedException("职业变化需要已核算的两树SP/TP来源");
         var result = SkillPointLedger.Synchronize(expected.Job, target, level, learning, skills,
-            learning.ExpertContractExpiresAt > now.ToUnixTimeSeconds() ? 5 : 0);
+            skills.ActiveExpertContractLevels(learning.ExpertContractExpiresAt, now.ToUnixTimeSeconds()));
         result.Validate();
         return result;
     }

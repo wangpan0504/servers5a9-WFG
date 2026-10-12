@@ -106,10 +106,10 @@ internal sealed class SkillLearningDefinition
             characterLevel < required || GetMaximum(growth) == 0 ||
             !(SkillFitnessGrowtypes.Contains(growth & 15) || SkillFitnessSecondGrowtypes.Any(value => (growth >> 4) >= value)))
             return 0;
-        int level = (1 + (characterLevel - required) / rule.Interval) * rule.Add;
+        long level = (1L + (characterLevel - required) / rule.Interval) * rule.Add;
         if (rule.AppliesContract)
             level += contractLevels / rule.Interval;
-        return Math.Min(level, maximumLevels[growth & 15]);
+        return checked((int)Math.Min(level, maximumLevels[growth & 15]));
     }
     // 04234A70、04234ACD 初始化 feature/combo 为零；特殊职业另有技能管理路径。
     public bool SupportsOrdinarySpLearning => Type is SkillType.Active or SkillType.Passive &&
@@ -193,6 +193,8 @@ internal sealed class SkillLearningCatalog
     private readonly ConcurrentDictionary<byte, IReadOnlyList<SkillLearningDefinition>> fixedSkills = new();
     private SkillGrantCatalog grants = null!;
     private SkillCatalog points = null!;
+    public int ExpertContractLevels { get; }
+    public int ActiveExpertContractLevels(long expiresAt, long utcSeconds) => expiresAt > 0 && expiresAt > utcSeconds ? ExpertContractLevels : 0;
     public IReadOnlyList<CharacterSkill> FreeSkills(byte job, byte growth) =>
         Array.AsReadOnly(grants.Get(job, growth).Where(skill => paths.ContainsKey((job, skill.Id))).ToArray());
     public int TotalSp(byte level) => points.GetLevelSpTotal(level);
@@ -209,15 +211,16 @@ internal sealed class SkillLearningCatalog
         return result.AsReadOnly();
     });
 
-    private SkillLearningCatalog(PvfArchive pvf, Dictionary<(byte, ushort), string> paths)
+    private SkillLearningCatalog(PvfArchive pvf, Dictionary<(byte, ushort), string> paths, int expertContractLevels)
     {
         this.pvf = pvf;
         this.paths = paths;
+        ExpertContractLevels = expertContractLevels;
     }
 
-    public static SkillLearningCatalog Load(PvfArchive pvf)
+    public static SkillLearningCatalog Load(PvfArchive pvf, int expertContractLevels)
     {
-
+        if (expertContractLevels < 0) throw new InvalidDataException("达人契约技能等级加成不能为负数");
         var paths = new Dictionary<(byte, ushort), string>();
         int[] jobs = CharacterCatalog.ReadJobList(pvf).Keys.Order().ToArray();
         foreach (int job in jobs)
@@ -236,7 +239,7 @@ internal sealed class SkillLearningCatalog
             }
         }
 
-        var catalog = new SkillLearningCatalog(pvf, paths) { grants = SkillGrantCatalog.Load(pvf), points = SkillCatalog.Load(pvf) };
+        var catalog = new SkillLearningCatalog(pvf, paths, expertContractLevels) { grants = SkillGrantCatalog.Load(pvf), points = SkillCatalog.Load(pvf) };
         // 成长提交会引用赠技；在装配阶段解码，SQLite writer 内只访问已缓存的定义。
         foreach (var key in catalog.grants.SkillIds)
             if (paths.ContainsKey((key.Job, key.Id))) catalog.Get(key.Job, key.Id);

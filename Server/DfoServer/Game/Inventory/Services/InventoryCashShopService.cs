@@ -7,9 +7,9 @@ using DfoServer.Game.Settings;
 
 namespace DfoServer.Game.Inventory.Services;
 
-// CERA 商城的一次购买只负责“校验目录、扣点券、发放奖励”。契约、名称装扮和开盒使用保持在独立功能点，避免本次购买事务产生隐式副作用。
+// 商品、扣点券及资源明确声明的契约或实物奖励在同一个库存计划提交。
 internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    GameDebugSettings? debugSettings = null)
+    GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null)
 {
     static readonly string[] UnsupportedSections = ["visual", "selectable character premium", "charac premium package"];
     readonly GameDebugSettings debug = debugSettings ?? new();
@@ -37,8 +37,14 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
             var product = shop.Product(requested.CommodityId);
             if (product is null || product.CeraPrice < 0 || product.Count <= 0 || UnsupportedSections.Contains(product.Section))
                 return InventoryResult.Reject(17);
-            try { catalog.Get(product.ItemId); }
-            catch (InvalidDataException) { return InventoryResult.Reject(17); }
+            if (CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
+                contracts?.TryConsumableContract(product.ItemId, out _) != true)
+            {
+                if (contracts?.Recognizes(product.ItemId) == true)
+                    return InventoryResult.Reject(17);
+                try { if (catalog.Get(product.ItemId).IsPremiumService) return InventoryResult.Reject(17); }
+                catch (InvalidDataException) { return InventoryResult.Reject(17); }
+            }
 
             total += product.CeraPrice;
             if (total > int.MaxValue)
@@ -52,8 +58,14 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
             bonuses[product.CommodityId] = productBonuses;
             foreach (var bonus in productBonuses)
             {
-                try { catalog.Get(bonus.ItemId); }
-                catch (InvalidDataException) { return InventoryResult.Reject(17); }
+                if (CurrencyWallet.RewardKind(bonus.ItemId) is null && !pieces.ByPiece.ContainsKey(bonus.ItemId) &&
+                    contracts?.TryConsumableContract(bonus.ItemId, out _) != true)
+                {
+                    if (contracts?.Recognizes(bonus.ItemId) == true)
+                        return InventoryResult.Reject(17);
+                    try { if (catalog.Get(bonus.ItemId).IsPremiumService) return InventoryResult.Reject(17); }
+                    catch (InvalidDataException) { return InventoryResult.Reject(17); }
+                }
                 rewards.Add(new(bonus.ItemId, bonus.Count));
             }
         }
@@ -66,12 +78,12 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
         if (!CanGrantCurrencies(spent.Plan!.After, rewards, new CurrencyService(goldLimits).CarryLimit(character)))
             return InventoryResult.Reject(17);
         var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = spent.Plan!.After }, rewards,
-            catalog, goldLimits, pieces, utcNow, shopExpiration: shopExpiration);
+            catalog, goldLimits, pieces, utcNow, shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: true);
         if (!grant.Accepted)
             return grant;
 
         receipt = new(products.ToImmutableArray(), bonuses);
-        return new(true, 0, new(before, grant.Plan!.After, "cash_shop_buy"));
+        return new(true, 0, new(before, grant.Plan!.After, "cash_shop_buy", overflowItems: grant.Plan.OverflowItems));
     }
 
     internal static bool CanGrantCurrencies(InventorySnapshot inventory, IReadOnlyList<InventoryReward> rewards, int goldLimit)

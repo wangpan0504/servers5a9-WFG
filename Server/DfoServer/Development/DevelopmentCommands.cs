@@ -62,7 +62,7 @@ internal static class DevelopmentCommands
             bool reset = request.Action is DevelopmentAction.Level or DevelopmentAction.Grow or DevelopmentAction.GrowOptions;
             var resources = request.Action == DevelopmentAction.Item || reset ? new ItemResources(pvf) : null;
             var mailbox = request.Action == DevelopmentAction.Item ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
-            var learning = reset ? SkillLearningCatalog.Load(pvf) : null;
+            var learning = reset ? SkillLearningCatalog.Load(pvf, resources!.Contracts.ExpertSkillLevels) : null;
             var progress = reset ? new CharacterProgressReset(CharacterCatalog.Load(pvf, resources!.Items), learning!, CharacterGrowthCatalog.Load(pvf, learning)) : null;
             Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items, progress));
             return 0;

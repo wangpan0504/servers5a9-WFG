@@ -6,13 +6,16 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 // 统一业务入口：只读规划完成后才提交。在线真源为当前角色的不可变 InventorySnapshot。
-internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces)
+internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
+    PremiumContractCatalog? contracts = null)
 {
-    public InventoryResult Move(Character character, InventoryMoveRequest request) => InventoryMoveService.Plan(character, request, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+    public InventoryResult Move(Character character, InventoryMoveRequest request) => InventoryMoveService.Plan(character, request, catalog,
+        DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts);
     public InventoryResult Sort(Character character, ItemKind kind, byte condition) => InventorySortService.Plan(character.Inventory, kind, condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     public InventoryResult Sort(Character character, InventorySortRequest request) => InventorySortService.Plan(character.Inventory,
         request.Kind, request.Condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), request.List);
-    public InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards) => InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, goldLimits, pieces);
+    public InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards) =>
+        InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, goldLimits, pieces, contracts: contracts);
     public InventoryResult Delete(Character character, InventoryDeleteRequest request, bool preserveClearCube = false) =>
         InventoryDeleteService.PlanBatch(character.Inventory, request, preserveClearCube);
     public (InventoryDiscardPlan? Plan, ushort Error) Discard(Character character, InventoryDiscardRequest request)

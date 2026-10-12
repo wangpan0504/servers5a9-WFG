@@ -2,6 +2,7 @@ using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using PvfLib;
 
 namespace DfoServer;
@@ -118,6 +119,23 @@ internal static class SkillLearningTests
         That(SkillLearning.Plan(0, 0, 1, source, Request(), Resolve).Success, "required level exact boundary admitted");
         That(SkillLearning.Plan(0, 0, 2, result.State!, Request(), Resolve).Failure == SkillLearningFailure.RequiredLevel,
             "next required level uses basis plus current times range");
+        var contractSkill = Definition(21, [3], 1, 17, 0);
+        SkillLearningDefinition ContractDefinition(byte job, ushort id) => id == 21 ? contractSkill : Resolve(job, id);
+        That(SkillLearning.Plan(0, 0, 10, source, Request(21), ContractDefinition, contractLevels: 5).Failure == SkillLearningFailure.RequiredLevel &&
+            SkillLearning.Plan(0, 0, 10, source, Request(21), ContractDefinition, contractLevels: 7).Success &&
+            SkillLearning.Plan(0, 0, 10, source, Request(21), ContractDefinition, contractLevels: 0).Failure == SkillLearningFailure.RequiredLevel,
+            "合成声明5与7分别参与真实SP资格，缺少加成0不回退为固定值");
+        var contractTp = new SkillLearningDefinition(0, 22, "skill/contract-tp-fixture.skl", SkillType.Active,
+            [0], Enumerable.Repeat(1, 6).ToArray(), Enumerable.Repeat(1, 6).ToArray(), 17, 0, [], new int[6], true, false, [],
+            skillClass: 3, tpCosts: [1]);
+        That(SkillLearning.Plan(0, 0, 10, source, Request(22), (_, _) => contractTp, contractLevels: 7).Failure == SkillLearningFailure.RequiredLevel,
+            "TP技能不借用任何达人声明加成，仍按实际角色等级检查");
+        var fixedContract = new SkillLearningDefinition(0, 23, "skill/contract-fixed-fixture.skl", SkillType.Active,
+            [0], Enumerable.Repeat(20, 6).ToArray(), Enumerable.Repeat(20, 6).ToArray(), 1, 2, [], new int[6], false, false, [],
+            fixedLevel: new(2, 1, true), skillFitnessGrowtypes: [0]);
+        That(fixedContract.GetFixedLevel(10, 0, 0) == 5 && fixedContract.GetFixedLevel(10, 0, 5) == 7 &&
+            fixedContract.GetFixedLevel(10, 0, 7) == 8 && fixedContract.GetFixedLevel(10, 0, int.MaxValue) == 20,
+            "固定赠技使用声明加成与间隔计算，仍受资源maximum限制且大整数不溢出");
         That(SkillLearning.Plan(0, 0, 10, State(6, []), Request(), Resolve).Failure == SkillLearningFailure.InsufficientSp, "point shortage rejects all state");
         That(SkillLearning.Plan(0, 0, 10, State(7, []), Request(), Resolve).State!.Trees[0].Sp == 0, "exact SP cost admits zero remaining balance");
         That(SkillLearning.Plan(1, 0, 10, source, Request(), Resolve).Failure == SkillLearningFailure.MissingSkill, "wrong job list cannot borrow another job skill");
@@ -168,7 +186,7 @@ internal static class SkillLearningTests
     {
         int checks = Count;
         SkillLearningCommand Request(ushort id = 5) => new(0, 0, [new(id, false, 1)]);
-        var actual = SkillLearningCatalog.Load(pvf);
+        var actual = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
         That(actual.Get(0, 5).GetBasePointCost(0) == 15, "matching resource hardattack base cost independently known");
         SkillLearningResult real = SkillLearning.Plan(0, 0, 1, State(15, []), Request(), actual.Get);
         That(real.Success && real.State!.Trees[0].Sp == 0 && real.Changes.Single().Level == 1, "real PVF ordinary hardattack learning consumes15 SP");
