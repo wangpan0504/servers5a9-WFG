@@ -2,10 +2,11 @@ using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Net;
 using System.Text;
+using System.IO.Compression;
 
 namespace DfoServer.Testing;
 
-internal sealed record WirePacket(byte Kind, ushort Opcode, byte[] Body);
+internal sealed record WirePacket(byte Kind, ushort Opcode, byte[] Body, bool Protected = false);
 // 独立实现测试帧与 CRC，不能调用服务端的 Frame、Parser、Builder 来自证。
 internal sealed class TcpPeer : IDisposable
 {
@@ -120,19 +121,32 @@ internal sealed class TcpPeer : IDisposable
         stream.ReadExactly(header);
         int length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(3));
         TestCheck.That(length is >= 16 and <= 65536, "S2C frame length");
-        TestCheck.That(BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(11)) == sequence++, "per-connection sequence");
-        TestCheck.Bytes(header.AsSpan(13), [0, 0, 0], "S2C reserved header");
+        bool protectedFrame = header[15] == 1;
+        if (protectedFrame)
+        {
+            TestCheck.That(header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 108,
+                "当前保护帧只接已确认的EVENT_INFO通知，不放宽普通包头");
+            TestCheck.That(BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(7)) == 1,
+                "保护帧使用固定校验字段1");
+            TestCheck.Bytes(header.AsSpan(11), [0, 0, 0, 0, 1], "保护帧保留零序号和独立标志，不消耗普通序号");
+        }
+        else
+        {
+            TestCheck.That(BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(11)) == sequence++, "per-connection sequence");
+            TestCheck.Bytes(header.AsSpan(13), [0, 0, 0], "S2C reserved header");
+        }
         byte[] frame = new byte[length];
         header.CopyTo(frame, 0);
         stream.ReadExactly(frame.AsSpan(16));
-        TestCheck.That(Crc(frame.AsSpan(11)) == BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(7)), "S2C CRC");
+        if (!protectedFrame)
+            TestCheck.That(Crc(frame.AsSpan(11)) == BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(7)), "S2C CRC");
         if (header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 356)
             CompletedQuestHistory = frame[16..];
         if (header[0] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 6 && frame.Length > 16 && frame[16] == 1)
             requestedRoster = true;
         if (header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 2 && frame.Length >= 21 && frame[16] is 0 or 1)
             TestCheck.Bytes(frame.AsSpan(19, 2), [2, channelNumber], "本人、同屏和刷新USERINFO均进入接收者当前频道的本地Actor表");
-        return new(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..]);
+        return new(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..], protectedFrame);
     }
 
     public WirePacket Expect(byte kind, ushort opcode, byte[]? body = null)
@@ -262,6 +276,7 @@ internal sealed class TcpPeer : IDisposable
             tail.Add(Expect(notice.Kind, notice.Opcode));
         foreach (var notice in expected.Skip(afterCargo))
         {
+            if (notice == ((byte)0, (ushort)124)) ReadSeriaInitialization();
             // 普通入城在124前恢复；换频道等最终24绑定后恢复。
             if (!resumeTown && notice == ((byte)0, (ushort)124)) ReadSceneInitialization();
             if (notice == ((byte)0, (ushort)3))
@@ -307,6 +322,35 @@ internal sealed class TcpPeer : IDisposable
             "client expansion reader stays within its three-stage table");
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
         return packets.ToArray();
+
+        void ReadSeriaInitialization()
+        {
+            var events = Expect(0, 108);
+            TestCheck.That(events.Protected, "入城的赛丽亚事件配置使用保护压缩帧");
+            using (var compressed = new MemoryStream(events.Body, writable: false))
+            using (var zlib = new ZLibStream(compressed, CompressionMode.Decompress))
+            {
+                byte[] payload = new byte[68];
+                zlib.ReadExactly(payload);
+                TestCheck.That(zlib.ReadByte() == -1, "事件正文必须恰好68B，解压不产生无界输出");
+                TestCheck.Bytes(payload, Build(writer =>
+                {
+                    writer.Write((ushort)1);
+                    writer.Write((ushort)2037);
+                    writer.Write(1u);
+                    writer.Write(0u);
+                    writer.Write(0u);
+                    writer.Write((byte)0);
+                    writer.Write((byte)1);
+                    writer.Write((ushort)2037);
+                    writer.Write(8u);
+                    for (int index = 1; index < 12; index++) writer.Write(0u);
+                }), "独立核对事件2037、最大阶段8及完整尾部，不能跳过新通知");
+            }
+            var gauge = Expect(0, 412);
+            TestCheck.That(!gauge.Protected && gauge.Body.Length == 2 && gauge.Body[0] == gauge.Body[1] &&
+                gauge.Body[0] <= 40 && gauge.Body[0] % 5 == 0, "幸运值初始通知使用普通CRC/序号，两端阶段一致且不超8");
+        }
 
         void ReadSceneInitialization()
         {
