@@ -82,7 +82,7 @@ internal sealed class QuestLifecyclePlan
             // Full03成功ACK31的type4/sub1立即触发event4归零，不读取实际点击NPC。
             "[meet npc]" when QuestStateProgress.Type(quest) == 4 => 0,
             "[reach the range]" when QuestClientSceneProgress.TownRange(quest) => 1,
-            "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) => 1,
+            "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest) => 1,
             "[question]" when QuestQuestionProgress.TryCount(quest,out _) => QuestQuestionProgress.Unanswered,
             "[seeking]" when quest.SubType == -1 && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
             "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u + MissingMaterials(expected.Inventory, quest, now.ToUnixTimeSeconds()),

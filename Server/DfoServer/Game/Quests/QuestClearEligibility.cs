@@ -6,8 +6,9 @@ namespace DfoServer.Game.Quests;
 
 internal static class QuestClearEligibility
 {
+    // 地图号是第一项。末尾 -1 与 dungeon info 的不限难度相同，仍是这一张图。
     public static bool IsSingleMap(StoryQuest quest) => quest.Condition == "[clear map]" && quest.SubType == -1 &&
-        quest.IntData.Count == 1 && quest.IntData[0] > 0;
+        quest.IntData is [> 0] or [> 0, -1];
 
     // 候选仍须在死亡/成长同事务核验完整事件账本，不使用客户端清图上报生成事实。
     public static bool TryValidate(DungeonEntryPlan entry, PreparedDungeonDeath prepared)

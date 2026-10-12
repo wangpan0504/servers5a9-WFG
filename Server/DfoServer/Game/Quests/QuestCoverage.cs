@@ -165,7 +165,7 @@ internal static class QuestCoverage
         "[clear map]" => QuestClearEligibility.IsSingleMap(quest),
         "[condition under clear]" => QuestDungeonClearProgress.TryTarget(quest,out _),
         "[reach the range]" => QuestClientSceneProgress.TownRange(quest),
-        "[look cinematic]" => QuestClientSceneProgress.Cinematic(quest,out _,out _),
+        "[look cinematic]" => QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest),
         "[question]" => QuestQuestionProgress.TryCount(quest,out _),
         _ => QuestStateProgress.Type(quest) is not null
     };

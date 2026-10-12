@@ -160,6 +160,14 @@ internal sealed record DungeonEntryPlan(
         if (maze.StoryStages.Count > 0 && starts.Length > 1)
             starts = [starts.FirstOrDefault(map => map.StoryStageIndex < 0) ?? starts[0]];
         var bosses = maze.StoryStages.Count > 0 ? new[] { maze.StoryStages[^1] } : maps.Where(map => map.Position == boss).ToArray();
+        // 任务终点写在 Boss 坐标的叠层上时，基础格可能只声明为 map。入场把它当作这条路线的基础 Boss 图，终点仍按任务地图选择。
+        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && quest is not null &&
+            QuestClearEligibility.IsSingleMap(quest) && maze.LayeredMaps.Any(map => map.Position == boss && map.Id == quest.IntData[0]))
+        {
+            var promoted = bosses[0] with { Kind = "boss" };
+            maze = maze with { MapSpecification = maze.MapSpecification!.Select(map => map == bosses[0] ? promoted : map).ToArray() };
+            bosses = [promoted];
+        }
         if (starts.Length != 1 || bosses.Length != 1 || bosses[0].Kind != "boss" && !(definition.IsTutorial && bosses[0].Kind == "map"))
         {
             reason = "quest-maze-map-unavailable";

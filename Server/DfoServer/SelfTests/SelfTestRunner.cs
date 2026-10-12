@@ -187,6 +187,7 @@ internal static class SelfTestRunner
         DungeonDropPacketsTests.Run();
         await DungeonDeathProtocolTests.RunAsync(towns, pvf);
         DungeonEntryPlanTests.Run(pvf);
+        MainlineQuestBatchTests.Run(pvf, itemResources);
         DungeonMapPoolTests.Run(pvf);
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
         await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);

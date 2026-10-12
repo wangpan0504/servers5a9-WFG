@@ -20,6 +20,7 @@ internal sealed record StoryQuest(
     public IReadOnlyList<string> Attributes { get; init; } = Array.Empty<string>();
     public QuestDefinition? Definition { get; init; }
     public string? CinematicPath { get; init; }
+    public int? CinematicMapId { get; init; }
 }
 
 internal sealed class QuestCatalog
@@ -34,6 +35,16 @@ internal sealed class QuestCatalog
 
     public StoryQuest Get(int id) => quests.TryGetValue(id, out var quest)
         ? quest : throw new InvalidDataException("任务目录没有这个任务: " + id);
+
+    static int? CinematicMap(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
+    {
+        for (int at = 0; at + 1 < tokens.Count; at++)
+            // 演出文件里的地图标签是大写 [MAP]，任务脚本标签则是小写。
+            if (tokens[at].Type == 3 && resolve(tokens[at].Value).Equals("[map]", StringComparison.OrdinalIgnoreCase) &&
+                tokens[at + 1].Type == 0 && tokens[at + 1].Value > 0)
+                return tokens[at + 1].Value;
+        return null;
+    }
 
     public static QuestCatalog Load(PvfArchive pvf)
     {
@@ -53,8 +64,8 @@ internal sealed class QuestCatalog
                 cinematics.TryGetValue(definition.IntData[0],out string? cinematicPath))
             {
                 // 只读取声明的演出；坏的废弃资源由LoadDefinitions隔离，不替换成其他演出。
-                _ = pvf.ReadTokens(cinematicPath);
-                definition = definition with { CinematicPath = cinematicPath };
+                var cinematicBody = pvf.ReadTokens(cinematicPath);
+                definition = definition with { CinematicPath = cinematicPath, CinematicMapId = CinematicMap(cinematicBody, pvf.ResolveString) };
             }
             if (VerifiedMapQuests.Contains(id))
                 definition = Parse(id, path, tokens, pvf.ResolveString, maps, pvf) with { Definition = definition.Definition };

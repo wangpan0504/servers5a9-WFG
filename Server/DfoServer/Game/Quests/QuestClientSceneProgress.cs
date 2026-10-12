@@ -32,6 +32,11 @@ internal static class QuestClientSceneProgress
         town = (byte)accept[1].Value; area = (byte)guide[1].Value; return true;
     }
 
+    // 副本演出没有城镇引导。地图号来自演出文件，任务自己声明要进的地下城。
+    public static bool DungeonCinematic(StoryQuest quest) => quest.Condition == "[look cinematic]" && quest.SubType == -1 &&
+        quest.IntData is [> 0] && quest.CinematicPath is not null && quest.CinematicMapId is > 0 &&
+        quest.Definition is { Dungeons.Length: > 0 } && !Cinematic(quest, out _, out _);
+
     public static bool Matches(Character character, StoryQuest quest, TownCatalog towns)
     {
         var position = character.Position;
