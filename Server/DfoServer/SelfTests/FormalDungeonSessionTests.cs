@@ -413,7 +413,7 @@ internal static class FormalDungeonSessionTests
             f.Sql($"UPDATE characters SET experience={startExperience} WHERE id={f.Created.Id}");
             f.Sql("UPDATE character_dungeon_state SET capsule_experience=11,proficiency_level=2,proficiency_experience=33");
             f.SelectEntry();
-            var opening = f.Session.BeginDungeonSelection();
+            var opening = f.Session.BeginDungeonSelection()!;
             var initial = f.Session.Selected!;
             Check(f.Session.ReadClearedQuest(3145) is null, "未清图不能因客户端报告获取达成回执");
             var entry = Enter(f);
@@ -590,7 +590,7 @@ internal static class FormalDungeonSessionTests
                 "已回城拒绝旧死亡");
             Check(f.Session.Move(new(1084, 249, 5, 0, 0, 0)), "正式退出后可合法移动到新的入口位置");
             var moved = f.Session.Selected!;
-            var reopenedSelection = f.Session.BeginDungeonSelection();
+            var reopenedSelection = f.Session.BeginDungeonSelection()!;
             Check(reopenedSelection.SelectionId > opening.SelectionId &&
                 f.Session.CurrentDungeonSelection?.OriginPosition == moved.Position &&
                 f.Session.CanPublishDungeonSelection(reopenedSelection) && !f.Session.CanPublishDungeonSelection(opening),
@@ -625,7 +625,7 @@ internal static class FormalDungeonSessionTests
                     f.Created.Learning.Trees.Count == 2 && f.Created.DungeonState == CharacterDungeonState.NewOrdinary,
                     $"普通职业{job}真实建角初始化双树与副本owner");
                 f.SelectEntry();
-                var selection = f.Session.BeginDungeonSelection();
+                var selection = f.Session.BeginDungeonSelection()!;
                 Check(f.Session.Phase == SessionPhase.MapSelect && f.Session.CanPublishDungeonSelection(selection),
                     $"普通职业{job}经合法旅行进入选图阶段");
                 var before = f.Session.Selected!;
@@ -671,7 +671,7 @@ internal static class FormalDungeonSessionTests
         {
             using var ordinary = new Fixture("RejectRoute", towns, characters, learning, quests, job: 14);
             ordinary.SelectEntry();
-            var current = ordinary.Session.BeginDungeonSelection();
+            var current = ordinary.Session.BeginDungeonSelection()!;
             var selected = ordinary.Session.Selected!;
             foreach (var request in new[] { (Dungeon: 4u, Task: 3145u, Difficulty: (byte)0), (Dungeon: 3u, Task: 3146u, Difficulty: (byte)0),
                 (Dungeon: 3u, Task: 3145u, Difficulty: (byte)1) })
@@ -684,7 +684,7 @@ internal static class FormalDungeonSessionTests
                 using var f = new Fixture(missing ? "TaskMissing" : "TaskReached", towns, characters, learning, quests, job: 14);
                 f.Sql(missing ? "DELETE FROM character_active_main_quests" : "UPDATE character_active_main_quests SET condition_state=0");
                 f.SelectEntry();
-                var selection = f.Session.BeginDungeonSelection();
+                var selection = f.Session.BeginDungeonSelection()!;
                 var context = f.Session.CurrentDungeonSelection;
                 var before = f.Session.Selected!;
                 Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null &&
@@ -784,7 +784,7 @@ internal static class FormalDungeonSessionTests
                 Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_state")) == 0,
                 "真实v7到v8迁移旧角色保持unknown，不改资产或补aux/key");
             f.SelectEntry();
-            var selection = f.Session.BeginDungeonSelection();
+            var selection = f.Session.BeginDungeonSelection()!;
             var context = f.Session.CurrentDungeonSelection;
             var selected = f.Session.Selected!;
             Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null && f.Session.DungeonSnapshot is null &&

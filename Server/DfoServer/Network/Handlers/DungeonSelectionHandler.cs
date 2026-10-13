@@ -75,6 +75,16 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             tutorials is not null ? context.Session.BeginTutorialSelection(entry.DungeonIndex, tutorials) : null;
         if (entry.DungeonIndex == 7142 && receipt is null) return CommandResult.Unhandled;
         receipt ??= context.Session.BeginDungeonSelection();
+        if (receipt is null)
+        {
+            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = false, Dungeon = entry.DungeonIndex,
+                Reason = "gate-return-position-unavailable", Position = replayBefore.Selected?.Position });
+            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "dungeon_entry_rejected",
+                () => context.Owner.Execute(() => replayBefore.Ready && context.Session.Ready &&
+                    context.Session.SelectionEpoch == replayBefore.SelectionEpoch && context.Session.Phase == replayBefore.Phase &&
+                    ReferenceEquals(context.Session.Selected,replayBefore.Selected) && context.Session.DungeonSnapshot?.Identity == replayBefore.Identity));
+            return CommandResult.Handled;
+        }
         if (!await projection.DetachForDungeonSelectionAsync(context, receipt))
             return CommandResult.Handled;
         bool CanSend() => context.Session.CanPublishDungeonSelection(receipt);

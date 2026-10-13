@@ -112,6 +112,36 @@ internal sealed class TownCatalog
                 result = position with { X = (ushort)x };
             }
         }
+        if (result is not null || map.Error is not null)
+            return result;
+        // 入口边缘的Y可能不在外侧可走矩形内；保留外侧X候选，寻找较近的合法落点。
+        foreach (var gate in gates.Select(g => g.Bounds))
+        {
+            foreach (long x in new[] { (long)gate.X - margin, (long)gate.X + gate.Width + margin })
+            {
+                if (x is < 0 or > ushort.MaxValue)
+                    continue;
+                foreach (var region in map.Bounds.Where(r => Allowed(r.Quests, r.Conditions, completed)))
+                {
+                    long minimumY = Math.Max(0L, region.Bounds.Y), maximumY = Math.Min(ushort.MaxValue, (long)region.Bounds.Y + region.Bounds.Height);
+                    if (minimumY > maximumY)
+                        continue;
+                    var candidates = new[] { Math.Clamp(position.Y, minimumY, maximumY) }.Concat(gates.SelectMany(g =>
+                        new[] { (long)g.Bounds.Y - 1, (long)g.Bounds.Y + g.Bounds.Height + 1 }));
+                    foreach (long y in candidates)
+                    {
+                        if (y < minimumY || y > maximumY || !region.Bounds.Contains((int)x, (int)y) ||
+                            gates.Any(g => g.Bounds.Contains((int)x, (int)y)))
+                            continue;
+                        long dx = x - ((long)gate.X + gate.Width / 2), dy = y - position.Y, distance = dx * dx + dy * dy;
+                        if (distance >= bestDistance)
+                            continue;
+                        bestDistance = distance;
+                        result = position with { X = (ushort)x, Y = (ushort)y };
+                    }
+                }
+            }
+        }
         return result;
     }
 

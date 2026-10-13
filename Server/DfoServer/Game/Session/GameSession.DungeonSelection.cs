@@ -7,13 +7,15 @@ internal sealed partial class GameSession
     long dungeonSelectionId;
     public DungeonSelectionContext? CurrentDungeonSelection { get; private set; }
 
-    public DungeonSelectionReceipt BeginDungeonSelection() => owner.Execute(() =>
+    public DungeonSelectionReceipt? BeginDungeonSelection() => owner.Execute<DungeonSelectionReceipt?>(() =>
     {
         if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.MapSelect))
             throw new InvalidDataException("Invalid dungeon-selection state");
         if (CurrentDungeonSelection is null || CurrentDungeonSelection.IsClassExperience)
         {
-            var back = towns.SelectionReturn(Selected.Position, completed) ?? throw new InvalidDataException("Dungeon gate return position unavailable");
+            var back = towns.SelectionReturn(Selected.Position, completed);
+            if (back is null)
+                return null;
             CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected.Id, Selected.Position, back);
         }
         ValidateDungeonSelection();

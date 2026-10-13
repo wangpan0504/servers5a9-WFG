@@ -42,10 +42,10 @@ internal static class DungeonSelectionReturnTests
             Reject<InvalidDataException>(() => session.BeginDungeonSelection(), "入城未完成不能开选图");
             session.MarkReady();
             string persisted = JsonSerializer.Serialize(repository.LoadCharacter(owner, 0));
-            var opening = session.BeginDungeonSelection();
+            var opening = session.BeginDungeonSelection()!;
             var current = session.CurrentDungeonSelection;
             That(session.Phase == SessionPhase.MapSelect && current?.ReturnPosition == point && session.CanPublishDungeonSelection(opening), "选图阶段拥有返回快照");
-            That(session.BeginDungeonSelection().SelectionId == opening.SelectionId && ReferenceEquals(current, session.CurrentDungeonSelection), "重复入口不替换选择身份和返回点");
+            That(session.BeginDungeonSelection()!.SelectionId == opening.SelectionId && ReferenceEquals(current, session.CurrentDungeonSelection), "重复入口不替换选择身份和返回点");
             That(!session.Move(new(11, 10, 5, 0, 0, 0)) && !session.LeaveRoom() && !session.Travel(new(1, 0, 11, 10, 5, 1, 0, 0)), "选图不提交城镇移动和切图");
             That(!session.MutateInventory(_ => throw new Exception("不应规划背包")).Accepted &&
                 !session.PlanAndCommitInventory(_ => throw new Exception("不应规划背包")).Accepted, "选图阶段保留背包资格门禁");
@@ -58,7 +58,7 @@ internal static class DungeonSelectionReturnTests
                 !session.CanPublishDungeonSelection(opening) && session.CanPublishDungeonSelection(returned, true), "返回只消费当前选择，恢复城镇发布资格");
             That(session.ReturnFromDungeonSelection() is null && session.CanPublishMailbox(mail), "重复返回无结果，城镇邮件资格恢复");
             That(JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == persisted, "选图和返回保留完整持久资产与revision");
-            var next = session.BeginDungeonSelection();
+            var next = session.BeginDungeonSelection()!;
             That(next.SelectionId > returned.SelectionId && !session.CanPublishDungeonSelection(returned, true), "同epoch再次选图阻止旧返回发布");
             session.ReturnFromDungeonSelection();
             That(!session.CanPublishDungeonSelection(returned, true), "第二次回城后旧回执仍然失效");
@@ -67,7 +67,7 @@ internal static class DungeonSelectionReturnTests
             session.Select(0);
             session.MarkReady();
             That(session.CurrentDungeonSelection is null && session.ReturnFromDungeonSelection() is null, "返回选角后旧选择不能作用于新角色会话");
-            var latest = session.BeginDungeonSelection();
+            var latest = session.BeginDungeonSelection()!;
             using var newer = owners.Acquire("selection", () => { });
             Reject<InvalidOperationException>(() => session.ReturnFromDungeonSelection(), "旧generation不能返回");
             Reject<InvalidOperationException>(() => session.CanPublishDungeonSelection(latest), "旧generation不能发布");
@@ -90,6 +90,7 @@ internal static class DungeonSelectionReturnTests
         Directory.CreateDirectory(root);
         try
         {
+            await UnavailableEntryAsync(towns,characters,items,root);
             foreach (string scenario in new[] { "normal", "failed-write", "owner", "reselect", "reopen", "gm" })
             {
                 var repository = new CharacterRepository(Path.Combine(root, scenario + ".db"));
@@ -181,6 +182,68 @@ internal static class DungeonSelectionReturnTests
         Console.WriteLine($"PASS {Count - checks} dungeon selection publication assertions");
     }
 
+    static async Task UnavailableEntryAsync(TownCatalog towns, CharacterCatalog characters, ItemResources items, string root)
+    {
+        // 合成无安全点的几何，只验证生产处理器拒绝和恢复；不将其冒充报告者实际PVF。
+        var area = towns.Areas[(38,2)];
+        var gate = area.Default.DungeonGates.Single();
+        var inside = new Location(38,2,74,249);
+        var unavailable = area.Default with { Bounds = [new(gate.Bounds,[],[])] };
+        var areas = towns.Areas.ToDictionary(row => row.Key,row => row.Value);
+        areas[(38,2)] = area with { Default = unavailable, Phases = [], Shifts = [] };
+        var synthetic = new TownCatalog(areas,towns.Room,towns.InitialReturn,towns.Dock,towns.RoomPortals,towns.NpcMoves,towns.DungeonMaps);
+        var repository = new CharacterRepository(Path.Combine(root,"unavailable.db"));
+        using var owner = new AccountOwners().Acquire("unavailable-wire",() => { });
+        repository.Create(owner,new("GateWire",inside,inside));
+        var session = new GameSession(repository,synthetic,owner);
+        // 普通选角会回房；复用频道恢复入口保留此合成现场的已提交城镇坐标。
+        session.Select(0,resumeTown: true);
+        session.MarkReady();
+        That(session.Selected!.Position == inside, "无安全点协议fixture确实处于目标入口，不因选角回房绕过拒绝分支");
+        var before = session.Selected!;
+        string persisted = JsonSerializer.Serialize(repository.LoadCharacter(owner,0));
+        var presence = new TownPresence(synthetic);
+        var projection = new TownProjection(synthetic,new CharacterStatComputer(characters),presence,items.EpicPieces);
+        using var log = new ServerLog(Path.Combine(root,"unavailable-wire"));
+        using var stop = new CancellationTokenSource();
+        using var stream = new HeldOutput();
+        var sent = new List<(byte Kind, ushort Opcode, byte[] Body)>();
+        await using var sender = new GameConnectionSender(owner,stream,stop,0,(kind,opcode,_,body,_) => sent.Add((kind,opcode,body.ToArray())));
+        var context = new GameConnectionContext(new(1,IPAddress.Loopback,stream,stop),owner,session,sender);
+        var commands = new GameCommandRegistry();
+        new DungeonSelectionHandler(projection,log).Register(commands);
+        commands.Seal();
+        projection.Join(context);
+        That(await commands.DispatchAsync(context,new(1,15,new byte[4])) == CommandResult.Handled && sent.Count == 1 &&
+            sent[0] is { Kind: 1, Opcode: 15 } && sent[0].Body.SequenceEqual(new byte[] {0,1,0}),
+            "无安全点只回复完整失败ACK15，不通知选图成功");
+        That(presence.Count == 1 && session.Phase == SessionPhase.Town && session.CurrentDungeonSelection is null &&
+            ReferenceEquals(session.Selected,before) && JsonSerializer.Serialize(repository.LoadCharacter(owner,0)) == persisted,
+            "无安全点保留原城镇成员、快照和数据库，不分配选择身份");
+        // 职业体验等待拥有自己的选择身份；普通入口拒绝不能消费它或误恢复Town。
+        await commands.DispatchAsync(context,new(1,15,Convert.FromHexString("E61B0000")));
+        var experience = session.CurrentDungeonSelection;
+        That(experience?.IsClassExperience == true && session.Phase == SessionPhase.MapSelect && presence.Count == 0 &&
+            sent.Skip(1).Select(frame => (frame.Kind,frame.Opcode)).SequenceEqual(new (byte,ushort)[] {(1,15),(0,3)}),
+            "无普通返回点仍可进入专用职业体验等待，不混用普通入口几何");
+        int beforeRejection = sent.Count;
+        await commands.DispatchAsync(context,new(1,15,new byte[4]));
+        That(sent.Count == beforeRejection + 1 && sent[^1] is { Kind: 1, Opcode: 15 } &&
+            sent[^1].Body.SequenceEqual(new byte[] {0,1,0}) && ReferenceEquals(session.CurrentDungeonSelection,experience) &&
+            session.Phase == SessionPhase.MapSelect && ReferenceEquals(session.Selected,before) &&
+            JsonSerializer.Serialize(repository.LoadCharacter(owner,0)) == persisted,
+            "从体验等待切普通选图无安全点时只拒绝本次请求，保留原体验身份、阶段和存档");
+        areas[(38,2)] = area;
+        int beforeRecovery = sent.Count;
+        await commands.DispatchAsync(context,new(1,15,new byte[4]));
+        That(sent.Skip(beforeRecovery).Select(frame => (frame.Kind,frame.Opcode)).SequenceEqual(new (byte,ushort)[] {(1,15),(0,3),(0,27)}) &&
+            session.Phase == SessionPhase.MapSelect && presence.Count == 0 &&
+            session.CurrentDungeonSelection is { IsClassExperience: false } ordinary && ordinary.Id > experience!.Id,
+            "原连接在恢复合法几何后可正常开选图，没有吞结构错误或遗留选择身份");
+        session.ReturnFromDungeonSelection();
+        session.End();
+    }
+
     static void GateReturnCore(string root)
     {
         var origin = new Location(38, 2, 90, 249, 1);
@@ -200,6 +263,18 @@ internal static class DungeonSelectionReturnTests
         That(towns.SelectionReturn(origin) == back && towns.IsPosition(back), "左入口返回可走区，保留方向");
         foreach (ushort y in new ushort[] { 197, 249, 347 })
             That(towns.SelectionReturn(origin with { Y = y }) == (back with { Y = y }), "顶部、中部、底部站位返回均保持Y");
+        foreach (var (y, expectedY) in new (ushort, ushort)[] { (193,197), (353,347) })
+            That(towns.SelectionReturn(origin with { Y = y }) == (back with { Y = expectedY }),
+                "入口上下边缘超出外侧可走矩形时只调整到最近合法Y");
+        var shiftedWalk = Catalog(left with { Bounds = [new(new(32, 240, 1080, 20), [7], [])] });
+        That(shiftedWalk.SelectionReturn(origin with { Y = 193 }) is null &&
+            shiftedWalk.SelectionReturn(origin with { Y = 193 },new HashSet<int> { 7 }) == (back with { Y = 240 }),
+            "Y回退仍检查可走区域任务条件，不以未解锁区域生成落点");
+        var overlapping = left with { Bounds = [new(new(32, 240, 65, 20), [], [])],
+            DungeonGates = [left.DungeonGates[0],new(new(85,245,50,10), [], [])] };
+        var around = Catalog(overlapping).SelectionReturn(origin);
+        That(around is { } safe && safe == (back with { Y = 244 }) && !overlapping.DungeonGates.Any(g => g.Bounds.Contains(safe.X,safe.Y)),
+            "最近Y被另一触发区覆盖时选择其外侧合法边界，不把玩家放进新入口");
         That(towns.SelectionReturn(origin with { X = 74 }) == back, "触发区内部与边界外使用同一安全侧");
         That(Catalog(right).SelectionReturn(origin with { X = 1070, Y = 239 }) == (back with { X = 1052, Y = 239 }), "右侧入口不使用左侧固定坐标");
         That(towns.SelectionReturn(origin with { X = 1085 }) == back, "入口区域的菜单选择也使用同一资源返回点");
@@ -208,6 +283,23 @@ internal static class DungeonSelectionReturnTests
         That(conditional.SelectionReturn(origin) == origin && conditional.SelectionReturn(origin, new HashSet<int> { 7 }) == back, "条件入口遵守当前已完成任务");
         That(Catalog(left with { Bounds = [new(left.DungeonGates[0].Bounds, [], [])] }).SelectionReturn(origin) is null,
             "没有入口外可走区时拒绝，不能把玩家重新放回触发区");
+        var noSafe = Catalog(left with { Bounds = [new(left.DungeonGates[0].Bounds, [], [])] });
+        var unavailableRepository = new CharacterRepository(Path.Combine(root, "gate-unavailable.db"));
+        using (var unavailableOwner = new AccountOwners().Acquire("unavailable", () => { }))
+        {
+            var inside = origin with { X = 74 };
+            unavailableRepository.Create(unavailableOwner,new("NoSafeReturn",inside,inside));
+            var unavailableSession = new GameSession(unavailableRepository,noSafe,unavailableOwner);
+            unavailableSession.Select(0);
+            unavailableSession.MarkReady();
+            var unchanged = unavailableSession.Selected!;
+            string snapshot = JsonSerializer.Serialize(unavailableRepository.LoadCharacter(unavailableOwner,0));
+            That(unavailableSession.BeginDungeonSelection() is null && unavailableSession.Phase == SessionPhase.Town &&
+                unavailableSession.CurrentDungeonSelection is null && ReferenceEquals(unavailableSession.Selected,unchanged) &&
+                JsonSerializer.Serialize(unavailableRepository.LoadCharacter(unavailableOwner,0)) == snapshot,
+                "无真实安全点是业务拒绝，保留Town、原快照与存档，不分配选择身份或抛出断线异常");
+            unavailableSession.End();
+        }
         var blocked = left with { DungeonGates = [left.DungeonGates[0], new(new(85, 240, 50, 50), [], [])] };
         var alternate = Catalog(blocked).SelectionReturn(origin);
         That(alternate is not null && alternate != back && !blocked.DungeonGates.Any(g => g.Bounds.Contains(alternate.X, alternate.Y)),
@@ -226,11 +318,11 @@ internal static class DungeonSelectionReturnTests
         session.MarkReady();
         var before = session.Selected!;
         string persisted = JsonSerializer.Serialize(repository.LoadCharacter(owner, 0));
-        var opened = session.BeginDungeonSelection();
+        var opened = session.BeginDungeonSelection()!;
         var selection = session.CurrentDungeonSelection!;
         That(selection.OriginPosition == origin && selection.ReturnPosition == back && session.Selected == before &&
             JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == persisted, "开选图仅冻结安全返回点，不提前写库");
-        That(session.BeginDungeonSelection().SelectionId == opened.SelectionId && ReferenceEquals(session.CurrentDungeonSelection, selection),
+        That(session.BeginDungeonSelection()!.SelectionId == opened.SelectionId && ReferenceEquals(session.CurrentDungeonSelection, selection),
             "重复入口保留本次原位置和安全点");
         using var connection = new SqliteConnection("Data Source=" + Path.Combine(root, "gate.db") + ";Pooling=False");
         connection.Open();
