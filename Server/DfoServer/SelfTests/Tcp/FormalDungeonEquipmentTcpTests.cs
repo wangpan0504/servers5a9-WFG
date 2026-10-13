@@ -99,9 +99,10 @@ internal static partial class FormalDungeonTcpTests
                     for (int index = 0; index < deltas; index++)
                     {
                         var delta = peer.Expect(0, opcode).Body;
-                        if (index == 0 && fromId != 0 && toId != 0 && fromId != toId)
+                        if (index == 0 && toId != 0 && (family.Bag == InventoryListType.Main || fromId != 0 && fromId != toId))
                         {
-                            That(U32(delta, 5) == uint.MaxValue, "背包不同模板覆盖先清除旧资源");
+                            That(delta[0] == (byte)family.Bag && U16(delta, 1) == 1 && U16(delta, 3) == bag && U32(delta, 5) == uint.MaxValue,
+                                "普通卸装和同模板换装均先清ACK对象，特殊容器仍只清不同模板覆盖");
                             delta = peer.Expect(0, opcode).Body;
                         }
                         That(delta[0] == (index == 0 && deltas == 2 ? 3 : (byte)family.Bag), "保留所属容器及宠物专属差量");

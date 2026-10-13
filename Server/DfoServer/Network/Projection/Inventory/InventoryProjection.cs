@@ -64,13 +64,14 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 await context.Notify(NotiPacketType.TITLE_BOOK_LIST, TitlePackets.Book(current.Inventory, (byte)list - 18), "title_book_committed", CanSend);
                 continue;
             }
-            var replaced = slots.Where(slot => slot.List == list && plan.BeforeIndex.Find(slot) is { } old &&
-                receipt.Index.Find(slot) is { } now && old.Core.ItemId != now.Core.ItemId).ToArray();
-            // 普通穿脱仍装载完整条目并保留图标effect，仅关闭获得通知；不套用Main内的无effect移动策略。
+            // ACK19已将卸下或交换的装备放入Main；同模板增量只更新属性，须先清槽才能重新装载图标effect。
+            var reloadSlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is { } now &&
+                (suppressMainNotice && list == InventoryListType.Main ||
+                    plan.BeforeIndex.Find(slot) is { } old && old.Core.ItemId != now.Core.ItemId)).ToArray();
             var updateType = suppressMainNotice && list == InventoryListType.Main ?
                 NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE : NotiPacketType.UPDATE_ITEM_LIST;
-            if (replaced.Length != 0)
-                await context.Notify(updateType, InventoryPackets.Delta(InventorySnapshot.Empty, list, replaced), "inventory_clear_replaced", CanSend);
+            if (reloadSlots.Length != 0)
+                await context.Notify(updateType, InventoryPackets.Delta(InventorySnapshot.Empty, list, reloadSlots), "inventory_clear_replaced", CanSend);
             // 孵化替换先清旧蛋模板，再提交完整详情，最后让新宠物引用已到达的详情。
             if (hatchCreature && creatureDetailsChanged && list == InventoryListType.Pet)
                 await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);

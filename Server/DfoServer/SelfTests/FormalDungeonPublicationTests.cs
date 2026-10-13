@@ -394,12 +394,14 @@ internal static class FormalDungeonPublicationTests
             before = stream.Frames.Count;
             await commands.DispatchAsync(context, new(1, 43, get));
             Check(stream.Opcodes.Skip(before).SequenceEqual(new ushort[] { 39, 14, 43 }) &&
-                stream.Frames[before].Length == 63 && stream.Frames[before + 1].Length == 142 &&
+                stream.Frames[before].Length == 71 && stream.Frames[before + 1].Length == 142 &&
                 stream.Frames[before + 2].AsSpan(16).SequenceEqual(new byte[] { 1 }),
-                "金币生产包序为47B通知、实际余额差量与成功ACK");
+                "金币生产包序为55B拾取表现通知、实际余额差量与成功ACK");
             var notice = stream.Frames[before].AsSpan(16).ToArray();
             var delta = stream.Frames[before + 1].AsSpan(16).ToArray();
-            Check(notice.Length == 47 && BinaryPrimitives.ReadUInt32LittleEndian(notice.AsSpan(7)) == 17 &&
+            Check(notice.Length == 55 && BinaryPrimitives.ReadUInt32LittleEndian(notice.AsSpan(7)) == 17 &&
+                notice[6] == 1 && notice[11] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(notice.AsSpan(12)) == 0 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(notice.AsSpan(16)) == 0 && notice.AsSpan(20).ToArray().All(value => value == 0) &&
                 BinaryPrimitives.ReadUInt16LittleEndian(delta.AsSpan(3)) == 0 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(delta.AsSpan(9)) == f.Read().Inventory.Gold && f.Read().Inventory.Gold == 17,
                 "金币增量和虚拟槽0的绝对余额来自同一实际提交");

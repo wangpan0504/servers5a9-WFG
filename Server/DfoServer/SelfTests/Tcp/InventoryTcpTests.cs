@@ -162,7 +162,7 @@ internal static partial class InventoryTcpTests
             var quickUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=17", characterId)[0][0];
             peer.Send(19, MoveItem(0, 21, 0, 1, 3, 17, pantsId));
             peer.Expect(1, 19, MoveAck(0, 21, 1, 3, 17));
-            DeltaAndAppearance(peer, 4);
+            DeltaAndAppearance(peer, 4, reloadMain: true);
             var quickRequest = Convert.FromHexString("0003000000000000000000001500E047000000000000FFFFFFFF0000");
             peer.Send(19, quickRequest);
             peer.Expect(1, 19, Convert.FromHexString("0100030001000000001500"));
@@ -188,7 +188,7 @@ internal static partial class InventoryTcpTests
             DeltaAndAppearance(peer, 5);
             peer.Send(19, MoveItem(0, 8, 0, 1, 3, 17, pantsId));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 3, 17));
-            DeltaAndAppearance(peer, 4);
+            DeltaAndAppearance(peer, 4, reloadMain: true);
             peer.Send(19, MoveItem(0, 8, pantsId, 0, 0, 3, 0));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 0, 3));
             peer.Barrier();
@@ -206,7 +206,7 @@ internal static partial class InventoryTcpTests
             var captured = Convert.FromHexString("00090000000000010000000310007030000000000000FFFFFFFF0000");
             peer.Send(19, captured);
             peer.Expect(1, 19, Convert.FromHexString("0100090001000000031000"));
-            DeltaAndAppearance(peer, 4);
+            DeltaAndAppearance(peer, 4, reloadMain: true);
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", characterId)[0][0], jacketUid), "captured empty-first unequip commits original jacket UID");
             string afterCaptured = Snapshot(fixture);
             peer.Send(19, captured);
@@ -219,7 +219,7 @@ internal static partial class InventoryTcpTests
             var originalUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=12", characterId)[0][0];
             peer.Send(19, MoveItem(0, 9, 0, 1, 3, 12, weaponId));
             peer.Expect(1, 19, MoveAck(0, 9, 1, 3, 12));
-            DeltaAndAppearance(peer, 4);
+            DeltaAndAppearance(peer, 4, reloadMain: true);
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", characterId)[0][0], originalUid), "unequip persists original UID before ACK");
             peer.Send(20, Convert.FromHexString("080000000814100018012000"));
             peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
@@ -234,10 +234,10 @@ internal static partial class InventoryTcpTests
             That(Snapshot(fixture) == beforeReplay, "replayed equip is read-only and keeps connection");
             peer.Send(19, MoveItem(0, 9, 0, 1, 3, 12, weaponId));
             peer.Expect(1, 19, MoveAck(0, 9, 1, 3, 12));
-            DeltaAndAppearance(peer, 4);
+            DeltaAndAppearance(peer, 4, reloadMain: true);
             peer.Send(19, MoveItem(0, 10, 0, 1, 3, 17, pantsId));
             peer.Expect(1, 19, MoveAck(0, 10, 1, 3, 17));
-            DeltaAndAppearance(peer, 3);
+            DeltaAndAppearance(peer, 3, reloadMain: true);
             peer.Send(20, Convert.FromHexString("080000000814100018012000"));
             peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
             var cleared = peer.Expect(0, 14).Body;
@@ -389,15 +389,22 @@ internal static partial class InventoryTcpTests
             broomSkillCount = role.Learning.Trees.Sum(tree => tree.Skills.Count);
             That(role.Skills.Any(skill => skill.Id == 368 && skill.Level > 0) && role.Skills.All(skill => skill.Id != 91),
                 "real enchantress grants black magic broom without inventing witch mastery");
+            var richBroom = InventoryRewardGrantService.Create(broom) with
+            {
+                Attr = 11, Durability = 17, EnchantCardId = 10309006, EnchantUpgrade = 2,
+                AmplifyType = 2, AmplifyValue = 21, GenuineUpgrade = 4, Rune = 8,
+                Random0 = new(1, 2, 3), Random1 = new(2, 4, 5), Random2 = new(3, 6, 7),
+                RandomState = 1, RandomChangedIndex = 1, RandomChangeState = 1, RandomChange = new(4, 8, 9)
+            };
             repository.CommitInventory(owner, role, new(role.Inventory, role.Inventory with
             {
-                Items = role.Inventory.Items.Add(new(0, new(InventoryListType.Main, 9), InventoryRewardGrantService.Create(broom) with
-                {
-                    Attr = 11, Durability = 17, EnchantCardId = 10309006, EnchantUpgrade = 2,
-                    AmplifyType = 2, AmplifyValue = 21, GenuineUpgrade = 4, Rune = 8,
-                    Random0 = new(1, 2, 3), Random1 = new(2, 4, 5), Random2 = new(3, 6, 7),
-                    RandomState = 1, RandomChangedIndex = 1, RandomChangeState = 1, RandomChange = new(4, 8, 9)
-                }))
+                Items = [.. role.Inventory.Items,
+                    new(0, new(InventoryListType.Main, 9), richBroom),
+                    new(0, new(InventoryListType.Main, 11), richBroom with
+                    { ItemId = profile.Equipment.Single(item => item.Slot == 12).Template.Id, Attr = 6, EnchantUpgrade = 3, GenuineUpgrade = 5 }),
+                    new(0, new(InventoryListType.Main, 12), richBroom with
+                    { Attr = 15, Durability = 13, AmplifyValue = 25, GenuineUpgrade = 7, RandomChange = new(5, 9, 10) })
+                ]
             }, "fixture_enchantress_broom"));
             broomUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", role.Id)[0][0]!;
         }
@@ -415,6 +422,37 @@ internal static partial class InventoryTcpTests
                 originalBroom.AsSpan(71, 16).SequenceEqual(new byte[] { 3, 1, 2, 3, 2, 4, 6, 3, 5, 7, 1, 1, 1, 4, 8, 9 }),
                 "真实入城完整条目保留强化、附魔、增幅、锻造、符文及随机属性/变换预览");
             int previousWeapon = characters.Get(3).Equipment.Single(item => item.Slot == 12).Template.Id;
+            foreach (var target in new[] { (Slot: (short)11, Id: previousWeapon, Upgrade: (byte)6), (Slot: (short)12, Id: broom.Id, Upgrade: (byte)15) })
+            {
+                var originalTarget = BoosterSelectionTcpTests.EquipmentEntry(full, target.Slot, true);
+                That(U32(originalTarget, 2) == target.Id && originalTarget[10] == target.Upgrade &&
+                    !originalTarget.AsSpan(2).SequenceEqual(originalBroom.AsSpan(2)),
+                    "交换目标使用独立非零属性实例，同模板也不能按模板编号代替实例");
+                var targetUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=$p1", peer.Id, target.Slot)[0][0];
+                string cores = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id);
+                peer.Send(19, MoveItem(0, 9, broom.Id, 1, 0, target.Slot, target.Id));
+                peer.Expect(1, 19, MoveAck(0, 9, 1, 0, target.Slot));
+                peer.Barrier();
+                That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) == cores &&
+                    Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", peer.Id)[0][0], targetUid) &&
+                    Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=$p1", peer.Id, target.Slot)[0][0], broomUid),
+                    "物品栏内交换只发ACK，不清槽或增量载入，保留两件装备的原UID和全部核心属性");
+                peer.Send(7);
+                peer.Expect(1, 7, [1]);
+                peer.Expect(0, 2);
+                full = peer.Select(1)[4].Body;
+                Bytes(BoosterSelectionTcpTests.EquipmentEntry(full, 9, true).AsSpan(2), originalTarget.AsSpan(2),
+                    "重选后的目标装备121B完整内容仅随交换改变槽号，不丢强化、附魔或随机属性");
+                Bytes(BoosterSelectionTcpTests.EquipmentEntry(full, target.Slot, true).AsSpan(2), originalBroom.AsSpan(2),
+                    "重选后的原装备全部非槽位字节保留，同模板交换也不串用另一实例的属性");
+                peer.Send(19, MoveItem(0, 9, target.Id, 1, 0, target.Slot, broom.Id));
+                peer.Expect(1, 19, MoveAck(0, 9, 1, 0, target.Slot));
+                peer.Barrier();
+                That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) == cores &&
+                    Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", peer.Id)[0][0], broomUid) &&
+                    Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=$p1", peer.Id, target.Slot)[0][0], targetUid),
+                    "交换回原槽仍无图标重载或属性变更，原UID恢复且不重新发放装备");
+            }
             var previousInstance = fixture.Query("SELECT i.item_uid,i.item_core FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=12", peer.Id).Single();
             var wear = MoveItem(0, 9, broom.Id, 1, 3, 12, previousWeapon);
             peer.Send(19, wear);
@@ -448,7 +486,7 @@ internal static partial class InventoryTcpTests
             CheckBroomPlayer(peer.Select(1)[3].Body);
             peer.Send(19, MoveItem(3, 12, broom.Id, 1, 0, 10, 0));
             peer.Expect(1, 19, MoveAck(3, 12, 1, 0, 10));
-            var update = DeltaAndAppearance(peer, 4, "BroomTest", broomSkillCount);
+            var update = DeltaAndAppearance(peer, 4, "BroomTest", broomSkillCount, reloadMain: true);
             var row = update.Main.AsSpan(3, 123);
             That(U16(update.Main, 3) == 10 && row.Slice(2, 11).SequenceEqual(originalBroom.AsSpan(2, 11)) &&
                 row[13] == 0 && row[13] <= originalBroom[13] && row[14..].SequenceEqual(originalBroom.AsSpan(14)),
@@ -486,11 +524,16 @@ internal static partial class InventoryTcpTests
         Audit = fixture.Query("SELECT * FROM inventory_audit_log ORDER BY audit_id")
     });
     static (byte[] Main, byte[] Actor, byte[] Player) DeltaAndAppearance(TcpPeer peer, byte count, string name = "BagGearTest", int totalSkills = 12,
-        int extraEquipmentBytes = 0)
+        int extraEquipmentBytes = 0, bool reloadMain = false)
     {
+        var cleared = reloadMain ? peer.Expect(0, 1681).Body : null;
         var main = peer.Expect(0, 1681).Body;
         That(main[0] == 0 && U16(main, 1) == 1 && main.Length == 126,
             "普通穿脱仍同步完整Main条目，只使用无获得通知入口");
+        if (cleared is not null)
+            That(cleared.Length == 126 && cleared[0] == 0 && U16(cleared, 1) == 1 &&
+                U16(cleared, 3) == U16(main, 3) && U32(cleared, 5) == uint.MaxValue && U32(main, 5) != uint.MaxValue,
+                "脱到背包或快捷栏空格先静默清除ACK对象，再完整装载以触发图标effect");
         var actor = peer.Expect(0, 2).Body;
         var player = peer.Expect(0, 2).Body;
         That(actor[133 + NameWidth(name)] == count && player[126] == count && player.Length == 167 + count * 91 + totalSkills * 3 + extraEquipmentBytes,

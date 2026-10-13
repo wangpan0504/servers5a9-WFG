@@ -1184,9 +1184,14 @@ internal static partial class FormalDungeonTcpTests
                 {
                     byte active = got[cursor++]; uint amount = U32(got, cursor); cursor += 4;
                     That(active == (member == 0 ? 1 : 0) && amount == (member == 0 ? value : 0), "金币八成员分支保留实际金额");
-                    if (active != 0) That(got[cursor++] == 0, "单人无额外金币分量");
+                    if (active != 0)
+                    {
+                        That(got[cursor++] == 1 && U32(got, cursor) == 0 && U32(got, cursor + 4) == 0,
+                            "无附加金币也进入保留地面上下文的扩展表现分支，不伪造奖金或公会基金");
+                        cursor += 8;
+                    }
                 }
-                That(got.Length == 47 && cursor == got.Length, "金币独立47B格式完整消费");
+                That(got.Length == 55 && cursor == got.Length, "金币独立55B格式完整消费并保留全部八成员");
             }
             else That(got.Length == 19 && U16(got, 14) == peer.Id, "普通物品与账号材料保留完整19B格式");
             peer.Expect(0, 14); peer.Expect(1, 43, [1]);
