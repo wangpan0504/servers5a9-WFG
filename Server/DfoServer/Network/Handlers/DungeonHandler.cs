@@ -105,24 +105,30 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             context.BlocksTownActions)
             return CommandResult.Unhandled;
         bool training = selection.DungeonIndex == 5000 && selection.Unknown8 == 1 && selection.Unknown16 == 0;
-        bool replay = selection.Unknown8 == 1 && !training;
-        // 修炼场与剧情回放共享offset8=1；只接受现场确认的5000/难度0/FFFF token/其余模式字段0。
+        bool experience = selection.DungeonIndex == 7142 && selection.Unknown8 == 1 && selection.Unknown16 == 0;
+        bool direct = training || experience;
+        bool replay = selection.Unknown8 == 1 && !direct;
+        // 两种直入与剧情回放共享offset8=1；副本、难度、token及完整模式字段共同判别。
         if (selection.DungeonIndex == 5000 && (!training || selection.Parameter != 0)) return await RejectAsync();
+        if (selection.DungeonIndex == 7142 && (!experience || selection.Parameter != 0)) return await RejectAsync();
         // 回放由1459的完成事实/显式路线授权；附加Scene flags只保留审计，不套普通选图常量。
         if (selection.Unknown5 != 0 || selection.Unknown11 != 0 || !replay &&
-            (selection.Unknown7 != 0 || selection.Unknown8 != (training ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
+            (selection.Unknown7 != 0 || selection.Unknown8 != (direct ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
              selection.Unknown15 != 0 || selection.Unknown20 != 0 || selection.Unknown21 != 0))
             return await RejectAsync();
         var receipt = replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
             context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms,
-                drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes);
-        log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Training = training, Request = selection, receipt?.Snapshot.Identity });
+                drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
+                classExperience: experience);
+        log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay,
+            Training = training, ClassExperience = experience, Request = selection, receipt?.Snapshot.Identity });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
-        // 指定修炼场的15没有打开选图场景；按入口顺序先建立27上下文，再让28/29装载副本。
-        if (training)
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(), "formal_training_scene_transition", Guard);
+        // 指定直入的15没有打开选图场景；先建立27上下文，28/29进入主游戏后由客户端安装临时体验技能。
+        if (direct)
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(),
+                experience ? "formal_class_experience_scene_transition" : "formal_training_scene_transition", Guard);
         await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry), "formal_dungeon_information", Guard);
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed), "formal_start_map", Guard);
         return CommandResult.Handled;

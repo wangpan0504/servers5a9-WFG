@@ -62,6 +62,15 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             .SelectMany(row => row.CandidateIds.Count == 0 ? new[] { row.Id } : row.CandidateIds).ToHashSet();
         var pool = entries.Where(row => row.Dungeons.Contains(definition.Id) && !excluded.Contains(row.Id)).ToArray();
         var start = Choose(maze.Starts); var boss = Choose(maze.Bosses);
+        // 本版职业体验是无出口的真实单房间；只接受已核验的资源归属、类型、坐标与AA，不放宽普通空格。
+        if (definition.IsClassExperience && maze.Width == 1 && maze.Height == 1 && maze.Starts.Count == 1 && maze.Bosses.Count == 1 &&
+            start == new DungeonPoint(0,0) && boss == start && maps.Count == 0 && maze.GreedGrid.Cells is [{ Index: 0 }])
+        {
+            var experience = pool.Where(row => row.Kind == "[normal]" && (row.Layouts & 1) != 0 &&
+                row.Path.EndsWith("/76032_changeclass_s_(0,0).map", StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (experience.Length != 1) return maze;
+            return maze with { IsClassExperience = true, MapSpecification = [new("boss",start,experience[0].Id,experience[0].Path)] };
+        }
         // 本版修炼场起点与终点重合，使用实际归属及坐标命名的start资源。
         if (definition.Id == 5000 && maze.Width == 1 && maze.Height == 1 && maze.Starts.Count == 1 && maze.Bosses.Count == 1 &&
             start == new DungeonPoint(0,0) && boss == start && maps.Count == 0 && maze.GreedGrid.Cells is [{ Index: 1 }])

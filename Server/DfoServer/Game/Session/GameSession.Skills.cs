@@ -64,7 +64,7 @@ internal sealed partial class GameSession
     private SkillLearningResult ApplySkillLearning(Func<Character, SkillLearningResult> plan)
     {
         var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
-            SelectionEpoch, Phase, Allowed: Ready));
+            SelectionEpoch, Phase, Allowed: Ready && !HasClassExperienceContext));
         if (!captured.Allowed)
             return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
 
@@ -75,7 +75,7 @@ internal sealed partial class GameSession
         catch (KeyNotFoundException) { return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()); }
         return owner.Execute(() =>
         {
-            if (!Ready || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
+            if (!Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
                 throw new InvalidOperationException("Stale skill learning state");
             if (!result.Success)
                 return result;
@@ -95,13 +95,13 @@ internal sealed partial class GameSession
     internal SkillLayoutResult MoveSkillSlot(SkillSlotChangeCommand command, Func<byte, ushort, SkillLearningDefinition> definition)
     {
         var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
-            SelectionEpoch, Phase, Allowed: Ready));
+            SelectionEpoch, Phase, Allowed: Ready && !HasClassExperienceContext));
         if (!captured.Allowed)
             return new(SkillLearningFailure.Unsupported, null);
         var result = SkillLayout.Move(captured.Character.Job, captured.Character.Learning, command, definition);
         return owner.Execute(() =>
         {
-            if (!Ready || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character))
+            if (!Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character))
                 throw new InvalidOperationException("Stale skill layout state");
             if (!result.Success)
                 return result;

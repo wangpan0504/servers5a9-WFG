@@ -26,7 +26,8 @@ internal sealed record DungeonEntryPlan(
     public Guid QuestAcceptanceId { get; init; }
     public bool IsOrdinary => !IsTutorial && QuestId == 0 && RouteQuestId == 0;
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
-    public bool UsesFatigue => IsOrdinary && !IsTrainingRoom;
+    public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
+    public bool UsesFatigue => IsOrdinary && !IsTrainingRoom && !IsClassExperience;
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public uint RouteQuestId { get; init; } = QuestId;
@@ -84,6 +85,12 @@ internal sealed record DungeonEntryPlan(
         if (definition.Id != dungeonId)
         {
             reason = "dungeon-resource-mismatch";
+            return false;
+        }
+
+        if (dungeonId == 7142 && (!definition.IsClassExperience || questId != 0 || difficulty != 0 || isReplay))
+        {
+            reason = "class-experience-resource-or-mode-invalid";
             return false;
         }
 
@@ -213,12 +220,12 @@ internal sealed record DungeonEntryPlan(
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],
             RouteQuestId = routeQuest,
-            QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(),
+            QuestAcceptances = definition.IsClassExperience ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
-            InitializationCounterSupported = maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
+            InitializationCounterSupported = !definition.IsClassExperience && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
         reason = "resource-plan-ready";

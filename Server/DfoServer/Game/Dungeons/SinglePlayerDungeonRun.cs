@@ -426,9 +426,9 @@ internal sealed class SinglePlayerDungeonRun
             CurrentLivingMonster(confirmed.MonsterKey) is null)
             return new(DungeonRunOutcome.Rejected);
         var target = current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey);
-        bool conditionClears = Phase == SinglePlayerDungeonPhase.Dungeon && MatchesClearCondition(target) &&
+        bool conditionClears = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && MatchesClearCondition(target) &&
             !HasPendingBossDeaths(confirmed.MonsterKey);
-        bool settles = Phase == SinglePlayerDungeonPhase.Dungeon && (TerminalBossCleared(confirmed.MonsterKey) ||
+        bool settles = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && (TerminalBossCleared(confirmed.MonsterKey) ||
             conditionClears && IsTerminalRoom());
         // 明确的猎杀条件同样清退当前房间；非终点不产生通关事实，清退不产生击杀奖励。
         ushort[] culled = settles || conditionClears ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
@@ -531,7 +531,7 @@ internal sealed class SinglePlayerDungeonRun
 
     private DungeonRunResult SettleIfCleared()
     {
-        if (TerminalBossCleared() && deaths.Count > 0)
+        if (!entry.IsClassExperience && TerminalBossCleared() && deaths.Count > 0)
         {
             Phase = SinglePlayerDungeonPhase.Settlement;
             Advance();

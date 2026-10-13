@@ -6,6 +6,7 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record DungeonSelectionContext(long Id, long SelectionEpoch, ushort CharacterId, Location OriginPosition, Location ReturnPosition)
 {
     public bool IsTutorial { get; init; }
+    public bool IsClassExperience { get; init; }
 }
 internal sealed record DungeonSelectionReceipt(Character Character, long Generation, long SelectionEpoch, long SelectionId)
 {

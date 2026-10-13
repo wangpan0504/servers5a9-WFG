@@ -30,6 +30,7 @@ internal sealed record DungeonMaze(
     public IReadOnlyList<DungeonClearCondition> ClearConditions { get; init; } = [];
     public string? ResourceError { get; init; }
     public bool IsTrainingRoom { get; init; }
+    public bool IsClassExperience { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
     public bool ConnectsQuest(uint questId, byte difficulty = 0, int state = 0) => QuestConnectionTokens.Count == 3 &&
         QuestConnectionTokens.All(token => token.Type == 0) &&
@@ -81,8 +82,19 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
+    public bool IsClassExperience => Id == 7142 &&
+        Path.Equals("dungeon/cataclysm/changeclass/7142_changeclass.dgn", StringComparison.OrdinalIgnoreCase) &&
+        Marker("disable drop item") && Marker("disable clear reward") && Marker("no fatigue") &&
+        Marker("no experience monster and result") && Marker("no giveup panalty") &&
+        RawSections.Where(row => row.Tag == "enter without fatigue").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool RoomMoveKeepState { get; init; }
     public bool IndividualMapMovement { get; init; }
+
+    bool Marker(string name)
+    {
+        var rows = RawSections.Where(row => row.Tag == name).ToArray();
+        return rows.Length > 0 && rows.All(row => row.Tokens.Count == 0);
+    }
 
     public bool TryGetDesignatedDifficulty(out byte difficulty)
     {

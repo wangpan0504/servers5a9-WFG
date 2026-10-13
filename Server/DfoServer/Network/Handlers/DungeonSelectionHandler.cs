@@ -71,7 +71,9 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         }
         if (context.BlocksTownActions)
             return CommandResult.Unhandled;
-        var receipt = tutorials is not null ? context.Session.BeginTutorialSelection(entry.DungeonIndex, tutorials) : null;
+        var receipt = entry.DungeonIndex == 7142 ? context.Session.BeginClassExperienceSelection() :
+            tutorials is not null ? context.Session.BeginTutorialSelection(entry.DungeonIndex, tutorials) : null;
+        if (entry.DungeonIndex == 7142 && receipt is null) return CommandResult.Unhandled;
         receipt ??= context.Session.BeginDungeonSelection();
         if (!await projection.DetachForDungeonSelectionAsync(context, receipt))
             return CommandResult.Handled;

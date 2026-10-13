@@ -40,7 +40,10 @@ internal sealed partial class GameSession
     }
     FormalDungeon? formalDungeon;
     bool PreservesTrainingItems => Phase == SessionPhase.Dungeon && formalDungeon?.Entry.IsTrainingRoom == true;
-    sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey);
+    sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey)
+    {
+        public DungeonSelectionContext? ClassExperienceSelection { get; init; }
+    }
     public DungeonRunSnapshot? DungeonSnapshot => owner.Execute(() => formalDungeon?.Run.Snapshot);
 
     public FormalDungeonReceipt? EnterFormalDungeon(uint dungeonId, uint questId, byte difficulty,
@@ -48,9 +51,10 @@ internal sealed partial class GameSession
         Func<int, int>? draw = null, EpicPieceCatalog? pieces = null, Character? requiredCharacter = null,
         FormalDungeonReceipt? retry = null,
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
-        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null)
+        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false)
     {
-        var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,prepareDrops,tutorials,tutorialScenes);
+        var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,
+            prepareDrops,tutorials,tutorialScenes,classExperience);
         return prepared is null ? null : owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
     }
 
@@ -58,19 +62,22 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         Func<int, int>? draw, EpicPieceCatalog? pieces, Character? requiredCharacter, FormalDungeonReceipt? retry,
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
-        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null)
+        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false)
     {
-        var (expected, epoch) = owner.Execute(() => (Ready && CanEnterFormalDungeon(retry) &&
-            (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch));
+        var (expected, epoch, selection) = owner.Execute(() => (Ready && CanEnterFormalDungeon(retry) &&
+            (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null)
             return null;
+        if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
+            selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
+            selection.OriginPosition != expected.Position)) return null;
         var done = QuestEligibility.Completed(expected);
         var flow = tutorials?.Get(expected.Job);
         bool training = expected.Tutorial is { Completed: false } pending && pending.DungeonId == dungeonId &&
             flow?.DungeonId == dungeonId && questId == 0 && difficulty == 0 &&
             tutorials!.Owns(expected.Job, dungeonId, catalog.Get(checked((int)dungeonId)));
         bool trainingRoom = dungeonId == 5000 && questId == 0 && difficulty == 0;
-        if (!training && !trainingRoom && (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
+        if (!training && !trainingRoom && !classExperience && (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
             area.DungeonWorldMap is not { } worldMap || !towns.DungeonMaps.TryGetValue(worldMap,out var selectionMap) ||
             selectionMap.Error is not null || !selectionMap.Options.Any(option => option.DungeonId == dungeonId &&
                 (option.QuestId == -1 || (option.InProgress ? expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) :
@@ -91,13 +98,15 @@ internal sealed partial class GameSession
             return null;
         if (entry!.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
             return null;
+        if (entry.IsClassExperience != classExperience) return null;
         if (entry.IsTutorial && !training) return null;
         if (questId == 0 && entry.RouteQuestId > 0 && questCatalog is not null &&
             expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId) &&
             !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
                 questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return null;
-        return PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
+        var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes);
+        return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null };
     }
 
     PreparedFormalDungeon? PrepareFormalDungeonResources(Character expected,long epoch,DungeonEntryPlan entry,
@@ -108,11 +117,11 @@ internal sealed partial class GameSession
         if (expected.DungeonState is not { } state) return null;
         state.Validate();
         if (entry.UsesFatigue && (expected.Fatigue is null || FatigueForClient(expected).Remaining == 0)) return null;
-        var ordinaryReturn = entry.IsTrainingRoom ? expected.Position :
+        var ordinaryReturn = entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return null;
         QuestDropResources? questDrops = null;
-        if (!entry.IsTutorial && questCatalog is not null && items is not null && pieces is not null)
+        if (!entry.IsTutorial && !entry.IsClassExperience && questCatalog is not null && items is not null && pieces is not null)
         {
             try { questDrops = QuestDropResources.Create(expected,questCatalog,items,pieces); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return null; }
@@ -141,7 +150,7 @@ internal sealed partial class GameSession
         var dropPlans = ImmutableDictionary.CreateBuilder<ushort, DungeonDropGenerationPlan>();
         var groundReservations = new List<DungeonGroundReservation>();
         if ((drops is null) != (items is null)) throw new InvalidDataException("掉落资源依赖必须同时提供");
-        if (drops is not null && items is not null)
+        if (drops is not null && items is not null && !entry.IsClassExperience)
         {
             foreach (var plan in plans)
             foreach (var monster in plan.Monsters.Where(monster => monster.IsBlocking && monster.Source is not null &&
@@ -168,7 +177,7 @@ internal sealed partial class GameSession
                 }
             }
         }
-        else if (prepareDrops is not null)
+        else if (prepareDrops is not null && !entry.IsClassExperience)
             throw new InvalidDataException("集合掉落生成计划必须同时装配实际物品依赖");
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
@@ -190,6 +199,8 @@ internal sealed partial class GameSession
     FormalDungeonReceipt? InstallFormalDungeon(PreparedFormalDungeon prepared)
     {
         if (!Ready || SelectionEpoch != prepared.SelectionEpoch || !ReferenceEquals(Selected,prepared.Character)) return null;
+        if (prepared.Dungeon.Entry.IsClassExperience && (prepared.ClassExperienceSelection is not { IsClassExperience: true } ||
+            !ReferenceEquals(CurrentDungeonSelection, prepared.ClassExperienceSelection))) return null;
         // 先持久预留key/attempt；通知失败也不回绕key或复用旧身份。
         var committed = repository.ReserveDungeonAttempt(owner,prepared.Character,prepared.NextKey);
         if (formalDungeon is { } previous)
@@ -224,7 +235,7 @@ internal sealed partial class GameSession
             (Ready && Phase == SessionPhase.Loading ? Selected : null, formalDungeon, SelectionEpoch,
                 formalDungeon?.Run.Snapshot.Identity,formalDungeon?.Run.Entry));
         if (expected is null || dungeon is null || identity is null || entry is null) return null;
-        bool hasMatchingQuest = questCatalog is not null && expected.ActiveMainQuests.Any(active =>
+        bool hasMatchingQuest = !entry.IsClassExperience && questCatalog is not null && expected.ActiveMainQuests.Any(active =>
             QuestHuntProgress.Bound(active,entry) && questCatalog.TryGet(active.QuestId,out var quest) &&
             QuestDungeonClearProgress.CountsInitializations(quest,entry));
         return owner.Execute(() =>
@@ -321,6 +332,15 @@ internal sealed partial class GameSession
         if (preparation.Outcome != DungeonRunOutcome.Accepted)
             return new FormalDungeonDeathResult(preparation.Outcome) { ReportedTarget = target };
         var pending = preparation.Pending!;
+        if (dungeon.Entry.IsClassExperience)
+        {
+            // 体验死亡只推进本次内存实例；不写成长/掉落/任务账本，也不向客户端覆盖临时技能。
+            var death = dungeon.Run.ConfirmCommittedDeath(pending);
+            if (death.Outcome != DungeonRunOutcome.Accepted)
+                throw new InvalidOperationException("职业体验死亡不能确认原实例准备");
+            return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey)
+                { ReportedTarget = target };
+        }
         var reward = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
         FrozenDungeonGroundDeath? loot = null;
         if (dungeon.Ground.HasReservation(pending.Death.MonsterKey))

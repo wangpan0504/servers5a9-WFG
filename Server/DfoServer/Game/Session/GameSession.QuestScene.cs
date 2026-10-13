@@ -42,6 +42,7 @@ internal sealed partial class GameSession
         {
             var dungeon = formalDungeon;
             var character = Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement && dungeon is not null &&
+                !dungeon.Entry.IsClassExperience &&
                 !dungeon.Ground.HasPendingOperation && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && pendingQuestCompletion is null
                 ? Selected : null;
             var snapshot = dungeon?.Run.Snapshot;
