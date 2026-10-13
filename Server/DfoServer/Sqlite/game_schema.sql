@@ -579,6 +579,31 @@ CREATE TABLE character_skill_combos(
  children BLOB NOT NULL CHECK(typeof(children)='blob' AND length(children)<=12 AND length(children)%2=0),
  PRIMARY KEY(character_id,context,root_id),FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE);
 
+-- 拍卖行挂牌跨账号可见，不归属单个角色；卖家为机器人时 seller_character_id 为 NULL，
+-- 因此不建立指向 characters 的外键。item_entry 是物品条目的字节快照，长度与内容由物品条目写入方负责，本表只保存字节。
+-- state: 0=在售 1=已成交 2=已下架 3=已过期；buyout_price 为 -1 表示无一口价。
+CREATE TABLE auction_listings(
+  listing_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(listing_id BETWEEN 1 AND 2147483647),
+  seller_character_id INTEGER,
+  seller_name TEXT NOT NULL,
+  item_template_id INTEGER NOT NULL CHECK(item_template_id BETWEEN 0 AND 2147483647),
+  item_kind INTEGER NOT NULL CHECK(item_kind BETWEEN 0 AND 255),
+  item_count INTEGER NOT NULL CHECK(item_count BETWEEN 1 AND 2147483647),
+  item_entry BLOB NOT NULL CHECK(typeof(item_entry)='blob' AND length(item_entry)>0),
+  starting_price INTEGER NOT NULL CHECK(starting_price BETWEEN 0 AND 2147483647),
+  buyout_price INTEGER NOT NULL CHECK(buyout_price BETWEEN -1 AND 2147483647),
+  current_bid INTEGER NOT NULL DEFAULT 0 CHECK(current_bid BETWEEN 0 AND 2147483647),
+  current_bidder_character_id INTEGER,
+  state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 3),
+  posted_at_unix INTEGER NOT NULL CHECK(posted_at_unix>=0),
+  expires_at_unix INTEGER NOT NULL CHECK(expires_at_unix>=posted_at_unix),
+  settled_at_unix INTEGER,
+  -- deposit_gold: 挂牌阶段收取的保证金（金币，逐行记录）。取消上架不退还、到期未售按此金额原额退还。
+  deposit_gold INTEGER NOT NULL DEFAULT 0 CHECK(deposit_gold BETWEEN 0 AND 2147483647)
+);
+CREATE INDEX auction_listings_expiry ON auction_listings(state,expires_at_unix);
+CREATE INDEX auction_listings_seller ON auction_listings(seller_character_id,state);
+CREATE INDEX auction_listings_template ON auction_listings(state,item_template_id,listing_id);
 CREATE TABLE character_dungeon_drop_batches(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
   instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>=0),

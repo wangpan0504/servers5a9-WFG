@@ -26,6 +26,10 @@ internal sealed record ServerOptions
     public string DevelopmentAccount => LoginCredentials.DevelopmentAccount;
     public DuplicateLoginPolicy DuplicateLoginPolicy => DuplicateLoginPolicy.ReplaceExisting;
     public DungeonEntryProbeMode DevelopmentDungeonEntryProbe { get; init; }
+    // 拍卖行搜索应答的记录布局探针；null = 关闭（186/187 走真实挂牌数据）。见 Development/Auction/AuctionProbe.cs。
+    public string? DevelopmentAuctionProbe { get; init; }
+    // 开发用拍卖行种子条数；0 = 不种子（默认）。表内已有挂牌时不再写入。见 Game/Auction/AuctionService.cs。
+    public int AuctionSeedCount { get; init; }
     public int SessionTtlSeconds { get; init; } = 300;
     public string ProtocolVersion => "matched-client";
 
@@ -54,6 +58,8 @@ internal sealed record ServerOptions
                     "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
                     "--session-ttl" => value with { SessionTtlSeconds = Number(argument, name) },
                     "--dungeon-entry-probe" => value with { DevelopmentDungeonEntryProbe = Mode<DungeonEntryProbeMode>(argument, name) },
+                    "--auction-probe" => value with { DevelopmentAuctionProbe = argument },
+                    "--auction-seed" => value with { AuctionSeedCount = Number(argument, name) },
                     _ => throw new InvalidDataException("未知运行参数：" + name)
                 };
             }
@@ -67,6 +73,9 @@ internal sealed record ServerOptions
             value.PacketHttpPort is < 0 or > 65535 || value.PacketHttpPort != 0 &&
                 new[] { value.ChannelPort, value.GamePort, value.GmPort }.Contains(value.PacketHttpPort))
             throw new InvalidDataException("Invalid endpoint configuration");
+        // 种子逐条写库并在启动时构造条目快照，必须有上限；0 表示不种子。
+        if (value.AuctionSeedCount > 10_000)
+            throw new InvalidDataException("--auction-seed 必须在 0..10000 之间");
         try
         {
             new AuthenticationSettings(value.DuplicateLoginPolicy, value.SessionTtlSeconds, value.ProtocolVersion).Validate();

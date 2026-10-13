@@ -223,9 +223,9 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("持久领奖结果与完整规划不同");
         if (plan.MailedGoldAmount != 0)
         {
-            var mail = DeliverMailInTransaction(db, tx, QuestGoldMail(owner, committed, plan));
-            if (!mail.Accepted) throw new InvalidOperationException("任务金币邮件提交失败：" + mail.Error);
-            goldMailId = mail.MailId;
+            var (goldMailError, goldMail) = DeliverMailInTransaction(db, tx, QuestGoldMail(owner, committed, plan));
+            if (goldMailError != MailboxError.None) throw new InvalidOperationException("任务金币邮件提交失败：" + goldMailError);
+            goldMailId = goldMail;
         }
         tx.Commit();
         return Result(committed, grantedItems, false, true, checked((uint)(plan.TargetLearning.Experience - expected.Learning.Experience)));

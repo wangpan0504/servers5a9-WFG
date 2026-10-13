@@ -29,6 +29,8 @@ internal static class SelfTestRunner
         await PacketCaptureTests.RunAsync();
         await PacketHttpTests.RunAsync();
         ClientNoticeTests.Run();
+        AuctionNoticeTests.Run();
+        AuctionReplyTests.Run();
         DungeonRequestTests.Run();
         DungeonSettlementProtocolTests.Run();
         BlackDiamondTests.RunCore();

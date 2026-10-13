@@ -84,9 +84,9 @@ internal sealed partial class CharacterRepository
         var items = cores.Select(core => new InventoryItem(0,new(InventoryListType.Main,9),core)).ToImmutableArray();
         var delivery = new MailboxDelivery("dungeon-card:"+side+":"+prepared.EventId.ToString("N"),recipient,"副本奖励",
             "背包空间不足，翻牌物品已通过永久邮件保存。",0,items,prepared.Card!.CreatedAt);
-        var result = DeliverMailInTransaction(db,tx,delivery);
-        if (!result.Accepted) throw new InvalidOperationException("翻牌邮件失败: "+result.Error);
-        return result.MailId;
+        var (mailError, mailId) = DeliverMailInTransaction(db,tx,delivery);
+        if (mailError != MailboxError.None) throw new InvalidOperationException("翻牌邮件失败: "+mailError);
+        return mailId;
     }
 
     static void VerifyActualCard(DungeonCardReward actual,DungeonCardReward frozen)

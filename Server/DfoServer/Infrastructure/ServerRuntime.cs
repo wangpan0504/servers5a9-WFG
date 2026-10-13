@@ -81,6 +81,35 @@ internal static class ServerRuntime
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
+        var auctionProbe = Development.Auction.AuctionProbe.Parse(options.DevelopmentAuctionProbe);
+        // 拍卖行挂牌：SQL 在 Persistence/AuctionListingRepository，读用例与种子在 Game/Auction；
+        // 条目字节快照的编码入口来自物品模块的 Builder。
+        // 分类 id 的翻译需要共享物品目录（装备部位要靠模板查一次缓存一次），因此解析器在装配处显式创建。
+        // 上架规划（CMD 183）还需要物品目录、史诗碎片判定与条目编码入口：可上架判定复用背包模块的字段口径，
+        // 不新建第二套；目录与编码入口都在这里显式注入，Game 层因此不引用 Network。
+        // ★ 取消上架（CMD 184）要把挂牌保存的条目快照**读回**物品核心再还回背包，因此编解码两个方向一起注入：
+        //   同一个文件里的 ItemEntrySnapshot / ItemCoreFromEntry 严格互逆，Game 层仍不引用 Network。
+        // ★ 存储合同由角色仓储实现（`repository`）：上架/取消都要与背包写入共用同一个写事务，
+        //   因此拍卖行不再持有第二个仓储实例 —— 与邮件（MailboxService(repository, …)）同一形态。
+        var auctionCategories = new Game.Auction.AuctionCategoryResolver(itemResources.Items);
+        var auctions = new Game.Auction.AuctionService(repository, auctionCategories,
+            itemResources.Items, itemResources.EpicPieces, Network.Builders.AuctionPackets.ItemEntrySnapshot,
+            Network.Builders.AuctionPackets.ItemCoreFromEntry);
+        if (options.AuctionSeedCount > 0)
+        {
+            // 建库与迁移由上面的 CharacterRepository 构造完成，种子在开始监听之前写入。
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var seedItems = Game.Auction.AuctionService.ResolveSeedItems(itemResources.Items,
+                Network.Builders.AuctionPackets.ItemEntrySnapshot, out var unresolved);
+            var seed = auctions.Seed(options.AuctionSeedCount, now, seedItems);
+            log.Write("auction_seed", new
+            {
+                Requested = options.AuctionSeedCount,
+                seed.Created,
+                ItemIds = seed.ItemIds.ToArray(),
+                UnresolvedItemIds = unresolved.ToArray()
+            });
+        }
         DungeonRoomCatalog? questRooms = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
         IGameCommandModule dungeon;
@@ -169,6 +198,8 @@ internal static class ServerRuntime
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection),
             dungeon,
             new AgitWarHandler(),
+            new AuctionHandler(itemResources.Items, auctions, inventoryProjection, auctionProbe.NextSearch, auctionProbe.NextAverage,
+                auctionProbe.NextMyList, log),
             new ClientNoticeHandler(log)
         ];
         foreach (var module in modules)

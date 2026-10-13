@@ -109,5 +109,17 @@ internal sealed record InventoryResult(bool Accepted, ushort Error, InventoryPla
     InventorySlot? MoveSource = null, InventorySlot? MoveDestination = null)
 {
     public InventoryCommitReceipt? Receipt { get; init; }
+
+    /// <summary>
+    /// 要求投影把**整个容器**重发一遍（而不是只发变化槽的差量）。
+    ///
+    /// 用于「客户端 UI 还持有源槽」的场景：拍卖行上架成功后客户端把源槽视为被上架窗口持有，
+    /// 只发差量解不开这个残留状态（参考实现 round13 实测：单槽 `0x000E` 刷新不足以解除拖入锁定，
+    /// 表现为背包不可操作、无法再次把道具拖进上架框，需重选角色才恢复）。整列重建强制客户端
+    /// 丢弃并重新装载该容器，是唯一可靠的解除方式，与仓库扩容等「背包大变动」场景同一口径。
+    /// 只有明确需要时才置位：整列刷新的代价是帧体变大，不能当成差量的默认行为。
+    /// </summary>
+    public bool WholeListRefresh { get; init; }
+
     public static InventoryResult Reject(ushort error = 1) => new(false, error);
 }

@@ -104,7 +104,8 @@ internal sealed partial class CharacterRepository
             var postal = plan.Postals[at];
             var delivery = new MailboxDelivery(postal.Key + ":" + current.Id, new(current.Id, owner.Account, current.Name, current.Job, current.GrowType, current.Level),
                 postal.Sender, postal.Message, 0, [plan.PostalItems[at]], DateTimeOffset.UtcNow.ToUnixTimeSeconds(), null);
-            if (!DeliverMailInTransaction(db, tx, delivery).Accepted) throw new InvalidOperationException("称号奖励邮件无法提交");
+            var (postalError, _) = DeliverMailInTransaction(db, tx, delivery);
+            if (postalError != MailboxError.None) throw new InvalidOperationException("称号奖励邮件无法提交：" + postalError);
         }
         tx.Commit();
         return current with { TitleProgress = plan.Progress, TitleSections = plan.Sections };

@@ -90,8 +90,47 @@ internal static class SqliteMigrations
         new(33, "账号赛丽亚幸运值", AddSeriaLuckColumn),
         new(34, "任务跳过实际效果账本", AddQuestEffects),
         new(35, "账号契约账本及已知旧分支v34兼容", UpgradePremiumContracts),
-        new(36, "翻牌领取、活动与统一会员契约来源", DungeonCardClaimSchema.Upgrade)
+        new(36, "翻牌领取、活动与统一会员契约来源", DungeonCardClaimSchema.Upgrade),
+        // 拍卖行挂牌表与保证金列合成同一步（本步在任何已发布版本里都不存在，编号在合并上游后重新占用 37）：
+        // 一步建出含 `deposit_gold` 的完整表，不再有「先建表、后加列」的两步，也就没有中途半成品的窗口。
+        new(37, "拍卖行挂牌与保证金", static (db, tx) =>
+        {
+            foreach (string statement in AuctionListingSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                Execute(db, tx, statement);
+        }),
     ];
+
+    // 拍卖行挂牌跨账号可见，不归属单个角色；卖家为机器人时 seller_character_id 为 NULL，
+    // 因此本表不建立指向 characters 的外键。item_entry 是物品条目的字节快照，长度与内容由物品条目写入方负责，本表只保存字节。
+    // 本结构由 v37 一步建出（含 deposit_gold），与 `Sqlite/game_schema.sql` 的当前结构逐列一致。
+    // 用 `IF NOT EXISTS`（与 v34/v36 的同款做法）：真正的老库（< v37）没有这张表，这里建出来；
+    // 而「拿当前结构库改版本号回退」的迁移夹具、以及从 `game_schema.sql` 直接重建的开发库可能已经有了它，
+    // 重复建表会撞名。列是否齐全由 `ValidateSchema` 的必需列检查兜底，不靠 CREATE 报错。
+    internal const string AuctionListingSchema = """
+        -- state: 0=在售 1=已成交 2=已下架 3=已过期；buyout_price 为 -1 表示无一口价。
+        CREATE TABLE IF NOT EXISTS auction_listings(
+          listing_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(listing_id BETWEEN 1 AND 2147483647),
+          seller_character_id INTEGER,
+          seller_name TEXT NOT NULL,
+          item_template_id INTEGER NOT NULL CHECK(item_template_id BETWEEN 0 AND 2147483647),
+          item_kind INTEGER NOT NULL CHECK(item_kind BETWEEN 0 AND 255),
+          item_count INTEGER NOT NULL CHECK(item_count BETWEEN 1 AND 2147483647),
+          item_entry BLOB NOT NULL CHECK(typeof(item_entry)='blob' AND length(item_entry)>0),
+          starting_price INTEGER NOT NULL CHECK(starting_price BETWEEN 0 AND 2147483647),
+          buyout_price INTEGER NOT NULL CHECK(buyout_price BETWEEN -1 AND 2147483647),
+          current_bid INTEGER NOT NULL DEFAULT 0 CHECK(current_bid BETWEEN 0 AND 2147483647),
+          current_bidder_character_id INTEGER,
+          state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 3),
+          posted_at_unix INTEGER NOT NULL CHECK(posted_at_unix>=0),
+          expires_at_unix INTEGER NOT NULL CHECK(expires_at_unix>=posted_at_unix),
+          settled_at_unix INTEGER,
+          -- deposit_gold: 挂牌阶段收取的保证金（金币，逐行记录）。取消上架不退还、到期未售按此金额原额退还。
+          deposit_gold INTEGER NOT NULL DEFAULT 0 CHECK(deposit_gold BETWEEN 0 AND 2147483647)
+        );
+        CREATE INDEX IF NOT EXISTS auction_listings_expiry ON auction_listings(state,expires_at_unix);
+        CREATE INDEX IF NOT EXISTS auction_listings_seller ON auction_listings(seller_character_id,state);
+        CREATE INDEX IF NOT EXISTS auction_listings_template ON auction_listings(state,item_template_id,listing_id);
+        """;
 
     internal const string QuestEffectsSchema = """
         CREATE TABLE IF NOT EXISTS character_quest_effect_receipts(
@@ -863,6 +902,9 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        // 拍卖行挂牌表由 v37 建出（`IF NOT EXISTS`），列是否齐全在这里兜底：
+        // 缺列或缺表都会在建库/升级阶段直接拒绝启动，而不是等到运行时读挂牌才发现。
+        "SELECT listing_id,seller_character_id,seller_name,item_template_id,item_kind,item_count,item_entry,starting_price,buyout_price,current_bid,current_bidder_character_id,state,posted_at_unix,expires_at_unix,settled_at_unix,deposit_gold FROM auction_listings LIMIT 0",
         "SELECT character_id,operation_id,before_revision,revision,claimed_quests,changed_items FROM character_quest_effect_receipts LIMIT 0",
         "SELECT character_id,quest_id,operation_id FROM character_quest_special_reward_claims LIMIT 0",
         "SELECT account,item_id,count FROM account_adventure_purchases LIMIT 0",

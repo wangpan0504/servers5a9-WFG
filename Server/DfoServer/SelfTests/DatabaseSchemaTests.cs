@@ -119,7 +119,8 @@ internal static class DatabaseSchemaTests
                 "DROP TABLE character_dungeon_state", "DROP TABLE character_dungeon_loot_receipts",
                 "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_quest_lifecycle_receipts; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts",
                 "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN report_body",
-                "DROP TABLE character_title_progress", "DROP TABLE character_title_book_slots", "DROP TRIGGER inventory_not_title_insert"
+                "DROP TABLE character_title_progress", "DROP TABLE character_title_book_slots", "DROP TRIGGER inventory_not_title_insert",
+                "DROP INDEX auction_listings_expiry; DROP INDEX auction_listings_seller; DROP INDEX auction_listings_template; DROP TABLE auction_listings"
             })
             {
                 string rejected = Path.Combine(root, Guid.NewGuid().ToString("N") + ".db");
@@ -142,6 +143,8 @@ internal static class DatabaseSchemaTests
                 RemoveTutorialSchema(db);
                 RemoveTitleSchema(db);
                 Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
+                // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+                DropAuctionListings(db);
             }
             string legacySnapshot = Snapshot(legacy);
             Reject<InvalidDataException>(() => new CharacterRepository(legacy), "未发布旧库明确拒绝");
@@ -167,6 +170,7 @@ internal static class DatabaseSchemaTests
             VerifyExistingQuestFatigueV14(root);
             VerifyMissingFatigueMigration(root, 18);
             VerifyMissingFatigueMigration(root, 19);
+            VerifyAuctionListingSchema(root);
             VerifyQuestSkipConstraints(root);
             VerifyDropCollectionSchema(root);
             VerifyTutorialSchema(root);
@@ -206,10 +210,10 @@ internal static class DatabaseSchemaTests
                         INSERT INTO character_quest_special_reward_claims VALUES(1,100,'00112233445566778899aabbccddeeff');
                         DROP TABLE account_adventure_purchases;
                         ALTER TABLE account_wallets DROP COLUMN seria_luck;
-                        PRAGMA user_version=32;
+                        DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings; PRAGMA user_version=32;
                         """);
                 }
-                else Execute(db,"DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts; PRAGMA user_version=33");
+                else Execute(db,"DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings; DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts; PRAGMA user_version=33");
             }
             _=new CharacterRepository(path);
             using(var db=Open(path))
@@ -232,7 +236,7 @@ internal static class DatabaseSchemaTests
         string broken=Path.Combine(root,"quest-effects-v33-failure.db");_=new CharacterRepository(broken);
         using(var db=Open(broken)) Execute(db,"""
             DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts;
-            CREATE TABLE character_quest_special_reward_claims(bad INTEGER); PRAGMA user_version=33;
+            DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings; CREATE TABLE character_quest_special_reward_claims(bad INTEGER); PRAGMA user_version=33;
             """);
         string original=Snapshot(broken);RejectDatabase(()=>new CharacterRepository(broken));
         Check(Snapshot(broken)==original,"末段列校验失败回滚新增任务表与版本，保留原库");
@@ -372,6 +376,8 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db,"PRAGMA user_version=22");
+            // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+            DropAuctionListings(db);
             tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
             before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
             using var target = Open(rollback); db.BackupDatabase(target);
@@ -433,6 +439,8 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
+            // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+            DropAuctionListings(db);
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('drop-old',0,'DropOld',7,38,1,450,234,0,123)");
             // 最后一张表撞到视图，前两张DDL和版本必须在同一升级事务回滚。
             Execute(db, "CREATE VIEW character_dungeon_drop_pickups AS SELECT id FROM characters");
@@ -569,6 +577,7 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
+            DropAuctionListings(db);
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,quest_cycle_day,equipment_slot_flags) VALUES('master-quest',0,'MasterQuest',9,38,1,450,234,0,20261009,7)");
             Execute(db, "INSERT INTO character_completed_quests VALUES(1,6217,20261009,2)");
             Execute(db, "INSERT INTO accounts(account_id,salt,password_hash,iterations) VALUES('master-quest',x'01',x'02',1)");
@@ -652,6 +661,7 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
+            DropAuctionListings(db);
             ChangeCompletionDefinition(db,sql => sql.Replace("44,49,64","44,64").Replace("65,67,70)","65,67)"));
             Execute(db,"DROP TABLE " + skip); Execute(db,previousSkip);
             Execute(db,"INSERT INTO character_quest_skip_receipts(rowid,character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot) VALUES(59,1,'history','34567890abcdef1234567890abcdef12',19,6217,6,7,'{\"Old\":true}')");
@@ -721,6 +731,7 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
+            DropAuctionListings(db);
             ChangeCompletionDefinition(db,sql => sql.Replace("44,49,64","44,64"));
             Execute(db,"INSERT INTO character_quest_skip_receipts VALUES(1,'history',NULL,NULL,NULL,7,8,'{\"Manual\":true}','4567890abcdef1234567890abcdef123','Manual')");
             Execute(db,"INSERT INTO character_quest_skip_receipts VALUES(1,'history',NULL,NULL,NULL,8,9,'{\"Ticket\":true}','67890abcdef1234567890abcdef12345','Ticket')");
@@ -769,6 +780,7 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
+            DropAuctionListings(db);
             Execute(db, "INSERT INTO character_quest_skip_receipts(rowid,character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot) VALUES(59,1,'history','34567890abcdef1234567890abcdef12',19,6217,6,7,'{\"Old\":true}')");
             Execute(db, "INSERT INTO character_dungeon_state VALUES(1,'history',700,42,123,4,56)");
             Execute(db, "INSERT INTO character_fatigue VALUES(1,'history',7,156,9,149,3,4)");
@@ -835,6 +847,8 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=18");
+            // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+            DropAuctionListings(db);
             Execute(db, "UPDATE character_dungeon_drop_objects SET core='{\"Uid\":0,\"Attrs\":[9,8,7],\"Legacy\":true}' WHERE ground_key=512");
             Execute(db, "UPDATE character_dungeon_drop_pickups SET item_uid=12345,after_core='{\"Uid\":12345,\"Attrs\":[9,8,7],\"Legacy\":true}' WHERE ground_key=512");
             tables = TableNames(db);
@@ -885,6 +899,7 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db,"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
+            DropAuctionListings(db);
             tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
             before = tables.Select((table,index) => Rows(db,table,columns[index])).ToArray();
         }
@@ -944,6 +959,7 @@ internal static class DatabaseSchemaTests
             RewindExperienceCaps(db);
             RewindAccountQuestSource(db);
             Execute(db, $"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
+            DropAuctionListings(db);
             tables = TableNames(db).Where(table => table != "character_fatigue").ToArray();
             columns = tables.Select(table => ColumnNames(db, table)).ToArray();
             before = tables.Select((table, index) => Rows(db, table, columns[index])).ToArray();
@@ -980,10 +996,93 @@ internal static class DatabaseSchemaTests
         Check(Snapshot(path) == committed, "补齐后重开不重复初始化或重置疲劳");
     }
 
+    // v37一步建出拍卖行挂牌表（含保证金列）；两个夹具都恢复到真实旧结构，不以改版本号冒充旧库。
+    private static void VerifyAuctionListingSchema(string root)
+    {
+        Check(SqliteMigrations.CurrentVersion == 37, "拍卖行挂牌与保证金落在连续迁移的v37");
+        string path = Path.Combine(root, "auction-v36.db");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='auction_listings'") is 1L &&
+                Query(db, "SELECT group_concat(name,'|') FROM (SELECT name FROM sqlite_schema WHERE type='index' AND tbl_name='auction_listings' ORDER BY name)") is "auction_listings_expiry|auction_listings_seller|auction_listings_template",
+                "v37新库建立挂牌表及到期、卖家、模板三个索引");
+            Check(Query(db, "SELECT count(*) FROM pragma_table_info('auction_listings')") is 16L &&
+                Query(db, "SELECT group_concat(name,',') FROM pragma_table_info('auction_listings')") is
+                    "listing_id,seller_character_id,seller_name,item_template_id,item_kind,item_count,item_entry,starting_price,buyout_price,current_bid,current_bidder_character_id,state,posted_at_unix,expires_at_unix,settled_at_unix,deposit_gold",
+                "v37挂牌表列齐全且顺序为挂牌、卖家、物品、价格、竞价、状态、时间与保证金");
+            Check(Query(db, "SELECT count(*) FROM pragma_table_info('auction_listings') WHERE name='listing_id' AND pk=1") is 1L,
+                "挂牌id为主键，客户端回传的购买与下架身份稳定");
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='auction_listings' AND sql LIKE '%AUTOINCREMENT%'") is 1L,
+                "挂牌id不回用已下架或已过期记录的身份");
+            Check(Query(db, "SELECT count(*) FROM pragma_foreign_key_list('auction_listings')") is 0L,
+                "挂牌表不引用characters，机器人卖家没有角色行");
+        }
+        string structure = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == structure, "v37重复初始化不重建挂牌表或索引");
+        using (var db = Open(path))
+        {
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='auction_listings'") is 1L,
+                "重复执行不重复建表");
+            Execute(db, "INSERT INTO auction_listings(seller_character_id,seller_name,item_template_id,item_kind,item_count,item_entry,starting_price,buyout_price,current_bid,state,posted_at_unix,expires_at_unix) VALUES(1,'新库卖家',1001,0,1,X'0A0B',150,-1,0,0,1700000000,1700086400)");
+            Check(Query(db, "SELECT count(*) FROM auction_listings") is 1L &&
+                Query(db, "SELECT last_insert_rowid()") is 1L,
+                "新库挂牌表接受纯竞拍的在售记录");
+            Check(Query(db, "SELECT deposit_gold FROM auction_listings WHERE listing_id=1") is 0L,
+                "★ 不写保证金时默认 0：历史行与种子行没交过钱，到期结算因此不会退钱（不凭空造币）");
+            Reject<SqliteException>(() => Execute(db, "INSERT INTO auction_listings(seller_name,item_template_id,item_kind,item_count,item_entry,starting_price,buyout_price,current_bid,state,posted_at_unix,expires_at_unix,deposit_gold) VALUES('负保证金',1001,0,1,X'0A0B',150,200,0,0,1700000000,1700086400,-1)"),
+                "挂牌表拒绝负数保证金");
+            Reject<SqliteException>(() => Execute(db, "INSERT INTO auction_listings(seller_name,item_template_id,item_kind,item_count,item_entry,starting_price,buyout_price,current_bid,state,posted_at_unix,expires_at_unix) VALUES('越界状态',1001,0,1,X'0A0B',150,200,0,9,1700000000,1700086400)"),
+                "挂牌表拒绝0至3以外的状态");
+        }
+
+        string upgrade = Path.Combine(root, "auction-v36-upgrade.db");
+        _ = new CharacterRepository(upgrade);
+        using (var db = Open(upgrade))
+        {
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('legacy',0,'AuctionLegacy',7,38,1,450,234,0)");
+            Execute(db, "INSERT INTO account_wallets(account,revision,rental_points) VALUES('legacy',5,17)");
+        }
+        ExecuteOn(upgrade, db =>
+        {
+            // 挂牌表只由 v37 建出：把结构与版本一起退回真实 v36（其余表与当前结构相同），
+            // 于是重开时只执行 v37，能同时验证「建表 + 三个索引 + 保证金列」。
+            DropAuctionListings(db);
+            Execute(db, "PRAGMA user_version=36");
+        });
+        Check(Snapshot(upgrade) != Snapshot(path), "v36夹具与v37新库结构不同");
+        Check(QueryOn(upgrade, "SELECT count(*) FROM sqlite_schema WHERE name='auction_listings'") is 0L,
+            "v36夹具确实缺少挂牌表，不以改版本号冒充旧库");
+        _ = new CharacterRepository(upgrade);
+        using (var db = Open(upgrade))
+        {
+            Check(Query(db, "PRAGMA user_version") is long version && version == 37,
+                "v36只执行v37（建挂牌表与保证金列）并推进版本号");
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='index' AND tbl_name='auction_listings'") is 3L,
+                "v37升级为旧库补齐到期、卖家、模板三个索引");
+            Check(Query(db, "SELECT c.revision||':'||w.revision||':'||w.rental_points FROM characters c JOIN account_wallets w USING(account) WHERE c.account='legacy'") is "7:5:17" &&
+                Query(db, "SELECT count(*) FROM characters WHERE account='legacy'") is 1L,
+                "v36升级保留既有角色与钱包数据");
+            Execute(db, "INSERT INTO auction_listings(seller_character_id,seller_name,item_template_id,item_kind,item_count,item_entry,starting_price,buyout_price,current_bid,state,posted_at_unix,expires_at_unix) VALUES(1,'旧库卖家',2002,0,5,X'0102',800,1500,0,0,1700000000,1700086400)");
+            Check(Query(db, "SELECT seller_name||':'||item_count||':'||buyout_price||':'||state||':'||deposit_gold FROM auction_listings WHERE listing_id=1") is "旧库卖家:5:1500:0:0",
+                "★ 升级后旧库挂牌表可插入并查询，且保证金默认 0（旧库升级不预置保证金）");
+            Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "挂牌表没有外键，升级后数据库仍完整");
+        }
+        string migrated = Snapshot(upgrade);
+        _ = new CharacterRepository(upgrade);
+        Check(Snapshot(upgrade) == migrated, "已到v37的旧库重开不重复执行建表");
+    }
+
     static void ChangeCompletionDefinition(SqliteConnection db,Func<string,string> change) =>
         ChangeReceiptDefinition(db, "character_quest_completion_receipts", sql => change(sql.Replace(
             "CHECK(after_experience>=before_experience AND after_experience<=before_experience+experience_amount)",
             "CHECK(after_experience=before_experience+experience_amount)", StringComparison.Ordinal)));
+
+    // v20前的真实库没有拍卖行挂牌表；模拟旧版必须把该结构与三个索引一起移除。
+    static void DropAuctionListings(SqliteConnection db) =>
+        Execute(db, "DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings");
 
     static void ChangeReceiptDefinition(SqliteConnection db, string table, Func<string,string> change, string[]? columns = null)
     {
@@ -1078,6 +1177,9 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 6) Execute(db, "DROP TABLE account_client_settings; DROP TABLE character_client_settings");
                 if (oldVersion < 4) Execute(db, "DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages");
                 if (oldVersion is 3 or 4) Execute(db, "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_source TO resource_sha256");
+                // 拍卖行挂牌表只出现在 v37：模拟 1..36 的旧库都必须把该表与三个索引一起移除
+                // （不能用「改版本号」冒充旧库，否则 v37 的 CREATE 会撞表）。
+                if (oldVersion < 37) DropAuctionListings(db);
                 if (oldVersion < 3)
                     Execute(db, "DROP TABLE character_dungeon_growth_receipts");
                 if (oldVersion == 1)
@@ -1205,6 +1307,8 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=1");
+            // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+            DropAuctionListings(db);
             Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
         }
         string before = Snapshot(rollback);
@@ -1219,6 +1323,8 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_dungeon_settlement_receipts; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=9; CREATE TABLE character_dungeon_settlement_receipts(collision INTEGER)");
+            // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+            DropAuctionListings(db);
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,experience,gold) VALUES('keep',0,'ClearKeep',11,38,1,450,234,0,321,456)");
         }
         string clearBefore = Snapshot(clearRollback);
@@ -1233,6 +1339,8 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=12");
+            // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+            DropAuctionListings(db);
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('keep',0,'QuestKeep',11,38,1,450,234,0)");
             Execute(db, "INSERT INTO character_active_main_quests VALUES(1,0,3145,1)");
         }
@@ -1404,7 +1512,7 @@ internal static class DatabaseSchemaTests
                     INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold) VALUES(1,'title-legacy',0,'TitleLegacy',9,38,1,450,234,0,123);
                     INSERT INTO character_inventory_items(item_uid,character_id,account,item_core) VALUES(87,1,'title-legacy','{"ItemId":26596,"Kind":1,"Value":123,"EnchantCardId":3185}');
                     INSERT INTO character_inventory_slots(character_id,account,list_type,slot_index,item_uid) VALUES(1,'title-legacy',0,9,87);
-                    PRAGMA user_version=24;
+                    DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings; PRAGMA user_version=24;
                     """);
                 if (fail) Execute(db, "CREATE TABLE character_title_progress(collision INTEGER)");
             }
@@ -1482,6 +1590,8 @@ internal static class DatabaseSchemaTests
         RewindDropCollection(db);
         if (!keepFatigue)
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue");
+        // 已发布v13没有拍卖行挂牌表；回退到该版本时一并移除，避免真实v14/v17库带表执行后续DDL。
+        DropAuctionListings(db);
         Execute(db, "PRAGMA foreign_keys=OFF");
         Execute(db, "DROP TABLE character_quest_skip_receipts; DROP TABLE character_quest_drop_receipts; DROP TABLE account_completed_quests; DROP TABLE character_quest_lifecycle_receipts");
         Execute(db, "ALTER TABLE characters DROP COLUMN equipment_slot_flags; ALTER TABLE characters DROP COLUMN quest_cycle_day; ALTER TABLE character_completed_quests DROP COLUMN answer; ALTER TABLE character_completed_quests DROP COLUMN daily_period");
@@ -1503,6 +1613,8 @@ internal static class DatabaseSchemaTests
         RemoveTutorialSchema(db);
         RemoveTitleSchema(db);
         Execute(db, "PRAGMA user_version=13; PRAGMA foreign_keys=ON");
+        // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+        DropAuctionListings(db);
     }
 
     private static string[] TableNames(SqliteConnection db)
@@ -1589,6 +1701,8 @@ internal static class DatabaseSchemaTests
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
             Execute(db, "PRAGMA user_version=23");
+            // 挂牌表只由 v37 建出：回退到更早版本的夹具必须把它一起移除。
+            DropAuctionListings(db);
             originalRow = Rows(db, "account_completed_quests", ColumnNames(db, "account_completed_quests"));
             Check(Query(db, "SELECT \"notnull\" FROM pragma_table_info('account_completed_quests') WHERE name='character_id'") is 1L,
                 "v23夹具保留来源角色非空约束");
@@ -1693,6 +1807,7 @@ internal static class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             Execute(db, "PRAGMA user_version=25");
+            DropAuctionListings(db);
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,gold) VALUES('old',0,'OldLevel1',7,38,1,450,234,0,1,123)");
             Execute(db, "INSERT INTO character_title_progress VALUES(1,'old',6501,1,2,3,0); INSERT INTO character_title_sections VALUES(1,'old',0,1)");
             Execute(db, "CREATE VIEW character_tutorial_receipts AS SELECT id FROM characters");
@@ -1782,6 +1897,19 @@ internal static class DatabaseSchemaTests
         using var command = db.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    // 夹具在独立连接上还原旧版本结构与版本号，不进入正常初始化路径。
+    private static void ExecuteOn(string path, Action<SqliteConnection> change)
+    {
+        using var db = Open(path);
+        change(db);
+    }
+
+    private static object? QueryOn(string path, string sql)
+    {
+        using var db = Open(path);
+        return Query(db, sql);
     }
 
     private static string Snapshot(string path)

@@ -16,12 +16,30 @@ internal sealed partial class CharacterRepository
         return FindMailRecipient(db, null, name);
     }
 
-    static MailboxRecipient? FindMailRecipient(SqliteConnection db, SqliteTransaction? tx, string name)
+    /// <summary>
+    /// 收件人查询的列只有这一份：按**名字**（寄送 / 系统投递）与按**角色 id**（拍卖行一口价购买的托管行）
+    /// 两条入口共用同一条 SELECT 与同一个读取器，避免两处列顺序漂移。
+    /// </summary>
+    const string RecipientColumns = "id,account,name,job,grow_type,level";
+
+    static MailboxRecipient? FindMailRecipient(SqliteConnection db, SqliteTransaction? tx, string name) =>
+        FindRecipient(db, tx, "name=$key", name);
+
+    /// <summary>
+    /// **在调用方的事务内**按角色 id 查收件人。拍卖行购买必须这样重查卖方角色行：
+    /// 邮件表有指向 `characters(id,account)` 的外键，卖家是机器人（`seller_character_id IS NULL`）
+    /// 或角色行已被删除时**不能插托管行** —— 先插再等约束报错会把整笔成交回滚。
+    /// 查不到返回 null，由调用方按「机器人卖家 / 收件人缺失」跳过金币托管（成交照常）。
+    /// </summary>
+    internal static MailboxRecipient? FindMailRecipientById(SqliteConnection db, SqliteTransaction? tx, long characterId) =>
+        FindRecipient(db, tx, "id=$key", characterId);
+
+    static MailboxRecipient? FindRecipient(SqliteConnection db, SqliteTransaction? tx, string condition, object key)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
-        command.CommandText = "SELECT id,account,name,job,grow_type,level FROM characters WHERE name=$name";
-        command.Parameters.AddWithValue("$name", name);
+        command.CommandText = $"SELECT {RecipientColumns} FROM characters WHERE {condition}";
+        command.Parameters.AddWithValue("$key", key);
         using var reader = command.ExecuteReader();
         return reader.Read() ? new(checked((ushort)reader.GetInt32(0)), reader.GetString(1), reader.GetString(2),
             checked((byte)reader.GetInt32(3)), checked((byte)reader.GetInt32(4)), checked((byte)reader.GetInt32(5))) : null;
@@ -354,26 +372,33 @@ internal sealed partial class CharacterRepository
 
     public MailboxResult DeliverMail(MailboxDelivery delivery)
     {
+        // 形状校验在开库之前（与既有行为一致）：非法请求不申请 writer、不开事务。
+        if (!ValidDelivery(delivery))
+            return MailboxResult.Reject(MailboxError.InvalidRequest);
         using var db = database.Open();
         using var tx = db.BeginTransaction(deferred: false);
-        var result = DeliverMailInTransaction(db, tx, delivery);
+        var (error, mailId) = DeliverMailInTransaction(db, tx, delivery);
+        if (error != MailboxError.None)
+            return MailboxResult.Reject(error);  // 未提交：using 释放事务即回滚，不留半封邮件
         tx.Commit();
-        return result;
+        return new(MailboxError.None, MailId: mailId) { Recipient = delivery.Recipient };
     }
 
-    // 通关等资产业务复用外层事务；不能在奖励写事务内另开系统邮件写事务。
-    static MailboxResult DeliverMailInTransaction(SqliteConnection db, SqliteTransaction tx, MailboxDelivery delivery)
+    /// <summary>
+    /// 托管投递的**事务内**实现：与 <see cref="DeliverMail"/> 共用同一份 SQL、同一条幂等键规则与同一份校验，
+    /// **不自己开连接、不申请 writer、不提交** —— 由调用方拥有事务。
+    ///
+    /// 为什么必须能这样复用：拍卖行一口价购买要把「买方扣款 + 挂牌置为已成交 + 两封托管邮件」放进
+    /// **同一个外层事务**，而 <see cref="DeliverMail"/> 自己 `BeginTransaction`，在那个事务里再调它
+    /// 会等自己的 writer 直到超时。跨账号资产不允许出现半成品，因此不另写第二份 INSERT。
+    ///
+    /// 幂等键命中时**只读**：内容不同直接抛异常（同一 key 不可能有两种资产），内容相同返回既有邮件 id。
+    /// </summary>
+    internal static (MailboxError Error, uint MailId) DeliverMailInTransaction(SqliteConnection db, SqliteTransaction tx, MailboxDelivery delivery)
     {
-        if (string.IsNullOrWhiteSpace(delivery.Key) || delivery.Key.Length > 128 || delivery.Items.IsDefault || delivery.Items.Length > 10 ||
-            delivery.Items.Any(item => item.Uid != 0) || delivery.Gold > int.MaxValue || delivery.Created < 0 || delivery.Expires <= delivery.Created ||
-            delivery.SenderName.Contains('\0') || CharacterName.Encoding.GetByteCount(delivery.SenderName) > 29 ||
-            delivery.Text.Contains('\0') || CharacterName.Encoding.GetByteCount(delivery.Text) > 511)
-            return MailboxResult.Reject(MailboxError.InvalidRequest);
-        foreach (var item in delivery.Items)
-        {
-            item.Core.Validate();
-            item.ValidateDetails(true);
-        }
+        if (!ValidDelivery(delivery))
+            return (MailboxError.InvalidRequest, 0);
+        // 幂等键比对用的内容串由 `MailDeliveryContent` 统一产出（字段与顺序与既有行完全一致）。
         string content = MailDeliveryContent(delivery);
         using var command = db.CreateCommand();
         command.Transaction = tx;
@@ -384,10 +409,11 @@ internal sealed partial class CharacterRepository
             {
                 if (reader.GetString(1) != content)
                     throw new InvalidOperationException("同一系统邮件 key 的资产或接收者已变化");
-                return new(MailboxError.None, MailId: checked((uint)reader.GetInt64(0))) { Recipient = delivery.Recipient };
+                return (MailboxError.None, checked((uint)reader.GetInt64(0)));
             }
-        if (FindMailRecipient(db, tx, delivery.Recipient.Name) != delivery.Recipient)
-            return MailboxResult.Reject(MailboxError.RecipientMissing);
+        // 按角色 id 重查收件人：查不到就返回 RecipientMissing（购买路径据此跳过托管行，而不是让外键回滚整笔）。
+        if (FindMailRecipientById(db, tx, delivery.Recipient.Id) != delivery.Recipient)
+            return (MailboxError.RecipientMissing, 0);
         uint id = InsertMail(db, tx, delivery.Recipient, 0, delivery.SenderName, delivery.Text, delivery.Gold,
             delivery.Created, delivery.Expires, delivery.Key, content);
         var held = ImmutableArray.CreateBuilder<InventoryItem>();
@@ -399,7 +425,26 @@ internal sealed partial class CharacterRepository
         }
         AuditMail(db, tx, id, delivery.Recipient.Account, delivery.Recipient.Id, 0, "system", delivery.Created,
             new { delivery.Key, delivery.Gold, Items = held.ToImmutable() });
-        return new(MailboxError.None, MailId: id) { Recipient = delivery.Recipient };
+        return (MailboxError.None, id);
+    }
+
+    /// <summary>
+    /// 托管投递的形状校验（字段上限、物品核心与详情）。**非法核心会抛异常**（与既有 DeliverMail 一致）：
+    /// 那是调用方给了坏物品，不是「请求非法」，不能静默当成一次被拒绝的投递。
+    /// </summary>
+    static bool ValidDelivery(MailboxDelivery delivery)
+    {
+        if (string.IsNullOrWhiteSpace(delivery.Key) || delivery.Key.Length > 128 || delivery.Items.IsDefault || delivery.Items.Length > 10 ||
+            delivery.Items.Any(item => item.Uid != 0) || delivery.Gold > int.MaxValue || delivery.Created < 0 || delivery.Expires <= delivery.Created ||
+            delivery.SenderName.Contains('\0') || CharacterName.Encoding.GetByteCount(delivery.SenderName) > 29 ||
+            delivery.Text.Contains('\0') || CharacterName.Encoding.GetByteCount(delivery.Text) > 511)
+            return false;
+        foreach (var item in delivery.Items)
+        {
+            item.Core.Validate();
+            item.ValidateDetails(true);
+        }
+        return true;
     }
 
     static void WriteOverflowMail(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner,

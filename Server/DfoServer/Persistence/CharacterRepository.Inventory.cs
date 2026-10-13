@@ -3,8 +3,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Auction;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Mailbox;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Currency;
 
@@ -12,6 +14,210 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
+    /// <summary>
+    /// 挂牌表 SQL。与角色库指向同一个数据库文件，因此能与背包扣减共用同一个写事务。
+    /// 与邮箱同一形态：接口由本仓储实现、SQL 委托给同层的专用仓储，避免两个仓储互相构造。
+    /// </summary>
+    readonly AuctionListingRepository auctionListings = new(path);
+
+    /// <summary>
+    /// 上架提交（<see cref="IAuctionListingStore"/> 的写路径）：**背包扣减与新挂牌在同一个外层事务里**。
+    ///
+    /// 为什么必须在这里（而不是先调 <see cref="CommitInventory"/> 再单独插一行）：SQLite 同一个文件
+    /// 只有一个 writer，分两次提交会出现「背包扣了、挂牌没写上」的半成品，而拍卖行上架是**会改背包资产**
+    /// 的操作，半成品只能靠人工补偿。参考实现把上架写成「扣道具 + 写挂牌 + 审计」同一事务，这里沿用同一口径：
+    /// 本方法拥有事务，<see cref="CommitInventoryInTransaction"/> 只参与、不提交；挂牌插入失败时抛异常，
+    /// 事务未提交 ⇒ 背包、审计、revision 与挂牌表一起回滚。
+    ///
+    /// owner / revision / 背包快照的复核由 <see cref="CommitInventoryInTransaction"/> 在写事务内完成
+    /// （它内部重新 `Require` 角色并比对完整背包快照），因此这里只按提交后的角色补挂牌明细，
+    /// 不重复维护第二套一致性检查。
+    /// </summary>
+    public AuctionListingRegisterResult RegisterListing(AccountOwners.Lease owner, Character expected, AuctionRegisterPlan plan) =>
+        owner.Execute(() =>
+        {
+            using var db = database.Open();
+            using var transaction = db.BeginTransaction(deferred: false);
+            var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
+            AuctionListingRepository.InsertListing(db, transaction, plan, character);
+            transaction.Commit();
+            return new AuctionListingRegisterResult(AuctionRegisterError.None, character);
+        });
+
+    /// <summary>
+    /// 取消上架提交（<see cref="IAuctionListingStore"/> 的另一条写路径）：**道具还回背包 + 挂牌置为已下架 +
+    /// 背包审计在同一个外层事务里**。与 <see cref="RegisterListing"/> 反方向、同一口径：
+    ///   ① 先生成背包写入（发放实例走既有的 <c>CommitInventoryInTransaction</c>，含 revision 复核与完整背包快照比对）；
+    ///   ② 再在**同一事务**内复核「这行仍是当前角色的、且仍在售」并置为已下架；
+    ///   ③ 任一步失败都抛异常 ⇒ 事务不提交 ⇒ **既不会丢道具，也不会出现「挂牌没了但道具没回来」**。
+    /// 事务由本方法拥有，两步都只参与、不提交。
+    /// </summary>
+    public AuctionListingCancelResult CancelListing(AccountOwners.Lease owner, Character expected, AuctionCancelPlan plan) =>
+        owner.Execute(() =>
+        {
+            using var db = database.Open();
+            using var transaction = db.BeginTransaction(deferred: false);
+            var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
+            AuctionListingRepository.MarkCancelled(db, transaction, plan.ListingId, character.Id);
+            transaction.Commit();
+            return new AuctionListingCancelResult(AuctionCancelError.None, character);
+        });
+
+    /// <summary>
+    /// 到期结算提交（**到期未售**）：**挂牌置为已过期 + 一封系统退回邮件（道具 + 退还的保证金）
+    /// 在同一个外层事务里**，事务由本方法拥有。
+    ///
+    /// 与 <see cref="BuyListing"/> 同形的两点：① 只写挂牌行与邮件行，**不改卖家角色行** ——
+    /// 保证金进托管邮件（卖家在自己的邮箱里领取），因此没有 revision 依赖、也不需要第二把租约；
+    /// ② 幂等判据是条件更新 `state=0 → 3`，影响 0 行就跳过这一行并记原因，绝不重复退钱/退物。
+    ///
+    /// 批量语义：一行失败（投递被拒）会让**整批**回滚 —— 这批里其它行的状态与邮件一起退回，
+    /// 下次访问重试。宁可整批重来，也不留下「状态流转了但邮件没发出去」的半成品。
+    /// </summary>
+    public AuctionExpiryResult SettleExpiredListings(AccountOwners.Lease owner, Character expected, AuctionExpiryPlan plan) =>
+        owner.Execute(() =>
+        {
+            if (plan.IsEmpty && plan.Skipped.IsDefaultOrEmpty)
+                return AuctionExpiryResult.None;
+            if (expected.Id != plan.SellerCharacterId)
+                throw new InvalidOperationException($"到期结算的卖家 {plan.SellerCharacterId} 与计划不一致（当前角色 {expected.Id}）");
+            using var db = database.Open();
+            using var transaction = db.BeginTransaction(deferred: false);
+            var receipts = ImmutableArray.CreateBuilder<AuctionExpiryRow>(plan.Rows.Length);
+            foreach (var row in plan.Rows)
+            {
+                // ① 状态条件更新：0 行 = 这一行已被下架/成交/并发结算 ⇒ 跳过，不发行邮件。
+                if (!AuctionListingRepository.TryMarkExpired(db, transaction, row.ListingId, plan.SellerCharacterId))
+                {
+                    receipts.Add(row with { Delivered = false, Note = "条件更新 state=0→3 影响 0 行：已被下架、成交或并发结算" });
+                    continue;
+                }
+                // ② 退回邮件：收件人就是当前角色（本人），角色行必然存在；投不出去整批回滚。
+                var recipient = FindMailRecipientById(db, transaction, plan.SellerCharacterId)
+                    ?? throw new InvalidOperationException($"到期退回邮件的收件人角色行不存在：{plan.SellerCharacterId}");
+                var (error, mailId) = DeliverMailInTransaction(db, transaction, new MailboxDelivery(row.Mail.Key, recipient,
+                    row.Mail.SenderName, row.Mail.Text, row.Mail.Gold, row.Mail.Items, row.Mail.Created, row.Mail.Expires));
+                if (error != MailboxError.None)
+                    throw new InvalidOperationException($"到期退回邮件投递失败（{error}）：key={row.Mail.Key} 收件人={plan.SellerCharacterId}");
+                receipts.Add(row with { Delivered = true, Note = $"mail_id={mailId}（保证金 {row.Mail.Gold} 金币 + 道具已退回）" });
+            }
+            transaction.Commit();
+            return new AuctionExpiryResult(receipts.ToImmutable(), plan.Skipped);
+        });
+
+    /// <summary>
+    /// 一口价购买提交（<see cref="IAuctionListingStore"/> 的第三条写路径，也是本仓库唯一**跨账号**的写入）：
+    /// **买方扣款 + 挂牌置为已成交 + 买方道具托管行 + 卖方金币托管行在同一个外层事务里**。
+    ///
+    /// 只取**买方**一把租约：卖方不取锁、不改其角色行（他可能在线并持有旧快照，改他的行会让对方下一笔写入
+    /// 在 revision 复核处被拒）。卖方所得只能进**托管邮件**，卖方在自己的会话里领取时才落进钱包。
+    /// 锁序与事务边界见[并发、事务与响应延迟](../../../../Docs/规范/并发事务与响应延迟.md#跨账号转移拍卖行一口价购买)。
+    ///
+    /// 四步顺序不能变，任何一步失败都抛异常 ⇒ 事务不提交 ⇒ 买卖双方资产、挂牌状态、审计与托管行一起回退：
+    ///   ① 事务内重读挂牌并复核**内容**（一口价 / 数量 / 模板 / 卖家）与过期时间；
+    ///   ② 挂牌条件更新 `state=0→1` 且**影响行数必须为 1**（为 0 抛 <see cref="AuctionBuyRaceLostException"/>）；
+    ///   ③ 买方扣款走既有背包提交器（revision 复核 + `currency_audit_log` 同一路径，**不写裸 SQL 改金币列**）；
+    ///   ④ 托管邮件：买方道具（必须投出去）+ 卖方所得（角色行不存在就**跳过**，绝不触发外键回滚整笔成交）。
+    /// ② 在 ③ 之前不是随意的：挂牌行是**先于买方角色**取的资源（见
+    /// [并发、事务与响应延迟](../../../../Docs/规范/并发事务与响应延迟.md#锁序) 的锁序
+    /// 「挂牌行 → 买方角色 → 托管邮件行」），而且这样「这一行已经被买走」在**任何一笔写之前**
+    /// 就能判出来：重复点击/并发第二笔直接整体拒绝，不会先扣一次钱再回滚。
+    ///
+    /// ★ **道具不进买方背包**：进托管邮件，容量判定发生在领取时。购买时直接入包就必须补发含金币槽的
+    /// 背包差量，而客户端 185 回调已本地乐观扣过一次金币，补发会被叠加成「再扣一次」。
+    /// </summary>
+    public AuctionListingBuyResult BuyListing(AccountOwners.Lease owner, Character expected, AuctionBuyPlan plan) =>
+        owner.Execute(() =>
+        {
+            using var db = database.Open();
+            using var transaction = db.BeginTransaction(deferred: false);
+
+            // ① 事务内重读挂牌：只复核内容与过期；**状态竞态留给 ② 的条件更新**——
+            //    在这里先判一次 state 会让「影响行数必须为 1」那条唯一幂等判据永远走不到。
+            if (RejectStaleBuy(AuctionListingRepository.LoadListing(db, transaction, plan.ListingId), plan) is { } reject)
+                return reject;
+
+            // ② 挂牌置为已成交（条件更新，影响 0 行即整笔回滚并翻成静默码 0x7e）。
+            AuctionListingRepository.MarkSold(db, transaction, plan.ListingId, plan.SettledAtUnix);
+
+            // ③ 买方扣款。
+            var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
+
+            // ④ 托管邮件。
+            var custody = ImmutableArray.CreateBuilder<AuctionCustodyReceipt>(plan.Custody.Length);
+            foreach (var mail in plan.Custody)
+            {
+                var recipient = FindMailRecipientById(db, transaction, mail.RecipientCharacterId);
+                if (recipient is null)
+                {
+                    // ⚠ 邮件表有指向 characters(id,account) 的外键：**不能先插再等约束报错**。
+                    //    机器人卖家（seller_character_id IS NULL）与「卖方角色行已删除」都是**合法数据**，
+                    //    金币不入账 = 系统回收，由日志与「是否生成托管行」本身作为可核对证据。
+                    if (mail.Required)
+                        throw new InvalidOperationException($"托管收件人角色行不存在：{mail.RecipientCharacterId}（这封不可跳过）");
+                    custody.Add(new(mail.Key, mail.RecipientCharacterId, mail.Gold, Delivered: false,
+                        "卖方角色行不存在（机器人卖家或已被删除）：金币不入账，成交照常"));
+                    continue;
+                }
+                var (error, mailId) = DeliverMailInTransaction(db, transaction, new MailboxDelivery(mail.Key, recipient,
+                    mail.SenderName, mail.Text, mail.Gold, mail.Items, mail.Created, mail.Expires));
+                if (error != MailboxError.None)
+                    throw new InvalidOperationException($"托管邮件投递失败（{error}）：key={mail.Key} 收件人={mail.RecipientCharacterId}");
+                custody.Add(new(mail.Key, mail.RecipientCharacterId, mail.Gold, Delivered: true, $"mail_id={mailId}"));
+            }
+
+            transaction.Commit();
+            return new AuctionListingBuyResult(AuctionBuyError.None, character) { Custody = custody.ToImmutable() };
+        });
+
+    /// <summary>
+    /// 购买提交前的事务内**内容**复核：返回 null 表示可以继续成交，否则返回要拒绝的结果（事务随
+    /// `using` 回滚，不写任何一行）。
+    ///
+    /// 两条判据：
+    ///   - 行不见了 / 已过期 ⇒ <see cref="AuctionBuyError.RaceLost"/>（静默 `0x7e`：操作前提已经没了）；
+    ///   - 价格、数量、模板或卖家与规划不一致 ⇒ <see cref="AuctionBuyError.StalePlan"/>（通用 `0xd2`）：
+    ///     成交价一律取库里的值，但**绝不在内容变了之后按旧计划结算**。
+    /// </summary>
+    static AuctionListingBuyResult? RejectStaleBuy(AuctionListing? listing, AuctionBuyPlan plan)
+    {
+        if (listing is null)
+            return AuctionListingBuyResult.Reject(AuctionBuyError.RaceLost, $"挂牌 {plan.ListingId} 在提交前被删除");
+        if (listing.ExpiresAtUnix <= plan.SettledAtUnix)
+            return AuctionListingBuyResult.Reject(AuctionBuyError.RaceLost,
+                $"挂牌 {plan.ListingId} 在提交前过期（{listing.ExpiresAtUnix} ≤ {plan.SettledAtUnix}）");
+        if (listing.BuyoutPrice != plan.UnitPrice || listing.ItemCount != plan.ItemCount ||
+            listing.ItemTemplateId != plan.ItemTemplateId || listing.SellerCharacterId != plan.SellerCharacterId)
+            return AuctionListingBuyResult.Reject(AuctionBuyError.StalePlan,
+                $"挂牌 {plan.ListingId} 的内容在规划后变化：单价 {listing.BuyoutPrice}/{plan.UnitPrice}、" +
+                $"数量 {listing.ItemCount}/{plan.ItemCount}、模板 {listing.ItemTemplateId}/{plan.ItemTemplateId}、" +
+                $"卖家 {listing.SellerCharacterId?.ToString() ?? "NULL"}/{plan.SellerCharacterId?.ToString() ?? "NULL"}");
+        return null;
+    }
+
+    // —— 只读查询直接委托同层仓储：分类过滤、分页与在售口径由那边一份实现负责 ——
+
+    public AuctionListing? LoadListing(int listingId) => auctionListings.LoadListing(listingId);
+
+    public AuctionSearchPage Search(AuctionSearchFilter filter, long now, int offset, int limit) =>
+        auctionListings.Search(filter, now, offset, limit);
+
+    public ImmutableArray<AuctionListing> LoadMatches(AuctionSearchFilter filter, long now) =>
+        auctionListings.LoadMatches(filter, now);
+
+    public int CountListings() => auctionListings.CountListings();
+
+    public ImmutableArray<AuctionListing> LoadSellerListings(long sellerCharacterId, long now, bool includeInactive) =>
+        auctionListings.LoadSellerListings(sellerCharacterId, now, includeInactive);
+
+    public int CountSellerListings(long sellerCharacterId, long now) => auctionListings.CountSellerListings(sellerCharacterId, now);
+
+    /// <summary>到期结算的输入（该卖家已到期且仍在售的挂牌）：与两条「我的拍卖品」读路径共用同一份在售口径。</summary>
+    public ImmutableArray<AuctionListing> LoadExpiredListings(long sellerCharacterId, long now) =>
+        sellerCharacterId <= 0 ? [] : auctionListings.LoadExpiredListings(sellerCharacterId, now);
+
+    public void InsertListings(ImmutableArray<AuctionListingDraft> listings) => auctionListings.InsertListings(listings);
+
     public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => owner.Execute(() =>
     {
         ValidateInventoryPlan(expected, plan);
@@ -34,7 +240,13 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("业务不能修改账号资产版本");
     }
 
-    Character CommitInventoryInTransaction(SqliteConnection db, SqliteTransaction transaction, AccountOwners.Lease owner,
+    /// <summary>
+    /// 在已有连接/事务内写背包（含 revision 复核、UID 分配、槽位、detail 与审计）。
+    /// **只参与，不提交**：调用方拥有事务（见 <see cref="CommitInventory"/> 与
+    /// <see cref="AuctionListingRepository.RegisterListing"/> 的「背包 + 挂牌同事务」）。
+    /// 同程序集内可见是为了让同一库文件的其它仓储复用这一份唯一实现，而不是各自另写一套扣减 SQL。
+    /// </summary>
+    internal Character CommitInventoryInTransaction(SqliteConnection db, SqliteTransaction transaction, AccountOwners.Lease owner,
         Character expected, InventoryPlan plan, IReadOnlySet<long>? retained = null, IReadOnlyDictionary<long, InventoryItem>? incoming = null)
     {
         ValidateInventoryPlan(expected, plan);

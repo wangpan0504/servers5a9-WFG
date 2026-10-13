@@ -39,6 +39,8 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --data-dir <目录>          存档目录，默认 Data，数据库名为 game.db
           --session-ttl <秒>         认证元数据有效期，默认 300
           --dungeon-entry-probe <模式>  独立开发诊断，默认 Disabled
+          --auction-probe <参数>     拍卖行应答记录布局探针，默认关闭（关闭时走真实挂牌数据）
+          --auction-seed <条数>      开发用拍卖行种子条数，默认 0（不种子）；表内已有挂牌时不写入
           --packet-capture [目录]    启动并记录应用层帧
           --selftest-core            基础自测，无需 PVF
           --selftest                 完整服务端自测
@@ -63,7 +65,8 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
         int index = 0;
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         while (index < args.Length && args[index] is "--server-ip" or "--listen-ip" or
-            "--channel-port" or "--game-port" or "--channel-entry-port-base" or "--gm-port" or "--packet-http-port" or "--session-ttl" or "--dungeon-entry-probe" or "--pvf-path" or "--data-dir")
+            "--channel-port" or "--game-port" or "--channel-entry-port-base" or "--gm-port" or "--packet-http-port" or "--session-ttl" or
+            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--pvf-path" or "--data-dir")
         {
             string name = args[index++];
             if (index == args.Length || string.IsNullOrWhiteSpace(args[index]) || args[index].StartsWith("--", StringComparison.Ordinal))

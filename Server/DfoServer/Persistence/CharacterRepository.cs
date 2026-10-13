@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Auction;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using Microsoft.Data.Sqlite;
@@ -7,7 +8,10 @@ using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Persistence;
 
-internal sealed partial class CharacterRepository(string path, DfoServer.GameWorld.Quests.QuestCatalog? quests = null) : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore
+// 领域存储合同的实现集中在本仓储（邮件、拍卖行挂牌）：它们都要与角色资产共用同一个写事务，
+// 因此按合同声明的形状实现，而不是让每个模块各自持有第二个仓储实例（那会变成互相构造）。
+internal sealed partial class CharacterRepository(string path, DfoServer.GameWorld.Quests.QuestCatalog? quests = null)
+    : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore, IAuctionListingStore
 {
     readonly SqliteGameDatabase database = new(path);
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>

@@ -55,6 +55,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await titles.InitializeAsync(context);
         if (adventure is not null)
             await adventure.InformationAsync(context, initialization: true);
+        // 拍卖行服务开启通知：本服尚未实现拍卖行玩法，先按已确认的 183 包体发送，用于确认客户端是否以它作为拍卖行 UI 的前置。
+        await context.Notify(NotiPacketType.AUCTION_NOTIFY_AUCTION_SERVICE, AuctionPackets.ServiceNotice(AuctionPackets.ServiceTypeZero), "auction_service_notice_0");
+        await context.Notify(NotiPacketType.AUCTION_NOTIFY_AUCTION_SERVICE, AuctionPackets.ServiceNotice(AuctionPackets.ServiceTypeOne), "auction_service_notice_1");
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
         await context.NotifyProtected(NotiPacketType.EVENT_INFO, SeriaLuckPackets.EventInfoCompressed(), "seria_luck_event_initialize");

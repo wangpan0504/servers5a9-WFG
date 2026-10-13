@@ -68,6 +68,18 @@ internal sealed class ItemCatalog
             pendingTemplates.TryRemove(new KeyValuePair<int, Lazy<ItemTemplate>>(id, pending));
         }
     }
+
+    /// <summary>
+    /// 预置模板（**仅供核心自测**）：核心自测没有 PVF，无法从资源取模板，因此把显式构造的模板直接灌进
+    /// 同一个缓存。只填缓存、不改 <see cref="Load"/> 的解析逻辑——调用方走的仍是真实的
+    /// <see cref="Get"/> 命中路径，与 <c>AuctionCategoryResolver.PrefillSlots</c> 同一套做法。
+    /// 预置项覆盖同名真实模板（自测要的是确定的字段取值，不是现场 PVF 的内容）。
+    /// </summary>
+    internal void PrefillTemplates(IEnumerable<KeyValuePair<int, ItemTemplate>> prefilled)
+    {
+        foreach (var (id, template) in prefilled)
+            templates[id] = template;
+    }
     public static byte Slot(string tag) => EquipmentSlots.TryGetValue(tag, out var slot) ? slot : throw new InvalidDataException("未知普通装备类型: " + tag);
 
     // 在资源装配阶段枚举；正creation rate的普通道具完整解析，失败不得静默删除候选。

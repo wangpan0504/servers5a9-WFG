@@ -25,6 +25,18 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         bool seriaLuckChanged = plan.Before.AccountWallet.SeriaLuck != current.Inventory.AccountWallet.SeriaLuck;
         var changedSlots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
             .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct().ToArray();
+        if (result.WholeListRefresh)
+        {
+            // 整列重建：在**变化槽**（含要清空的源槽）之外，把该容器当前实际占用的每个槽与 Main 的虚拟货币槽
+            // 也一起发一遍，强制客户端丢弃并重新装载整个容器。这是解除「源槽仍被业务窗口持有」这类残留状态的
+            // 唯一可靠方式（拍卖行上架后背包不可操作就是这一种，见 InventoryResult.WholeListRefresh）。
+            // 与登录全量同一套编码：清空条目为目标 slot + itemId=-1，因此解引用走既有 Delta 语义，不手搓包体。
+            changedSlots = changedSlots
+                .Concat(current.Inventory.Items.Where(item => item.Position.List is InventoryListType.Main or InventoryListType.Avatar or
+                    InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.PersonalCargo).Select(item => item.Position))
+                .Concat(CurrencyPackets.VirtualSlots.Select(slot => new InventorySlot(InventoryListType.Main, slot)))
+                .Distinct().ToArray();
+        }
         var slots = changedSlots.Where(slot => acknowledgedSlots?.Contains(slot) != true).ToArray();
         bool rebuildMain = silentMainMove && changedSlots.Where(slot => slot.List == InventoryListType.Main)
             .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
@@ -75,7 +87,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             // 孵化替换先清旧蛋模板，再提交完整详情，最后让新宠物引用已到达的详情。
             if (hatchCreature && creatureDetailsChanged && list == InventoryListType.Pet)
                 await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
-            await context.Notify(updateType, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index), "inventory_committed_delta", CanSend);
+            await context.Notify(updateType, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index),
+                result.WholeListRefresh ? "inventory_whole_list_refresh" : "inventory_committed_delta", CanSend);
         }
         if (refreshEquipment && changedSlots.Any(slot => slot.List == InventoryListType.Equipment))
         {
