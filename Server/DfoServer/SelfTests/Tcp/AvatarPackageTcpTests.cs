@@ -82,6 +82,7 @@ internal static class AvatarPackageTcpTests
         var items = resources.ItemResources.Items;
         var rows = packages.Get(490705387).Categories.Single(row => row.Category == 0 && row.Subcategory == 0).Rows;
         var choices = rows.Select(row => new AvatarPackageChoice(row.ItemId, packages.GetAvatar(row.ItemId).Abilities.Max())).ToArray();
+        var avatarIds = choices.Select(choice => choice.ItemId).ToHashSet();
         var template = items.Get(rows[0].ItemId);
         var filled = Enumerable.Range(0, ItemSlotBoundService.AvatarCapacity).Select(slot => InventoryRewardGrantService.CreateItem(template,
             new(InventoryListType.Avatar, (short)slot), InventoryRewardGrantService.Create(template))).ToImmutableArray();
@@ -111,7 +112,7 @@ internal static class AvatarPackageTcpTests
             BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 73, -1, 0);
             peer.Expect(0, 99, [1, 0]); peer.Barrier();
             peer.Send(96); peer.Expect(1, 96, [1, 0, 0]);
-            var mailbox = MailboxTcpTests.ReadList(peer.Expect(0, 97).Body);
+            var mailbox = MailboxTcpTests.ReadList(peer.Expect(0, 97).Body, avatarIds);
             That(mailbox.Details.Length == 1 && mailbox.Summaries.Length == choices.Length &&
                 mailbox.Summaries.Select(row => row.ItemId).Order().SequenceEqual(choices.Select(choice => choice.ItemId).Order()),
                 "满装扮页把九件完整套装作为同一永久系统邮件保存和展示");
@@ -122,7 +123,7 @@ internal static class AvatarPackageTcpTests
             That(persisted.Length == choices.Length && persisted.All(row => Convert.ToInt64(row[1]) == int.MaxValue),
                 "Runtime默认开启商城调试后，每个邮件装扮详情保存2038截止；遗漏共享开关接线不能通过");
             foreach (var summary in mailbox.Summaries)
-                That(U16(summary.Core, 11) == choices.Single(choice => choice.ItemId == summary.ItemId).Ability, "邮件摘要保留各部位所选属性编号");
+                CheckAvatarMailSummary(summary, choices);
             peer.Barrier();
             string before = Snapshot(fixture);
             peer.Send(518, Cera(73, choices)); peer.Expect(1, 518, [0, 4, 0]); peer.Barrier();
@@ -141,9 +142,10 @@ internal static class AvatarPackageTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
-            var mailbox = MailboxTcpTests.ReadList(peer.Mailbox.Single());
+            var mailbox = MailboxTcpTests.ReadList(peer.Mailbox.Single(), avatarIds);
             That(mailbox.Details.Single().Id == mailId && mailbox.Summaries.Length == choices.Length, "服务重建恢复原九件邮件，无额外赠送");
             var summaries = mailbox.Summaries;
+            foreach (var summary in summaries) CheckAvatarMailSummary(summary, choices);
             long claimStarted = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             peer.Send(95, Build(writer => { writer.Write(1); writer.Write(mailId); }));
             peer.Expect(1, 95, Build(writer =>
@@ -152,7 +154,7 @@ internal static class AvatarPackageTcpTests
                 foreach (var summary in summaries) { writer.Write(summary.MailId); writer.Write(summary.ClaimId); writer.Write(0); }
             }));
             CheckAvatarRows(peer.Expect(0, 14).Body, choices, expectedExpiry: int.MaxValue, earliestUtcSeconds: claimStarted);
-            MailboxTcpTests.ReadList(peer.Expect(0, 97).Body);
+            MailboxTcpTests.ReadList(peer.Expect(0, 97).Body, avatarIds);
             peer.Barrier();
         }
         await fixture.StopAsync();
@@ -170,6 +172,22 @@ internal static class AvatarPackageTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "装扮礼盒邮件存档完整性");
+    }
+
+    static void CheckAvatarMailSummary(MailboxTcpTests.Summary summary, AvatarPackageChoice[] choices)
+    {
+        var extra = summary.Extra ?? throw new InvalidDataException("装扮邮件缺少RAW附加块");
+        That(U16(summary.Core, 11) == choices.Single(choice => choice.ItemId == summary.ItemId).Ability,
+            "邮件摘要保留各部位所选属性编号");
+        That(extra.Length == 42 && U32(extra, 0) == 30 && U32(extra, 34) == 4 && U16(extra, 38) == 0 && U16(extra, 40) == 0,
+            "邮件装扮摘要完整消费两RAW的42B孔位/颜色附加块");
+        for (int socket = 0; socket < 5; socket++)
+        {
+            bool skinSocket = summary.ItemId == 401580026 && socket < 2;
+            That(U16(extra, 4 + socket * 6) == (skinSocket ? 239 : 0) &&
+                U32(extra, 6 + socket * 6) == (skinSocket ? uint.MaxValue : 0),
+                "邮件摘要保留皮肤双空M孔及其他部位完整未开放孔位");
+        }
     }
 
     static void CheckAvatarRows(byte[] body, AvatarPackageChoice[] choices, bool full = false,

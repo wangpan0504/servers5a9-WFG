@@ -77,6 +77,9 @@ internal static class AvatarPackageTests
         var tail = body.ToArray(); tail[^1] = 1;
         Invalid(() => AvatarPackageRequests.Read(tail, 2, 2));
         var captured = AvatarPackageRequests.Read(CapturedSelection(), 9, 9);
+        That(AvatarPackageRequests.IsSelection(CapturedSelection()) && !AvatarPackageRequests.IsSelection(new byte[9]) &&
+            !AvatarPackageRequests.IsSelection(CapturedSelection()[..^1]),
+            "耗尽源只辨认完整已支持装扮选择，未知9B或截断扩展保持原未实现边界");
         That(AvatarPackageRequests.ReadHeader(CapturedSelection()) == ((short)73, (byte)0, (byte)0), "分类头由Parser统一读取实际源槽和两个分类键");
         Invalid(() => AvatarPackageRequests.ReadHeader(CapturedSelection()[..7]));
         var negativeSlot = CapturedSelection(); negativeSlot[0] = 255; negativeSlot[1] = 255;

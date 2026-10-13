@@ -19,14 +19,13 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
 
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
     {
+        short sourceSlot = BoosterRequests.ReadSourceSlot(packet.Body);
         var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         BoosterReceipt? receipt = null;
         InventoryResult result;
-        short sourceSlot = -1;
         bool avatarSource = false;
         try
         {
-            sourceSlot = BoosterRequests.ReadSourceSlot(packet.Body);
             var source = capture.Selected?.Inventory.Find(new(InventoryListType.Main, sourceSlot));
             var definition = avatars.Definition(source?.Core.ItemId ?? 0);
             avatarSource = definition.Recognized;
@@ -48,6 +47,9 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
                             InventoryResult.Reject(19), 19, requireTown: false);
                 }
             }
+            else if (source is null && packet.Body.Length > 6 && !BoosterRequests.IsItemSelection(packet.Body) &&
+                !AvatarPackageRequests.IsSelection(packet.Body))
+                return CommandResult.Unhandled;
             else if (source is null)
                 result = InventoryResult.Reject(19);
             else

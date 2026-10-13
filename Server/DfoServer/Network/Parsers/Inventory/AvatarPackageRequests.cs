@@ -5,6 +5,12 @@ namespace DfoServer.Network.Parsers.Inventory;
 
 internal static class AvatarPackageRequests
 {
+    public static bool IsSelection(ReadOnlySpan<byte> body)
+    {
+        try { return Read(body, 1, Math.Max(1, (body.Length - 10) / 4)).Choices.Length != 0; }
+        catch (InvalidDataException) { return false; }
+    }
+
     public static (short Slot, byte Category, byte Subcategory) ReadHeader(ReadOnlySpan<byte> body)
     {
         if (body.Length < 8) throw new InvalidDataException("装扮礼包请求分类头过短");

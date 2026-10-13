@@ -185,9 +185,9 @@ internal static class MailboxTcpTests
         }
         throw new InvalidOperationException("Missing mailbox delta slot " + slot);
     }
-    internal sealed record Summary(uint ClaimId, uint MailId, int ItemId, uint Gold, byte[] Core);
+    internal sealed record Summary(uint ClaimId, uint MailId, int ItemId, uint Gold, byte[] Core, byte[]? Extra = null);
     internal sealed record Detail(uint Id, string Text, ushort State);
-    internal static (Summary[] Summaries, Detail[] Details) ReadList(byte[] body)
+    internal static (Summary[] Summaries, Detail[] Details) ReadList(byte[] body, IReadOnlySet<int>? avatarItems = null)
     {
         using var stream = new MemoryStream(body);
         using var reader = new BinaryReader(stream);
@@ -199,8 +199,18 @@ internal static class MailboxTcpTests
             uint gold = reader.ReadUInt32(); int item = reader.ReadInt32(); _ = reader.ReadByte();
             _ = reader.ReadBytes(15);
             var core = reader.ReadBytes(123);
+            byte[]? extra = null;
+            if (avatarItems?.Contains(item) == true)
+            {
+                long start = stream.Position;
+                That(reader.ReadInt32() == 30, "邮件时装摘要孔位RAW完整30B");
+                That(reader.ReadBytes(30).Length == 30, "邮件时装摘要不截断孔位字段");
+                That(reader.ReadInt32() == 4, "邮件时装摘要颜色RAW完整4B");
+                That(reader.ReadBytes(4).Length == 4, "邮件时装摘要不截断颜色字段");
+                extra = body.AsSpan(checked((int)start), 42).ToArray();
+            }
             _ = reader.ReadInt32(); uint mail = reader.ReadUInt32(); _ = reader.ReadByte();
-            summaries.Add(new(claim, mail, item, gold, core));
+            summaries.Add(new(claim, mail, item, gold, core, extra));
         }
         _ = reader.ReadUInt16(); int detailsCount = reader.ReadUInt16();
         var details = new List<Detail>();
