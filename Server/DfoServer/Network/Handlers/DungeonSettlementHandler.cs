@@ -172,7 +172,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             if (retry is null) return CommandResult.Unhandled;
             bool RetryGuard() => context.Session.CanPublishDungeonSettlement(retry);
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_retry", RetryGuard);
-            await context.Notify(NotiPacketType.EPLP_RECHALLENGE, [9], "formal_retry_ready", RetryGuard);
+            // 261只更新结算页的再挑战资格，不能结束旧Scene；27沿已核验入口切换场景并清理旧结算层。
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(), "formal_retry_scene_transition", RetryGuard);
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(retry.Entry), "formal_retry_information", RetryGuard);
             await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed), "formal_retry_start_map", RetryGuard);
             return CommandResult.Handled;

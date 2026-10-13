@@ -281,7 +281,7 @@ internal static partial class FormalDungeonTcpTests
                 "付费或黄金牌先选后自动免费揭示仍保留同一付费奖励，计时不会覆盖已取得牌面");
             That(DrainCardInventory(peer) > 0,
                 "付费先选后的自动免费与黑钻领取仍实际发布各自库存差量");
-            peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 261, [9]);
+            peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 27, new byte[42]);
             peer.Expect(0, 28);
             byte[] retryMap = peer.Expect(0, 29).Body;
             That(U16(retryMap, 25) > U16(map, 25), "再挑战创建新Run、新尝试及新怪key");
@@ -833,7 +833,7 @@ internal static partial class FormalDungeonTcpTests
                 "普通六图免费牌实际发奖且领取位落库，不能仅凭35展示判定结算完成");
             peer.Send(72, [1, 0]);
             peer.Expect(1, 72, [1, 1, 0]);
-            peer.Expect(0, 261, [9]);
+            peer.Expect(0, 27, new byte[42]);
             That(U32(peer.Expect(0, 28).Body, 0) == dungeonId && U32(peer.Expect(0, 29).Body, 14) == startMap.Id,
                 "普通六图结算再挑战保持原资源路线，创建新的尝试");
             Load(peer);
@@ -1057,7 +1057,7 @@ internal static partial class FormalDungeonTcpTests
         That(selectedCard.Length == 33 && selectedCard[0] == 1 && selectedCard[1] == 0 && DrainCardInventory(peer) > 0 &&
             fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0 AND instance_id=(SELECT instance_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0 AND quest_id=0)", peer.Id) is [[1L]],
             "领奖后普通免费牌实际提交资产和领取位，不以结算候选展示代替发奖");
-        peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 261, [9]);
+        peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 27, new byte[42]);
         That(peer.Expect(0, 28).Body[7] == 0 && U32(peer.Expect(0, 29).Body, 14) == 58548,
             "普通结算再挑战真实通知重新加载普通起点，保持任务字段0");
         Load(peer); ExpectFatigue(7);
