@@ -14,6 +14,7 @@ internal static class SelfTestRunner
     public static async Task RunCoreAsync()
     {
         CommandLineTests.Run();
+        await Testing.TcpTestArtifactsTests.RunAsync();
         CashShopTests.RunCore();
         PremiumContractTests.RunCore();
         EnchantmentTests.RunCore();
