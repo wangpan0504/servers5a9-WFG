@@ -28,19 +28,17 @@ internal static class DungeonSettlementPackets
         byte[] body = new byte[218];
         BinaryPrimitives.WriteUInt32LittleEndian(body, reward.BaseExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), reward.RankExperience);
-        body[192] = 1;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(194), monsterExperience);
         return body;
     }
 
-    public static byte[] CardRights(bool paid = false)
+    public static byte[] CardRights(short fatigue = 1)
     {
         byte[] body = new byte[17];
         body[0] = 1;
-        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), 1);
+        BinaryPrimitives.WriteInt16LittleEndian(body.AsSpan(1), fatigue);
         for (int index = 1; index < 8; index++)
             BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1 + index * 2), ushort.MaxValue);
-        if (paid) BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(9),1);
         return body;
     }
 
@@ -50,25 +48,25 @@ internal static class DungeonSettlementPackets
         var empty = EmptyCardReward(reward, monsterExperience);
         if (card is null) return empty;
         card.Validate();
-        int count = (card.Gold > 0 ? 1 : 0) + (card.Item is null ? 0 : 1);
-        int bonusCount = blackDiamond is null ? 0 : (blackDiamond.Gold > 0 ? 1 : 0) + (blackDiamond.Item is null ? 0 : 1);
+        var free = Display(card);
+        var bonusItems = blackDiamond is null ? [] : Display(blackDiamond);
+        int count = free.Count;
+        int bonusCount = bonusItems.Count;
         byte[] body = new byte[empty.Length + (count+bonusCount) * 8];
         empty.AsSpan(0,156).CopyTo(body);
         int at = 156;
         body[at++] = checked((byte)count);
-        if (card.Gold > 0) Pair(0, checked((uint)card.Gold));
-        if (card.Item is { } core) Pair(checked((uint)core.ItemId), checked((uint)core.Count));
+        foreach (var item in free) Pair(item.Id, item.Count);
         at += 7; // 本人之外的七个免费席。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at),checked((uint)(options?.Price ?? 0)));
         at += 4 + 8; // 费用及未使用的额外组。
         body[at++] = checked((byte)bonusCount);
-        if (blackDiamond is { } bonus)
-        {
-            if (bonus.Gold > 0) Pair(0,checked((uint)bonus.Gold));
-            if (bonus.Item is { } bonusItem) Pair(checked((uint)bonusItem.ItemId),checked((uint)bonusItem.Count));
-        }
+        foreach (var item in bonusItems) Pair(item.Id, item.Count);
         at += 7;
         empty.AsSpan(184).CopyTo(body.AsSpan(at));
+        // 尾段先读全局u32和弃用u32，再读双倍位；它不是结果页显示开关。
+        body[at + 8] = options?.DoublePaidItems == true ? (byte)1 : (byte)0;
+        // 回归消费者仅有静态分析，八个成员标志保持零，不借旧本地回执赋予资格。
         return body;
 
         void Pair(uint item, uint amount)
@@ -96,7 +94,8 @@ internal static class DungeonSettlementPackets
     public static byte[] CardSelected(DungeonCardView view)
     {
         if (view.Paid is null && view.FreeSelected) return FreeCardSelected();
-        int count = view.Paid is null ? 0 : (view.Paid.Gold > 0 ? 1 : 0)+(view.Paid.Item is null ? 0 : 1);
+        var paidItems = view.Paid is null ? [] : Display(view.Paid);
+        int count = paidItems.Count;
         byte[] body = new byte[33+count*8];
         body[0] = 1;
         int at = 1;
@@ -105,11 +104,8 @@ internal static class DungeonSettlementPackets
             body[at++] = slot == 0 && view.FreeSelected ? (byte)0 : byte.MaxValue;
             body[at++] = slot == 0 && view.Paid is not null ? (byte)0 : byte.MaxValue;
             body[at++] = slot == 0 ? checked((byte)count) : (byte)0;
-            if (slot == 0 && view.Paid is { } paid)
-            {
-                if (paid.Gold > 0) Pair(0,checked((uint)paid.Gold));
-                if (paid.Item is { } item) Pair(checked((uint)item.ItemId),checked((uint)item.Count));
-            }
+            if (slot == 0)
+                foreach (var item in paidItems) Pair(item.Id, item.Count);
             body[at++] = 0;
         }
         return body;
@@ -122,4 +118,14 @@ internal static class DungeonSettlementPackets
     }
 
     public static byte[] ResultCommand(byte state, byte option) => [1, state, option];
+
+    // 039F8B40/039F63E0 固定把首项作为金币，空装备也必须保留金币占位。
+    static List<(uint Id, uint Count)> Display(DungeonCardReward reward)
+    {
+        reward.Validate();
+        var result = new List<(uint, uint)> { (0, checked((uint)reward.Gold)) };
+        result.AddRange(reward.Items().GroupBy(core => core.ItemId).Select(group =>
+            (checked((uint)group.Key), checked((uint)group.Sum(core => (long)core.Count)))));
+        return result;
+    }
 }

@@ -89,7 +89,8 @@ internal static class SqliteMigrations
         new(32, "冒险团商店账号限购", static (db, tx) => Execute(db, tx, AdventurePurchasesSchema)),
         new(33, "账号赛丽亚幸运值", AddSeriaLuckColumn),
         new(34, "任务跳过实际效果账本", AddQuestEffects),
-        new(35, "账号契约账本及已知旧分支v34兼容", UpgradePremiumContracts)
+        new(35, "账号契约账本及已知旧分支v34兼容", UpgradePremiumContracts),
+        new(36, "翻牌领取、活动与统一会员契约来源", DungeonCardClaimSchema.Upgrade)
     ];
 
     internal const string QuestEffectsSchema = """
@@ -804,6 +805,11 @@ internal static class SqliteMigrations
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
         bool existingFatigue = version == 14 && HasPublishedFatigue(db, tx);
+        if (version == 34 && current >= 36 && DungeonCardClaimSchema.IsPreviousLayout(db,tx))
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_effect_receipts','character_quest_special_reward_claims')";
+            if (query.ExecuteScalar() is 0L) AddQuestEffects(db,tx);
+        }
         foreach (var step in steps)
         {
             if (step.Version <= version)
@@ -875,7 +881,8 @@ internal static class SqliteMigrations
         "SELECT account,black_diamond_expires,gold_card_expires,revision FROM account_card_memberships LIMIT 0",
         "SELECT character_id,account,service_day,used FROM character_gold_card_uses LIMIT 0",
         "SELECT character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id,paid_reward_json,paid_mail_id,paid_cost,paid_revision,paid_day FROM character_dungeon_card_options LIMIT 0",
-        "SELECT character_id,account,instance_id,plan_json,reward_json,mail_id,revision FROM character_dungeon_card_rewards LIMIT 0",
+        "SELECT character_id,account,instance_id,plan_json,reward_json,mail_id,revision,claimed FROM character_dungeon_card_rewards LIMIT 0",
+        "SELECT event_id,revision,starts_at,ends_at,override_active FROM server_events LIMIT 0",
         "SELECT character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot,operation_id,operation_kind FROM character_quest_skip_receipts LIMIT 0",
         "SELECT character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items FROM character_quest_drop_receipts LIMIT 0",
         "SELECT account,quest_id,character_id,acceptance_id,daily_period,answer FROM account_completed_quests LIMIT 0",

@@ -554,11 +554,18 @@ CREATE TABLE character_dungeon_card_rewards(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,instance_id TEXT NOT NULL,
   plan_json TEXT NOT NULL CHECK(json_valid(plan_json) AND json_type(plan_json)='object'),
   reward_json TEXT NOT NULL CHECK(json_valid(reward_json) AND json_type(reward_json)='object'),
-  mail_id INTEGER,revision INTEGER NOT NULL CHECK(revision>=0),
+  mail_id INTEGER,revision INTEGER NOT NULL CHECK(revision>=0),claimed INTEGER NOT NULL DEFAULT 1 CHECK(claimed IN(0,1)),
   PRIMARY KEY(character_id,instance_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
   FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_settlement_receipts(character_id,instance_id),
   FOREIGN KEY(mail_id) REFERENCES mailbox_messages(mail_id));
+
+CREATE TABLE server_events(
+  event_id INTEGER NOT NULL PRIMARY KEY CHECK(event_id BETWEEN 1 AND 65535),
+  revision INTEGER NOT NULL CHECK(revision>0),starts_at INTEGER,ends_at INTEGER,
+  override_active INTEGER CHECK(override_active IS NULL OR override_active IN (0,1)),
+  CHECK((starts_at IS NULL AND ends_at IS NULL) OR
+    (starts_at IS NOT NULL AND ends_at IS NOT NULL AND starts_at>=0 AND ends_at>starts_at AND ends_at<=253402300799)));
 
 CREATE TABLE character_tp_sources(
  character_id INTEGER PRIMARY KEY,bonus_tp INTEGER NOT NULL CHECK(bonus_tp BETWEEN 0 AND 65535),

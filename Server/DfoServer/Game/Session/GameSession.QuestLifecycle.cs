@@ -25,7 +25,7 @@ internal sealed partial class GameSession
         var capture = owner.Execute(() =>
         {
             Character? character = Ready && Selected is not null && Phase is not (SessionPhase.Unselected or SessionPhase.Loading) &&
-                formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
+                !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
             var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
             return (Character: character, SelectionEpoch, Phase, Identity: instance, Entry: formalDungeon?.Entry,
@@ -165,7 +165,7 @@ internal sealed partial class GameSession
         if (questCatalog is null || !Ready || Selected is not { } expected || expected.QuestCycleDay >= QuestCycle.Day(now) ||
             pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } || HasPendingQuestScene ||
             pendingDungeonContinuation is not null || HasPendingQuestReplay ||
-            formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true)
+            HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true)
             return null;
         Selected = repository.AdvanceQuestCycle(owner, expected, QuestCycle.Day(now));
         completed = QuestEligibility.Completed(Selected);

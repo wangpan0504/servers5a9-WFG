@@ -5,18 +5,31 @@ using DfoServer.Game.Currency;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 
 namespace DfoServer.Game.Dungeons;
 
 // 免费牌在首次通关报告时冻结；入库、邮件和展示共用这份完整核心，不在选牌时重抽。
 internal sealed record DungeonCardReward(int Gold, ItemCore? Item, string RuleId, string ResourceSource, long CreatedAt)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public ItemCore? ExtraItem { get; init; }
+
+    public IEnumerable<ItemCore> Items()
+    {
+        if (Item is not null) yield return Item;
+        if (ExtraItem is not null) yield return ExtraItem;
+    }
+
     public void Validate()
     {
         if (Gold < 0 || CreatedAt < 0 || string.IsNullOrWhiteSpace(RuleId) || RuleId.Length > 128 ||
             string.IsNullOrWhiteSpace(ResourceSource) || ResourceSource.Length > 1024)
             throw new InvalidDataException("免费翻牌奖励声明无效");
         Item?.Validate();
+        ExtraItem?.Validate();
+        if (ExtraItem is not null && (Item is null || Item.IsStackable || ExtraItem != Item))
+            throw new InvalidDataException("双倍装备必须保留两件相同完整核心");
     }
 }
 
@@ -58,26 +71,43 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         return reward;
     }
 
-    public (InventoryPlan Inventory, bool MailItem) PlanInventory(Character character, DungeonCardReward reward, byte targetLevel)
-    {
-        var delivered = PlanDelivery(character,[reward],targetLevel);
-        return (delivered.Inventory,!delivered.MailItems.IsEmpty);
-    }
-
     public DungeonCardOptions? PrepareOptions(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
-        CardMembership membership, DateTimeOffset now)
+        CardMembership membership, DateTimeOffset now, Events.ServerEventState? goldCardEvent = null)
     {
         if (prices is null) return null;
+        if (goldCardEvent is not null)
+        {
+            Events.ServerEventService.RequireRegistered(goldCardEvent.Schedule.EventId);
+            goldCardEvent.Schedule.Validate();
+        }
         bool golden = membership.GoldCardAvailable(now.ToUnixTimeSeconds());
-        return new(Prepare(dungeon,difficulty,confirmedKills,utcNow:now),
+        bool doubled = goldCardEvent?.Active == true;
+        var paid = Prepare(dungeon,difficulty,confirmedKills,utcNow:now) with { Gold = 0 };
+        if (doubled) paid = DoubleItems(paid);
+        return new(paid,
             golden ? 0 : prices.Price(dungeon.BasisLevel ?? throw new InvalidDataException("付费牌没有基准等级")), golden,membership,
-            membership.BlackDiamondActive(now.ToUnixTimeSeconds()) ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now) : null);
+            membership.BlackDiamondActive(now.ToUnixTimeSeconds()) ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now) : null)
+        {
+            DoublePaidItems = doubled,
+            GoldCardEventRevision = goldCardEvent?.Schedule.Revision ?? 0
+        };
     }
 
-    public DungeonCardDelivery PlanDelivery(Character character, IReadOnlyList<DungeonCardReward> rewards, byte targetLevel, int cost = 0)
+    public static DungeonCardReward DoubleItems(DungeonCardReward reward)
+    {
+        reward.Validate();
+        if (reward.Item is not { } item) return reward;
+        if (!item.IsStackable) return reward with { ExtraItem = item };
+        if (item.Value > int.MaxValue / 2) throw new InvalidDataException("双倍翻牌数量超界");
+        return reward with { Item = item with { Value = item.Value * 2 } };
+    }
+
+    public DungeonCardDelivery PlanDelivery(Character character, IReadOnlyList<DungeonCardReward> rewards, byte targetLevel,
+        int cost = 0, DateTimeOffset? utcNow = null)
     {
         if (cost < 0 || rewards.Count is < 1 or > 2) throw new InvalidDataException("翻牌费用或奖励批次无效");
         var grown = character with { Level = targetLevel };
+        var now = utcNow ?? DateTimeOffset.UtcNow;
         var inventory = character.Inventory;
         if (inventory.Gold < cost) throw new InvalidOperationException("付费翻牌金币不足");
         inventory = inventory with { Gold = checked(inventory.Gold - (uint)cost) };
@@ -86,10 +116,10 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         foreach (var reward in rewards)
         {
             reward.Validate();
-            if (reward.Item is { } core)
+            foreach (var core in reward.Items())
             {
                 var grant = InventoryRewardGrantService.TryGrantCore(grown with { Inventory = inventory },core,items.Get(core.ItemId),pieces,
-                    DateTimeOffset.FromUnixTimeSeconds(reward.CreatedAt));
+                    now);
                 if (!grant.Accepted && grant.Error != 17) throw new InvalidDataException("冻结翻牌物品不能发放: " + grant.Error);
                 if (grant.Accepted) inventory = grant.Plan!.After;
                 else mails.Add(core);

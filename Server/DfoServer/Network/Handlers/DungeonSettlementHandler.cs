@@ -18,7 +18,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items,
     CharacterLevelProjection levelProjection, EpicPieceCatalog? pieces = null,
     DungeonCardRewardPolicy? cards = null, InventoryProjection? inventoryProjection = null,
-    RentalCatalog? rental = null) : IGameCommandModule
+    RentalCatalog? rental = null, Game.Events.ServerEventService? events = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -50,8 +50,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     async Task<CommandResult> ResultAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
+        // 活动查询不占用账号锁；同一份结算准备冻结资格与倍率。
+        var goldCardEvent = events?.Read(Game.Events.ServerEventService.DoubleGoldCardId);
         var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
-            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0);
+            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
             result.Reward, result.GainedExperience, result.Card, result.MailId, result.Receipt?.Snapshot.Identity });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate) || result.Receipt is not { } receipt)
@@ -71,6 +73,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (SkillPackets.BindingsChanged(previous.Learning, receipt.Character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_clear_skills", Guard);
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard);
+        if (!receipt.Entry.IsTutorial)
+            await DungeonCardMembershipProjection.RefreshAsync(context);
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(reward.Applied(result.GainedExperience), result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond), "formal_clear_reward", Guard);
         if (result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
@@ -95,8 +99,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (request.Body.Length != 0 || context.Session.AdvanceFormalDungeonCards(true) is not { } receipt)
             return CommandResult.Unhandled;
         var view = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("翻牌展示失效");
-        await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRights(view.Options is not null), "formal_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
-        context.Cards ??= new DungeonCardProjection(context, log);
+        var fatigue = receipt.Character.Fatigue ?? throw new InvalidOperationException("翻牌角色缺少疲劳owner");
+        await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRights(checked((short)fatigue.Remaining)), "formal_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
+        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection);
         await context.Cards.StartAsync(receipt);
         return CommandResult.Handled;
     }
@@ -106,19 +111,26 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (request.Body.Length != 2)
             return CommandResult.Unhandled;
         FormalDungeonReceipt? receipt;
-        if (request.Body[0] == 0) receipt = context.Session.SelectFormalDungeonFreeCard(0,request.Body[1]);
+        FormalFreeCardResult? free = null;
+        if (request.Body[0] == 0)
+        {
+            free = context.Session.SelectFormalDungeonFreeCard(0,request.Body[1]);
+            receipt = free?.Receipt;
+        }
         else if (cards is not null)
         {
             var selected = context.Session.SelectFormalDungeonPaidCard(request.Body[0],request.Body[1],cards);
             if (selected is null)
             {
                 log.Write("formal_paid_card_rejected",new {Connection=context.Id,Row=request.Body[0],Member=request.Body[1]});
+                await DungeonCardMembershipProjection.RefreshAsync(context);
                 return CommandResult.Handled;
             }
             receipt = selected.Receipt;
             var paidView = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("付费牌展示失效");
             await context.Reply(CmdPacketType.SELECT_CARD,DungeonSettlementPackets.CardSelected(paidView),"formal_paid_card_selected",
                 () => context.Session.CanPublishCardView(receipt,paidView));
+            await DungeonCardMembershipProjection.RefreshAsync(context);
             if (selected.Inventory is { } inventory)
                 await (inventoryProjection ?? throw new InvalidOperationException("付费牌缺少库存投影")).RefreshAsync(context,inventory);
             if (selected.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
@@ -129,6 +141,11 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var view = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("免费牌展示失效");
         await context.Reply(CmdPacketType.SELECT_CARD, DungeonSettlementPackets.CardSelected(view), "formal_free_card_selected",
             () => context.Session.CanPublishCardView(receipt,view));
+        if (free?.Inventory is { } freeInventory)
+            await (inventoryProjection ?? throw new InvalidOperationException("免费牌缺少库存投影")).RefreshAsync(context, freeInventory);
+        if (free?.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
+        log.Write("formal_free_card_claimed", new { Connection = context.Id, receipt.Snapshot.Identity,
+            free?.Duplicate, free?.MailId, Revision = receipt.Character.Revision });
         return CommandResult.Handled;
     }
 

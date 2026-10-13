@@ -41,6 +41,12 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
         return this with { Contracts = PremiumContracts.SetItem(type, expiry) };
     }
     public long ContractExpiry(int type) => PremiumContracts.GetValueOrDefault(type);
+    public AccountWallet SetContractExpiry(int type, long expires)
+    {
+        if (type is <= 0 or >= 132 || expires < 0)
+            throw new InvalidDataException("契约类型或绝对到期时间无效");
+        return this with { Contracts = expires == 0 ? PremiumContracts.Remove(type) : PremiumContracts.SetItem(type, expires) };
+    }
     public AccountWallet SetSeriaLuck(int value)
     {
         if (value is < 0 or > 8)

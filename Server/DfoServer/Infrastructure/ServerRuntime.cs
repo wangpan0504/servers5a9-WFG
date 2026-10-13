@@ -75,6 +75,7 @@ internal static class ServerRuntime
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
         var debugSettings = new GameDebugSettings();
+        var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces,
             debugSettings, itemResources.Contracts);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
@@ -109,7 +110,7 @@ internal static class ServerRuntime
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
-                prices: DungeonCardPriceCatalog.Load(pvf)), inventoryProjection, itemResources.Rental);
+                prices: DungeonCardPriceCatalog.Load(pvf)), inventoryProjection, itemResources.Rental, events);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops);
         }
         else
@@ -208,7 +209,7 @@ internal static class ServerRuntime
         string DevelopmentCommand(string line)
         {
             string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
-                mailbox, itemResources.Items, progress, cashShop, debugSettings);
+                mailbox, itemResources.Items, progress, cashShop, debugSettings, events);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });
             return result;
         }

@@ -33,11 +33,41 @@ internal sealed partial class CharacterRepository
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
-        command.CommandText = "INSERT INTO character_fatigue VALUES($id,$account,0,156,0,156,0,0)";
+        ushort maximum = ReadAccountWallet(db, account, tx).ContractExpiry(56) > DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            ? CharacterFatigueState.BlackDiamondMaximum : CharacterFatigueState.OrdinaryMaximum;
+        command.CommandText = "INSERT INTO character_fatigue VALUES($id,$account,0,$maximum,0,$maximum,0,0)";
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$account", account);
+        command.Parameters.AddWithValue("$maximum", maximum);
         command.ExecuteNonQuery();
     }
+
+    public Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now) => owner.Execute(() =>
+    {
+        if (expected.BlackDiamondExpiresAt <= now.ToUnixTimeSeconds() ||
+            expected.Fatigue?.Maximum != CharacterFatigueState.OrdinaryMaximum) return expected;
+        using var db = database.Open();
+        using var tx = db.BeginTransaction(deferred: true);
+        var current = Require(db, tx, owner.Account, expected.Name);
+        if (current.Id != expected.Id || current.Revision != expected.Revision || current.Fatigue != expected.Fatigue ||
+            current.BlackDiamondExpiresAt != expected.BlackDiamondExpiresAt)
+            throw new InvalidOperationException("黑钻疲劳补齐的原角色快照已变化");
+        var target = current.Fatigue!.GrantBlackDiamondCapacity();
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.Parameters.AddWithValue("$id", current.Id);
+        query.Parameters.AddWithValue("$account", owner.Account);
+        query.Parameters.AddWithValue("$revision", current.Revision);
+        query.Parameters.AddWithValue("$maximum", target.Maximum);
+        query.Parameters.AddWithValue("$remaining", target.Remaining);
+        query.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("黑钻疲劳补齐revision冲突");
+        query.CommandText = "UPDATE character_fatigue SET maximum=$maximum,remaining=$remaining WHERE character_id=$id AND account=$account";
+        if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("黑钻疲劳补齐缺少原owner");
+        var committed = Require(db, tx, owner.Account, current.Name);
+        tx.Commit();
+        return committed;
+    });
 
     public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) => owner.Execute(() =>
     {

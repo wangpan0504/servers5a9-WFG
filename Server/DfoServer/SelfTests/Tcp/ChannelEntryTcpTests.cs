@@ -22,7 +22,7 @@ internal static class ChannelEntryTcpTests
             var hello = probe.Expect(0, 1).Body;
             for (int i = 0; i < hello.Length; i++)
                 hello[i] = (byte)((((hello[i] << 6) | (hello[i] >> 2)) ^ 0xb5) & 0xff);
-            That(hello.Length == 357 && hello.AsSpan(343, 4).SequenceEqual(new byte[] { 0x38, 2, 0x40, number }),
+            That(U32(hello, 0) == hello.Length - 4 && hello.AsSpan(343, 4).SequenceEqual(new byte[] { 0x38, 2, 0x40, number }),
                 "所有分类入口首包均安装实际连接的频道身份，不固定回写10");
         }
 

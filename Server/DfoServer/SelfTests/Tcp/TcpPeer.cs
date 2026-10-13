@@ -40,6 +40,9 @@ internal sealed class TcpPeer : IDisposable
     public byte[] InitialGameOptions { get; private set; } = [];
     public byte[] AdventureInfo { get; private set; } = [];
     public byte[] AdventureRefresh { get; private set; } = [];
+    public byte[] CardMembershipInformation { get; private set; } = [];
+    public byte[] DevilService0 { get; private set; } = [];
+    public Dictionary<byte, long> PremiumServices { get; private set; } = [];
 
     static readonly Encoding names;
     static TcpPeer()
@@ -161,6 +164,30 @@ internal sealed class TcpPeer : IDisposable
 
     public WirePacket[] Batch(params (byte Kind, ushort Opcode)[] expected) => expected.Select(p => Expect(p.Kind, p.Opcode)).ToArray();
     public void SendBarrier() => Send(1347, [2, 0, 0, 0]);
+    public void ReadCardMembershipState(WirePacket? information = null)
+    {
+        information ??= Expect(0, 1760);
+        TestCheck.That(information.Kind == 0 && information.Opcode == 1760, "会员状态必须从1760开始，不能跳过其他通知");
+        CardMembershipInformation = information.Body;
+        PremiumInfo = information.Body;
+        DevilService0 = Expect(1, 905).Body;
+        TestCheck.That(CardMembershipInformation.Length == 1 + CardMembershipInformation[0] * 9, "1760完整契约目录长度与数量一致");
+        PremiumServices = [];
+        for (int index = 0; index < CardMembershipInformation[0]; index++)
+        {
+            byte type = CardMembershipInformation[1 + index * 9];
+            long remaining = BinaryPrimitives.ReadInt64LittleEndian(CardMembershipInformation.AsSpan(2 + index * 9));
+            TestCheck.That(type is > 0 and < 132 && remaining >= 0 && PremiumServices.TryAdd(type, remaining),
+                "统一契约目录类型合法、无重复且期限非负");
+        }
+        TestCheck.That(PremiumServices.ContainsKey(56) && PremiumServices.ContainsKey(58),
+            "统一契约列表包含56/58的有效期限或显式清除值，不覆盖22/27");
+        TestCheck.That(DevilService0.Length == 77 && DevilService0[0] == 1 && U16(DevilService0, 1) == 1 &&
+            DevilService0.AsSpan(3, 6).IndexOfAnyExcept((byte)0) == -1 && DevilService0[13] <= 10 &&
+            DevilService0.AsSpan(14).IndexOfAnyExcept((byte)0) == -1 &&
+            (U32(DevilService0, 9) > 0) == (PremiumServices[58] > 0),
+            "魔王服务0同步有效期限及真实次数，其他七项服务保持未启用");
+    }
     public void Barrier()
     {
         SendBarrier();
@@ -310,7 +337,7 @@ internal sealed class TcpPeer : IDisposable
             {
                 tail.Add(Expect(notice.Kind, notice.Opcode));
                 if (notice == ((byte)0, (ushort)53))
-                    PremiumInfo = premiumContracts ? Expect(0, 1760).Body : [];
+                    ReadCardMembershipState();
             }
         }
         if (resumeTown)
@@ -333,6 +360,8 @@ internal sealed class TcpPeer : IDisposable
         {
             var events = Expect(0, 108);
             TestCheck.That(events.Protected, "入城的赛丽亚事件配置使用保护压缩帧");
+            var fatigue = Expect(0, 36);
+            TestCheck.That(fatigue.Body.Length == 10, "EVENT_INFO建立城镇HUD后同步本版五个u16疲劳字段");
             using (var compressed = new MemoryStream(events.Body, writable: false))
             using (var zlib = new ZLibStream(compressed, CompressionMode.Decompress))
             {

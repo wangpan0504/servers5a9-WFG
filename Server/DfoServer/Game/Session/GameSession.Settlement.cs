@@ -29,6 +29,8 @@ internal sealed partial class GameSession
         public uint GainedExperience { get; set; }
         public bool LuckyStarGained { get; set; }
         public int LuckyStarTotal { get; set; }
+        public DungeonCardRewardPolicy? CardPolicy { get; init; }
+        public DungeonCardClaimPreparation? Claim { get; set; }
     }
 
     public (FormalDungeonReceipt Receipt, ushort BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
@@ -83,7 +85,8 @@ internal sealed partial class GameSession
 
     public FormalDungeonSettlementResult SettleFormalDungeon(ushort actorId, byte rankPoint, byte maximumRankPoint,
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth,
-        DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0) => owner.Execute(() =>
+        DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0,
+        Events.ServerEventState? goldCardEvent = null) => owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
             dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
@@ -102,13 +105,14 @@ internal sealed partial class GameSession
             var now = DateTimeOffset.UtcNow;
             var membership = repository.LoadCardMembership(owner,Selected!.Id,now);
             options = cards.PrepareOptions(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),dungeon.Entry.Difficulty,
-                fact.ConfirmedDeathEvents.Count,membership,now);
+                fact.ConfirmedDeathEvents.Count,membership,now,goldCardEvent);
         }
         var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options);
         if (prepared.Pending is null || prepared.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
-            new(dungeon.ClearTimeMilliseconds, rankPoint, rewards.GradeForPoint(rankPoint), dungeon.KillExperienceTotal), Selected!);
+            new(dungeon.ClearTimeMilliseconds, rankPoint, rewards.GradeForPoint(rankPoint), dungeon.KillExperienceTotal), Selected!)
+            { CardPolicy = cards };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
@@ -132,18 +136,10 @@ internal sealed partial class GameSession
             }
             else
             {
-                var planned = prepared.Pending.Card is { } frozen && cards is not null ? cards.PlanInventory(expected, frozen,
-                    CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, growth).Plan!.TargetLevel) : default;
-                DungeonCardDelivery? premium = null;
-                if (prepared.Pending.Options is { } premiumOptions && cards is not null)
-                {
-                    DungeonCardReward[] requested = premiumOptions.BlackDiamond is { } bonus ? [prepared.Pending.Card!,bonus] : [prepared.Pending.Card!];
-                    premium = cards.PlanDelivery(expected,requested,CharacterGrowthPlan.AddExperience(expected,reward.TotalExperience,growth).Plan!.TargetLevel);
-                }
                 bool grantLuckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(
                     dungeons.Get(checked((int)dungeon.Entry.DungeonId)), expected.Level);
                 commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
-                    planned.Inventory, planned.MailItem, premium, grantLuckyStar, luckyStarLimit);
+                    grantLuckyStar: grantLuckyStar, luckyStarLimit: luckyStarLimit);
             }
             if (commit.Character.Id != expected.Id || commit.Character.Revision < expected.Revision ||
                 dungeon.Run.ConfirmCommittedSettlement(prepared.Pending) != DungeonRunOutcome.Accepted)
@@ -151,7 +147,7 @@ internal sealed partial class GameSession
             Selected = commit.Character;
             settlement.Card = commit.Card;
             settlement.MailId = commit.MailId;
-            settlement.BlackDiamond = commit.BlackDiamond;
+            settlement.BlackDiamond = commit.BlackDiamond ?? prepared.Pending.Options?.BlackDiamond;
             settlement.GainedExperience = commit.GainedExperience;
             settlement.LuckyStarGained = commit.LuckyStarGained;
             settlement.LuckyStarTotal = commit.LuckyStarTotal;
@@ -184,14 +180,37 @@ internal sealed partial class GameSession
         return FormalReceipt();
     });
 
-    public FormalDungeonReceipt? SelectFormalDungeonFreeCard(byte row, byte card) => owner.Execute(() =>
+    public FormalFreeCardResult? SelectFormalDungeonFreeCard(byte row, byte card) => owner.Execute<FormalFreeCardResult?>(() =>
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Settlement is not { Committed: true, CardsShown: true } settlement ||
             row != 0 || card != 0 || settlement.SelectedCard is { } old && old != card)
             return null;
-        // 免费资产已随通关事务保存，选牌只确认展示，不能再次写入奖励。
+        if (settlement.SelectedCard is not null)
+            return new(FormalReceipt(), null, settlement.MailId, true);
+        InventoryResult? inventory = null;
+        bool duplicate = false;
+        if (settlement.Pending.Card is { } frozen)
+        {
+            if (settlement.Claim is { Side: not 0 }) return null;
+            var policy = settlement.CardPolicy ?? throw new InvalidOperationException("免费牌缺少发放规则");
+            DungeonCardReward[] rewards = settlement.Pending.Options?.BlackDiamond is { } bonus ? [frozen, bonus] : [frozen];
+            var claim = settlement.Claim ??= new(Selected!, 0, policy.PlanDelivery(Selected!, rewards, Selected!.Level), DateTimeOffset.UtcNow);
+            if (!ReferenceEquals(Selected, claim.Expected)) throw new InvalidOperationException("免费牌待提交快照已变化");
+            var committed = repository.CommitFreeDungeonCard(owner, claim.Expected, settlement.Pending, claim.Delivery);
+            Selected = committed.Character;
+            settlement.Card = committed.Reward;
+            settlement.BlackDiamond = committed.BlackDiamond;
+            settlement.MailId = committed.MailId;
+            duplicate = committed.Duplicate;
+            inventory = new(true, 0, committed.Inventory)
+            {
+                Receipt = new(Selected, owner.Generation, SelectionEpoch)
+                    { Phase = Phase, DungeonIdentity = formalDungeon!.Run.Snapshot.Identity }
+            };
+            settlement.Claim = null;
+        }
         settlement.SelectedCard = card;
-        return FormalReceipt();
+        return new(FormalReceipt(), inventory, settlement.MailId, duplicate);
     });
 
     public bool ScheduleFormalDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
@@ -202,7 +221,7 @@ internal sealed partial class GameSession
         return true;
     });
 
-    public FormalDungeonReceipt? RevealFormalDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
+    public FormalFreeCardResult? RevealFormalDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed: true, CardsShown: true, SelectedCard: null }
             ? SelectFormalDungeonFreeCard(0, 0) : null);
 
@@ -226,17 +245,24 @@ internal sealed partial class GameSession
         DateTimeOffset? utcNow = null) => owner.Execute(() =>
     {
         if (row is not (1 or 2) || member != 0 || !Ready || Phase != SessionPhase.Settlement || Selected is null ||
-            formalDungeon?.Settlement is not { Committed:true,CardsShown:true } settlement || settlement.Pending.Options is not { } options)
+            formalDungeon?.Settlement is not { Committed:true,CardsShown:true } settlement || settlement.Pending.Options is not { } options ||
+            settlement.Claim is { Side: not 1 })
             return null;
         var now = utcNow ?? DateTimeOffset.UtcNow;
         if (settlement.Paid is not null) return new FormalPaidCardResult(FormalReceipt(),settlement.Paid,null,null,true);
         if (Selected.Inventory.Gold < options.Price) return null;
-        var before = Selected;
-        var delivery = cards.PlanDelivery(before,[options.Paid],before.Level,options.Price);
-        var committed = repository.CommitPaidDungeonCard(owner,before,settlement.Pending,delivery,now);
-        if (!committed.Accepted || committed.Character is null || committed.Reward is null) return null;
+        var claim = settlement.Claim ??= new(Selected, 1, cards.PlanDelivery(Selected,[options.Paid],Selected.Level,options.Price,now), now);
+        var before = claim.Expected;
+        if (!ReferenceEquals(Selected, before)) throw new InvalidOperationException("付费牌待提交快照已变化");
+        var committed = repository.CommitPaidDungeonCard(owner,before,settlement.Pending,claim.Delivery,claim.Time);
+        if (!committed.Accepted || committed.Character is null || committed.Reward is null)
+        {
+            settlement.Claim = null;
+            return null;
+        }
         Selected = committed.Character;
         settlement.Paid = committed.Reward;
+        settlement.Claim = null;
         InventoryResult? inventory = committed.Inventory is { } plan ? new(true,0,plan)
         {
             Receipt = new(Selected,owner.Generation,SelectionEpoch)
@@ -245,10 +271,38 @@ internal sealed partial class GameSession
         return new(FormalReceipt(),committed.Reward,inventory,committed.MailId,committed.Duplicate);
     });
 
-    public CardMembership SetCardMembership(string name,CardMembershipKind kind,long expires) =>
-        owner.Execute(() => repository.SetCardMembership(owner,name,kind,expires));
+    long cardMembershipPublication;
 
-    bool CanUseSettlementNpcServices() => Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
+    public CardMembershipReceipt? CardMembershipForClient() => owner.Execute<CardMembershipReceipt?>(() =>
+    {
+        // 选角初始化还未Ready，但Selected和选角epoch已建立，不能遗漏这次原生状态同步。
+        if (Selected is null) return null;
+        var membership = repository.LoadCardMembership(owner, Selected.Id, DateTimeOffset.UtcNow);
+        return new(Selected, membership, owner.Generation, SelectionEpoch, ++cardMembershipPublication);
+    });
+
+    public bool CanPublishCardMembership(CardMembershipReceipt receipt) => owner.Execute(() =>
+        receipt.Generation == owner.Generation && receipt.SelectionEpoch == SelectionEpoch &&
+        receipt.Publication == cardMembershipPublication && ReferenceEquals(Selected, receipt.Character));
+
+    public CardMembership SetCardMembership(string name,CardMembershipKind kind,long expires) => owner.Execute(() =>
+    {
+        if (HasPendingFormalCard ||
+            formalDungeon?.HasPendingFatigue == true || formalDungeon?.Run.HasPendingDeath == true ||
+            formalDungeon?.Run.HasPendingSettlement == true || formalDungeon?.Ground.HasPendingOperation == true ||
+            formalDungeon?.PendingTutorialClear is not null || pendingQuestCompletion is not null ||
+            pendingQuestLifecycle is not null || pendingQuestQuickClear is not null || HasPendingQuestScene)
+            throw new InvalidOperationException("当前业务结果待确认，不能覆盖账号契约快照");
+        var result = repository.SetCardMembership(owner,name,kind,expires);
+        if (Selected is { } selected)
+            Selected = repository.LoadCharacter(owner, selected.Slot);
+        cardMembershipPublication++;
+        return result;
+    });
+
+    bool HasPendingFormalCard => formalDungeon?.Settlement?.Claim is not null;
+
+    bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
         dungeon.Settlement is { Committed: true } && dungeon.Run.ClearFact is not null &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         pendingQuestCompletion is null && !HasPendingQuestScene;
@@ -262,11 +316,11 @@ internal sealed partial class GameSession
     });
 
     public FormalDungeonReceipt? FormalDungeonResultFocus() => owner.Execute(() =>
-        Ready && Phase == SessionPhase.Settlement && formalDungeon?.Settlement is { Committed: true } ? FormalReceipt() : null);
+        Ready && !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon?.Settlement is { Committed: true } ? FormalReceipt() : null);
 
     public FormalDungeonReceipt? BeginFormalDungeonOtherSelection() => owner.Execute(() =>
     {
-        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Settlement is not { Committed: true } settlement)
+        if (!Ready || HasPendingFormalCard || Phase != SessionPhase.Settlement || formalDungeon?.Settlement is not { Committed: true } settlement)
             return null;
         settlement.OtherSelectionRequested = true;
         return FormalReceipt();

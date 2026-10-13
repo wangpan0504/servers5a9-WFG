@@ -63,7 +63,7 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Actor(Character character, ChannelIdentity channel = default)
+    public static byte[] Actor(Character character, ChannelIdentity channel = default, long? utcSeconds = null)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
@@ -97,7 +97,9 @@ internal static class TownPackets
             writer.Write(creature?.Creature is not null ? checked((uint)creature.Core.ItemId) : 0u);
             PacketEncoding.WriteString(writer, creature?.Creature?.Name ?? "");
             writer.Write((byte)0); // 当前详情没有死亡状态；零沿原合同表示存活。
-            writer.Write(new byte[2]);
+            writer.Write((byte)0); // 02677320：PC房效果，与黑钻分开。
+            // 02677430写Actor+344h；02AA85A4/02AA8ACC据此绘制金色名称和pcroompremiumreward.img的index3。
+            writer.Write(character.BlackDiamondExpiresAt > (utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()) ? (byte)1 : (byte)0);
             writer.Write(0u);
             PacketEncoding.WriteString(writer, "");
             writer.Write(0u);

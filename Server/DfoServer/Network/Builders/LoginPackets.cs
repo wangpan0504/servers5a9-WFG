@@ -22,6 +22,10 @@ internal static class LoginPackets
         writer.Write7BitEncodedInt(channel.ServerIndex);
         writer.Write7BitEncodedInt(8 << 3);
         writer.Write7BitEncodedInt(channel.Number);
+        // 0041B8A0的field11/varint64写对象+58h；023B7B5E用它初始化29107D0的服务器时钟。
+        // 魔王服务使用绝对期限，不能用选角包的时间字段代替这份握手时钟。
+        writer.Write7BitEncodedInt(11 << 3);
+        writer.Write7BitEncodedInt64(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         // 0041BF07/0041BF59 -> 对象 +78/+7C；0239B280 核对双方完整枚举数量。
         writer.Write7BitEncodedInt(30004 << 3);
         writer.Write7BitEncodedInt((int)CmdPacketType.END);

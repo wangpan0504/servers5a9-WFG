@@ -16,11 +16,12 @@ internal static partial class DevelopmentGm
     public const string Written = " 已写入。服务端通行校验立即使用新等级和任务。客户端回到选角并再次进入后刷新画面。属性块仍是匹配职业的初始值。";
     public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find,
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
-        InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null)
+        InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
+        Game.Events.ServerEventService? events = null)
     {
         try
         {
-            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings);
+            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events);
         }
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
         {
@@ -30,11 +31,22 @@ internal static partial class DevelopmentGm
 
     public static string Execute(ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find, DevelopmentRequest request,
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
-        InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null)
+        InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
+        Game.Events.ServerEventService? events = null)
     {
         try
         {
             request.Validate();
+            if (request.Action == DevelopmentAction.Event)
+            {
+                var state = request.Event!.Execute(events ?? throw new InvalidOperationException("活动服务未装配"));
+                return "OK " + JsonSerializer.Serialize(new
+                {
+                    eventId = state.Schedule.EventId, active = state.Active,
+                    mode = state.Schedule.OverrideActive is { } active ? active ? "on" : "off" : "auto",
+                    state.Schedule.Revision, state.Schedule.StartsAt, state.Schedule.EndsAt
+                });
+            }
             if (request.Action == DevelopmentAction.InfiniteFatigue)
             {
                 if (debugSettings is null) throw new InvalidOperationException("无限疲劳调试开关仅支持在线服务");
@@ -53,11 +65,18 @@ internal static partial class DevelopmentGm
             var live = find(request.Account);
             if (request.Action is DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard)
             {
-                var kind = request.Action == DevelopmentAction.BlackDiamond ? CardMembershipKind.BlackDiamond : CardMembershipKind.GoldCard;
+                var kind = request.Action switch
+                {
+                    DevelopmentAction.BlackDiamond => CardMembershipKind.BlackDiamond,
+                    _ => CardMembershipKind.GoldCard
+                };
                 long expires = request.Primary == 0 ? 0 : DateTimeOffset.UtcNow.AddDays(request.Primary).ToUnixTimeSeconds();
                 var membership = live is not null ? live.SetCardMembership(request.Name,kind,expires) :
                     WithLease(owners,request.Account,lease => repository.SetCardMembership(lease,request.Name,kind,expires));
-                return "OK "+JsonSerializer.Serialize(new {request.Account,kind,expires,membership.GoldCardUsed,DailyLimit=CardMembership.GoldCardDailyLimit})+
+                return "OK "+JsonSerializer.Serialize(new {request.Account,kind,expires,
+                    ContractType = kind == CardMembershipKind.BlackDiamond ? CardMembership.BlackDiamondType : CardMembership.DevilContractType,
+                    Service0Enabled = CardMembership.DevilContractService0Enabled,
+                    membership.GoldCardUsed,DailyLimit=CardMembership.DevilContractService0Enabled ? CardMembership.GoldCardDailyLimit : 0})+
                     " 已保存账号会员资格；新通关结算使用新资格。";
             }
             if (request.Action == DevelopmentAction.GrowOptions)

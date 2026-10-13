@@ -23,13 +23,15 @@ internal enum DevelopmentAction
     Contract,
     BlackDiamond,
     GoldCard,
+    Event,
     CashShopExpiration,
     InfiniteFatigue
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
 {
-    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量> | cash-shop-expiration [on|off]（商城与礼包期限覆盖至2038） | infinite-fatigue [on|off]（显示满疲劳且不扣点）。两个调试开关仅在线，默认开启。其他账号在命令前加 account <账号>。";
+    public DevelopmentEventRequest? Event { get; init; }
+    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | event status/on/off/auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量> | cash-shop-expiration [on|off]（商城与礼包期限覆盖至2038） | infinite-fatigue [on|off]（显示满疲劳且不扣点）。两个调试开关仅在线，默认开启。其他账号在命令前加 account <账号>。";
     public static DevelopmentRequest Parse(string line, string defaultAccount)
     {
         if (string.IsNullOrWhiteSpace(line) || line.Length > 512)
@@ -48,6 +50,12 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         if (i >= tokens.Length)
             throw new InvalidDataException(Usage);
         string op = tokens[i];
+        if (op == "event")
+        {
+            if (i != 0) throw new InvalidDataException("活动是全服配置，不能使用account前缀");
+            return new(DevelopmentAction.Event, account, "", 0, 0)
+                { Event = DevelopmentEventRequest.Parse(tokens[1..]) };
+        }
         DevelopmentRequest request = op switch
         {
             "infinite-fatigue" when tokens.Length == i + 1 => new(DevelopmentAction.InfiniteFatigue, account, "", -1, 0),
@@ -93,6 +101,12 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
     static int Integer(string text) => int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int value) ? value : throw new InvalidDataException(Usage);
     public void Validate()
     {
+        if (Action == DevelopmentAction.Event)
+        {
+            if (Event is null) throw new InvalidDataException(DevelopmentEventRequest.Usage);
+            Game.Events.ServerEventService.RequireRegistered(Event.EventId);
+            return;
+        }
         if (Account.Length is < 1 or > 64 || Account.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_' or '-')))
             throw new InvalidDataException("账号无效");
         if (Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.InfiniteFatigue)
@@ -113,7 +127,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             ToProgressEdit().Validate();
     }
 
-    public bool Writes => Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.InfiniteFatigue ? Primary >= 0 :
+    public bool Writes => Action == DevelopmentAction.Event ? Event?.Operation != "status" :
+        Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.InfiniteFatigue ? Primary >= 0 :
         Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard;
 
     public CharacterProgressEdit ToProgressEdit()

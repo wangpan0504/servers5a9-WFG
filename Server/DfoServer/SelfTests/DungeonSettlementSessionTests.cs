@@ -41,10 +41,13 @@ internal static class DungeonSettlementSessionTests
         FreeCards(false);
         FreeCards(true);
         LostCardResult();
+        LostFreeResult();
+        DoubleCardRewards();
         PremiumCards(false,false);
         PremiumCards(true,false);
         PremiumCards(true,true);
         MembershipExpiryAndDay();
+        GoldCardDailyLimit();
         LostPaidResult();
         DelilahServices();
         CappedSettlement();
@@ -72,19 +75,22 @@ internal static class DungeonSettlementSessionTests
             f.Sql("DROP TRIGGER premium_fail");
             var cleared = Finish();
             Check(draws == frozen && cleared.Options is not null && cleared.Options.UseGoldCard == member &&
-                cleared.Options.Price == (member ? 0 : DungeonCardPriceCatalog.Load(pvf).Price(definition.BasisLevel!.Value)) && (cleared.BlackDiamond is not null) == member,
-                $"首份报告冻结资源付费价格或黄金牌免费资格，黑钻单独生成额外奖励（member={member},draws={draws}/{frozen},price={cleared.Options?.Price},basis={definition.BasisLevel}）");
-            Check(f.Read().Inventory.Gold == previous.Inventory.Gold + cleared.Card!.Gold + (cleared.BlackDiamond?.Gold ?? 0),
-                "免费和黑钻金币均按实际入库量合并提交，不提前扣付费牌金币");
-            if (full) Check(f.Count("mailbox_attachments") == 2,"满装备页黑钻和普通两份完整核心共用永久邮件且不遗漏");
+                cleared.Options.Membership.GoldCardActive(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) == member &&
+                cleared.Options.Price == (member ? 0 : DungeonCardPriceCatalog.Load(pvf).Price(definition.BasisLevel!.Value)) &&
+                !cleared.Options.DoublePaidItems && !cleared.Options.LegacyReturningPlayer &&
+                (cleared.BlackDiamond is not null) == member,
+                $"有效58默认免金币单倍，普通账号保留原价；黑钻奖励独立（member={member},draws={draws}/{frozen},price={cleared.Options?.Price},basis={definition.BasisLevel}）");
+            Check(f.Read().Inventory.Gold == previous.Inventory.Gold && f.Read().Inventory.Items.SequenceEqual(previous.Inventory.Items) &&
+                f.Count("mailbox_attachments") == 0 && f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 0L,
+                "通关仅冻结免费与黑钻奖励，不提前发金币、装备、邮件或扣付费牌金币");
             f.Session.AdvanceFormalDungeonCards(false);f.Session.AdvanceFormalDungeonCards(true);
+            f.Session.SetCharacterGold(f.Created.Name,0);
             if (!member)
             {
-                f.Session.SetCharacterGold(f.Created.Name,0);
                 string beforeReject = JsonSerializer.Serialize(f.Read());
                 Check(f.Session.SelectFormalDungeonPaidCard(1,0,policy) is null && JsonSerializer.Serialize(f.Read()) == beforeReject &&
                     f.Query("SELECT paid_reward_json FROM character_dungeon_card_options") is DBNull,
-                    "余额不足的付费请求不写回执、不发奖、不使用会员次数");
+                    "无契约时余额不足的付费请求不写回执、不发奖或耗次数");
                 f.Session.SetCharacterGold(f.Created.Name,10000);
             }
             var beforePaid = f.Session.Selected!;
@@ -100,13 +106,20 @@ internal static class DungeonSettlementSessionTests
                 "付费牌同一事务先验证扣费再增加冻结奖励，不因重试重新抽牌");
             Check(selected!.Inventory?.Receipt is { } paidReceipt && f.Session.CanPublishInventory(paidReceipt),
                 "付费及会员翻牌库存回执绑定当前副本身份，提交后可实际发布差量");
-            if (member) Check(f.Query("SELECT sum(used) FROM character_gold_card_uses") is 1L,"黄金会员一次成功选牌只消费一次角色当日权益");
-            else Check(f.Count("character_gold_card_uses") == 0,"普通金币付费牌不消费黄金会员计数");
+            Check(f.Count("character_gold_card_uses") == (member ? 1 : 0) &&
+                (!member || f.Query("SELECT used FROM character_gold_card_uses") is 1L),
+                "免费黄金牌只在实际领取时消费一次；普通付费牌不创建免费次数");
             var repeat = f.Session.SelectFormalDungeonPaidCard(2,0,policy);
             Check(repeat is { Duplicate:true } && repeat.Reward == selected!.Reward && Same(paid,f.Read()) &&
-                f.Session.SelectFormalDungeonPaidCard(1,1,policy) is null,
-                "两种付费请求选择同一本人席重复回放，其他席不取得奖励");
-            f.Session.SelectFormalDungeonFreeCard(0,0);
+                f.Session.SelectFormalDungeonPaidCard(1,1,policy) is null &&
+                (!member || f.Query("SELECT used FROM character_gold_card_uses") is 1L),
+                "两种请求选择同一本人席重复回放，不再耗次；其他席不取得奖励");
+            var beforeFree = f.Session.Selected!;
+            var claimedFree = f.Session.SelectFormalDungeonFreeCard(0,0);
+            Check(claimedFree?.Inventory?.Receipt is { } freeReceipt && f.Session.CanPublishInventory(freeReceipt) &&
+                f.Session.Selected!.Inventory.Gold == beforeFree.Inventory.Gold + cleared.Card!.Gold + (cleared.BlackDiamond?.Gold ?? 0) &&
+                f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 1L,
+                "选免费牌才同事务发放普通与黑钻奖励，付费选择不代替免费领取");
             var view = f.Session.FormalCardState(f.Session.FormalDungeonResultFocus()!)!;
             Check(view.FreeSelected && view.Paid == selected!.Reward,"手动或自动免费揭示保留此前付费牌面，不覆盖已付款结果");
             if (full) Check(f.Count("mailbox_attachments") == 3,"满背包付费奖励也进入永久邮件，三份核心各保存一次");
@@ -122,21 +135,69 @@ internal static class DungeonSettlementSessionTests
             var policy = PremiumPolicy(_ => 0);
             var cleared = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[13,14,15],dungeons,clear,growth,policy);
             f.Session.AdvanceFormalDungeonCards(false);f.Session.AdvanceFormalDungeonCards(true);
+            var native = f.Session.CardMembershipForClient()!;
+            Check(cleared.Options is { UseGoldCard: true, Price: 0, DoublePaidItems: false } &&
+                native.Membership.GoldCardAvailable(now.ToUnixTimeSeconds()) && f.Session.CanPublishCardMembership(native),
+                "有效58建立服务0及单倍免费黄金牌资格，不凭资格触发双倍");
             f.Session.SetCardMembership(f.Created.Name,CardMembershipKind.GoldCard,0);
-            var before = f.Read();
-            Check(f.Session.SelectFormalDungeonPaidCard(1,0,policy,now) is null && Same(before,f.Read()) && f.Count("character_gold_card_uses") == 0,
-                "已广告免费后会员被关闭时拒绝领取，不暗中按金币收费");
+            Check(!f.Session.CanPublishCardMembership(native), "GM关闭权益使旧服务状态回执失效，不迟到覆盖新资格");
+            f.Session.SetCharacterGold(f.Created.Name,10000);
+            var beforeReject = f.Read();
+            Check(f.Session.SelectFormalDungeonPaidCard(1,0,policy,now) is null && Same(beforeReject,f.Read()) &&
+                f.Query("SELECT paid_reward_json FROM character_dungeon_card_options") is DBNull &&
+                f.Count("character_gold_card_uses") == 0,
+                "已广告免费的牌失去契约资格时拒绝，不暗改金币扣费或消耗次数");
             f.Session.SetCardMembership(f.Created.Name,CardMembershipKind.GoldCard,now.AddDays(30).ToUnixTimeSeconds());
-            int day = CardMembership.ServiceDay(now);
-            f.Sql($"INSERT INTO character_gold_card_uses VALUES({f.Created.Id},'{f.Account}',{day},10)");
-            Check(f.Session.SelectFormalDungeonPaidCard(2,0,policy,now) is null && Same(before,f.Read()),
-                "当天权益已耗尽的已广告免费牌不多扣次数、不暗中扣金币");
-            var selected = f.Session.SelectFormalDungeonPaidCard(2,0,policy,now.AddDays(1));
-            Check(selected is not null && f.Query("SELECT sum(used) FROM character_gold_card_uses") is 11L &&
-                f.Query("SELECT paid_cost FROM character_dungeon_card_options") is 0L,
-                "跨业务日重置计数且保留上一日历史，下一日选牌使用一次免费权益");
+            Check(f.Session.SelectFormalDungeonPaidCard(1,0,policy,now) is not null &&
+                f.Query("SELECT paid_cost FROM character_dungeon_card_options") is 0L &&
+                f.Query("SELECT used FROM character_gold_card_uses") is 1L,
+                "恢复契约后领取原冻结单倍牌，不重抽或追收金币");
             f.Session.ReturnFromFormalDungeon();
             Check(f.Session.SelectFormalDungeonPaidCard(1,0,policy) is null,"退出后迟到付费请求不能作用旧实例");
+        }
+
+        void GoldCardDailyLimit()
+        {
+            using var f = new Fixture("LimitCards",towns,characters,learning,quests);
+            var now = DateTimeOffset.UtcNow;
+            int day = CardMembership.ServiceDay(now);
+            f.Session.SetCardMembership(f.Created.Name,CardMembershipKind.BlackDiamond,now.AddDays(30).ToUnixTimeSeconds());
+            f.Session.SetCardMembership(f.Created.Name,CardMembershipKind.GoldCard,now.AddDays(30).ToUnixTimeSeconds());
+            f.Sql($"INSERT INTO character_gold_card_uses(character_id,account,service_day,used) VALUES({f.Created.Id},'{f.Account}',{day},9)");
+            f.SelectEntry();Enter(f);ClearRun(f);
+            var policy = PremiumPolicy(_ => 0);
+            var activeEvent = new DfoServer.Game.Events.ServerEventState(new(64,1,OverrideActive:true),true);
+            var lastFree = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[25,26,27],dungeons,clear,growth,policy,goldCardEvent:activeEvent);
+            Check(lastFree.Options is { UseGoldCard:true, Price:0, DoublePaidItems:true } && lastFree.BlackDiamond is not null,
+                "已用9次仍冻结最后一次免费双倍黄金牌，黑钻附加免费牌保持独立");
+            f.Session.AdvanceFormalDungeonCards(false);f.Session.AdvanceFormalDungeonCards(true);
+            uint beforeGold = f.Session.Selected!.Inventory.Gold;
+            Check(f.Session.SelectFormalDungeonPaidCard(1,0,policy) is not null &&
+                f.Session.Selected!.Inventory.Gold == beforeGold && f.Query("SELECT used FROM character_gold_card_uses") is 10L,
+                "第10次免费双倍领取不扣金币，两份奖励只消耗一次并原子保存已用10次");
+            Check(f.Session.SelectFormalDungeonPaidCard(2,0,policy) is { Duplicate:true } &&
+                f.Session.SelectFormalDungeonFreeCard(0,0) is not null && f.Query("SELECT used FROM character_gold_card_uses") is 10L,
+                "重复黄金牌及普通加黑钻免费牌不额外占用魔王每日次数");
+            Check(f.Session.ReturnFromFormalDungeon() is not null,
+                "次数边界测试通过正常回城建立下一次副本上下文");
+            f.Session.ReturnToRoster();
+            f.SelectEntry();Enter(f);ClearRun(f);
+            var paid = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[28,29,30],dungeons,clear,growth,policy,goldCardEvent:activeEvent);
+            Check(paid.Options is { UseGoldCard:false, Price:>0, DoublePaidItems:true } &&
+                f.Session.CardMembershipForClient()!.Membership is { GoldCardUsed:10 },
+                "耗尽10次后的新副本恢复金币付费，但仍享活动双倍并保留真实服务次数");
+            f.Session.AdvanceFormalDungeonCards(false);f.Session.AdvanceFormalDungeonCards(true);
+            f.Session.SetCharacterGold(f.Created.Name,10000);
+            Check(f.Session.SelectFormalDungeonPaidCard(1,0,policy) is not null &&
+                f.Query("SELECT paid_cost FROM character_dungeon_card_options ORDER BY rowid DESC LIMIT 1") is long cost && cost == paid.Options!.Price &&
+                f.Query("SELECT used FROM character_gold_card_uses") is 10L,
+                "次数耗尽后仍可合法金币翻牌，不增加或溢出免费次数");
+            var tomorrow = f.Membership(now.AddDays(1));
+            var tomorrowOptions = policy.PrepareOptions(definition,0,1,tomorrow,now.AddDays(1),activeEvent);
+            Check(tomorrow.GoldCardUsed == 0 && tomorrow.Day == day + 1 &&
+                tomorrowOptions is { UseGoldCard:true, Price:0, DoublePaidItems:true } &&
+                f.Query("SELECT used FROM character_gold_card_uses") is 10L,
+                "新业务日恢复免费双倍牌的10次资格，不删除历史次数或补发旧奖励");
         }
 
         DungeonCardRewardPolicy PremiumPolicy(Func<int,int> draw) => new(DungeonDropRuleCatalog.Load(pvf),itemResources.DungeonDropItems,
@@ -146,6 +207,7 @@ internal static class DungeonSettlementSessionTests
         {
             using var f = new Fixture("PaidLost",towns,characters,learning,quests,losePaidResult:true);
             f.Session.SetCardMembership(f.Created.Name,CardMembershipKind.GoldCard,DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds());
+            f.Session.SetCharacterGold(f.Created.Name,10000);
             f.SelectEntry();Enter(f);ClearRun(f);
             int draws = 0;
             var policy = PremiumPolicy(_ => {draws++;return 0;});
@@ -155,12 +217,13 @@ internal static class DungeonSettlementSessionTests
             int frozenDraws = draws;
             Reject<IOException>(() => f.Session.SelectFormalDungeonPaidCard(1,0,policy),"付费或次数消费COMMIT后返回丢失保留同一冻结准备");
             var persisted = f.Read();
-            Check(ReferenceEquals(before,f.Session.Selected) && f.Query("SELECT sum(used) FROM character_gold_card_uses") is 1L,
-                "结果不明时永久回执和一次黄金权益已提交，在线快照尚未安装");
+            Check(ReferenceEquals(before,f.Session.Selected) && persisted.Inventory.Gold == before.Inventory.Gold &&
+                f.Query("SELECT used FROM character_gold_card_uses") is 1L,
+                "结果不明时保留免费黄金牌回执，完整奖励及一次计数已提交且没有扣金币");
             var restored = f.Session.SelectFormalDungeonPaidCard(2,0,policy);
             Check(restored is { Duplicate:true } && restored.Inventory?.Receipt is not null && Same(persisted,f.Session.Selected!) &&
-                draws == frozenDraws && f.Query("SELECT sum(used) FROM character_gold_card_uses") is 1L,
-                "结果恢复读取已有付费回执和实际角色，不重复随机、扣费或消费黄金次数");
+                draws == frozenDraws && f.Query("SELECT used FROM character_gold_card_uses") is 1L,
+                "结果恢复读取已有黄金牌回执和实际角色，不重复随机、发奖或耗次");
         }
 
         void LostCardResult()
@@ -174,19 +237,85 @@ internal static class DungeonSettlementSessionTests
             Reject<IOException>(() => SettleCard(),"COMMIT后返回结果丢失保留原在线快照及待确认实例");
             int frozenDraws = draws;
             var stored = f.Read();
-            Check(ReferenceEquals(previous,f.Session.Selected) && stored.Inventory.Gold > previous.Inventory.Gold &&
+            Check(ReferenceEquals(previous,f.Session.Selected) && stored.Inventory.Gold == previous.Inventory.Gold &&
                 stored.Learning.Experience == previous.Learning.Experience + expectedReward.TotalExperience &&
                 f.Count("character_dungeon_card_rewards") == 1 && f.Settlements == 1,
-                "提交结果不明时数据库已有完整经验和免费奖励，内存未伪装成功");
+                "提交通关结果不明时只有经验与冻结计划已保存，免费资产尚未入库");
             var restored = SettleCard();
             Check(draws == frozenDraws && Same(stored,f.Session.Selected!) && restored.Card is not null &&
-                restored.Inventory?.Receipt is not null && f.Count("character_dungeon_card_rewards") == 1 && f.Settlements == 1,
+                restored.Inventory is null && f.Count("character_dungeon_card_rewards") == 1 && f.Settlements == 1,
                 "原报告恢复只读真实回执，安装实际角色及库存发布回执，不再次抽牌或发资产");
-            Check(restored.Inventory?.Receipt is { } restoredReceipt && f.Session.CanPublishInventory(restoredReceipt),
-                "返回结果丢失后的免费牌恢复回执仍绑定当前副本并允许发布");
+            Check(f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 0L,
+                "通关结果恢复不误标记免费牌已领取，仍需实际选择");
             Check(SettleCard().Outcome == DungeonRunOutcome.Duplicate && Same(stored,f.Read()),
                 "恢复确认后的重复报告继续保持资产和唯一回执");
             FormalDungeonSettlementResult SettleCard() => f.Session.SettleFormalDungeon(f.Created.Id,99,99,[7,8,9],dungeons,clear,growth,policy);
+        }
+
+        void LostFreeResult()
+        {
+            using var f = new Fixture("FreeLost",towns,characters,learning,quests,loseFreeResult:true);
+            f.SelectEntry();Enter(f);ClearRun(f);
+            int draws = 0;
+            var policy = PremiumPolicy(_ => { draws++; return 0; });
+            f.Session.SettleFormalDungeon(f.Created.Id,99,99,[19,20,21],dungeons,clear,growth,policy);
+            f.Session.AdvanceFormalDungeonCards(false);f.Session.AdvanceFormalDungeonCards(true);
+            var before = f.Session.Selected!;
+            int frozen = draws;
+            Reject<IOException>(() => f.Session.SelectFormalDungeonFreeCard(0,0),"免费领取COMMIT后返回丢失保留原准备");
+            var stored = f.Read();
+            Check(ReferenceEquals(before,f.Session.Selected) && stored.Inventory.Gold > before.Inventory.Gold &&
+                f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 1L && f.Session.ReturnFromFormalDungeon() is null,
+                "结果不明时已保存领取事实，但不发布成功或放行回城");
+            Reject<InvalidOperationException>(() => f.Session.SetCharacterGold(f.Created.Name,42),"领取结果不明不能覆盖原库存快照");
+            var restored = f.Session.SelectFormalDungeonFreeCard(0,0);
+            Check(restored is { Duplicate:true,Inventory.Receipt:not null } && draws == frozen && Same(stored,f.Session.Selected!) &&
+                f.Session.CanPublishInventory(restored.Inventory.Receipt!),
+                "重试从持久回执恢复实际库存和发布资格，不重复发奖或随机");
+            Check(f.Session.SelectFormalDungeonFreeCard(0,0) is { Duplicate:true,Inventory:null } && Same(stored,f.Read()),
+                "恢复后的再次选择不发送获得特效或再次保存库存");
+        }
+
+        void DoubleCardRewards()
+        {
+            foreach (var (active, devil) in new[] { (false,false),(true,false),(false,true),(true,true) })
+            {
+                using var f = new Fixture("Double"+(active ? "1" : "0")+(devil ? "1" : "0"),towns,characters,learning,quests);
+                f.Session.SetCharacterGold(f.Created.Name,10000);
+                if (devil) f.Session.SetCardMembership(f.Created.Name,CardMembershipKind.GoldCard,DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds());
+                f.SelectEntry();Enter(f);ClearRun(f);
+                var policy = PremiumPolicy(_ => 0);
+                var eventState = new DfoServer.Game.Events.ServerEventState(new(64,1,OverrideActive:active),active);
+                var settled = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[22,23,24],dungeons,clear,growth,policy,goldCardEvent:eventState);
+                bool doubled = active;
+                Check(settled.Options!.DoublePaidItems == doubled && !settled.Options.LegacyReturningPlayer &&
+                    settled.Options.UseGoldCard == devil && (devil ? settled.Options.Price == 0 : settled.Options.Price > 0) &&
+                    (settled.Options.Paid.ExtraItem is not null) == doubled && settled.BlackDiamond is null,
+                    "只有活动64决定双倍；魔王子服务0决定免金币，二者组合为免费双倍牌，不制造黑钻或回归资格");
+                f.Session.AdvanceFormalDungeonCards(false);f.Session.AdvanceFormalDungeonCards(true);
+                var before = f.Session.Selected!;
+                if (active && devil)
+                {
+                    f.Sql("CREATE TRIGGER double_free_fail BEFORE UPDATE OF paid_reward_json ON character_dungeon_card_options BEGIN SELECT RAISE(ABORT,'double free rollback'); END");
+                    Reject<SqliteException>(() => f.Session.SelectFormalDungeonPaidCard(1,0,policy),
+                        "免费双倍牌回执末段失败必须同时回滚两件装备与使用次数");
+                    Check(Same(before,f.Read()) && f.Count("character_gold_card_uses") == 0 &&
+                        f.Query("SELECT paid_reward_json FROM character_dungeon_card_options") is DBNull,
+                        "免费双倍SQL失败不留下半份奖励、扣金币或已用次数");
+                    f.Sql("DROP TRIGGER double_free_fail");
+                }
+                var selected = f.Session.SelectFormalDungeonPaidCard(1,0,policy)!;
+                var added = f.Session.Selected!.Inventory.Items.Where(item => before.Inventory.Items.All(old => old.Uid != item.Uid)).ToArray();
+                Check(added.Length == (doubled ? 2 : 1) && added.Select(item => item.Uid).Distinct().Count() == added.Length &&
+                    added.All(item => item.Core == settled.Options.Paid.Item) && selected.Reward.Gold == 0 &&
+                    f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 0L &&
+                    f.Session.Selected!.Inventory.Gold == before.Inventory.Gold - settled.Options.Price &&
+                    f.Count("character_gold_card_uses") == (devil ? 1 : 0) &&
+                    (!devil || f.Query("SELECT used FROM character_gold_card_uses") is 1L),
+                    "活动x2真实发两件独立UID同品级装备；契约仅免金币并耗一次，不乘金币或普通免费奖励");
+                Check(f.Session.SelectFormalDungeonPaidCard(2,0,policy) is { Duplicate:true } && Same(f.Session.Selected!,f.Read()),
+                    "免费或付费双倍的重复请求不重复扣费、耗次数或发奖");
+            }
         }
 
         void FreeCards(bool full)
@@ -219,23 +348,21 @@ internal static class DungeonSettlementSessionTests
             var result = CardSettle();
             var committed = f.Session.Selected!;
             Check(draws == frozenDraws && result.Card is { Gold: > 0, Item: not null } &&
-                committed.Inventory.Gold == previous.Inventory.Gold + result.Card.Gold && Same(committed,f.Read()) &&
+                committed.Inventory.Gold == previous.Inventory.Gold && committed.Inventory.Items.SequenceEqual(previous.Inventory.Items) && Same(committed,f.Read()) &&
                 f.Settlements == 1 && f.Count("character_dungeon_card_rewards") == 1,
-                "同报告重试沿原随机核心提交一次金币、物品及永久回执");
+                "同报告重试沿原随机核心只冻结牌面，不提前提交金币或物品");
             Check(result.LuckyStarGained && result.LuckyStarTotal == previous.Inventory.AccountWallet.RentalPoints + 1 &&
                 committed.Inventory.AccountWallet.RentalPoints == result.LuckyStarTotal &&
                 committed.Inventory.AccountWallet.Revision == previous.Inventory.AccountWallet.Revision + 1 &&
-                result.Inventory?.Receipt is { } freeReceipt && f.Session.CanPublishInventory(freeReceipt),
-                "免费牌与幸运星共事务，实际钱包和副本身份回执均安装到当前角色");
+                result.Inventory is null && f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 0L,
+                "幸运星仍随通关事务保存，免费牌保持未领取，不能误发库存增量");
             var core = result.Card!.Item!;
             if (full)
-                Check(result.MailId is not null && committed.Inventory.Items.SequenceEqual(previous.Inventory.Items) &&
-                    f.Count("mailbox_messages") == 1 && f.Count("mailbox_attachments") == 1 &&
-                    f.Query("SELECT expires_at FROM mailbox_messages") is DBNull,
-                    "满装备页不吞牌面物品，冻结完整核心进入同事务永久邮件");
+                Check(result.MailId is null && f.Count("mailbox_messages") == 0 && f.Count("mailbox_attachments") == 0,
+                    "满装备页也不能在实际翻牌前提前投递邮件");
             else
-                Check(result.MailId is null && committed.Inventory.Items.Any(item => item.Uid > 0 && item.Core == core) &&
-                    f.Count("mailbox_messages") == 0, "空位奖励使用真实UID及原随机品级完整入库");
+                Check(result.MailId is null && f.Count("mailbox_messages") == 0,
+                    "空位牌面尚未创建库存UID，随机完整核心留在冻结计划");
             var replay = CardSettle();
             Check(draws == frozenDraws && replay.Card == result.Card && Same(committed,f.Read()) &&
                 f.Count("character_dungeon_card_rewards") == 1 && f.Settlements == 1,
@@ -252,12 +379,25 @@ internal static class DungeonSettlementSessionTests
                 f.Session.Selected!.Inventory.Find(new(InventoryListType.Equipment,12)) is null && Same(f.Session.Selected,f.Read()),
                 "德利拉1000/1000结算窗口实际扣除物品并同事务增加金币");
             var beforeFlip = f.Session.Selected!;
-            Check(f.Session.RevealFormalDungeonCard(cards) is not null && f.Session.RevealFormalDungeonCard(cards) is null &&
-                f.Session.SelectFormalDungeonFreeCard(0,0) is not null && ReferenceEquals(beforeFlip,f.Session.Selected) &&
-                f.Count("character_dungeon_card_rewards") == 1,
-                "出售后的当前角色可揭示原实例，自动/手动重复只展示一次奖励且不写资产");
+            f.Sql("CREATE TRIGGER free_claim_fail BEFORE UPDATE OF claimed ON character_dungeon_card_rewards BEGIN SELECT RAISE(ABORT,'claim rollback'); END");
+            Reject<SqliteException>(() => f.Session.RevealFormalDungeonCard(cards),"领取末段失败回滚金币、装备、邮件和领取位");
+            Check(Same(beforeFlip,f.Read()) && f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 0L,
+                "领取失败保留原库存和同一份随机计划");
+            f.Sql("DROP TRIGGER free_claim_fail");
+            var flipped = f.Session.RevealFormalDungeonCard(cards);
+            Check(flipped?.Inventory?.Receipt is { } flipReceipt && f.Session.CanPublishInventory(flipReceipt) &&
+                f.Session.Selected!.Inventory.Gold == beforeFlip.Inventory.Gold + result.Card.Gold &&
+                f.Session.RevealFormalDungeonCard(cards) is null && f.Session.SelectFormalDungeonFreeCard(0,0) is { Inventory: null, Duplicate: true } &&
+                f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 1L && draws == frozenDraws,
+                "出售后选牌使用当前库存，原计划重试一次发奖，自动/手动重复不再发资产");
+            if (full)
+                Check(flipped!.MailId is not null && f.Count("mailbox_attachments") == 1 && f.Query("SELECT expires_at FROM mailbox_messages") is DBNull,
+                    "实际领取时满装备页完整核心进入永久邮件");
+            else Check(f.Session.Selected!.Inventory.Items.Any(item => item.Uid > 0 && item.Core == core),
+                "实际领取时创建真实UID并保持冻结品级");
+            var afterFlip = f.Session.Selected!;
             f.Session.ReturnFromFormalDungeon();
-            Check(f.Session.RevealFormalDungeonCard(cards) is null && Same(beforeFlip,f.Read()),
+            Check(f.Session.RevealFormalDungeonCard(cards) is null && Same(afterFlip,f.Read()),
                 "回城后旧计时及旧牌面不影响新阶段，重开库保留全部已提交资产");
 
             FormalDungeonSettlementResult CardSettle() => f.Session.SettleFormalDungeon(f.Created.Id,99,99,[4,5,6],dungeons,clear,growth,policy,luckyStarLimit:999);
@@ -637,13 +777,13 @@ internal static class DungeonSettlementSessionTests
         public long Settlements => Count("character_dungeon_settlement_receipts");
 
         public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning,
-            DfoServer.GameWorld.Quests.QuestCatalog quests, bool loseCardResult = false,bool losePaidResult = false)
+            DfoServer.GameWorld.Quests.QuestCatalog quests, bool loseCardResult = false,bool losePaidResult = false, bool loseFreeResult = false)
         {
             database = Path.Combine(root, "game.db");
             repository = new(database, quests);
             owner = owners.Acquire("clear-session", () => { });
-            Session = new(loseCardResult || losePaidResult ? new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,
-                loseSettlement:loseCardResult,losePaid:losePaidResult) : repository, towns, owner);
+            Session = new(loseCardResult || losePaidResult || loseFreeResult ? new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,
+                loseSettlement:loseCardResult,losePaid:losePaidResult,loseFree:loseFreeResult) : repository, towns, owner);
             Created = repository.Create(owner,CharacterCreation.Prepare(name,characters.Get(0),towns.Room,towns.InitialReturn,learning.Get)
                 with { ActiveMainQuests = [new(0,3145,1)] });
         }
@@ -669,6 +809,7 @@ internal static class DungeonSettlementSessionTests
         }
 
         public Character Read(AccountOwners.Lease? reader = null) => repository.LoadCharacter(reader ?? owner, Created.Slot);
+        public CardMembership Membership(DateTimeOffset now) => repository.LoadCardMembership(owner, Created.Id, now);
         public AccountOwners.Lease TakeOver() => owners.Acquire(owner.Account,() => { });
         public long Count(string table)
         {

@@ -12,14 +12,22 @@ internal static class NativeLoginTcpTests
         try
         {
             var hello = peer.Expect(0, 1).Body;
-            TestCheck.That(hello.Length == 357, "native channel initialization contains complete codec key, shared identity and packet counts");
-            TestCheck.Bytes(hello.AsSpan(0, 9), [0x53, 0xd2, 0xd6, 0xd6, 0x96, 0xd2, 0xbe, 0xed, 0xde], "first NOTI uses its dedicated wire encoding");
+            TestCheck.That(hello.Length >= 357, "native channel initialization contains complete codec key, shared identity, clock and packet counts");
+            TestCheck.Bytes(hello.AsSpan(4, 5), [0x96, 0xd2, 0xbe, 0xed, 0xde], "first NOTI uses its dedicated wire encoding");
             // 独立复现客户端 0369FA30 解码，再检查 protobuf，避免只验证服务端内部明文。
             for (int i = 0; i < hello.Length; i++)
                 hello[i] = (byte)((((hello[i] << 6) | (hello[i] >> 2)) ^ 0xb5) & 0xff);
-            TestCheck.Bytes(hello.AsSpan(0, 9), [0x61, 1, 0, 0, 0x10, 1, 0x1a, 0xce, 2], "protobuf result and bytes field framing");
+            TestCheck.That(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(hello) == hello.Length - 4,
+                "protobuf长度前缀覆盖时钟及所有原字段");
+            TestCheck.Bytes(hello.AsSpan(4, 5), [0x10, 1, 0x1a, 0xce, 2], "protobuf result and bytes field framing");
             TestCheck.Bytes(hello.AsSpan(343, 4), [0x38, 2, 0x40, 10], "主游戏端口仍安装默认入口身份2/10");
-            TestCheck.Bytes(hello.AsSpan(347), [0xa0, 0xd3, 0x0e, 0xd4, 0x0d, 0xa8, 0xd3, 0x0e, 0x94, 0x0e], "protobuf fields 30004=1748 CMD and 30005=1812 NOTI");
+            using (var reader = new BinaryReader(new MemoryStream(hello, 347, hello.Length - 347)))
+            {
+                TestCheck.That(reader.ReadByte() == 88 && Math.Abs(reader.Read7BitEncodedInt64() - DateTimeOffset.UtcNow.ToUnixTimeSeconds()) <= 5,
+                    "原生握手field11为Unix秒，完整关闭/重开不沿用旧服务器时钟");
+                TestCheck.Bytes(reader.ReadBytes(10), [0xa0, 0xd3, 0x0e, 0xd4, 0x0d, 0xa8, 0xd3, 0x0e, 0x94, 0x0e], "protobuf fields 30004=1748 CMD and 30005=1812 NOTI");
+                TestCheck.That(reader.BaseStream.Position == reader.BaseStream.Length, "完整消费新增时钟及两项枚举数量");
+            }
             peer.Send(1562, NativeLoginWire.Precheck(account));
             peer.Expect(1, 1562, [1]);
             return peer;

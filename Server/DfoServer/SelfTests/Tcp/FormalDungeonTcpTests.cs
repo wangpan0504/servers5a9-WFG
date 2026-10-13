@@ -32,6 +32,7 @@ internal static partial class FormalDungeonTcpTests
         string completedOrdinaryState = "";
         long completedOrdinaryRevision = 0;
         int completedOrdinaryGoldLimit = 0, expectedOrdinaryGoldLimit = 0;
+        bool expectContractOverview = false;
         byte automaticLevel = resources.Characters.Get(0).Skills.Single(skill => skill.Id == 174).Level;
         using (var peer = Open(fixture))
         {
@@ -206,6 +207,9 @@ internal static partial class FormalDungeonTcpTests
             string assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(46, reportResult);
             ReadClear();
+            That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assetsBeforeClear &&
+                fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id) is [[0L]],
+                "真实通关冻结牌面但不提前写背包或领取位");
             assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             experience += clearReward.TotalExperience;
             That(Experience(fixture, peer.Id) == experience && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[1L]],
@@ -221,6 +225,11 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(70); That(peer.Expect(1, 70).Body.Length == 17, "70普通八槽完整ACK");
             var cardRow = fixture.Query("SELECT reward_json FROM character_dungeon_card_rewards WHERE character_id=$p0 ORDER BY revision DESC LIMIT 1",peer.Id).Single();
             var cardReward = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>((string)cardRow[0])!;
+            var automaticCard = peer.Expect(1,71).Body;
+            That(automaticCard.Length == 33 && automaticCard[0] == 1 && automaticCard[1] == 0 && automaticCard[2] == 255,
+                "70后真实计时自动选择本人免费席，提交成功后才揭示牌面");
+            That(DrainCardInventory(peer) > 0 && fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id) is [[1L]],
+                "自动翻牌实际提交金币/物品和领取位，ACK后完整同步库存差量");
             if (cardReward.Item is { } cardItem)
             {
                 var location = fixture.Query("SELECT s.list_type,s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=$p1 ORDER BY i.item_uid DESC LIMIT 1",peer.Id,cardItem.ItemId).Single();
@@ -233,9 +242,6 @@ internal static partial class FormalDungeonTcpTests
                     "德利拉出售按完整冻结物品耐久折算价实际增加金币");
                 assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             }
-            var automaticCard = peer.Expect(1,71).Body;
-            That(automaticCard.Length == 33 && automaticCard[0] == 1 && automaticCard[1] == 0 && automaticCard[2] == 255,
-                "70后真实计时自动揭示本人免费席，出售的新revision不打断牌面");
             string cardState = fixture.Snapshot("SELECT * FROM character_dungeon_card_rewards ORDER BY character_id,instance_id");
             peer.Send(71, [0, 0]); peer.Expect(1,71,automaticCard);
             That(fixture.Snapshot("SELECT * FROM character_dungeon_card_rewards ORDER BY character_id,instance_id") == cardState,
@@ -250,23 +256,41 @@ internal static partial class FormalDungeonTcpTests
             peer.Barrier();
             That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assetsBeforeClear &&
                 Experience(fixture, peer.Id) == experience, "免费翻牌展示及回城保留已提交资产，不再发物品或经验");
+            var fatigueBeforeBlack = fixture.Query("SELECT f.used,f.maximum,f.remaining,c.revision FROM character_fatigue f JOIN characters c ON c.id=f.character_id WHERE c.id=$p0",peer.Id).Single();
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"black-diamond FormalTcp 30",out string blackReply) && blackReply.StartsWith("OK ") &&
                 DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"gold-card FormalTcp 30",out string goldReply) && goldReply.StartsWith("OK "),
-                "在线GM为当前账号保存黑钻和黄金牌到期资格，不接管正在使用的会话");
+                "在线GM为当前账号保存黑钻及58期限，启用魔王服务0但不隐式启用双倍");
+            expectContractOverview = true;
+            var fatigueAfterBlack = fixture.Query("SELECT f.used,f.maximum,f.remaining,c.revision FROM character_fatigue f JOIN characters c ON c.id=f.character_id WHERE c.id=$p0",peer.Id).Single();
+            That(Convert.ToInt64(fatigueAfterBlack[0]) == Convert.ToInt64(fatigueBeforeBlack[0]) &&
+                Convert.ToInt64(fatigueAfterBlack[1]) == Convert.ToInt64(fatigueBeforeBlack[1])+32 &&
+                Convert.ToInt64(fatigueAfterBlack[2]) == Convert.ToInt64(fatigueBeforeBlack[2])+32 &&
+                Convert.ToInt64(fatigueAfterBlack[3]) == Convert.ToInt64(fatigueBeforeBlack[3])+2,
+                "黑钻与58两次GM设置各按统一事务推进角色revision，黑钻容量只补32点一次");
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"event on 64",out string eventReply) && eventReply.StartsWith("OK "),
+                "本机GM启用全服活动64，已有魔王资格与活动共同进入免费双倍牌，不依赖回归标志");
             ClearAgain(Enter(peer));
             peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"event off 64",out string offReply) && offReply.StartsWith("OK "),
+                "牌面冻结后关闭活动只影响下一份计划，本次仍免金币并按原x2发奖");
             peer.Send(69);peer.Expect(1,69,[1]);peer.Send(70);peer.Expect(1,70);
             var paidBeforeAuto = SelectPaid(true);
             var completeView = peer.Expect(1,71).Body;
             That(completeView.Length == paidBeforeAuto.Length && completeView[1] == 0 && completeView[2] == 0 &&
                 completeView.AsSpan(3).SequenceEqual(paidBeforeAuto.AsSpan(3)),
                 "付费或黄金牌先选后自动免费揭示仍保留同一付费奖励，计时不会覆盖已取得牌面");
+            That(DrainCardInventory(peer) > 0,
+                "付费先选后的自动免费与黑钻领取仍实际发布各自库存差量");
             peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 261, [9]);
             peer.Expect(0, 28);
             byte[] retryMap = peer.Expect(0, 29).Body;
             That(U16(retryMap, 25) > U16(map, 25), "再挑战创建新Run、新尝试及新怪key");
             ClearAgain(retryMap);
             peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            var singleGold = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardOptions>((string)fixture.Query(
+                "SELECT options_json FROM character_dungeon_card_options WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id).Single()[0])!;
+            That(singleGold is { UseGoldCard:true, Price:0, DoublePaidItems:false, LegacyReturningPlayer:false } && peer.DevilService0[13] == 1,
+                "关闭活动后的新副本走单倍免费黄金牌，未领取不提前消耗第二次资格");
             peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 2]);
             peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             peer.Send(72, [1, 3]); peer.Barrier();
@@ -287,6 +311,10 @@ internal static partial class FormalDungeonTcpTests
                 ulong expectedExperience = experience + (duplicate ? 0 : clearReward.TotalExperience);
                 byte expectedLevel = 1;
                 while (expectedExperience >= growth.GetCumulativeExperienceBoundary(expectedLevel)) expectedLevel++;
+                peer.ReadCardMembershipState();
+                if (expectContractOverview)
+                    That(peer.PremiumServices.GetValueOrDefault((byte)58) > 0 && U32(peer.DevilService0,9) > 0,
+                        "有效type58契约期限与免费黄金牌服务0在结算35之前同步");
                 byte[] clear = peer.Expect(0, 35).Body;
                 That(result.Length == 16 && result[6] == 99 && U16(result, 9) == peer.Id && exp.Length == 91 &&
                     U64(exp, 1) == expectedExperience && exp[0] == expectedLevel &&
@@ -306,19 +334,24 @@ internal static partial class FormalDungeonTcpTests
                         "普通付费牌测试提供足够金币，既有窗口内更新不重抽牌面");
                 }
                 long before = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]);
-                peer.Send(71,[golden ? (byte)2 : (byte)1,0]);
+                peer.Send(71,[1,0]);
                 byte[] selected = peer.Expect(1,71).Body;
                 var rewardRow = fixture.Query("SELECT paid_reward_json,paid_cost FROM character_dungeon_card_options WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id).Single();
                 var actual = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>((string)rewardRow[0])!;
                 That(selected[0] == 1 && selected[2] == 0 && selected.Length == 33+selected[3]*8 &&
-                    options.UseGoldCard == golden && Convert.ToInt64(rewardRow[1]) == options.Price &&
+                    options.UseGoldCard == golden && (golden ? options.Price == 0 : options.Price > 0) &&
+                    Convert.ToInt64(rewardRow[1]) == options.Price &&
                     Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]) == before-options.Price+actual.Gold,
                     "71实际费用、金币和付费条目按本次冻结及持久回执核对，不借客户端会员标志");
+                peer.ReadCardMembershipState();
+                That(golden ? peer.DevilService0[13] == 1 &&
+                    fixture.Query("SELECT used FROM character_gold_card_uses WHERE character_id=$p0",peer.Id) is [[1L]] :
+                    U32(peer.DevilService0,9) == 0 &&
+                    fixture.Query("SELECT count(*) FROM character_gold_card_uses WHERE character_id=$p0",peer.Id) is [[0L]],
+                    "魔王免费黄金牌成功后刷新已用1次；普通金币牌不创建免费次数");
                 DrainCardInventory(peer);
-                if (golden) That(fixture.Query("SELECT sum(used) FROM character_gold_card_uses WHERE character_id=$p0",peer.Id) is [[1L]],
-                    "黄金牌一次成功领取仅消耗一个角色当日次数");
                 string saved = fixture.Snapshot();
-                peer.Send(71,[1,0]);peer.Expect(1,71,selected);peer.Barrier();
+                peer.Send(71,[1,0]);peer.Expect(1,71,selected);peer.ReadCardMembershipState();peer.Barrier();
                 That(fixture.Snapshot() == saved,"真实网络重复付费请求不重复扣金币、消耗次数、写奖励或邮件");
                 return selected;
             }
@@ -372,6 +405,8 @@ internal static partial class FormalDungeonTcpTests
                 return packet;
             }
         }
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"black-diamond FormalTcp 0",out string clearBlackReply) &&
+            clearBlackReply.StartsWith("OK "), "后续普通角色回归前只关闭黑钻，黄金牌、活动和回归资格保持独立");
         VerifyEntryRecoveryAndJobs(fixture, kills);
         VerifyOrdinaryEntry(fixture);
         VerifyDungeonEquipmentMoves(fixture, resources);
@@ -876,6 +911,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(46, resultReport);
         That(peer.Expect(0, 34).Body[6] == 90, "普通真实Boss清图开启评分结果通知");
         ReadGrowth(clearReward.TotalExperience);
+        peer.ReadCardMembershipState();
         byte[] clear = peer.Expect(0, 35).Body;
         ReadCommittedCard(fixture,peer,clear);
         That(U32(clear, 0) == clearReward.BaseExperience && U32(clear, 4) == clearReward.RankExperience &&
@@ -938,14 +974,15 @@ internal static partial class FormalDungeonTcpTests
         if (card.Item is { } item) expected.Add((checked((uint)item.ItemId),checked((uint)item.Count)));
         var optionsRow = fixture.Query("SELECT options_json,black_diamond_reward_json FROM character_dungeon_card_options WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id).Single();
         var options = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardOptions>((string)optionsRow[0])!;
-        var bonus = optionsRow[1] is string bonusJson ? JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>(bonusJson) : null;
+        var bonus = options.BlackDiamond;
         var bonusPairs = new List<(uint Item,uint Amount)>();
         if (bonus?.Gold > 0) bonusPairs.Add((0,checked((uint)bonus.Gold)));
         if (bonus?.Item is { } bonusItem) bonusPairs.Add((checked((uint)bonusItem.ItemId),checked((uint)bonusItem.Count)));
         int totalPairs = expected.Count+bonusPairs.Count;
-        That(body.Length == 218 + totalPairs * 8 && body[156] == expected.Count && body[192 + totalPairs * 8] == 1 &&
-            body.AsSpan(210 + totalPairs * 8,8).IndexOfAnyExcept((byte)0) == -1 && U32(body,164+expected.Count*8) == options.Price,
-            "35个人免费奖励动态条目及完整八bool尾按当前持久回执独立核对");
+        That(body.Length == 218 + totalPairs * 8 && body[156] == expected.Count && body[193 + totalPairs * 8] == 0 &&
+            body[^26] == (options.DoublePaidItems ? 1 : 0) && body[^27] == 0 && body[^8] == 0 &&
+            body.AsSpan(body.Length-7).IndexOfAnyExcept((byte)0) == -1 && U32(body,164+expected.Count*8) == options.Price,
+            "35个人冻结候选、x2及回归标记按持久计划独立核对，不混为黑钻标志");
         for (int index = 0; index < expected.Count; index++)
             That(U32(body,157+index*8) == expected[index].Item && U32(body,161+index*8) == expected[index].Amount,
                 "免费牌每项模板ID和本次数量对应实际金币或冻结物品");
@@ -955,9 +992,7 @@ internal static partial class FormalDungeonTcpTests
             That(U32(body,bonusAt+1+index*8) == bonusPairs[index].Item && U32(body,bonusAt+5+index*8) == bonusPairs[index].Amount,
                 "35黑钻条目精确对应同事务追加的实际金币及冻结核心数量");
         int inventoryNotices = DrainCardInventory(peer, fixture);
-        if (duplicate) That(inventoryNotices == 0,"重复结算只刷新幸运星余额，不重发背包奖励差量");
-        else if (card.Gold > 0 || bonus?.Gold > 0)
-            That(inventoryNotices > 0,"已到账翻牌金币必须发送实际背包差量，不能只通过提交断言");
+        That(inventoryNotices == 0,"首次和重复通关都不提前发翻牌库存差量，幸运星余额仍按既有链发布");
     }
 
     static int DrainCardInventory(TcpPeer peer, TcpTestFixture? fixture = null)

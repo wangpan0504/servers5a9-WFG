@@ -64,7 +64,9 @@ internal static class DevelopmentCommands
             var mailbox = request.Action == DevelopmentAction.Item ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
             var learning = reset ? SkillLearningCatalog.Load(pvf, resources!.Contracts.ExpertSkillLevels) : null;
             var progress = reset ? new CharacterProgressReset(CharacterCatalog.Load(pvf, resources!.Items), learning!, CharacterGrowthCatalog.Load(pvf, learning)) : null;
-            Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items, progress));
+            var events = request.Action == DevelopmentAction.Event ? new Game.Events.ServerEventService(
+                new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db"))) : null;
+            Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items, progress, events: events));
             return 0;
         }
         catch (IOException)

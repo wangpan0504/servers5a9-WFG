@@ -592,7 +592,7 @@ internal static class SessionPlanningTests
             new AuthenticationService(new AuthenticationRepository(Database)).Create(Owner.Account, "fixture-password");
             Sql($$"""
                 INSERT INTO account_client_settings VALUES('planning',zeroblob(204));
-                INSERT INTO account_card_memberships VALUES('planning',9999999999,9999999999,7);
+                INSERT INTO account_card_memberships(account,black_diamond_expires,gold_card_expires,revision) VALUES('planning',9999999999,9999999999,7);
                 INSERT INTO account_expert_contracts VALUES('planning',9999999999);
                 INSERT INTO account_completed_quests VALUES('planning',900,{{id}},'1234567890abcdef1234567890abcdef',0,2);
                 INSERT INTO character_completed_quests VALUES({{id}},10,0,1);
@@ -629,7 +629,7 @@ internal static class SessionPlanningTests
                     1,'test','test','test',0,1,0,'normal',1,1,0,1,1,0,1,0,1,'[]','1234567890abcdef1234567890abcdef');
                 INSERT INTO character_dungeon_settlement_receipts VALUES({{id}},'planning','settlement','instance',0,1,1,1,1,zeroblob(16),X'01',1,
                   1,0,1,-1,'test','test',1,1,0,1,1);
-                INSERT INTO character_dungeon_card_rewards VALUES({{id}},'planning','instance','{}','{}',NULL,1);
+                INSERT INTO character_dungeon_card_rewards(character_id,account,instance_id,plan_json,reward_json,mail_id,revision) VALUES({{id}},'planning','instance','{}','{}',NULL,1);
                 INSERT INTO character_dungeon_card_options VALUES({{id}},'planning','instance','{}',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
                 INSERT INTO character_tutorial_state VALUES({{id}},'planning',7115,0,0);
                 INSERT INTO character_tutorial_receipts VALUES({{id}},'planning','abcdef1234567890abcdef1234567890','skip',

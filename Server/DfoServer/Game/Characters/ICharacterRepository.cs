@@ -21,10 +21,13 @@ internal interface ICharacterRepository
     DfoServer.Game.Tutorials.TutorialCheckpointResult CommitTutorialCheckpoint(AccountOwners.Lease owner,
         DfoServer.Game.Tutorials.TutorialCheckpointPlan plan);
     Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
+    Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now);
     CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort characterId,DateTimeOffset now);
     CardMembership SetCardMembership(AccountOwners.Lease owner,string name,CardMembershipKind kind,long expires);
     DungeonPaidCardCommit CommitPaidDungeonCard(AccountOwners.Lease owner,Character expected,PreparedDungeonSettlement prepared,
         DungeonCardDelivery delivery,DateTimeOffset now);
+    DungeonFreeCardCommit CommitFreeDungeonCard(AccountOwners.Lease owner, Character expected,
+        PreparedDungeonSettlement prepared, DungeonCardDelivery delivery);
     DfoServer.Game.Currency.AccountWallet LoadAccountWallet(AccountOwners.Lease owner);
     CharacterRosterEntry[] ListRoster(AccountOwners.Lease owner);
     Character LoadCharacter(AccountOwners.Lease owner, ushort slot);

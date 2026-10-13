@@ -60,6 +60,14 @@ internal static class PremiumContractTests
             [2, 27, 10, 0, 0, 0, 0, 0, 0, 0, 131, 1, 0, 0, 0, 0, 0, 0, 0],
             "1760逐项按类型排序，使用u8/u8/i64布局，精确到期及已过期服务不发送");
         Bytes(PremiumPackets.SelectEntries(AccountWallet.Empty, DateTimeOffset.FromUnixTimeSeconds(1000)), [0], "空契约列表保留数量字段");
+        var devil = projectionWallet.SetContractExpiry(58,2000);
+        That(devil.ContractExpiry(58) == 2000 && devil.ContractExpiry(27) == 1010 && devil.Revision == projectionWallet.Revision &&
+            devil.SetContractExpiry(58,0).PremiumContracts.SequenceEqual(projectionWallet.PremiumContracts),
+            "58设置/关闭沿统一不可变契约快照，仅改本类型，版本由原持久化事务推进");
+        Reject<InvalidDataException>(() => devil.SetContractExpiry(132,2000),"契约GM设置不得越过匹配客户端类型边界");
+        Reject<InvalidDataException>(() => devil.SetContractExpiry(58,-1),"账号契约不能保存负期限");
+        That(!PremiumContractCatalog.IsConsumableContract(56) && !PremiumContractCatalog.IsConsumableContract(58),
+            "56/58显示资格接入不擅自开放未确认的商城或实体服务能力");
         Reject<InvalidDataException>(() => PremiumPackets.SelectEntries(projectionWallet with
         { Contracts = projectionWallet.PremiumContracts.Add(580, 1010) }, DateTimeOffset.FromUnixTimeSeconds(1000)),
             "超出客户端类型边界的活动服务不推测合并成另一种权益");

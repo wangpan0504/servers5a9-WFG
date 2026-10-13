@@ -123,6 +123,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         CreateTutorial(db, transaction, owner.Account, id, character.Tutorial);
         if (character.DungeonState is not null) CreateFatigue(db, transaction, owner.Account, id);
         var learning = ReadLearning(db, id, transaction);
+        var fatigue = ReadFatigue(db, id, transaction);
         // 新角色尚无实体；读取同账号已有仓库后合入角色初始物品，不能重写共享资产。
         var before = ReadInventory(db, id, transaction) with { Gold = 0 };
         var initial = character.Inventory with { AccountWallet = before.AccountWallet, AccountCargo = before.AccountCargo,
@@ -148,7 +149,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             Learning = learning,
             Inventory = inventory,
             DungeonState = character.DungeonState,
-            Fatigue = character.DungeonState is null ? null : CharacterFatigueState.NewOrdinary
+            Fatigue = fatigue
         };
     });
     public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint) => owner.Execute(() =>

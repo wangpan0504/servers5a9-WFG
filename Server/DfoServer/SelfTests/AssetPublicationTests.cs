@@ -85,11 +85,12 @@ internal static class AssetPublicationTests
         await using var staleSender = new GameConnectionSender(owner, staleBytes, staleStop, 0,
             (_, _, _, _, _) => publications++);
         using var fresh = owners.Acquire("publication", () => { });
+        var staleContext = new GameConnectionContext(new(1, IPAddress.Loopback, staleBytes, staleStop), owner, failedSession, staleSender);
+        await RejectAsync<InvalidOperationException>(() => commands.DispatchAsync(staleContext, request),
+            "old owner cannot retry committed creation");
         await RejectAsync<InvalidOperationException>(() => staleSender.Send(0, (ushort)NotiPacketType.USERINFO, [2], "stale_assets"),
             "replaced owner cannot publish asset result");
         TestCheck.That(staleBytes.Length == 0 && publications == 0, "stale generation rejected before stream write");
-        await RejectAsync<InvalidOperationException>(() => commands.DispatchAsync(failedContext, request),
-            "old owner cannot retry committed creation");
         owner.Dispose();
         var reopened = new CharacterRepository(path);
         TestCheck.That(reopened.List(fresh).Single().Inventory.Items.SequenceEqual(instances),

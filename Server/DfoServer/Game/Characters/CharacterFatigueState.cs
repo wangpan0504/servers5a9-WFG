@@ -7,7 +7,31 @@ internal sealed record CharacterFatigueState(ushort Used, ushort Maximum, ushort
     public const string OrdinaryRoomRuleId = "local-3145-first-room-fatigue-v1";
     public const string NormalRoomRuleId = "local-normal-first-room-fatigue-v1";
     // 与此前普通选角投影一致的本服初始状态，不宣称是原服恢复/重置公式。
-    public static CharacterFatigueState NewOrdinary => new(0, 156, 0, 156, 0, 0);
+    public const ushort OrdinaryMaximum = 156;
+    public const ushort BlackDiamondBonus = 32;
+    public const ushort BlackDiamondMaximum = OrdinaryMaximum + BlackDiamondBonus;
+    public static CharacterFatigueState NewOrdinary => new(0, OrdinaryMaximum, 0, OrdinaryMaximum, 0, 0);
+
+    public CharacterFatigueState GrantBlackDiamondCapacity()
+    {
+        Validate();
+        return Maximum == OrdinaryMaximum
+            ? this with { Maximum = BlackDiamondMaximum, Remaining = checked((ushort)(Remaining + BlackDiamondBonus)) }
+            : this;
+    }
+
+    public CharacterFatigueState ForBlackDiamond(bool active)
+    {
+        Validate();
+        if (active) return GrantBlackDiamondCapacity();
+        // 保留已经消耗的黑钻容量，关闭后隐藏剩余附加池，续期不能再次补32点。
+        return Maximum == BlackDiamondMaximum ? this with
+        {
+            Maximum = OrdinaryMaximum,
+            Used = Math.Min(Used, OrdinaryMaximum),
+            Remaining = (ushort)Math.Max(0, Remaining - BlackDiamondBonus)
+        } : this;
+    }
 
     public void Validate()
     {

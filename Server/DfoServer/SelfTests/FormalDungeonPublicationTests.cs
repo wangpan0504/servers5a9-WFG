@@ -199,7 +199,9 @@ internal static class FormalDungeonPublicationTests
                 committed.ActiveMainQuests.Single().ConditionState == 0 && Same(committed, f.Session.Selected!) &&
                 f.Session.Phase == SessionPhase.Settlement && stream.Opcodes.SequenceEqual(expectedOpcodes) &&
                 sender.PendingBytes == 0, "31失败保留同事务成长与任务，只写已成功死亡、经验和Boss帧并释放发送预算");
-            Check(await commands.DispatchAsync(context, death) == CommandResult.Handled && f.Count() == 28 &&
+            await RejectAsync(typeof(TaskCanceledException), () => commands.DispatchAsync(context, death),
+                "清图通知失败后取消连接不再执行原报告");
+            Check(f.Count() == 28 &&
                 stream.Frames.Count == expectedOpcodes.Count && Same(committed, f.Read()), "31通知失败不重跑Boss经验、任务清图或追加奖励");
         }
 
@@ -252,7 +254,8 @@ internal static class FormalDungeonPublicationTests
                 "发送失败结束连接，已提交经验与死亡确认保持一致");
             Check(stream.Frames.Count == failedPacket - 1 && sender.PendingBytes == 0,
                 "部分发送故障只保留已写帧，释放发送预算");
-            await commands.DispatchAsync(context, death);
+            await RejectAsync(typeof(TaskCanceledException), () => commands.DispatchAsync(context, death),
+                "已经取消的连接不再取得执行门禁或处理下一条请求");
             Check(f.Count() == 1 && stream.Frames.Count == failedPacket - 1, "失败后原报告不能再次发奖或补发成功");
             f.Session.End();
             f.Session.Select(f.Created.Slot);
@@ -670,7 +673,7 @@ internal static class FormalDungeonPublicationTests
     }
     // 故障注入只丢弃真实仓储第一次提交后的返回值，不伪造SQL结果或领域确认。
     internal sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false,
-        bool loseSettlement = false,bool losePaid = false,bool loseDiscard = false) : ICharacterRepository
+        bool loseSettlement = false,bool losePaid = false,bool loseDiscard = false,bool loseFree = false) : ICharacterRepository
     {
         public DfoServer.Game.Adventure.AdventureSnapshot CommitAdventureExpedition(AccountOwners.Lease owner,
             DfoServer.Game.Adventure.AdventureExpeditionPlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.CommitAdventureExpedition(owner, plan, catalog, now);
@@ -689,10 +692,18 @@ internal static class FormalDungeonPublicationTests
         public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => inner.AdvanceQuestCycle(owner, expected, day);
         public CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort id,DateTimeOffset now) => inner.LoadCardMembership(owner,id,now);
         public CardMembership SetCardMembership(AccountOwners.Lease owner,string name,CardMembershipKind kind,long expires) => inner.SetCardMembership(owner,name,kind,expires);
+        public Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now) => inner.GrantBlackDiamondFatigue(owner, expected, now);
         public DungeonPaidCardCommit CommitPaidDungeonCard(AccountOwners.Lease owner,Character expected,PreparedDungeonSettlement prepared,DungeonCardDelivery delivery,DateTimeOffset now)
         {
             var result = inner.CommitPaidDungeonCard(owner,expected,prepared,delivery,now);
             if (result.Accepted && ++paidCalls == 1 && losePaid) throw new IOException("合成付费牌已提交但结果返回丢失");
+            return result;
+        }
+        public DungeonFreeCardCommit CommitFreeDungeonCard(AccountOwners.Lease owner, Character expected,
+            PreparedDungeonSettlement prepared, DungeonCardDelivery delivery)
+        {
+            var result = inner.CommitFreeDungeonCard(owner, expected, prepared, delivery);
+            if (++freeCalls == 1 && loseFree) throw new IOException("合成免费牌已提交但结果返回丢失");
             return result;
         }
         public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) =>
@@ -701,6 +712,7 @@ internal static class FormalDungeonPublicationTests
         public int Calls { get; private set; }
         int settlementCalls;
         int paidCalls;
+        int freeCalls;
         public bool LastDuplicate { get; private set; }
         public bool SamePrepared { get; private set; }
         public int PickupCalls { get; private set; }

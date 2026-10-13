@@ -14,6 +14,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public AccountOwners.Lease Owner { get; } = owner;
     public GameSession Session { get; } = session;
     public GameConnectionSender Sender { get; } = sender;
+    // 后台翻牌与本连接收包共用执行边界，提交后的差量发布完才允许下次资产修改。
+    public SemaphoreSlim CommandGate { get; } = new(1, 1);
     public DfoServer.Network.Projection.DungeonElevatorProjection? Elevator { get; set; }
     public ChannelIdentity Channel => Session.ChannelEntry?.Identity ?? channel;
     public DfoServer.Network.Projection.DungeonDeathProjection? Death { get; set; }

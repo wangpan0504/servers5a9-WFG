@@ -106,6 +106,35 @@ internal static class UserStateTests
             That(session.GetState() == UserState.Town && session.CheckState(UserState.Town) &&
                 await commands.DispatchAsync(context, packet) == CommandResult.Handled && called == 1 && stream.Length == 0,
                 "就绪后基础分派放行，门禁本身不伪造网络响应");
+            Task<CommandResult> waiting;
+            await context.CommandGate.WaitAsync();
+            try
+            {
+                waiting = commands.DispatchAsync(context, packet);
+                That(!waiting.IsCompleted && called == 1,"后台资产发布占用门禁时同连接请求不能提前执行");
+                using var otherOwner = owners.Acquire("other-state", () => { });
+                using var otherStop = new CancellationTokenSource();
+                using var otherBytes = new MemoryStream();
+                await using var otherSender = new GameConnectionSender(otherOwner,otherBytes,otherStop,0,(_,_,_,_,_) => { });
+                var other = new GameConnectionContext(new(2,IPAddress.Loopback,otherBytes,otherStop),otherOwner,
+                    new GameSession(repository,towns,otherOwner),otherSender);
+                That(await commands.DispatchAsync(other,packet).WaitAsync(TimeSpan.FromSeconds(1)) == CommandResult.Unhandled,
+                    "同连接门禁不阻塞其他账号的正常请求及状态检查");
+                otherStop.Cancel();
+                bool cancelled = false;
+                try { await commands.DispatchAsync(other,packet); }
+                catch (OperationCanceledException) { cancelled = true; }
+                That(cancelled && other.CommandGate.CurrentCount == 1,"取消等待不泄漏或误释放未取得的门禁");
+                using var otherReplacement = owners.Acquire("other-state", () => { });
+                bool staleRejected = false;
+                try { await commands.DispatchAsync(other,packet); }
+                catch (InvalidOperationException) { staleRejected = true; }
+                That(staleRejected && other.CommandGate.CurrentCount == 1,
+                    "已取消且被接管的连接先拒绝旧owner，不重跑已提交业务或误释放门禁");
+            }
+            finally { context.CommandGate.Release(); }
+            That(await waiting.WaitAsync(TimeSpan.FromSeconds(1)) == CommandResult.Handled && called == 2,
+                "发布完成后恢复同连接顺序执行，不丢失等待请求");
             session.BeginDungeonSelection();
             var selection = session.CurrentDungeonSelection;
             Reject<InvalidOperationException>(() => session.MarkReady(), "重复旧入城回调不能把选图强制改回Town");

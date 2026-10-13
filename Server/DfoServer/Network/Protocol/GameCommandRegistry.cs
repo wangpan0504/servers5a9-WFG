@@ -50,11 +50,18 @@ internal sealed class GameCommandRegistry
     {
         if (commands is null)
             throw new InvalidOperationException("Command registry is not sealed");
+        // 保留旧owner拒绝的优先级；等待门禁期间可能接管，取得后仍须复验。
         context.Owner.Execute(() => true);
-        CommandResult result = commands.TryGetValue(request.Opcode, out var command) && context.Session.CheckState(command.MinimumState)
-            ? await command.Handler(context, request) : CommandResult.Unhandled;
-        // 异步处理结束后仍须属于当前账号；旧连接不能继续下一条业务。
-        context.Owner.Execute(() => true);
-        return result;
+        await context.CommandGate.WaitAsync(context.Stop);
+        try
+        {
+            context.Owner.Execute(() => true);
+            CommandResult result = commands.TryGetValue(request.Opcode, out var command) && context.Session.CheckState(command.MinimumState)
+                ? await command.Handler(context, request) : CommandResult.Unhandled;
+            // 异步处理结束后仍须属于当前账号；旧连接不能继续下一条业务。
+            context.Owner.Execute(() => true);
+            return result;
+        }
+        finally { context.CommandGate.Release(); }
     }
 }

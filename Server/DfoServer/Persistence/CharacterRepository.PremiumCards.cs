@@ -111,7 +111,7 @@ internal sealed partial class CharacterRepository
         for (int index = 0; index < frozen.Count; index++)
         {
             VerifyActualCard(delivery.Rewards[index],frozen[index]);
-            if (frozen[index].Item is { } core) remaining.Add(core);
+            remaining.AddRange(frozen[index].Items());
         }
         foreach (var mailed in delivery.MailItems)
         {

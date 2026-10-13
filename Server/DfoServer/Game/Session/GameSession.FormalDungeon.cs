@@ -107,7 +107,7 @@ internal sealed partial class GameSession
     {
         if (expected.DungeonState is not { } state) return null;
         state.Validate();
-        if (entry.UsesFatigue && (expected.Fatigue is null || debugSettings?.InfiniteFatigue != true && expected.Fatigue.Remaining == 0)) return null;
+        if (entry.UsesFatigue && (expected.Fatigue is null || FatigueForClient(expected).Remaining == 0)) return null;
         var ordinaryReturn = entry.IsTrainingRoom ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return null;
@@ -185,7 +185,7 @@ internal sealed partial class GameSession
 
     bool CanEnterFormalDungeon(FormalDungeonReceipt? retry) => retry is null ?
         Phase is SessionPhase.Town or SessionPhase.MapSelect && formalDungeon is null :
-        CanPublishFormalDungeon(retry) && CanReplaceSettledDungeon(formalDungeon, retry) && !HasPendingQuestScene;
+        CanPublishFormalDungeon(retry) && CanReplaceSettledDungeon(formalDungeon, retry) && !HasPendingQuestScene && !HasPendingFormalCard;
 
     FormalDungeonReceipt? InstallFormalDungeon(PreparedFormalDungeon prepared)
     {
@@ -396,7 +396,7 @@ internal sealed partial class GameSession
 
     public TownTravelReceipt? ReturnFromFormalDungeon() => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
+        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement) return null;
         if (dungeon.PendingTutorialClear is not null) return null;
         // 普通挑战沿本次入口安全点返回；先提交位置，失败时保留原实例与完整角色资产。

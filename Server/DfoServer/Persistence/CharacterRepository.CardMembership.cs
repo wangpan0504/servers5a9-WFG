@@ -1,5 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
@@ -20,18 +22,16 @@ internal sealed partial class CharacterRepository
     {
         if (expires < 0 || !Enum.IsDefined(kind)) throw new InvalidDataException("会员类型或到期时间无效");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred:false);
-        using var query = db.CreateCommand();
-        query.Transaction = tx;
-        query.Parameters.AddWithValue("$account",owner.Account);
-        query.Parameters.AddWithValue("$name",name);
-        query.CommandText = "SELECT id FROM characters WHERE account=$account AND name=$name";
-        if (query.ExecuteScalar() is not long id) throw new InvalidDataException("会员设置目标角色不属于该账号");
-        string field = kind == CardMembershipKind.BlackDiamond ? "black_diamond_expires" : "gold_card_expires";
-        query.Parameters.AddWithValue("$expires",expires);
-        query.CommandText = $"INSERT INTO account_card_memberships(account,{field},revision) VALUES($account,$expires,1) ON CONFLICT(account) DO UPDATE SET {field}=$expires,revision=revision+1";
-        query.ExecuteNonQuery();
-        var result = ReadCardMembership(db,tx,owner.Account,checked((ushort)id),DateTimeOffset.UtcNow);
+        using var tx = db.BeginTransaction(deferred:true);
+        var current = Require(db, tx, owner.Account, name);
+        int type = kind == CardMembershipKind.BlackDiamond ? CardMembership.BlackDiamondType : CardMembership.DevilContractType;
+        var before = current.Inventory;
+        var after = before with { AccountWallet = before.AccountWallet.SetContractExpiry(type, expires) };
+        var plan = new InventoryPlan(before, after, "gm_premium_contract");
+        var committed = CommitInventoryInTransaction(db, tx, owner, current, plan);
+        if (kind == CardMembershipKind.BlackDiamond && expires > DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            GrantAccountBlackDiamondFatigue(db, tx, owner.Account, committed.Revision != current.Revision ? current.Id : null);
+        var result = ReadCardMembership(db,tx,owner.Account,current.Id,DateTimeOffset.UtcNow);
         tx.Commit();
         return result;
     });
@@ -41,16 +41,31 @@ internal sealed partial class CharacterRepository
         using var query = db.CreateCommand();
         query.Transaction = tx;
         query.Parameters.AddWithValue("$account",account);
-        query.CommandText = "SELECT black_diamond_expires,gold_card_expires,revision FROM account_card_memberships WHERE account=$account";
-        long black = 0,gold = 0,revision = 0;
-        using (var reader = query.ExecuteReader())
-            if (reader.Read()) { black = reader.GetInt64(0);gold = reader.GetInt64(1);revision = reader.GetInt64(2); }
+        var wallet = ReadAccountWallet(db, account, tx);
         int day = CardMembership.ServiceDay(now);
         query.Parameters.AddWithValue("$id",id);
         query.Parameters.AddWithValue("$day",day);
         query.CommandText = "SELECT used FROM character_gold_card_uses WHERE character_id=$id AND account=$account AND service_day=$day";
         int used = query.ExecuteScalar() is long value ? checked((int)value) : 0;
-        return new(black,gold,revision,day,used);
+        return new(wallet.ContractExpiry(CardMembership.BlackDiamondType), wallet.ContractExpiry(CardMembership.DevilContractType),
+            wallet.Revision,day,used);
+    }
+
+    static void GrantAccountBlackDiamondFatigue(SqliteConnection db, SqliteTransaction tx, string account, ushort? committedCharacter = null)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.Parameters.AddWithValue("$account", account);
+        query.Parameters.AddWithValue("$base", CharacterFatigueState.OrdinaryMaximum);
+        query.Parameters.AddWithValue("$bonus", CharacterFatigueState.BlackDiamondBonus);
+        query.Parameters.AddWithValue("$committed", (object?)committedCharacter ?? DBNull.Value);
+        query.CommandText = """
+            UPDATE characters SET revision=revision+1 WHERE account=$account AND ($committed IS NULL OR id<>$committed) AND id IN
+              (SELECT character_id FROM character_fatigue WHERE account=$account AND maximum=$base);
+            UPDATE character_fatigue SET maximum=maximum+$bonus,remaining=remaining+$bonus
+              WHERE account=$account AND maximum=$base;
+            """;
+        query.ExecuteNonQuery();
     }
 
     static void VerifyCardCharacter(SqliteConnection db,SqliteTransaction tx,string account,ushort id)

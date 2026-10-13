@@ -33,7 +33,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     public CharacterFatigueState FatigueForClient(Character character)
     {
-        var state = character.Fatigue ?? CharacterFatigueState.NewOrdinary;
+        var state = (character.Fatigue ?? CharacterFatigueState.NewOrdinary)
+            .ForBlackDiamond(character.BlackDiamondExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         state.Validate();
         return debugSettings?.InfiniteFatigue == true ? state with { Used = 0, Remaining = state.Maximum } : state;
     }
@@ -132,6 +133,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             var character = repository.LoadCharacter(owner, slot);
             if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
                 throw new InvalidOperationException("Selection published roster identity changed");
+            character = repository.GrantBlackDiamondFatigue(owner, character, DateTimeOffset.UtcNow);
             if (questCatalog is not null && character.QuestCycleDay != DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow))
                 character = repository.AdvanceQuestCycle(owner, character, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow));
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
@@ -165,6 +167,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     public Character UpdateProgress(CharacterProgressEdit request) => owner.Execute(() =>
     {
+        if (HasPendingFormalCard && string.Equals(Selected?.Name, request.Name, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("翻牌结果待确认，不能覆盖当前角色进度");
         if (request.Account != owner.Account)
             throw new InvalidDataException("账号与当前会话不一致");
         var updated = repository.UpdateProgress(owner, request);
@@ -193,7 +197,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         var plan = reset.Prepare(captured.Character, request);
         return owner.Execute(() =>
         {
-            if (!ReferenceEquals(Selected, captured.Selected) || SelectionEpoch != captured.SelectionEpoch)
+            if (!ReferenceEquals(Selected, captured.Selected) || SelectionEpoch != captured.SelectionEpoch ||
+                HasPendingFormalCard && Selected?.Id == captured.Character.Id)
                 throw new InvalidOperationException("在线角色快照已变化，请重试");
             var updated = repository.ResetProgress(owner, plan);
             if (Selected?.Id == updated.Id) Selected = updated;

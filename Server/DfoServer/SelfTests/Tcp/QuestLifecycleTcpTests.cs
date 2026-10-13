@@ -780,6 +780,11 @@ internal static class QuestLifecycleTcpTests
         {
             var packet = peer.Read();
             if (packet.Kind == 1 && packet.Opcode == 1347) { Bytes(packet.Body,[1],"任务剧情阶段处理完成"); return; }
+            if (packet.Kind == 0 && packet.Opcode == 1760)
+            {
+                peer.ReadCardMembershipState(packet);
+                continue;
+            }
             That(packet.Kind == 0,"剧情事件后只有通知，没有未检查的失败ACK");
         }
         throw new InvalidDataException("任务剧情通知超过有界数量");

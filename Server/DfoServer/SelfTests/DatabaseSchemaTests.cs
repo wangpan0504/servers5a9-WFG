@@ -13,7 +13,20 @@ namespace DfoServer;
 
 internal static class DatabaseSchemaTests
 {
-    internal static void RemoveAdventurePurchases(SqliteConnection db) => Execute(db, "DROP TABLE IF EXISTS account_adventure_purchases");
+    internal static void RemoveAdventurePurchases(SqliteConnection db)
+    {
+        RemoveCardClaimSchema(db);
+        Execute(db, "DROP TABLE IF EXISTS account_adventure_purchases");
+    }
+
+    internal static void RemoveCardClaimSchema(SqliteConnection db)
+    {
+        Execute(db, "DROP TABLE IF EXISTS server_events");
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_card_rewards') WHERE name='claimed'") is 1L)
+            Execute(db, "ALTER TABLE character_dungeon_card_rewards DROP COLUMN claimed");
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('account_card_memberships') WHERE name='returning_player_expires'") is 1L)
+            Execute(db, "ALTER TABLE account_card_memberships DROP COLUMN returning_player_expires");
+    }
     internal static void RemoveAdventureExpeditions(SqliteConnection db)
     {
         RemoveAdventurePurchases(db);
@@ -162,6 +175,7 @@ internal static class DatabaseSchemaTests
             VerifyAccountQuestSourceMigration(root);
             VerifyFutureMigrations(path);
             VerifyQuestEffectsMigration(root);
+            VerifyCardClaimUpgrade(root);
             string concurrent = Path.Combine(root, "concurrent.db");
             Task.WaitAll(Task.Run(() => new CharacterRepository(concurrent)), Task.Run(() => new AuthenticationRepository(concurrent)));
             using (var db = Open(concurrent))
@@ -222,6 +236,122 @@ internal static class DatabaseSchemaTests
             """);
         string original=Snapshot(broken);RejectDatabase(()=>new CharacterRepository(broken));
         Check(Snapshot(broken)==original,"末段列校验失败回滚新增任务表与版本，保留原库");
+    }
+
+    private static void VerifyCardClaimUpgrade(string root)
+    {
+        string path = Path.Combine(root, "cards-v33.db");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Execute(db, """
+                INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('history',0,'History',7,38,1,450,234,0);
+                INSERT INTO account_card_memberships(account,black_diamond_expires,gold_card_expires,revision) VALUES('history',100,200,3);
+                INSERT INTO character_dungeon_settlement_receipts VALUES(1,'history','event','instance',0,1,1,3,1,zeroblob(16),X'01',1,99,0,99,0,'old','old',1,1,0,99,7);
+                INSERT INTO character_dungeon_card_rewards(character_id,account,instance_id,plan_json,reward_json,mail_id,revision) VALUES(1,'history','instance','{}','{}',NULL,7);
+                """);
+            RemoveCardClaimSchema(db);
+            Execute(db, "PRAGMA user_version=33; CREATE TABLE server_events(collision INTEGER)");
+        }
+        string original = Snapshot(path);
+        RejectDatabase(() => new CharacterRepository(path));
+        Check(Snapshot(path) == original,"v36末条DDL失败回滚领取位及版本，不改变旧资产和回执");
+        using (var db = Open(path)) Execute(db, "DROP TABLE server_events");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db,"SELECT claimed FROM character_dungeon_card_rewards") is 1L &&
+                Query(db,"SELECT reward_json||':'||revision FROM character_dungeon_card_rewards") is "{}:7",
+                "旧已发免费奖励升级为已领取，不改历史结果或再发一次");
+            Check(Query(db,"SELECT black_diamond_expires||':'||gold_card_expires||':'||revision FROM account_card_memberships") is "100:200:3" &&
+                Query(db,"SELECT revision FROM characters") is 7L && Query(db,"SELECT count(*) FROM server_events") is 0L,
+                "保留原会员、角色和revision，活动空表不自动启用");
+            Check(Query(db,"SELECT count(*) FROM pragma_table_info('account_card_memberships') WHERE name='returning_player_expires'") is 0L,
+                "翻牌升级只建立领取位和活动管理，不新增回归玩家库表字段");
+            Check(Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,"翻牌增量升级保留原外键关系");
+            Check(Query(db,"SELECT json_extract(premium_contracts,'$.56')||':'||json_extract(premium_contracts,'$.58') FROM account_wallets WHERE account='history'") is "100:200",
+                "原会员56/58期限接管至统一契约账本，旧列只保留迁移历史，不补发奖励");
+        }
+        string upgraded = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == upgraded,"翻牌增量升级重开幂等，不重复DDL或奖励");
+        VerifyLocalCardContractsMigration(root,path);
+    }
+
+    private static void VerifyLocalCardContractsMigration(string root, string source)
+    {
+        foreach (string scenario in new[] { "known-v34", "partial-v34", "rollback-v34" })
+        {
+            string path = Path.Combine(root,"card-contracts-"+scenario+".db");
+            using (var old = Open(source))
+            using (var copy = Open(path)) old.BackupDatabase(copy);
+            using (var db = Open(path))
+            {
+                Execute(db,"""
+                    DROP TABLE character_quest_special_reward_claims;
+                    DROP TABLE character_quest_effect_receipts;
+                    ALTER TABLE account_wallets DROP COLUMN premium_contracts;
+                    ALTER TABLE account_card_memberships ADD COLUMN returning_player_expires INTEGER NOT NULL DEFAULT 0 CHECK(returning_player_expires>=0);
+                    UPDATE account_card_memberships SET returning_player_expires=123;
+                    UPDATE character_dungeon_card_rewards SET claimed=0;
+                    PRAGMA user_version=34;
+                    """);
+                if (scenario == "partial-v34")
+                    Execute(db,"ALTER TABLE character_dungeon_card_rewards DROP COLUMN claimed");
+                if (scenario == "rollback-v34")
+                    Execute(db,"CREATE TRIGGER fail_card_contracts AFTER UPDATE ON account_wallets BEGIN SELECT RAISE(ABORT,'contract migration rollback'); END");
+            }
+            string before = Snapshot(path);
+            if (scenario != "known-v34")
+            {
+                RejectDatabase(() => new CharacterRepository(path));
+                Check(Snapshot(path) == before,"未知旧翻牌v34或末段契约写入失败完整回滚任务表、期限列、资产和版本");
+                continue;
+            }
+            _ = new CharacterRepository(path);
+            using var upgraded = Open(path);
+            Check(Query(upgraded,"SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_effect_receipts','character_quest_special_reward_claims')") is 2L &&
+                Query(upgraded,"SELECT json_extract(premium_contracts,'$.56')||':'||json_extract(premium_contracts,'$.58') FROM account_wallets WHERE account='history'") is "100:200" &&
+                Query(upgraded,"SELECT claimed FROM character_dungeon_card_rewards") is 0L &&
+                Query(upgraded,"SELECT revision FROM characters") is 7L &&
+                Query(upgraded,"SELECT returning_player_expires FROM account_card_memberships") is 123L &&
+                Query(upgraded,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                "已知旧翻牌v34连续接入上游任务/契约，原未领取状态和角色revision保持");
+        }
+        foreach (var (name,sql) in new[]
+        {
+            ("invalid-terms","UPDATE account_wallets SET premium_contracts='{\"27\":\"bad\"}' WHERE account='history'"),
+            ("revision-overflow","UPDATE account_wallets SET revision=9223372036854775807,premium_contracts='{}' WHERE account='history'")
+        })
+        {
+            string damaged = Path.Combine(root,"card-contracts-"+name+".db");
+            using (var old = Open(source))
+            using (var copy = Open(damaged)) old.BackupDatabase(copy);
+            using (var db = Open(damaged))
+            {
+                RemoveCardClaimSchema(db);
+                Execute(db,sql);
+                Execute(db,"PRAGMA user_version=35");
+            }
+            string before = Snapshot(damaged);
+            RejectDatabase(() => new CharacterRepository(damaged));
+            Check(Snapshot(damaged) == before,"错误契约期限对象或钱包版本溢出拒绝，领取字段、原数据与版本全部回滚");
+        }
+        string mixed = Path.Combine(root,"card-contracts-upstream-v35.db");
+        using (var old = Open(source))
+        using (var copy = Open(mixed)) old.BackupDatabase(copy);
+        using (var db = Open(mixed))
+        {
+            RemoveCardClaimSchema(db);
+            Execute(db,"UPDATE account_wallets SET revision=9,premium_contracts='{\"27\":400,\"58\":300}' WHERE account='history'; PRAGMA user_version=35");
+            Execute(db,$"INSERT INTO account_currency_balances VALUES('history',{(int)CurrencyKind.Cera},321)");
+        }
+        _ = new CharacterRepository(mixed);
+        using var migrated = Open(mixed);
+        Check(Query(migrated,"SELECT revision||':'||json_extract(premium_contracts,'$.27')||':'||json_extract(premium_contracts,'$.56')||':'||json_extract(premium_contracts,'$.58') FROM account_wallets WHERE account='history'") is "10:400:100:300" &&
+            Query(migrated,"SELECT balance FROM account_currency_balances WHERE account='history'") is 321L &&
+            Query(migrated,"SELECT revision FROM characters") is 7L,
+            "上游v35契约与旧会员期限取最大值，其他契约和余额保留，仅真实账号账本变化推进版本");
     }
 
     private static void VerifyExperienceCapMigration(string root)
@@ -915,6 +1045,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
+                if (oldVersion < 34) RemoveCardClaimSchema(db);
                 if (oldVersion < 28) RemoveEmotionSchema(db);
                 if (oldVersion < 27) RemoveHotkeySchema(db);
                 if (oldVersion < 26) RemoveTutorialSchema(db);
@@ -1132,6 +1263,7 @@ internal static class DatabaseSchemaTests
             new AuthenticationService(new AuthenticationRepository(path)).Create("migrated", "fixture-password");
             using (var db = Open(path))
             {
+                RemoveCardClaimSchema(db);
                 Execute(db, "UPDATE account_wallets SET seria_luck=7 WHERE account='migrated'");
                 Execute(db, $"INSERT INTO account_currency_balances VALUES('migrated',{(int)CurrencyKind.Cera},321)");
                 Execute(db, $"INSERT INTO account_expert_contracts VALUES('migrated',{gmExpiry})");

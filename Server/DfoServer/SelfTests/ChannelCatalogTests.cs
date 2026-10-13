@@ -56,9 +56,15 @@ internal static class ChannelCatalogTests
         byte[] body = LoginPackets.ChannelInfo(catalog.GameIdentity);
         for (int i = 0; i < body.Length; i++)
             body[i] = (byte)((((body[i] << 6) | (body[i] >> 2)) ^ 0xb5) & 0xff);
-        That(body.Length == 357 && BinaryPrimitives.ReadInt32LittleEndian(body) == 353, "完整CHANNELINFO长度前缀");
+        That(BinaryPrimitives.ReadInt32LittleEndian(body) == body.Length - 4, "完整CHANNELINFO长度前缀包含时钟字段");
         Bytes(body.AsSpan(343, 4), [0x38, 2, 0x40, 10], "登录安装共享的服务器2/游戏频道10，不使用点击的分类号");
-        Bytes(body.AsSpan(347), [0xa0, 0xd3, 0x0e, 0xd4, 0x0d, 0xa8, 0xd3, 0x0e, 0x94, 0x0e], "频道身份不截断协议数量");
+        using (var reader = new BinaryReader(new MemoryStream(body, 347, body.Length - 347)))
+        {
+            That(reader.ReadByte() == 88 && Math.Abs(reader.Read7BitEncodedInt64() - DateTimeOffset.UtcNow.ToUnixTimeSeconds()) <= 5,
+                "CHANNELINFO field11为服务器Unix秒，绝对期限不能落到零时钟");
+            Bytes(reader.ReadBytes(10), [0xa0, 0xd3, 0x0e, 0xd4, 0x0d, 0xa8, 0xd3, 0x0e, 0x94, 0x0e], "频道身份不截断协议数量");
+            That(reader.BaseStream.Position == reader.BaseStream.Length, "握手时钟及枚举数量完整消费，无多余尾部");
+        }
         var character = new Character(1, 0, "A", 0, new(38, 1, 450, 234), null);
         var stats = new CharacterStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         byte[] actor = TownPackets.Actor(character, catalog.GameIdentity);

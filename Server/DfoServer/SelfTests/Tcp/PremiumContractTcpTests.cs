@@ -180,8 +180,14 @@ internal static class PremiumContractTcpTests
         { writer.Write((byte)0); writer.Write((ushort)123); writer.Write((byte)0); writer.Write(token); writer.Write(itemId); }));
         static void AssertPremium(byte[] body, long expiry)
         {
-            That(body.Length == 10 && body[0] == 1 && body[1] == 22, "1760按已确认数量/类型/8B期限布局独立检查");
-            long duration = BinaryPrimitives.ReadInt64LittleEndian(body.AsSpan(2));
+            That(body.Length == 1 + body[0] * 9, "1760按已确认数量/类型/8B期限布局独立检查");
+            var entries = new Dictionary<byte,long>();
+            for (int index = 0; index < body[0]; index++)
+                That(entries.TryAdd(body[1 + index * 9], BinaryPrimitives.ReadInt64LittleEndian(body.AsSpan(2 + index * 9))),
+                    "统一1760目录没有重复服务类型");
+            That(entries.ContainsKey(22) && entries.All(pair => pair.Key == 22 || (pair.Key is 56 or 58 && pair.Value == 0)),
+                "已提交霸王资格保持完整；附加56/58只清除旧状态，不伪造契约");
+            long duration = entries[22];
             long remaining = expiry - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             That(duration >= remaining && duration <= remaining + 5, "1760投影同一账号已提交到期时间的剩余期限");
         }
