@@ -329,6 +329,9 @@ internal sealed class TcpPeer : IDisposable
                 TestCheck.That(packet.Kind == 0 && packet.Opcode == 1343, "冒险团信息在角色资产后初始化");
                 AdventureInfo = packet.Body;
                 AdventureRefresh = Expect(0, 1349).Body;
+                // #169 在冒险团之后初始化两种拍卖服务；逐包核验完整正文，保留原城镇状态断言。
+                Expect(0, 183, [0, 1]);
+                Expect(0, 183, [1, 1]);
                 packet = Read();
                 TestCheck.That(mails.Count > 0 && packet.Kind == 0 && packet.Opcode == 3, "mailbox initializes after account assets and before town state");
                 tail.Add(packet);
