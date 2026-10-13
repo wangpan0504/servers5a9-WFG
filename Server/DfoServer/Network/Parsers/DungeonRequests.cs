@@ -20,7 +20,7 @@ internal sealed record DungeonDeathRequest(uint ObjectKey, ushort Reporter, IRea
     public DungeonSinglePlayerDeathStatistics? SinglePlayerStatistics { get; init; }
 }
 // 02A787A0独立发送分支；+1754来自构造参数及资源查询，不是普通怪物对象key。
-internal sealed record DungeonPassiveDeathRequest(uint ObjectIdentifier, uint ActorFlags, byte Unknown36,
+internal sealed record DungeonPassiveDeathRequest(uint ObjectIdentifier, uint Unknown42, byte Unknown36,
     ushort Unknown39, byte UnknownLast, bool ChecksumMatches, IReadOnlyList<byte> ContextFields);
 internal sealed record DungeonScriptedDeathRequest(uint ObjectKey, byte RewriteFlag, bool ChecksumMatches, ushort Reporter);
 

@@ -13,11 +13,11 @@ internal sealed partial class GameSession
         public bool Committed { get; set; }
     }
 
-    public QuestLifecycleReceipt? ObserveFormalPassiveDeath(uint templateId, uint actorFlags, bool checksum,
+    public QuestLifecycleReceipt? ObserveFormalPassiveDeath(uint templateId, bool checksum,
         string fingerprint, DungeonRoomCatalog resources)
     {
         // Full03 +1754与构造参数/资源查询同源；此分支没有普通怪物实例key。
-        if (templateId is 0 or > int.MaxValue || (actorFlags & 0x21) != 0x21 || !checksum || fingerprint.Length != 64 || questCatalog is null)
+        if (templateId is 0 or > int.MaxValue || !checksum || fingerprint.Length != 64 || questCatalog is null)
             return null;
         return ObserveFormalPassiveEvent(templateId,fingerprint,resources);
     }

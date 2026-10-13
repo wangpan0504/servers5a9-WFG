@@ -164,7 +164,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         {
             if (!context.Session.Ready || context.Session.DungeonSnapshot is not { Phase: SinglePlayerDungeonPhase.Dungeon })
                 return CommandResult.Unhandled;
-            var progress = context.Session.ObserveFormalPassiveDeath(passive!.ObjectIdentifier,passive.ActorFlags,
+            var progress = context.Session.ObserveFormalPassiveDeath(passive!.ObjectIdentifier,
                 passive.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body)),rooms);
             log.Write("formal_passive_death", new { Connection = context.Id, Accepted = progress?.Commit is not null, Request = passive });
             if (progress?.Commit is not null)

@@ -126,7 +126,7 @@ internal static class QuestSceneTests
             That(Same(f.Session.Selected!,f.Read()) && f.Read().CompletedQuests.Contains(3054), "整条实际Lv3父子链重登完整恢复");
 
             QuestLifecycleReceipt? Change(ushort id,QuestLifecycleAction action) => f.Session.ChangeQuest(id,action,quests,items.Items,items.GoldLimits,items.EpicPieces);
-            QuestLifecycleReceipt? Observe(uint id,bool checksum) => f.Session.ObserveFormalPassiveDeath(id,0x21,checksum,new string('B',64),rooms);
+            QuestLifecycleReceipt? Observe(uint id,bool checksum) => f.Session.ObserveFormalPassiveDeath(id,checksum,new string('B',64),rooms);
             QuestFinishResult Finish(ushort id) => f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
         }
         Console.WriteLine($"PASS {Count-checks} 实际Lv3父子剧情、物件事件、清图交付与恢复断言（非实机）");

@@ -60,7 +60,7 @@ internal static class DungeonDeathProtocolTests
             byte[] passive = encoded.ToArray();
             byte[] context = passive[46..^6];
             That(DungeonRequests.TryParsePassiveDeath(passive,out var parsed) && passive.Length == 52 + contextLength &&
-                parsed is { ObjectIdentifier: 0xF2345678, ActorFlags: 0xF1234521, Unknown36: 0xA5, Unknown39: 0xFEDC,
+                parsed is { ObjectIdentifier: 0xF2345678, Unknown42: 0xF1234521, Unknown36: 0xA5, Unknown39: 0xFEDC,
                     UnknownLast: 0xD7, ChecksumMatches: true } && parsed.ContextFields.SequenceEqual(context),
                 "独立被动物件格式保留52/74B、未知高位及可选上下文，不套用88B死亡统计");
             That(!DungeonRequests.TryParseDeath(passive,out _) && !DungeonRequests.TryParseSinglePlayerDeathStatistics(passive,out _),

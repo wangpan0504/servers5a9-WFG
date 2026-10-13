@@ -284,7 +284,7 @@ internal static class QuestLifecycleTcpTests
                 byte[] passive = new byte[length];
                 BinaryPrimitives.WriteUInt32LittleEndian(passive,13099);
                 BinaryPrimitives.WriteUInt16LittleEndian(passive.AsSpan(4),ushort.MaxValue);
-                passive[37] = 1; BinaryPrimitives.WriteUInt32LittleEndian(passive.AsSpan(42),0x21);
+                passive[37] = 1; BinaryPrimitives.WriteUInt32LittleEndian(passive.AsSpan(42),1);
                 FormalDungeonTcpTests.SealDeath(passive);
                 peer.Send(39,passive); peer.Barrier();
                 That(State() == before, "被动物件格式不关闭连接，也不向未确认地图制造物件死亡或任务进度 " + length);
@@ -492,6 +492,20 @@ internal static class QuestLifecycleTcpTests
             map = FormalDungeonTcpTests.Enter(peer,3146); FormalDungeonTcpTests.Load(peer);
             That(U32(map,14) == 76131,"真实3146起始地图包含右侧对话物件13099");
             long experience = (long)extra.Query("SELECT experience FROM characters WHERE id=2")[0][0];
+            byte[] passiveDeath = new byte[74];
+            BinaryPrimitives.WriteUInt32LittleEndian(passiveDeath,13099);
+            BinaryPrimitives.WriteUInt16LittleEndian(passiveDeath.AsSpan(4),ushort.MaxValue);
+            passiveDeath[37] = 1;
+            // 原生产者+41C返回的默认值为1；这个u32不是对象flags或物件实例key。
+            BinaryPrimitives.WriteUInt32LittleEndian(passiveDeath.AsSpan(42),1);
+            FormalDungeonTcpTests.SealDeath(passiveDeath);
+            peer.Send(39,passiveDeath); peer.Expect(0,574); peer.Barrier();
+            That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=2 ORDER BY quest_id") is
+                [[3146L,2L],[3157L,0L]], "原生39附加值1按真实唯一物件推进子任务，父任务等待实际交付");
+            var passiveState = extra.Query("SELECT revision,experience FROM characters WHERE id=2");
+            peer.Send(39,passiveDeath); peer.Barrier();
+            That(extra.Query("SELECT revision,experience FROM characters WHERE id=2").SelectMany(row => row).SequenceEqual(passiveState.SelectMany(row => row)),
+                "原生39重复报告不再次写revision或死亡经验，后续33仍沿原场景交付");
             peer.Send(33,[33,0,85,12,16,0,0]); peer.Expect(1,33,[1,85,12,0,0,0,0]);
             peer.Expect(0,574,Convert.FromHexString("010000004A0C01000000"));
             var flags = peer.Expect(0,356).Body; That(flags[4+3157] == 1,"对话33无需怪物死亡或后续34即可闭合3157"); peer.Barrier();

@@ -125,7 +125,7 @@ internal static class QuestDropTests
             That(progress?.Commit is { ProjectionCurrent: true } && f.Read().Inventory.Items.Single(item => item.Core.ItemId == 10165055).Core.Count == 2 &&
                 f.Read().ActiveMainQuests.Single(row => row.QuestId == 29987).ConditionState == 0 && f.Read().Learning.Experience == beforePassive.Learning.Experience &&
                 ObservePassive() is null,"真实被动物件只发一次任务物品，进度和回执原子保存，无伪造死亡经验");
-            DfoServer.Game.Session.QuestLifecycleReceipt? ObservePassive() => f.Session.ObserveFormalPassiveDeath(13099,0x21,true,new string('E',64),rooms);
+            DfoServer.Game.Session.QuestLifecycleReceipt? ObservePassive() => f.Session.ObserveFormalPassiveDeath(13099,true,new string('E',64),rooms);
         }
         var clearing = seeking with { Definition = seeking.Definition! with { Drops = [new(0,0,3,-1,10165055,2,100,2)] } };
         var clearCatalog = new QuestCatalog(original.All.Append(clearing).ToDictionary(quest => quest.Id));
