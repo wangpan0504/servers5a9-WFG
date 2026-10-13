@@ -34,7 +34,12 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
         var acknowledgedSlots = result.Plan?.ChangedSlots
             .Where(slot => slot.List == InventoryListType.Equipment && slot.Index is not (>= 26 and <= 29)).ToHashSet();
         bool silentMainMove = request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.Main;
-        await projection.RefreshAsync(context, result, acknowledgedSlots, silentMainMove: silentMainMove);
+        bool suppressMainNotice = request.Source.List == InventoryListType.Main &&
+            request.Destination is { List: InventoryListType.Equipment, Index: >= 12 and <= 25 } ||
+            request.Destination.List == InventoryListType.Main &&
+            request.Source is { List: InventoryListType.Equipment, Index: >= 12 and <= 25 };
+        await projection.RefreshAsync(context, result, acknowledgedSlots, silentMainMove: silentMainMove,
+            suppressMainNotice: suppressMainNotice);
         return CommandResult.Handled;
     }
 

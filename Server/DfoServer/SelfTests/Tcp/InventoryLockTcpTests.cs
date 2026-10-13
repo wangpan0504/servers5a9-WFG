@@ -110,7 +110,8 @@ internal static partial class InventoryTcpTests
 
         static void WearDelta(TcpPeer peer)
         {
-            peer.Expect(0, 14);
+            var main = peer.Expect(0, 1681).Body;
+            That(main[0] == 0 && main.Length == 126, "锁定装备穿脱仍同步完整条目和图标，获得通知独立关闭");
             peer.Expect(0, 2);
             peer.Expect(0, 2);
         }

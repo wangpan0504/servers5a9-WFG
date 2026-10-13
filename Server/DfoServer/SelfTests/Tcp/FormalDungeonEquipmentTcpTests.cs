@@ -95,15 +95,20 @@ internal static partial class FormalDungeonTcpTests
                     { writer.Write((byte)1); writer.Write((byte)family.Bag); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write(family.Worn); }));
                     if (family.Worn == 26) That(peer.Expect(0, 105).Body[0] == 2, "换宠物保留全部详情UID通知");
                     int deltas = family.Worn is >= 26 and <= 29 ? 2 : 1;
+                    ushort opcode = family.Bag == InventoryListType.Main ? (ushort)1681 : (ushort)14;
                     for (int index = 0; index < deltas; index++)
                     {
-                        var delta = peer.Expect(0, 14).Body;
+                        var delta = peer.Expect(0, opcode).Body;
                         if (index == 0 && fromId != 0 && toId != 0 && fromId != toId)
                         {
                             That(U32(delta, 5) == uint.MaxValue, "背包不同模板覆盖先清除旧资源");
-                            delta = peer.Expect(0, 14).Body;
+                            delta = peer.Expect(0, opcode).Body;
                         }
                         That(delta[0] == (index == 0 && deltas == 2 ? 3 : (byte)family.Bag), "保留所属容器及宠物专属差量");
+                        if (family.Bag == InventoryListType.Main)
+                            That(delta.Length == 126 && U16(delta, 1) == 1 && U16(delta, 3) == bag &&
+                                U32(delta, 5) == (toId == 0 ? uint.MaxValue : (uint)toId),
+                                "副本普通穿脱保留图标装载和完整返回装备，关闭获得通知但不重置房间");
                     }
                     byte[] player = peer.Expect(0, 2).Body;
                     That(player[0] == 1 && U16(player, 22) == peer.Id && player[126] == Convert.ToInt32(fixture.Query(

@@ -391,25 +391,52 @@ internal static partial class InventoryTcpTests
                 "real enchantress grants black magic broom without inventing witch mastery");
             repository.CommitInventory(owner, role, new(role.Inventory, role.Inventory with
             {
-                Items = role.Inventory.Items.Add(new(0, new(InventoryListType.Main, 9), InventoryRewardGrantService.Create(broom)))
+                Items = role.Inventory.Items.Add(new(0, new(InventoryListType.Main, 9), InventoryRewardGrantService.Create(broom) with
+                {
+                    Attr = 11, Durability = 17, EnchantCardId = 10309006, EnchantUpgrade = 2,
+                    AmplifyType = 2, AmplifyValue = 21, GenuineUpgrade = 4, Rune = 8,
+                    Random0 = new(1, 2, 3), Random1 = new(2, 4, 5), Random2 = new(3, 6, 7),
+                    RandomState = 1, RandomChangedIndex = 1, RandomChangeState = 1, RandomChange = new(4, 8, 9)
+                }))
             }, "fixture_enchantress_broom"));
             broomUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", role.Id)[0][0]!;
         }
         await fixture.StartAsync("broom");
+        byte[] originalBroom;
         using (var peer = Open(fixture))
         {
-            peer.Select(1);
+            var entry = peer.Select(1);
+            var full = entry[4].Body;
+            int at = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(index => U16(full, index) == 9);
+            originalBroom = full.AsSpan(at, 123).ToArray();
+            That(originalBroom[10] == 11 && U16(originalBroom, 11) == 17 && U32(originalBroom, 14) == 10309006 &&
+                originalBroom[18] == 2 && originalBroom[19] == 2 && U16(originalBroom, 20) == 21 &&
+                U16(originalBroom, 69) == 8 && originalBroom[87] == 4 &&
+                originalBroom.AsSpan(71, 16).SequenceEqual(new byte[] { 3, 1, 2, 3, 2, 4, 6, 3, 5, 7, 1, 1, 1, 4, 8, 9 }),
+                "真实入城完整条目保留强化、附魔、增幅、锻造、符文及随机属性/变换预览");
             int previousWeapon = characters.Get(3).Equipment.Single(item => item.Slot == 12).Template.Id;
+            var previousInstance = fixture.Query("SELECT i.item_uid,i.item_core FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=12", peer.Id).Single();
             var wear = MoveItem(0, 9, broom.Id, 1, 3, 12, previousWeapon);
             peer.Send(19, wear);
             peer.Expect(1, 19, MoveAck(0, 9, 1, 3, 12));
-            var cleared = peer.Expect(0, 14).Body;
+            var cleared = peer.Expect(0, 1681).Body;
             That(cleared[0] == 0 && cleared.Length == 126 && U16(cleared, 1) == 1 && U16(cleared, 3) == 9 && U32(cleared, 5) == uint.MaxValue,
-                "broom swap clears replaced main-slot resource before publishing the other weapon");
-            DeltaAndAppearance(peer, 5, "BroomTest", broomSkillCount);
+                "普通换装仍清除旧模板并写回原装备，图标路径不变但不发布获得通知");
+            var update = DeltaAndAppearance(peer, 5, "BroomTest", broomSkillCount, extraEquipmentBytes: 15);
+            var returnedWeapon = update.Main;
+            int appearance = 134 + NameWidth("BroomTest");
+            That(update.Actor[appearance] == 12 && U32(update.Actor, appearance + 1) == broom.Id &&
+                update.Actor[appearance + 13] == 23 && update.Actor[appearance + 14] == 4 &&
+                U32(update.Actor, appearance + 20) == 10309006 && update.Actor[appearance + 24] == 2,
+                "穿戴后的Actor仍刷新原装备的强化/增幅标记、锻造和附魔信息");
+            CheckBroomPlayer(update.Player);
+            That(U16(returnedWeapon, 3) == 9 && U32(returnedWeapon, 5) == previousWeapon,
+                "无获得通知的完整条目仍显示实际返回背包的武器");
             peer.Barrier();
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=12", peer.Id)[0][0], broomUid),
                 "enchantress broom swap commits original UID before successful reply");
+            That(fixture.Query("SELECT i.item_uid,i.item_core FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=9", peer.Id).Single().SequenceEqual(previousInstance),
+                "普通交换保留返回装备的原UID及完整核心，不重新发放实例");
             string before = Snapshot(fixture);
             peer.Send(19, wear);
             peer.Expect(1, 19, [0, 23, 0, 0, 3]);
@@ -418,13 +445,36 @@ internal static partial class InventoryTcpTests
         }
         using (var peer = Open(fixture))
         {
-            peer.Select(1);
+            CheckBroomPlayer(peer.Select(1)[3].Body);
             peer.Send(19, MoveItem(3, 12, broom.Id, 1, 0, 10, 0));
             peer.Expect(1, 19, MoveAck(3, 12, 1, 0, 10));
-            DeltaAndAppearance(peer, 4, "BroomTest", broomSkillCount);
+            var update = DeltaAndAppearance(peer, 4, "BroomTest", broomSkillCount);
+            var row = update.Main.AsSpan(3, 123);
+            That(U16(update.Main, 3) == 10 && row.Slice(2, 11).SequenceEqual(originalBroom.AsSpan(2, 11)) &&
+                row[13] == 0 && row[13] <= originalBroom[13] && row[14..].SequenceEqual(originalBroom.AsSpan(14)),
+                "脱下后的1681完整核心逐字节保留，只有目标槽和合法穿戴解封标志可变");
             peer.Barrier();
             That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=10", peer.Id)[0][0], broomUid),
                 "reconnected enchantress restores and unequips the same broom instance");
+        }
+        using (var peer = Open(fixture))
+        {
+            var full = peer.Select(1)[4].Body;
+            int at = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(index => U16(full, index) == 10);
+            var row = full.AsSpan(at, 123);
+            That(row.Slice(2, 11).SequenceEqual(originalBroom.AsSpan(2, 11)) && row[14..].SequenceEqual(originalBroom.AsSpan(14)),
+                "脱下重登的123B条目仍保留原强化、附魔、随机属性和全部扩展");
+            peer.Barrier();
+        }
+
+        void CheckBroomPlayer(byte[] player)
+        {
+            const int at = 127;
+            That(player[at] == 12 && U32(player, at + 1) == broom.Id && player[at + 9] == 11 && U16(player, at + 10) == 17 &&
+                U32(player, at + 18) == 10309006 && player[at + 22] == 2 && player[at + 23] == 2 && U16(player, at + 24) == 21 &&
+                U16(player, at + 32) == 8 && player[at + 50] == 4 &&
+                player.AsSpan(at + 34, 16).SequenceEqual(new byte[] { 3, 1, 2, 3, 2, 4, 5, 3, 6, 7, 1, 1, 1, 4, 8, 9 }),
+                "完整Player独立消费强化、附魔、增幅、锻造、符文和交错随机属性，包含变换预览");
         }
     }
 
@@ -435,14 +485,17 @@ internal static partial class InventoryTcpTests
         Slots = fixture.Query("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index"),
         Audit = fixture.Query("SELECT * FROM inventory_audit_log ORDER BY audit_id")
     });
-    static void DeltaAndAppearance(TcpPeer peer, byte count, string name = "BagGearTest", int totalSkills = 12)
+    static (byte[] Main, byte[] Actor, byte[] Player) DeltaAndAppearance(TcpPeer peer, byte count, string name = "BagGearTest", int totalSkills = 12,
+        int extraEquipmentBytes = 0)
     {
-        var main = peer.Expect(0, 14).Body;
-        That(main[0] == 0 && main.Length == 126, "ACK moves worn slots before committed main delta");
+        var main = peer.Expect(0, 1681).Body;
+        That(main[0] == 0 && U16(main, 1) == 1 && main.Length == 126,
+            "普通穿脱仍同步完整Main条目，只使用无获得通知入口");
         var actor = peer.Expect(0, 2).Body;
         var player = peer.Expect(0, 2).Body;
-        That(actor[133 + NameWidth(name)] == count && player[126] == count && player.Length == 167 + count * 91 + totalSkills * 3,
+        That(actor[133 + NameWidth(name)] == count && player[126] == count && player.Length == 167 + count * 91 + totalSkills * 3 + extraEquipmentBytes,
             "appearance and complete player skill tail agree after wear change");
+        return (main, actor, player);
     }
     static void FullStack(byte[] body, short slot, int itemId, int count, uint gold = 0)
     {

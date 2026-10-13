@@ -12,7 +12,8 @@ namespace DfoServer.Network.Projection.Inventory;
 internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces)
 {
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
-        IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true, bool silentMainMove = false)
+        IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true, bool silentMainMove = false,
+        bool suppressMainNotice = false)
     {
         if (!result.Accepted || result.Plan is not { Changed: true } plan)
             return;
@@ -65,12 +66,15 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             }
             var replaced = slots.Where(slot => slot.List == list && plan.BeforeIndex.Find(slot) is { } old &&
                 receipt.Index.Find(slot) is { } now && old.Core.ItemId != now.Core.ItemId).ToArray();
+            // 普通穿脱仍装载完整条目并保留图标effect，仅关闭获得通知；不套用Main内的无effect移动策略。
+            var updateType = suppressMainNotice && list == InventoryListType.Main ?
+                NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE : NotiPacketType.UPDATE_ITEM_LIST;
             if (replaced.Length != 0)
-                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(InventorySnapshot.Empty, list, replaced), "inventory_clear_replaced", CanSend);
+                await context.Notify(updateType, InventoryPackets.Delta(InventorySnapshot.Empty, list, replaced), "inventory_clear_replaced", CanSend);
             // 孵化替换先清旧蛋模板，再提交完整详情，最后让新宠物引用已到达的详情。
             if (hatchCreature && creatureDetailsChanged && list == InventoryListType.Pet)
                 await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
-            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index), "inventory_committed_delta", CanSend);
+            await context.Notify(updateType, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index), "inventory_committed_delta", CanSend);
         }
         if (refreshEquipment && changedSlots.Any(slot => slot.List == InventoryListType.Equipment))
         {
