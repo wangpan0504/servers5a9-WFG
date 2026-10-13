@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
@@ -22,6 +23,29 @@ namespace DfoServer;
 // 全新角色连续推进；不预填完成位、等级、任务材料或剧情进度。
 internal static class QuestMainlineTests
 {
+    internal static bool MatchesReconnect(Character completed, Character restored, int firstDay, int lastDay, Location room)
+    {
+        if (restored.Position != room || restored.QuestCycleDay < firstDay || restored.QuestCycleDay > lastDay ||
+            restored.QuestCycleDay < completed.QuestCycleDay) return false;
+        bool rolled = restored.QuestCycleDay != completed.QuestCycleDay;
+        // 只允许实际选角窗口内的日切、过期每日投影和固定次数保存；其余资产逐字段保持。
+        var expired = rolled ? completed.QuestDailyClaims.Where(row => row.Value > 0 && row.Value < restored.QuestCycleDay)
+            .Select(row => row.Key).ToHashSet() : [];
+        var accountExpired = rolled ? completed.AccountQuestDailyClaims.Where(row => row.Value > 0 && row.Value < restored.QuestCycleDay)
+            .Select(row => row.Key).ToHashSet() : [];
+        var expected = completed with
+        {
+            Position = room, Return = restored.Return, Revision = completed.Revision + (rolled ? 2 : 1),
+            QuestCycleDay = restored.QuestCycleDay,
+            CompletedQuests = completed.CompletedQuests.Where(id => !expired.Contains(id)).ToArray(),
+            QuestAnswers = completed.QuestAnswers.RemoveRange(expired), QuestDailyClaims = completed.QuestDailyClaims.RemoveRange(expired),
+            AccountCompletedQuests = completed.AccountCompletedQuests.Where(id => !accountExpired.Contains(id)).ToArray(),
+            AccountQuestAnswers = completed.AccountQuestAnswers.RemoveRange(accountExpired),
+            AccountQuestDailyClaims = completed.AccountQuestDailyClaims.RemoveRange(accountExpired)
+        };
+        return QuestCompletionRepositoryTests.Same(expected,restored);
+    }
+
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items,
         QuestCatalog? sharedQuests = null, SkillLearningCatalog? sharedSkills = null)
         => RunConfigured(towns,pvf,characters,items,Enumerable.Range(0,16).Select(job => ((byte)job,job == 0 ? 30 : 20)),sharedQuests,sharedSkills);
@@ -92,12 +116,13 @@ internal static class QuestMainlineTests
         void Reconnect(int checkpoint)
         {
             var completed = f.Read();
+            int firstDay = QuestCycle.Day(DateTimeOffset.UtcNow);
             f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             var restored = f.Read();
-            That(restored.Position == towns.Room && restored.Revision == completed.Revision+1 &&
-                QuestCompletionRepositoryTests.Same(completed with { Position = restored.Position, Return = restored.Return, Revision = restored.Revision },restored) &&
+            int lastDay = QuestCycle.Day(DateTimeOffset.UtcNow);
+            That(MatchesReconnect(completed,restored,firstDay,lastDay,towns.Room) &&
                 QuestCompletionRepositoryTests.Same(f.Session.Selected!,restored) && restored.Level >= checkpoint && restored.ActiveMainQuests.Length == 0,
-                $"Lv1–{checkpoint}整条主线与转职在重登后保留同一资产、等级、技能及完成状态");
+                $"Lv1–{checkpoint}整条主线与转职重登保留完整资产；游戏日{completed.QuestCycleDay}→{restored.QuestCycleDay}，revision{completed.Revision}→{restored.Revision}");
             Console.WriteLine($"职业{job}完成Lv1–{checkpoint}连续主线，转职路线{transfer.Id}，Lv{restored.Level}");
         }
 

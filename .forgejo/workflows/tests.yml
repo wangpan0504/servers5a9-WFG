@@ -5,9 +5,10 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  no-pvf:
+  no-pvf-debug:
+    name: no-pvf (Debug)
     runs-on: codeberg-small
-    timeout-minutes: 10
+    timeout-minutes: 5
     container:
       image: mcr.microsoft.com/dotnet/sdk:10.0-noble
     defaults:
@@ -15,6 +16,7 @@ jobs:
         shell: bash
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      CONFIGURATION: Debug
     steps:
       - name: 检出 PR 提交
         env:
@@ -26,22 +28,62 @@ jobs:
           git fetch --depth=1 origin "$PR_COMMIT"
           git checkout --detach "$PR_COMMIT"
 
-      # The dotnet SDK image intentionally has no PowerShell and no PVF.  Keep
-      # this job shell-only and run the resource-free entry points directly.
-      # This also avoids the old build/check path, which was not a runnable
-      # DLL path after --artifacts-path was introduced.
+      # SDK镜像没有PowerShell或PVF；每个配置独立限时，直接DLL入口避免重复SDK项目解析。
       - name: Debug 无资源构建与核心自测
         run: |
-          dotnet build ServerS5A9.sln -c Debug --nologo
-          dotnet run --project Tools/ArchitectureCheck -c Debug --no-build
-          dotnet run --project Tools/PvfLib.Tests -c Debug --no-build
-          dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-core
-          dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-tcp commands
+          dotnet build ServerS5A9.sln -c "$CONFIGURATION" --nologo --artifacts-path build/check -m:1 -nr:false
+          variant="${CONFIGURATION,,}"
+          dotnet "build/check/bin/ArchitectureCheck/$variant/ArchitectureCheck.dll"
+          dotnet "build/check/bin/PvfLib.Tests/$variant/PvfLib.Tests.dll"
+          dotnet "build/check/bin/DfoServer/$variant/DfoServer.dll" --selftest-core
+          dotnet "build/check/bin/DfoServer/$variant/DfoServer.dll" --selftest-tcp commands
 
+  no-pvf-release:
+    name: no-pvf (Release)
+    needs: no-pvf-debug
+    if: ${{ !cancelled() }}
+    runs-on: codeberg-small
+    timeout-minutes: 5
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:10.0-noble
+    defaults:
+      run:
+        shell: bash
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      CONFIGURATION: Release
+    steps:
+      - name: 检出 PR 提交
+        env:
+          REPOSITORY_URL: ${{ forgejo.event.pull_request.head.repo.clone_url }}
+          PR_COMMIT: ${{ forgejo.event.pull_request.head.sha }}
+        run: |
+          git init .
+          git remote add origin "$REPOSITORY_URL"
+          git fetch --depth=1 origin "$PR_COMMIT"
+          git checkout --detach "$PR_COMMIT"
+
+      # SDK镜像没有PowerShell或PVF；每个配置独立限时，直接DLL入口避免重复SDK项目解析。
       - name: Release 无资源构建与核心自测
         run: |
-          dotnet build ServerS5A9.sln -c Release --nologo
-          dotnet run --project Tools/ArchitectureCheck -c Release --no-build
-          dotnet run --project Tools/PvfLib.Tests -c Release --no-build
-          dotnet run --project Server/DfoServer -c Release --no-build -- --selftest-core
-          dotnet run --project Server/DfoServer -c Release --no-build -- --selftest-tcp commands
+          dotnet build ServerS5A9.sln -c "$CONFIGURATION" --nologo --artifacts-path build/check -m:1 -nr:false
+          variant="${CONFIGURATION,,}"
+          dotnet "build/check/bin/ArchitectureCheck/$variant/ArchitectureCheck.dll"
+          dotnet "build/check/bin/PvfLib.Tests/$variant/PvfLib.Tests.dll"
+          dotnet "build/check/bin/DfoServer/$variant/DfoServer.dll" --selftest-core
+          dotnet "build/check/bin/DfoServer/$variant/DfoServer.dll" --selftest-tcp commands
+
+  # 保留分支保护使用的原检查名称；两个配置都成功才能通过。
+  no-pvf:
+    needs: [no-pvf-debug, no-pvf-release]
+    if: ${{ always() }}
+    runs-on: codeberg-small
+    timeout-minutes: 1
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:10.0-noble
+    steps:
+      - name: 核对两个配置完整成功
+        env:
+          DEBUG_RESULT: ${{ needs.no-pvf-debug.result }}
+          RELEASE_RESULT: ${{ needs.no-pvf-release.result }}
+        run: test "$DEBUG_RESULT" = success && test "$RELEASE_RESULT" = success

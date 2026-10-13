@@ -25,6 +25,50 @@ internal static class QuestCycleContinuationTests
         var before = new DateTimeOffset(date.Year,date.Month,date.Day,5,59,59,TimeSpan.FromHours(8));
         var after = before.AddSeconds(1);
         That(QuestCycle.Day(before) != QuestCycle.Day(after),"合成时钟准确跨过UTC+8 06:00游戏日边界");
+        using (var f = new Fixture(DateTimeOffset.UtcNow))
+        {
+            var selected = f.Read();
+            var sameDay = selected with { Revision = selected.Revision+1 };
+            int day = selected.QuestCycleDay;
+            That(QuestMainlineTests.MatchesReconnect(selected,sameDay,day,day,f.Towns.Room) &&
+                !QuestMainlineTests.MatchesReconnect(selected,sameDay with { Revision = selected.Revision },day,day,f.Towns.Room),
+                "主线同日比较仍要求一次回房保存和完整状态，不允许零次保存");
+            f.Session.ReturnToRoster();
+            int previousDay = QuestCycle.Day(DateTimeOffset.UtcNow.AddDays(-1));
+            // 只准备本轮合成数据库的旧日投影；选角、日切及回房全部沿真实Session和SQLite。
+            f.Sql($"""
+                INSERT INTO accounts(account_id,salt,password_hash,iterations,disabled)
+                  SELECT account,zeroblob(16),zeroblob(32),100000,1 FROM characters;
+                UPDATE characters SET quest_cycle_day={previousDay},x=x+1;
+                UPDATE character_completed_quests SET daily_period={previousDay},answer=2 WHERE quest_id=100;
+                INSERT INTO character_completed_quests(character_id,quest_id,answer) SELECT id,102,3 FROM characters;
+                INSERT INTO account_completed_quests(account,quest_id,character_id,acceptance_id,daily_period,answer)
+                  SELECT account,100,id,'11111111111111111111111111111111',{previousDay},2 FROM characters;
+                INSERT INTO account_completed_quests(account,quest_id,character_id,acceptance_id,answer)
+                  SELECT account,102,id,'22222222222222222222222222222222',3 FROM characters;
+                """);
+            var completed = f.Read();
+            int firstDay = QuestCycle.Day(DateTimeOffset.UtcNow);
+            f.Session.Select(0); f.Session.MarkReady();
+            var restored = f.Read();
+            int lastDay = QuestCycle.Day(DateTimeOffset.UtcNow);
+            bool Matches(Character value) => QuestMainlineTests.MatchesReconnect(completed,value,firstDay,lastDay,f.Towns.Room);
+            That(Matches(restored) && Same(restored,f.Session.Selected!) && restored.Revision == completed.Revision+2 &&
+                restored.CompletedQuests.SequenceEqual([102]) && restored.AccountCompletedQuests.SequenceEqual([102]) &&
+                restored.QuestAnswers.GetValueOrDefault(102) == 3 && restored.AccountQuestAnswers.GetValueOrDefault(102) == 3 &&
+                restored.QuestDailyClaims.Count == 0 && restored.AccountQuestDailyClaims.Count == 0,
+                "真实跨日选角精确保存两次，只清过期个人及账号每日投影，永久完成与答案保持");
+            That(!Matches(restored with { Revision = restored.Revision-1 }) &&
+                !Matches(restored with { Revision = restored.Revision+1 }) &&
+                !Matches(restored with { QuestCycleDay = previousDay }) &&
+                !Matches(restored with { QuestCycleDay = QuestCycle.Day(DateTimeOffset.UtcNow.AddDays(2)) }),
+                "跨日比较不接受错误revision、旧周期或窗口之外的周期");
+            That(!Matches(restored with { Level = 2 }) && !Matches(restored with { CompletedQuests = [] }) &&
+                !Matches(restored with { QuestAnswers = completed.QuestAnswers }) &&
+                !Matches(restored with { AccountQuestAnswers = completed.AccountQuestAnswers }) &&
+                !Matches(restored with { ActiveMainQuests = [] }),
+                "跨日比较仍拒绝资产、永久完成、过期答案和活动接取变化");
+        }
         using (var f = new Fixture(before))
         {
             var selected = f.Session.Selected!;
@@ -152,6 +196,12 @@ internal static class QuestCycleContinuationTests
         }
 
         public Character Read() => repository.LoadCharacter(owner,0);
+
+        public void Sql(string sql)
+        {
+            using var db = new SqliteConnection("Data Source="+Path.Combine(root,"game.db")+";Pooling=False");
+            db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
+        }
 
         public void PrepareContinuation(bool forReplay = false)
         {
