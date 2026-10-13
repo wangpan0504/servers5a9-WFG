@@ -154,6 +154,14 @@ internal static class DungeonEntryPlanTests
                 DungeonEntryPlan.TryCreate(catalog,actual,1000,0,0,out var routed,out _,quests: quests) && routed!.RouteQuestId == id,
                 "匹配剑影转职资源的显式和普通选图入口均可规划");
         }
+        var vagabond = quests.Get(13102);
+        var candidate = character with { Job = 11, Level = 15, GrowType = 0, CompletedQuests = [3155],
+            ActiveMainQuests = [new(0,13102,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(catalog,candidate,7143,13102,0,out var vagabondPlan,out var vagabondReason,
+            quest: vagabond,quests: quests), "流浪武士转职使用资源声明的无连接迷宫: " + vagabondReason);
+        That(vagabondPlan is { QuestId: 13102, RouteQuestId: 13102, StartMap.Id: 76115, BossMap.Id: 76118 } &&
+            vagabondPlan.QuestAcceptanceId == candidate.ActiveMainQuests[0].AcceptanceId && vagabondPlan.Maze.StaticTopology.Supported,
+            "转职路线保留原任务接取身份、真实四房终点和可走拓扑");
         RejectMaze(maze with { QuestConnectionTokens = [new(0, 0), new(7, 3145), new(0, -1)] }, "quest-maze-unavailable");
         RejectMaze(maze with { QuestConnectionTokens = [new(0, 0), new(0, 3145)] }, "quest-maze-unavailable");
         RejectMaze(maze with { QuestConnectionTokens = [new(0, 1), new(0, 3145), new(0, -1)] }, "quest-maze-unavailable");
@@ -182,6 +190,27 @@ internal static class DungeonEntryPlanTests
         That(!DungeonEntryPlan.TryCreate(definition with { Id = 17, Mazes = [otherMaze] },otherCharacter with { ActiveMainQuests = [new(0,100,1)] },
             17,100,0,out _,out var mismatch,quest: clearTarget) && mismatch == "quest-terminal-map-unavailable", "任务目标地图不属于路线Boss时拒绝，不替换路线");
         var child = parent with { Id = 101, MainQuest = 100 };
+        var unlinkedMaze = otherMaze with { QuestConnectionTokens = [] };
+        var unlinkedDefinition = definition with { Id = 17, Mazes = [unlinkedMaze] };
+        var unlinkedQuest = clearTarget with { IntData = [456], Definition = clearTarget.Definition! with { Dungeons = [new(17,-1)] } };
+        var pendingClear = otherCharacter with { ActiveMainQuests = [new(0,100,1)] };
+        That(DungeonEntryPlan.TryCreate(unlinkedDefinition,pendingClear,17,100,0,out var unlinked,out _,quest: unlinkedQuest) &&
+            unlinked is { QuestId: 100, RouteQuestId: 100, BossMap.Id: 456 },
+            "合成不同任务和地图同样复用明确声明的唯一无连接清图路线，不硬编码转职编号");
+        foreach (var unsupported in new[] { unlinkedQuest with { Definition = unlinkedQuest.Definition! with { Dungeons = [] } },
+            unlinkedQuest with { Definition = unlinkedQuest.Definition! with { Dungeons = [new(18,-1)] } },
+            unlinkedQuest with { Condition = "[hunt enemy]" } })
+            That(!DungeonEntryPlan.TryCreate(unlinkedDefinition,pendingClear,17,100,0,out _,out _,quest: unsupported),
+                "缺少地下城归属或非清图目标不能借用无连接路线");
+        That(!DungeonEntryPlan.TryCreate(unlinkedDefinition,pendingClear,17,100,0,out _,out var wrongTarget,
+                quest: unlinkedQuest with { IntData = [999] }) && wrongTarget == "quest-terminal-map-unavailable" &&
+            !DungeonEntryPlan.TryCreate(unlinkedDefinition with { Mazes = [unlinkedMaze,unlinkedMaze with { SourceOrdinal = 8 }] },
+                pendingClear,17,100,0,out _,out var multiple,quest: unlinkedQuest) && multiple == "quest-maze-ambiguous",
+            "无连接路线仍核对目标且拒绝多个候选，不猜测地图或随机绕过歧义");
+        That(!DungeonEntryPlan.TryCreate(unlinkedDefinition with { Mazes = [unlinkedMaze,otherMaze with {
+                QuestConnectionTokens = [new(0,0),new(0,100),new(0,1)] }] },pendingClear,17,100,0,out _,out _,quest: unlinkedQuest) &&
+            !DungeonEntryPlan.TryCreate(unlinkedDefinition,pendingClear with { ActiveMainQuests = [] },17,100,0,out _,out _,quest: unlinkedQuest),
+            "既有任务连接的难度不符和未接取不能被无连接回退放行");
         That(DungeonEntryPlan.TryCreate(definition with { Id = 17, Mazes = [otherMaze,otherMaze with { SourceOrdinal = 8 }] },
             otherCharacter with { ActiveMainQuests = [new(0,101,1)] },17,101,0,out var fallback,out _,quest: child) &&
             fallback!.RouteQuestId == 100, "子任务回退到父任务的重复路线也去重");

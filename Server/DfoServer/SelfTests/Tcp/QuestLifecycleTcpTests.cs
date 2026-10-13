@@ -595,6 +595,40 @@ internal static class QuestLifecycleTcpTests
                 peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body; FormalDungeonTcpTests.Load(peer);
             }
         }
+        // 隔离准备真实前置和职业，验证无任务连接的转职地图经过生产准入；不修改玩家进度。
+        using (var owner = new AccountOwners().Acquire(extra.Options.DevelopmentAccount,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare("QuestVagabond",resources.Characters.Get(11),resources.Towns.Room,
+                resources.Towns.InitialReturn,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(11,0,15,candidate.InitialLearning with {
+                Experience = growth.GetLevelStartExperience(15) },resources.Learning);
+            new CharacterRepository(extra.Database).Create(owner,candidate with { Level = 15,
+                CompletedQuests = [3145,4873,3146,3147,3148,4875,3149,3150,3151,3152,3153,3155], InitialLearning = learning });
+        }
+        string acceptance;
+        using (var peer = Open(extra))
+        {
+            peer.Select(slot: 3,prepared: true); FormalDungeonTcpTests.EntryTown(peer);
+            byte[] information = [];
+            var map = FormalDungeonTcpTests.Enter(peer,13102,7143,row => information = row);
+            That(U32(information,0) == 7143 && U32(map,14) == 76115,
+                "真实流浪武士接取及选图下发7143和起点76115，不改为普通森林");
+            FormalDungeonTcpTests.Load(peer);
+            acceptance = extra.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id);
+            That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
+                is [[13102L,1L]], "成功加载不伪造清图或转职完成");
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21);
+            Bytes(peer.Expect(0,356).Body,peer.CompletedQuestHistory,"转职任务回城保留已知前置完成历史"); peer.Barrier();
+            That(extra.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id) == acceptance,
+                "未通关回城保留本次持久接取及清图进度");
+        }
+        using (var peer = Open(extra))
+        {
+            peer.Select(slot: 3,prepared: true); peer.Barrier();
+            That(extra.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id) == acceptance &&
+                extra.Query("SELECT grow_type FROM characters WHERE id=$p0",peer.Id) is [[0L]],
+                "重连仍回放原接取，未清图不改变职业分支");
+        }
         await QuestQuickClearTcpTests.RunAsync(extra,resources);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +

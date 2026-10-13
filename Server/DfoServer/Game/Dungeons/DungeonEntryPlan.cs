@@ -127,6 +127,11 @@ internal sealed record DungeonEntryPlan(
             candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(routeQuest,difficulty)));
         else if (questId == 0) candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
         else routeQuest = questId;
+        // 转职等清图资源可能只声明 dungeon info，没有任务连接。只借用明确归属的无连接路线，仍由后续终点检查核对目标地图。
+        if (candidates.Length == 0 && questId != 0 && quest is not null && QuestClearEligibility.IsSingleMap(quest) &&
+            quest.Definition is { Diagnostics.Length: 0 } declared && declared.Dungeons.Any(row => row.DungeonId == dungeonId) &&
+            definition.Mazes.All(maze => maze.QuestConnectionTokens.Count == 0))
+            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
         if (candidates.Length != 1)
         {
             reason = candidates.Length == 0 ? "route-maze-unavailable" : "route-maze-ambiguous";
