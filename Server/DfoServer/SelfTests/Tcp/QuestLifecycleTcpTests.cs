@@ -598,7 +598,7 @@ internal static class QuestLifecycleTcpTests
         // 隔离准备真实前置和职业，验证无任务连接的转职地图经过生产准入；不修改玩家进度。
         using (var owner = new AccountOwners().Acquire(extra.Options.DevelopmentAccount,() => { }))
         {
-            var candidate = CharacterCreation.Prepare("QuestVagabond",resources.Characters.Get(11),resources.Towns.Room,
+            var candidate = CharacterCreation.Prepare("QuestVaga",resources.Characters.Get(11),resources.Towns.Room,
                 resources.Towns.InitialReturn,resources.Learning.Get);
             var learning = SkillPointLedger.Synchronize(11,0,15,candidate.InitialLearning with {
                 Experience = growth.GetLevelStartExperience(15) },resources.Learning);

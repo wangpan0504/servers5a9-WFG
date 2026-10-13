@@ -59,7 +59,7 @@ internal sealed class DungeonProbeModule : IGameCommandModule
             {
                 nextPlan = active.Entry with { StartMap = target };
                 nextMonsters = active.Cached(target) ?? DungeonMonsterPlan.Create(roomProbeCatalog, target, nextPlan.CharacterId,
-                    checked((ushort)probe.NextObjectKey), nextPlan.BasisLevel);
+                    checked((ushort)probe.NextObjectKey), nextPlan.BasisLevel, playerTeam: nextPlan.PlayerTeam);
                 body = DungeonEntryProbe.BuildStartMap(nextPlan, nextMonsters);
                 active.Enter(target, nextMonsters);
                 if (nextMonsters.Monsters.Count > 0)
@@ -161,7 +161,8 @@ internal sealed class DungeonProbeModule : IGameCommandModule
                 }
                 try
                 {
-                    monsters = DungeonMonsterPlan.Create(roomProbeCatalog, plan!.StartMap, character.Id, checked((ushort)probe.NextObjectKey), plan.BasisLevel);
+                    monsters = DungeonMonsterPlan.Create(roomProbeCatalog, plan!.StartMap, character.Id, checked((ushort)probe.NextObjectKey),
+                        plan.BasisLevel, playerTeam: plan.PlayerTeam);
                     startMap = DungeonEntryProbe.BuildStartMap(plan, monsters);
                 }
                 catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException)

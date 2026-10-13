@@ -123,7 +123,7 @@ internal static class SinglePlayerDungeonRunTests
             "the original all-blocking-clear path preserves only real death events with friendly actors alive");
         var multiBoss = WithTeams(BossPlan(boss, 20, 21, 22, 23), 100, 100, 100, 0);
         var multiSources = multiBoss.Room.Monsters.Select((source, index) => index == 2 ? source with { RankKind = "[normal]" } : source).ToArray();
-        multiBoss = DungeonMonsterPlan.FromRoom(multiBoss.Room with { Monsters = Array.AsReadOnly(multiSources) }, 99, 20);
+        multiBoss = DungeonMonsterPlan.FromRoom(multiBoss.Room with { Monsters = Array.AsReadOnly(multiSources) }, 99, 20, playerTeam: 0);
         var terminalMaze = maze with { Starts = [boss.Position], MapSpecification = [boss] };
         var terminalEntry = entry with { Maze = terminalMaze, StartMap = boss };
         That(SinglePlayerDungeonRun.TryCreate(terminalEntry, 5, 500, new([multiBoss], []), authority, out var multiRun, out _),
@@ -208,7 +208,38 @@ internal static class SinglePlayerDungeonRunTests
             sideRun.ClearFact == branchClear.ClearFact,
             "settlement cannot resume room traversal or add an optional branch to the committed clear fact");
         RunLoadingCore();
+        RunFactionCore();
         Console.WriteLine($"PASS {Count - checks} dungeon actor and confirmed-loading lifecycle assertions");
+    }
+
+    static void RunFactionCore()
+    {
+        var map = new DungeonMap("boss",new(0,0),99,"map/relative-team.map");
+        var maze = new DungeonMaze(0,1,1,"fixture",[map.Position],[map.Position],[map],[]);
+        var source = new DungeonRoomMonster(1,[1,0,20,100,100,0,1,1],"[fixed]","[normal]","monster/fixture.mob");
+        var room = new DungeonRoomDefinition(map,[source,source with { RankKind = "[boss]" },source with { RankKind = "[boss]" }],[],[],[100,7,0]);
+        var plan = DungeonMonsterPlan.FromRoom(room,99,10,playerTeam: 7);
+        var entry = new DungeonEntryPlan(99,0,3,3145,0,0,maze,map,map) { PlayerTeam = 7 };
+        var authority = new FixtureCombatAuthority();
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,new([plan],[]),authority,out var run,out _),
+            "明确本人team7及原阵营生成计划可建立实例");
+        run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,11,1)).Outcome == DungeonRunOutcome.Rejected &&
+            run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 10,11,12 }), "同阵营Boss不能签发战斗死亡或删除场景对象");
+        var clear = run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,12,1));
+        That(clear.ClearFact is { ConfirmedDeathEvents.Count: 1 } && clear.CulledMonsterKeys.SequenceEqual(new ushort[] { 10 }) &&
+            run.Phase == SinglePlayerDungeonPhase.Settlement && run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 11 }),
+            "异阵营team0 Boss真实死亡后结算，仅清退敌方小怪而保留同阵营Boss");
+        var altered = plan with { Monsters = [plan.Monsters[0] with { IsFriendly = true,IsBlocking = false },.. plan.Monsters.Skip(1)] };
+        That(!SinglePlayerDungeonRun.TryCreate(entry,2,200,new([altered],[]),authority,out _,out _) &&
+            !SinglePlayerDungeonRun.TryCreate(entry,2,200,new([plan with { PlayerTeam = 0 }],[]),authority,out _,out _),
+            "入场复验拒绝伪造友军资格或不匹配的本人阵营");
+        var unknown = DungeonMonsterPlan.FromRoom(room,99,10);
+        That(SinglePlayerDungeonRun.TryCreate(entry with { PlayerTeam = null },2,200,new([unknown],[]),authority,out var unknownRun,out _),
+            "未知本人阵营不阻断原生成集合");
+        unknownRun!.CompleteLoading(unknownRun.Snapshot.Identity,Guid.NewGuid());
+        That(unknownRun.AcceptConfirmedDeath(authority.Death(unknownRun.Snapshot.Identity,12,1)).ClearFact is null,
+            "未知本人阵营不因team7被猜为友军而提前通关");
     }
 
     private static void RunLoadingCore()
@@ -551,7 +582,8 @@ internal static class SinglePlayerDungeonRunTests
     }
 
     private static DungeonMonsterPlan WithTeams(DungeonMonsterPlan plan, params int[] teams)
-        => DungeonMonsterPlan.FromRoom(plan.Room with { MonsterTeams = Array.AsReadOnly(teams) }, 99, plan.Monsters[0].ObjectKey);
+        => DungeonMonsterPlan.FromRoom(plan.Room with { MonsterTeams = Array.AsReadOnly(teams) }, 99, plan.Monsters[0].ObjectKey,
+            playerTeam: 0);
 
     private static DungeonMonsterPlan BossPlan(DungeonMap map, params ushort[] keys)
     {

@@ -32,7 +32,8 @@ internal static class TutorialTcpTests
             foreach (var map in definition.Mazes.Single().MapSpecification!.Concat(definition.Mazes.Single().LayeredMaps))
             {
                 DungeonMonsterPlan actors;
-                try { actors = DungeonMonsterPlan.FromRoom(scenes.Apply(rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: true)), 1, next, definition.BasisLevel, includeSpecial: false); }
+                try { actors = DungeonMonsterPlan.FromRoom(scenes.Apply(rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: true)),
+                    1, next, definition.BasisLevel, includeSpecial: false, playerTeam: plan!.PlayerTeam); }
                 catch (Exception error) when (error is InvalidDataException or NotSupportedException)
                 { throw new InvalidDataException($"训练资源边界：job={flow.Job},dungeon={flow.DungeonId},map={map.Id},path={map.Path}", error); }
                 That(actors.Monsters.Count + actors.SpecialObjects.Count <= 255, "训练房间Actor格式与正文上限: " + map.Id);
@@ -120,7 +121,8 @@ internal static class TutorialTcpTests
                 That(U32(map, 14) == expectedMap.Id, "训练真实切图顺序: job=" + job);
                 FormalDungeonTcpTests.Load(peer);
                 var room = scenes.Apply(rooms.Get(expectedMap, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: true));
-                var actors = DungeonMonsterPlan.FromRoom(room, peer.Id, map[18] == 0 ? (ushort)1 : U16(map, 25), definition.BasisLevel, includeSpecial: false);
+                var actors = DungeonMonsterPlan.FromRoom(room, peer.Id, map[18] == 0 ? (ushort)1 : U16(map, 25), definition.BasisLevel,
+                    includeSpecial: false, playerTeam: 0);
                 if (cinematic && expectedMap == ordered[^1])
                 {
                     var movie = room.TutorialCinematics.Where(row => row.DestroyTargets.Count > 0).MaxBy(row => row.MonsterActors.Count)!;

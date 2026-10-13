@@ -71,6 +71,23 @@ internal static class NativeDungeonCombatAuthorityTests
         var next = nextAuthority.ValidateAndIssue(nextRun,nextRun.Snapshot.Identity,report);
         That(next.Outcome == DungeonRunOutcome.Accepted && next.Death!.EventId != accepted.Death!.EventId &&
             Rejected(nextAuthority.ValidateAndIssue(nextRun,identity,Observation(100))),"来源只是审计，新run独立事实不继承旧实例观察");
+        var (teamAuthority,teamRun) = Fixture(withMiddle: true,playerTeam: 7,monsterTeams: [0,7]);
+        Load(teamRun);
+        var teamIdentity = teamRun.Snapshot.Identity;
+        var retirement = teamAuthority.ValidateAndIssue(teamRun,teamIdentity,Observation(101));
+        That(retirement is { Outcome: DungeonRunOutcome.Accepted,Death: null }, "同阵营正值team7对象退场不签发奖励事实");
+        teamRun.RetireNonCombatObject(101);
+        That(teamRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 100 }) &&
+            teamAuthority.ValidateAndIssue(teamRun,teamIdentity,Observation(101)) is { Outcome: DungeonRunOutcome.Accepted,Death: null },
+            "友军有效退场及重复只改变显示集合，保留上游无奖励应答");
+        var enemy = teamAuthority.ValidateAndIssue(teamRun,teamIdentity,Observation(100));
+        That(enemy.Death is { CombatSequence: 1 }, "相对team7的敌方team0真实死亡才消费第一条战斗序号");
+        Confirm(teamRun,enemy.Death!);
+        teamRun.Move(teamRun.Snapshot.Identity,Guid.NewGuid(),new(1,0)); Load(teamRun);
+        Confirm(teamRun,teamAuthority.ValidateAndIssue(teamRun,teamRun.Snapshot.Identity,Observation(102)).Death!);
+        teamRun.Move(teamRun.Snapshot.Identity,Guid.NewGuid(),new(0,0)); Load(teamRun);
+        That(teamRun.Snapshot.LivingMonsters.Count == 0 && teamRun.ClearFact is null,
+            "回访原房间不复活退场友军，也不把其退场加入清图事实");
         Console.WriteLine($"PASS {Count-checks} 原生来源审计、无奖励目标与提交身份去重断言");
     }
 
@@ -414,7 +431,8 @@ internal static class NativeDungeonCombatAuthorityTests
     }
 
     static (NativeDungeonCombatAuthority Authority, SinglePlayerDungeonRun Run) Fixture(
-        NativeDungeonCombatAuthority? authority = null, bool bind = true, bool withMiddle = false, int level = 3, bool withFriendly = false)
+        NativeDungeonCombatAuthority? authority = null, bool bind = true, bool withMiddle = false, int level = 3, bool withFriendly = false,
+        int? playerTeam = null, int[]? monsterTeams = null)
     {
         authority ??= new();
         var a = new DungeonMap("map", new(0, 0), 1, "map/fixture-native-a.map");
@@ -422,9 +440,13 @@ internal static class NativeDungeonCombatAuthorityTests
         var c = new DungeonMap("boss", new(2, 0), 3, "map/fixture-native-c.map");
         DungeonMap[] maps = withMiddle ? [a, b, c] : [a, b];
         var maze = new DungeonMaze(0, maps.Length, 1, "明确合成", [a.Position], [maps[^1].Position], Array.AsReadOnly(maps), []);
-        var entry = new DungeonEntryPlan(99, 17, 3, 3145, 0, 0, maze, a, maps[^1]);
+        var entry = new DungeonEntryPlan(99, 17, 3, 3145, 0, 0, maze, a, maps[^1]) { PlayerTeam = playerTeam };
         DungeonMonsterPlan[] plans = withMiddle ? [Plan(a, 100, 2, level), Plan(b, 102, 1, level), Plan(c, 103, 1, level)]
             : [Plan(a, 100, 2, level), Plan(b, 102, 1, level)];
+        if (playerTeam is not null || monsterTeams is not null)
+            plans = plans.Select((plan,index) => DungeonMonsterPlan.FromRoom(
+                plan.Room with { MonsterTeams = index == 0 ? monsterTeams : plan.Room.MonsterTeams },99,
+                plan.Monsters[0].ObjectKey,playerTeam: playerTeam)).ToArray();
         if (withFriendly)
         {
             DungeonRoomAiCharacter Actor(int id,string faction) => new(id,[id,0,1,100,100,0],faction,"[normal]","aicharacter/fixture.aic",level);

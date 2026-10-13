@@ -12,6 +12,46 @@ namespace DfoServer;
 
 internal static class DungeonMonsterPacketsTests
 {
+    public static void RunCore()
+    {
+        int checks = Count;
+        var map = new DungeonMap("boss",new(0,0),1,"map/faction-fixture.map");
+        var maze = new DungeonMaze(0,1,1,"fixture",[map.Position],[map.Position],[map],[]);
+        var entry = new DungeonEntryPlan(99,0,3,0,byte.MaxValue,0,maze,map,map);
+        var source = new DungeonRoomMonster(1034,[1034,0,20,993,421,0,1,1],"[fixed]","[normal]","monster/fixture.mob");
+        var room = new DungeonRoomDefinition(map,[source,source,source,source],[],[],[100,0,7,-1]);
+        foreach (var (team, flags) in new (int? Team, byte[] Flags)[]
+        {
+            (0,[0,1,0,0]), (7,[0,0,1,0]), (null,[0,0,0,0])
+        })
+        {
+            var plan = DungeonMonsterPlan.FromRoom(room,99,10,playerTeam: team);
+            foreach (var payload in new[] { DungeonMapPayload.Build,DungeonMapPayload.Refresh })
+            {
+                byte[] body = DungeonPackets.StartMap(entry,plan,1,payload: payload);
+                That(body.Length == 111 && body[13] == (byte)payload && body[18] == 4 &&
+                    body.AsSpan(107).SequenceEqual(new byte[] { 0,0,0,255 }), "阵营标记不改变完整22B演员列表与尾部对齐");
+                for (int index = 0; index < flags.Length; index++)
+                {
+                    int offset = 19+22*index;
+                    That(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset+2)) == index &&
+                        BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(offset+6)) == 10+index &&
+                        BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset+8)) == 1034 && body[offset+12] == 20 &&
+                        body[offset+14] == 0 && body[offset+15] == 0 && body[offset+16] == 255 &&
+                        body[offset+21] == flags[index], "同阵营只置末byte排除位，原ordinal/key/等级与创建组保留");
+                }
+            }
+        }
+        DungeonRoomAiCharacter Actor(int id,string faction) => new(id,[id,0,0,0,0,0],faction,"[normal]","aicharacter/fixture.aic",20);
+        var apcs = DungeonMonsterPlan.FromRoom(new(map,[],[],[])
+            { AiCharacters = [Actor(1,"[character]"),Actor(2,"[neutral]"),Actor(3,"[monster]")] },99,10);
+        byte[] apcBody = DungeonPackets.StartMap(entry,apcs,1);
+        That(apcBody.Length == 89 && apcBody[40] == 1 && apcBody[62] == 1 && apcBody[84] == 0 &&
+            apcBody[32] == 5 && apcBody[54] == 5 && apcBody[76] == 5,
+            "友方/中立APC排除清房记录，敌对APC保留原类型与标记");
+        Console.WriteLine($"PASS {Count - checks} 阵营清房22B生成通知断言");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
@@ -26,7 +66,8 @@ internal static class DungeonMonsterPacketsTests
         foreach (var map in approvedEntry.Maze.MapSpecification!)
         {
             var plan = approvedEntry with { StartMap = map };
-            var monsters = DungeonMonsterPlan.Create(rooms, map, character.Id, 0x100, approvedEntry.BasisLevel);
+            var monsters = DungeonMonsterPlan.Create(rooms, map, character.Id, 0x100, approvedEntry.BasisLevel,
+                playerTeam: approvedEntry.PlayerTeam);
             byte[] body = DungeonPackets.StartMap(plan, monsters, 0xF1234567);
             That(DungeonEntryProbe.BuildStartMap(plan, monsters, 0xF1234567).SequenceEqual(body),
                 "诊断调用委托同一正式纯Builder，保持完整怪物字节");
@@ -52,7 +93,7 @@ internal static class DungeonMonsterPacketsTests
                 That(reader.ReadUInt32() == monsters.Monsters[index].MonsterId && reader.ReadByte() == expectedLevel,
                     "monster code and candidate level come from this room's resource");
                 That(reader.ReadByte() == expectedType && reader.ReadByte() == 0 && reader.ReadByte() == 0
-                    && reader.ReadSByte() == -1 && reader.ReadUInt32() == 0 && reader.ReadByte() == 0,
+                    && reader.ReadSByte() == -1 && reader.ReadUInt32() == 0 && reader.ReadByte() == (map.Id == 76126 && index == 1 ? 1 : 0),
                     "candidate flags include the mandatory Client signed byte before the u32");
             }
             for (int index = 0; index < expectedParents; index++)

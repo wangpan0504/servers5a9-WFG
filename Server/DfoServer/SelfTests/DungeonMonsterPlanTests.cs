@@ -46,14 +46,14 @@ internal static class DungeonMonsterPlanTests
         That(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [] }, 99, 10).Monsters.All(monster => monster.IsBlocking),
             "empty team section keeps default blocking behavior");
         var teams = room with { MonsterTeams = Array.AsReadOnly(new[] { 100, 0 }) };
-        var plan = DungeonMonsterPlan.FromRoom(teams, 99, 10);
+        var plan = DungeonMonsterPlan.FromRoom(teams, 99, 10, playerTeam: 0);
         That(plan.Monsters.Select(monster => monster.IsBlocking).SequenceEqual([true, false]),
-            "team zero alone excludes a friendly actor from the clear requirement");
+            "明确本人team0后排除同阵营actor，不删除生成行");
         That(plan.Monsters.Select(monster => monster.ObjectKey).SequenceEqual(new ushort[] { 10, 11 }) &&
             plan.Monsters.Select(monster => monster.SourceOrdinal).SequenceEqual([0, 1]) &&
             plan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 3, 0 }) &&
             ReferenceEquals(plan.Monsters[1].Source, room.Monsters[1]), "friendly actor keeps its source ordinal key level and spawn type");
-        That(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [0] }, 99, 10).Monsters.Select(monster => monster.IsBlocking)
+        That(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [0] }, 99, 10, playerTeam: 0).Monsters.Select(monster => monster.IsBlocking)
             .SequenceEqual([false, true]), "missing trailing team defaults to blocking by its source ordinal");
         That(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [-1, int.MaxValue] }, 99, 10).Monsters.All(monster => monster.IsBlocking),
             "all nonzero team values remain blocking without guessed team enums");
@@ -63,6 +63,19 @@ internal static class DungeonMonsterPlanTests
         That(rejected, "synthetic metadata cannot add team indices beyond the resource roster");
         That(new DungeonPlannedMonster(0, 10, 1, 3, source).IsBlocking,
             "existing fixture constructors keep ordinary blocking behavior");
+        var relativeTeams = room with { MonsterTeams = [0,7] };
+        var sameTeam = DungeonMonsterPlan.FromRoom(relativeTeams,99,10,playerTeam: 7);
+        That(sameTeam.PlayerTeam == 7 && sameTeam.Monsters.Select(monster => monster.Team).SequenceEqual([0,7]) &&
+            sameTeam.Monsters.Select(monster => monster.IsFriendly).SequenceEqual([false,true]) &&
+            sameTeam.Monsters.Select(monster => monster.CanReportDeath).SequenceEqual([true,false]),
+            "明确team7时team0仍是敌方，同team7才排除战斗奖励");
+        That(DungeonMonsterPlan.FromRoom(relativeTeams,99,10).Monsters.All(monster => !monster.IsFriendly && monster.IsBlocking),
+            "未知本人阵营不能自动排除team0或其他正值");
+        var defaults = DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [-1] },99,10,playerTeam: 0);
+        That(defaults.Monsters.All(monster => monster.Team == 100 && !monster.IsFriendly),
+            "负值与缺失阵营按原生创建回退100，不变成友军");
+        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(room,99,10,playerTeam: -1),
+            "未知本人阵营使用null而不是怪物的负值回退标记");
         var apcs = new[] { "[normal]", "[champion]", "[super champion]", "[boss]" }.Select((rank,index) =>
             new DungeonRoomAiCharacter(2000+index,[2000+index,100,200,0,0,0],"[monster]",rank,"aicharacter/fixture.aic",32)).ToArray();
         var mixed = DungeonMonsterPlan.FromRoom(room with { AiCharacters = apcs },99,10);
@@ -149,7 +162,7 @@ internal static class DungeonMonsterPlanTests
         That(bossRoom.Monsters.Count == 2 && bossRoom.Monsters[0].MonsterId == 107000903 &&
             bossRoom.Monsters[0].RankKind == "[boss]" && bossRoom.Monsters[1].MonsterId == 107000906 &&
             bossRoom.Monsters[1].RankKind == "[normal]", "76126真实Boss与普通怪物身份分别保留");
-        var bossPlan = DungeonMonsterPlan.FromRoom(bossRoom, 99, 100);
+        var bossPlan = DungeonMonsterPlan.FromRoom(bossRoom, 99, 100, playerTeam: 0);
         That(bossPlan.Monsters.Count == 2 && bossPlan.Monsters.All(monster => monster.CandidateLevel == 3) &&
             bossPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 3, 0 }),
             "76126完整Boss与普通怪物计划分别保留类型3和0，等级均为资源Lv3");

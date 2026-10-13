@@ -118,6 +118,7 @@ internal static class SelfTestRunner
         DungeonMapPoolTests.RunCore();
         DungeonResourceSurveyTests.RunCore();
         DungeonMonsterPlanTests.RunCore();
+        DungeonMonsterPacketsTests.RunCore();
         SinglePlayerDungeonRunTests.RunCore();
         DungeonExplicitDropPolicyTests.RunCore();
         DungeonGroundStateTests.RunCore();

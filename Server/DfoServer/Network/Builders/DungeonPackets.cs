@@ -132,7 +132,8 @@ internal static class DungeonPackets
             writer.Write(monster.IsSpecialChild ? checked((byte)(monster.Source?.SpecialParent?.SourceOrdinal ??
                 throw new InvalidDataException("特殊子actor缺少父资源索引"))) : byte.MaxValue);
             writer.Write(0u);
-            writer.Write(monster.IsSpecialChild ? (byte)1 : (byte)0);
+            // 22B行末byte为清房排除位；保持原ordinal/key与父子关联字段，不伪造死亡。
+            writer.Write(monster.IsSpecialChild || monster.IsFriendly ? (byte)1 : (byte)0);
         }
         foreach (var actor in monsters.SpecialObjects)
         {

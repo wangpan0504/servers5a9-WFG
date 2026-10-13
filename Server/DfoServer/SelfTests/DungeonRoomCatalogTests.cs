@@ -48,6 +48,9 @@ internal static class DungeonRoomCatalogTests
         var parsed = fixture.Parse([.. monsters, .. teamTokens]);
         That(parsed.MonsterTeams!.SequenceEqual([100, 0]) && parsed.Monsters.Count == 2,
             "team values retain positional source order beside the complete actor roster");
+        That(parsed.Monsters.Select(monster => monster.Team).SequenceEqual(new int?[] { 100,0 }) &&
+            fixture.Parse(monsters).Monsters.All(monster => monster.Team is null),
+            "每条源记录保留对应原始阵营，缺失不补0");
         teamTokens[1] = new(0, 0);
         That(parsed.MonsterTeams!.SequenceEqual([100, 0]) && parsed.MonsterTeams is IList teams && teams.IsReadOnly,
             "parsed teams are read only and do not retain mutable input tokens");
@@ -58,6 +61,8 @@ internal static class DungeonRoomCatalogTests
             "missing trailing team entries remain absent instead of inventing friendly values");
         That(fixture.Parse([.. monsters, .. fixture.Block("monster team", [new(0, int.MinValue), new(0, int.MaxValue)])])
             .MonsterTeams!.SequenceEqual([int.MinValue, int.MaxValue]), "nonzero team integers stay opaque and complete");
+        That(fixture.Parse([.. monsters, .. fixture.Block("monster team", [new(0,-1)])]).Monsters.Select(monster => monster.Team)
+            .SequenceEqual(new int?[] { -1,null }), "原始负值与尾部缺项独立保留，由生成计划解释回退");
         Reject([.. monsters, .. fixture.Block("monster team", [new(6, fixture.String("0").Value)])], "nonnumeric team rejected");
         Reject([.. monsters, .. fixture.Block("monster team", [new(0, 100), new(0, 0), new(0, 0)])], "excess team index rejected");
         Reject(fixture.Block("monster team", [new(0, 0)]), "team without corresponding monster rejected");

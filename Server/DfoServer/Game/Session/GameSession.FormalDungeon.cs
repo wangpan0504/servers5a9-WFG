@@ -131,7 +131,7 @@ internal sealed partial class GameSession
                 var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
                 if (entry.IsTutorial) room = (tutorialScenes ?? throw new InvalidDataException("训练动作目录未装配")).Apply(room);
                 var plan = DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.BasisLevel,
-                    includeSpecial: !entry.IsTutorial);
+                    includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam);
                 plans.Add(plan);
                 if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0) next = plan.NextObjectKey;
             }

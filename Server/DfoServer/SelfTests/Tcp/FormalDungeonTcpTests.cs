@@ -109,6 +109,8 @@ internal static partial class FormalDungeonTcpTests
                     byte[] report = Death(key, peer.Id, level);
                     if (room == ids.Length - 1 && U32(map, offset + 8) == 107000906)
                     {
+                        That(U32(map,offset+2) == 1 && map[offset+21] == 1 && map[offset+14] == 0 &&
+                            map[offset+15] == 0 && map[offset+16] == 255, "托比仅设置清房排除位，保留普通创建字段与原资源序号");
                         peer.Send(39, report); peer.Expect(0,38); peer.Barrier();
                         That(Experience(fixture, peer.Id) == experience &&
                             fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, key) is [[0L]],

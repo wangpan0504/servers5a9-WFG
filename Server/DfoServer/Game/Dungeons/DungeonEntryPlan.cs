@@ -20,6 +20,7 @@ internal sealed record DungeonEntryPlan(
     DungeonMap BossMap)
 {
     public int? BasisLevel { get; init; }
+    public int? PlayerTeam { get; init; }
     public bool IsTutorial { get; init; }
     public bool DisableClearReward { get; init; }
     public Guid QuestAcceptanceId { get; init; }
@@ -203,6 +204,9 @@ internal sealed record DungeonEntryPlan(
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, maze, starts[0], terminal)
         {
             BasisLevel = definition.BasisLevel,
+            // 本入口只规划原生普通单人PVE；构造初始team0，START_MAP普通分支保持该值。
+            // 未实现的组队/对抗模式须提供自身阵营来源，不能沿用这个入口的单人合同。
+            PlayerTeam = 0,
             IsTutorial = definition.IsTutorial,
             DisableClearReward = definition.DisableClearReward,
             MonsterBasisLevel = definition.BasisLevel,

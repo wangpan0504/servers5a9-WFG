@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace DfoServer.Testing;
 
 internal static class TcpTestArtifactsTests
@@ -45,7 +47,32 @@ internal static class TcpTestArtifactsTests
                 await Prepare(root);
                 try
                 {
-                    Directory.CreateSymbolicLink(Path.Combine(root, "group/Data/previous"), Path.Combine(roots[0], "group/Data"));
+                    string link = Path.Combine(root, "group/Data/previous");
+                    string target = Path.Combine(roots[0], "group/Data");
+                    if (OperatingSystem.IsWindows())
+                    {
+                        // junction同样是目录重解析点，保留越界保护断言且不依赖管理员/开发者模式。
+                        using var process = Process.Start(new ProcessStartInfo("cmd.exe")
+                        {
+                            Arguments = $"/d /c mklink /J \"{link}\" \"{target}\"",
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        }) ?? throw new IOException("Cannot create synthetic directory junction");
+                        if (!process.WaitForExit(5000))
+                        {
+                            process.Kill();
+                            process.WaitForExit();
+                            throw new TimeoutException("Synthetic junction command timed out");
+                        }
+                        if (process.ExitCode != 0)
+                            throw new IOException("Synthetic junction failed: " + process.StandardError.ReadToEnd());
+                    }
+                    else
+                        Directory.CreateSymbolicLink(link, target);
+                    TestCheck.That((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0,
+                        "link boundary must exercise a real directory reparse point");
                     linked = true;
                 }
                 catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException)

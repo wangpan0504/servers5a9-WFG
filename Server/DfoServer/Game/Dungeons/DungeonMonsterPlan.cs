@@ -12,6 +12,8 @@ internal sealed record DungeonPlannedMonster(
     public DungeonRoomAiCharacter? AiCharacter { get; init; }
     public byte SpawnType { get; init; }
     public bool IsBlocking { get; init; } = true;
+    public int Team { get; init; } = Source?.Team is >= 0 ? Source.Team.Value : 100;
+    public bool IsFriendly { get; init; }
     public bool IsSpecialChild => Source?.SpecialChild is not null;
     public bool IsScriptedRetirement => Source?.ScriptedRetirement == true;
     public int EnemyType => AiCharacter is null ? 1 : 2;
@@ -22,24 +24,28 @@ internal sealed record DungeonPlannedMonster(
 }
 internal sealed record DungeonPlannedSpecialObject(ushort ObjectKey, DungeonRoomSpecialObject Source);
 
-// 此计划只分配房间对象身份；不建立战斗、死亡、清房或奖励状态。
+// 冻结房间对象身份和阵营资格；不建立战斗、死亡、清房或奖励状态。
 internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyList<DungeonPlannedMonster> Monsters)
 {
     public IReadOnlyList<DungeonPlannedSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonPlannedSpecialObject>();
     public uint NextObjectKey => (uint)Monsters.Select(monster => (int)monster.ObjectKey)
         .Concat(SpecialObjects.Select(actor => (int)actor.ObjectKey)).DefaultIfEmpty(0).Max() + 1;
     public int? BasisLevel { get; init; }
+    public int? PlayerTeam { get; init; }
 
-    public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey, int? basisLevel = null)
-        => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel);
+    public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey,
+        int? basisLevel = null, int? playerTeam = null)
+        => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel, playerTeam: playerTeam);
 
     internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
-        bool includeSpecial = true)
+        bool includeSpecial = true, int? playerTeam = null)
     {
         if (basisLevel is < 1 or > byte.MaxValue)
             throw new InvalidDataException("副本基准等级超出演员创建范围");
         if (room.MonsterTeams is { } teams && teams.Count > room.Monsters.Count)
             throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
+        if (playerTeam is < 0)
+            throw new InvalidDataException("本人阵营不能使用怪物的负值回退声明");
         var result = new List<DungeonPlannedMonster>();
         int nextKey = firstObjectKey;
         for (int index = 0; index < room.Monsters.Count; index++)
@@ -67,12 +73,17 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 throw new InvalidDataException("房间怪物对象 key 超出 ushort 容量");
             // 资源品级经模板+24进入客户端记录+14：普通0、精英1/2、Boss3。
             // 绝对等级保留完整整数，相对等级使用已核验基准；原始行始终保留。
+            int? rawTeam = room.MonsterTeams is { } monsterTeams && index < monsterTeams.Count
+                ? monsterTeams[index] : source.Team;
+            int team = rawTeam is >= 0 ? rawTeam.Value : 100;
+            bool friendly = playerTeam is { } actualTeam && team == actualTeam;
             result.Add(new(index, (ushort)nextKey, source.MonsterId, level, source)
             {
                 SpawnType = source.RankKind switch { "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => (byte)0 },
-                // team 与资源行同索引；0为友方任务对象，缺项沿用普通阻塞行为。
-                IsBlocking = !source.ScriptedRetirement &&
-                    (room.MonsterTeams is not { } monsterTeams || index >= monsterTeams.Count || monsterTeams[index] != 0)
+                // 02A15E31保留显式team；02C9F43C相对本人比较，不把0或非100统一当作友军。
+                Team = team,
+                IsFriendly = friendly,
+                IsBlocking = !source.ScriptedRetirement && !friendly
             });
             nextKey++;
         }
@@ -92,7 +103,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 AiCharacter = source,
                 SpawnType = source.RankKind switch { "[champion]" => 6, "[super champion]" => 7, "[boss]" => 8, _ => (byte)5 },
                 // 两端均不把APC放入普通门阻塞集；敌对Boss单独参与终点判定。
-                IsBlocking = false
+                IsBlocking = false,
+                IsFriendly = source.Faction is "[character]" or "[neutral]"
             });
         }
 
@@ -117,7 +129,12 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 result.Add(new(result.Count, Allocate(), source.MonsterId, level, source) { IsBlocking = false });
             }
         }
-        return new(room, Array.AsReadOnly(result.ToArray())) { SpecialObjects = Array.AsReadOnly(objects.ToArray()), BasisLevel = basisLevel };
+        return new(room, Array.AsReadOnly(result.ToArray()))
+        {
+            SpecialObjects = Array.AsReadOnly(objects.ToArray()),
+            BasisLevel = basisLevel,
+            PlayerTeam = playerTeam
+        };
 
         ushort Allocate()
         {

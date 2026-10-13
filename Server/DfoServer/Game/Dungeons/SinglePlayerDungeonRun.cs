@@ -220,12 +220,18 @@ internal sealed class SinglePlayerDungeonRun
         var keys = new HashSet<ushort>();
         foreach (DungeonMonsterPlan plan in approvedRoute.Rooms)
         {
+            if (entry.PlayerTeam is { } playerTeam && plan.PlayerTeam is { } plannedTeam && plannedTeam != playerTeam)
+            {
+                reason = "invalid: 房间阵营与已确认入场上下文不匹配";
+                return false;
+            }
             // 不把未支持生成规则或缺失资源行替换成空房间。
             DungeonMonsterPlan resourcePlan;
             try
             {
                 // 入场与复验采用同一训练策略；普通副本继续要求完整特殊父子演员。
-                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel, includeSpecial: !entry.IsTutorial);
+                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel,
+                    includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException)
             {
@@ -236,7 +242,8 @@ internal sealed class SinglePlayerDungeonRun
                 pair.First.SourceOrdinal != pair.Second.SourceOrdinal || pair.First.Source != pair.Second.Source ||
                 pair.First.AiCharacter != pair.Second.AiCharacter || pair.First.MonsterId != pair.Second.MonsterId ||
                 pair.First.CandidateLevel != pair.Second.CandidateLevel || pair.First.SpawnType != pair.Second.SpawnType ||
-                pair.First.IsBlocking != pair.Second.IsBlocking || pair.First.ObjectKey == entry.CharacterId || !keys.Add(pair.First.ObjectKey)))
+                pair.First.IsBlocking != pair.Second.IsBlocking || pair.First.Team != pair.Second.Team ||
+                pair.First.IsFriendly != pair.Second.IsFriendly || pair.First.ObjectKey == entry.CharacterId || !keys.Add(pair.First.ObjectKey)))
             {
                 reason = "invalid: 房间怪物身份不完整或重复";
                 return false;

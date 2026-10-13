@@ -5,6 +5,7 @@ namespace DfoServer.GameWorld.Dungeons;
 // 只保存匹配地图的资源行；整数和标记尚未全部映射到生成规则、战斗状态或 wire 字段。
 internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string RankKind, string Path)
 {
+    public int? Team { get; init; }
     public bool ScriptedRetirement { get; init; }
     // 冠军/命名品级的附加数量独立于八整数；当前只恢复空附加集合，不截断未知正数量。
     public IReadOnlyList<string> Modifiers { get; init; } = Array.Empty<string>();
@@ -209,6 +210,8 @@ internal sealed class DungeonRoomCatalog
         var teams = sections.TryGetValue("[monster team]", out var teamTokens) ? Integers(teamTokens) : Freeze(Array.Empty<int>());
         if (teams.Count > monsterRows.Count)
             throw new InvalidDataException("房间 monster team 索引超过怪物资源行");
+        for (int index = 0; index < teams.Count; index++)
+            monsterRows[index] = monsterRows[index] with { Team = teams[index] };
         var actors = new List<DungeonRoomAiCharacter>();
         if (sections.TryGetValue("[ai character]",out var actorTokens))
             foreach (var row in PvfAiCharacterScript.MapRows(actorTokens,resolve))
