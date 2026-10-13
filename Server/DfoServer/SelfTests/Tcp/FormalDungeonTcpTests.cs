@@ -410,7 +410,7 @@ internal static partial class FormalDungeonTcpTests
         VerifyEntryRecoveryAndJobs(fixture, kills);
         VerifyOrdinaryEntry(fixture);
         VerifyDungeonEquipmentMoves(fixture, resources);
-        VerifyPreviouslyBlockedOrdinaryMaps(fixture, resources);
+        VerifyOrdinaryRoutes(fixture, resources);
         string persisted = fixture.Snapshot("SELECT level,experience FROM characters");
         string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
         string inventory = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
@@ -736,10 +736,12 @@ internal static partial class FormalDungeonTcpTests
         }
     }
 
-    static void VerifyPreviouslyBlockedOrdinaryMaps(TcpTestFixture fixture, TcpTestResources resources)
+    static void VerifyOrdinaryRoutes(TcpTestFixture fixture, TcpTestResources resources)
     {
         var dungeons = DungeonCatalog.Load(resources.Archive);
-        foreach (int dungeonId in new[] { 7, 8 })
+        var rooms = DungeonRoomCatalog.Load(resources.Archive);
+        var clearRewards = DungeonClearExperienceCatalog.Load(resources.Archive);
+        foreach (int dungeonId in new[] { 5, 6, 7, 8, 9, 1000 })
         {
             var definition = dungeons.Get(dungeonId);
             string name = "OrdMap" + dungeonId;
@@ -750,6 +752,13 @@ internal static partial class FormalDungeonTcpTests
             using var peer = Open(fixture);
             peer.Select(slot);
             EntryTown(peer);
+            That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", peer.Id) is [[0L]],
+                "六图生产挑战使用无活动主线角色，不伪造任务资格");
+            string equipmentQuery = "SELECT s.slot_index,i.item_uid,i.item_core FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND s.list_type=3 ORDER BY s.slot_index";
+            That(fixture.Query(equipmentQuery, peer.Id).Length > 0, "普通挑战保留真实职业初始装备，不能用空资产证明保全");
+            string equipment = fixture.Snapshot(equipmentQuery, peer.Id);
+            byte currentLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            ulong experience = Experience(fixture, peer.Id);
             SelectMap(peer);
             byte[] selection = Selection();
             BinaryPrimitives.WriteUInt32LittleEndian(selection, checked((uint)dungeonId));
@@ -763,11 +772,133 @@ internal static partial class FormalDungeonTcpTests
             var info = peer.Expect(0, 28).Body;
             var start = peer.Expect(0, 29).Body;
             var maze = definition.Mazes[0];
-            var startMap = maze.MapSpecification!.Single(map => map.Position == maze.Starts.Single());
-            That(U32(info, 0) == dungeonId && info[7] == 0 && U32(start, 14) == startMap.Id && start[18] > 0,
-                "7与8完整路线规划通过，真正生产通知使用本副本普通起点和所有初始化actor");
-            Load(peer); peer.Expect(0, 36, [1, 0, 156, 0, 0, 0, 155, 0, 0, 0]);
+            var maps = maze.MapSpecification ?? throw new InvalidDataException("普通六图回归需要完整显式房间");
+            var startMap = maps.Single(map => map.Position == maze.Starts.Single());
+            That(U32(info, 0) == dungeonId && info[7] == 0 && U32(start, 14) == startMap.Id,
+                "六图生产通知分别选择实际普通maze和起点，不复用剧情地图");
+            byte[] mapBody = start;
+            DungeonMap currentMap = startMap;
+            var visited = new HashSet<int>();
+            int deaths = 0, pickups = 0;
+            VerifyRoom();
+            var bossMap = maps.Single(map => map.Position == maze.Bosses.Single());
+            foreach (var target in maps.Where(map => map != startMap && map != bossMap).Concat([bossMap]))
+            {
+                var queue = new Queue<DungeonPoint>();
+                var from = new Dictionary<DungeonPoint, DungeonPoint?> { [currentMap.Position] = null };
+                queue.Enqueue(currentMap.Position);
+                while (queue.TryDequeue(out var point) && !from.ContainsKey(target.Position))
+                foreach (var link in maze.StaticTopology.Links!)
+                {
+                    DungeonPoint? next = link.First == point ? link.Second : link.Second == point ? link.First : null;
+                    if (next is not { } adjacent || from.ContainsKey(adjacent) || adjacent == bossMap.Position && adjacent != target.Position)
+                        continue;
+                    from.Add(adjacent, point);
+                    queue.Enqueue(adjacent);
+                }
+                That(from.ContainsKey(target.Position), "普通图全部资源房间可沿真实连接抵达，最后进入Boss房");
+                var path = new Stack<DungeonPoint>();
+                for (var point = target.Position; from[point] is { } parent; point = parent)
+                    path.Push(point);
+                while (path.TryPop(out var next))
+                {
+                    byte[] move = new byte[100];
+                    move[0] = checked((byte)next.X);
+                    move[1] = checked((byte)next.Y);
+                    peer.Send(45, move);
+                    peer.Expect(1, 45, [1]);
+                    mapBody = peer.Expect(0, 29).Body;
+                    currentMap = maps.Single(map => map.Position == next);
+                    VerifyRoom();
+                }
+            }
+            That(visited.Count == maps.Count && fixture.Query(
+                "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND quest_id=0", peer.Id) is [[long storedDeaths]] && storedDeaths == deaths,
+                "六图逐房全部静态敌人经正式死亡与资源掉落通道提交，机关子对象不混入奖励事实");
+            peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 90));
+            peer.Expect(0, 34);
+            var clearReward = clearRewards.Calculate(definition, 0, 90);
+            experience += clearReward.TotalExperience;
+            ReadGrowth();
+            peer.ReadCardMembershipState();
+            ReadCommittedCard(fixture, peer, peer.Expect(0, 35).Body);
+            peer.Send(69);
+            peer.Expect(1, 69, [1]);
+            peer.Send(70);
+            That(peer.Expect(1, 70).Body.Length == 17, "普通六图沿完整八槽翻牌协议进入领奖");
+            peer.Send(71, [0, 0]);
+            var card = peer.Expect(1, 71).Body;
+            That(card.Length == 33 && card[0] == 1 && card[1] == 0 && DrainCardInventory(peer) > 0 &&
+                fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0", peer.Id) is [[1L]],
+                "普通六图免费牌实际发奖且领取位落库，不能仅凭35展示判定结算完成");
+            peer.Send(72, [1, 0]);
+            peer.Expect(1, 72, [1, 1, 0]);
+            peer.Expect(0, 261, [9]);
+            That(U32(peer.Expect(0, 28).Body, 0) == dungeonId && U32(peer.Expect(0, 29).Body, 14) == startMap.Id,
+                "普通六图结算再挑战保持原资源路线，创建新的尝试");
+            Load(peer);
+            ExpectFatigue(visited.Count + 1);
             peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+            That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[2L]] &&
+                fixture.Query("SELECT quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[0L]] &&
+                fixture.Snapshot(equipmentQuery, peer.Id) == equipment && Experience(fixture, peer.Id) == experience,
+                "普通六图再挑战及返回保留原完整装备和累计成长，不创建任务结算身份");
+            Console.WriteLine($"PASS 普通图{dungeonId}完整生产TCP挑战：{visited.Count}房、{deaths}静态死亡、{pickups}拾取、实际翻牌与再挑战（合成战斗，非客户端验收）");
+
+            void VerifyRoom()
+            {
+                bool revisit = !visited.Add(currentMap.Id);
+                That(mapBody[0] == currentMap.Position.X && mapBody[1] == currentMap.Position.Y &&
+                    (revisit ? mapBody.Length == 16 && mapBody[13] == 0 : mapBody[13] == 1 && U32(mapBody, 14) == currentMap.Id),
+                    "普通六图首次按实际资源初始化，回访复用缓存而不重新生成演员");
+                Load(peer);
+                ExpectFatigue(visited.Count);
+                if (revisit) return;
+                var room = rooms.Get(currentMap, requirePassiveDefinitions: false);
+                int expectedActors = room.Monsters.Count + room.AiCharacters.Count + room.SpecialObjects.Count +
+                    room.SpecialObjects.Sum(parent => parent.Children.Count(child => child.Kind == "[monster]"));
+                That(mapBody[18] == expectedActors, "普通六图通知包含完整资源怪物、APC和特殊父子对象，不用删行通过挑战");
+                foreach (int index in Enumerable.Range(0, room.Monsters.Count).OrderBy(index => room.Monsters[index].RankKind == "[boss]"))
+                {
+                    int offset = 19 + index * 22;
+                    var monster = room.Monsters[index];
+                    That(U32(mapBody, offset + 2) == index && U32(mapBody, offset + 8) == monster.MonsterId && mapBody[offset + 14] == 0,
+                        "普通六图每只静态怪物的原资源序号和模板完整进入生产通知");
+                    if (room.MonsterTeams is { } teams && index < teams.Count && teams[index] == 0) continue;
+                    ushort key = U16(mapBody, offset + 6);
+                    peer.Send(39, Death(key, peer.Id, mapBody[offset + 12]));
+                    var death = peer.Expect(0, 38).Body;
+                    That(U16(death, 0) == key, "普通六图完整死亡通知绑定本房实际key");
+                    var receipt = fixture.Query("SELECT amount,monster_level FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, key).Single();
+                    That(Convert.ToByte(receipt[1]) == mapBody[offset + 12], "普通六图成长账本使用实际生成等级");
+                    experience += Convert.ToUInt32(receipt[0]);
+                    ReadGrowth();
+                    deaths++;
+                    if (currentMap.Kind == "boss" && monster.RankKind == "[boss]")
+                    {
+                        peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]);
+                        peer.Expect(0, 31, []);
+                    }
+                    pickups += PickupResourceDrops(fixture, peer, death, 0);
+                }
+            }
+
+            void ReadGrowth()
+            {
+                var notice = peer.Expect(0, 37).Body;
+                That(notice.Length == 91 && U64(notice, 1) == experience && Experience(fixture, peer.Id) == experience,
+                    "普通六图逐怪和通关的完整成长投影对应实际持久提交");
+                if (notice[0] == currentLevel) return;
+                peer.Expect(0, 19);
+                var player = peer.Expect(0, 2).Body;
+                That(player[0] == 1 && U16(player, 22) == peer.Id && U64(player, 24) == experience,
+                    "普通六图合法升级后同步本人Player及实际累计经验");
+                RefreshedQuests(peer);
+                currentLevel = notice[0];
+            }
+
+            void ExpectFatigue(int used) => peer.Expect(0, 36,
+                [checked((byte)used), 0, 156, 0, 0, 0, checked((byte)(156 - used)), 0, 0, 0]);
         }
     }
 
@@ -917,6 +1048,15 @@ internal static partial class FormalDungeonTcpTests
         That(U32(clear, 0) == clearReward.BaseExperience && U32(clear, 4) == clearReward.RankExperience &&
             fixture.Query("SELECT quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0 AND quest_id=0", peer.Id) is [[0L]],
             "普通生产结算使用本路线经验与零任务账本，不复用任务结算资格");
+        peer.Send(69);
+        peer.Expect(1, 69, [1]);
+        peer.Send(70);
+        That(peer.Expect(1, 70).Body.Length == 17, "领奖后普通幽暗密林进入完整翻牌阶段");
+        peer.Send(71, [0, 0]);
+        var selectedCard = peer.Expect(1, 71).Body;
+        That(selectedCard.Length == 33 && selectedCard[0] == 1 && selectedCard[1] == 0 && DrainCardInventory(peer) > 0 &&
+            fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0 AND instance_id=(SELECT instance_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0 AND quest_id=0)", peer.Id) is [[1L]],
+            "领奖后普通免费牌实际提交资产和领取位，不以结算候选展示代替发奖");
         peer.Send(72, [1, 0]); peer.Expect(1, 72, [1, 1, 0]); peer.Expect(0, 261, [9]);
         That(peer.Expect(0, 28).Body[7] == 0 && U32(peer.Expect(0, 29).Body, 14) == 58548,
             "普通结算再挑战真实通知重新加载普通起点，保持任务字段0");
