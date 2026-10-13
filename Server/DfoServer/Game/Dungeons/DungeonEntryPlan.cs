@@ -108,10 +108,19 @@ internal sealed record DungeonEntryPlan(
 
         // 仅识别匹配 PVF 已确认的三个整数；未知引用和其他条件形状不能变成默认迷宫。
         uint routeQuest = !isReplay && quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
+        StoryQuest? layoutQuest = quest;
         var candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)));
         if (questId == 0 && quests is not null)
         {
             candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active => maze.ConnectsQuest(active.QuestId,difficulty))));
+            var sequences = new List<(StoryQuest Parent, StoryQuest Child)>();
+            if (candidates.Length == 0)
+            {
+                foreach (var acceptedQuest in character.ActiveMainQuests)
+                    if (quests.TryGet(acceptedQuest.QuestId,out var parent) && CurrentSequentialChild(character,parent,quests,dungeonId,difficulty) is { } child)
+                        sequences.Add((parent,child));
+                candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => sequences.Any(pair => maze.ConnectsQuest((uint)pair.Child.Id,difficulty))));
+            }
             if (candidates.Length == 0)
                 candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => QuestEligibility.Completed(character).Any(id => maze.ConnectsQuest((uint)id,difficulty,1))));
             if (candidates.Length == 0)
@@ -129,12 +138,26 @@ internal sealed record DungeonEntryPlan(
                 routeQuest = checked((uint)candidates[0].ConnectionQuestId!.Value);
                 if (quests is null || !quests.TryGet((int)routeQuest,out quest) || !QuestCoverage.HasOrdinaryDeclarations(quest))
                 { reason = "quest-route-definition-unavailable"; return false; }
+                layoutQuest = quest;
+                if (sequences.SingleOrDefault(pair => pair.Child.Id == routeQuest) is { Parent: not null } sequence)
+                {
+                    quest = sequence.Parent;
+                    routeQuest = checked((uint)quest.Id);
+                }
             }
         }
         else if (candidates.Length == 0 && routeQuest != questId)
             candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(routeQuest,difficulty)));
         else if (questId == 0) candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
         else routeQuest = questId;
+        // 父请求保留自己的接取身份；布局和终点只借用真实顺序中的当前子任务。
+        if (!isReplay && candidates.Length == 0 && questId != 0 && quest is not null && quests is not null &&
+            QuestRelationProgress.SequentialParent(quest,quests))
+        {
+            layoutQuest = CurrentSequentialChild(character,quest,quests,dungeonId,difficulty);
+            if (layoutQuest is null) { reason = "quest-sequential-child-unavailable"; return false; }
+            candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest((uint)layoutQuest.Id,difficulty)));
+        }
         // 转职等清图资源可能只声明 dungeon info，没有任务连接。只借用明确归属的无连接路线，仍由后续终点检查核对目标地图。
         if (candidates.Length == 0 && questId != 0 && quest is not null && QuestClearEligibility.IsSingleMap(quest) &&
             quest.Definition is { Diagnostics.Length: 0 } declared && declared.Dungeons.Any(row => row.DungeonId == dungeonId) &&
@@ -174,8 +197,8 @@ internal sealed record DungeonEntryPlan(
             starts = [starts.FirstOrDefault(map => map.StoryStageIndex < 0) ?? starts[0]];
         var bosses = maze.StoryStages.Count > 0 ? new[] { maze.StoryStages[^1] } : maps.Where(map => map.Position == boss).ToArray();
         // 任务终点写在 Boss 坐标的叠层上时，基础格可能只声明为 map。入场把它当作这条路线的基础 Boss 图，终点仍按任务地图选择。
-        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && quest is not null &&
-            QuestClearEligibility.IsSingleMap(quest) && maze.LayeredMaps.Any(map => map.Position == boss && map.Id == quest.IntData[0]))
+        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && layoutQuest is not null &&
+            QuestClearEligibility.IsSingleMap(layoutQuest) && maze.LayeredMaps.Any(map => map.Position == boss && map.Id == layoutQuest.IntData[0]))
         {
             var promoted = bosses[0] with { Kind = "boss" };
             maze = maze with { MapSpecification = maze.MapSpecification!.Select(map => map == bosses[0] ? promoted : map).ToArray() };
@@ -188,13 +211,13 @@ internal sealed record DungeonEntryPlan(
         }
 
         var terminal = bosses[0];
-        if (quest is not null && QuestClearEligibility.IsSingleMap(quest))
+        if (layoutQuest is not null && QuestClearEligibility.IsSingleMap(layoutQuest))
         {
-            var layers = maze.LayeredMaps.Where(map => map.Position == boss && map.Id == quest.IntData[0]).ToArray();
+            var layers = maze.LayeredMaps.Where(map => map.Position == boss && map.Id == layoutQuest.IntData[0]).ToArray();
             if (layers.Length != 0) terminal = layers[^1];
-            else if (quest.IntData[0] != terminal.Id)
+            else if (layoutQuest.IntData[0] != terminal.Id)
             {
-                var replacements = maze.ConditionalMaps.Where(map => map.Position == boss && map.Id == quest.IntData[0]).ToArray();
+                var replacements = maze.ConditionalMaps.Where(map => map.Position == boss && map.Id == layoutQuest.IntData[0]).ToArray();
                 if (replacements.Length != 1) { reason = "quest-terminal-map-unavailable"; return false; }
                 terminal = replacements[0];
             }
@@ -230,6 +253,27 @@ internal sealed record DungeonEntryPlan(
         };
         reason = "resource-plan-ready";
         return true;
+    }
+
+    static StoryQuest? CurrentSequentialChild(Character character, StoryQuest parent, QuestCatalog quests, uint dungeonId, byte difficulty)
+    {
+        if (!QuestRelationProgress.SequentialParent(parent,quests)) return null;
+        var completed = QuestEligibility.Completed(character);
+        if (completed.Contains(parent.Id)) return null;
+        var accepted = character.ActiveMainQuests.Where(active => active.QuestId == parent.Id).ToArray();
+        if (accepted is not [{ Slot: <= 29, AcceptanceId: var acceptance, ConditionState: > 0 } active] || acceptance == Guid.Empty ||
+            character.ActiveMainQuests.Count(row => row.Slot == active.Slot) != 1 ||
+            active.ConditionState != QuestRelationProgress.Initial(parent,quests,completed)) return null;
+        int next = parent.IntData.FirstOrDefault(id => !completed.Contains(id));
+        if (!quests.TryGet(next,out var child) || !QuestCoverage.HasOrdinaryDeclarations(child) ||
+            child.Definition!.Dungeons.Length != 0 && !child.Definition.Dungeons.Any(row => row.DungeonId == dungeonId) ||
+            !QuestEligibility.Evaluate(character with { ActiveMainQuests = character.ActiveMainQuests.Where(row => row.QuestId != child.Id).ToArray() },
+                child,quests).Eligible) return null;
+        var childAcceptances = character.ActiveMainQuests.Where(row => row.QuestId == child.Id).ToArray();
+        if (childAcceptances.Length != 0 && (childAcceptances.Any(row => row.AcceptanceId == Guid.Empty) ||
+            ValidateRequest(character,dungeonId,checked((uint)child.Id),difficulty,false,child) != "resource-request-ready")) return null;
+        // 子任务未接取时只选择路线；真实31提交后沿已有BindQuestAcceptance绑定，不能在规划中造接取。
+        return child;
     }
 
     static DungeonMaze[] DistinctQuestRoutes(IEnumerable<DungeonMaze> source)

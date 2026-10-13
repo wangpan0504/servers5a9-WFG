@@ -99,6 +99,18 @@ internal static class DungeonEntryPlanTests
             "英雄冢沿真实任务接取身份及八房路线规划，不替换成普通图");
         That(DungeonEntryPlan.TryCreate(catalog,hero,151,0,0,out var autoHero,out _,quests: quests) &&
             autoHero is { QuestId: 0, RouteQuestId: 3240, Maze.SourceOrdinal: 7 }, "普通选图同样匹配英雄冢活动任务路线");
+        var noir = hero with { Job = 0, GrowType = 0, CompletedQuests = [3272,5149],
+            ActiveMainQuests = [new(5,3273,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(catalog,noir,239,3273,0,out var noirParent,out string noirReason,
+            quest: quests.Get(3273),quests: quests), "真实抵达诺伊佩拉父请求选择当前子路线：" + noirReason);
+        That(noirParent is { QuestId: 3273, RouteQuestId: 3273, ActiveQuestSlot: 5, StartMap.Id: 70148, BossMap.Id: 70154 } &&
+            noirParent.QuestAcceptanceId == noir.ActiveMainQuests[0].AcceptanceId && noirParent.QuestAcceptances.SequenceEqual(noir.ActiveMainQuests),
+            "父身份与持久接取保留，只借用5150迷宫，不在入场规划中接取子任务");
+        That(DungeonEntryPlan.TryCreate(catalog,noir,239,0,0,out var noirAutomatic,out _,quests: quests) &&
+            noirAutomatic is { QuestId: 0, RouteQuestId: 3273, BossMap.Id: 70154, QuestAcceptanceId: var noAcceptance } && noAcceptance == Guid.Empty,
+            "普通0请求也能由已接父任务和真实子完成记录选择诺伊佩拉路线，不伪造请求任务身份");
+        That(!DungeonEntryPlan.TryCreate(catalog,noir with { CompletedQuests = [3272], ActiveMainQuests = [noir.ActiveMainQuests[0] with { ConditionState = 2 }] },
+            239,3273,0,out _,out _,quest: quests.Get(3273),quests: quests), "5149材料步骤未完成时不跳到5150迷宫");
         var heroDefinition = catalog.Get(151);
         var heroLevels = heroDefinition.RawSections.First(section => section.Tag == "difficulty level");
         That(heroDefinition.RawSections.Count(section => section.Tag == "difficulty level") == 2 &&
@@ -214,6 +226,34 @@ internal static class DungeonEntryPlanTests
         That(DungeonEntryPlan.TryCreate(definition with { Id = 17, Mazes = [otherMaze,otherMaze with { SourceOrdinal = 8 }] },
             otherCharacter with { ActiveMainQuests = [new(0,101,1)] },17,101,0,out var fallback,out _,quest: child) &&
             fallback!.RouteQuestId == 100, "子任务回退到父任务的重复路线也去重");
+        var sequentialChild = unlinkedQuest with { Id = 102, MainQuest = 100 };
+        var sequentialCatalog = new DfoServer.GameWorld.Quests.QuestCatalog(new()
+            { [100] = parent, [101] = QuestEligibilityTests.Quest(101) with { MainQuest = 100 }, [102] = sequentialChild });
+        var childMaze = otherMaze with { QuestConnectionTokens = [new(0,0),new(0,102),new(0,-1)] };
+        var childDefinition = definition with { Id = 17, Mazes = [childMaze] };
+        var sequence = otherCharacter with { CompletedQuests = [101],
+            ActiveMainQuests = [new(5,100,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(childDefinition,sequence,17,100,0,out var parentRoute,out _,quest: parent,quests: sequentialCatalog) &&
+            parentRoute is { QuestId: 100, RouteQuestId: 100, ActiveQuestSlot: 5, BossMap.Id: 456 } &&
+            parentRoute.QuestAcceptances.SequenceEqual(sequence.ActiveMainQuests),
+            "不同父子编号同样按真实完成集选择当前子路线，保留父请求身份和接取快照");
+        var childAccepted = sequence with { ActiveMainQuests = [sequence.ActiveMainQuests[0],new(6,102,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(childDefinition,childAccepted,17,100,0,out var acceptedRoute,out _,quest: parent,quests: sequentialCatalog) &&
+            acceptedRoute!.QuestAcceptances.SequenceEqual(childAccepted.ActiveMainQuests) &&
+            DungeonEntryPlan.TryCreate(childDefinition,childAccepted,17,102,0,out var directChild,out _,quest: sequentialChild,quests: sequentialCatalog) &&
+            directChild is { QuestId: 102, BossMap.Id: 456 }, "已接取子任务保留自己的身份，父/子两种真实请求都匹配相同路线");
+        foreach (var invalid in new[] { sequence with { CompletedQuests = [] }, sequence with { CompletedQuests = [101,102] },
+            sequence with { CompletedQuests = [100,101] }, sequence with { ActiveMainQuests = [sequence.ActiveMainQuests[0] with { ConditionState = 2 }] },
+            sequence with { ActiveMainQuests = [sequence.ActiveMainQuests[0] with { AcceptanceId = Guid.Empty }] },
+            childAccepted with { ActiveMainQuests = [sequence.ActiveMainQuests[0],childAccepted.ActiveMainQuests[1] with { ConditionState = 0 }] } })
+            That(!DungeonEntryPlan.TryCreate(childDefinition,invalid,17,100,0,out _,out _,quest: parent,quests: sequentialCatalog),
+                "顺序完成、父scalar或接取身份不一致时不借用子路线");
+        var wrongChild = sequentialChild with { MinimumLevel = 95 };
+        var wrongCatalog = new DfoServer.GameWorld.Quests.QuestCatalog(new() { [100] = parent, [101] = sequentialCatalog.Get(101), [102] = wrongChild });
+        That(!DungeonEntryPlan.TryCreate(childDefinition,sequence,17,100,0,out _,out _,quest: parent,quests: wrongCatalog) &&
+            !DungeonEntryPlan.TryCreate(childDefinition with { Mazes = [childMaze with { QuestConnectionTokens = [new(0,0),new(0,102),new(0,1)] }] },
+                sequence,17,100,0,out _,out _,quest: parent,quests: sequentialCatalog),
+            "当前子任务等级和迷宫难度不符仍拒绝，不以父请求绕过资格");
         Console.WriteLine($"PASS {Count - checks} dungeon entry plan assertions");
 
         void Reject(Character input, uint dungeonId, uint questId, byte difficulty, string expected)

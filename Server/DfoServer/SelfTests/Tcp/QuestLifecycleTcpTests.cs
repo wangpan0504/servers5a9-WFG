@@ -644,6 +644,7 @@ internal static class QuestLifecycleTcpTests
                 "重连仍回放原接取，未清图不改变职业分支");
         }
         await QuestQuickClearTcpTests.RunAsync(extra,resources);
+        VerifySequentialParent(extra,resources,growth);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
@@ -653,6 +654,61 @@ internal static class QuestLifecycleTcpTests
             That(body[0] == 0 && body.Length == 3+123*U16(body,1),"独立读器确认NOTI14 Main行长度");
             int offset = Enumerable.Range(0,U16(body,1)).Select(at => 3+123*at).Single(at => U16(body,at) == slot);
             That(U32(body,offset+2) == item && U32(body,offset+6) == balance,"NOTI14钱包slot与实际绝对余额一致");
+        }
+    }
+
+    static void VerifySequentialParent(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
+    {
+        var done = new HashSet<int> { 3272,5149 };
+        var area = resources.Towns.Areas.Values.First(row => row.Level <= 39 && row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 239));
+        // 夹具只准备本入口资源声明的城镇资格，不作为从新角色连续游玩的证据。
+        done.UnionWith(area.Quests);
+        if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+        var map = area.Map(done);
+        var walk = map.Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
+            checked((ushort)(walk.X + walk.Width / 2)),checked((ushort)(walk.Y + walk.Height / 2)));
+        Character created;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare("QuestNoir",resources.Characters.Get(0),position,position,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,39,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(39) },resources.Learning);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level = 39, AcceptedStoryLevel = 39,
+                CompletedQuests = done.ToArray(),InitialLearning = learning,ActiveMainQuests = [new(5,3273,1) { AcceptanceId = Guid.NewGuid() }] });
+        }
+        string parentAcceptance = fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared: true,resumeTown: true,room: false);
+            foreach (ushort requestQuest in new ushort[] { 3273,0,5150 })
+            {
+                peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27,new byte[42]);
+                byte[] request = new byte[25]; BinaryPrimitives.WriteUInt32LittleEndian(request,239);
+                BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(9),ushort.MaxValue);
+                BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),requestQuest);
+                peer.Send(16,request);
+                That(U32(peer.Expect(0,28).Body,0) == 239 && U32(peer.Expect(0,29).Body,14) == 70148,
+                    "诺伊佩拉父/0/子请求沿真实5150迷宫加载起点，不改为普通图 " + requestQuest);
+                FormalDungeonTcpTests.Load(peer);
+                if (requestQuest == 3273)
+                {
+                    That(fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id) == parentAcceptance,
+                        "父请求入场及加载不自动接取5150、不改父scalar或接取身份");
+                    peer.Send(31,[31,0,30,20]); peer.Expect(1,31,[1,30,20,1,0,0,0,0]);
+                    peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                }
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id",peer.Id)
+                    is [[3273L,1L],[5150L,1L]], "未通关返回保留父/子进行中，不伪造任务完成 " + requestQuest);
+            }
+        }
+        string accepted = fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id",created.Id);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared: true,resumeTown: true,room: false); peer.Barrier();
+            That(fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id",peer.Id) == accepted,
+                "诺伊佩拉父请求及真实副本内子31重连回放原持久接取，未清图不生成凭据");
         }
     }
 
