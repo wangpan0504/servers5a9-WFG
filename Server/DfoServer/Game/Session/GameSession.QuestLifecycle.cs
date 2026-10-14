@@ -28,8 +28,10 @@ internal sealed partial class GameSession
                 !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
             var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
+            var room = instance is not null && formalDungeon is { } dungeon
+                ? dungeon.Route.Rooms.Single(row => row.Room.Map == dungeon.Run.Snapshot.CurrentMap).Room : null;
             return (Character: character, SelectionEpoch, Phase, Identity: instance, Entry: formalDungeon?.Entry,
-                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear);
+                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear, Room: room);
         });
         if (capture.Character is not { } expected) return null;
         var refusal = new QuestLifecycleReceipt(expected, null, owner.Generation, capture.SelectionEpoch, capture.Phase, capture.Identity, "任务资格不符");
@@ -119,7 +121,7 @@ internal sealed partial class GameSession
                 // 客户端只读取当前权威结果，不按它上报的Boolean减少猎杀次数。
                 return QuestLifecyclePlan.SetCondition(expected,quest,accepted.ConditionState);
             if (quest.Condition == "[seek n meet npc]" && quest.SubType == -1 && QuestLifecyclePlan.ValidSeeking(quest) &&
-                capture.Phase == SessionPhase.Town && quest.Definition is { Diagnostics.Length: 0 } &&
+                (capture.Phase == SessionPhase.Town || HasDialogueNpc(quest.IntData[^1])) && quest.Definition is { Diagnostics.Length: 0 } &&
                 condition is { Channel: 0x10 or 0x20, Reserved: 0 } seekReport &&
                 expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { } seekActive && seekActive.ConditionState <= 1023)
             {
@@ -128,7 +130,7 @@ internal sealed partial class GameSession
                 if (seekReport.Channel == 0x20)
                 {
                     if (seekReport.Value != 0 || missing != 0 ||
-                        !QuestClientSceneProgress.DialogueNpc(expected,quest.IntData[^1],quest,quests,towns))
+                        !HasDialogueNpc(quest.IntData[^1]))
                         throw new InvalidDataException("寻物会面需要实际足额库存和当前目标NPC");
                     seekScalar = 0;
                 }
@@ -138,20 +140,33 @@ internal sealed partial class GameSession
             if (condition is { Channel: null, Value: 0, Reserved: 0 } && capture.Phase == SessionPhase.Town &&
                 QuestClientSceneProgress.Matches(expected,quest,towns))
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
-            if (condition is not { Channel: null, Value: 0, Reserved: 0 } || capture.Phase != SessionPhase.Town ||
+            if (condition is not { Channel: null, Value: 0, Reserved: 0 } ||
+                capture.Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 quest.Definition is not { Diagnostics.Length: 0 } || quest.SubType != -1 ||
                 QuestEligibility.InspectResource(quest).Entry != QuestResourceEntry.Ordinary && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestHiddenEntry.Direct(quest,quests))
-                throw new InvalidDataException("客户端条件需要已确认类型和当前城镇场景");
+                throw new InvalidDataException("客户端条件需要已确认类型和当前真实场景");
             uint scalar;
-            if (quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest))
+            if (capture.Phase == SessionPhase.Town && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest))
                 scalar = QuestLifecyclePlan.HasMaterials(expected, quest, DateTimeOffset.UtcNow.ToUnixTimeSeconds()) ? 0u : 1u;
             else if (quest.Condition == "[meet npc]" && quest.IntData.Count == 1 && quest.IntData[0] > 0 &&
-                QuestClientSceneProgress.DialogueNpc(expected,quest.IntData[0],quest,quests,towns))
+                HasDialogueNpc(quest.IntData[0]))
                 scalar = 0;
             else
                 throw new NotSupportedException("任务目标或NPC场景尚未满足");
             return QuestLifecyclePlan.SetCondition(expected, quest, scalar);
+        }
+
+        bool HasDialogueNpc(int npcId)
+        {
+            if (capture.Phase == SessionPhase.Town)
+                return QuestClientSceneProgress.DialogueNpc(expected,npcId,quest,quests,towns);
+            if (capture.Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) ||
+                capture.Entry is not { } entry || capture.Room is not { NpcMetadataError: null } room ||
+                quest.Definition?.Dungeons.Any(row => row.DungeonId == entry.DungeonId) != true ||
+                !expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,entry))) return false;
+            int resolved = QuestClientSceneProgress.ResolveNpc(expected,npcId,quest);
+            return resolved > 0 && room.Npcs.Any(npc => npc.Id == resolved);
         }
     }
 

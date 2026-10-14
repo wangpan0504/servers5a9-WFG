@@ -13,6 +13,14 @@ internal static class DungeonRoomCatalogTests
     {
         int checks = Count;
         var fixture = new Fixture();
+        var npcTokens = fixture.Block("NPC", [new(0,1000),fixture.String("[left]"),new(0,0),new(0,0),new(0,0),
+            new(0,1298),fixture.String("[left]"),new(0,485),new(0,284),new(0,0)]);
+        var npcRoom = fixture.Parse(npcTokens);
+        That(npcRoom.NpcMetadataError is null && npcRoom.Npcs.Select(row => row.Id).SequenceEqual([1000,1298]),
+            "地图NPC投影保留不同演员的完整来源，不用位置字段匹配任务NPC");
+        var unresolvedNpc = fixture.Parse([.. fixture.Monster(),.. npcTokens[..^1]]);
+        That(unresolvedNpc.NpcMetadataError is not null && unresolvedNpc.Npcs.Count == 0 && unresolvedNpc.Monsters.Count == 1,
+            "未闭合NPC不授予会面来源，同时保留原可用怪物与入场能力");
         var positions = fixture.Parse(fixture.Block("event monster position", [new(0, 330), new(0, -93), new(0, 0)]));
         That(positions.EventMonsterPositions.SequenceEqual([330, -93, 0]), "事件怪物位置保留三坐标与负值");
         var special = fixture.Block("special passive object", [new(0, 3), new(0, -20), new(0, 150), new(0, 0), new(0, 2),

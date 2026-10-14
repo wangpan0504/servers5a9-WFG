@@ -25,6 +25,26 @@ internal static class ScriptTests
         That(PvfScript.Block("[x]a", "x") == "", "incomplete block is absent");
         TokenDocument();
         AiCharacter();
+        MapNpcRows();
+    }
+
+    private static void MapNpcRows()
+    {
+        string[] strings = ["[NPC]", "[/npc]", "[left]", "[right]", "[other]", "[/other]"];
+        string Resolve(int id) => strings[id];
+        PvfToken[] tokens = [new(3,0),new(0,1000),new(6,2),new(0,0),new(0,0),new(0,0),
+            new(0,1298),new(6,3),new(0,-485),new(0,284),new(0,1),new(3,1)];
+        var rows = MapNpcs.Read(tokens,Resolve);
+        That(rows is [{ Id:1000, Direction:"[left]" }, { Id:1298, Direction:"[right]", X:-485, Y:284, Z:1 }],
+            "地图NPC保留完整五字段、大小写闭合、原序及负坐标");
+        tokens[6] = new(0,7);
+        That(rows[1].Id == 1298 && MapNpcs.Read([],Resolve).IsEmpty && MapNpcs.Read([new(3,0),new(3,1)],Resolve).IsEmpty,
+            "NPC集合冻结原输入，缺失与空块不生成演员");
+        Reject<InvalidDataException>(() => MapNpcs.Read(tokens[..^1],Resolve));
+        Reject<InvalidDataException>(() => MapNpcs.Read([.. tokens,.. tokens],Resolve));
+        Reject<InvalidDataException>(() => MapNpcs.Read([new(3,0),new(0,1),new(0,2),new(0,3),new(0,4),new(0,5),new(3,1)],Resolve));
+        Reject<InvalidDataException>(() => MapNpcs.Read([new(3,0),new(0,1),new(6,2),new(0,3),new(3,4),new(3,1)],Resolve));
+        Reject<InvalidDataException>(() => MapNpcs.Read([new(3,4),.. tokens,new(3,5)],Resolve));
     }
 
     private static void AiCharacter()

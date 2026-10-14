@@ -21,6 +21,7 @@ internal sealed record DungeonRoomSpecialChild(int SourceOrdinal, string Kind, I
 internal sealed record DungeonRoomSpecialObject(int SourceOrdinal, int ObjectId, IReadOnlyList<int> RawValues,
     string? Path, IReadOnlyList<DungeonRoomSpecialChild> Children);
 internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level);
+internal sealed record DungeonRoomNpc(int Id, string Direction, int X, int Y, int Z);
 internal sealed record DungeonRoomDefinition(
     DungeonMap Map,
     IReadOnlyList<DungeonRoomMonster> Monsters,
@@ -31,6 +32,8 @@ internal sealed record DungeonRoomDefinition(
     public IReadOnlyList<DungeonRoomSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonRoomSpecialObject>();
     public IReadOnlyList<DungeonRoomAiCharacter> AiCharacters { get; init; } = Array.Empty<DungeonRoomAiCharacter>();
     public IReadOnlyList<int> EventMonsterPositions { get; init; } = Array.Empty<int>();
+    public IReadOnlyList<DungeonRoomNpc> Npcs { get; init; } = [];
+    public string? NpcMetadataError { get; init; }
     public IReadOnlyList<DfoServer.GameWorld.Characters.TutorialCinematicEvidence> TutorialCinematics { get; init; } = [];
 }
 
@@ -219,8 +222,14 @@ internal sealed class DungeonRoomCatalog
         var eventPositions = sections.TryGetValue("[event monster position]", out var eventTokens) ? Integers(eventTokens) : Freeze(Array.Empty<int>());
         if (eventPositions.Count % 3 != 0)
             throw new InvalidDataException("事件怪物位置不是完整的三整数坐标");
+        IReadOnlyList<DungeonRoomNpc> npcs = [];
+        string? npcError = null;
+        try { npcs = Freeze(MapNpcs.Read(tokens, resolve).Select(row => new DungeonRoomNpc(row.Id,row.Direction,row.X,row.Y,row.Z))); }
+        catch (InvalidDataException error) { npcError = error.Message; }
+        // 未解释的 NPC 元数据不收窄原入场/战斗能力，但不能作为任务会面的真实来源。
         return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams)
-            { AiCharacters = Freeze(actors), SpecialObjects = Freeze(specialObjects), EventMonsterPositions = eventPositions };
+            { AiCharacters = Freeze(actors), SpecialObjects = Freeze(specialObjects), EventMonsterPositions = eventPositions,
+                Npcs = npcs, NpcMetadataError = npcError };
 
         string Resolve(int id, IReadOnlyDictionary<int, string> paths, string kind)
         {
