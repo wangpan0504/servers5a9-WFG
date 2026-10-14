@@ -52,10 +52,11 @@ internal sealed class RentalHandler(RentalService rental, InventoryProjection pr
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         InventoryResult result = context.BlocksTownActions ? InventoryResult.Reject() :
-            context.Session.PlanAndCommitInventory(character => rental.Rent(character, checked((int)request.ItemId), request.Job, request.Tier, now));
+            context.Session.RentEquipment(rental, checked((int)request.ItemId), request.Job, request.Tier, now);
         await context.Reply(CmdPacketType.RENT_EQUIPMENT_ITEM,
             result.Accepted ? RentalPackets.RentSuccess() : RentalPackets.RentFailure(result.Error == 17 ? (byte)2 : (byte)1),
-            result.Accepted ? "rental_equipment_success" : "rental_equipment_rejected");
+            result.Accepted ? "rental_equipment_success" : "rental_equipment_rejected",
+            result.Receipt is { } receipt ? () => context.Session.CanPublishInventory(receipt) : null);
         await PublishStateAsync(context, result, "rental_state_after_equipment");
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;

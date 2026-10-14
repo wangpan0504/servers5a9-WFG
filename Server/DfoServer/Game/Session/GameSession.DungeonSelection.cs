@@ -9,6 +9,7 @@ internal sealed partial class GameSession
 
     public DungeonSelectionReceipt? BeginDungeonSelection() => owner.Execute<DungeonSelectionReceipt?>(() =>
     {
+        if (pendingRental is not null) return null;
         if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.MapSelect))
             throw new InvalidDataException("Invalid dungeon-selection state");
         if (CurrentDungeonSelection is null || CurrentDungeonSelection.IsClassExperience)

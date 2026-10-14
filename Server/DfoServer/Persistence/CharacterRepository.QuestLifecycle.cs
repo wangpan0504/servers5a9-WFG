@@ -56,6 +56,10 @@ internal sealed partial class CharacterRepository
                 var changedIndex = changedItems.ToDictionary(item => item.Position);
                 var after = plan.Inventory.After with { Items = plan.Inventory.After.Items.Select(item =>
                     changedIndex.GetValueOrDefault(item.Position, item)).ToImmutableArray() };
+                // 原库存提交只在实际账号钱包变化时推进一次版本；按冻结计划恢复，不能借用后续钱包版本。
+                if (plan.Inventory.Changed && !plan.Inventory.Before.AccountWallet.Same(after.AccountWallet))
+                    after = after with { AccountWallet = after.AccountWallet with
+                        { Revision = checked(plan.Inventory.Before.AccountWallet.Revision + 1) } };
                 bool projectionCurrent = current.Id == expected.Id && current.Revision == reader.GetInt64(4) &&
                     current.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) && current.Level == expected.Level &&
                     current.Job == expected.Job && current.GrowType == expected.GrowType && current.Position == expected.Position &&

@@ -114,6 +114,8 @@ internal sealed class QuestLifecyclePlan
             throw new InvalidDataException("30个任务槽已满");
         uint initial = quest.Condition switch
         {
+            // 租赁成功事务才归零；这是本窄用例的未达成模型，不是任意custom的初值。
+            "[custom quest]" when QuestRentalProgress.Supports(quest) => 1,
             "[meet npc]" when quest.SubType == -1 && quest.IntData.Count == 1 && quest.IntData[0] > 0 => 1,
             // Full03成功ACK31的type4/sub1立即触发event4归零，不读取实际点击NPC。
             "[meet npc]" when QuestStateProgress.Type(quest) == 4 => 0,
@@ -263,11 +265,27 @@ internal sealed class QuestLifecyclePlan
         bool question = QuestQuestionProgress.TryCount(quest,out int answers) && scalar < answers;
         bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest);
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
-        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !question && !state && !observedClear && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
+        bool observedRental = QuestRentalProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
+        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !question && !state && !observedClear && !observedRental && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
             throw new InvalidDataException("条件类型或接取身份不符");
         return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
             expected.ActiveMainQuests.Select(value => value.AcceptanceId == active.AcceptanceId ? value with { ConditionState = scalar } : value).ToImmutableArray(),
             new(expected.Inventory, expected.Inventory, "quest_condition"));
+    }
+
+    internal static QuestLifecyclePlan? ObserveRental(Character expected, InventoryPlan inventory, QuestCatalog quests, DateTimeOffset now)
+    {
+        var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == QuestRentalProgress.QuestId);
+        if (!quests.TryGet(QuestRentalProgress.QuestId, out var quest) || !QuestRentalProgress.Supports(quest) ||
+            QuestEligibility.Completed(expected).Contains(quest.Id) ||
+            active is not { ConditionState: 1 } || active.AcceptanceId == Guid.Empty)
+            return null;
+        if (!ReferenceEquals(inventory.Before, expected.Inventory) || !inventory.Changed ||
+            inventory.CharacterPrecondition?.Matches(expected, now.ToUnixTimeSeconds()) != true)
+            throw new InvalidDataException("租赁任务需要当前角色的成功库存规划");
+        var after = expected.ActiveMainQuests.Select(row => row == active ? row with { ConditionState = 0 } : row).ToArray();
+        return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
+            QuestInventoryProgress.Refresh(after, inventory.After, quests, now.ToUnixTimeSeconds()), inventory);
     }
 
     internal static int MaterialLength(StoryQuest quest) => quest.IntData.Count - (quest.Condition == "[seek n meet npc]" ? 1 : 0);

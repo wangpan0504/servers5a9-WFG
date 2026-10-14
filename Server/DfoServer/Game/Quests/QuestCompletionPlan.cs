@@ -35,6 +35,7 @@ internal sealed class QuestCompletionPlan
         CompletedParentId = completedParentId;
         AuthoritativeClear = clear;
         ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
+            "[custom quest]" when QuestRentalProgress.Supports(quest) => 19,
             "[quest clear]" => 44, "[clear multi quest]" => 70, "[question]" => 42, "[reach the range]" => 64, "[look cinematic]" => 65,
             _ => QuestStateProgress.Type(quest) ?? (byte)4 };
         // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
@@ -190,7 +191,8 @@ internal sealed class QuestCompletionPlan
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
             bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0;
             bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out var dungeonTarget);
-            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && QuestStateProgress.Type(quest) is null || quest.RewardType != "[item]" && profession is null && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
+            bool rental = QuestRentalProgress.Supports(quest);
+            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && QuestStateProgress.Type(quest) is null || quest.RewardType != "[item]" && profession is null && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
                 !QuestCoverage.HasOrdinaryAttributes(quest) ||
                 quest.Definition!.Has("send postal"))
                 throw new NotSupportedException("任务需要尚未具备的周期、特殊奖励或附属交付规则");
@@ -244,6 +246,10 @@ internal sealed class QuestCompletionPlan
             else if (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _))
             {
                 if (active.ConditionState != 0) throw new InvalidDataException("范围或演出的原生终末事件尚未达成");
+            }
+            else if (rental)
+            {
+                if (active.ConditionState != 0) throw new InvalidDataException("租赁任务需要本次接取的已提交租赁事实");
             }
             else if (quest.Condition is not ("[seeking]" or "[seek n meet npc]") || !QuestLifecyclePlan.ValidSeeking(quest))
                 throw new NotSupportedException("此交付条件尚未接入权威事件");

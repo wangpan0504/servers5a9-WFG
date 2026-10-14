@@ -44,8 +44,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
     public DungeonCardReward Prepare(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
         Func<int, int>? draw = null, DateTimeOffset? utcNow = null)
     {
-        if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills <= 0)
-            throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和已提交死亡事实");
+        if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
+            throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和非负的已提交击杀数");
         var gold = rules.GoldReferences.SingleOrDefault(row => row.Level == level);
         var items = rules.ItemReferences.SingleOrDefault(row => row.Level == level);
         if (gold.Level == 0 || items.Level == 0 || items.Value0 < 0 || items.Value1 < 0)

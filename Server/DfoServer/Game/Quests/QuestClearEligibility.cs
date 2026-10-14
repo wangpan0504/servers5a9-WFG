@@ -75,7 +75,7 @@ internal static class QuestClearEligibility
             scene.Identity.CharacterId == entry.CharacterId && scene.Identity.QuestId == entry.QuestId &&
             scene.Identity.InstanceId != Guid.Empty && scene.Identity.TaskAttempt > 0 && scene.Identity.Epoch < long.MaxValue &&
             scene.DungeonId == entry.DungeonId && scene.MapId > 0 && scene.Fingerprint.Length == 64 &&
-            clear is { PassiveSource: not null, ConfirmedDeathEvents.Count: > 0, ClearMap: not null } && clear.PassiveSource == source &&
+            clear is { PassiveSource: not null, ClearMap: not null } && clear.PassiveSource == source &&
             clear.DungeonId == entry.DungeonId && clear.ClearMap.Id == scene.MapId && entry.IsTerminalMap(clear.ClearMap) &&
             prepared.Result.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement && clear.ClearMap == prepared.Result.Snapshot.CurrentMap &&
             clear.Identity == prepared.Result.Snapshot.Identity && clear.Identity == (scene.Identity with { Epoch = scene.Identity.Epoch + 1 }) &&

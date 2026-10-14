@@ -43,7 +43,7 @@ internal sealed partial class GameSession
 
     public ImageCommunicationReceipt? UseImageCommunication(ImageCommunicationCatalog catalog, QuestCatalog quests)
     {
-        var capture = owner.Execute(() => (Character: Ready && Phase == SessionPhase.Town && Selected is not null &&
+        var capture = owner.Execute(() => (Character: pendingRental is null && Ready && Phase == SessionPhase.Town && Selected is not null &&
             pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null && !HasPendingQuestScene &&
             !HasPendingFormalCard && towns.IsPosition(Selected.Position, QuestEligibility.Completed(Selected)) ? Selected : null,
             SelectionEpoch, Scene: communicationSceneEpoch, Pending: pendingCommunication, Sources: CommunicationSources(Selected)));
@@ -76,7 +76,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (!SameCommunicationScene(scene, expected) || !ReferenceEquals(Selected, expected))
+            if (pendingRental is not null || !SameCommunicationScene(scene, expected) || !ReferenceEquals(Selected, expected))
                 throw new InvalidOperationException("通讯规划的原选角或场景已失效");
             pendingCommunication = new(plan, scene);
             var commit = repository.CommitQuestLifecycle(owner, plan);

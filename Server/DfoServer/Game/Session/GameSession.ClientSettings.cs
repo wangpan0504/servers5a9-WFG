@@ -9,7 +9,7 @@ internal sealed partial class GameSession
 {
     public (DfoServer.Game.Characters.Character? Character, ushort Error, bool Changed) ChangeEmotion(ClientSettingsService settings, ushort emotion) => owner.Execute(() =>
     {
-        if (Selected is not { } character || !Ready)
+        if (pendingRental is not null || Selected is not { } character || !Ready)
             return ((DfoServer.Game.Characters.Character?)null, (ushort)3, false);
         bool? changed = settings.SaveEmotion(owner, character.Id, emotion);
         if (changed is null) return ((DfoServer.Game.Characters.Character?)null, (ushort)1, false);
@@ -26,6 +26,7 @@ internal sealed partial class GameSession
 
     public bool SaveGameOptions(ClientSettingsService settings, ImmutableArray<byte> options) => owner.Execute(() =>
     {
+        if (pendingRental is not null) return false;
         bool changed = settings.SaveGameOptions(owner, options, Selected?.Id);
         if (Selected is not null)
             LoadClientSettings(settings);
@@ -43,7 +44,7 @@ internal sealed partial class GameSession
         var character = Selected ?? throw new InvalidOperationException("回放角色设置时没有选中角色");
         var restored = ClientSettingsRules.Project(settings.Load(owner, character.Id));
         byte flags = ClientSettingsRules.VisibilityFlags(restored.GameOptions);
-        if (character.VisibilityFlags != flags)
+        if (pendingRental is null && character.VisibilityFlags != flags)
             Selected = character with { VisibilityFlags = flags };
         return new ClientSettingsReceipt(restored, owner.Generation, SelectionEpoch, character.Id, flags, HotkeySettingsRules.Profile(character.Job));
     });

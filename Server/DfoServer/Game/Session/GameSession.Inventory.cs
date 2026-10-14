@@ -14,7 +14,7 @@ internal sealed partial class GameSession
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
     {
-        if (!Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingQuestScene || HasPendingFormalCard ||
+        if (pendingRental is not null || !Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingQuestScene || HasPendingFormalCard ||
             formalDungeon?.PendingTutorialClear is not null || formalDungeon?.PendingInventoryDiscard is not null)
             return InventoryResult.Reject(invalidStateError);
         var result = operation(Selected);
@@ -72,7 +72,7 @@ internal sealed partial class GameSession
 
         bool CanPlan()
         {
-            if (additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingQuestScene || HasPendingFormalCard ||
+            if (pendingRental is not null || additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingQuestScene || HasPendingFormalCard ||
                 requiredPhase is { } expected && Phase != expected || formalDungeon?.PendingTutorialClear is not null) return false;
             // 既有城镇用例保持原资格；只有专用跨场景取放核对未完成事务与副本上下文。
             if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();

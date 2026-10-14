@@ -25,7 +25,7 @@ internal sealed partial class GameSession
     public bool CanPublishAdventureRepresentative(AdventureRepresentativeResult result) => owner.Execute(() =>
         result.Accepted && Ready && result.Generation == owner.Generation && result.Epoch == SelectionEpoch && result.Phase == Phase &&
         result.Dungeon == formalDungeon?.Run.Snapshot.Identity && ReferenceEquals(result.Selected, Selected));
-    bool CanPlanAdventureRepresentative() => Ready && Selected is not null && !HasPendingQuestScene &&
+    bool CanPlanAdventureRepresentative() => pendingRental is null && Ready && Selected is not null && !HasPendingQuestScene &&
         pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null &&
         pendingDungeonContinuation is null && !HasPendingQuestReplay && !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true &&
         formalDungeon?.HasPendingFatigue != true && formalDungeon?.Run.HasPendingDeath != true && formalDungeon?.Run.HasPendingSettlement != true &&

@@ -49,6 +49,10 @@ internal static class QuestProtocolTests
             "未回答只在存档用哨兵，ACK31和574不得让客户端误判活动问题不存在");
         Check(QuestPackets.Finish(100, 4, 0, [], 0, []).SequenceEqual(Convert.FromHexString("01640004000000000000")),
             "普通会面零经验、零物品完整10B成功合同");
+        Check(QuestPackets.Finish(8581,19,600,[],40,[]).SequenceEqual(Convert.FromHexString("0185211358020000000100000000000028000000000000000000000000")),
+            "租赁任务19保留真实分类、经验及完整19B金币奖励行，不插入材料数组");
+        Reject(() => QuestPackets.Finish(8581,19,600,[new(177,1)],40,[]),
+            "租赁任务19不能冒充寻物条件消费材料");
         Check(QuestPackets.Finish(100, 0, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640000000000000100B100030000000000")),
             "普通寻物先读本次扣除7B行，再读mode0和奖励数，不填剩余库存");
         Check(QuestPackets.Finish(100, 25, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640019000000000100B100030000000000")),

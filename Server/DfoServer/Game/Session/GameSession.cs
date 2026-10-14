@@ -167,6 +167,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     public Character UpdateProgress(CharacterProgressEdit request) => owner.Execute(() =>
     {
+        if (pendingRental is not null)
+            throw new InvalidOperationException("租赁结果待确认，须恢复原提交或重新选角");
         if (HasPendingFormalCard && string.Equals(Selected?.Name, request.Name, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("翻牌结果待确认，不能覆盖当前角色进度");
         if (request.Account != owner.Account)
@@ -189,6 +191,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     {
         var captured = owner.Execute(() =>
         {
+            if (pendingRental is not null)
+                throw new InvalidOperationException("租赁结果待确认，须恢复原提交或重新选角");
             if (request.Account != owner.Account) throw new InvalidDataException("账号与当前会话不一致");
             var target = repository.ListRoster(owner).SingleOrDefault(value => string.Equals(value.Name, request.Name, StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidDataException("角色不存在");
@@ -198,7 +202,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         var plan = reset.Prepare(captured.Character, request);
         return owner.Execute(() =>
         {
-            if (!ReferenceEquals(Selected, captured.Selected) || SelectionEpoch != captured.SelectionEpoch ||
+            if (pendingRental is not null || !ReferenceEquals(Selected, captured.Selected) || SelectionEpoch != captured.SelectionEpoch ||
                 HasPendingFormalCard && Selected?.Id == captured.Character.Id)
                 throw new InvalidOperationException("在线角色快照已变化，请重试");
             var updated = repository.ResetProgress(owner, plan);
@@ -221,6 +225,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         pendingQuestReplay = null;
         pendingQuestCompletion = null;
         pendingQuestLifecycle = null;
+        pendingRental = null;
         InvalidateImageCommunication();
         pendingQuestQuickClear = null;
         SelectionEpoch++;

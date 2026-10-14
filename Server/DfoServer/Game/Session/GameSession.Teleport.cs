@@ -6,7 +6,7 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    bool CanTeleport() => Ready && Phase == SessionPhase.Town && Selected is not null && !HasPendingQuestScene &&
+    bool CanTeleport() => pendingRental is null && Ready && Phase == SessionPhase.Town && Selected is not null && !HasPendingQuestScene &&
         pendingQuestCompletion is null && !HasPendingFormalCard;
 
     public TeleportResult TeleportPotion(PotionTeleportRequest request, TeleportService service, bool blocked = false) =>

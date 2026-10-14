@@ -8,6 +8,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Infrastructure;
 using System.Collections.Immutable;
@@ -49,6 +50,17 @@ internal static class RentalTests
         var valid = RentalRules.ValidateCharge(500, 10_000_000, 41, 410, 100);
         That(valid.Accepted && valid.PointsAfter == 141 && valid.GoldAfter == 9_959_000, "租赁点充值原子计算");
         That(!RentalRules.ValidateCharge(500, 1_000, 41, 410, 100).Accepted, "金币不足拒绝充值");
+        var quest = QuestEligibilityTests.Quest(QuestRentalProgress.QuestId) with
+        {
+            Grade = "[system]", Condition = "[custom quest]", SubType = 0, IntData = [1, 0, 1],
+            Npc = 2, CompleteNpc = -1, MinimumLevel = 10, MaximumLevel = 99,
+            Definition = new([]) { Job = "[all]", AccountQuest = true }
+        };
+        That(QuestRentalProgress.Supports(quest), "租赁任务只开放已绑定事件17的完整Q8581合同");
+        That(!QuestRentalProgress.Supports(quest with { Id = 8582 }) &&
+            !QuestRentalProgress.Supports(quest with { IntData = [1, 0, 2] }) &&
+            !QuestRentalProgress.Supports(quest with { Definition = quest.Definition! with { AccountQuest = false } }),
+            "相邻任务号、未知事件值和非账号合同不借租赁事件获得支持");
         Console.WriteLine("PASS rental core assertions");
     }
 

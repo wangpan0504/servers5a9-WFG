@@ -157,6 +157,7 @@ internal static class QuestCoverage
 
     internal static bool HasSupportedTarget(StoryQuest quest, QuestCatalog catalog) => quest.Condition switch
     {
+        "[custom quest]" => QuestRentalProgress.Supports(quest),
         "[meet npc]" => QuestStateProgress.Type(quest) is not null || quest.SubType == -1 && quest.IntData is [> 0],
         "[seeking]" or "[seek n meet npc]" => quest.SubType == -1 && QuestLifecyclePlan.ValidSeeking(quest),
         "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.TryTargets(quest,out _),

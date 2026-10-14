@@ -110,7 +110,7 @@ internal static class QuestPackets
         IReadOnlyList<QuestConsumedItemProjection> consumed, uint gold, IReadOnlyList<QuestRewardItemProjection> rewards, byte? growType = null,
         IReadOnlyList<QuestCurrencyRewardProjection>? currencies = null, ushort tpAmount = 0)
     {
-        if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 25 or 31 or 39 or 40 or 42 or 44 or 49 or 64 or 65 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
+        if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 49 or 64 or 65 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
             consumed.Count > byte.MaxValue || conditionType is not (0 or 25) && consumed.Count != 0 ||
             rewards.Count + (currencies?.Count ?? 0) + (gold == 0 ? 0 : 1) > byte.MaxValue ||
             growType is { } growth && (growth == 0 || (growth & 15) > 5 || growth >> 4 > 2) ||

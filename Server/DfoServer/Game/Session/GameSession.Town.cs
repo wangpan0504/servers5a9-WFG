@@ -6,7 +6,7 @@ internal sealed partial class GameSession
 {
     public bool Move(PositionRequest request) => owner.Execute(() =>
     {
-        if (Phase != SessionPhase.Town || Selected is null)
+        if (pendingRental is not null || Phase != SessionPhase.Town || Selected is null)
             return false;
         var target = TownTravel.Walk(Selected, request, towns, completed);
         if (target is null)
@@ -39,7 +39,7 @@ internal sealed partial class GameSession
     TownTravelReceipt? CommitTravel(TownTravelPlan plan)
     {
         TravelReason = plan.Reason;
-        if (!plan.Accepted)
+        if (pendingRental is not null || !plan.Accepted)
             return null;
         Selected = repository.Save(owner, Selected!, plan.Position!, plan.Return);
         InvalidateImageCommunication();

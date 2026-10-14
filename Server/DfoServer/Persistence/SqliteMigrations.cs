@@ -109,7 +109,35 @@ internal static class SqliteMigrations
         {
             Execute(db, tx, CubePremiumSchema);
         }),
+        new(42, "租赁任务原生完成来源", UpgradeQuestRentalCompletion),
+        new(43, "物件零击杀结算与完整契约经验", DungeonSceneSettlementSchema.Upgrade),
     ];
+    // 在已发布v18和经验封顶声明上只扩展native19，不改写历史迁移。
+    internal static string QuestCompletionSchemaV42 => ExperienceCapSchema.Definition(
+        QuestCompletionSchemaV18, "character_quest_completion_receipts").Replace("12,25", "12,19,25", StringComparison.Ordinal);
+
+    static void UpgradeQuestRentalCompletion(SqliteConnection db, SqliteTransaction tx)
+    {
+        const string table = "character_quest_completion_receipts";
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+        query.Parameters.AddWithValue("$table", table);
+        string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("租赁任务迁移缺少原领奖账本");
+        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV42, table)) return;
+        string previous = ExperienceCapSchema.Definition(QuestCompletionSchemaV18, table);
+        if (NormalizeTable(actual, table) != NormalizeTable(previous, table))
+            throw new InvalidDataException("租赁任务迁移不是已确认的v41领奖结构");
+        query.CommandText = """
+            SELECT count(*) FROM sqlite_schema s JOIN pragma_foreign_key_list(s.name) f
+              WHERE s.type='table' AND f."table"=$table
+            """;
+        if (Convert.ToInt32(query.ExecuteScalar()) != 0)
+            throw new InvalidDataException("租赁任务迁移发现未知领奖依赖表");
+        RebuildReceipt(db, tx, table, QuestCompletionSchemaV42);
+        query.CommandText = "PRAGMA foreign_key_check";
+        using var failures = query.ExecuteReader();
+        if (failures.Read()) throw new InvalidDataException("租赁任务迁移破坏原领奖外键");
+    }
     const string CubePremiumSchema = """
         CREATE TABLE cube_premium(
             charac_no INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
@@ -587,12 +615,13 @@ internal static class SqliteMigrations
     }
 
     // SQLite重命名表会为表名及外键引用补双引号，仍按相同已知声明比较。
-    static string NormalizeTable(string sql, string table) => string.Concat(sql.Where(c => !char.IsWhiteSpace(c)))
+    internal static string NormalizeTable(string sql, string table) => string.Concat(sql.Where(c => !char.IsWhiteSpace(c)))
         .TrimEnd(';').Replace("\"" + table + "\"", table)
         .Replace("\"character_quest_clear_receipts\"", "character_quest_clear_receipts")
         .Replace("\"character_dungeon_growth_receipts\"", "character_dungeon_growth_receipts")
         .Replace("\"character_dungeon_scene_clear_receipts\"", "character_dungeon_scene_clear_receipts")
         .Replace("\"character_quest_lifecycle_receipts\"", "character_quest_lifecycle_receipts")
+        .Replace("\"character_dungeon_settlement_receipts\"", "character_dungeon_settlement_receipts")
         .Replace("\"characters\"", "characters");
 
     private const string QuestCompletionSchemaV18 = """
@@ -808,7 +837,7 @@ internal static class SqliteMigrations
           account TEXT PRIMARY KEY,expires_at INTEGER NOT NULL CHECK(expires_at>=0),
           FOREIGN KEY(account) REFERENCES accounts(account_id) ON DELETE CASCADE);
         """;
-    private const string DungeonSettlementSchema = """
+    internal const string DungeonSettlementSchema = """
         CREATE TABLE character_dungeon_settlement_receipts(
           character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL,
           instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>0),
@@ -974,8 +1003,10 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
-        foreach (var (table,expected) in new[] { ("character_quest_clear_receipts",QuestClearSchemaV40),
-            ("character_dungeon_scene_clear_receipts",QuestSceneClearSchema) })
+        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV42),
+            ("character_quest_clear_receipts",QuestClearSchemaV40),
+            ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
+            ("character_dungeon_settlement_receipts",DungeonSceneSettlementSchema.SettlementSql) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";

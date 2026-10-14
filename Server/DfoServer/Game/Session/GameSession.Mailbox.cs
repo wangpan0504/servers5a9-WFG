@@ -60,8 +60,8 @@ internal sealed partial class GameSession
     });
 
     (Character? Character, long Epoch) MailCharacter() => owner.Execute(() =>
-        (Ready && Phase == SessionPhase.Town ? Selected : null, SelectionEpoch));
-    bool MailPlanIsCurrent(Character character, long epoch) => Ready && Phase == SessionPhase.Town &&
+        (pendingRental is null && Ready && Phase == SessionPhase.Town ? Selected : null, SelectionEpoch));
+    bool MailPlanIsCurrent(Character character, long epoch) => pendingRental is null && Ready && Phase == SessionPhase.Town &&
         MatchesSelection(epoch, character.Id) && ReferenceEquals(Selected, character);
 
     MailboxResult InstallMailResult(MailboxResult result, InventoryPlan? plan)

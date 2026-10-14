@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
 
 namespace DfoServer.Persistence;
 
@@ -119,7 +120,7 @@ internal sealed partial class CharacterRepository
               AND l.revision=s.revision
             """;
         if (source.Identity != (clear.Identity with { Epoch = source.Identity.Epoch }) || clear.Identity.Epoch != source.Identity.Epoch+1 ||
-            clear.ConfirmedDeathEvents.Count == 0 || Convert.ToInt64(command.ExecuteScalar()) != 1)
+            Convert.ToInt64(command.ExecuteScalar()) != 1)
             throw new InvalidDataException("正式结算需要原实例已提交的物件清图来源");
         VerifySceneDeathLedger(db,tx,owner.Account,clear.Identity.CharacterId,source.OperationId,clear.Identity.InstanceId,
             clear.Identity.TaskAttempt);
@@ -132,9 +133,38 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$id",characterId); command.Parameters.AddWithValue("$account",account);
         command.Parameters.AddWithValue("$operation",operationId.ToString("N"));
         command.Parameters.AddWithValue("$instance",instanceId.ToString("N")); command.Parameters.AddWithValue("$attempt",attempt);
-        command.CommandText="SELECT death_events FROM character_dungeon_scene_clear_receipts WHERE character_id=$id AND account=$account AND operation_id=$operation AND instance_id=$instance AND task_attempt=$attempt";
-        if(command.ExecuteScalar() is not byte[] blob || blob.Length==0 || blob.Length%16!=0)
-            throw new InvalidDataException("场景清图缺少完整非空真实死亡集合");
+        command.CommandText = """
+            SELECT s.quest_id,s.before_epoch,s.epoch,s.dungeon_id,s.map_id,s.template_id,s.source_ordinal,
+              s.fingerprint,s.death_events,l.scene_event
+            FROM character_dungeon_scene_clear_receipts s JOIN character_quest_lifecycle_receipts l
+              ON l.character_id=s.character_id AND l.operation_id=s.operation_id AND l.account=s.account
+            WHERE s.character_id=$id AND s.account=$account AND s.operation_id=$operation AND s.source_type='PassiveObject'
+              AND s.instance_id=$instance AND s.task_attempt=$attempt AND l.action='Condition'
+              AND l.revision=s.revision AND l.scene_event IS NOT NULL
+            """;
+        byte[] blob;
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read() || reader[8] is not byte[] saved || saved.Length%16!=0)
+                throw new InvalidDataException("场景清图缺少原生命周期及完整真实死亡集合");
+            QuestSceneEvent scene;
+            try
+            {
+                scene = JsonSerializer.Deserialize<QuestSceneEvent>(reader.GetString(9))
+                    ?? throw new InvalidDataException("场景清图的原生命周期事件为空");
+            }
+            catch (JsonException error)
+            {
+                throw new InvalidDataException("场景清图的原生命周期事件格式无效",error);
+            }
+            long beforeEpoch = reader.GetInt64(1);
+            var identity = new DungeonRunIdentity(characterId,checked((uint)reader.GetInt64(0)),attempt,instanceId,beforeEpoch);
+            if (scene.OperationId!=operationId || scene.Identity!=identity || beforeEpoch<=0 || beforeEpoch==long.MaxValue ||
+                reader.GetInt64(2)!=beforeEpoch+1 || scene.DungeonId!=reader.GetInt32(3) || scene.MapId!=reader.GetInt32(4) ||
+                scene.TemplateId!=reader.GetInt32(5) || scene.SourceOrdinal!=reader.GetInt32(6) || scene.Fingerprint!=reader.GetString(7))
+                throw new InvalidDataException("场景清图的身份、地图、物件或摘要不是原生命周期事件");
+            blob = saved;
+        }
         var frozen=new HashSet<Guid>();
         for(int at=0;at<blob.Length;at+=16)
             if(!frozen.Add(new Guid(blob.AsSpan(at,16)))) throw new InvalidDataException("场景清图重复死亡事件");

@@ -134,7 +134,7 @@ internal static class QuestSceneTests
         VerifyRoomProgress(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
         VerifyTerminalLayerReentry(towns,characters,items,quests,skills,growth,dungeons,rooms,kills);
         QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
-            DungeonClearExperienceCatalog.Load(pvf),parameters);
+            DungeonClearExperienceCatalog.Load(pvf),parameters,DungeonDropRuleCatalog.Load(pvf),DungeonCardPriceCatalog.Load(pvf));
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
     }
 
@@ -448,7 +448,7 @@ internal static class QuestSceneTests
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
             byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
-            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null)
+            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
@@ -458,8 +458,11 @@ internal static class QuestSceneTests
             if (growthContractExpiresAt is { } expiry)
                 Repository.CommitInventory(Owner,created,new(created.Inventory,created.Inventory with
                     { AccountWallet = created.Inventory.AccountWallet.SetContractExpiry(84,expiry) },"test_growth_contract"));
-            Session = new(lost || loseGrowth ? new LostResultRepository(Repository) { LoseSceneResult = lost, LoseCompletionResult = false,
-                LoseGrowthResult = loseGrowth,GrowthLossCondition = growthLossCondition } : Repository,towns,Owner,questCatalog: quests,
+            ICharacterRepository repository = lost || loseGrowth ? new LostResultRepository(Repository) { LoseSceneResult = lost, LoseCompletionResult = false,
+                LoseGrowthResult = loseGrowth,GrowthLossCondition = growthLossCondition } : Repository;
+            if (loseSettlement)
+                repository = new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,loseSettlement:true);
+            Session = new(repository,towns,Owner,questCatalog: quests,
                 contracts: contracts,timeProvider: timeProvider);
             Session.Select(0, resumeTown: position is not null); Session.MarkReady();
         }
@@ -508,7 +511,19 @@ internal static class QuestSceneTests
             }
             That(Session.Move(new(position.X,position.Y,0,0,0,0)),"任务测试落点符合城镇可行走资源");
         }
-        public void Sql(string sql) { using var db=new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); using var c=db.CreateCommand(); c.CommandText=sql; c.ExecuteNonQuery(); }
+        public void Sql(string sql,params object[] values)
+        {
+            using var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open();
+            using var command = db.CreateCommand(); command.CommandText = sql;
+            for (int index=0;index<values.Length;index++) command.Parameters.AddWithValue("$p"+index,values[index]);
+            command.ExecuteNonQuery();
+        }
+        public object? Query(string sql)
+        {
+            using var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open();
+            using var command = db.CreateCommand(); command.CommandText = sql;
+            return command.ExecuteScalar();
+        }
         public void Dispose() { Session.End(); Owner.Dispose(); Directory.Delete(root,true); }
     }
 }

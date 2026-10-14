@@ -545,7 +545,7 @@ internal sealed class SinglePlayerDungeonRun
         ArgumentNullException.ThrowIfNull(reward);
         if (!ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
             HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial ||
-            (ulong)reward.BaseExperience + reward.RankExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
+            (ulong)reward.BaseExperience + reward.RankExperience + reward.GrowthContractExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
             string.IsNullOrWhiteSpace(reward.ResourceSource) || reward.ResourceSource.Length > 1024)
             return new(DungeonRunOutcome.Rejected);
@@ -589,9 +589,9 @@ internal sealed class SinglePlayerDungeonRun
         current.Plan.Room.PassiveObjects[sourceOrdinal].ObjectId == templateId &&
         current.Plan.Room.PassiveObjects.Count(source => source.ObjectId == templateId) == 1;
 
-    // 冻结原物件终末及已提交真实死亡；零击杀场景的翻牌合同尚未闭合，继续拒绝。
+    // 冻结真实物件终末及本实例已提交死亡；物件副本允许精确为空的死亡集合。
     internal bool CanPreparePassiveClear(DungeonRunIdentity expected, int templateId, int sourceOrdinal) =>
-        IsPassiveClearCondition(expected,templateId,sourceOrdinal) && deaths.Count > 0 && TerminalBossCleared(passiveConfirmed:true);
+        IsPassiveClearCondition(expected,templateId,sourceOrdinal) && TerminalBossCleared(passiveConfirmed:true);
 
     internal PreparedDungeonPassiveClear? PreparePassiveClear(DungeonRunIdentity expected, Guid operationId, int templateId, int sourceOrdinal)
     {

@@ -643,14 +643,58 @@ internal static class SinglePlayerDungeonRunTests
             "未确认的多实例数量声明不能借单物件批准字段接入");
         var emptyStart = route.Rooms[0] with { Monsters = [], Room = route.Rooms[0].Room with { Monsters = [] } };
         var zeroRoute = route with { Rooms = [emptyStart,end] };
-        That(SinglePlayerDungeonRun.TryCreate(entry,4,400,zeroRoute,authority,out var zero,out _),
+        var accepted = new DfoServer.Game.Characters.ActiveMainQuest(0,3205,1) { AcceptanceId = Guid.NewGuid() };
+        var zeroEntry = entry with { QuestAcceptanceId = accepted.AcceptanceId, QuestAcceptances = [accepted] };
+        That(SinglePlayerDungeonRun.TryCreate(zeroEntry,4,400,zeroRoute,authority,out var zero,out _),
             "零击杀边界保留空首图与友方终点原资源，不制造敌人");
         zero!.CompleteLoading(zero.Snapshot.Identity,Guid.NewGuid());
         zero.Move(zero.Snapshot.Identity,Guid.NewGuid(),terminal.Position);
         zero.CompleteLoading(zero.Snapshot.Identity,Guid.NewGuid());
-        That(zero.PreparePassiveClear(zero.Snapshot.Identity,Guid.NewGuid(),80458,0) is null &&
-            zero.ClearFact is null && zero.Phase==SinglePlayerDungeonPhase.Dungeon,
-            "尚未闭合的零击杀结算保持拒绝，不能用kill1或空死亡绕过翻牌合同");
+        var zeroBefore = zero.Snapshot.Identity;
+        var zeroOperation = Guid.NewGuid();
+        var zeroPrepared = zero.PreparePassiveClear(zeroBefore,zeroOperation,80458,0)!;
+        var scene = new DfoServer.Game.Quests.QuestSceneEvent(zeroOperation,zeroBefore,25,terminal.Id,80458,0,new string('A',64));
+        That(zeroPrepared is not null && zeroPrepared.Result.ClearFact is { ConfirmedDeathEvents.Count:0 } &&
+            zero.ClearFact is null && zero.Phase==SinglePlayerDungeonPhase.Dungeon && zero.Snapshot.Identity==zeroBefore &&
+            DfoServer.Game.Quests.QuestClearEligibility.TryValidateScene(zero,zeroPrepared,scene),
+            "零击杀只冻结原物件候选与精确空集合，提交前不发布清图或推进epoch");
+        foreach (var changed in new[] { scene with { OperationId = Guid.NewGuid() }, scene with { MapId = start.Id },
+            scene with { Identity = zeroBefore with { TaskAttempt = zeroBefore.TaskAttempt+1 } }, scene with { SourceOrdinal = 1 } })
+            That(!DfoServer.Game.Quests.QuestClearEligibility.TryValidateScene(zero,zeroPrepared!,changed),
+                "精确空死亡仍拒绝另一场景操作、地图、尝试或物件行");
+        That(!DfoServer.Game.Quests.QuestClearEligibility.TryValidateScene(zero,
+            new(zeroPrepared!.Source,zeroPrepared.Result),scene),"复制物件候选不能替代原Run待提交引用");
+        var zeroClear = zero.ConfirmCommittedPassiveClear(zeroPrepared);
+        That(zeroClear.ClearFact is { ConfirmedDeathEvents.Count:0,PassiveSource.OperationId:var zeroSource } &&
+            zeroSource==zeroOperation && zero.Snapshot.Identity.Epoch==zeroBefore.Epoch+1 &&
+            zero.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 11 }) &&
+            zero.ConfirmCommittedPassiveClear(zeroPrepared).Outcome==DungeonRunOutcome.Duplicate,
+            "真实物件提交后零击杀只推进一次结算，保留友方及原来源，不造死亡");
+        var bonusReward = new DungeonClearExperienceReward(90,10,150,1,"fixture-clear","fixture/clear.tbl")
+            { GrowthContractExperience = 50 };
+        foreach (var invalid in new[] { bonusReward with { TotalExperience = 100 },
+            bonusReward with { GrowthContractExperience = 51 },
+            bonusReward with { BaseExperience = uint.MaxValue, RankExperience = 1, GrowthContractExperience = 50, TotalExperience = 50 } })
+            That(zero.PrepareSettlement(zeroClear.ClearFact!,[1],invalid).Outcome==DungeonRunOutcome.Rejected && !zero.HasPendingSettlement,
+                "通关完整经验分解拒绝遗漏、畸形契约和uint溢出后伪等值");
+        var zeroSettlement = zero.PrepareSettlement(zeroClear.ClearFact!,[1],bonusReward).Pending!;
+        That(zeroSettlement is not null && zeroSettlement.Reward.GrowthContractExperience==50 &&
+            ReferenceEquals(zero.PrepareSettlement(zeroClear.ClearFact!,[1],bonusReward).Pending,zeroSettlement) &&
+            zero.PrepareSettlement(zeroClear.ClearFact!,[1],bonusReward with { BaseExperience=80,RankExperience=20 }).Outcome==DungeonRunOutcome.Rejected,
+            "正契约经验按完整分解冻结，精确重试复用候选，同总额改分解仍拒绝");
+        zero.ConfirmCommittedSettlement(zeroSettlement!);
+        That(zero.PrepareSettlement(zeroClear.ClearFact!,[1],bonusReward).Outcome==DungeonRunOutcome.Duplicate,
+            "带契约的零击杀结算提交后仍返回原冻结结果");
+        var ordinaryEntry = zeroEntry with { QuestId = 0,RouteQuestId = 0,ActiveQuestSlot = byte.MaxValue,
+            QuestAcceptanceId = Guid.Empty,QuestAcceptances = [],Maze = maze with { ClearConditions = [] } };
+        That(SinglePlayerDungeonRun.TryCreate(ordinaryEntry,5,500,zeroRoute with { PassiveClearTarget = null },authority,out var ordinary,out _),
+            "普通无scene边界复用同一空首图和友方终点");
+        ordinary!.CompleteLoading(ordinary.Snapshot.Identity,Guid.NewGuid());
+        ordinary.Move(ordinary.Snapshot.Identity,Guid.NewGuid(),terminal.Position);
+        ordinary.CompleteLoading(ordinary.Snapshot.Identity,Guid.NewGuid());
+        That(ordinary.ClearFact is null && ordinary.Phase==SinglePlayerDungeonPhase.Dungeon &&
+            ordinary.PreparePassiveClear(ordinary.Snapshot.Identity,Guid.NewGuid(),80458,0) is null,
+            "普通无scene空死亡仍不取得结算，不能由空房加载推导清图事实");
     }
 
     private static void VerifyLayeredBossTerminal()

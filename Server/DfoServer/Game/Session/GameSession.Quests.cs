@@ -39,7 +39,7 @@ internal sealed partial class GameSession
     {
         var captured = owner.Execute(() =>
         {
-            if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
+            if (pendingRental is not null || !Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true || HasPendingQuestScene)
                 return (Character: (DfoServer.Game.Characters.Character?)null, SelectionEpoch, Phase,
                     Identity: (DungeonRunIdentity?)null, Clear: (QuestClearReceipt?)null, Pending: (PendingQuestCompletion?)null);
@@ -80,7 +80,7 @@ internal sealed partial class GameSession
                 growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth);
         return owner.Execute(() =>
         {
-            if (!CanPublishQuestRefusal(rejection))
+            if (pendingRental is not null || !CanPublishQuestRefusal(rejection))
                 throw new InvalidOperationException("领奖资源规划的原选角、角色快照或实例已失效");
             if (preparation.Outcome != QuestCompletionOutcome.Accepted || preparation.Plan is null)
                 return new QuestFinishResult(preparation.Outcome == QuestCompletionOutcome.InsufficientSpace &&

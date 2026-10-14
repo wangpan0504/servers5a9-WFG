@@ -31,7 +31,7 @@ internal sealed partial class GameSession
                 { Phase = Phase, DungeonIdentity = formalDungeon?.Run.Snapshot.Identity, PreviousQuests = character.ActiveMainQuests } };
         });
 
-        bool CanUpdate() => owner.Execute(() => Selected is not null && (initializing
+        bool CanUpdate() => owner.Execute(() => pendingRental is null && Selected is not null && (initializing
             ? !Ready && Phase == SessionPhase.Unselected
             : Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Dungeon or SessionPhase.Settlement &&
               !HasPendingQuestScene && pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null &&

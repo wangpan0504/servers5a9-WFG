@@ -6,7 +6,7 @@ internal sealed partial class GameSession
 {
     public Character? AcceptStoryDigest() => owner.Execute(() =>
     {
-        if (!Ready || Selected is not { } before) return null;
+        if (pendingRental is not null || !Ready || Selected is not { } before) return null;
         var updated = repository.AdvanceAcceptedStoryLevel(owner,before);
         Selected = updated;
         if (ReferenceEquals(before,updated) || pendingDungeonContinuation is not { } pending) return updated;

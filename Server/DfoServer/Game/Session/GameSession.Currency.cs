@@ -8,6 +8,8 @@ internal sealed partial class GameSession
 {
     public Character SetCharacterGold(string name, uint amount) => owner.Execute(() =>
     {
+        if (pendingRental is not null)
+            throw new InvalidOperationException("租赁结果待确认，须恢复原提交或重新选角");
         if (HasPendingFormalCard && string.Equals(Selected?.Name, name, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("翻牌结果待确认，不能覆盖当前角色金币");
         var current = Selected is { } selected && string.Equals(selected.Name, name, StringComparison.OrdinalIgnoreCase) ? selected :

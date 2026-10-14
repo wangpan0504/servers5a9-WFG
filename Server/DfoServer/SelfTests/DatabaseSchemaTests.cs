@@ -13,6 +13,8 @@ namespace DfoServer;
 
 internal static class DatabaseSchemaTests
 {
+    const string SettlementColumns = "character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision";
+
     internal static void RemoveAdventurePurchases(SqliteConnection db)
     {
         RemoveCardClaimSchema(db);
@@ -39,6 +41,7 @@ internal static class DatabaseSchemaTests
     // 旧结构夹具确实移除v40来源列和空场景表，保留旧清图、完成FK与历史行。
     internal static void RewindQuestSceneClearSchema(SqliteConnection db)
     {
+        RewindQuestRentalCompletion(db);
         Execute(db, "DROP TABLE IF EXISTS cube_premium");
         const string table = "character_quest_clear_receipts";
         if (Query(db,"SELECT count(*) FROM pragma_table_info('character_quest_clear_receipts') WHERE name='source_type'") is 1L)
@@ -188,6 +191,8 @@ internal static class DatabaseSchemaTests
 
             VerifyReleasedMigrations(root);
             VerifyCubeContractMigration(root);
+            VerifyQuestRentalCompletionMigration(root);
+            VerifyDungeonSceneSettlementMigration(root);
             VerifyPremiumContractsMigration(root);
             VerifyMasterQuest14Compatibility(root);
             VerifyQuestSystemMigration(root);
@@ -221,6 +226,244 @@ internal static class DatabaseSchemaTests
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
     }
 
+    static void RewindQuestRentalCompletion(SqliteConnection db)
+    {
+        RewindDungeonSceneSettlement(db);
+        const string table = "character_quest_completion_receipts";
+        if (Query(db, "SELECT sql FROM sqlite_schema WHERE type='table' AND name='" + table + "'") is string sql &&
+            sql.Contains("12,19,25", StringComparison.Ordinal))
+            ChangeReceiptDefinition(db, table, definition => definition.Replace("12,19,25", "12,25", StringComparison.Ordinal));
+    }
+
+    // v42仍是正死亡场景与结算；回退只接受没有v43新事实的夹具，不删除真实来源或奖励。
+    internal static void RewindDungeonSceneSettlement(SqliteConnection db)
+    {
+        const string settlement = "character_dungeon_settlement_receipts", scene = "character_dungeon_scene_clear_receipts";
+        bool hasNewColumns = Query(db, "SELECT count(*) FROM pragma_table_info('" + settlement + "') WHERE name='scene_operation_id'") is 1L;
+        if (hasNewColumns && Query(db, "SELECT count(*) FROM " + settlement + " WHERE scene_operation_id IS NOT NULL OR growth_contract_experience<>0") is not 0L ||
+            Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='" + scene + "'") is 1L &&
+            Query(db, "SELECT count(*) FROM " + scene + " WHERE length(death_events)=0") is not 0L)
+            throw new InvalidOperationException("旧版本夹具不能丢弃实际空场景来源或成长契约奖励");
+        bool foreignKeys = Query(db, "PRAGMA foreign_keys") is 1L;
+        Execute(db, "PRAGMA foreign_keys=OFF");
+        try
+        {
+            if (hasNewColumns)
+                ChangeReceiptDefinition(db, settlement, _ => DungeonSceneSettlementSchema.PreviousSettlementSql,
+                    ColumnNames(db, settlement).Where(name => name is not "\"scene_operation_id\"" and not "\"growth_contract_experience\"").ToArray());
+            if (Query(db, "SELECT sql FROM sqlite_schema WHERE type='table' AND name='" + scene + "'") is string definition &&
+                !definition.Contains("length(death_events)>0", StringComparison.Ordinal))
+                ChangeReceiptDefinition(db, scene, _ => SqliteMigrations.QuestSceneClearSchema);
+        }
+        finally { if (foreignKeys) Execute(db, "PRAGMA foreign_keys=ON"); }
+    }
+
+    private static void VerifyDungeonSceneSettlementMigration(string root)
+    {
+        string path = Path.Combine(root, "scene-settlement-v42.db");
+        _ = new CharacterRepository(path);
+        new AuthenticationService(new AuthenticationRepository(path)).Create("scene-settlement-history", "fixture-password");
+        const string operation = "11111111111111111111111111111111", acceptance = "22222222222222222222222222222222";
+        const string emptyOperation = "44444444444444444444444444444444";
+        string[] tables = ["character_quest_lifecycle_receipts", "character_dungeon_scene_clear_receipts",
+            "character_dungeon_settlement_receipts", "character_quest_clear_receipts", "character_quest_completion_receipts",
+            "character_dungeon_card_rewards", "character_dungeon_card_options"];
+        string[][] columns;
+        string[] history;
+        using (var db = Open(path))
+        {
+            RewindDungeonSceneSettlement(db);
+            Execute(db, $$"""
+                INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
+                  VALUES('scene-settlement-history',0,'SceneSettlementHistory',8,38,1,450,234,0,123);
+                INSERT INTO account_wallets(account,revision,rental_points) VALUES('scene-settlement-history',5,17);
+                INSERT INTO cube_premium VALUES(1,1,5);
+                INSERT INTO character_quest_lifecycle_receipts(rowid,character_id,account,operation_id,action,quest_id,
+                  acceptance_id,before_revision,revision,before_active,after_active,changed_items,scene_event,before_completed,after_completed)
+                  VALUES(11,1,'scene-settlement-history','{{operation}}','Condition',100,'{{acceptance}}',7,8,
+                    '[]','[]','[]','{"Frozen":"scene"}','[]','[]');
+                INSERT INTO character_dungeon_scene_clear_receipts(rowid,character_id,account,operation_id,source_type,
+                  instance_id,quest_id,task_attempt,before_epoch,epoch,dungeon_id,map_id,template_id,source_ordinal,fingerprint,death_events,generation,revision)
+                  VALUES(13,1,'scene-settlement-history','{{operation}}','PassiveObject','scene-history',100,1,1,2,
+                    191,70407,2115,0,'{{new string('a',64)}}',zeroblob(16),1,8);
+                INSERT INTO character_quest_clear_receipts(rowid,character_id,account,acceptance_id,quest_id,quest_slot,
+                  event_id,instance_id,task_attempt,epoch,dungeon_id,map_id,generation,revision,source_type,growth_event_id,scene_operation_id)
+                  VALUES(17,1,'scene-settlement-history','{{acceptance}}',100,0,'{{operation}}','scene-history',1,2,
+                    191,70407,1,8,'PassiveObject',NULL,'{{operation}}');
+                INSERT INTO character_quest_completion_receipts(rowid,character_id,account,acceptance_id,quest_id,event_id,instance_id,
+                  task_attempt,epoch,generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,
+                  difficulty_key,difficulty_weight,experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,
+                  before_revision,revision,rewards,clear_acceptance_id)
+                  VALUES(19,1,'scene-settlement-history','{{acceptance}}',100,'{{operation}}','scene-history',1,2,1,
+                    'history-rule','history-resource','history-quest',0,0,0,'normal',100,0,0,1,1,60,60,7,8,'[]','{{acceptance}}');
+                INSERT INTO character_quest_completion_receipts(rowid,character_id,account,acceptance_id,quest_id,generation,
+                  rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,
+                  experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards,condition_type,plan_snapshot)
+                  VALUES(21,1,'scene-settlement-history','33333333333333333333333333333333',8581,1,
+                    'rental-history','rental-resource','rental-quest',0,0,0,'normal',100,0,0,1,1,60,60,7,8,'[]',19,'{"History":19}');
+                INSERT INTO character_dungeon_settlement_receipts(rowid,{{SettlementColumns}})
+                  VALUES(23,1,'scene-settlement-history','history-settlement','scene-history',100,1,2,191,70407,
+                    zeroblob(16),X'0102',1,20,2,22,0,'history-rule','history-resource',1,1,60,82,8);
+                INSERT INTO character_dungeon_card_rewards(rowid,character_id,account,instance_id,plan_json,reward_json,revision,claimed)
+                  VALUES(29,1,'scene-settlement-history','scene-history','{"Frozen":"card"}','{"History":"reward"}',8,0);
+                INSERT INTO character_dungeon_card_options(rowid,character_id,account,instance_id,options_json,black_diamond_reward_json)
+                  VALUES(31,1,'scene-settlement-history','scene-history','{"Frozen":"option"}','{"History":"bonus"}');
+                CREATE TABLE scene_settlement_migration_audit(value TEXT);
+                PRAGMA user_version=42;
+                """);
+            foreach (string table in tables.Skip(1))
+                Execute(db, "CREATE INDEX " + table + "_history ON " + table + "(account); CREATE TRIGGER " + table +
+                    "_history_insert AFTER INSERT ON " + table + " BEGIN INSERT INTO scene_settlement_migration_audit VALUES('" + table + "'); END");
+            columns = tables.Select(table => ColumnNames(db, table)).ToArray();
+            history = tables.Select((table, index) => Rows(db, table, columns[index])).ToArray();
+            Check(Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name IN('scene_operation_id','growth_contract_experience')") is 0L &&
+                Query(db, "SELECT sql FROM sqlite_schema WHERE name='character_dungeon_scene_clear_receipts'") is string scene &&
+                scene.Contains("length(death_events)>0", StringComparison.Ordinal), "v42夹具真实保留非空场景约束，移除两个v43结算列");
+        }
+        foreach (string scenario in new[] { "late-table", "late-validation", "unknown-scene", "unknown-settlement", "unknown-child", "partial-shape" })
+        {
+            string damaged = Path.Combine(root, "scene-settlement-v42-" + scenario + ".db");
+            using (var source = Open(path)) using (var target = Open(damaged)) source.BackupDatabase(target);
+            using (var db = Open(damaged))
+            {
+                Execute(db, "PRAGMA foreign_keys=OFF");
+                if (scenario == "late-table") Execute(db, "CREATE VIEW character_quest_completion_receipts_scene_settlement AS SELECT 1 AS collision");
+                else if (scenario == "late-validation") Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
+                else if (scenario == "unknown-scene")
+                    ChangeReceiptDefinition(db, tables[1], sql => sql.Replace("source_ordinal>=0", "source_ordinal BETWEEN 0 AND 999", StringComparison.Ordinal));
+                else if (scenario == "unknown-settlement")
+                    ChangeReceiptDefinition(db, tables[2], sql => sql.Replace("rank_bonus_index BETWEEN -1 AND 4", "rank_bonus_index BETWEEN -1 AND 5", StringComparison.Ordinal));
+                else if (scenario == "partial-shape") ChangeReceiptDefinition(db, tables[1], _ => DungeonSceneSettlementSchema.SceneSql);
+                else Execute(db, "CREATE TABLE unknown_scene_settlement_child(character_id INTEGER,operation_id TEXT,FOREIGN KEY(character_id,operation_id) REFERENCES character_dungeon_scene_clear_receipts(character_id,operation_id))");
+                Execute(db, "PRAGMA foreign_keys=ON");
+            }
+            string before = Snapshot(damaged);
+            RejectDatabase(() => new CharacterRepository(damaged));
+            Check(Snapshot(damaged) == before, "物件结算拒绝未知或半份结构、末表及末段校验失败时完整回滚历史父子表、DDL和版本：" + scenario);
+        }
+        var repository = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            for (int index = 0; index < tables.Length; index++)
+                Check(Rows(db, tables[index], columns[index]) == history[index], "v43保留全部原列、rowid和冻结JSON/BLOB，不改历史关联：" + tables[index]);
+            Check(Query(db, "SELECT count(*) FROM scene_settlement_migration_audit") is 0L &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE name GLOB '*_history' OR name GLOB '*_history_insert'") is 12L,
+                "v43保留六表索引和触发器，复制历史时不重放业务");
+            Check(Query(db, "SELECT scene_operation_id IS NULL AND growth_contract_experience=0 FROM character_dungeon_settlement_receipts WHERE rowid=23") is 1L &&
+                Query(db, "SELECT condition_type||':'||plan_snapshot FROM character_quest_completion_receipts WHERE rowid=21") is "19:{\"History\":19}" &&
+                Query(db, "SELECT selected||':'||cube_type FROM cube_premium") is "1:5", "v43旧结算只补NULL/0，v42租赁来源与v41晶体选择保持");
+            Execute(db, $$"""
+                INSERT INTO character_quest_lifecycle_receipts
+                  SELECT character_id,account,'{{emptyOperation}}',action,quest_id,'55555555555555555555555555555555',
+                    before_revision,revision,before_active,after_active,changed_items,scene_event,before_completed,after_completed
+                  FROM character_quest_lifecycle_receipts WHERE rowid=11;
+                INSERT INTO character_dungeon_scene_clear_receipts
+                  SELECT character_id,account,'{{emptyOperation}}',source_type,'empty-scene',quest_id,task_attempt,before_epoch,epoch,
+                    dungeon_id,map_id,template_id,source_ordinal,fingerprint,X'',generation,revision
+                  FROM character_dungeon_scene_clear_receipts WHERE rowid=13;
+                INSERT INTO character_dungeon_settlement_receipts({{SettlementColumns}},scene_operation_id,growth_contract_experience)
+                  SELECT character_id,account,'empty-settlement','empty-scene',quest_id,task_attempt,epoch,dungeon_id,map_id,X'',
+                    report_body,generation,base_experience,rank_experience,27,rank_bonus_index,rule_id,resource_source,before_level,
+                    after_level,before_experience,87,revision,'{{emptyOperation}}',5
+                  FROM character_dungeon_settlement_receipts WHERE rowid=23;
+                """);
+            Check(Query(db, "SELECT length(death_events)||':'||base_experience||':'||rank_experience||':'||growth_contract_experience||':'||total_experience FROM character_dungeon_settlement_receipts WHERE event_id='empty-settlement'") is "0:20:2:5:27",
+                "空死亡物件结算绑定原场景来源，基础、rank和成长契约奖励完整分解");
+            foreach (string mutation in new[] { "scene_operation_id=NULL", "scene_operation_id='missing'", "death_events=NULL",
+                "death_events=X'01'", "total_experience=26", "growth_contract_experience=-1", "growth_contract_experience=4294967296" })
+                Reject<SqliteException>(() => Execute(db, "UPDATE character_dungeon_settlement_receipts SET " + mutation + " WHERE event_id='empty-settlement'"),
+                    "物件结算拒绝缺来源、外键断裂、非法死亡BLOB或不一致奖励分解：" + mutation);
+            Check(Query(db, "SELECT count(*) FROM scene_settlement_migration_audit") is 2L,
+                "恢复后的场景和结算触发器只观察两个新提交，不重复历史");
+            Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "v43物件来源、领奖和翻牌历史完整外键保持");
+        }
+        string stable = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == stable, "v43重开幂等，不重新生成物件来源、成长契约奖励或翻牌");
+        using var owner = new AccountOwners().Acquire("scene-settlement-history", () => { });
+        var targetCharacter = repository.LoadDeletionTarget(owner, 0);
+        Check(repository.Delete(owner, targetCharacter) == targetCharacter, "实际删角按新结算→场景来源顺序删除，不被新增外键阻塞");
+        using (var db = Open(path))
+            Check(tables.All(table => Query(db, "SELECT count(*) FROM " + table) is 0L) &&
+                Query(db, "SELECT count(*) FROM characters") is 0L && Query(db, "SELECT rental_points FROM account_wallets") is 17L &&
+                Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L, "删角清理来源、结算、清图、完成和翻牌，保留账号钱包且无残留外键");
+    }
+
+    private static void VerifyQuestRentalCompletionMigration(string root)
+    {
+        const string table = "character_quest_completion_receipts";
+        string path = Path.Combine(root, "rental-v41.db");
+        _ = new CharacterRepository(path);
+        new AuthenticationService(new AuthenticationRepository(path)).Create("rental-history", "fixture-password");
+        string[] names;
+        string originalRows;
+        using (var db = Open(path))
+        {
+            RewindQuestRentalCompletion(db);
+            Execute(db, """
+                INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
+                  VALUES('rental-history',0,'RentalHistory',8,38,1,450,234,0,123);
+                INSERT INTO cube_premium VALUES(1,1,5);
+                INSERT INTO character_quest_completion_receipts(rowid,character_id,account,acceptance_id,quest_id,generation,
+                  rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,
+                  experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,
+                  rewards,condition_type,plan_snapshot)
+                  VALUES(87,1,'rental-history','1234567890abcdef1234567890abcdef',3145,1,
+                    'historical-rule','historical-resource','historical-quest',0,0,0,'normal',100,0,0,1,1,0,0,7,8,'[]',4,'{"History":true}');
+                CREATE INDEX rental_history_type ON character_quest_completion_receipts(condition_type);
+                CREATE TABLE rental_migration_audit(value INTEGER);
+                CREATE TRIGGER rental_history_insert AFTER INSERT ON character_quest_completion_receipts
+                  BEGIN INSERT INTO rental_migration_audit VALUES(1); END;
+                PRAGMA user_version=41;
+                """);
+            names = ColumnNames(db, table);
+            originalRows = Rows(db, table, names);
+        }
+        foreach (string scenario in new[] { "late-failure", "unknown-definition", "unknown-child" })
+        {
+            string damaged = Path.Combine(root, "rental-v41-" + scenario + ".db");
+            using (var source = Open(path))
+            using (var target = Open(damaged)) source.BackupDatabase(target);
+            using (var db = Open(damaged))
+            {
+                if (scenario == "late-failure") Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
+                else if (scenario == "unknown-definition")
+                    ChangeReceiptDefinition(db, table, sql => sql.Replace("native_index>=0", "native_index>=0 AND native_index<999", StringComparison.Ordinal));
+                else Execute(db, "CREATE TABLE unknown_rental_child(character_id INTEGER,acceptance_id TEXT,FOREIGN KEY(character_id,acceptance_id) REFERENCES character_quest_completion_receipts(character_id,acceptance_id) ON DELETE CASCADE)");
+            }
+            string before = Snapshot(damaged);
+            RejectDatabase(() => new CharacterRepository(damaged));
+            Check(Snapshot(damaged) == before, "租赁迁移拒绝未知结构/子表或末段失败，整笔保留原DDL、历史行与版本");
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Rows(db, table, names) == originalRows && Query(db, "SELECT count(*) FROM rental_migration_audit") is 0L,
+                "租赁迁移保留历史全部列及rowid，不重放插入触发器");
+            Check(Query(db, "SELECT selected||':'||cube_type FROM cube_premium WHERE charac_no=1") is "1:5" &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='rental_history_type'") is 1L,
+                "租赁迁移保留v41晶体选择及原索引");
+            string copied = string.Join(',', names.Select(name => name switch
+            {
+                "\"acceptance_id\"" => "'234567890abcdef1234567890abcdef1'", "\"quest_id\"" => "8581", "\"condition_type\"" => "19", _ => name
+            }));
+            Execute(db, "INSERT INTO " + table + "(" + string.Join(',', names) + ") SELECT " + copied + " FROM " + table + " WHERE rowid=87");
+            Check(Query(db, "SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id=8581 AND condition_type=19 AND event_id IS NULL AND plan_snapshot IS NOT NULL") is 1L &&
+                Query(db, "SELECT count(*) FROM rental_migration_audit") is 1L,
+                "native19使用无清图来源的冻结计划，恢复后的原触发器只观察新事件");
+            Reject<SqliteException>(() => Execute(db, "UPDATE character_quest_completion_receipts SET plan_snapshot=NULL WHERE condition_type=19"),
+                "native19不允许缺失冻结计划");
+            Reject<SqliteException>(() => Execute(db, "UPDATE character_quest_completion_receipts SET event_id='fake',instance_id='fake',task_attempt=1,epoch=1 WHERE condition_type=19"),
+                "native19不能伪装清图来源");
+            Check(Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "租赁迁移保留领奖外键完整性");
+        }
+        string after = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == after, "租赁迁移重开幂等，不重复领奖或改写回执");
+    }
+
     private static void VerifyCubeContractMigration(string root)
     {
         string path = Path.Combine(root, "cube-v40.db");
@@ -228,6 +471,7 @@ internal static class DatabaseSchemaTests
         new AuthenticationService(new AuthenticationRepository(path)).Create("cube-history", "fixture-password");
         using (var db = Open(path))
         {
+            RewindQuestRentalCompletion(db);
             Execute(db, """
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
                   VALUES('cube-history',0,'CubeHistory',7,38,1,450,234,0,123);
@@ -315,10 +559,14 @@ internal static class DatabaseSchemaTests
             Check(Snapshot(path)==saved,"升级后反复初始化只读保留完整状态");
         }
         string broken=Path.Combine(root,"quest-effects-v33-failure.db");_=new CharacterRepository(broken);
-        using(var db=Open(broken)) Execute(db,"""
-            DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts;
-            DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings; CREATE TABLE character_quest_special_reward_claims(bad INTEGER); PRAGMA user_version=33;
-            """);
+        using(var db=Open(broken))
+        {
+            RewindDungeonSceneSettlement(db);
+            Execute(db,"""
+                DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts;
+                DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings; CREATE TABLE character_quest_special_reward_claims(bad INTEGER); PRAGMA user_version=33;
+                """);
+        }
         string original=Snapshot(broken);RejectDatabase(()=>new CharacterRepository(broken));
         Check(Snapshot(broken)==original,"末段列校验失败回滚新增任务表与版本，保留原库");
     }
@@ -383,6 +631,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
+            RewindDungeonSceneSettlement(db);
             Execute(db, """
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('history',0,'History',7,38,1,450,234,0);
                 INSERT INTO account_card_memberships(account,black_diamond_expires,gold_card_expires,revision) VALUES('history',100,200,3);
@@ -677,7 +926,7 @@ internal static class DatabaseSchemaTests
             That(Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L && Query(db, "PRAGMA integrity_check") is "ok",
                 "有历史父子账本的v13直接迁移仍保持完整外键");
             Execute(db, "INSERT INTO character_dungeon_growth_receipts SELECT character_id,account,'ordinary','new-run',0,task_attempt,epoch,map_id,2,2,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts WHERE rowid=41");
-            Execute(db, "INSERT INTO character_dungeon_settlement_receipts SELECT character_id,account,'ordinary-settlement','new-run',0,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts WHERE event_id='old-settlement'");
+            Execute(db, "INSERT INTO character_dungeon_settlement_receipts(" + SettlementColumns + ") SELECT character_id,account,'ordinary-settlement','new-run',0,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts WHERE event_id='old-settlement'");
             That(Query(db, "SELECT count(*) FROM character_dungeon_growth_receipts WHERE quest_id=0") is 1L &&
                 Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE quest_id=0") is 1L,
                 "普通无任务副本可保存成长与结算，不生成任务完成记录");
@@ -1212,7 +1461,7 @@ internal static class DatabaseSchemaTests
     }
 
     static void ChangeCompletionDefinition(SqliteConnection db,Func<string,string> change) =>
-        ChangeReceiptDefinition(db, "character_quest_completion_receipts", sql => change(sql.Replace(
+        ChangeReceiptDefinition(db, "character_quest_completion_receipts", sql => change(sql.Replace("12,19,25", "12,25", StringComparison.Ordinal).Replace(
             "CHECK(after_experience>=before_experience AND after_experience<=before_experience+experience_amount)",
             "CHECK(after_experience=before_experience+experience_amount)", StringComparison.Ordinal)));
 
@@ -1269,6 +1518,8 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                if (oldVersion < 43) RewindDungeonSceneSettlement(db);
+                if (oldVersion < 42) RewindQuestRentalCompletion(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('migrated',0,'Migrated',7,38,1,450,234,0,2,60,123)");
                 Execute(db, "INSERT INTO character_skill_points VALUES(1,0,12,0),(1,1,34,0)");
                 Execute(db, "INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES(1,0,3145,1,'1234567890abcdef1234567890abcdef')");
@@ -1301,6 +1552,10 @@ internal static class DatabaseSchemaTests
                 }
                 if (oldVersion == 17) RewindQuestReceiptsToV17(db);
                 else if (oldVersion < 17) RewindQuestSystemToV13(db, keepFatigue: oldVersion >= 15);
+                // v16已经发布普通0身份，任务系统仍沿v13；不能用正任务限定冒充v16账本。
+                if (oldVersion == 16)
+                    foreach (string table in new[] { "character_dungeon_growth_receipts", "character_dungeon_settlement_receipts" })
+                        ChangeReceiptDefinition(db, table, sql => sql.Replace("CHECK(quest_id>0)", "CHECK(quest_id>=0)", StringComparison.Ordinal));
                 if (oldVersion >= 17 && oldVersion < 24) RewindAccountQuestSource(db);
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_completion_receipts");
                 if (oldVersion < 13) Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id");
@@ -1986,6 +2241,7 @@ internal static class DatabaseSchemaTests
     // 老版本夹具恢复当时的严格到账约束，不能仅把v23的版本号改低。
     internal static void RewindExperienceCaps(SqliteConnection db)
     {
+        RewindDungeonSceneSettlement(db);
         bool foreignKeys = Query(db,"PRAGMA foreign_keys") is 1L;
         Execute(db,"PRAGMA foreign_keys=OFF");
         try

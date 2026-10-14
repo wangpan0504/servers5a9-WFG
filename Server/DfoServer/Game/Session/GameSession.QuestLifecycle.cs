@@ -25,7 +25,7 @@ internal sealed partial class GameSession
         var capture = owner.Execute(() =>
         {
             Character? character = Ready && Selected is not null && Phase is not (SessionPhase.Unselected or SessionPhase.Loading) &&
-                !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
+                pendingRental is null && !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
             var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
             var room = instance is not null && formalDungeon is { } dungeon
@@ -75,7 +75,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (!CanPublishQuestLifecycle(refusal)) throw new InvalidOperationException("任务规划的原选角或实际场景已失效");
+            if (pendingRental is not null || !CanPublishQuestLifecycle(refusal)) throw new InvalidOperationException("任务规划的原选角或实际场景已失效");
             pendingQuestLifecycle = new(plan, capture.SelectionEpoch, capture.Phase, capture.Identity, condition);
             var commit = repository.CommitQuestLifecycle(owner, plan);
             Selected = commit.Character;
@@ -93,6 +93,10 @@ internal sealed partial class GameSession
         QuestLifecyclePlan ConditionPlan()
         {
             QuestCoverage.RequireOrdinaryDeclarations(quest);
+            if (QuestRentalProgress.Supports(quest) && condition is { Channel: null, Value: 0, Reserved: 0 } &&
+                expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { AcceptanceId: var rentalAcceptance, ConditionState: 0 } &&
+                rentalAcceptance != Guid.Empty)
+                return QuestLifecyclePlan.SetCondition(expected, quest, 0);
             if (QuestDungeonClearProgress.TryTarget(quest,out _) && condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { } clearActive &&
                 QuestDungeonClearProgress.ValidScalar(quest,clearActive.ConditionState))
@@ -179,7 +183,7 @@ internal sealed partial class GameSession
     public QuestCycleReceipt? AdvanceQuestCycle(DateTimeOffset now) => owner.Execute(() =>
     {
         if (questCatalog is null || !Ready || Selected is not { } expected || expected.QuestCycleDay >= QuestCycle.Day(now) ||
-            pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } || HasPendingQuestScene ||
+            pendingRental is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } || HasPendingQuestScene ||
             pendingDungeonContinuation is not null || HasPendingQuestReplay ||
             HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true)
             return null;
