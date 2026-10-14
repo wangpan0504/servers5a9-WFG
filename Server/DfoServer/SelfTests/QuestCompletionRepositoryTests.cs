@@ -304,6 +304,7 @@ internal static class QuestCompletionRepositoryTests
         public bool LoseLifecycleResult { get; init; }
         public bool LoseSceneResult { get; init; }
         public bool LoseGrowthResult { get; init; }
+        public Func<PreparedDungeonDeath,bool>? GrowthLossCondition { get; init; }
         public bool LoseCompletionResult { get; init; } = true;
         public bool LoseInventoryResult { get; init; }
         int inventoryCalls;
@@ -359,7 +360,8 @@ internal static class QuestCompletionRepositoryTests
             PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null)
         {
             var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops);
-            if (LoseGrowthResult && ++growthCalls == 1) throw new IOException("合成死亡事务已提交但返回值丢失");
+            if (LoseGrowthResult && (GrowthLossCondition?.Invoke(prepared) ?? true) && ++growthCalls == 1)
+                throw new IOException("合成死亡事务已提交但返回值丢失");
             return result;
         }
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected, DungeonGroundPickupPreparation prepared, InventoryPlan plan) =>

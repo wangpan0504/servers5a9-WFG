@@ -212,7 +212,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         var target = result.ReportedTarget;
         log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, Report = audit,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.Team, target.IsFriendly, target.IsBlocking, target.CanReportDeath },
-            result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ClearFact });
+            result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ClearFact, result.RoomClearFact });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return CommandResult.Unhandled;
         if (result.Receipt is not { } receipt) return CommandResult.Handled;

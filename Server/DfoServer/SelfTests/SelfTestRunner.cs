@@ -119,6 +119,7 @@ internal static class SelfTestRunner
         DungeonRoomCatalogTests.RunCore();
         DungeonElevatorTests.Run();
         DungeonStoryFlowTests.Run();
+        WarpMazeConditionsTests.Run();
         DungeonClearConditionTests.Run();
         DungeonMapPoolTests.RunCore();
         DungeonClassExperienceTests.RunCore();
@@ -221,6 +222,8 @@ internal static class SelfTestRunner
         QuestConnectionCatalogTests.Run(pvf);
         QuestCharacterRewardTests.Run(towns,pvf,characters,itemResources);
         QuestSceneTests.Run(towns, pvf, characters, itemResources,sharedQuests,sharedSkills);
+        MiddleQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestScriptedSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         FriendlyAiCharacterDeathTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestDropTests.Run(towns, pvf, characters, itemResources);

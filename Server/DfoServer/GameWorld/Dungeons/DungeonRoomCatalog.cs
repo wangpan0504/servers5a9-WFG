@@ -29,6 +29,8 @@ internal sealed record DungeonRoomDefinition(
     IReadOnlyList<int> Buffs,
     IReadOnlyList<int>? MonsterTeams = null)
 {
+    // MAP自身的单值[type]，与迷宫位置的map/boss/layered声明分别保存；缺失或歧义不授予终点资格。
+    public string? DeclaredType { get; init; }
     public IReadOnlyList<DungeonRoomSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonRoomSpecialObject>();
     public IReadOnlyList<DungeonRoomAiCharacter> AiCharacters { get; init; } = Array.Empty<DungeonRoomAiCharacter>();
     public IReadOnlyList<int> EventMonsterPositions { get; init; } = Array.Empty<int>();
@@ -115,6 +117,8 @@ internal sealed class DungeonRoomCatalog
         bool allowUnresolvedSpecialMetadata = false)
     {
         var sections = new Dictionary<string, IReadOnlyList<PvfToken>>(StringComparer.Ordinal);
+        string? declaredType = null;
+        bool typeSeen = false;
         for (int i = 0; i < tokens.Count;)
         {
             if (tokens[i].Type != 3)
@@ -124,6 +128,13 @@ internal sealed class DungeonRoomCatalog
             }
 
             string tag = resolve(tokens[i++].Value).ToLowerInvariant();
+            if (tag == "[type]")
+            {
+                declaredType = !typeSeen && i < tokens.Count && tokens[i].Type == 6 &&
+                    (i + 1 == tokens.Count || tokens[i + 1].Type == 3) ? resolve(tokens[i].Value) : null;
+                typeSeen = true;
+                continue;
+            }
             if (tag is not ("[monster]" or "[monster team]" or "[passive object]" or "[buff]" or "[ai character]" or "[special passive object]" or "[event monster position]"))
                 continue;
             if (sections.ContainsKey(tag))
@@ -229,7 +240,7 @@ internal sealed class DungeonRoomCatalog
         // 未解释的 NPC 元数据不收窄原入场/战斗能力，但不能作为任务会面的真实来源。
         return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams)
             { AiCharacters = Freeze(actors), SpecialObjects = Freeze(specialObjects), EventMonsterPositions = eventPositions,
-                Npcs = npcs, NpcMetadataError = npcError };
+                Npcs = npcs, NpcMetadataError = npcError, DeclaredType = declaredType };
 
         string Resolve(int id, IReadOnlyDictionary<int, string> paths, string kind)
         {

@@ -31,6 +31,13 @@ internal sealed record DungeonEntryPlan(
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public bool HasExplicitClearMap { get; init; }
+    // 中途任务目标独立冻结，不改变Boss坐标或终末资格。
+    public DungeonMap? QuestClearMap { get; init; }
+    // 不同坐标的显式末层只覆盖领域终点，BossMap仍保留原NOTI28投影。
+    public DungeonMap? TerminalLayerMap { get; init; }
+    public ushort TerminalLayerQuestId { get; init; }
+    public byte TerminalLayerQuestSlot { get; init; } = byte.MaxValue;
+    public Guid TerminalLayerAcceptanceId { get; init; }
     public uint RouteQuestId { get; init; } = QuestId;
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
     public float ExperienceWeight { get; init; } = 1;
@@ -38,7 +45,8 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
-    public bool IsTerminalMap(DungeonMap map) => map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
+    public bool IsTerminalMap(DungeonMap map) => TerminalLayerMap is { } layer ? map == layer :
+        map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
         map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map);
 
     public static bool TryCreateReplay(DungeonCatalog catalog,QuestReplayPlan replay,out DungeonEntryPlan? plan,out string reason)
@@ -54,7 +62,7 @@ internal sealed record DungeonEntryPlan(
 
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
-        Func<int,int>? draw = null, QuestCatalog? quests = null)
+        Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -72,12 +80,13 @@ internal sealed record DungeonEntryPlan(
         }
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
-            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw));
+            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
-        Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false)
+        Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
+        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -219,6 +228,10 @@ internal sealed record DungeonEntryPlan(
         }
 
         var terminal = bosses[0];
+        DungeonMap? questClearMap = null;
+        DungeonMap? terminalLayer = null;
+        ActiveMainQuest? terminalQuest = null;
+        Guid terminalAcceptance = Guid.Empty;
         if (layoutQuest is not null && QuestClearEligibility.IsSingleMap(layoutQuest))
         {
             var layers = maze.LayeredMaps.Where(map => map.Position == boss && map.Id == layoutQuest.IntData[0]).ToArray();
@@ -226,8 +239,34 @@ internal sealed record DungeonEntryPlan(
             else if (layoutQuest.IntData[0] != terminal.Id)
             {
                 var replacements = maze.ConditionalMaps.Where(map => map.Position == boss && map.Id == layoutQuest.IntData[0]).ToArray();
-                if (replacements.Length != 1) { reason = "quest-terminal-map-unavailable"; return false; }
-                terminal = replacements[0];
+                if (replacements.Length == 1) terminal = replacements[0];
+                else
+                {
+                    var targets = maze.MapSpecification!.Concat(maze.LayeredMaps).Concat(maze.ConditionalMaps)
+                        .Where(map => map.Id == layoutQuest.IntData[0]).Distinct().ToArray();
+                    if (targets.Length != 1) { reason = "quest-terminal-map-unavailable"; return false; }
+                    questClearMap = targets[0];
+                }
+            }
+            // 同ID基础Boss与异坐标末层不能改写wire坐标；仅原接取的显式目标可申请领域别名。
+            if (!isReplay && terminal == bosses[0] && layoutQuest.IntData[0] == terminal.Id && maze.StoryStages.Count == 0)
+            {
+                var aliases = maze.LayeredMaps.Where(map => map.Position != boss && map.Id == terminal.Id).ToArray();
+                if (aliases.Length > 1) { reason = "quest-terminal-layer-ambiguous"; return false; }
+                var accepted = character.ActiveMainQuests.Where(row => row.QuestId == layoutQuest.Id).ToArray();
+                if (aliases is [var alias] && accepted is [{ Slot: <= 29 } original] &&
+                    (original.ConditionState == 1 || original.ConditionState == 0 &&
+                        (allowClearedQuest && original.QuestId == questId || allowClearedTerminalQuest?.Invoke(original) == true)) &&
+                    alias.Path == terminal.Path &&
+                    original.AcceptanceId != Guid.Empty && character.ActiveMainQuests.Count(row => row.Slot == original.Slot) == 1 &&
+                    maze.LayeredMaps.LastOrDefault(map => map.Position == alias.Position) == alias &&
+                    !maze.ConditionalMaps.Any(map => map.Position == alias.Position))
+                {
+                    terminalLayer = alias;
+                    terminalQuest = original;
+                    terminalAcceptance = original.AcceptanceId;
+                }
+                else if (aliases.Length != 0) { reason = "quest-terminal-layer-unavailable"; return false; }
             }
         }
         if (quest is not null && (quest.Id != (questId == 0 ? routeQuest : questId) || quest.Definition is null ||
@@ -251,6 +290,11 @@ internal sealed record DungeonEntryPlan(
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],
             HasExplicitClearMap = layoutQuest is not null && QuestClearEligibility.IsSingleMap(layoutQuest),
+            QuestClearMap = questClearMap,
+            TerminalLayerMap = terminalLayer,
+            TerminalLayerQuestId = terminalQuest?.QuestId ?? 0,
+            TerminalLayerQuestSlot = terminalQuest?.Slot ?? byte.MaxValue,
+            TerminalLayerAcceptanceId = terminalAcceptance,
             RouteQuestId = routeQuest,
             QuestAcceptances = definition.IsClassExperience ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),

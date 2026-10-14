@@ -11,6 +11,7 @@ internal static class SinglePlayerDungeonRunTests
     {
         int checks = Count;
         VerifyLayeredBossTerminal();
+        VerifyExplicitTerminalLayer();
         VerifyPassiveClearCondition();
         var authority = new FixtureCombatAuthority();
         var start = new DungeonMap("map", new(0, 0), 1, "map/fixture-start.map");
@@ -707,6 +708,26 @@ internal static class SinglePlayerDungeonRunTests
         Layer(explicitLayer);
         That(explicitLayer.AcceptConfirmedDeath(authority.Death(explicitLayer.Snapshot.Identity, 30, 1)).ClearFact?.ClearMap == middle,
             "任务明确声明的非末层清图地图仍按原终点结算");
+        var sameIdLayer = middle with { Id = boss.Id };
+        var sameIdEntry = entry with { Maze = maze with { LayeredMaps = [sameIdLayer,last] },
+            BossMap = sameIdLayer,HasExplicitClearMap = true,QuestClearMap = sameIdLayer };
+        var sameIdRoute = route with { Rooms = [route.Rooms[0],dummy,BossPlan(sameIdLayer,30),route.Rooms[3]] };
+        var sameIdRun = Create(sameIdEntry,sameIdRoute);
+        Layer(sameIdRun);
+        That(sameIdRun.AcceptConfirmedDeath(authority.Death(sameIdRun.Snapshot.Identity,30,1)).ClearFact?.ClearMap == sameIdLayer,
+            "已有基础图与叠层同ID的明确终点保留旧合同，中途目标唯一性不扩大终点准入限制");
+        var roomTargetRun = Create(entry with { HasExplicitClearMap = true,QuestClearMap = middle },route);
+        That(roomTargetRun.Entry.BossMap == last && roomTargetRun.Entry.QuestClearMap == middle,
+            "明确中途目标不阻止原dummy基础Boss解析为末层真实Boss");
+        That(roomTargetRun.AcceptConfirmedDeath(authority.Death(roomTargetRun.Snapshot.Identity,20,1)).ClearFact is null,
+            "中途目标路线的基础dummy死亡不提前结算");
+        Layer(roomTargetRun);
+        var roomTargetClear = roomTargetRun.AcceptConfirmedDeath(authority.Death(roomTargetRun.Snapshot.Identity,30,2));
+        That(roomTargetClear.RoomClearFact is { Map: var targetMap } && targetMap == middle && roomTargetClear.ClearFact is null &&
+            roomTargetRun.Phase == SinglePlayerDungeonPhase.Dungeon,"中间叠层目标只产生独立清房，不抢占原末层结算");
+        Layer(roomTargetRun);
+        That(roomTargetRun.AcceptConfirmedDeath(authority.Death(roomTargetRun.Snapshot.Identity,40,3)).ClearFact?.ClearMap == last &&
+            roomTargetRun.Phase == SinglePlayerDungeonPhase.Settlement,"中途目标后仍由原末层真实Boss完成通关");
         var livingDummy = Create(entry, route);
         Layer(livingDummy);
         livingDummy.AcceptConfirmedDeath(authority.Death(livingDummy.Snapshot.Identity, 30, 1));
@@ -737,6 +758,83 @@ internal static class SinglePlayerDungeonRunTests
                 RawValues = Array.AsReadOnly(new[] { template }.Concat(source.RawValues.Skip(1)).ToArray()),
                 Modifiers = isDummy ? ["[dummy]"] : [] }).ToArray();
             return DungeonMonsterPlan.FromRoom(plan.Room with { Monsters = sources }, 99, plan.Monsters[0].ObjectKey);
+        }
+    }
+
+    private static void VerifyExplicitTerminalLayer()
+    {
+        var start = new DungeonMap("map", new(0,0), 10, "map/fixture-start.map");
+        var entrance = new DungeonMap("map", new(1,0), 11, "map/fixture-entrance.map");
+        var boss = new DungeonMap("boss", new(2,0), 20, "map/fixture-boss.map");
+        var layer = boss with { Kind = "layered", Position = entrance.Position };
+        var maze = new DungeonMaze(0,3,1,"fixture-terminal-alias",[start.Position],[boss.Position],[start,entrance,boss],[])
+            { LayeredMaps = [layer] };
+        var accepted = new DfoServer.Game.Characters.ActiveMainQuest(0,100,1) { AcceptanceId = Guid.NewGuid() };
+        var entry = new DungeonEntryPlan(99,0,17,100,0,0,maze,start,boss)
+        {
+            HasExplicitClearMap = true, QuestAcceptanceId = accepted.AcceptanceId, QuestAcceptances = [accepted],
+            TerminalLayerMap = layer, TerminalLayerQuestId = accepted.QuestId, TerminalLayerQuestSlot = accepted.Slot,
+            TerminalLayerAcceptanceId = accepted.AcceptanceId
+        };
+        var terminal = BossPlan(layer,40);
+        var source = terminal.Room.Monsters[0] with { Modifiers = ["[dummy]"] };
+        terminal = DungeonMonsterPlan.FromRoom(terminal.Room with { Monsters = [source], DeclaredType = "[boss]" },99,40);
+        var route = new DungeonFixedRoute([Plan(start,10),Plan(entrance,11),BossPlan(boss,20),terminal],
+            [new(start.Position,entrance.Position),new(entrance.Position,boss.Position)]);
+        var authority = new FixtureCombatAuthority();
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,route,authority,out var run,out _) &&
+            run!.Entry.BossMap == boss && !run.Entry.IsTerminalMap(boss) && run.Entry.IsTerminalMap(layer),
+            "异坐标显式末层是唯一领域终点，原BossMap投影保持不变");
+        That(SinglePlayerDungeonRun.TryCreate(entry with { StartMap = boss, Maze = maze with { Starts = [boss.Position] } },
+            2,200,route,authority,out var baseRun,out _), "单独核对基础Boss死亡，不跳过实际路线的必经叠层");
+        baseRun!.CompleteLoading(baseRun.Snapshot.Identity,Guid.NewGuid());
+        That(baseRun.AcceptConfirmedDeath(authority.Death(baseRun.Snapshot.Identity,20,1)).ClearFact is null,
+            "相同MAP编号的基础Boss死亡不能提前完成末层任务");
+        run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,10,1));
+        run.Move(run.Snapshot.Identity,Guid.NewGuid(),entrance.Position);
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,11,2));
+        That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),entrance.Position,true).Outcome == DungeonRunOutcome.Accepted,
+            "末层沿真实声明位置和原移动入口进入");
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        var before = run.Snapshot.Identity;
+        var death = authority.Death(before,40,3);
+        var pending = run.PrepareConfirmedDeath(death).Pending!;
+        That(pending.Result.ClearFact?.ClearMap == layer && run.ClearFact is null &&
+            DfoServer.Game.Quests.QuestClearEligibility.TryValidate(run.Entry,pending),
+            "真实可报告dummy死亡沿原终末事实和任务准入，不由剧情消失授予成功");
+        That(run.CancelUncommittedDeath(pending) && run.CurrentLivingMonster(40) is not null && run.Snapshot.Identity == before,
+            "未提交末层死亡保留原epoch与存活状态");
+        pending = run.PrepareConfirmedDeath(death).Pending!;
+        run.ConfirmCommittedDeath(pending);
+        That(run.Phase == SinglePlayerDungeonPhase.Settlement && run.Snapshot.Identity.Epoch == before.Epoch+1 &&
+            run.AcceptConfirmedDeath(death).Outcome == DungeonRunOutcome.Duplicate,
+            "同事件末层死亡仅提交一次通关且旧epoch不能退回基础层");
+        foreach (var changed in new[]
+        {
+            entry with { HasExplicitClearMap = false }, entry with { TerminalLayerAcceptanceId = Guid.NewGuid() },
+            entry with { TerminalLayerMap = layer with { Path = "map/other.map" } },
+            entry with { TerminalLayerMap = layer with { Position = boss.Position } },
+            entry with { IsQuestReplay = true }
+        })
+            That(!SinglePlayerDungeonRun.TryCreate(changed,2,200,route,authority,out _,out _),
+                "末层别名拒绝非显式目标、异接取、异路径、基础坐标与回放模式");
+        var unrelated = accepted with { QuestId = 101, Slot = 1, AcceptanceId = Guid.NewGuid() };
+        That(!SinglePlayerDungeonRun.TryCreate(entry with { QuestAcceptances = [accepted,unrelated],
+            TerminalLayerAcceptanceId = unrelated.AcceptanceId },2,200,route,authority,out _,out _) &&
+            !SinglePlayerDungeonRun.TryCreate(entry with { TerminalLayerQuestSlot = 1 },2,200,route,authority,out _,out _),
+            "另一已绑定UUID或槽位不能替代实际末层目标三元组");
+        foreach (var invalidRoom in new[]
+        {
+            terminal.Room with { DeclaredType = null }, terminal.Room with { DeclaredType = "[normal]" },
+            terminal.Room with { Monsters = [source with { RankKind = "[normal]", Modifiers = [] }] },
+            terminal.Room with { Monsters = [source with { Team = 0 }] }
+        })
+        {
+            var invalid = DungeonMonsterPlan.FromRoom(invalidRoom,99,40,playerTeam:0);
+            That(!SinglePlayerDungeonRun.TryCreate(entry,2,200,route with { Rooms = [.. route.Rooms.Take(3),invalid] },authority,out _,out _),
+                "真实MAP类型及敌方可报告Boss必须共同成立");
         }
     }
 

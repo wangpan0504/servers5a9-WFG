@@ -79,6 +79,43 @@ internal static class DungeonEntryPlanTests
         var definition = catalog.Get(3);
         var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
+        foreach (var scenario in new[] { (Quest:3560,Dungeon:82,Level:(byte)65,Target:92247,Boss:92251),
+            (Quest:3753,Dungeon:104,Level:(byte)83,Target:76648,Boss:76649) })
+        {
+            var targetQuest = quests.Get(scenario.Quest);
+            var accepted = character with { Level = scenario.Level,
+                ActiveMainQuests = [new(5,checked((ushort)scenario.Quest),1) { AcceptanceId = Guid.NewGuid() }] };
+            That(DungeonEntryPlan.TryCreate(catalog,accepted,checked((uint)scenario.Dungeon),checked((uint)scenario.Quest),0,
+                out var middlePlan,out var middleReason,quest: targetQuest,quests: quests) &&
+                middlePlan is { QuestClearMap: not null } && middlePlan.QuestClearMap.Id == scenario.Target &&
+                middlePlan.BossMap.Id == scenario.Boss && middlePlan.BaseBossMap == middlePlan.BossMap &&
+                !middlePlan.IsTerminalMap(middlePlan.QuestClearMap),
+                "中途目标独立于真实Boss，保留原迷宫而不投影任务终点：" + scenario.Quest + "/" + middleReason);
+            var missingTarget = targetQuest with { IntData = [int.MaxValue] };
+            That(!DungeonEntryPlan.TryCreate(catalog,accepted,checked((uint)scenario.Dungeon),checked((uint)scenario.Quest),0,
+                out _,out _,quest: missingTarget,quests: quests),"未声明的地图号不能借中途清图放行");
+        }
+        var eggQuest = quests.Get(6032);
+        var eggAcceptance = new ActiveMainQuest(5,6032,1) { AcceptanceId = Guid.NewGuid() };
+        var eggCharacter = character with { Level = 92, CompletedQuests = [6031], ActiveMainQuests = [eggAcceptance] };
+        foreach (uint requestQuest in new uint[] { 6032,0 })
+        {
+            That(DungeonEntryPlan.TryCreate(catalog,eggCharacter,291100319,requestQuest,0,out var eggPlan,out var eggReason,
+                quest: requestQuest == 0 ? null : eggQuest,quests: quests) && eggPlan is
+                { BossMap.Id: 59914, BossMap.Position.X: 3, BossMap.Position.Y: 0,
+                  TerminalLayerMap.Id: 59914, TerminalLayerMap.Position.X: 2, TerminalLayerMap.Position.Y: 0 } &&
+                eggPlan.TerminalLayerAcceptanceId == eggAcceptance.AcceptanceId && eggPlan.TerminalLayerQuestId == eggAcceptance.QuestId &&
+                eggPlan.TerminalLayerQuestSlot == eggAcceptance.Slot && !eggPlan.IsTerminalMap(eggPlan.BossMap),
+                "被偷走的卵保留原Boss坐标并冻结原接取的实际末层，显式及普通0请求一致：" + eggReason);
+            var frozenEgg = eggPlan ?? throw new InvalidOperationException("真实末层入场计划未建立");
+            var information = DfoServer.Network.Builders.DungeonPackets.Information(frozenEgg);
+            That(information[8] == 3 && information[9] == 0, "终末别名不改变NOTI28原grid");
+            var actual = DungeonMonsterPlan.Create(rooms,frozenEgg.TerminalLayerMap!,eggCharacter.Id,100,
+                frozenEgg.BasisLevel,frozenEgg.PlayerTeam);
+            That(actual.Room.DeclaredType == "[boss]" && actual.Monsters.Any(monster => monster.MonsterId == 70215 &&
+                monster.IsScriptedBoss && monster.IsBoss && monster.CanReportDeath),
+                "真实末层保留MAP自身boss类型和完整dummy演员，不伪造剧情死亡");
+        }
         var plazaQuest = quests.Get(3946);
         var plazaCharacter = character with { Level = 88,CompletedQuests = [3945],
             ActiveMainQuests = [new(5,3946,1) { AcceptanceId = Guid.NewGuid() }] };
@@ -280,6 +317,31 @@ internal static class DungeonEntryPlanTests
         var unlinkedDefinition = definition with { Id = 17, Mazes = [unlinkedMaze] };
         var unlinkedQuest = clearTarget with { IntData = [456], Definition = clearTarget.Definition! with { Dungeons = [new(17,-1)] } };
         var pendingClear = otherCharacter with { ActiveMainQuests = [new(0,100,1)] };
+        var alias = fixtureBoss with { Kind = "layered", Position = fixtureStart.Position };
+        var aliasMaze = otherMaze with { LayeredMaps = [alias] };
+        var aliasAccepted = new ActiveMainQuest(0,100,1) { AcceptanceId = Guid.NewGuid() };
+        var aliasCharacter = otherCharacter with { ActiveMainQuests = [aliasAccepted] };
+        That(DungeonEntryPlan.TryCreate(unlinkedDefinition with { Mazes = [aliasMaze] },aliasCharacter,17,100,0,
+            out var aliasEntry,out _,quest: unlinkedQuest) && aliasEntry!.TerminalLayerMap == alias &&
+            aliasEntry.BossMap == fixtureBoss && aliasEntry.TerminalLayerAcceptanceId == aliasAccepted.AcceptanceId,
+            "不同编号及坐标的单地图资源同样冻结末层，不依赖真实任务号");
+        foreach (var invalid in new[]
+        {
+            aliasMaze with { LayeredMaps = [alias,alias with { Path = "map/second.map" }] },
+            aliasMaze with { LayeredMaps = [alias with { Path = "map/other.map" }] },
+            aliasMaze with { LayeredMaps = [alias,fixtureStart with { Kind = "layered" }] }
+        })
+            That(!DungeonEntryPlan.TryCreate(unlinkedDefinition with { Mazes = [invalid] },aliasCharacter,17,100,0,
+                out _,out _,quest: unlinkedQuest), "歧义、异路径及非末层不能回退为基础Boss通关");
+        That(!DungeonEntryPlan.TryCreate(unlinkedDefinition with { Mazes = [aliasMaze] },pendingClear,17,100,0,
+            out _,out _,quest: unlinkedQuest), "末层别名缺少真实接取身份时拒绝");
+        var clearedAlias = aliasCharacter with { ActiveMainQuests = [aliasAccepted with { ConditionState = 0 }] };
+        That(!DungeonEntryPlan.TryCreate(unlinkedDefinition with { Mazes = [aliasMaze] },clearedAlias,17,100,0,
+            out _,out _,quest: unlinkedQuest) &&
+            DungeonEntryPlan.TryCreate(unlinkedDefinition with { Mazes = [aliasMaze] },clearedAlias,17,100,0,
+                out var repeatedAlias,out _,allowClearedQuest:true,quest: unlinkedQuest) &&
+            repeatedAlias!.TerminalLayerMap == alias && repeatedAlias.TerminalLayerAcceptanceId == aliasAccepted.AcceptanceId,
+            "裸state0拒绝；原入口已核对持久清图凭据的同接取重入保留实际末层");
         var baseMapMaze = otherMaze with { MapSpecification = [fixtureStart,fixtureBoss with { Kind = "map" }] };
         var baseMapDefinition = definition with { Id = 17, Mazes = [baseMapMaze] };
         That(DungeonEntryPlan.TryCreate(baseMapDefinition,pendingClear,17,100,0,out var baseMapPlan,out _,quest: unlinkedQuest) &&

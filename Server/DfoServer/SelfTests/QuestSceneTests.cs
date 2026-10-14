@@ -6,6 +6,7 @@ using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
@@ -130,6 +131,8 @@ internal static class QuestSceneTests
             QuestFinishResult Finish(ushort id) => f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
         }
         VerifyPassiveSettlement(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
+        VerifyRoomProgress(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
+        VerifyTerminalLayerReentry(towns,characters,items,quests,skills,growth,dungeons,rooms,kills);
         QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             DungeonClearExperienceCatalog.Load(pvf),parameters);
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
@@ -211,6 +214,229 @@ internal static class QuestSceneTests
         }
     }
 
+    // 使用真实父3525/子3560与92247资源；死亡合成，不能替代客户端演出验收。
+    private static void VerifyRoomProgress(TownCatalog towns,CharacterCatalog characters,ItemResources items,
+        QuestCatalog quests,SkillLearningCatalog skills,CharacterGrowthCatalog growth,DungeonCatalog dungeons,
+        DungeonRoomCatalog rooms,DungeonKillExperienceCatalog kills,QuestRewardParameterCatalog parameters)
+    {
+        // 独立合成支线仅用于核对同一真实目标房的多接取原子性，不冒充PVF中另一个任务。
+        var siblingSource = quests.Get(3560);
+        var sibling = siblingSource with { Id = 29900,MainQuest = null,Grade = "[side]",
+            Definition = siblingSource.Definition! with { ExposedByNpc = true } };
+        quests = new(quests.All.Append(sibling).ToDictionary(row => row.Id));
+        var area = towns.Areas.Values.First(row => row.Level <= 65 && row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 82));
+        var done = new HashSet<int>(area.Quests) { 3145,4873,3524,3558,3559 };
+        if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town,area.Area,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
+        foreach (bool lost in new[] { false,true })
+        {
+            var clock = lost ? new ConsumableUseSessionTests.FakeClock() : null;
+            long? contractExpiry = clock?.GetUtcNow().AddSeconds(1).ToUnixTimeSeconds();
+            using var f = new Fixture(towns,characters,skills,growth,quests,false,65,done.ToArray(),loseGrowth: lost,
+                position: position,growthLossCondition: prepared => prepared.Result.RoomClearFact is not null,
+                contracts: lost ? items.Contracts : null,timeProvider: clock,growthContractExpiresAt: contractExpiry);
+            int expiredKills = 0;
+            That(Change(3525)?.Commit is not null && f.Read().ActiveMainQuests.Single().ConditionState == 1,
+                "真实父任务按已完成两个会面子任务进入最后清图阶段");
+            var opening = f.Session.EnterFormalDungeon(82,3525,0,dungeons,rooms)!;
+            That(opening is not null && opening.Entry.QuestClearMap is { Id: 92247,Position.X: 2,Position.Y: 1 } &&
+                opening.Entry.BossMap.Id == 92251 && opening.Entry.BaseBossMap == opening.Entry.BossMap &&
+                !f.Read().ActiveMainQuests.Any(row => row.QuestId == 3560),"父请求借真实子布局，不造接取或替换原Boss");
+            var receipt = f.Session.CompleteFormalDungeonLoading()!;
+            That(Change(3560)?.Commit is not null,"加载后真实31接取清图子任务并绑定本Run");
+            That(Change(29900)?.Commit is not null,"同图合成支线以独立接取身份绑定原Run");
+            var acceptance = f.Read().ActiveMainQuests.Single(row => row.QuestId == 3560).AcceptanceId;
+            var entry = opening!.Entry;
+            var target = entry.QuestClearMap!;
+            var path = QuestStoryRouteTests.Path(entry.Maze.StaticTopology,entry.StartMap.Position,target.Position);
+            foreach (var point in path.Skip(1))
+            {
+                KillRoom();
+                That(f.Session.MoveFormalDungeon(checked((byte)point.X),checked((byte)point.Y)) is not null,"真实门墙连接通往中途任务房");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+            }
+            var enemies = receipt.Monsters.Monsters.Where(row => row.IsBlocking).ToArray();
+            That(enemies.Length == 6 && enemies.All(row => row.MonsterId == 61801) &&
+                receipt.Monsters.Monsters.Any(row => row.MonsterId == 10448 && row.IsFriendly && !row.IsBlocking),
+                "任务房保留真实六敌与友方APC");
+            foreach (var monster in enemies[..^1]) Kill(monster);
+            That(f.Session.ReadClearedQuest(3560) is null && f.Session.EnableFormalDungeonSettlement() is null,
+                "少一敌人不能达成清图或提前许可结算");
+            var observation = FormalDungeonSessionTests.Observation(receipt,enemies[^1]);
+            var scripted = new NativeDungeonScriptedDeathObservation(enemies[^1].ObjectKey,0,true,new string('D',64));
+            var before = f.Read(); var online = f.Session.Selected; var originalIdentity = f.Session.DungeonSnapshot!.Identity;
+            uint basis = ExpectedExperience(enemies[^1]);
+            uint bonus = lost ? checked((uint)((ulong)basis * (uint)items.Contracts.Growth!.ExperiencePercent / 100)) : 0;
+            Character? savedBeforeRecovery = null;
+            QuestClearReceipt? savedClear = null;
+            if (lost)
+            {
+                TestCheck.Reject<IOException>(() => SubmitLast(),"合成脚本39的目标房事务提交后返回丢失");
+                That(f.Read().ActiveMainQuests.Single(row => row.QuestId == 3560).ConditionState == 0 &&
+                    ReferenceEquals(f.Session.Selected,online) && f.Session.DungeonSnapshot.Identity == originalIdentity &&
+                    f.Session.ReadClearedQuest(3560) is null,"数据库已达成但未确认Run，不提前读取或安装Selected");
+                savedBeforeRecovery = f.Read();
+                savedClear = f.Repository.LoadQuestClear(f.Owner,savedBeforeRecovery,3560)!;
+                That(bonus > 0 && savedBeforeRecovery.Learning.Experience == before.Learning.Experience + basis + bonus &&
+                    savedBeforeRecovery.Revision == before.Revision + 1 &&
+                    f.GrowthReceipt(savedClear.EventId) == (1L,(long)basis + bonus),
+                    "返回丢失前已按有效账户契约提交原死亡经验与唯一清图事件");
+                // 可控时钟推进到精确到期；同一死亡恢复必须保留到期前的原奖励。
+                clock!.Advance(TimeSpan.FromSeconds(1));
+                That(clock.GetUtcNow().ToUnixTimeSeconds() == contractExpiry &&
+                    before.Inventory.AccountWallet.ContractExpiry(84) == contractExpiry,
+                    "原角色账户真实期限不变，仅推进测试时钟至契约到期");
+            }
+            else
+            {
+                f.Sql("CREATE TRIGGER room_clear_abort AFTER INSERT ON character_quest_clear_receipts BEGIN SELECT RAISE(ABORT,'room clear rollback'); END");
+                TestCheck.Reject<SqliteException>(() => SubmitLast(),"中途清图末段SQL失败");
+                That(Same(before,f.Read()) && ReferenceEquals(f.Session.Selected,online) &&
+                    f.Session.DungeonSnapshot.Identity == originalIdentity,"回滚保留全部资产、任务与原epoch候选");
+                f.Sql("DROP TRIGGER room_clear_abort");
+            }
+            var result = SubmitLast();
+            var committed = f.Read(); var clear = f.Session.ReadClearedQuest(3560)!;
+            That(result.Outcome == DungeonRunOutcome.Accepted && result.ClearFact is null && f.Session.Phase == SessionPhase.Dungeon &&
+                f.Session.DungeonSnapshot!.Identity.Epoch == originalIdentity.Epoch+1 && committed.Revision == before.Revision+1 &&
+                clear.Clear is { MapId: 92247,SourceType: QuestClearSourceType.MonsterDeath } && clear.Clear.AcceptanceId == acceptance &&
+                f.Session.CanPublishQuestCondition(clear) && f.Session.EnableFormalDungeonSettlement() is null &&
+                result.Receipt!.Snapshot.LivingMonsters.Contains(receipt.Monsters.Monsters.Single(row => row.MonsterId == 10448).ObjectKey),
+                "原成长事务精确恢复并确认RoomClear；保留友方且不生成终点奖励或结算许可");
+            if (lost)
+                That(result.Reward is { } reward && reward.Amount == basis + bonus && reward.GrowthContractExperience == bonus &&
+                    result.GainedExperience == basis + bonus && Same(savedBeforeRecovery!,committed) &&
+                    clear.Clear.EventId == savedClear!.EventId && f.GrowthReceipt(clear.Clear.EventId) == (1L,(long)basis + bonus),
+                    "到期后精确恢复沿用原死亡额度和契约份额，不重写revision、清图身份或再发经验");
+            That(f.Session.ReadClearedQuest(29900) is { } siblingClear && siblingClear.Clear.EventId == clear.Clear.EventId &&
+                siblingClear.Clear.AcceptanceId != clear.Clear.AcceptanceId &&
+                committed.ActiveMainQuests.Single(row => row.QuestId == 29900).ConditionState == 0,
+                "同次实际清房原子推进全部合法匹配接取，凭据保持各自AcceptanceId");
+            That(SubmitLast().Outcome == DungeonRunOutcome.Duplicate && Same(committed,f.Read()),
+                "确认后的旧epoch死亡仅重复忽略，不二次授予经验或进度");
+            if (lost) That(f.GrowthReceipt(clear.Clear.EventId) == (1L,(long)basis + bonus),
+                "确认后的重复死亡不增加原事件收据或改写冻结额度");
+            var toBoss = QuestStoryRouteTests.Path(entry.Maze.StaticTopology,target.Position,entry.BossMap.Position);
+            foreach (var point in toBoss.Skip(1))
+            {
+                KillRoom();
+                That(f.Session.MoveFormalDungeon(checked((byte)point.X),checked((byte)point.Y)) is not null,"清图后继续原Boss路线");
+                That(!f.Session.CanPublishQuestCondition(clear),"过房使旧发布快照失效");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+                That(f.Session.ReadClearedQuest(3560)?.Clear == clear.Clear,"后续房间仍读取本Run具体已提交清图事实");
+            }
+            KillRoom();
+            if (lost) That(expiredKills > 0,"恢复后确有新死亡经过到期契约分支，不仅检查旧事件重放");
+            That(f.Session.Phase == SessionPhase.Settlement && f.Session.ReadClearedQuest(3560)?.Clear == clear.Clear &&
+                f.Session.EnableFormalDungeonSettlement() is not null,"真正Boss才产生结算，中途任务凭据不丢失");
+            That(f.Session.ReturnFromFormalDungeon() is not null,"已达成子任务可以保留凭据回城");
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            That(f.Session.ReadClearedQuest(3560)?.Clear == clear.Clear,"重登从原growth外键恢复中途清图资格");
+            var finished = f.Session.FinishQuest(3560,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
+            That(finished.Outcome == QuestFinishOutcome.Committed && f.Read().CompletedQuests.Contains(3560) &&
+                f.Read().ActiveMainQuests.Single(row => row.QuestId == 3525).ConditionState == 0,"子任务真实交付后按原顺序推进父任务");
+
+            QuestLifecycleReceipt? Change(ushort id) => f.Session.ChangeQuest(id,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces);
+            FormalDungeonDeathResult SubmitLast() => lost ? f.Session.ObserveFormalDungeonScriptedDeath(scripted,kills,growth) :
+                f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
+            uint ExpectedExperience(DungeonPlannedMonster monster) => DungeonKillExperiencePolicy.Calculate(
+                kills.GetExperience(monster.CandidateLevel),entry.ExperienceWeight,kills.GetDifficultyRate(entry.Difficulty),
+                kills.GetMonsterRate(monster.ExperienceType,monster.AiCharacter is null && entry.NamedMonsters.Contains(monster.MonsterId)),
+                f.Session.Selected!.Level,monster.CandidateLevel);
+            void Kill(DungeonPlannedMonster monster)
+            {
+                uint expected = ExpectedExperience(monster);
+                bool expired = clock is not null && clock.GetUtcNow().ToUnixTimeSeconds() >= contractExpiry!.Value;
+                var death = f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,monster),kills,growth);
+                That(death.Outcome == DungeonRunOutcome.Accepted,"合成已登记敌对死亡沿原成长事务提交");
+                if (expired)
+                {
+                    That(death.Reward is { GrowthContractExperience: 0 } reward && reward.Amount == expected &&
+                        death.GainedExperience == expected,"原奖励恢复后新的合法死亡按已到期账户资格发基础经验，不沿用旧契约加成");
+                    expiredKills++;
+                }
+            }
+            void KillRoom()
+            {
+                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).OrderBy(row => row.IsBoss).ToArray())
+                    if (f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey)) Kill(monster);
+            }
+        }
+    }
+
+    private static void VerifyTerminalLayerReentry(TownCatalog towns, CharacterCatalog characters, ItemResources items,
+        QuestCatalog quests, SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons,
+        DungeonRoomCatalog rooms, DungeonKillExperienceCatalog kills)
+    {
+        var area = towns.Areas.Values.First(row => row.Level <= 92 && row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 291100319));
+        var done = new HashSet<int>(area.Quests) { 6031 };
+        if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+        foreach (int id in area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0 && !gate.Quests.Contains(6032)).Quests)
+            done.Add(id);
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town,area.Area,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
+        using var f = new Fixture(towns,characters,skills,growth,quests,false,92,done.ToArray(),position:position);
+        That(f.Session.ChangeQuest(6032,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
+            "真实搏击俱乐部入口按前置接取末层清图任务");
+        var original = f.Read().ActiveMainQuests.Single(row => row.QuestId == 6032);
+        // 裸scalar0没有任何死亡/场景持久凭据，不能通过普通0入口冒充已批准重入。
+        f.Sql("UPDATE character_active_main_quests SET condition_state=0 WHERE quest_id=6032");
+        Reselect();
+        That(f.Session.EnterFormalDungeon(291100319,0,0,dungeons,rooms) is null,
+            "真实Session普通0拒绝无持久清图凭据的裸state0");
+        f.Sql("UPDATE character_active_main_quests SET condition_state=1 WHERE quest_id=6032");
+        Reselect();
+        var opening = f.Session.EnterFormalDungeon(291100319,0,0,dungeons,rooms);
+        That(opening is { Entry.TerminalLayerMap: { Position.X: 2, Position.Y: 0, Id: 59914 } } &&
+            opening.Entry.TerminalLayerQuestId == original.QuestId && opening.Entry.TerminalLayerQuestSlot == original.Slot &&
+            opening.Entry.TerminalLayerAcceptanceId == original.AcceptanceId,
+            "普通0冻结实际layout任务三元组，不把请求0当目标任务");
+        var receipt = opening ?? throw new InvalidOperationException("末层任务实例未建立");
+        var target = receipt.Entry.TerminalLayerMap!;
+        ClearTerminal(receipt);
+        var first = f.Session.ReadClearedQuest(6032)?.Clear;
+        That(first is not null && first.AcceptanceId == original.AcceptanceId && f.Session.Phase == SessionPhase.Settlement,
+            "合成可信死亡经真实Session和SQLite形成原接取持久凭据（非客户端验收）");
+        That(f.Session.ReturnFromFormalDungeon() is not null,"未交付任务可沿原退出回城");
+        Reselect();
+        var repeated = f.Session.EnterFormalDungeon(291100319,0,0,dungeons,rooms);
+        That(repeated is not null && repeated.Entry.TerminalLayerMap == target && repeated.Entry.TerminalLayerAcceptanceId == original.AcceptanceId &&
+            f.Repository.LoadQuestClear(f.Owner,f.Session.Selected!,6032) == first &&
+            f.Read().ActiveMainQuests.Single(row => row.QuestId == 6032).ConditionState == 0,
+            "同接取已达成未34后普通0凭原持久账本重入，保留末层及首清图凭据");
+        ClearTerminal(repeated!);
+        That(f.Session.Phase == SessionPhase.Settlement && f.Repository.LoadQuestClear(f.Owner,f.Session.Selected!,6032) == first &&
+            !f.Read().CompletedQuests.Contains(6032), "再次真实末层死亡不覆盖首清图凭据或代替34领奖");
+
+        void ClearTerminal(FormalDungeonReceipt entered)
+        {
+            var path = QuestStoryRouteTests.Path(entered.Entry.Maze.StaticTopology,entered.Entry.StartMap.Position,target.Position);
+            for (int index = 0; index < path.Length; index++)
+            {
+                var loaded = f.Session.CompleteFormalDungeonLoading()!;
+                Clear(loaded);
+                if (index == path.Length-1) break;
+                That(f.Session.MoveFormalDungeon(checked((byte)path[index+1].X),checked((byte)path[index+1].Y)) is not null,
+                    "真实路线按原连接到达末层入口");
+            }
+            That(f.Session.Phase == SessionPhase.Dungeon &&
+                f.Session.MoveFormalDungeon(checked((byte)target.Position.X),checked((byte)target.Position.Y),1) is not null,
+                "中途清房不结算，按原kind1进入真实末层");
+            Clear(f.Session.CompleteFormalDungeonLoading()!);
+        }
+
+        void Clear(FormalDungeonReceipt loaded)
+        {
+            foreach (var monster in loaded.Monsters.Monsters.Where(row => row.CanReportDeath).OrderBy(row => row.IsBoss).ToArray())
+                That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(loaded,monster),kills,growth).Outcome == DungeonRunOutcome.Accepted,
+                    "末层重入回归复用合成死亡与原成长提交入口");
+        }
+        void Reselect() { f.Session.ReturnToRoster(); f.Session.Select(0,resumeTown:true); f.Session.MarkReady(); }
+    }
+
     internal sealed class Fixture : IDisposable
     {
         readonly string root = Path.Combine(Path.GetTempPath(),"S5A9-quest-scene-"+Guid.NewGuid().ToString("N"));
@@ -220,17 +446,33 @@ internal static class QuestSceneTests
         public CharacterRepository Repository { get; }
         public GameSession Session { get; }
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
-            byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null)
+            byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
+            Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
+            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
             var learning = SkillPointLedger.Synchronize(job,0,level,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(level) },skills);
-            Repository.Create(Owner,candidate with { Level = level, CompletedQuests = completed ?? [3145,4873], InitialLearning = learning,
+            var created = Repository.Create(Owner,candidate with { Level = level, CompletedQuests = completed ?? [3145,4873], InitialLearning = learning,
                 AcceptedStoryLevel = position is null ? candidate.AcceptedStoryLevel : level });
-            Session = new(lost || loseGrowth ? new LostResultRepository(Repository) { LoseSceneResult = lost, LoseCompletionResult = false, LoseGrowthResult = loseGrowth } : Repository,towns,Owner,questCatalog: quests);
+            if (growthContractExpiresAt is { } expiry)
+                Repository.CommitInventory(Owner,created,new(created.Inventory,created.Inventory with
+                    { AccountWallet = created.Inventory.AccountWallet.SetContractExpiry(84,expiry) },"test_growth_contract"));
+            Session = new(lost || loseGrowth ? new LostResultRepository(Repository) { LoseSceneResult = lost, LoseCompletionResult = false,
+                LoseGrowthResult = loseGrowth,GrowthLossCondition = growthLossCondition } : Repository,towns,Owner,questCatalog: quests,
+                contracts: contracts,timeProvider: timeProvider);
             Session.Select(0, resumeTown: position is not null); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner,0);
+        public (long Count,long Amount) GrowthReceipt(Guid eventId)
+        {
+            using var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "SELECT count(*),coalesce(max(amount),0) FROM character_dungeon_growth_receipts WHERE character_id=$id AND event_id=$event";
+            command.Parameters.AddWithValue("$id",Read().Id); command.Parameters.AddWithValue("$event",eventId.ToString("N"));
+            using var reader = command.ExecuteReader(); reader.Read();
+            return (reader.GetInt64(0),reader.GetInt64(1));
+        }
         public Dictionary<(byte,byte),(byte,byte)> TravelPaths(TownCatalog towns)
         {
             if (towns.IsRoom(Session.Selected!.Position)) That(Session.LeaveRoom(),"选角后从真实房间返回城镇");

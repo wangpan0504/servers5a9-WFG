@@ -13,6 +13,12 @@ internal static class DungeonRoomCatalogTests
     {
         int checks = Count;
         var fixture = new Fixture();
+        That(fixture.Parse([fixture.Tag("type"),fixture.String("[boss]")]).DeclaredType == "[boss]" &&
+            fixture.Parse(fixture.Monster()).DeclaredType is null,
+            "MAP真实类型独立保留，迷宫身份不补造缺失类型");
+        That(fixture.Parse([fixture.Tag("type"),fixture.String("[boss]"),fixture.Tag("type"),fixture.String("[boss]")]).DeclaredType is null &&
+            fixture.Parse([fixture.Tag("type"),fixture.String("[boss]"),new(0,1)]).DeclaredType is null,
+            "重复或多值MAP类型不能授予末层终点资格");
         var npcTokens = fixture.Block("NPC", [new(0,1000),fixture.String("[left]"),new(0,0),new(0,0),new(0,0),
             new(0,1298),fixture.String("[left]"),new(0,485),new(0,284),new(0,0)]);
         var npcRoom = fixture.Parse(npcTokens);

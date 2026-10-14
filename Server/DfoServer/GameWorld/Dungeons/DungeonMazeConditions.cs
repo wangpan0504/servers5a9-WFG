@@ -80,7 +80,8 @@ internal static class DungeonMazeConditions
             }
             else if (section.Tag == "/warp map condition")
             {
-                if (!inside || source is not null) throw new InvalidDataException("条件传送缺少完整坐标对");
+                if (!inside || source is not null || section.Tokens.Count != 0)
+                    throw new InvalidDataException("条件传送缺少完整坐标对或结束标记无效");
                 inside = false;
             }
             else if (inside)
@@ -95,8 +96,9 @@ internal static class DungeonMazeConditions
                 }
                 else
                 {
-                    if (source is null || result.Any(row => row.Source == source.Value))
-                        throw new InvalidDataException("条件传送起点缺失或不唯一");
+                    // 声明保留有向多目标；是否能用于同格替换由具体消费者检查。
+                    if (source is null || result.Any(row => row.Source == source.Value && row.Destination == point))
+                        throw new InvalidDataException("条件传送起点缺失或有向边重复");
                     result.Add(new(source.Value,point)); source = null;
                 }
             }

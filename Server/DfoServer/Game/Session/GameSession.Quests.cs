@@ -112,14 +112,16 @@ internal sealed partial class GameSession
 
     public QuestConditionReceipt? ReadClearedQuest(ushort questId) => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Settlement))
+        if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement))
             return null;
+        if (Phase != SessionPhase.Town && formalDungeon?.Run.HasPendingDeath == true) return null;
         var clear = repository.LoadQuestClear(owner, Selected, questId);
         if (clear is null)
             return null;
-        var identity = Phase == SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
-        if (Phase == SessionPhase.Settlement && (identity is null || identity.InstanceId != clear.InstanceId ||
-            identity.TaskAttempt != clear.TaskAttempt || identity.Epoch != clear.Epoch))
+        var identity = Phase == SessionPhase.Town ? null : formalDungeon?.Run.Snapshot.Identity;
+        if (Phase != SessionPhase.Town && (identity is null || identity.InstanceId != clear.InstanceId ||
+            identity.TaskAttempt != clear.TaskAttempt || !(formalDungeon!.Run.HasCommittedRoomClear(clear) ||
+                Phase == SessionPhase.Settlement && identity.Epoch == clear.Epoch)))
             return null;
         return new QuestConditionReceipt(Selected, clear, owner.Generation, SelectionEpoch, identity);
     });
@@ -128,5 +130,7 @@ internal sealed partial class GameSession
         Ready && owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch &&
         ReferenceEquals(Selected, receipt.Character) &&
         (receipt.DungeonIdentity is null ? Phase == SessionPhase.Town :
-            Phase == SessionPhase.Settlement && formalDungeon?.Run.Snapshot.Identity == receipt.DungeonIdentity));
+            Phase is SessionPhase.Dungeon or SessionPhase.Settlement && formalDungeon?.Run.Snapshot.Identity == receipt.DungeonIdentity &&
+                (formalDungeon.Run.HasCommittedRoomClear(receipt.Clear) ||
+                    Phase == SessionPhase.Settlement && receipt.DungeonIdentity.Epoch == receipt.Clear.Epoch)));
 }

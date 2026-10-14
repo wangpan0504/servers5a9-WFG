@@ -36,6 +36,7 @@ internal sealed partial class GameSession
         public Dictionary<(DungeonMap Map, int Template), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
+        public (PreparedDungeonDeath Death, DungeonExperienceReward Reward, DateTimeOffset At)? PendingDeathReward { get; set; }
         public DfoServer.Game.Tutorials.TutorialCheckpointPlan? PendingTutorialClear { get; set; }
         public ushort? TutorialClearTarget { get; set; }
     }
@@ -95,7 +96,8 @@ internal sealed partial class GameSession
         }
         bool allowClearedQuest = questId is > 0 and < 30000 &&
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
-        if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _, allowClearedQuest, quest,draw,questCatalog))
+        if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _, allowClearedQuest, quest,draw,questCatalog,
+            allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null))
             return null;
         if (entry!.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
             return null;
@@ -108,6 +110,13 @@ internal sealed partial class GameSession
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null };
+
+        // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
+        bool HasOriginalTerminalClear(ActiveMainQuest original) =>
+            repository.LoadQuestClear(owner,expected,original.QuestId) is { } clear &&
+            clear.QuestId == original.QuestId && clear.QuestSlot == original.Slot && clear.AcceptanceId == original.AcceptanceId &&
+            clear.DungeonId == dungeonId && questCatalog is not null && questCatalog.TryGet(original.QuestId,out var targetQuest) &&
+            QuestClearEligibility.IsSingleMap(targetQuest) && clear.MapId == targetQuest.IntData[0];
     }
 
     PreparedFormalDungeon? PrepareFormalDungeonResources(Character expected,long epoch,DungeonEntryPlan entry,
@@ -351,16 +360,25 @@ internal sealed partial class GameSession
             return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey)
                 { ReportedTarget = target };
         }
-        var reward = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
-        uint contractExperience = GrowthContractPolicy.ExperienceBonus(Selected, reward.Amount, contracts?.Growth,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        reward = reward with { Amount = checked(reward.Amount + contractExperience), GrowthContractExperience = contractExperience };
+        // 契约跨到期或提交返回丢失时仍恢复原死亡的奖励与规划时刻，不重算已冻结额度。
+        if (dungeon.PendingDeathReward is null)
+        {
+            var at = (timeProvider ?? TimeProvider.System).GetUtcNow();
+            var basis = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
+            uint bonus = GrowthContractPolicy.ExperienceBonus(Selected, basis.Amount, contracts?.Growth, at.ToUnixTimeSeconds());
+            dungeon.PendingDeathReward = (pending, basis with
+                { Amount = checked(basis.Amount + bonus), GrowthContractExperience = bonus }, at);
+        }
+        var frozen = dungeon.PendingDeathReward.Value;
+        if (!ReferenceEquals(frozen.Death, pending))
+            throw new InvalidOperationException("待提交死亡奖励不能借用另一事件的候选");
+        var reward = frozen.Reward;
         FrozenDungeonGroundDeath? loot = null;
         if (dungeon.Ground.HasReservation(pending.Death.MonsterKey))
             loot = dungeon.DropPlans.TryGetValue(pending.Death.MonsterKey, out var generation)
                 ? dungeon.Ground.GetOrFreezeAssets(pending, () =>
                 {
-                    var now = DateTimeOffset.UtcNow;
+                    var now = frozen.At;
                     // 当前正式Run为单人；四档是队内有效成长契约人数，不是难度或怪物品级。
                     int bonus = GrowthContractPolicy.Active(Selected, contracts?.Growth, now.ToUnixTimeSeconds()) &&
                         !dungeon.Entry.IsTutorial && !dungeon.Entry.IsTrainingRoom ? contracts!.Growth!.IndependentDropPercent[0] : 0;
@@ -377,9 +395,10 @@ internal sealed partial class GameSession
         if (dungeon.QuestDrops is { } resources)
             dungeon.PendingQuestDrop ??= QuestDropPlan.Create(Selected,dungeon.Run.Entry,resources,pending.Death.EventId,
                 pending.Death.Identity,pending.Result.Snapshot.CurrentMap.Id,pending.Monster.MonsterId,pending.Monster.EnemyType,pending.Result.ClearFact is not null,
-                dungeon.Draw,DateTimeOffset.UtcNow);
+                dungeon.Draw,frozen.At);
         var questDrop = dungeon.PendingQuestDrop;
         var committed = CommitDungeonGrowth(SelectionEpoch, Selected, dungeon.Run, pending, reward, growth, loot, questDrop);
+        dungeon.PendingDeathReward = null;
         dungeon.PendingQuestDrop = null;
         if (loot is not null && !dungeon.Ground.PublishCommitted(pending, loot))
             throw new InvalidOperationException("已提交掉落的原准备不能发布");
@@ -398,6 +417,7 @@ internal sealed partial class GameSession
             ReportedTarget = target,
             PreviousQuests = previousQuests,
             QuestDropSlots = questDrop?.Inventory.ChangedSlots ?? [],
+            RoomClearFact = committed.Death.RoomClearFact,
             CulledMonsterKeys = committed.Death.CulledMonsterKeys
         };
     });

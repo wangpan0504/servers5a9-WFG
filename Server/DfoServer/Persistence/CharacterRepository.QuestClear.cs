@@ -68,6 +68,11 @@ internal sealed partial class CharacterRepository
     {
         var entry = run.Entry;
         var clear = prepared.Result.ClearFact;
+        var roomClear = prepared.Result.RoomClearFact;
+        var clearIdentity = clear?.Identity ?? roomClear?.Identity;
+        var clearMap = clear?.ClearMap ?? roomClear?.Map;
+        uint? clearDungeon = clear?.DungeonId ?? roomClear?.DungeonId;
+        var clearDeaths = clear?.ConfirmedDeathEvents ?? roomClear?.ConfirmedDeathEvents;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$id", current.Id);
         command.Parameters.AddWithValue("$event", prepared.Death.EventId.ToString("N"));
@@ -81,26 +86,26 @@ internal sealed partial class CharacterRepository
             while (reader.Read())
             {
                 Guid acceptance = Guid.ParseExact(reader.GetString(1), "N");
-                if (clear is null || reader.GetString(0) != owner.Account || !entry.QuestAcceptances.Any(row =>
+                if (clearIdentity is null || reader.GetString(0) != owner.Account || !entry.QuestAcceptances.Any(row =>
                     row.AcceptanceId == acceptance && row.QuestId == reader.GetInt32(2) && row.Slot == reader.GetInt32(3)) ||
                     reader.GetString(9) != nameof(QuestClearSourceType.MonsterDeath) ||
-                    reader.GetString(4) != clear.Identity.InstanceId.ToString("N") || reader.GetInt64(5) != clear.Identity.TaskAttempt ||
-                    reader.GetInt64(6) != clear.Identity.Epoch || reader.GetInt32(7) != clear.DungeonId || reader.GetInt32(8) != clear.ClearMap?.Id)
+                    reader.GetString(4) != clearIdentity.InstanceId.ToString("N") || reader.GetInt64(5) != clearIdentity.TaskAttempt ||
+                    reader.GetInt64(6) != clearIdentity.Epoch || reader.GetInt32(7) != clearDungeon || reader.GetInt32(8) != clearMap?.Id)
                     throw new InvalidDataException("清图重放的接取身份、实例或地图不一致");
                 saved.Add(acceptance);
             }
         }
-        if (clear is null) return;
+        if (clearIdentity is null) return;
         // 接取身份在入场时冻结；资源缺失或玩法未支持不产生完成事实。
         var targets = current.ActiveMainQuests.Where(row => row.ConditionState > 0 && QuestHuntProgress.Bound(row, entry) &&
             quests is not null && quests.TryGet(row.QuestId, out var quest) && QuestCoverage.HasOrdinaryDeclarations(quest) &&
-            (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 && quest.IntData[0] == clear.ClearMap?.Id &&
+            (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 && quest.IntData[0] == clearMap?.Id &&
                 (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
-             QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue &&
+             clear is not null && QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue &&
                 QuestDungeonClearProgress.Matches(quest,entry,run) && QuestDungeonClearProgress.ValidScalar(quest,row.ConditionState))).ToArray();
         if (targets.Length == 0 && saved.Count == 0) return;
-        if (!QuestClearEligibility.TryValidate(entry, prepared))
-            throw new InvalidDataException("任务清图需要同一正式实例末次可信死亡事实");
+        if (!(roomClear is null ? QuestClearEligibility.TryValidate(entry, prepared) : QuestClearEligibility.TryValidateRoom(run,prepared)))
+            throw new InvalidDataException("任务清图需要同一正式实例的终点或目标房末次可信死亡事实");
         if (verifyOnly)
         {
             // 中间次数只有growth账本和持久scalar；最终归零才产生可领奖清图凭据。
@@ -110,8 +115,8 @@ internal sealed partial class CharacterRepository
             return;
         }
         if (saved.Count != 0) throw new InvalidDataException("新死亡不能覆盖已有清图账本");
-        command.Parameters.AddWithValue("$instance", clear.Identity.InstanceId.ToString("N"));
-        command.Parameters.AddWithValue("$attempt", clear.Identity.TaskAttempt);
+        command.Parameters.AddWithValue("$instance", clearIdentity.InstanceId.ToString("N"));
+        command.Parameters.AddWithValue("$attempt", clearIdentity.TaskAttempt);
         command.CommandText = """
             SELECT event_id FROM character_dungeon_growth_receipts
             WHERE character_id=$id AND instance_id=$instance AND task_attempt=$attempt
@@ -119,14 +124,14 @@ internal sealed partial class CharacterRepository
         var committedDeaths = new HashSet<Guid>();
         using (var reader = command.ExecuteReader())
             while (reader.Read()) committedDeaths.Add(Guid.ParseExact(reader.GetString(0), "N"));
-        if (!committedDeaths.SetEquals(clear.ConfirmedDeathEvents))
+        if (!committedDeaths.SetEquals(clearDeaths!))
             throw new InvalidDataException("清图事件集合与本实例已提交死亡不一致");
         command.Parameters.AddWithValue("$account", owner.Account);
-        command.Parameters.AddWithValue("$epoch", clear.Identity.Epoch);
+        command.Parameters.AddWithValue("$epoch", clearIdentity.Epoch);
         command.Parameters.AddWithValue("$generation", owner.Generation);
         command.Parameters.AddWithValue("$revision", checked(current.Revision + 1));
-        command.Parameters.AddWithValue("$dungeon", clear.DungeonId);
-        command.Parameters.AddWithValue("$map", clear.ClearMap!.Id);
+        command.Parameters.AddWithValue("$dungeon", clearDungeon!.Value);
+        command.Parameters.AddWithValue("$map", clearMap!.Id);
         command.Parameters.AddWithValue("$slot", 0); command.Parameters.AddWithValue("$quest", 0);
         command.Parameters.AddWithValue("$before", 0L); command.Parameters.AddWithValue("$remaining", 0L);
         command.Parameters.AddWithValue("$acceptance", "");

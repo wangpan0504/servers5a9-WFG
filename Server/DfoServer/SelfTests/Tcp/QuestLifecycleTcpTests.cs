@@ -654,7 +654,11 @@ internal static class QuestLifecycleTcpTests
         VerifyLargeResearchMaterials(extra,resources,growth);
         VerifyImageCommunication(extra,resources,growth);
         VerifyAlbertRequest(extra,resources,growth);
+        AlbertHuntTcpTests.Verify(extra,resources,growth,DrainNotifications);
         QuestPassiveClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
+        QuestRoomClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
+        ForestChildAcceptanceTcpTests.Verify(extra,resources,growth,DrainNotifications);
+        MiddleQuestEntryTcpTests.Verify(extra,resources,growth);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");

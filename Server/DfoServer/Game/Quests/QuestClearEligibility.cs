@@ -40,6 +40,25 @@ internal static class QuestClearEligibility
             matches[0].ConditionState == 1 && matches[0].AcceptanceId == entry.QuestAcceptanceId;
     }
 
+    internal static bool TryValidateRoom(SinglePlayerDungeonRun run, PreparedDungeonDeath prepared)
+    {
+        var entry = run.Entry; var death = prepared.Death; var clear = prepared.Result.RoomClearFact;
+        return (run.IsPendingDeath(prepared) || run.IsConfirmedDeath(prepared)) &&
+            prepared.Result.ClearFact is null && clear is not null && !entry.IsTutorial && !entry.IsClassExperience &&
+            entry.CharacterId != 0 && entry.DungeonId > 0 && entry.BaseBossMap.Kind == "boss" &&
+            (entry.QuestId == 0 ? entry.ActiveQuestSlot == byte.MaxValue && entry.QuestAcceptanceId == Guid.Empty :
+                entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty) &&
+            prepared.Monster.IsBlocking && entry.QuestClearMap == clear.Map && !entry.IsTerminalMap(clear.Map) &&
+            clear.Map == prepared.Result.Snapshot.CurrentMap && clear.DungeonId == entry.DungeonId &&
+            prepared.Result.Snapshot.Phase == SinglePlayerDungeonPhase.Dungeon &&
+            clear.Identity.CharacterId == entry.CharacterId && clear.Identity.QuestId == entry.QuestId &&
+            clear.Identity.TaskAttempt > 0 && clear.Identity.InstanceId != Guid.Empty && death.Identity.Epoch < long.MaxValue &&
+            clear.Identity == prepared.Result.Snapshot.Identity && clear.Identity == (death.Identity with { Epoch = death.Identity.Epoch + 1 }) &&
+            death.EventId != Guid.Empty && clear.ConfirmedDeathEvents.Contains(death.EventId) &&
+            !clear.ConfirmedDeathEvents.Contains(Guid.Empty) &&
+            clear.ConfirmedDeathEvents.Count == clear.ConfirmedDeathEvents.Distinct().Count();
+    }
+
     internal static bool TryValidateScene(SinglePlayerDungeonRun run, PreparedDungeonPassiveClear prepared, QuestSceneEvent scene)
     {
         var entry = run.Entry; var clear = prepared.Result.ClearFact; var source = prepared.Source;

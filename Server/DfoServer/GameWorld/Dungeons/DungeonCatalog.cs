@@ -198,7 +198,13 @@ internal sealed class DungeonCatalog
                 layers.Add(layer);
             }
         }
-        if ((maps is null || maps.SequenceEqual(maze.MapSpecification!)) && layers.SequenceEqual(maze.LayeredMaps)) return maze;
+        if ((maps is null || maps.SequenceEqual(maze.MapSpecification!)) && layers.SequenceEqual(maze.LayeredMaps))
+        {
+            if (maze.BossEntrance is null || maze.WarpMaps.Count == 0) return maze;
+            // 候选未变化仍复验实际Boss入口声明；直接调用或with后的迷宫不能绕过来源唯一性。
+            var conditional = ConditionalMaps(maze);
+            return maze.ConditionalMaps.SequenceEqual(conditional) ? maze : maze with { ConditionalMaps = conditional };
+        }
         var resolved = maze with { MapSpecification = maps is null ? null : Freeze(maps), LayeredMaps = Freeze(layers),
             StoryStages = maps is null ? maze.StoryStages : Freeze(maps.Where(map => map.StoryStageIndex >= 0).OrderBy(map => map.StoryStageIndex)) };
         return resolved with { ConditionalMaps = ConditionalMaps(resolved) };
@@ -217,6 +223,9 @@ internal sealed class DungeonCatalog
         var maps = new List<DungeonMap>();
         foreach (var warp in maze.WarpMaps)
         {
+            // Boss入口只支持每个逻辑房间唯一替换，多目标声明不能任取其一。
+            if (maps.Any(map => map.Position == warp.Source))
+                throw new InvalidDataException("Boss入口条件传送的同一来源存在多个目标");
             var source = maze.MapSpecification.Where(map => map.Position == warp.Source && map.StoryStageIndex < 0).ToArray();
             var destination = maze.MapSpecification.Where(map => map.Position == warp.Destination && map.StoryStageIndex < 0).ToArray();
             if (source.Length != 1 || destination.Length != 1)
