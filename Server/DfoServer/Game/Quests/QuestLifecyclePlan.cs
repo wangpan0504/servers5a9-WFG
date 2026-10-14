@@ -60,6 +60,10 @@ internal sealed class QuestLifecyclePlan
         var changed = after.FirstOrDefault(row => expected.ActiveMainQuests.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState));
         if (changed is null && drops?.Outcomes.Length > 0)
             changed = after.First(row => row.AcceptanceId == drops.Outcomes[0].AcceptanceId);
+        // 迷宫物件条件可以独立于任务目标；仍借用本实例真实接取身份保存场景事件，不伪造任务推进。
+        if (changed is null && entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] &&
+            condition.TargetId == sceneEvent.TemplateId)
+            changed = after.SingleOrDefault(row => row.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(row, entry));
         return changed is null ? null : new(expected,QuestLifecycleAction.Condition,changed.QuestId,changed.AcceptanceId,
             after,inventory,sceneEvent);
     }

@@ -648,6 +648,7 @@ internal static class QuestLifecycleTcpTests
         VerifyNonBossSettlement(extra,resources,growth);
         VerifyMutationEntry(extra,resources,growth);
         VerifyLayeredBossSettlement(extra,resources,growth);
+        VerifyPassiveTerminalSettlement(extra,resources,growth);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
@@ -657,6 +658,96 @@ internal static class QuestLifecycleTcpTests
             That(body[0] == 0 && body.Length == 3+123*U16(body,1),"独立读器确认NOTI14 Main行长度");
             int offset = Enumerable.Range(0,U16(body,1)).Select(at => 3+123*at).Single(at => U16(body,at) == slot);
             That(U32(body,offset+2) == item && U32(body,offset+6) == balance,"NOTI14钱包slot与实际绝对余额一致");
+        }
+    }
+
+    static void VerifyPassiveTerminalSettlement(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
+    {
+        var dungeons = DungeonCatalog.Load(resources.Archive);
+        foreach (var scenario in new[] { (Quest:3205,Dungeon:25,Level:28,Previous:3204,Map:53493,Request:3205),
+            (Quest:3210,Dungeon:27,Level:29,Previous:3209,Map:53508,Request:3210),
+            (Quest:3205,Dungeon:25,Level:28,Previous:3204,Map:53493,Request:0) })
+        {
+            var done = new HashSet<int> { scenario.Previous };
+            var area = resources.Towns.Areas.Values.First(row => row.Level <= scenario.Level && row.DungeonWorldMap is { } world &&
+                resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == scenario.Dungeon));
+            done.UnionWith(area.Quests);
+            if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+            var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+            var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
+                checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+            Character created;
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+            {
+                // 只准备真实资源入口资格；不主动发送46替代客户端尚未收到的结算许可。
+                var candidate = CharacterCreation.Prepare("Quest"+scenario.Quest+(scenario.Request == 0 ? "Z" : ""),resources.Characters.Get(0),position,position,resources.Learning.Get);
+                var learning = SkillPointLedger.Synchronize(0,0,checked((byte)scenario.Level),candidate.InitialLearning with
+                    { Experience=growth.GetLevelStartExperience(checked((byte)scenario.Level)) },resources.Learning);
+                created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level=checked((byte)scenario.Level),
+                    AcceptedStoryLevel=checked((uint)scenario.Level),CompletedQuests=done.ToArray(),InitialLearning=learning });
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+                byte[] information=[];
+                var map=FormalDungeonTcpTests.Enter(peer,checked((ushort)scenario.Quest),checked((uint)scenario.Dungeon),row => information=row,
+                    requestQuestId: checked((ushort)scenario.Request));
+                var maze=dungeons.Get(scenario.Dungeon).Mazes.Single(row => row.SourceOrdinal == information[7]);
+                var path=QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),new(information[8],information[9]));
+                int enabled=0, bossChecks=0;
+                foreach (var point in path)
+                {
+                    FormalDungeonTcpTests.Load(peer); Drain();
+                    bool terminal=U32(map,14) == scenario.Map;
+                    if (terminal)
+                    {
+                        That(enabled == 0,"资源销毁物件条件尚未提交，不能仅因终点加载完成就提前发送31 " + scenario.Quest);
+                        peer.Send(33,[33,0,(byte)scenario.Quest,(byte)(scenario.Quest>>8),0x10,0,0]);
+                        peer.Expect(1,33,[1,(byte)scenario.Quest,(byte)(scenario.Quest>>8),0,0,0,0]); Drain();
+                        if (scenario.Quest == 3210)
+                            That(map[18] == 1 && U32(map,27) == 107004013,
+                                "3210保留真实普通怪物声明，不为结算复现删去或替换演员");
+                    }
+                    for (int at=0; at<map[18]; at++)
+                    {
+                        int offset=19+22*at;
+                        peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12])); Drain();
+                    }
+                    if (terminal) break;
+                    That(enabled == 0,"非终点的真实死亡不能提前许可结算 " + scenario.Quest);
+                    var next=path[Array.IndexOf(path,point)+1];
+                    var move=new byte[100]; move[0]=checked((byte)next.X); move[1]=checked((byte)next.Y);
+                    peer.Send(45,move); peer.Expect(1,45,[1]); map=peer.Expect(0,29).Body;
+                }
+                That(U32(map,14) == scenario.Map && fixture.Query(
+                    "SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,scenario.Quest) is [[0L]],
+                    "真实终点33独立持久推进自动物件目标 " + scenario.Quest);
+                That(enabled == 1,"终点加载和实际条件达成后须发送一次31，才能进入客户端46链 " + scenario.Quest);
+                That(bossChecks == 0,"空终点或友方演员不伪造115怪物死亡确认 " + scenario.Quest);
+                var beforeRepeat=fixture.Snapshot("SELECT revision FROM characters WHERE id="+peer.Id);
+                peer.Send(33,[33,0,(byte)scenario.Quest,(byte)(scenario.Quest>>8),0x10,0,0]);
+                peer.Expect(1,33,[1,(byte)scenario.Quest,(byte)(scenario.Quest>>8),0,0,0,0]); Drain();
+                That(enabled == 1 && bossChecks == 0 && beforeRepeat == fixture.Snapshot("SELECT revision FROM characters WHERE id="+peer.Id),
+                    "同一物件33重放只确认原条件，不重复发31、伪造115或推进revision " + scenario.Quest);
+                peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();
+                That(fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id)
+                    is [[long settledMap]] && settledMap == scenario.Map,"收到许可后真实46按实际终点结算 " + scenario.Quest);
+                peer.Send(34,[34,0,(byte)scenario.Quest,(byte)(scenario.Quest>>8),255,255,1,0,255,255]);
+                That(Finished(peer).Body[0] == 1,"实际条件及结算完成后正常交付 " + scenario.Quest); Drain();
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                void Drain() => DrainNotifications(peer,packet =>
+                {
+                    if (packet.Opcode == 31) enabled++;
+                    if (packet.Opcode == 115) bossChecks++;
+                });
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(created.Slot,prepared:true); peer.Barrier();
+                That(fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1",peer.Id,scenario.Quest) is [[1L]] &&
+                    fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[long settledMap]] && settledMap == scenario.Map,
+                    "回城重连保持一次真实物件交付和结算记录 " + scenario.Quest);
+            }
         }
     }
 

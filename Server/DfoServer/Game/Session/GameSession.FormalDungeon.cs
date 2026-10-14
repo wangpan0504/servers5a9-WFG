@@ -181,6 +181,23 @@ internal sealed partial class GameSession
             throw new InvalidDataException("集合掉落生成计划必须同时装配实际物品依赖");
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
+        // 只有已经接入实际33或39来源的唯一物件条件才冻结到Run；仅可读取声明不等于已实现演出机制。
+        if (entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] && questCatalog is not null &&
+            expected.ActiveMainQuests.Any(active => active.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(active, entry)))
+        {
+            var sources = plans.SelectMany(plan => plan.Room.PassiveObjects.Where(source => source.ObjectId == condition.TargetId &&
+                plan.Room.PassiveObjects.Count(other => other.ObjectId == source.ObjectId) == 1)).ToArray();
+            bool trigger = expected.ActiveMainQuests.Any(active => QuestHuntProgress.Bound(active, entry) &&
+                questCatalog.TryGet(active.QuestId, out var targetQuest) && QuestHuntProgress.TryTargets(targetQuest, out var targets) &&
+                targets.Any(target => target.EnemyType == 3 && target.MonsterId == condition.TargetId &&
+                    (target.DungeonId == -1 || target.DungeonId == entry.DungeonId) && entry.Difficulty >= target.MinimumDifficulty));
+            try
+            {
+                if (sources.Length > 0 && (trigger || sources.Any(rooms.ReportsQuestDeath)))
+                    route = route with { PassiveClearTarget = condition.TargetId };
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return null; }
+        }
         var authority = new NativeDungeonCombatAuthority();
         var committedEntry = entry with { CharacterRevision = checked(expected.Revision + 1) };
         if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out _) ||

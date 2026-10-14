@@ -11,6 +11,7 @@ internal static class SinglePlayerDungeonRunTests
     {
         int checks = Count;
         VerifyLayeredBossTerminal();
+        VerifyPassiveClearCondition();
         var authority = new FixtureCombatAuthority();
         var start = new DungeonMap("map", new(0, 0), 1, "map/fixture-start.map");
         var friendly = new DungeonMap("map", new(1, 0), 2, "map/fixture-friendly.map");
@@ -572,6 +573,62 @@ internal static class SinglePlayerDungeonRunTests
         That(committingRun.Return(committingRun.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted,
             "确认完成后解除待提交门禁，正常退出仍可执行");
         Console.WriteLine($"PASS {Count - checks} single-player lifecycle identity and confirmed-event assertions");
+    }
+
+    private static void VerifyPassiveClearCondition()
+    {
+        var start = new DungeonMap("map", new(0, 0), 1, "map/passive-start.map");
+        var terminal = new DungeonMap("boss", new(1, 0), 2, "map/passive-terminal.map");
+        var passive = new DungeonRoomPassiveObject(80458, [80458, 10, 10, 0], "passiveobject/fixture.obj");
+        var maze = new DungeonMaze(0, 2, 1, "passive-clear", [start.Position], [terminal.Position], [start, terminal], [])
+            { ClearConditions = [new("destroy object", 80458, 1)] };
+        var entry = new DungeonEntryPlan(99, 0, 25, 3205, 0, 0, maze, start, terminal);
+        var end = WithTeams(Plan(terminal, 11), 0);
+        end = end with { Room = end.Room with { PassiveObjects = [passive] } };
+        var route = new DungeonFixedRoute([Plan(start, 10), end], [new(start.Position, terminal.Position)]) { PassiveClearTarget = 80458 };
+        var authority = new FixtureCombatAuthority();
+        That(SinglePlayerDungeonRun.TryCreate(entry, 1, 100, route, authority, out var created, out _), "物件终点保持真实怪物与友方演员计划");
+        var run = created!;
+        var loading = run.Snapshot.Identity;
+        That(run.ConfirmCommittedPassiveObject(loading, Guid.NewGuid(), 80458, 0).Outcome == DungeonRunOutcome.Rejected,
+            "加载前的物件确认不能取得结算资格");
+        run.CompleteLoading(loading, Guid.NewGuid());
+        That(run.ConfirmCommittedPassiveObject(run.Snapshot.Identity, Guid.NewGuid(), 80458, 0).Outcome == DungeonRunOutcome.Rejected,
+            "另一房间不能消费终点物件");
+        var death = authority.Death(run.Snapshot.Identity, 10, 1);
+        run.AcceptConfirmedDeath(death);
+        run.Move(run.Snapshot.Identity, Guid.NewGuid(), terminal.Position);
+        var loaded = run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
+        var before = run.Snapshot.Identity;
+        That(loaded.ClearFact is null && run.Phase == SinglePlayerDungeonPhase.Dungeon && run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 11 }),
+            "终点加载保留友方演员，声明的物件未提交时不能提前结算");
+        var action = Guid.NewGuid();
+        That(run.ConfirmCommittedPassiveObject(before with { InstanceId = Guid.NewGuid() }, action, 80458, 0).Outcome == DungeonRunOutcome.Rejected &&
+            run.ConfirmCommittedPassiveObject(before, action, 80457, 0).Outcome == DungeonRunOutcome.Rejected &&
+            run.ConfirmCommittedPassiveObject(before, action, 80458, 1).Outcome == DungeonRunOutcome.Rejected &&
+            run.ConfirmCommittedPassiveObject(loading, action, 80458, 0).Outcome == DungeonRunOutcome.Rejected && run.Snapshot.Identity == before,
+            "旧实例、旧epoch、错误模板和行号均不推进场景");
+        var clear = run.ConfirmCommittedPassiveObject(before, action, 80458, 0);
+        That(clear.ClearFact is { ConfirmedDeathEvents.Count: 1, ClearMap: var map } && map == terminal &&
+            clear.ClearFact.ConfirmedDeathEvents.Single() == death.EventId && !clear.ClearFact.ConfirmedDeathEvents.Contains(action) &&
+            run.Snapshot.Identity.Epoch == before.Epoch + 1 && run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 11 }),
+            "提交后形成一次实际终点清图，物件不伪造战斗死亡或清退友方");
+        That(run.ConfirmCommittedPassiveObject(before, action, 80458, 0).Outcome == DungeonRunOutcome.Duplicate &&
+            run.ConfirmCommittedPassiveObject(before, action, 80457, 0).Outcome == DungeonRunOutcome.Rejected &&
+            run.ConfirmCommittedPassiveObject(before, Guid.NewGuid(), 80458, 0).Outcome == DungeonRunOutcome.Rejected &&
+            run.ClearFact == clear.ClearFact && run.Snapshot.Identity == clear.Snapshot.Identity,
+            "原操作精确重放不重复清图，同ID改内容或新ID旧身份仍拒绝");
+        var ambiguous = route with { Rooms = [route.Rooms[0], end with { Room = end.Room with { PassiveObjects = [passive, passive] } }] };
+        That(SinglePlayerDungeonRun.TryCreate(entry, 2, 200, ambiguous, authority, out var repeated, out _), "保留同模板多行资源而不反猜实例身份");
+        repeated!.CompleteLoading(repeated.Snapshot.Identity, Guid.NewGuid());
+        repeated.AcceptConfirmedDeath(authority.Death(repeated.Snapshot.Identity, 10, 1));
+        repeated.Move(repeated.Snapshot.Identity, Guid.NewGuid(), terminal.Position);
+        repeated.CompleteLoading(repeated.Snapshot.Identity, Guid.NewGuid());
+        That(repeated.ConfirmCommittedPassiveObject(repeated.Snapshot.Identity, Guid.NewGuid(), 80458, 0).Outcome == DungeonRunOutcome.Rejected &&
+            repeated.ClearFact is null, "重复模板行不能靠数量或模板任意认领一个物件并结算");
+        var multiple = entry with { Maze = maze with { ClearConditions = [new("destroy object", 80458, 2)] } };
+        That(!SinglePlayerDungeonRun.TryCreate(multiple, 3, 300, route, authority, out _, out _),
+            "未确认的多实例数量声明不能借单物件批准字段接入");
     }
 
     private static void VerifyLayeredBossTerminal()

@@ -79,9 +79,22 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("被动物件规划的原角色或实际房间已失效");
             var pending = capture.Pending ?? new PendingQuestScene(plan);
             current.QuestSceneEvents[capture.Key] = pending;
+            bool clearCondition = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, plan.SceneEvent!.SourceOrdinal);
             var commit = repository.CommitQuestLifecycle(owner,plan);
-            Selected = commit.Character; pending.Committed = true;
-            return new QuestLifecycleReceipt(commit.Character,commit,owner.Generation,SelectionEpoch,Phase,scene.Identity,
+            if (commit.ProjectionCurrent)
+            {
+                Selected = commit.Character;
+                pending.Committed = true;
+                if (clearCondition)
+                {
+                    var result = current.Run.ConfirmCommittedPassiveObject(scene.Identity, plan.OperationId,
+                        (int)templateId, plan.SceneEvent.SourceOrdinal);
+                    if (result.Outcome != DungeonRunOutcome.Accepted)
+                        throw new InvalidOperationException("已提交物件事件的原实例条件无法确认");
+                    SetState(current.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
+                }
+            }
+            return new QuestLifecycleReceipt(commit.Character,commit,owner.Generation,SelectionEpoch,Phase,current.Run.Snapshot.Identity,
                 "真实地图的被动物件事件已提交") { Outcome = QuestLifecycleOutcome.Committed };
         });
     }

@@ -1261,7 +1261,8 @@ internal static partial class FormalDungeonTcpTests
         peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
         peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);
     }
-    internal static byte[] Enter(TcpPeer peer, ushort questId = 3145, uint dungeonId = 3, Action<byte[]>? information = null)
+    internal static byte[] Enter(TcpPeer peer, ushort questId = 3145, uint dungeonId = 3, Action<byte[]>? information = null,
+        ushort? requestQuestId = null)
     {
         peer.Send(31,[31,0,(byte)questId,(byte)(questId >> 8)]);
         byte[] accepted = peer.Expect(1,31).Body;
@@ -1269,7 +1270,7 @@ internal static partial class FormalDungeonTcpTests
         else Bytes(accepted,[0,18,0],"重复接取通过通用错误响应，不改变已有副本fixture");
         SelectMap(peer);
         var selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection,dungeonId);
-        BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),questId);
+        BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),requestQuestId ?? questId);
         peer.Send(16, selection);
         var entered = peer.Expect(0, 28).Body;
         That(entered.Length == 36, "正式NOTI28完整36B"); information?.Invoke(entered);

@@ -155,6 +155,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (receipt.Entry.UsesFatigue)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
+        if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
+            await DungeonSettlementProjection.EnableAsync(context);
         return CommandResult.Handled;
     }
 
@@ -162,11 +164,13 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
     {
         if (DungeonRequests.TryParsePassiveDeath(request.Body, out var passive))
         {
-            if (!context.Session.Ready || context.Session.DungeonSnapshot is not { Phase: SinglePlayerDungeonPhase.Dungeon })
+            if (!context.Session.Ready || context.Session.DungeonSnapshot is not { Phase: SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement })
                 return CommandResult.Unhandled;
             var progress = context.Session.ObserveFormalPassiveDeath(passive!.ObjectIdentifier,
                 passive.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body)),rooms);
-            log.Write("formal_passive_death", new { Connection = context.Id, Accepted = progress?.Commit is not null, Request = passive });
+            log.Write("formal_passive_death", new { Connection = context.Id, Accepted = progress?.Commit is { ProjectionCurrent: true },
+                progress?.Phase, progress?.DungeonIdentity, Request = passive });
+            if (progress?.Commit is { ProjectionCurrent: false }) return CommandResult.CloseConnection;
             if (progress?.Commit is not null)
             {
                 if (progress.Commit.Plan.Inventory.ChangedSlots.Length > 0)
@@ -175,6 +179,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                         () => context.Session.CanPublishQuestLifecycle(progress));
                 await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(progress.Character.ActiveMainQuests),
                     "formal_passive_quest_conditions",() => context.Session.CanPublishQuestLifecycle(progress));
+                await DungeonSettlementProjection.EnableAsync(context);
             }
             return CommandResult.Handled;
         }
@@ -254,14 +259,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);
         if (!closed && result.PreviousQuests is { } previous && receipt.Character.ActiveMainQuests.Any(row => previous.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
-        if (result.ClearFact is not null && context.Session.EnableFormalDungeonSettlement(result.MonsterKey) is { } completion)
-        {
-            bool CompletionGuard() => context.Session.CanPublishDungeonSettlement(completion.Receipt);
-            await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(completion.BossKey), "formal_boss_confirmed", CompletionGuard);
-            bool enabled = false;
-            await context.Notify(NotiPacketType.ENABLE_CLEAR_DUNGEON, [], "formal_clear_enabled", () => enabled = CompletionGuard());
-            if (enabled) context.Session.ConfirmFormalDungeonSettlementEnabled(completion.Receipt);
-        }
+        if (result.ClearFact is not null)
+            await DungeonSettlementProjection.EnableAsync(context, result.MonsterKey);
         return CommandResult.Handled;
     }
 

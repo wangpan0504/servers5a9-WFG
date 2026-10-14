@@ -129,7 +129,84 @@ internal static class QuestSceneTests
             QuestLifecycleReceipt? Observe(uint id,bool checksum) => f.Session.ObserveFormalPassiveDeath(id,checksum,new string('B',64),rooms);
             QuestFinishResult Finish(ushort id) => f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
         }
-        Console.WriteLine($"PASS {Count-checks} 实际Lv3父子剧情、物件事件、清图交付与恢复断言（非实机）");
+        VerifyPassiveSettlement(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
+        Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
+    }
+
+    private static void VerifyPassiveSettlement(TownCatalog towns, CharacterCatalog characters, ItemResources items,
+        QuestCatalog quests, SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons,
+        DungeonRoomCatalog rooms, DungeonKillExperienceCatalog kills)
+    {
+        var area = towns.Areas.Values.First(row => row.Level <= 28 && row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 25));
+        var done = new HashSet<int>(area.Quests) { 3204 };
+        if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)), checked((ushort)(bounds.Y + bounds.Height / 2)));
+        foreach (string mode in new[] { "rollback", "lost", "stale", "independent" })
+        {
+            using var f = new Fixture(towns, characters, skills, growth, quests, mode is "lost" or "stale",
+                28, done.ToArray(), position: position);
+            That(f.Session.ChangeQuest(3205, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces)?.Commit is not null,
+                "隔离真实入口正常接取3205");
+            if (mode == "independent")
+            {
+                // 活动任务已有进度时，新的实例仍须提交本次迷宫物件事实，不能借scalar0提前结算。
+                f.Sql("UPDATE character_active_main_quests SET condition_state=0 WHERE quest_id=3205");
+                f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
+            }
+            var opening = f.Session.EnterFormalDungeon(25, 3205, 0, dungeons, rooms);
+            That(opening is not null, "3205场景事务fixture已恢复实际入口区域并正常准入：" + mode);
+            var path = QuestStoryRouteTests.Path(opening!.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, opening.Entry.BossMap.Position);
+            FormalDungeonReceipt receipt = opening!;
+            foreach (var point in path)
+            {
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+                foreach (var monster in receipt.Monsters.Monsters.Where(monster => monster.IsBlocking))
+                    That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth).Outcome == DungeonRunOutcome.Accepted,
+                        "实际3205路线由合成权威死亡通过原提交链清房");
+                if (point == opening.Entry.BossMap.Position) break;
+                var next = path[Array.IndexOf(path, point) + 1];
+                That(f.Session.MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null, "按实际门墙路线移动至3205终点");
+            }
+            var before = f.Read(); var online = f.Session.Selected!; var identity = f.Session.DungeonSnapshot!.Identity;
+            That(receipt.Snapshot.CurrentMap.Id == 53493 && f.Session.Phase == SessionPhase.Dungeon &&
+                f.Session.EnableFormalDungeonSettlement() is null, "物件提交前终点仍在Dungeon且无结算许可");
+            if (mode == "rollback")
+            {
+                f.Sql("CREATE TRIGGER terminal_scene_abort AFTER INSERT ON character_quest_lifecycle_receipts WHEN NEW.scene_event IS NOT NULL BEGIN SELECT RAISE(ABORT,'terminal scene rollback'); END");
+                TestCheck.Reject<SqliteException>(() => Observe(), "终点物件SQL末段回滚");
+                f.Sql("DROP TRIGGER terminal_scene_abort");
+                That(Same(before, f.Read()), "回滚保留完整角色资产和任务状态");
+            }
+            if (mode is "lost" or "stale") TestCheck.Reject<IOException>(() => Observe(), "终点物件提交返回丢失");
+            if (mode != "independent")
+                That(ReferenceEquals(f.Session.Selected, online) && f.Session.DungeonSnapshot!.Identity == identity &&
+                    f.Session.Phase == SessionPhase.Dungeon && f.Session.EnableFormalDungeonSettlement() is null,
+                    "未取得明确提交结果时不改变Run或提前许可结算");
+            if (mode == "stale") f.Sql("UPDATE characters SET revision=revision+1");
+            var progress = Observe()!;
+            if (mode == "stale")
+            {
+                That(progress.Commit is { Duplicate: true, ProjectionCurrent: false } && !f.Session.CanPublishQuestLifecycle(progress) &&
+                    ReferenceEquals(f.Session.Selected, online) && f.Session.Phase == SessionPhase.Dungeon && f.Session.DungeonSnapshot!.Identity == identity,
+                    "已过期的持久回执不推进Run、不覆盖在线角色或发布成功");
+                continue;
+            }
+            var enable = f.Session.EnableFormalDungeonSettlement();
+            That(progress.Commit is { ProjectionCurrent: true } && progress.Commit.Duplicate == (mode == "lost") &&
+                f.Session.CanPublishQuestLifecycle(progress) && progress.Phase == SessionPhase.Settlement &&
+                progress.DungeonIdentity == f.Session.DungeonSnapshot!.Identity && progress.DungeonIdentity!.Epoch == identity.Epoch + 1 &&
+                enable is { BossKey: null } && enable.Value.Receipt.Snapshot.CurrentMap.Id == 53493,
+                "原操作恢复后回执绑定实际结算phase与epoch，空终点没有伪造Boss key");
+            var committed = f.Read();
+            That(Observe() is null && Same(committed, f.Read()) &&
+                f.Session.ObserveFormalPassiveDeath(80458, true, new string('D', 64), rooms) is null,
+                "同物件33重放或39镜像不再次推进revision或结算");
+            f.Session.ConfirmFormalDungeonSettlementEnabled(enable!.Value.Receipt);
+            That(f.Session.EnableFormalDungeonSettlement() is null, "成功发布后本实例不重复许可结算");
+            QuestLifecycleReceipt? Observe() => f.Session.ObserveFormalPassiveTrigger(3205, new(0x10, 0, 0), new string('C', 64), rooms);
+        }
     }
 
     internal sealed class Fixture : IDisposable
@@ -141,14 +218,15 @@ internal static class QuestSceneTests
         public CharacterRepository Repository { get; }
         public GameSession Session { get; }
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
-            byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0)
+            byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
-            var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),towns.Room,towns.InitialReturn,skills.Get);
+            var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
             var learning = SkillPointLedger.Synchronize(job,0,level,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(level) },skills);
-            Repository.Create(Owner,candidate with { Level = level, CompletedQuests = completed ?? [3145,4873], InitialLearning = learning });
+            Repository.Create(Owner,candidate with { Level = level, CompletedQuests = completed ?? [3145,4873], InitialLearning = learning,
+                AcceptedStoryLevel = position is null ? candidate.AcceptedStoryLevel : level });
             Session = new(lost || loseGrowth ? new LostResultRepository(Repository) { LoseSceneResult = lost, LoseCompletionResult = false, LoseGrowthResult = loseGrowth } : Repository,towns,Owner,questCatalog: quests);
-            Session.Select(0); Session.MarkReady();
+            Session.Select(0, resumeTown: position is not null); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner,0);
         public Dictionary<(byte,byte),(byte,byte)> TravelPaths(TownCatalog towns)

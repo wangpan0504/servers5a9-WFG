@@ -4,6 +4,7 @@ using DfoServer.Network.Builders.Inventory;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Protocol;
+using DfoServer.Network.Projection;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Quests;
@@ -79,6 +80,8 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
             await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(closed.Commit.Character.ActiveMainQuests),"quest_child_parent_progress",Guard);
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(closed.Commit.Character),"quest_child_completed",Guard);
         }
+        if (changed?.Commit?.Plan.SceneEvent is not null)
+            await DungeonSettlementProjection.EnableAsync(context);
         return CommandResult.Handled;
     }
 }

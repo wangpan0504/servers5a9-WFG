@@ -86,7 +86,7 @@ internal static class QuestScriptedSettlementTests
             var enabled = f.Session.EnableFormalDungeonSettlement(target.ObjectKey);
             That(enabled is { } candidate && candidate.BossKey == target.ObjectKey && candidate.Receipt.Snapshot.CurrentMap == entry.BossMap,
                 "普通rank终点可发布115/31，引用本层真实死亡key");
-            Bytes(DungeonSettlementPackets.BossAccepted(enabled!.Value.BossKey),[1,1,(byte)target.ObjectKey,(byte)(target.ObjectKey >> 8)],
+            Bytes(DungeonSettlementPackets.BossAccepted(enabled!.Value.BossKey!.Value),[1,1,(byte)target.ObjectKey,(byte)(target.ObjectKey >> 8)],
                 "115沿既有协议字段回真实对象key，不改造Boss");
             That(f.Session.EnableFormalDungeonSettlement(oldBaseKey)?.BossKey == target.ObjectKey &&
                 f.Session.ConfirmFormalDungeonBoss(f.Session.Selected!.Id,target.ObjectKey,checked((uint)target.CandidateLevel),0) is null,

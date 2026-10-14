@@ -33,22 +33,23 @@ internal sealed partial class GameSession
         public DungeonCardClaimPreparation? Claim { get; set; }
     }
 
-    public (FormalDungeonReceipt Receipt, ushort BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
+    public (FormalDungeonReceipt Receipt, ushort? BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
             dungeon.SettlementEnabled || dungeon.Run.ClearFact is null)
-            return ((FormalDungeonReceipt, ushort)?)null;
+            return ((FormalDungeonReceipt, ushort?)?)null;
         var snapshot = dungeon.Run.Snapshot;
-        if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort)?)null;
+        if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort?)?)null;
         if (dungeon.Entry.IsTutorial && dungeon.TutorialClearTarget is { } tutorialTarget)
             return (FormalReceipt(), tutorialTarget);
         // 剧情终点可以只有普通阻挡敌人；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。
         var terminal = dungeon.Route.Rooms.Single(room => room.Room.Map == snapshot.CurrentMap).Monsters
-            .Where(monster => (monster.IsBoss || monster.IsBlocking && monster.CanReportDeath) &&
+            .Where(monster => monster.CanReportDeath && (monster.IsBoss || monster.IsBlocking) &&
                 !snapshot.LivingMonsters.Contains(monster.ObjectKey) && !dungeon.Run.IsCulledMonster(monster.ObjectKey)).ToArray();
         var boss = terminal.FirstOrDefault(monster => monster.ObjectKey == reportedBossKey) ??
             terminal.FirstOrDefault(monster => monster.IsBoss) ?? terminal.FirstOrDefault();
-        if (boss is null) return ((FormalDungeonReceipt, ushort)?)null;
+        if (boss is null) return dungeon.Run.HasCommittedPassiveClearCondition
+            ? (FormalReceipt(), (ushort?)null) : ((FormalDungeonReceipt, ushort?)?)null;
         return (FormalReceipt(), boss.ObjectKey);
     });
 
