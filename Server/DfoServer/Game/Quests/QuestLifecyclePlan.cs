@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -38,6 +39,8 @@ internal sealed class QuestLifecyclePlan
     public ImmutableArray<ActiveMainQuest> ActiveAfter { get; }
     public InventoryPlan Inventory { get; }
     public QuestSceneEvent? SceneEvent { get; }
+    internal PreparedDungeonPassiveClear? SceneClear { get; private init; }
+    internal SinglePlayerDungeonRun? SceneClearRun { get; private init; }
     public ImmutableArray<int> CompletedAfter { get; private init; }
     public ImmutableArray<int> AccountCompletedAfter { get; private init; }
 
@@ -55,13 +58,29 @@ internal sealed class QuestLifecyclePlan
     }
 
     internal static QuestLifecyclePlan? ObservePassive(Character expected, QuestCatalog quests,
-        DfoServer.Game.Dungeons.DungeonEntryPlan entry, QuestSceneEvent sceneEvent, QuestDropPlan? drops = null)
+        DfoServer.Game.Dungeons.DungeonEntryPlan entry, QuestSceneEvent sceneEvent, QuestDropPlan? drops = null,
+        PreparedDungeonPassiveClear? sceneClear = null, SinglePlayerDungeonRun? run = null)
     {
         if (sceneEvent.OperationId == Guid.Empty || sceneEvent.Identity.CharacterId != expected.Id ||
             sceneEvent.Identity.QuestId != entry.QuestId || sceneEvent.DungeonId != entry.DungeonId ||
             sceneEvent.MapId <= 0 || sceneEvent.TemplateId <= 0 || sceneEvent.SourceOrdinal < 0 || sceneEvent.Fingerprint.Length != 64)
             throw new InvalidDataException("被动物件事件需要真实实例、地图和资源行身份");
         var after = QuestHuntProgress.PassiveDeath(expected.ActiveMainQuests,entry,quests,sceneEvent.TemplateId);
+        if (sceneClear is not null)
+        {
+            if (run is null || !run.IsPendingPassiveClear(sceneClear) || sceneClear.Source.OperationId != sceneEvent.OperationId ||
+                sceneClear.Source.Identity != sceneEvent.Identity || sceneClear.Source.TemplateId != sceneEvent.TemplateId ||
+                sceneClear.Source.SourceOrdinal != sceneEvent.SourceOrdinal)
+                throw new InvalidDataException("场景清图必须来自原实例冻结的物件终末");
+            var clear = sceneClear.Result.ClearFact!;
+            after = after.Select(row => row.ConditionState > 0 && QuestHuntProgress.Bound(row,entry) &&
+                quests.TryGet(row.QuestId,out var quest) && QuestCoverage.HasOrdinaryDeclarations(quest) &&
+                (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 && quest.IntData[0] == clear.ClearMap!.Id &&
+                    (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
+                 QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue &&
+                    QuestDungeonClearProgress.Matches(quest,entry,run) && QuestDungeonClearProgress.ValidScalar(quest,row.ConditionState))
+                ? row with { ConditionState = row.ConditionState - 1 } : row).ToImmutableArray();
+        }
         var inventory = drops?.Inventory ?? new(expected.Inventory,expected.Inventory,"quest_passive_death");
         if (drops is not null)
         {
@@ -78,7 +97,7 @@ internal sealed class QuestLifecyclePlan
             condition.TargetId == sceneEvent.TemplateId)
             changed = after.SingleOrDefault(row => row.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(row, entry));
         return changed is null ? null : new(expected,QuestLifecycleAction.Condition,changed.QuestId,changed.AcceptanceId,
-            after,inventory,sceneEvent);
+            after,inventory,sceneEvent) { SceneClear = sceneClear, SceneClearRun = run };
     }
 
     public static QuestLifecyclePlan Accept(Character expected, StoryQuest quest, QuestCatalog catalog,

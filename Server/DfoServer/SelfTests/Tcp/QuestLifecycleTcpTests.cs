@@ -6,6 +6,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
 using DfoServer.Persistence;
+using DfoServer.Network.Management;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -425,7 +426,7 @@ internal static class QuestLifecycleTcpTests
         }
 
         await f.StopAsync();
-        await using var extra = new TcpTestFixture(options,Path.Combine(root,"quest-extras"),resources: resources,questCatalog: new(catalog));
+        await using var extra = new TcpTestFixture(options,Path.Combine(root,"quest-extras"),gm:true,resources: resources,questCatalog: new(catalog));
         await extra.StartAsync();
         using (var peer = Open(extra))
         {
@@ -652,6 +653,8 @@ internal static class QuestLifecycleTcpTests
         VerifyDungeonNpcMeeting(extra,resources,growth);
         VerifyLargeResearchMaterials(extra,resources,growth);
         VerifyImageCommunication(extra,resources,growth);
+        VerifyAlbertRequest(extra,resources,growth);
+        QuestPassiveClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
@@ -662,6 +665,140 @@ internal static class QuestLifecycleTcpTests
             int offset = Enumerable.Range(0,U16(body,1)).Select(at => 3+123*at).Single(at => U16(body,at) == slot);
             That(U32(body,offset+2) == item && U32(body,offset+6) == balance,"NOTI14钱包slot与实际绝对余额一致");
         }
+    }
+
+    static void VerifyAlbertRequest(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
+    {
+        // 只准备已达成的3472持久接取；实际34和奖励链走TCP，不冒充158副本完整猎杀。
+        var (created,materialSlot) = Prepare("AlbertTCP",2,[new(0,3458,2),new(1,3472,0)],[3457]);
+        string acceptance = fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3458",created.Id);
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(created.Slot,prepared:true);
+            Bytes(entry[1].Body,[1,0,0,0],"阿尔伯特56级初次选角1382回放story1");
+            That(U16(entry[0].Body,22) == 3458 && U32(entry[0].Body,24) == 2 &&
+                U16(entry[0].Body,28) == 3472 && U32(entry[0].Body,30) == 0,"初始ACK4回放父2与隔离准备的已达成猎杀子0");
+            foreach (byte level in new byte[] {57,58})
+            {
+                string before = Assets(created.Id);
+                long revision = (long)fixture.Query("SELECT revision FROM characters WHERE id=$p0",created.Id)[0][0];
+                That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                    "account "+fixture.Options.DevelopmentAccount+" level AlbertTCP "+level,out string reply) && reply.StartsWith("OK ",StringComparison.Ordinal),
+                    "阿尔伯特GM连接当前extra端口并实际提交等级："+level);
+                peer.Barrier();
+                That(fixture.Query("SELECT level,accepted_story_level,experience,revision FROM characters WHERE id=$p0",created.Id)
+                    is [[long actual,1L,long experience,long next]] && actual == level &&
+                    experience == checked((long)growth.GetLevelStartExperience(level)) && next == revision+1 && Assets(created.Id) == before,
+                    "GM"+level+"只更新等级/经验/技能，保留story1、库存、父子完成位与全部AcceptanceId，不伪造游戏ACK");
+                var points = fixture.Query("SELECT context,sp,tp FROM character_skill_points WHERE character_id=$p0 ORDER BY context",created.Id);
+                That(points.Length == 2 && points.All(row => (long)row[1] == resources.Learning.TotalSp(level) &&
+                    (long)row[2] == resources.Learning.TotalTp(level)),"GM等级更新后两棵技能树余额完整落库");
+            }
+            string blocked = State(created.Id);
+            peer.Send(31,[31,0,145,13]); peer.Expect(1,31,[0,18,0]); peer.Barrier();
+            peer.Send(34,[34,0,130,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
+            That(State(created.Id) == blocked,"58级与持有碎片都不能跳过3472正式交付、提前接3473或领取父奖励");
+            peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); Finished(peer,Reward(3472,2,0,2));
+            Balance(peer,4);
+            peer.Expect(0,574,Convert.FromHexString("01000000820D01000000")); peer.Expect(0,21);
+            History(peer.Expect(0,356).Body,3472); peer.Barrier();
+            That(Materials(created.Id) == 4 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id)
+                is [[3458L,1L]],"真实3472 ACK34只发碎片2、父2→1，未自动接或交付3473");
+            string once = State(created.Id);
+            peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
+            That(State(created.Id) == once,"3472重复34拒绝且不重复奖励");
+            peer.Send(31,[31,0,145,13]); peer.Expect(1,31,Convert.FromHexString("01910D0000000000")); peer.Expect(0,21);
+            History(peer.Expect(0,356).Body,3472); peer.Barrier();
+            peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,Reward(3473,0,3,4));
+            Balance(peer,5);
+            peer.Expect(0,574,Convert.FromHexString("01000000820D00000000")); peer.Expect(0,21);
+            History(peer.Expect(0,356).Body,3472,3473); peer.Barrier();
+            That(Materials(created.Id) == 5 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id)
+                is [[3458L,0L]],"真实3473完整37B ACK34扣3发4，实际库存4→5，父1→0并保留未领奖父接取");
+            once = State(created.Id);
+            peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
+            That(State(created.Id) == once,"3473重复34中立拒绝，材料、奖励与receipt零变化");
+        }
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(created.Slot,prepared:true);
+            Bytes(entry[1].Body,[1,0,0,0],"GM57/58及子交付后重连仍回放story1，不代接受剧情");
+            That(U16(entry[0].Body,22) == 3458 && U32(entry[0].Body,24) == 0 && Materials(created.Id) == 5 &&
+                fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3458",created.Id) == acceptance,
+                "重连回放父0、碎片5及GM前原父接取身份");
+            History(peer.CompletedQuestHistory,3472,3473); peer.Barrier();
+            long goldBefore = (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0",created.Id)[0][0];
+            peer.Send(34,[34,0,130,13,255,255,1,0,255,255]); var ack = Finished(peer).Body;
+            That(fixture.Query("SELECT experience_amount,gold_amount FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3458",created.Id)
+                    is [[long parentExperience,long parentGold]] && parentExperience > 0 && parentGold > 0 &&
+                ack.Length == 29 && ack[0] == 1 && U16(ack,1) == 3458 && ack[3] == 44 && U32(ack,4) == parentExperience &&
+                ack[8] == 0 && ack[9] == 1 && U16(ack,10) == 0 && U32(ack,12) == 0 && U32(ack,16) == parentGold &&
+                ack.AsSpan(20).SequenceEqual(new byte[9]) &&
+                fixture.Query("SELECT gold FROM characters WHERE id=$p0",created.Id) is [[long goldAfter]] && goldAfter == goldBefore+parentGold,
+                "父ACK34分类44完整29B只发自身经验及slot0/item0金币，和独立回执/实际余额一致，不重复子碎片或扣料");
+            Bytes(ack,Convert.FromHexString("01820D2CA329190000010000000000009C0F0000000000000000000000"),
+                "真实3458资源在58级按原金币标记、经验及奖励参数生成完整父ACK34金样");
+            var goldUpdate = peer.Expect(0,14).Body;
+            That(goldUpdate.Length == 126 && goldUpdate[0] == 0 && U16(goldUpdate,1) == 1 && U16(goldUpdate,3) == 0 &&
+                U32(goldUpdate,5) == 0 && U32(goldUpdate,9) == 3996,
+                "父ACK34后先以完整Main金币行同步绝对3996，再发布EXP37与任务历史");
+            peer.Expect(0,37); DrainNotifications(peer);
+            That(Materials(created.Id) == 5 && fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]] &&
+                fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id)
+                    is [[3458L],[3472L],[3473L]],"父34正式完成后资产保留、三项真实回执各一次");
+            string once = State(created.Id);
+            peer.Send(34,[34,0,130,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
+            That(State(created.Id) == once,"父34重复拒绝，经验、金币、碎片及三项完成回执不重复发放");
+        }
+        var (poor,_) = Prepare("AlbertPoor",2,[new(0,3458,1)],[3457,3472]);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(poor.Slot,prepared:true);
+            peer.Send(31,[31,0,145,13]); peer.Expect(1,31,Convert.FromHexString("01910D0100000000")); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            string before = State(poor.Id);
+            peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
+            That(State(poor.Id) == before && Materials(poor.Id) == 2,"真实3473库存2/3拒绝交付且连接可继续，父子与资产不变");
+        }
+
+        (Character Character,ushort Slot) Prepare(string name,int count,ActiveMainQuest[] active,int[] done)
+        {
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { });
+            var candidate = CharacterCreation.Prepare(name,resources.Characters.Get(0),resources.Towns.Room,resources.Towns.InitialReturn,resources.Learning.Get);
+            var template = resources.ItemResources.Items.Get(10164800);
+            var range = DfoServer.Game.Inventory.Services.ItemSlotBoundService.Range(template.Kind,candidate.Inventory.Expansion);
+            short slot = Enumerable.Range(range.Start,range.End-range.Start+1).Select(value => checked((short)value))
+                .First(value => candidate.Inventory.Find(new(DfoServer.Game.Inventory.Models.InventoryListType.Main,value)) is null);
+            var item = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.Create(template,count);
+            That(item is {AmplifyType:0,AmplifyValue:0,ExpireTime:0,SortLockFlag:0,RemainUseCount:0},"真实碎片的奖励短行保留已核对的零附属字段金样");
+            var learning = SkillPointLedger.Synchronize(0,0,56,candidate.InitialLearning with
+                {Experience=growth.GetLevelStartExperience(56)},resources.Learning);
+            var character = new CharacterRepository(fixture.Database).Create(owner,candidate with {Level=56,AcceptedStoryLevel=1,
+                InitialLearning=learning,CompletedQuests=done,ActiveMainQuests=active,
+                Inventory=candidate.Inventory with {Items=candidate.Inventory.Items.Add(new(0,new(DfoServer.Game.Inventory.Models.InventoryListType.Main,slot),item))} });
+            return (character,checked((ushort)slot));
+        }
+        byte[] Reward(ushort id,byte type,int consumed,uint count) => Build(writer =>
+        {
+            writer.Write((byte)1); writer.Write(id); writer.Write(type); writer.Write(0u);
+            if (type == 0) {writer.Write((byte)1);writer.Write((byte)0);writer.Write(materialSlot);writer.Write((uint)consumed);}
+            writer.Write((byte)0); writer.Write((byte)1); writer.Write(materialSlot); writer.Write(10164800u); writer.Write(count); writer.Write(new byte[9]);
+        });
+        void Balance(TcpPeer peer,uint count)
+        {
+            var body = peer.Expect(0,14).Body;
+            That(body.Length == 126 && body[0] == 0 && U16(body,1) == 1 && U16(body,3) == materialSlot &&
+                U32(body,5) == 10164800 && U32(body,9) == count,"子奖励后NOTI14完整123B实体行同步原槽绝对碎片余额");
+        }
+        static void History(byte[] body,params int[] ids) => That(body.Length == 30004 && U32(body) == 30000 &&
+            body[4+3457] == 1 && ids.All(id => body[4+id] == 1),"356完成历史在21之后恢复实际阿尔伯特子完成位");
+        long Materials(ushort id) => (long)fixture.Query("SELECT coalesce(sum(json_extract(i.item_core,'$.Value')),0) FROM character_inventory_items i " +
+            "JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=10164800",id)[0][0];
+        string Assets(ushort id) => fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",id) +
+            fixture.Snapshot("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id",id) +
+            fixture.Snapshot("SELECT s.slot_index,i.* FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) " +
+                "WHERE s.character_id=$p0 ORDER BY s.slot_index",id);
+        string State(ushort id) => Assets(id)+fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",id) +
+            fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY revision",id);
     }
 
     static void VerifyLargeResearchMaterials(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
@@ -1070,6 +1207,23 @@ internal static class QuestLifecycleTcpTests
                 "友方非阻塞演员消失只投影空掉落通知，不作为敌对死亡"); peer.Barrier();
             That(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id) is [[long same]] && same == revision,
                 "友方终点报告不授予额外任务、成长事实或revision变化");
+            peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
+            That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "黄金矿洞真实物件69291未销毁前，40次猎杀和友方退场不能提前46结算");
+            var passive = QuestPassiveClearTcpTests.PassiveDeath(69291);
+            peer.Send(39,passive); peer.Expect(0,574); peer.Expect(0,31,[]);
+            int bossChecks = 0;
+            DrainNotifications(peer,packet => { if (packet.Opcode == 115) bossChecks++; });
+            That(bossChecks == 0 && fixture.Query(
+                "SELECT source_type,map_id,template_id,length(death_events)/16 FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
+                is [["PassiveObject",70107L,69291L,40L]],
+                "黄金矿洞唯一真实52B物件来源提交后574→空31，不伪造115或额外怪物死亡");
+            string sceneState = fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",peer.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id);
+            peer.Send(39,passive); DrainNotifications(peer);
+            That(sceneState == fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",peer.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id),
+                "黄金矿洞重复物件39不重复改变角色、奖励或清图来源");
             peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
             That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
                 "无Boss的已清终点沿真实46完成一次结算");

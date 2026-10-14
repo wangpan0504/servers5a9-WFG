@@ -608,11 +608,22 @@ internal static class SinglePlayerDungeonRunTests
             run.ConfirmCommittedPassiveObject(before, action, 80458, 1).Outcome == DungeonRunOutcome.Rejected &&
             run.ConfirmCommittedPassiveObject(loading, action, 80458, 0).Outcome == DungeonRunOutcome.Rejected && run.Snapshot.Identity == before,
             "旧实例、旧epoch、错误模板和行号均不推进场景");
-        var clear = run.ConfirmCommittedPassiveObject(before, action, 80458, 0);
+        var prepared = run.PreparePassiveClear(before, action, 80458, 0)!;
+        That(prepared is not null && run.IsPendingPassiveClear(prepared) && run.ClearFact is null && run.Snapshot.Identity == before &&
+            run.Phase == SinglePlayerDungeonPhase.Dungeon && run.PreparePassiveClear(before, action, 80458, 0) == prepared &&
+            run.PreparePassiveClear(before, Guid.NewGuid(), 80458, 0) is null,
+            "物件准备冻结同一原操作，提交前不改变清图或epoch，不能另起终末");
+        That(run.Return(before, Guid.NewGuid()).Outcome == DungeonRunOutcome.Rejected &&
+            run.Move(before, Guid.NewGuid(), start.Position).Outcome == DungeonRunOutcome.Rejected,
+            "原物件准备等待提交时不能离开实例或改写场景");
+        var clear = run.ConfirmCommittedPassiveClear(prepared!);
         That(clear.ClearFact is { ConfirmedDeathEvents.Count: 1, ClearMap: var map } && map == terminal &&
             clear.ClearFact.ConfirmedDeathEvents.Single() == death.EventId && !clear.ClearFact.ConfirmedDeathEvents.Contains(action) &&
             run.Snapshot.Identity.Epoch == before.Epoch + 1 && run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 11 }),
             "提交后形成一次实际终点清图，物件不伪造战斗死亡或清退友方");
+        That(clear.ClearFact!.PassiveSource is { OperationId: var operation } && operation == action &&
+            run.ConfirmCommittedPassiveClear(prepared!).Outcome == DungeonRunOutcome.Duplicate,
+            "物件清图保留独立来源且同一准备确认不会再推进epoch");
         That(run.ConfirmCommittedPassiveObject(before, action, 80458, 0).Outcome == DungeonRunOutcome.Duplicate &&
             run.ConfirmCommittedPassiveObject(before, action, 80457, 0).Outcome == DungeonRunOutcome.Rejected &&
             run.ConfirmCommittedPassiveObject(before, Guid.NewGuid(), 80458, 0).Outcome == DungeonRunOutcome.Rejected &&
@@ -629,6 +640,16 @@ internal static class SinglePlayerDungeonRunTests
         var multiple = entry with { Maze = maze with { ClearConditions = [new("destroy object", 80458, 2)] } };
         That(!SinglePlayerDungeonRun.TryCreate(multiple, 3, 300, route, authority, out _, out _),
             "未确认的多实例数量声明不能借单物件批准字段接入");
+        var emptyStart = route.Rooms[0] with { Monsters = [], Room = route.Rooms[0].Room with { Monsters = [] } };
+        var zeroRoute = route with { Rooms = [emptyStart,end] };
+        That(SinglePlayerDungeonRun.TryCreate(entry,4,400,zeroRoute,authority,out var zero,out _),
+            "零击杀边界保留空首图与友方终点原资源，不制造敌人");
+        zero!.CompleteLoading(zero.Snapshot.Identity,Guid.NewGuid());
+        zero.Move(zero.Snapshot.Identity,Guid.NewGuid(),terminal.Position);
+        zero.CompleteLoading(zero.Snapshot.Identity,Guid.NewGuid());
+        That(zero.PreparePassiveClear(zero.Snapshot.Identity,Guid.NewGuid(),80458,0) is null &&
+            zero.ClearFact is null && zero.Phase==SinglePlayerDungeonPhase.Dungeon,
+            "尚未闭合的零击杀结算保持拒绝，不能用kill1或空死亡绕过翻牌合同");
     }
 
     private static void VerifyLayeredBossTerminal()

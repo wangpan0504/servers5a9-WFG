@@ -15,6 +15,7 @@ internal sealed partial class CharacterRepository
         "character_dungeon_drop_pickups", "character_dungeon_drop_objects", "character_dungeon_drop_batches",
         "character_dungeon_pickup_receipts", "character_dungeon_loot_receipts",
         "character_quest_completion_receipts", "character_quest_clear_receipts", "character_quest_drop_receipts",
+        "character_dungeon_scene_clear_receipts",
         "character_dungeon_growth_receipts", "character_dungeon_settlement_receipts",
         "character_dungeon_fatigue_receipts", "character_gold_card_uses",
         "character_quest_skip_receipts", "character_quest_lifecycle_receipts",

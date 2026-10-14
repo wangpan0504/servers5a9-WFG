@@ -611,6 +611,13 @@ internal static class SessionPlanningTests
                 INSERT INTO mailbox_sent_gold VALUES({{id}},20261011,12);
                 INSERT INTO character_quest_lifecycle_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','Accept',30,
                   '1234567890abcdef1234567890abcdef',0,1,'[]','[]','[]',NULL,NULL,NULL);
+                INSERT INTO character_quest_lifecycle_receipts VALUES({{id}},'planning','fedcba0987654321fedcba0987654321','Condition',30,
+                  '1234567890abcdef1234567890abcdef',1,2,'[]','[]','[]','{}',NULL,NULL);
+                INSERT INTO character_dungeon_scene_clear_receipts(character_id,account,operation_id,source_type,instance_id,quest_id,
+                  task_attempt,before_epoch,epoch,dungeon_id,map_id,template_id,source_ordinal,fingerprint,death_events,generation,revision)
+                  VALUES({{id}},'planning','fedcba0987654321fedcba0987654321','PassiveObject','instance',30,
+                    1,1,2,1,1,69291,0,'0000000000000000000000000000000000000000000000000000000000000000',
+                    X'1234567890ABCDEF1234567890ABCDEF',1,2);
                 INSERT INTO character_quest_skip_receipts VALUES({{id}},'planning',NULL,NULL,NULL,0,1,'{}','abcdef1234567890abcdef1234567890','Manual');
                 INSERT INTO character_quest_effect_receipts VALUES({{id}},'abcdef1234567890abcdef1234567890',0,1,'[]','[]');
                 INSERT INTO character_quest_special_reward_claims VALUES({{id}},30,'abcdef1234567890abcdef1234567890');
@@ -621,8 +628,11 @@ internal static class SessionPlanningTests
                 INSERT INTO character_dungeon_drop_objects VALUES({{id}},'1234567890abcdef1234567890abcdef',0,2,NULL,1,0,0,0);
                 INSERT INTO character_dungeon_drop_pickups VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',2,'instance',1,1,NULL,NULL,NULL,0,1,1,0,1);
                 INSERT INTO character_quest_drop_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',0,1,'{}','[]');
-                INSERT INTO character_quest_clear_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',30,0,
-                  '1234567890abcdef1234567890abcdef','instance',1,1,1,1,1,1);
+                INSERT INTO character_quest_clear_receipts(character_id,account,acceptance_id,quest_id,quest_slot,event_id,
+                  instance_id,task_attempt,epoch,dungeon_id,map_id,generation,revision,source_type,growth_event_id,scene_operation_id)
+                  VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',30,0,
+                    '1234567890abcdef1234567890abcdef','instance',1,1,1,1,1,1,
+                    'MonsterDeath','1234567890abcdef1234567890abcdef',NULL);
                 INSERT INTO character_quest_completion_receipts(character_id,account,acceptance_id,quest_id,event_id,instance_id,task_attempt,epoch,
                   generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,
                   experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards,clear_acceptance_id)

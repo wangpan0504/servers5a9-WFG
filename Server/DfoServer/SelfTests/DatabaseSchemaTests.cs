@@ -30,9 +30,27 @@ internal static class DatabaseSchemaTests
     }
     internal static void RemoveAdventureNames(SqliteConnection db)
     {
+        RewindQuestSceneClearSchema(db);
         Execute(db, "DROP INDEX IF EXISTS account_adventure_name");
         if (Query(db, "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='name_initialized'") is 1L)
             Execute(db, "ALTER TABLE account_adventures DROP COLUMN name_initialized");
+    }
+
+    // 旧结构夹具确实移除v40来源列和空场景表，保留旧清图、完成FK与历史行。
+    internal static void RewindQuestSceneClearSchema(SqliteConnection db)
+    {
+        const string table = "character_quest_clear_receipts";
+        if (Query(db,"SELECT count(*) FROM pragma_table_info('character_quest_clear_receipts') WHERE name='source_type'") is 1L)
+        {
+            if (Query(db,"SELECT count(*) FROM character_quest_clear_receipts WHERE source_type<>'MonsterDeath'") is not 0L)
+                throw new InvalidOperationException("旧版本夹具不能丢弃实际场景来源");
+            var columns = ColumnNames(db,table).Where(name => name is not "\"source_type\"" and not "\"growth_event_id\"" and not "\"scene_operation_id\"").ToArray();
+            bool foreignKeys = Query(db,"PRAGMA foreign_keys") is 1L;
+            Execute(db,"PRAGMA foreign_keys=OFF");
+            try { ChangeReceiptDefinition(db,table,_=>SqliteMigrations.QuestClearSchemaV14,columns); }
+            finally { if (foreignKeys) Execute(db,"PRAGMA foreign_keys=ON"); }
+        }
+        Execute(db,"DROP TABLE IF EXISTS character_dungeon_scene_clear_receipts");
     }
     internal static void RemoveAdventureExpeditions(SqliteConnection db)
     {
@@ -187,6 +205,7 @@ internal static class DatabaseSchemaTests
             VerifyFutureMigrations(path);
             VerifyQuestEffectsMigration(root);
             VerifyCardClaimUpgrade(root);
+            VerifyQuestSceneClearMigration(root);
             string concurrent = Path.Combine(root, "concurrent.db");
             Task.WaitAll(Task.Run(() => new CharacterRepository(concurrent)), Task.Run(() => new AuthenticationRepository(concurrent)));
             using (var db = Open(concurrent))
@@ -248,6 +267,59 @@ internal static class DatabaseSchemaTests
             """);
         string original=Snapshot(broken);RejectDatabase(()=>new CharacterRepository(broken));
         Check(Snapshot(broken)==original,"末段列校验失败回滚新增任务表与版本，保留原库");
+    }
+
+    private static void VerifyQuestSceneClearMigration(string root)
+    {
+        string path=Path.Combine(root,"scene-clear-v39.db");
+        _=new CharacterRepository(path);
+        const string eventId="11111111111111111111111111111111",acceptance="22222222222222222222222222222222";
+        const string clearColumns="rowid,character_id,account,acceptance_id,quest_id,quest_slot,event_id,instance_id,task_attempt,epoch,dungeon_id,map_id,generation,revision";
+        string clearRows,completedRows;
+        using(var db=Open(path))
+        {
+            RewindQuestSceneClearSchema(db);
+            Execute(db,"INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('scene-history',0,'SceneHistory',8,38,1,450,234,0)");
+            Execute(db,$"INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES(1,'scene-history','{eventId}','old-instance',100,1,1,70407,1,1,1,1,'fixture','fixture',1,1,1,1,0,1,7)");
+            Execute(db,$"INSERT INTO character_quest_clear_receipts({clearColumns}) VALUES(17,1,'scene-history','{acceptance}',100,0,'{eventId}','old-instance',1,2,191,70407,1,7)");
+            Execute(db,$"""
+                INSERT INTO character_quest_completion_receipts(rowid,character_id,account,acceptance_id,quest_id,event_id,instance_id,
+                  task_attempt,epoch,generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,
+                  difficulty_key,difficulty_weight,experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,
+                  before_revision,revision,rewards,clear_acceptance_id)
+                VALUES(29,1,'scene-history','{acceptance}',100,'{eventId}','old-instance',1,2,1,'fixture','fixture','fixture',0,0,0,'fixture',0,0,0,1,1,0,0,7,8,'[]','{acceptance}')
+                """);
+            Execute(db,"CREATE TABLE scene_migration_audit(value INTEGER); CREATE INDEX scene_history_map ON character_quest_clear_receipts(map_id); CREATE TRIGGER scene_history_insert AFTER INSERT ON character_quest_clear_receipts BEGIN INSERT INTO scene_migration_audit VALUES(1); END; PRAGMA user_version=39");
+            clearRows=JsonSerializer.Serialize(TcpTestFixture.Rows(path,"SELECT "+clearColumns+" FROM character_quest_clear_receipts"));
+            completedRows=JsonSerializer.Serialize(TcpTestFixture.Rows(path,"SELECT rowid,* FROM character_quest_completion_receipts"));
+        }
+        _=new CharacterRepository(path);
+        using(var db=Open(path))
+        {
+            Check(Query(db,"PRAGMA user_version") is 40L && Query(db,"SELECT count(*) FROM character_dungeon_scene_clear_receipts") is 0L,
+                "v39只增空场景来源并升级v40，不补造历史物件清图");
+            Check(JsonSerializer.Serialize(TcpTestFixture.Rows(path,"SELECT "+clearColumns+" FROM character_quest_clear_receipts"))==clearRows &&
+                JsonSerializer.Serialize(TcpTestFixture.Rows(path,"SELECT rowid,* FROM character_quest_completion_receipts"))==completedRows &&
+                Query(db,"SELECT source_type||':'||growth_event_id FROM character_quest_clear_receipts") is string typed && typed=="MonsterDeath:"+eventId,
+                "旧清图与完成的原列、rowid和FK保全，event明确绑定原growth");
+            Check(Query(db,"SELECT count(*) FROM scene_migration_audit") is 0L && Query(db,"SELECT count(*) FROM sqlite_schema WHERE name IN('scene_history_map','scene_history_insert')") is 2L &&
+                Query(db,"SELECT count(*) FROM pragma_foreign_key_check") is 0L,"保全索引触发器而不重放历史业务，完成FK仍完整");
+            Reject<SqliteException>(()=>Execute(db,"UPDATE character_quest_clear_receipts SET source_type='PassiveObject'"),
+                "旧growth不能只改来源类型就冒充场景物件");
+        }
+        string stable=Snapshot(path); _=new CharacterRepository(path);
+        Check(Snapshot(path)==stable,"v40重开幂等，既有历史凭据不变");
+
+        string failed=Path.Combine(root,"scene-clear-v39-invalid-fk.db");
+        using(var source=Open(path)) using(var target=Open(failed)) source.BackupDatabase(target);
+        using(var db=Open(failed))
+        {
+            RewindQuestSceneClearSchema(db);
+            Execute(db,"PRAGMA foreign_keys=OFF; DELETE FROM character_dungeon_growth_receipts; PRAGMA foreign_keys=ON; PRAGMA user_version=39");
+        }
+        string damaged=Snapshot(failed);
+        Reject<InvalidDataException>(()=>new CharacterRepository(failed),"旧历史FK断裂拒绝整次场景来源迁移");
+        Check(Snapshot(failed)==damaged,"新增来源表、重建清图与版本在同原事务失败回滚，保留损坏现场");
     }
 
     private static void VerifyCardClaimUpgrade(string root)
@@ -1153,6 +1225,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion >= 3)
                     Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
+                if (oldVersion < 40) RewindQuestSceneClearSchema(db);
                 if (oldVersion < 34) RemoveCardClaimSchema(db);
                 if (oldVersion < 28) RemoveEmotionSchema(db);
                 if (oldVersion < 27) RemoveHotkeySchema(db);

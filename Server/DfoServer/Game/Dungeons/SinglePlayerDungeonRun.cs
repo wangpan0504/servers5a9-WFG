@@ -24,6 +24,13 @@ internal sealed record DungeonLoadingFact(DungeonRunIdentity Identity, Guid Acti
 internal sealed record DungeonClearFact(DungeonRunIdentity Identity, uint DungeonId, IReadOnlyList<Guid> ConfirmedDeathEvents)
 {
     public DungeonMap? ClearMap { get; init; }
+    public DungeonPassiveClearSource? PassiveSource { get; init; }
+}
+internal sealed record DungeonPassiveClearSource(Guid OperationId, DungeonRunIdentity Identity, int TemplateId, int SourceOrdinal);
+internal sealed class PreparedDungeonPassiveClear(DungeonPassiveClearSource source, DungeonRunResult result)
+{
+    public DungeonPassiveClearSource Source { get; } = source;
+    public DungeonRunResult Result { get; } = result;
 }
 internal sealed record DungeonRunResult(DungeonRunOutcome Outcome, DungeonRunSnapshot Snapshot, DungeonClearFact? ClearFact = null)
 {
@@ -98,6 +105,8 @@ internal sealed class SinglePlayerDungeonRun
     private readonly HashSet<PreparedDungeonDeath> committedPreparations = [];
     private readonly HashSet<long> combatSequences = [];
     private PreparedDungeonDeath? pendingDeath;
+    private PreparedDungeonPassiveClear? pendingPassiveClear;
+    private PreparedDungeonPassiveClear? committedPassiveClear;
     private PreparedDungeonSettlement? pendingSettlement;
     private PreparedDungeonSettlement? committedSettlement;
     private Room current;
@@ -122,7 +131,8 @@ internal sealed class SinglePlayerDungeonRun
     public bool InitializationCounterSupported { get; }
     public DungeonLoadingFact? LastLoadingFact { get; private set; }
     internal DungeonEntryPlan Entry => entry;
-    internal bool HasPendingDeath => pendingDeath is not null;
+    internal bool HasPendingDeath => pendingDeath is not null || pendingPassiveClear is not null;
+    internal bool HasPendingPassiveClear => pendingPassiveClear is not null;
     internal uint DungeonId => entry.DungeonId;
     internal DungeonElevatorState? CurrentElevator => current.Elevator;
     internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
@@ -135,7 +145,7 @@ internal sealed class SinglePlayerDungeonRun
     // 原生顺序入口可在同一父剧情实例中接取下一子任务，仅绑定此后发生的事件。
     internal void BindQuestAcceptance(DfoServer.Game.Characters.ActiveMainQuest active)
     {
-        if (active.AcceptanceId == Guid.Empty || pendingDeath is not null || pendingSettlement is not null ||
+        if (active.AcceptanceId == Guid.Empty || HasPendingDeath || pendingSettlement is not null ||
             entry.QuestAcceptances.Any(row => row.QuestId == active.QuestId))
             throw new InvalidOperationException("子任务不能复用本实例已绑定的旧接取");
         entry = entry with { QuestAcceptances = entry.QuestAcceptances.Add(active) };
@@ -149,7 +159,7 @@ internal sealed class SinglePlayerDungeonRun
     // 友方、非敌对对象退场只更新显示集合，不加入持久击杀或清图事实；未知key不改变实例。
     internal void RetireNonCombatObject(ushort key)
     {
-        if (current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath))
+        if (pendingPassiveClear is null && current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath))
             current.Dead.Add(key);
     }
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
@@ -164,7 +174,7 @@ internal sealed class SinglePlayerDungeonRun
     public DungeonRunOutcome RetireSpecialChild(ConfirmedDungeonMonsterDeath death)
     {
         if (!ReferenceEquals(death.Authority, authority) || death.Identity != identity || Phase != SinglePlayerDungeonPhase.Dungeon ||
-            death.EventId == Guid.Empty || death.CombatSequence <= 0 || pendingDeath is not null || pendingSettlement is not null ||
+            death.EventId == Guid.Empty || death.CombatSequence <= 0 || HasPendingDeath || pendingSettlement is not null ||
             !current.Plan.Monsters.Any(monster => !monster.IsBlocking && monster.ObjectKey == death.MonsterKey &&
                 (monster.IsSpecialChild || entry.IsTutorial && (monster.IsScriptedRetirement || monster.AiCharacter?.Faction is "[character]" or "[neutral]"))))
             return DungeonRunOutcome.Rejected;
@@ -302,7 +312,7 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (Replay(expected, actionId, "loaded", null) is { } replay)
             return replay;
-        if (pendingDeath is not null || !Matches(expected) || Phase != SinglePlayerDungeonPhase.Loading || actionId == Guid.Empty || !CanAdvance())
+        if (HasPendingDeath || !Matches(expected) || Phase != SinglePlayerDungeonPhase.Loading || actionId == Guid.Empty || !CanAdvance())
             return Result(DungeonRunOutcome.Rejected);
         int slot = InitializationCounterSupported ? checked(entry.Maze.Width * current.Plan.Room.Map.Position.Y + current.Plan.Room.Map.Position.X) : 0;
         bool first = LastLoadingFact is null;
@@ -328,7 +338,7 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (Replay(expected, actionId, "move", target) is { } replay)
             return replay;
-        if (pendingDeath is not null)
+        if (HasPendingDeath)
             return Result(DungeonRunOutcome.Rejected);
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
             current.Elevator is { Completed: false } || !current.Cleared || HasPendingLayer() || !connections.Contains((current.Plan.Room.Map.Position, target)) || !rooms.TryGetValue(target, out Room? next))
@@ -354,7 +364,7 @@ internal sealed class SinglePlayerDungeonRun
         string kind = nextLayer ? "layer" : "base";
         if (Replay(expected,actionId,kind,target) is { } replay) return replay;
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
-            pendingDeath is not null || pendingSettlement is not null || current.Elevator is { Completed: false } || current.Plan.Room.Map.Position != target)
+            HasPendingDeath || pendingSettlement is not null || current.Elevator is { Completed: false } || current.Plan.Room.Map.Position != target)
             return Result(DungeonRunOutcome.Rejected);
         Room next;
         var layers = entry.Maze.LayeredMaps.Where(map => map.Position == target).ToArray();
@@ -384,7 +394,7 @@ internal sealed class SinglePlayerDungeonRun
     internal bool ConfirmLayerBase(DungeonRunIdentity expected, DungeonPoint target)
     {
         if (!Matches(expected) || Phase is not (SinglePlayerDungeonPhase.Loading or SinglePlayerDungeonPhase.Dungeon) ||
-            pendingDeath is not null || pendingSettlement is not null || pendingLayerBaseAck != target ||
+            HasPendingDeath || pendingSettlement is not null || pendingLayerBaseAck != target ||
             current.Plan.Room.Map.Position != target || current.Plan.Room.Map.Kind == "layered") return false;
         pendingLayerBaseAck = null;
         return true;
@@ -402,7 +412,7 @@ internal sealed class SinglePlayerDungeonRun
     {
         if (Replay(expected, actionId, "return", null) is { } replay)
             return replay;
-        if (pendingDeath is not null || pendingSettlement is not null || !Matches(expected) || Phase == SinglePlayerDungeonPhase.Returned || actionId == Guid.Empty || identity.Epoch == long.MaxValue)
+        if (HasPendingDeath || pendingSettlement is not null || !Matches(expected) || Phase == SinglePlayerDungeonPhase.Returned || actionId == Guid.Empty || identity.Epoch == long.MaxValue)
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "return", null));
         Phase = SinglePlayerDungeonPhase.Returned;
@@ -414,7 +424,7 @@ internal sealed class SinglePlayerDungeonRun
     {
         ArgumentNullException.ThrowIfNull(confirmed);
         // 旧的纯内存入口不能抢先确认正在等待数据库结果的候选，既有死亡重放仍可识别。
-        bool awaitingCommit = pendingDeath is not null;
+        bool awaitingCommit = HasPendingDeath;
         DungeonDeathPreparation preparation = PrepareConfirmedDeath(confirmed);
         if (preparation.Outcome != DungeonRunOutcome.Accepted)
             return Result(preparation.Outcome);
@@ -425,7 +435,7 @@ internal sealed class SinglePlayerDungeonRun
     public DungeonDeathPreparation PrepareConfirmedDeath(ConfirmedDungeonMonsterDeath confirmed)
     {
         ArgumentNullException.ThrowIfNull(confirmed);
-        if (!ReferenceEquals(confirmed.Authority, authority))
+        if (!ReferenceEquals(confirmed.Authority, authority) || pendingPassiveClear is not null)
             return new(DungeonRunOutcome.Rejected);
         if (deaths.TryGetValue(confirmed.EventId, out ConfirmedDungeonMonsterDeath? old))
             return new(SameDeath(old, confirmed)
@@ -504,7 +514,7 @@ internal sealed class SinglePlayerDungeonRun
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
         if (!ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
-            pendingDeath is not null || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial ||
+            HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial ||
             (ulong)reward.BaseExperience + reward.RankExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
             string.IsNullOrWhiteSpace(reward.ResourceSource) || reward.ResourceSource.Length > 1024)
@@ -544,10 +554,51 @@ internal sealed class SinglePlayerDungeonRun
 
     internal bool IsPassiveClearCondition(DungeonRunIdentity expected, int templateId, int sourceOrdinal) =>
         Matches(expected) && Phase == SinglePlayerDungeonPhase.Dungeon && !entry.IsClassExperience &&
-        pendingDeath is null && pendingSettlement is null && CanAdvance() && !HasCommittedPassiveClearCondition &&
+        pendingDeath is null && pendingPassiveClear is null && pendingSettlement is null && CanAdvance() && !HasCommittedPassiveClearCondition &&
         passiveClearTarget == templateId && sourceOrdinal >= 0 && sourceOrdinal < current.Plan.Room.PassiveObjects.Count &&
         current.Plan.Room.PassiveObjects[sourceOrdinal].ObjectId == templateId &&
         current.Plan.Room.PassiveObjects.Count(source => source.ObjectId == templateId) == 1;
+
+    // 冻结原物件终末及已提交真实死亡；零击杀场景的翻牌合同尚未闭合，继续拒绝。
+    internal bool CanPreparePassiveClear(DungeonRunIdentity expected, int templateId, int sourceOrdinal) =>
+        IsPassiveClearCondition(expected,templateId,sourceOrdinal) && deaths.Count > 0 && TerminalBossCleared(passiveConfirmed:true);
+
+    internal PreparedDungeonPassiveClear? PreparePassiveClear(DungeonRunIdentity expected, Guid operationId, int templateId, int sourceOrdinal)
+    {
+        if (pendingPassiveClear is { } pending)
+            return pending.Source == new DungeonPassiveClearSource(operationId, expected, templateId, sourceOrdinal) ? pending : null;
+        if (operationId == Guid.Empty || !CanPreparePassiveClear(expected,templateId,sourceOrdinal)) return null;
+        var source = new DungeonPassiveClearSource(operationId, expected, templateId, sourceOrdinal);
+        var next = Snapshot with { Identity = identity with { Epoch = checked(identity.Epoch + 1) }, Phase = SinglePlayerDungeonPhase.Settlement };
+        var fact = new DungeonClearFact(next.Identity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.ToArray()))
+            { ClearMap = current.Plan.Room.Map, PassiveSource = source };
+        pendingPassiveClear = new(source, new(DungeonRunOutcome.Accepted, next, fact));
+        return pendingPassiveClear;
+    }
+
+    internal bool IsPendingPassiveClear(PreparedDungeonPassiveClear prepared) => ReferenceEquals(pendingPassiveClear, prepared) &&
+        prepared.Source.Identity == identity && Phase == SinglePlayerDungeonPhase.Dungeon;
+    internal bool IsCommittedPassiveClear(PreparedDungeonPassiveClear prepared) => ReferenceEquals(committedPassiveClear, prepared) &&
+        prepared.Result.ClearFact == ClearFact && prepared.Result.Snapshot.Identity == identity && Phase == SinglePlayerDungeonPhase.Settlement;
+    internal void CancelUncommittedPassiveClear(PreparedDungeonPassiveClear prepared)
+    {
+        if (ReferenceEquals(pendingPassiveClear,prepared)) pendingPassiveClear=null;
+    }
+
+    internal DungeonRunResult ConfirmCommittedPassiveClear(PreparedDungeonPassiveClear prepared)
+    {
+        if (ReferenceEquals(committedPassiveClear, prepared)) return Result(DungeonRunOutcome.Duplicate);
+        if (!IsPendingPassiveClear(prepared)) return Result(DungeonRunOutcome.Rejected);
+        var source = prepared.Source;
+        acceptedActions.Add(source.OperationId, new(source.Identity, $"passive:{source.TemplateId}:{source.SourceOrdinal}", null));
+        HasCommittedPassiveClearCondition = true;
+        identity = prepared.Result.Snapshot.Identity;
+        Phase = prepared.Result.Snapshot.Phase;
+        ClearFact = prepared.Result.ClearFact;
+        committedPassiveClear = prepared;
+        pendingPassiveClear = null;
+        return prepared.Result;
+    }
 
     // 由原 Session 在场景事件持久提交后确认；物件不是战斗死亡，不加入死亡集合。
     internal DungeonRunResult ConfirmCommittedPassiveObject(DungeonRunIdentity expected, Guid operationId, int templateId, int sourceOrdinal)
@@ -603,11 +654,11 @@ internal sealed class SinglePlayerDungeonRun
             !current.Dead.Contains(monster.ObjectKey) && monster.ObjectKey != preparedMonsterKey);
     }
 
-    private bool TerminalBossCleared(ushort? preparedMonsterKey = null)
+    private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。
         if (!IsTerminalRoom() || HasPendingBossDeaths(preparedMonsterKey) ||
-            passiveClearTarget is not null && !HasCommittedPassiveClearCondition)
+            passiveClearTarget is not null && !HasCommittedPassiveClearCondition && !passiveConfirmed)
             return false;
         if (entry.IsTutorial && current.Plan.Room.TutorialCinematics.Any(movie => movie.DestroyTargets.Count > 0) &&
             current.Plan.Monsters.Any(monster => monster.IsBlocking && !current.Dead.Contains(monster.ObjectKey) &&
@@ -629,7 +680,7 @@ internal sealed class SinglePlayerDungeonRun
     internal IReadOnlyList<ushort>? TutorialCinematicTargets(ushort targetKey)
     {
         if (!entry.IsTutorial || Phase != SinglePlayerDungeonPhase.Dungeon || !IsTerminalRoom() ||
-            pendingDeath is not null || pendingSettlement is not null || !CanAdvance()) return null;
+            HasPendingDeath || pendingSettlement is not null || !CanAdvance()) return null;
         if (current.Plan.Monsters.Any(monster => monster.AiCharacter?.Faction == "[monster]" &&
             !current.Dead.Contains(monster.ObjectKey) && !current.Culled.Contains(monster.ObjectKey))) return null;
         var target = current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == targetKey &&

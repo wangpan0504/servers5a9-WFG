@@ -64,14 +64,17 @@ internal sealed partial class CharacterRepository
         if (clear is not null)
         {
             command.CommandText = """
-                SELECT event_id,instance_id,task_attempt,epoch,quest_slot,revision,dungeon_id,map_id FROM character_quest_clear_receipts
+                SELECT event_id,instance_id,task_attempt,epoch,quest_slot,revision,dungeon_id,map_id,source_type FROM character_quest_clear_receipts
                 WHERE character_id=$id AND account=$account AND acceptance_id=$acceptance AND quest_id=$quest
                 """;
             using var reader = command.ExecuteReader();
             if (!reader.Read() || reader.GetString(0) != clear.EventId.ToString("N") || reader.GetString(1) != clear.InstanceId.ToString("N") ||
                 reader.GetInt64(2) != clear.TaskAttempt || reader.GetInt64(3) != clear.Epoch || reader.GetInt32(4) != clear.QuestSlot || reader.GetInt64(5) != clear.Revision ||
-                reader.GetInt32(6) != clear.DungeonId || reader.GetInt32(7) != clear.MapId)
+                reader.GetInt32(6) != clear.DungeonId || reader.GetInt32(7) != clear.MapId || reader.GetString(8) != clear.SourceType.ToString())
                 throw new InvalidDataException("领奖资格不是原持久接取的权威清图事实");
+            reader.Close();
+            if (clear.SourceType == QuestClearSourceType.PassiveObject)
+                VerifySceneDeathLedger(db,tx,owner.Account,current.Id,clear.EventId,clear.InstanceId,clear.TaskAttempt);
         }
         string consumed = JsonSerializer.Serialize(plan.Consumed);
         command.CommandText = "SELECT * FROM character_quest_completion_receipts WHERE character_id=$id AND account=$account AND acceptance_id=$acceptance";

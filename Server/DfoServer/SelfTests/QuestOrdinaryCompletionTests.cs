@@ -221,6 +221,7 @@ internal static class QuestOrdinaryCompletionTests
                 "任务回答、完成位和奖励同事务失败回滚，不能提前开放分支");
         }
         var actualQuestions = QuestCatalog.Load(pvf);
+        AlbertRequestTests.Run(towns,characters,items,actualQuestions,learning,growth,parameters);
         That(new[] {(3868,3),(3869,2),(6217,3),(6382,2),(6383,2)}.All(row =>
             QuestQuestionProgress.TryCount(actualQuestions.Get(row.Item1),out int count) && count == row.Item2) &&
             QuestQuestionProgress.OrdinaryChoice(actualQuestions.Get(3868),2,actualQuestions) &&
@@ -731,6 +732,7 @@ internal static class QuestOrdinaryCompletionTests
         readonly ItemResources items; readonly CharacterGrowthCatalog growth; readonly QuestRewardParameterCatalog parameters;
         public CharacterRepository Repository { get; }
         readonly AccountOwners owners = new(); public AccountOwners.Lease Owner { get; }
+        internal AccountOwners Owners => owners;
         public QuestCatalog Catalog { get; } public GameSession Session { get; }
         public QuestCompletionRepositoryTests.LostResultRepository? Lost { get; }
         public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, CharacterGrowthCatalog growth,

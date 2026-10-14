@@ -15,7 +15,7 @@ internal static class QuestClearEligibility
     {
         var clear = prepared.Result.ClearFact;
         var death = prepared.Death;
-        return clear is not null && entry.CharacterId != 0 && entry.DungeonId > 0 &&
+        return clear is { PassiveSource: null } && entry.CharacterId != 0 && entry.DungeonId > 0 &&
             (entry.QuestId == 0 ? entry.ActiveQuestSlot == byte.MaxValue && entry.QuestAcceptanceId == Guid.Empty : entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty) &&
             entry.BaseBossMap.Kind == "boss" &&
             clear.DungeonId == entry.DungeonId && clear.ClearMap == prepared.Result.Snapshot.CurrentMap &&
@@ -38,5 +38,28 @@ internal static class QuestClearEligibility
         var matches = character.ActiveMainQuests.Where(quest => quest.Slot == entry.ActiveQuestSlot || quest.QuestId == entry.QuestId).ToArray();
         return matches.Length == 1 && matches[0].Slot == entry.ActiveQuestSlot && matches[0].QuestId == entry.QuestId &&
             matches[0].ConditionState == 1 && matches[0].AcceptanceId == entry.QuestAcceptanceId;
+    }
+
+    internal static bool TryValidateScene(SinglePlayerDungeonRun run, PreparedDungeonPassiveClear prepared, QuestSceneEvent scene)
+    {
+        var entry = run.Entry; var clear = prepared.Result.ClearFact; var source = prepared.Source;
+        return (run.IsPendingPassiveClear(prepared) || run.IsCommittedPassiveClear(prepared)) &&
+            entry.CharacterId != 0 && entry.DungeonId > 0 && entry.BaseBossMap.Kind == "boss" &&
+            (entry.QuestId == 0 ? entry.ActiveQuestSlot == byte.MaxValue && entry.QuestAcceptanceId == Guid.Empty :
+                entry.QuestId < 30000 && entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty &&
+                entry.QuestAcceptances.Any(row => row.QuestId == entry.QuestId && row.Slot == entry.ActiveQuestSlot && row.AcceptanceId == entry.QuestAcceptanceId)) &&
+            entry.RouteQuestId is > 0 and < 30000 && entry.QuestAcceptances.Count(row => row.QuestId == entry.RouteQuestId) == 1 &&
+            entry.QuestAcceptances.Any(row => row.QuestId == entry.RouteQuestId && row.Slot <= 29 && row.AcceptanceId != Guid.Empty) &&
+            source.OperationId != Guid.Empty && source.OperationId == scene.OperationId && source.Identity == scene.Identity &&
+            source.TemplateId == scene.TemplateId && source.SourceOrdinal == scene.SourceOrdinal &&
+            entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } target] && target.TargetId == scene.TemplateId &&
+            scene.Identity.CharacterId == entry.CharacterId && scene.Identity.QuestId == entry.QuestId &&
+            scene.Identity.InstanceId != Guid.Empty && scene.Identity.TaskAttempt > 0 && scene.Identity.Epoch < long.MaxValue &&
+            scene.DungeonId == entry.DungeonId && scene.MapId > 0 && scene.Fingerprint.Length == 64 &&
+            clear is { PassiveSource: not null, ConfirmedDeathEvents.Count: > 0, ClearMap: not null } && clear.PassiveSource == source &&
+            clear.DungeonId == entry.DungeonId && clear.ClearMap.Id == scene.MapId && entry.IsTerminalMap(clear.ClearMap) &&
+            prepared.Result.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement && clear.ClearMap == prepared.Result.Snapshot.CurrentMap &&
+            clear.Identity == prepared.Result.Snapshot.Identity && clear.Identity == (scene.Identity with { Epoch = scene.Identity.Epoch + 1 }) &&
+            !clear.ConfirmedDeathEvents.Contains(Guid.Empty) && clear.ConfirmedDeathEvents.Distinct().Count() == clear.ConfirmedDeathEvents.Count;
     }
 }

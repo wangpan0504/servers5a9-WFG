@@ -43,7 +43,9 @@ internal sealed partial class GameSession
             var dungeon = formalDungeon;
             var character = Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement && dungeon is not null &&
                 !dungeon.Entry.IsClassExperience &&
-                !dungeon.Ground.HasPendingOperation && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && pendingQuestCompletion is null
+                !dungeon.Ground.HasPendingOperation && (!dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingPassiveClear &&
+                    dungeon.QuestSceneEvents.TryGetValue((dungeon.Run.Snapshot.CurrentMap,(int)templateId),out var retry) && !retry.Committed) &&
+                !dungeon.Run.HasPendingSettlement && pendingQuestCompletion is null
                 ? Selected : null;
             var snapshot = dungeon?.Run.Snapshot;
             var room = snapshot is null ? null : dungeon!.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;
@@ -59,16 +61,44 @@ internal sealed partial class GameSession
         var matches = capture.Room.PassiveObjects.Select((source,ordinal) => (source,ordinal))
             .Where(row => row.source.ObjectId == templateId).ToArray();
         // 标识只有模板时，重复模板行无法唯一寻址；不按接取目标或数量反猜物件身份。
-        // 39的无key死亡报告要求资源声明；33已按活动任务指定模板，普通自动销毁物件也走该原生消费者。
-        if (matches.Length != 1 || reportedQuest is null && !resources.ReportsQuestDeath(matches[0].source)) return null;
+        // maze明确声明的唯一终末物件有独立39来源；零击杀结算仍未接入。
+        if (matches.Length != 1) return null;
+        bool reportsQuestDeath = resources.ReportsQuestDeath(matches[0].source);
+        bool mazeClear = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, matches[0].ordinal);
+        if (capture.Pending is null && mazeClear && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
+            QuestHuntProgress.Bound(active,current.Entry))) return null;
+        if (capture.Pending is null && reportedQuest is null && !reportsQuestDeath &&
+            (!mazeClear || current.Run.ClearFact is not null || !current.Entry.IsTerminalMap(scene.CurrentMap))) return null;
         var plan = capture.Pending?.Plan;
         if (plan is null)
         {
             var source = new QuestSceneEvent(Guid.NewGuid(),scene.Identity,checked((int)current.Entry.DungeonId),scene.CurrentMap.Id,
                 checked((int)templateId),matches[0].ordinal,fingerprint);
-            var drops = current.QuestDrops is { } prepared ? QuestDropPlan.Create(expected,current.Run.Entry,prepared,
-                source.OperationId,scene.Identity,scene.CurrentMap.Id,checked((int)templateId),3,false,current.Draw,DateTimeOffset.UtcNow) : null;
-            plan = QuestLifecyclePlan.ObservePassive(expected,questCatalog,current.Run.Entry,source,drops);
+            bool clearCandidate = owner.Execute(() => ReferenceEquals(Selected,expected) && ReferenceEquals(formalDungeon,current) &&
+                SelectionEpoch == capture.SelectionEpoch && current.Run.CanPreparePassiveClear(scene.Identity,source.TemplateId,source.SourceOrdinal));
+            if (reportedQuest is null && !reportsQuestDeath && !clearCandidate) return null;
+            var drops = current.QuestDrops is { } questDrops ? QuestDropPlan.Create(expected,current.Run.Entry,questDrops,
+                source.OperationId,scene.Identity,scene.CurrentMap.Id,checked((int)templateId),3,clearCandidate,current.Draw,DateTimeOffset.UtcNow) : null;
+            plan = owner.Execute(() =>
+            {
+                if (!Ready || Phase != capture.Phase || SelectionEpoch != capture.SelectionEpoch || !ReferenceEquals(Selected,expected) ||
+                    !ReferenceEquals(formalDungeon,current) || current.Run.Snapshot.Identity != scene.Identity) return null;
+                var prepared = mazeClear ? current.Run.PreparePassiveClear(scene.Identity,source.OperationId,
+                    source.TemplateId,source.SourceOrdinal) : null;
+                if (reportedQuest is null && !reportsQuestDeath && prepared is null) return null;
+                try
+                {
+                    var candidate = QuestLifecyclePlan.ObservePassive(expected,questCatalog,current.Run.Entry,source,drops,prepared,current.Run);
+                    if (candidate is null && prepared is not null) current.Run.CancelUncommittedPassiveClear(prepared);
+                    return candidate;
+                }
+                catch
+                {
+                    // 此处尚未进入任何存储调用；规划失败可以撤销原准备，SQL结果不明则保留原候选。
+                    if (prepared is not null) current.Run.CancelUncommittedPassiveClear(prepared);
+                    throw;
+                }
+            });
         }
         if (plan is null) return null;
         return owner.Execute(() =>
@@ -85,7 +115,14 @@ internal sealed partial class GameSession
             {
                 Selected = commit.Character;
                 pending.Committed = true;
-                if (clearCondition)
+                if (plan.SceneClear is { } prepared)
+                {
+                    var result = current.Run.ConfirmCommittedPassiveClear(prepared);
+                    if (result.Outcome != DungeonRunOutcome.Accepted)
+                        throw new InvalidOperationException("已提交场景清图的原实例准备无法确认");
+                    SetState(SessionPhase.Settlement);
+                }
+                else if (clearCondition)
                 {
                     var result = current.Run.ConfirmCommittedPassiveObject(scene.Identity, plan.OperationId,
                         (int)templateId, plan.SceneEvent.SourceOrdinal);

@@ -130,6 +130,8 @@ internal static class QuestSceneTests
             QuestFinishResult Finish(ushort id) => f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
         }
         VerifyPassiveSettlement(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
+        QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
+            DungeonClearExperienceCatalog.Load(pvf),parameters);
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
     }
 

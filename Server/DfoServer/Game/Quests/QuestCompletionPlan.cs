@@ -399,7 +399,7 @@ internal sealed class QuestCompletionPlan
     {
         if (character.Id == 0 || character.Revision < clear.Revision || clear.Revision <= 0 || clear.QuestId is 0 or >= 30000 || clear.QuestSlot > 29 ||
             clear.AcceptanceId == Guid.Empty || clear.EventId == Guid.Empty || clear.InstanceId == Guid.Empty ||
-            clear.TaskAttempt <= 0 || clear.Epoch <= 0 || character.CompletedQuests.Contains(clear.QuestId) ||
+            clear.TaskAttempt <= 0 || clear.Epoch <= 0 || !Enum.IsDefined(clear.SourceType) || character.CompletedQuests.Contains(clear.QuestId) ||
             character.CompletedQuests.Distinct().Count() != character.CompletedQuests.Length)
             return false;
         var matches = character.ActiveMainQuests.Where(active => active.QuestId == clear.QuestId || active.Slot == clear.QuestSlot ||

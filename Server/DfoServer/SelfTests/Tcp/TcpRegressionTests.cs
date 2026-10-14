@@ -61,8 +61,12 @@ internal static class TcpRegressionTests
             QuestDungeonClearProgressTests.RunInitialization(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources);
             return Task.CompletedTask;
         }),
-        ("dungeon-story-events", (_, _, resources) => DungeonStoryEventPublicationTests.RunAsync(resources.Towns,resources.Archive,
-            resources.Characters,resources.ItemResources,resources.Learning)),
+        ("dungeon-story-events", async (_, _, resources) =>
+        {
+            QuestSceneTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            await DungeonStoryEventPublicationTests.RunAsync(resources.Towns,resources.Archive,
+                resources.Characters,resources.ItemResources,resources.Learning);
+        }),
         ("quest-core-rewards", async (_, _, resources) =>
         {
             ImageCommunicationTests.RunResources(resources.Towns, resources.Archive, resources.Characters,

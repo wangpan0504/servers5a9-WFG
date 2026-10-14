@@ -30,13 +30,22 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$slot", active.Slot);
         command.Parameters.AddWithValue("$quest", questId);
         command.CommandText = """
-            SELECT r.event_id,r.instance_id,r.task_attempt,r.epoch,r.revision,r.dungeon_id,r.map_id
-            FROM character_quest_clear_receipts r JOIN character_dungeon_growth_receipts g
-            ON g.character_id=r.character_id AND g.event_id=r.event_id AND g.account=r.account
+            SELECT r.event_id,r.instance_id,r.task_attempt,r.epoch,r.revision,r.dungeon_id,r.map_id,r.source_type
+            FROM character_quest_clear_receipts r LEFT JOIN character_dungeon_growth_receipts g
+            ON g.character_id=r.character_id AND g.event_id=r.growth_event_id AND g.account=r.account
+            LEFT JOIN character_dungeon_scene_clear_receipts s
+            ON s.character_id=r.character_id AND s.operation_id=r.scene_operation_id AND s.account=r.account
+            LEFT JOIN character_quest_lifecycle_receipts l
+            ON l.character_id=s.character_id AND l.operation_id=s.operation_id AND l.account=s.account
             WHERE r.character_id=$id AND r.account=$account AND r.acceptance_id=$acceptance
               AND r.quest_id=$quest AND r.quest_slot=$slot
-              AND g.instance_id=r.instance_id AND g.task_attempt=r.task_attempt
-              AND g.map_id=r.map_id AND g.epoch+1=r.epoch AND g.revision=r.revision
+              AND ((r.source_type='MonsterDeath' AND g.event_id=r.event_id AND r.scene_operation_id IS NULL
+                AND g.instance_id=r.instance_id AND g.task_attempt=r.task_attempt
+                AND g.map_id=r.map_id AND g.epoch+1=r.epoch AND g.revision=r.revision)
+               OR (r.source_type='PassiveObject' AND s.operation_id=r.event_id AND r.growth_event_id IS NULL
+                AND s.source_type='PassiveObject' AND s.instance_id=r.instance_id AND s.task_attempt=r.task_attempt
+                AND s.map_id=r.map_id AND s.dungeon_id=r.dungeon_id AND s.epoch=r.epoch AND s.revision=r.revision
+                AND l.action='Condition' AND l.scene_event IS NOT NULL AND l.revision=s.revision))
             """;
         using var reader = command.ExecuteReader();
         if (!reader.Read())
@@ -44,8 +53,13 @@ internal sealed partial class CharacterRepository
         long revision = reader.GetInt64(4);
         if (revision > current.Revision)
             throw new InvalidDataException("持久清图revision晚于实际角色");
-        return new QuestClearReceipt(active.AcceptanceId, questId, active.Slot, Guid.ParseExact(reader.GetString(0), "N"),
-            Guid.ParseExact(reader.GetString(1), "N"), reader.GetInt64(2), reader.GetInt64(3), revision) { DungeonId = reader.GetInt32(5), MapId = reader.GetInt32(6) };
+        var receipt = new QuestClearReceipt(active.AcceptanceId, questId, active.Slot, Guid.ParseExact(reader.GetString(0), "N"),
+            Guid.ParseExact(reader.GetString(1), "N"), reader.GetInt64(2), reader.GetInt64(3), revision)
+            { DungeonId = reader.GetInt32(5), MapId = reader.GetInt32(6), SourceType = Enum.Parse<QuestClearSourceType>(reader.GetString(7)) };
+        reader.Close();
+        if (receipt.SourceType == QuestClearSourceType.PassiveObject)
+            VerifySceneDeathLedger(db,tx,owner.Account,current.Id,receipt.EventId,receipt.InstanceId,receipt.TaskAttempt);
+        return receipt;
     });
 
     // 清图事实与末次死亡经验共用事务；C2S33及诊断状态不能进入此入口。
@@ -58,7 +72,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$id", current.Id);
         command.Parameters.AddWithValue("$event", prepared.Death.EventId.ToString("N"));
         command.CommandText = """
-            SELECT account,acceptance_id,quest_id,quest_slot,instance_id,task_attempt,epoch,dungeon_id,map_id
+            SELECT account,acceptance_id,quest_id,quest_slot,instance_id,task_attempt,epoch,dungeon_id,map_id,source_type
             FROM character_quest_clear_receipts WHERE character_id=$id AND event_id=$event
             """;
         var saved = new HashSet<Guid>();
@@ -69,6 +83,7 @@ internal sealed partial class CharacterRepository
                 Guid acceptance = Guid.ParseExact(reader.GetString(1), "N");
                 if (clear is null || reader.GetString(0) != owner.Account || !entry.QuestAcceptances.Any(row =>
                     row.AcceptanceId == acceptance && row.QuestId == reader.GetInt32(2) && row.Slot == reader.GetInt32(3)) ||
+                    reader.GetString(9) != nameof(QuestClearSourceType.MonsterDeath) ||
                     reader.GetString(4) != clear.Identity.InstanceId.ToString("N") || reader.GetInt64(5) != clear.Identity.TaskAttempt ||
                     reader.GetInt64(6) != clear.Identity.Epoch || reader.GetInt32(7) != clear.DungeonId || reader.GetInt32(8) != clear.ClearMap?.Id)
                     throw new InvalidDataException("清图重放的接取身份、实例或地图不一致");
@@ -129,8 +144,9 @@ internal sealed partial class CharacterRepository
             if (target.ConditionState != 1) continue;
             command.CommandText = """
                 INSERT INTO character_quest_clear_receipts(character_id,account,acceptance_id,quest_id,quest_slot,event_id,
-                  instance_id,task_attempt,epoch,dungeon_id,map_id,generation,revision)
-                VALUES($id,$account,$acceptance,$quest,$slot,$event,$instance,$attempt,$epoch,$dungeon,$map,$generation,$revision)
+                  instance_id,task_attempt,epoch,dungeon_id,map_id,generation,revision,source_type,growth_event_id,scene_operation_id)
+                VALUES($id,$account,$acceptance,$quest,$slot,$event,$instance,$attempt,$epoch,$dungeon,$map,$generation,$revision,
+                  'MonsterDeath',$event,NULL)
                 """;
             command.ExecuteNonQuery();
         }

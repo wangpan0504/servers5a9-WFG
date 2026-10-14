@@ -104,7 +104,62 @@ internal static class SqliteMigrations
             Execute(db, tx, "CREATE INDEX account_adventure_name ON account_adventures(name COLLATE NOCASE)");
         }),
         new(39, "角色药剂与光环传送冷却", static (db, tx) => Execute(db, tx, TeleportCooldownSchema)),
+        new(40, "物件终末场景清图来源", UpgradeQuestSceneClear),
     ];
+
+    internal const string QuestSceneClearSchema = """
+        CREATE TABLE character_dungeon_scene_clear_receipts(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,operation_id TEXT NOT NULL,
+          source_type TEXT NOT NULL CHECK(source_type='PassiveObject'),
+          instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 0 AND 29999),
+          task_attempt INTEGER NOT NULL CHECK(task_attempt>0),before_epoch INTEGER NOT NULL CHECK(before_epoch>0),
+          epoch INTEGER NOT NULL CHECK(epoch=before_epoch+1),dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),map_id INTEGER NOT NULL CHECK(map_id>0),
+          template_id INTEGER NOT NULL CHECK(template_id>0),source_ordinal INTEGER NOT NULL CHECK(source_ordinal>=0),
+          fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64),
+          death_events BLOB NOT NULL CHECK(typeof(death_events)='blob' AND length(death_events)>0 AND length(death_events)%16=0),
+          generation INTEGER NOT NULL CHECK(generation>0),revision INTEGER NOT NULL CHECK(revision>0),
+          PRIMARY KEY(character_id,operation_id),UNIQUE(character_id,instance_id),
+          FOREIGN KEY(character_id,operation_id) REFERENCES character_quest_lifecycle_receipts(character_id,operation_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    internal static readonly string QuestClearSchemaV40 = QuestClearSchemaV14
+        .Replace("PRIMARY KEY(character_id,acceptance_id),", """
+            source_type TEXT NOT NULL CHECK(source_type IN('MonsterDeath','PassiveObject')),
+            growth_event_id TEXT,scene_operation_id TEXT,
+            CHECK((source_type='MonsterDeath' AND growth_event_id=event_id AND growth_event_id IS NOT NULL AND scene_operation_id IS NULL)
+              OR (source_type='PassiveObject' AND scene_operation_id=event_id AND scene_operation_id IS NOT NULL AND growth_event_id IS NULL)),
+            PRIMARY KEY(character_id,acceptance_id),
+            """)
+        .Replace("FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),", """
+            FOREIGN KEY(character_id,growth_event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
+            FOREIGN KEY(character_id,scene_operation_id) REFERENCES character_dungeon_scene_clear_receipts(character_id,operation_id),
+            """);
+
+    static void UpgradeQuestSceneClear(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var command = db.CreateCommand(); command.Transaction = tx;
+        command.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_quest_clear_receipts'";
+        string actual = command.ExecuteScalar() as string ?? throw new InvalidDataException("场景清图迁移缺少原清图表");
+        bool current = NormalizeTable(actual,"character_quest_clear_receipts") == NormalizeTable(QuestClearSchemaV40,"character_quest_clear_receipts");
+        if (!current && NormalizeTable(actual,"character_quest_clear_receipts") != NormalizeTable(QuestClearSchemaV14,"character_quest_clear_receipts"))
+            throw new InvalidDataException("场景清图迁移拒绝未知清图定义");
+        command.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_dungeon_scene_clear_receipts'";
+        if (command.ExecuteScalar() is string scene)
+        {
+            if (NormalizeTable(scene,"character_dungeon_scene_clear_receipts") != NormalizeTable(QuestSceneClearSchema,"character_dungeon_scene_clear_receipts"))
+                throw new InvalidDataException("场景清图迁移拒绝未知场景来源定义");
+        }
+        else Execute(db,tx,QuestSceneClearSchema);
+        if (current) return;
+        Execute(db,tx,"PRAGMA defer_foreign_keys=ON");
+        RebuildReceipt(db,tx,"character_quest_clear_receipts",QuestClearSchemaV40,
+            "source_type,growth_event_id,scene_operation_id","'MonsterDeath',event_id,NULL");
+        command.CommandText = "PRAGMA foreign_key_check";
+        using var reader = command.ExecuteReader();
+        if (reader.Read()) throw new InvalidDataException("场景清图迁移不能保全旧清图或完成外键");
+    }
 
     internal const string TeleportCooldownSchema = """
         CREATE TABLE IF NOT EXISTS character_teleport_cooldowns(
@@ -524,6 +579,9 @@ internal static class SqliteMigrations
     static string NormalizeTable(string sql, string table) => string.Concat(sql.Where(c => !char.IsWhiteSpace(c)))
         .TrimEnd(';').Replace("\"" + table + "\"", table)
         .Replace("\"character_quest_clear_receipts\"", "character_quest_clear_receipts")
+        .Replace("\"character_dungeon_growth_receipts\"", "character_dungeon_growth_receipts")
+        .Replace("\"character_dungeon_scene_clear_receipts\"", "character_dungeon_scene_clear_receipts")
+        .Replace("\"character_quest_lifecycle_receipts\"", "character_quest_lifecycle_receipts")
         .Replace("\"characters\"", "characters");
 
     private const string QuestCompletionSchemaV18 = """
@@ -596,7 +654,7 @@ internal static class SqliteMigrations
         );
         """;
 
-    private const string QuestClearSchemaV14 = """
+    internal const string QuestClearSchemaV14 = """
         CREATE TABLE character_quest_clear_receipts(
           character_id INTEGER NOT NULL,account TEXT NOT NULL,
           acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
@@ -905,6 +963,15 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
+        foreach (var (table,expected) in new[] { ("character_quest_clear_receipts",QuestClearSchemaV40),
+            ("character_dungeon_scene_clear_receipts",QuestSceneClearSchema) })
+        {
+            using var query = db.CreateCommand(); query.Transaction = tx;
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            query.Parameters.AddWithValue("$table",table);
+            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(expected,table))
+                throw new InvalidDataException("任务清图来源的约束或外键不是已确认结构: " + table);
+        }
         using var constraints = db.CreateCommand();
         constraints.Transaction = tx;
         constraints.CommandText = """
@@ -945,6 +1012,8 @@ internal static class SqliteMigrations
         "SELECT character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items FROM character_quest_drop_receipts LIMIT 0",
         "SELECT account,quest_id,character_id,acceptance_id,daily_period,answer FROM account_completed_quests LIMIT 0",
         "SELECT character_id,account,operation_id,action,quest_id,acceptance_id,before_revision,revision,before_active,after_active,changed_items,scene_event,before_completed,after_completed FROM character_quest_lifecycle_receipts LIMIT 0",
+        "SELECT character_id,account,operation_id,source_type,instance_id,quest_id,task_attempt,before_epoch,epoch,dungeon_id,map_id,template_id,source_ordinal,fingerprint,death_events,generation,revision FROM character_dungeon_scene_clear_receipts LIMIT 0",
+        "SELECT character_id,acceptance_id,event_id,source_type,growth_event_id,scene_operation_id FROM character_quest_clear_receipts LIMIT 0",
         "SELECT character_id,bonus_tp FROM character_tp_sources LIMIT 0",
         "SELECT character_id,context,skill_id,keys FROM character_skill_commands LIMIT 0",
         "SELECT character_id,context,root_id,children FROM character_skill_combos LIMIT 0",

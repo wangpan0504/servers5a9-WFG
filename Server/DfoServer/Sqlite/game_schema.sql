@@ -143,14 +143,34 @@ CREATE TABLE character_quest_clear_receipts(
     task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
     dungeon_id INTEGER NOT NULL,map_id INTEGER NOT NULL,
     generation INTEGER NOT NULL CHECK(generation>0),revision INTEGER NOT NULL CHECK(revision>0),
+    source_type TEXT NOT NULL CHECK(source_type IN('MonsterDeath','PassiveObject')),
+    growth_event_id TEXT,scene_operation_id TEXT,
+    CHECK((source_type='MonsterDeath' AND growth_event_id=event_id AND growth_event_id IS NOT NULL AND scene_operation_id IS NULL)
+      OR (source_type='PassiveObject' AND scene_operation_id=event_id AND scene_operation_id IS NOT NULL AND growth_event_id IS NULL)),
     PRIMARY KEY(character_id,acceptance_id),
 
-    FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
+    FOREIGN KEY(character_id,growth_event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
+    FOREIGN KEY(character_id,scene_operation_id) REFERENCES character_dungeon_scene_clear_receipts(character_id,operation_id),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
 
 CREATE UNIQUE INDEX character_active_quest_acceptance ON character_active_main_quests(character_id,acceptance_id)
     WHERE acceptance_id<>'00000000000000000000000000000000';
+
+CREATE TABLE character_dungeon_scene_clear_receipts(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,operation_id TEXT NOT NULL,
+  source_type TEXT NOT NULL CHECK(source_type='PassiveObject'),
+  instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 0 AND 29999),
+  task_attempt INTEGER NOT NULL CHECK(task_attempt>0),before_epoch INTEGER NOT NULL CHECK(before_epoch>0),
+  epoch INTEGER NOT NULL CHECK(epoch=before_epoch+1),dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),map_id INTEGER NOT NULL CHECK(map_id>0),
+  template_id INTEGER NOT NULL CHECK(template_id>0),source_ordinal INTEGER NOT NULL CHECK(source_ordinal>=0),
+  fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64),
+  death_events BLOB NOT NULL CHECK(typeof(death_events)='blob' AND length(death_events)>0 AND length(death_events)%16=0),
+  generation INTEGER NOT NULL CHECK(generation>0),revision INTEGER NOT NULL CHECK(revision>0),
+  PRIMARY KEY(character_id,operation_id),UNIQUE(character_id,instance_id),
+  FOREIGN KEY(character_id,operation_id) REFERENCES character_quest_lifecycle_receipts(character_id,operation_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
 
 CREATE TABLE character_quest_completion_receipts(
           character_id INTEGER NOT NULL,account TEXT NOT NULL,
