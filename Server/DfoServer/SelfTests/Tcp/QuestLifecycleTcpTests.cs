@@ -317,7 +317,7 @@ internal static class QuestLifecycleTcpTests
             }
             peer.Send(33,Convert.FromHexString("21002A75100000")); peer.Expect(1,33,Convert.FromHexString("012A7500000000")); peer.Barrier();
             peer.Send(33,[33,0,35,117,16,0,0]); peer.Expect(1,33,[1,35,117,0,0,0,0]); peer.Barrier();
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
         }
         using (var peer = Open(f))
         {
@@ -632,7 +632,7 @@ internal static class QuestLifecycleTcpTests
             acceptance = extra.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id);
             That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
                 is [[13102L,1L]], "成功加载不伪造清图或转职完成");
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21);
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21);
             Bytes(peer.Expect(0,356).Body,peer.CompletedQuestHistory,"转职任务回城保留已知前置完成历史"); peer.Barrier();
             That(extra.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id) == acceptance,
                 "未通关回城保留本次持久接取及清图进度");
@@ -1050,7 +1050,7 @@ internal static class QuestLifecycleTcpTests
                     is [[long settledMap]] && settledMap == scenario.Map,"收到许可后真实46按实际终点结算 " + scenario.Quest);
                 peer.Send(34,[34,0,(byte)scenario.Quest,(byte)(scenario.Quest>>8),255,255,1,0,255,255]);
                 That(Finished(peer).Body[0] == 1,"实际条件及结算完成后正常交付 " + scenario.Quest); Drain();
-                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
                 void Drain() => DrainNotifications(peer,packet =>
                 {
                     if (packet.Opcode == 31) enabled++;
@@ -1300,7 +1300,7 @@ internal static class QuestLifecycleTcpTests
             That(fixture.Snapshot() == committed,"重复46不发放第二份末层通关奖励");
             peer.Send(34,[34,0,203,12,255,255,1,0,255,255]); That(Finished(peer).Body[0] == 1,"3275猎杀完成后正常交付");
             DrainNotifications(peer);
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             void Move(byte x,byte y,byte layer)
             {
                 var request=new byte[100]; request[0]=x; request[1]=y; request[10]=layer;
@@ -1357,7 +1357,7 @@ internal static class QuestLifecycleTcpTests
                     peer.Send(31,[31,0,30,20]); peer.Expect(1,31,[1,30,20,1,0,0,0,0]);
                     peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
                 }
-                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
                 That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id",peer.Id)
                     is [[3273L,1L],[5150L,1L]], "未通关返回保留父/子进行中，不伪造任务完成 " + requestQuest);
             }
@@ -1407,7 +1407,7 @@ internal static class QuestLifecycleTcpTests
                 That(U32(peer.Expect(0,28).Body,0) == 52 && U32(peer.Expect(0,29).Body,14) == 76340,
                     "真实3348及0请求均从D52任务起点加载，不返回拒绝ACK16 " + requestQuest);
                 FormalDungeonTcpTests.Load(peer);
-                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
                 That(Accepted() == acceptance && fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
                     "未清图返回保留3348接取身份和进行中状态，不签发清图凭据 " + requestQuest);
             }
@@ -1513,7 +1513,7 @@ internal static class QuestLifecycleTcpTests
             }
             peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
             long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
-            peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,2]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,2]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             string returned = fixture.Snapshot();
             peer.Send(72,[1,3]); peer.Barrier();
             That(fixture.Snapshot() == returned && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)
@@ -1531,7 +1531,7 @@ internal static class QuestLifecycleTcpTests
             fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
                 is [[3147L,1L]],"连图从已提交前驱和真实已接取3147开始，不用可接列表代替活动任务");
         long attempt = Attempt();
-        peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+        peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
         That(Attempt() == attempt,"72开始后继立即ACK72和24/21退场，真实15前不安装副本或预留尝试");
         long? storyRevision = null;
         if (acceptStoryDigest)

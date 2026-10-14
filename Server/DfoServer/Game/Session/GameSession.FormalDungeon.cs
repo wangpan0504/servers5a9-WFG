@@ -29,6 +29,7 @@ internal sealed partial class GameSession
         public Location? OrdinaryReturnPosition { get; init; }
         public long StartedTimestamp { get; } = System.Diagnostics.Stopwatch.GetTimestamp();
         public uint KillExperienceTotal { get; set; }
+        public uint KillGrowthContractExperience { get; set; }
         public uint ClearTimeMilliseconds { get; set; }
         public bool SettlementEnabled { get; set; }
         public FormalSettlement? Settlement { get; set; }
@@ -123,7 +124,7 @@ internal sealed partial class GameSession
         QuestDropResources? questDrops = null;
         if (!entry.IsTutorial && !entry.IsClassExperience && questCatalog is not null && items is not null && pieces is not null)
         {
-            try { questDrops = QuestDropResources.Create(expected,questCatalog,items,pieces); }
+            try { questDrops = QuestDropResources.Create(expected,questCatalog,items,pieces,contracts?.Growth); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return null; }
         }
         if (state.NextObjectKey > ushort.MaxValue || state.LastAttempt == long.MaxValue)
@@ -351,10 +352,20 @@ internal sealed partial class GameSession
                 { ReportedTarget = target };
         }
         var reward = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
+        uint contractExperience = GrowthContractPolicy.ExperienceBonus(Selected, reward.Amount, contracts?.Growth,
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        reward = reward with { Amount = checked(reward.Amount + contractExperience), GrowthContractExperience = contractExperience };
         FrozenDungeonGroundDeath? loot = null;
         if (dungeon.Ground.HasReservation(pending.Death.MonsterKey))
             loot = dungeon.DropPlans.TryGetValue(pending.Death.MonsterKey, out var generation)
-                ? dungeon.Ground.GetOrFreezeAssets(pending, () => generation.Generate(dungeon.Draw, DateTimeOffset.UtcNow), generation.ResourceSource)
+                ? dungeon.Ground.GetOrFreezeAssets(pending, () =>
+                {
+                    var now = DateTimeOffset.UtcNow;
+                    // 当前正式Run为单人；四档是队内有效成长契约人数，不是难度或怪物品级。
+                    int bonus = GrowthContractPolicy.Active(Selected, contracts?.Growth, now.ToUnixTimeSeconds()) &&
+                        !dungeon.Entry.IsTutorial && !dungeon.Entry.IsTrainingRoom ? contracts!.Growth!.IndependentDropPercent[0] : 0;
+                    return generation.WithGrowthContract(bonus).Generate(dungeon.Draw, now);
+                }, generation.ResourceSource)
                 : dungeon.Ground.GetOrFreeze(pending, () =>
             {
                 var choice = DungeonExplicitDropPolicy.Select(dungeon.Pools[pending.Monster.MonsterId],
@@ -374,6 +385,9 @@ internal sealed partial class GameSession
             throw new InvalidOperationException("已提交掉落的原准备不能发布");
         SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
         dungeon.KillExperienceTotal = checked(dungeon.KillExperienceTotal + committed.Commit.GainedExperience);
+        dungeon.KillGrowthContractExperience = checked(dungeon.KillGrowthContractExperience +
+            GrowthContractPolicy.AppliedBonus(reward.Amount - reward.GrowthContractExperience,
+                reward.GrowthContractExperience, committed.Commit.GainedExperience));
         if (committed.Death.ClearFact is not null)
             dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
         return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward,
@@ -425,7 +439,7 @@ internal sealed partial class GameSession
 
     public TownTravelReceipt? ReturnFromFormalDungeon() => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
+        if (!CheckState(UserStateRequirement.DungeonContext) || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement) return null;
         if (dungeon.PendingTutorialClear is not null) return null;
         // 普通挑战沿本次入口安全点返回；先提交位置，失败时保留原实例与完整角色资产。

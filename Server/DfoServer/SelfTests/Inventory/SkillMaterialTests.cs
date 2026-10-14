@@ -42,11 +42,26 @@ internal static class SkillMaterialTests
             "余额1830消费1回删除量1，不发送余额1829让客户端只剩1");
         That(consumed.Plan!.After.AccountWallet.Get(CurrencyKind.ClearCube) == 1829,"修正应答不改变实际扣款");
         foreach (var invalid in new InventoryDeleteEntry[] { new(2, 358, 3037, 0), new(2, 358, 3037, -1),
-            new(2, 358, 3037, 21), new(2, 357, 3037, 1), new(2, 358, 3036, 1), new(0, 358, 3037, 1), new(3, 358, 3037, 1) })
+            new(2, 358, 3037, 21), new(2, 357, 3037, 1), new(2, 358, 3036, 1), new(0, 358, 3037, 1), new(4, 358, 3037, 1) })
             That(!InventoryDeleteService.PlanBatch(inventory, request with { Items = [invalid] }).Accepted, "错误数量、钱包映射或未实现类型不扣无色");
         That(!InventoryDeleteService.PlanBatch(inventory, request with { List = InventoryListType.PersonalCargo }).Accepted &&
             !InventoryDeleteService.PlanBatch(inventory, request with { Items = [request.Items[0], request.Items[0]] }).Accepted,
             "消费容器和重复槽拒绝");
+        int[] cubeIds = [3033, 3034, 3035, 3036, 3037, 3262];
+        for (int index = 0; index < cubeIds.Length; index++)
+        {
+            var kind = CurrencyWallet.RewardKind(cubeIds[index])!.Value;
+            var before = inventory with { AccountWallet = inventory.AccountWallet.Set(kind, 2) };
+            var scripted = request with { Items = [new(3, (short)(354 + index), cubeIds[index], 1)] };
+            var result = InventoryDeleteService.PlanBatch(before, scripted, preserveClearCube: true);
+            That(result.Accepted && result.Plan!.Reason == "delete_equipment_material" &&
+                result.Plan.After.AccountWallet.Get(kind) == 1 && before.AccountWallet.Get(kind) == 2,
+                "六种晶块的装备脚本材料消费沿账号钱包，只减一，不借修炼场技能豁免");
+            var response = InventoryPackets.Delete(scripted, result);
+            That(response[^3] == 3 && response[13] == 1, "装备脚本ACK保留type3和本次消耗量，不写余额");
+            That(!InventoryDeleteService.PlanBatch(before, scripted with { Items = [scripted.Items[0] with { Count = 3 }] }).Accepted,
+                "装备脚本材料不足拒绝，不能按整堆归一少扣");
+        }
         var material = new InventoryItem(1, new(InventoryListType.Main, 121), new(50000, ItemKind.Material, 3));
         var mixed = inventory with { Items = [material] };
         var entityRequest = request with { Items = [new(2,121,3,1)] };

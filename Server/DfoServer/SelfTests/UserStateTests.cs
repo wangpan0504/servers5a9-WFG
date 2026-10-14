@@ -2,6 +2,7 @@ using System.Net;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
+using DfoServer.Game.Town;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network;
 using DfoServer.Network.Protocol;
@@ -135,7 +136,12 @@ internal static class UserStateTests
             finally { context.CommandGate.Release(); }
             That(await waiting.WaitAsync(TimeSpan.FromSeconds(1)) == CommandResult.Handled && called == 2,
                 "发布完成后恢复同连接顺序执行，不丢失等待请求");
+            var townReceipt = new TownTravelReceipt(session.Selected!, owner.Generation, session.SelectionEpoch);
+            That(session.CheckState(UserState.Town) && session.CanPublishTravel(townReceipt),
+                "城镇投影使用正式user状态与当前角色回执");
             session.BeginDungeonSelection();
+            That(!session.CanPublishTravel(townReceipt),
+                "已进入选图时旧城镇回执不能发布state0或把新上下文加入城镇");
             var selection = session.CurrentDungeonSelection;
             Reject<InvalidOperationException>(() => session.MarkReady(), "重复旧入城回调不能把选图强制改回Town");
             That(session.GetState() == UserState.DungeonSelect && ReferenceEquals(selection, session.CurrentDungeonSelection) &&

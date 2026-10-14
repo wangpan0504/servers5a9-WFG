@@ -79,9 +79,9 @@ internal static class InventoryRewardGrantService
                 wallet = currencies.Grant(character with { Inventory = wallet }, currency, reward.Count).Plan!.After;
                 continue;
             }
-            if (instances is null && contracts?.Recognizes(reward.ItemId) == true)
+            if (contracts?.Recognizes(reward.ItemId) == true)
             {
-                if (!contracts.TryConsumableContract(reward.ItemId, out var contract) || reward.Upgrade != 0 || reward.Refinement != 0)
+                if (!contracts.TryAcquisitionContract(reward.ItemId, out var contract) || reward.Upgrade != 0 || reward.Refinement != 0)
                     return InventoryResult.Reject(19);
                 try
                 {
@@ -91,6 +91,22 @@ internal static class InventoryRewardGrantService
                 continue;
             }
             var template = catalog.Get(reward.ItemId);
+            if (template.AcquisitionContract is { } acquired)
+            {
+                if (reward.Upgrade != 0 || reward.Refinement != 0) return InventoryResult.Reject(19);
+                if (instances is not null)
+                {
+                    var incoming = instances[rewardIndex];
+                    if (incoming.Core.Kind != template.Kind || incoming.IsExpired(now.ToUnixTimeSeconds()) ||
+                        character.Inventory.Items.Any(item => item.Uid != 0 && item.Uid == incoming.Uid))
+                        return InventoryResult.Reject(19);
+                    try { incoming.Core.Validate(); }
+                    catch (InvalidDataException) { return InventoryResult.Reject(19); }
+                }
+                try { wallet = wallet with { AccountWallet = wallet.AccountWallet.ActivateContract(acquired.Type, acquired.DurationSeconds, now, reward.Count) }; }
+                catch (OverflowException) { return InventoryResult.Reject(19); }
+                continue;
+            }
             if (instances is null && template.IsPremiumService)
                 return InventoryResult.Reject(19);
             if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
@@ -133,6 +149,18 @@ internal static class InventoryRewardGrantService
             return InventoryResult.Reject(19);
         if (core.Count > template.StackLimit)
             return InventoryResult.Reject(17);
+        if (template.AcquisitionContract is { } acquired)
+        {
+            var before = character.Inventory;
+            try
+            {
+                var afterContract = before with { AccountWallet = before.AccountWallet.ActivateContract(acquired.Type,
+                    acquired.DurationSeconds, utcNow ?? DateTimeOffset.UtcNow, core.Count) };
+                return new(true, 0, new(before, afterContract, "reward_grant_contract", new(character)));
+            }
+            catch (OverflowException) { return InventoryResult.Reject(19); }
+        }
+        if (template.IsPremiumService) return InventoryResult.Reject(19);
 
         // ItemCore及其附属值均不可变，直接共享完整核心；不重新Create或计算期限。
         var inventory = character.Inventory;

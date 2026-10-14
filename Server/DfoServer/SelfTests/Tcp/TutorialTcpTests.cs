@@ -77,7 +77,7 @@ internal static class TutorialTcpTests
             peer.Expect(1, 44, [1, 3, 0, 0, 123, 0, 0, 0, 26, 33, 0, 0]); peer.Expect(0, 14); peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=8474", peer.Id) is [[0L]],
                 "训练药剂通过本版CMD44消费，先ACK让客户端应用STK本地效果，再发绝对库存");
-            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
             That(fixture.Query("SELECT completed FROM character_tutorial_state WHERE character_id=$p0", peer.Id) is [[1L]],
                 "用户明确退出未完成训练后持久结束训练，与普通副本退出分开");
         }
@@ -98,7 +98,7 @@ internal static class TutorialTcpTests
                 "女圣职者实收15/16进入训练首图，不能停留选图或以失败ACK代替地图初始化");
             peer.Expect(1, 143, [1, 0]);
             FormalDungeonTcpTests.Load(peer);
-            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
             That(fixture.Query("SELECT completed FROM character_tutorial_state WHERE character_id=$p0", peer.Id) is [[1L]],
                 "女圣职者真实进入后明确退出仍完成训练，不通过入场失败伪造完成");
         }
@@ -162,7 +162,7 @@ internal static class TutorialTcpTests
             That(fixture.Query("SELECT count(*) FROM character_tutorial_receipts WHERE character_id=$p0 AND kind='settlement'", peer.Id) is [[1L]] &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[0L]],
                 "训练结算独立原子检查点，不借用普通结算账本或付费免费翻牌奖励");
-            peer.Send(42); peer.Expect(1, 42); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
 
             void Kill(DungeonPlannedMonster actor)
             {

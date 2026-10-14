@@ -33,14 +33,7 @@ internal static class SkillPackets
 
     // NOTI66 type2的剩余秒数，同时驱动客户端达人超等级技能状态。
     public static byte[] ExpertContract(long expiresAt, long now)
-    {
-        using var bytes = new MemoryStream();
-        using var writer = new BinaryWriter(bytes);
-        writer.Write((ushort)2);
-        writer.Write((byte)27);
-        writer.Write(Math.Max(0, expiresAt - now));
-        return bytes.ToArray();
-    }
+        => Inventory.PremiumPackets.Updated(27, expiresAt, now);
     public static byte[] SlotChanged(byte context, byte from, byte to)
     {
         if (context > 1 || from >= 204 || to >= 204)

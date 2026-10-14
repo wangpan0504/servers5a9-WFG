@@ -8,7 +8,8 @@ internal sealed record DungeonDropRarityPool(int Threshold, DungeonItemDropPool 
 internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Items,
     int MinimumCount, int MaximumCount, DungeonDropGoldReference? Gold = null, decimal GoldMultiplier = 1m,
     int ProbabilityDenominator = DungeonDropRatePlan.ProbabilityDenominator,
-    ImmutableArray<DungeonDropRarityPool> RarityPools = default, bool ReferenceGold = false, int Attempts = 1);
+    ImmutableArray<DungeonDropRarityPool> RarityPools = default, bool ReferenceGold = false, int Attempts = 1,
+    bool GrowthContractEligible = false);
 
 // 上游必须提供已解释的概率、数量与池；这里只按完整声明执行，不为未知资源列补类别。
 // 准备计划是不可变规则输入，不持有在线角色；原Run负责冻结实际随机结果。
@@ -18,6 +19,13 @@ internal sealed class DungeonDropGenerationPlan
     public ImmutableArray<DungeonDropTrial> Trials { get; }
     public int MaximumObjects { get; }
     public bool ReferenceQuality { get; }
+    public DungeonDropGenerationPlan WithGrowthContract(int percent)
+    {
+        if (percent < 0) throw new InvalidDataException("成长契约掉落加成不能为负");
+        if (percent == 0 || !Trials.Any(trial => trial.GrowthContractEligible)) return this;
+        return new(ResourceSource, Trials.Select(trial => !trial.GrowthContractEligible ? trial : trial with
+        { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality);
+    }
 
     public DungeonDropGenerationPlan(string resourceSource, IEnumerable<DungeonDropTrial> trials, bool referenceQuality = false)
     {

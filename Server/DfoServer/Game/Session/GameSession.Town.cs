@@ -48,7 +48,7 @@ internal sealed partial class GameSession
 
     public bool CanPublishTravel(TownTravelReceipt receipt) => owner.Execute(() =>
     {
-        if (!Ready || receipt.Generation != owner.Generation || !MatchesSelection(receipt.SelectionEpoch, receipt.Character.Id))
+        if (!CheckState(UserState.Town) || receipt.Generation != owner.Generation || !MatchesSelection(receipt.SelectionEpoch, receipt.Character.Id))
             return false;
         // 同次选角内不能静默丢掉已提交切图并继续收请求；让连接关闭后重读持久位置。
         if (!ReferenceEquals(Selected, receipt.Character))

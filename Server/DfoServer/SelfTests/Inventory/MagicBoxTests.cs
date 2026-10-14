@@ -144,7 +144,7 @@ internal static class MagicBoxTests
         var opened = service.Open(character, noMaterial with { Count = 1 }, out var receipt);
         var unsupportedSeria = seriaDefinition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0 &&
             CurrencyWallet.RewardKind(row.ItemId) is null && resources.Contracts.Recognizes(row.ItemId) &&
-            !resources.Contracts.TryConsumableContract(row.ItemId, out _)).Select(row => row.ItemId).Distinct().ToArray();
+            !resources.Contracts.TryAcquisitionContract(row.ItemId, out _)).Select(row => row.ItemId).Distinct().ToArray();
         if (unsupportedSeria.Length != 0)
         {
             Check(!opened.Accepted && opened.Plan is null && receipt is null && random.Calls == 0 &&

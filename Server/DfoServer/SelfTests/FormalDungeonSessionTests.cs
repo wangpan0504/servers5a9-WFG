@@ -177,6 +177,7 @@ internal static class FormalDungeonSessionTests
             Check(!Buy().Accepted && Same(before, f.Read()) && f.Session.CurrentDungeonDeathReturn() == scheduled,
                 "点券不足不改变钱包、币或死亡计时");
             Check(f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is not null && f.Session.Phase == SessionPhase.Town &&
+                f.Session.GetState() == UserState.Town && f.Session.CheckState(UserState.Town) &&
                 f.Read().Inventory.ReviveCoins == 1 && f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is null,
                 "购买后未复活仍可由原计时返回且仅执行一次，不自动消费新币");
             Enter(f); f.Session.CompleteFormalDungeonLoading(); f.Session.ReportFormalCharacterDeath();

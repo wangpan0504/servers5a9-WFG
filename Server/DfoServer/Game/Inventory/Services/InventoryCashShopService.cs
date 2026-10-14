@@ -37,14 +37,7 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
             var product = shop.Product(requested.CommodityId);
             if (product is null || product.CeraPrice < 0 || product.Count <= 0 || UnsupportedSections.Contains(product.Section))
                 return InventoryResult.Reject(17);
-            if (CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
-                contracts?.TryConsumableContract(product.ItemId, out _) != true)
-            {
-                if (contracts?.Recognizes(product.ItemId) == true)
-                    return InventoryResult.Reject(17);
-                try { if (catalog.Get(product.ItemId).IsPremiumService) return InventoryResult.Reject(17); }
-                catch (InvalidDataException) { return InventoryResult.Reject(17); }
-            }
+            if (!AllowsReward(product.ItemId)) return InventoryResult.Reject(17);
 
             total += product.CeraPrice;
             if (total > int.MaxValue)
@@ -58,14 +51,7 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
             bonuses[product.CommodityId] = productBonuses;
             foreach (var bonus in productBonuses)
             {
-                if (CurrencyWallet.RewardKind(bonus.ItemId) is null && !pieces.ByPiece.ContainsKey(bonus.ItemId) &&
-                    contracts?.TryConsumableContract(bonus.ItemId, out _) != true)
-                {
-                    if (contracts?.Recognizes(bonus.ItemId) == true)
-                        return InventoryResult.Reject(17);
-                    try { if (catalog.Get(bonus.ItemId).IsPremiumService) return InventoryResult.Reject(17); }
-                    catch (InvalidDataException) { return InventoryResult.Reject(17); }
-                }
+                if (!AllowsReward(bonus.ItemId)) return InventoryResult.Reject(17);
                 rewards.Add(new(bonus.ItemId, bonus.Count));
             }
         }
@@ -84,6 +70,18 @@ internal sealed class InventoryCashShopService(ItemCatalog catalog, CashShopCata
 
         receipt = new(products.ToImmutableArray(), bonuses);
         return new(true, 0, new(before, grant.Plan!.After, "cash_shop_buy", overflowItems: grant.Plan.OverflowItems));
+
+        bool AllowsReward(int itemId)
+        {
+            if (CurrencyWallet.RewardKind(itemId) is not null || pieces.ByPiece.ContainsKey(itemId)) return true;
+            if (contracts?.Recognizes(itemId) == true) return contracts.TryAcquisitionContract(itemId, out _);
+            try
+            {
+                var template = catalog.Get(itemId);
+                return !template.IsPremiumService || template.AcquisitionContract is not null;
+            }
+            catch (InvalidDataException) { return false; }
+        }
     }
 
     internal static bool CanGrantCurrencies(InventorySnapshot inventory, IReadOnlyList<InventoryReward> rewards, int goldLimit)

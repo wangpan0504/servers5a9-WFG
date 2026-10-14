@@ -142,6 +142,8 @@ public static class ServerApplication
             if (command.Kind == ServerCommandKind.Gm)
                 return DevelopmentCommands.RunGm(command.Arguments, options, pvf);
             var itemResources = Load("Item resources", () => new ItemResources(pvf));
+            foreach (var warning in itemResources.Contracts.ResourceWarnings)
+                log?.Write("resource_warning", new { Stage = "Premium contract STK", warning.Type, warning.ConfiguredItems, warning.Reason });
             var characters = Load("Character resources", () => CharacterCatalog.Load(pvf, itemResources.Items));
             if (command.Kind == ServerCommandKind.SelfTest)
             {

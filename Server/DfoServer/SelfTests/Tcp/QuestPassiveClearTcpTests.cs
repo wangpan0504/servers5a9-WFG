@@ -147,7 +147,7 @@ internal static class QuestPassiveClearTcpTests
             That(State() == committed,"重复34不增加完成回执或奖励");
             peer.Send(42);
             peer.Expect(1,42,[1]);
-            peer.Expect(0,24);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24);
             peer.Expect(0,21);
             peer.Expect(0,356);
             peer.Barrier();

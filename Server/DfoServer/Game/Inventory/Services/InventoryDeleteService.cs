@@ -7,15 +7,15 @@ internal static class InventoryDeleteService
     public static InventoryResult PlanBatch(InventorySnapshot before, InventoryDeleteRequest request, bool preserveClearCube = false)
     {
         if (!Allows(request.List) || request.Flag != 0 || request.Items.Length is < 1 or > 352 ||
-            request.Items.Any(item => item.Type is not (0 or 1 or 2)) || request.Items.Select(item => item.Slot).Distinct().Count() != request.Items.Length)
+            request.Items.Any(item => item.Type is not (0 or 1 or 2 or 3)) || request.Items.Select(item => item.Slot).Distinct().Count() != request.Items.Length)
             return InventoryResult.Reject();
         var after = before;
         foreach (var item in request.Items)
         {
             InventoryResult result;
-            if (item.Type == 2)
+            if (item.Type is 2 or 3)
             {
-                // 技能材料必须按正数足额扣除，不能套普通丢弃的整堆归一约定。
+                // 技能与装备脚本材料按正数足额扣除，不能套普通丢弃的整堆归一约定。
                 if (request.List != InventoryListType.Main || item.Count <= 0)
                     return InventoryResult.Reject();
                 if (item.Slot is >= 354 and <= 365)
@@ -37,7 +37,9 @@ internal static class InventoryDeleteService
             if (!(preserveClearCube && item.Type == 2 && item.Slot == 358 && item.Value == 3037))
                 after = result.Plan!.After;
         }
-        return new(true, 0, new InventoryPlan(before, after, request.Items.Any(item => item.Type == 2) ? "delete_skill_material" : "delete_item")
+        string reason = request.Items.Any(item => item.Type == 3) ? "delete_equipment_material" :
+            request.Items.Any(item => item.Type == 2) ? "delete_skill_material" : "delete_item";
+        return new(true, 0, new InventoryPlan(before, after, reason)
             { PreserveClearCube = preserveClearCube });
     }
     public static InventoryResult Plan(InventorySnapshot before, InventorySlot position, int value, int count)

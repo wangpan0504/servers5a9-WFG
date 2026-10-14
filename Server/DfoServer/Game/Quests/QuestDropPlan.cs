@@ -12,9 +12,10 @@ namespace DfoServer.Game.Quests;
 
 // 入口锁外解析当前任务与剧情子任务需要的物品；死亡路径只消费已装载模板。
 internal sealed record QuestDropResources(IReadOnlyDictionary<int,StoryQuest> Quests,
-    IReadOnlyDictionary<int,ItemTemplate> Items, EpicPieceCatalog Pieces)
+    IReadOnlyDictionary<int,ItemTemplate> Items, EpicPieceCatalog Pieces, GrowthContractBenefits? Growth = null)
 {
-    public static QuestDropResources Create(Character character, QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces)
+    public static QuestDropResources Create(Character character, QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces,
+        GrowthContractBenefits? growth = null)
     {
         var ids = character.ActiveMainQuests.Select(row => (int)row.QuestId).ToHashSet();
         foreach (int id in ids.ToArray())
@@ -26,7 +27,7 @@ internal sealed record QuestDropResources(IReadOnlyDictionary<int,StoryQuest> Qu
             if (template.Kind is not (ItemKind.Quest or ItemKind.Material or ItemKind.Consumable) ||
                 CurrencyWallet.RewardKind(template.Id) is not null || pieces.ByPiece.ContainsKey(template.Id))
                 throw new NotSupportedException("任务掉落需要尚未接入的持有域: " + template.Id);
-        return new(definitions,templates,pieces);
+        return new(definitions,templates,pieces,growth);
     }
 }
 
@@ -72,13 +73,14 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
                 }
                 if (limit >= 0 && held >= limit) continue;
                 int rolled = 0;
-                if (row.Rate == 100) rolled = row.Count;
-                else if (row.Rate != 0)
+                int rate = GrowthContractPolicy.QuestDropRate(character,row.Rate,resources.Growth,now.ToUnixTimeSeconds());
+                if (rate == 100) rolled = row.Count;
+                else if (rate != 0)
                     for (int at = 0; at < row.Count; at++)
                     {
                         int value = draw(100);
                         if (value is < 0 or >= 100) throw new InvalidDataException("任务掉落随机值越界");
-                        if (value < row.Rate) rolled++;
+                        if (value < rate) rolled++;
                     }
                 int count = checked((int)Math.Min(rolled,limit < 0 ? rolled : Math.Max(0,limit - held)));
                 ushort error = 0;

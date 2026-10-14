@@ -61,7 +61,7 @@ internal static partial class FormalDungeonTcpTests
                 That(fixture.Snapshot() == loaded,"重复加载不重复预留实例、推进任务或改写资产");
                 peer.Send(42);
                 peer.Expect(1,42,[1]);
-                peer.Expect(0,24);
+                peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24);
                 RefreshedQuests(peer);
                 peer.Barrier();
                 That(fixture.Snapshot("SELECT * FROM character_active_main_quests") == active &&

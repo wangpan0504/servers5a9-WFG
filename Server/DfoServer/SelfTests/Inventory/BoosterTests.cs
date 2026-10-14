@@ -102,15 +102,15 @@ internal static class BoosterTests
                 contractGrant.Plan.After.AccountWallet.ContractExpiry(type) == now.ToUnixTimeSeconds() + 86400,
                 "具有完整参数的已支持契约礼包奖励写入账号期限而不创建实体槽 " + type);
         }
-        That(!InventoryRewardGrantService.TryGrantBatch(contractRole, [new(10000387, 1)], catalog,
-            itemResources.GoldLimits, itemResources.EpicPieces, now).Accepted,
-            "统一grant缺契约依赖时拒绝新premium奖励，不因[contract]/[etc]宽类别发成普通实体");
+        That(InventoryRewardGrantService.TryGrantBatch(contractRole, [new(10000387, 1)], catalog,
+            itemResources.GoldLimits, itemResources.EpicPieces, now) is { Accepted: true, Plan.After.Items.IsEmpty: true },
+            "统一grant消费正式模板携带的契约资源事实，不限制获取来源或创建实体");
         var existingPremium = new InventoryItem(99, Bag(65), Core(10000387) with { Marker16 = 77, SortLockFlag = 1 });
         var restoredPremium = InventoryRewardGrantService.TryGrantItems(contractRole, [existingPremium], catalog,
             itemResources.GoldLimits, itemResources.EpicPieces, now);
-        That(restoredPremium.Accepted && restoredPremium.Plan!.After.Items.Single() == existingPremium &&
-            restoredPremium.Plan.After.AccountWallet.PremiumContracts.Count == 0,
-            "完整既有premium实例转移保留UID及核心，不重新激活或误丢弃；消费仍须独立能力门禁");
+        That(restoredPremium.Accepted && restoredPremium.Plan!.After.Items.IsEmpty &&
+            restoredPremium.Plan.After.AccountWallet.ContractExpiry(97) == now.ToUnixTimeSeconds() + 86400,
+            "邮件等实际接收入口将新收到的契约实例转为期限，不占实体槽");
         foreach (int type in new[] { 84, 97, 29 })
         {
             var unsupportedContract = PremiumContractCatalog.Parse("[type] " + type + "\n[target item] 1106\n[term] 1\n[/type]");
@@ -131,7 +131,7 @@ internal static class BoosterTests
             "762真实奖池保持全部原池、抽数和正权重候选，不凭名称猜包含哪些契约");
         bool unsupportedPremium = premiumBox.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0)
             .Any(row => CurrencyWallet.RewardKind(row.ItemId) is null && !itemResources.EpicPieces.ByPiece.ContainsKey(row.ItemId) &&
-                !itemResources.Contracts.TryConsumableContract(row.ItemId, out _) &&
+                !itemResources.Contracts.TryAcquisitionContract(row.ItemId, out _) &&
                 (itemResources.Contracts.Recognizes(row.ItemId) || itemResources.Boosters.DirectActivationItems.Contains(row.ItemId)));
         var premiumRole = current with { Inventory = new([new(1, Bag(3), Core(762))]) };
         var premiumOpen = injectedContracts.Open(premiumRole, new(3, 1), out var premiumReceipt, now);
@@ -146,7 +146,7 @@ internal static class BoosterTests
             // EdgeRandom命中每个独立池的首个正权重候选，按原抽数和数量独立合计全部预期。
             var expectedRewards = premiumBox.Pools.Select(pool => (Pool: pool, Reward: pool.Rewards.First(row => row.Weight > 0)))
                 .GroupBy(row => row.Reward.ItemId).ToDictionary(group => group.Key, group => group.Sum(row => row.Pool.Draws * row.Reward.Count));
-            var expectedExpiries = expectedRewards.Where(pair => itemResources.Contracts.TryConsumableContract(pair.Key, out _))
+            var expectedExpiries = expectedRewards.Where(pair => itemResources.Contracts.TryAcquisitionContract(pair.Key, out _))
                 .GroupBy(pair => itemResources.Contracts.Get(pair.Key)!.Type)
                 .ToDictionary(group => group.Key, group => now.ToUnixTimeSeconds() +
                     group.Sum(pair => itemResources.Contracts.Get(pair.Key)!.DurationSeconds * pair.Value));
@@ -160,7 +160,7 @@ internal static class BoosterTests
                 if (group.Key is { } kind)
                     That(CurrencyWallet.Get(premiumOpen.Plan!.After, kind) == group.Sum(pair => (long)pair.Value), "762完整保留虚拟货币收益");
             var expectedPhysical = expectedRewards.Where(pair => CurrencyWallet.RewardKind(pair.Key) is null &&
-                !itemResources.EpicPieces.ByPiece.ContainsKey(pair.Key) && !itemResources.Contracts.TryConsumableContract(pair.Key, out _))
+                !itemResources.EpicPieces.ByPiece.ContainsKey(pair.Key) && !itemResources.Contracts.TryAcquisitionContract(pair.Key, out _))
                 .ToDictionary(pair => pair.Key, pair => pair.Value);
             var actualPhysical = premiumOpen.Plan!.After.Items.GroupBy(item => item.Core.ItemId)
                 .ToDictionary(group => group.Key, group => group.Sum(item => (long)item.Core.Count));
@@ -276,12 +276,18 @@ internal static class BoosterTests
             That(service.Open(fullWallet, new(3, 1), out _) is { Accepted: false, Error: 4 } && fullWallet.Inventory.Items.Length == 1,
                 "wallet overflow keeps box and never truncates reward " + reward);
         }
-        foreach (int id in new[] { 38, 762 })
-        {
-            current = current with { Inventory = new([new(1, Bag(3), Core(id))]) };
-            int calls = random.Calls;
-            That(!service.Open(current, new(3, 1), out _).Accepted && random.Calls == calls, "unsupported detail or premium pool rejected before randomness " + id);
-        }
+        current = current with { Inventory = new([new(1, Bag(3), Core(38))]) };
+        int calls = random.Calls;
+        That(!service.Open(current, new(3, 1), out _).Accepted && random.Calls == calls,
+            "unsupported detail rejected before randomness 38");
+        current = current with { Inventory = new([new(1, Bag(3), Core(762))]) };
+        calls = random.Calls;
+        var boundPremium = service.Open(current, new(3, 1), out var boundReceipt, now);
+        That(unsupportedPremium
+            ? boundPremium is { Accepted: false, Plan: null } && boundReceipt is null && random.Calls == calls
+            : boundPremium.Accepted && boundReceipt is not null && boundPremium.Plan!.After.Find(Bag(3)) is null &&
+                boundPremium.Plan.After.AccountWallet.PremiumContracts.Count == premiumOpen.Plan!.After.AccountWallet.PremiumContracts.Count,
+            "未覆盖契约目录时也按模板绑定的实际支持情况处理762，不固定拒绝全部契约礼盒");
         current = current with { Inventory = new([new(1, Bag(3), Core(2660291) with { Value = int.MaxValue })]) };
         That(service.Open(current, new(3, int.MaxValue), out _) is { Accepted: false, Error: 4 }, "batch reward arithmetic overflow rejects without a long deterministic loop");
 

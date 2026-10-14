@@ -99,7 +99,7 @@ internal sealed partial class CharacterRepository
 
     static void RequireDeletionDependencies(SqliteConnection db, SqliteTransaction tx)
     {
-        var affected = DeletionTables.Concat(["characters", "character_inventory_items", "character_inventory_slots",
+        var affected = DeletionTables.Concat(["characters", "cube_premium", "character_inventory_items", "character_inventory_slots",
             "inventory_avatar_details", "inventory_creature_details", "mailbox_messages", "mailbox_attachments", "mailbox_audit_log",
             "shop_purchase_counts", "account_completed_quests", "account_adventure_representatives",
             "account_adventure_receipts", "account_adventure_expedition_members", "account_adventure_expeditions"])

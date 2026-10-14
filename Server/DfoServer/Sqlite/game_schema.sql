@@ -6,6 +6,11 @@ CREATE TABLE character_teleport_cooldowns(
   aura_until INTEGER NOT NULL CHECK(aura_until>=0),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE cube_premium(
+  charac_no INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+  selected INTEGER NOT NULL CHECK(selected IN (0,1)),
+  cube_type INTEGER NOT NULL CHECK(cube_type BETWEEN -1 AND 5)
+);
 CREATE TABLE account_adventures(
   account TEXT PRIMARY KEY REFERENCES accounts(account_id),revision INTEGER NOT NULL CHECK(revision>=0),
   name TEXT NOT NULL CHECK(length(name)>0),created_date INTEGER NOT NULL CHECK(created_date BETWEEN 19000101 AND 99991231),

@@ -129,7 +129,7 @@ internal static class PremiumContractTests
     public static void RunResources(ItemResources resources, PvfArchive archive)
     {
         string source = archive.ReadText("etc/premiumlist_new.etc");
-        var original = PremiumContractCatalog.Parse(source);
+        var original = PremiumContractCatalog.Parse(source, archive.ReadText("etc/premiumserviceeffect.etc"));
         That(original.ExpertSkillLevels == resources.Contracts.ExpertSkillLevels &&
             original.ConquerorEquipmentLevels.OrderBy(pair => pair.Key).SequenceEqual(resources.Contracts.ConquerorEquipmentLevels.OrderBy(pair => pair.Key)) &&
             original.ConquerorEquipmentGroups.Count == resources.Contracts.ConquerorEquipmentGroups.Count &&
@@ -158,7 +158,7 @@ internal static class PremiumContractTests
                 "匹配霸王/达人具备声明完整的效果和可用物品模板，[etc]不等于未知药剂");
         foreach (int item in new[] { 2660408, 10000387 })
             That(resources.Contracts.Recognizes(item) && resources.Contracts.Get(item) is not null && !service.TryDefinition(item, out _),
-                "成长/晶之期限映射继续保留，但效果尚未接入时不能只写期限消费");
+                "成长/晶之新获取即时激活，不扫描或处理遗留背包实体");
         foreach (int item in new[] { 9, 11, 137, 1108, 1114 })
             That(!service.TryDefinition(item, out _), "会员赠品、拍卖服务和普通药剂不进入已实现契约消费入口");
         That(resources.Contracts.ByItem.OrderBy(pair => pair.Key).SequenceEqual(original.ByItem.OrderBy(pair => pair.Key)) &&

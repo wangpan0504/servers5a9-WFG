@@ -77,7 +77,7 @@ internal sealed partial class GameSession
             preparation = new(QuestCompletionOutcome.Accepted, pending.Plan, "原领奖计划精确重试");
         else
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
-                growth, DateTimeOffset.UtcNow, captured.Clear, multiplier);
+                growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth);
         return owner.Execute(() =>
         {
             if (!CanPublishQuestRefusal(rejection))

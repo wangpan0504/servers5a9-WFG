@@ -252,6 +252,7 @@ internal static partial class FormalDungeonTcpTests
             assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(72, [2, 2]); peer.Expect(1, 72, [1, 2, 2]);
             peer.Send(72, [1, 2]); peer.Expect(1, 72, [1, 1, 2]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
             That(peer.Expect(0, 24).Body[11] == 3, "正式副本结果页回城保留转职特效显示位");
             That(QuestLifecycleTcpTests.List(peer.Expect(0, 21).Body, projectedLevel).Contains(3145),
                 "结果页72回城在绑定场景后刷新当前任务，未领奖的任务仍保留");
@@ -294,7 +295,7 @@ internal static partial class FormalDungeonTcpTests
             That(singleGold is { UseGoldCard:true, Price:0, DoublePaidItems:false, LegacyReturningPlayer:false } && peer.DevilService0[13] == 1,
                 "关闭活动后的新副本走单倍免费黄金牌，未领取不提前消耗第二次资格");
             peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 2]);
-            peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             peer.Send(72, [1, 3]); peer.Barrier();
             That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[3L]],
                 "剧情没有已接取且合法的后继任务时明确回城，不等待15或生成新副本");
@@ -436,7 +437,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(39, oldReport!);
             peer.Barrier();
             That(Experience(fixture, peer.Id) == experience, "新实例上轮死亡key只审计忽略，不增加资产经验");
-            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
             byte previousLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
             string afterClear = fixture.Snapshot();
             for (int replay = 0; replay < 2; replay++)
@@ -569,13 +570,13 @@ internal static partial class FormalDungeonTcpTests
             That(Command("infinite-fatigue invalid").StartsWith("ERR ") &&
                 Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}", "错误开关参数不改变默认状态");
             That(Command("infinite-fatigue off") == "OK {\"infiniteFatigue\":false}", "GM可关闭实际Session共享的无限疲劳");
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             SelectMap(peer); peer.Send(16,selection); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored, "关闭后真实零疲劳拒绝重新入场");
             That(Command("infinite-fatigue on").StartsWith("OK "), "重新开启无限疲劳");
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
             Load(peer); peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
         }
         That(Command("infinite-fatigue off").StartsWith("OK "), "普通扣点场景显式关闭无限模式");
         using (var peer = Open(fixture))
@@ -621,7 +622,7 @@ internal static partial class FormalDungeonTcpTests
         }
     }
 
-    static void RefreshedQuests(TcpPeer peer)
+    internal static void RefreshedQuests(TcpPeer peer)
     {
         byte[] history = peer.CompletedQuestHistory;
         peer.Expect(0,21);
@@ -717,7 +718,7 @@ internal static partial class FormalDungeonTcpTests
             }
             peer.Send(42);
             peer.Expect(1, 42, [1]);
-            peer.Expect(0, 24);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24);
             RefreshedQuests(peer);
             peer.Barrier();
         }
@@ -734,7 +735,7 @@ internal static partial class FormalDungeonTcpTests
                 is [[37L, 1L]], "转职角色真实TCP准入加载，不依赖普通职业成长资格");
             peer.Send(42);
             peer.Expect(1, 42, [1]);
-            peer.Expect(0, 24);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24);
             RefreshedQuests(peer);
             peer.Barrier();
         }
@@ -842,7 +843,7 @@ internal static partial class FormalDungeonTcpTests
                 "普通六图结算再挑战保持原资源路线，创建新的尝试");
             Load(peer);
             ExpectFatigue(visited.Count + 1);
-            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
             That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[2L]] &&
                 fixture.Query("SELECT quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[0L]] &&
                 fixture.Snapshot(equipmentQuery, peer.Id) == equipment && Experience(fixture, peer.Id) == experience,
@@ -926,7 +927,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(37, new byte[8]); peer.Barrier();
         That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[1L, 155L]],
             "普通重复加载不重复收费，实际NOTI36及SQLowner一致");
-        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         SelectMap(peer); peer.Send(16, selection);
         peer.Expect(0, 28); var current = peer.Expect(0, 29).Body; Load(peer);
         peer.Expect(0, 36, [2, 0, 156, 0, 0, 0, 154, 0, 0, 0]);
@@ -960,7 +961,7 @@ internal static partial class FormalDungeonTcpTests
         That(Experience(fixture, peer.Id) == beforeChild && fixture.Query(
             "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, U16(current, childOffset + 6)) is [[0L]],
             "真实机关子报告只一次死亡收尾，不冒充普通经验或资产receipt");
-        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[2L]],
             "普通返回后再次挑战实际建立新尝试，没有重新接取或修改主线");
     }
@@ -1067,7 +1068,7 @@ internal static partial class FormalDungeonTcpTests
         Load(peer); ExpectFatigue(7);
         peer.Send(39, bossReport!); peer.Barrier();
         That(Experience(fixture, peer.Id) == experience, "再挑战拒绝旧普通Boss报告，不重复结算或发经验");
-        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[long last]] && last == attempt + 2 &&
             fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0", peer.Id) is [[1L]] &&
             fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0", peer.Id) is [[3145L]] &&

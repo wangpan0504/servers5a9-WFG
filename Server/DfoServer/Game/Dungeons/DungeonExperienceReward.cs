@@ -4,7 +4,10 @@ using DfoServer.Game.Characters;
 namespace DfoServer.Game.Dungeons;
 
 // 奖励候选携带明确规则与资源身份；合法死亡及当前owner仍由提交路径核验。
-internal sealed record DungeonExperienceReward(string RuleId, string ResourceSource, int MonsterId, int MonsterLevel, uint Amount);
+internal sealed record DungeonExperienceReward(string RuleId, string ResourceSource, int MonsterId, int MonsterLevel, uint Amount)
+{
+    public uint GrowthContractExperience { get; init; }
+}
 
 // 存储返回实际提交后的角色；Duplicate表示账本精确重放，不是新的击杀或新奖励。
 internal sealed record DungeonGrowthCommit(Character Character, bool Duplicate, uint GainedExperience = 0);

@@ -28,7 +28,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
             foreach (int id in definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId).Distinct())
             {
                 if (Currency.CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id)) continue;
-                if (contracts?.TryConsumableContract(id, out _) == true) continue;
+                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).AcquisitionContract is not null) continue;
                 if (contracts?.Recognizes(id) == true)
                     return InventoryResult.Reject(19);
                 if (catalog.Get(id).IsPremiumService) return InventoryResult.Reject(19);
@@ -144,7 +144,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
                     result.Add(new(pair.Key, pair.Value, -1, 0, false));
                     continue;
                 }
-                if (contracts?.TryConsumableContract(pair.Key, out _) == true)
+                if (contracts?.TryAcquisitionContract(pair.Key, out _) == true || catalog.Get(pair.Key).AcquisitionContract is not null)
                 {
                     result.Add(new(pair.Key, pair.Value, -1, 0, false));
                     continue;

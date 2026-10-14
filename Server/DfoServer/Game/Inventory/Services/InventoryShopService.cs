@@ -21,6 +21,8 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         ItemTemplate template;
         try { template = catalog.Get(request.ItemId); }
         catch (InvalidDataException) { return InventoryResult.Reject(17); }
+        // ACK21必需实体核心并会解引用购入对象；服务商品不能伪造空槽或临时库存回执。
+        if (template.IsPremiumService) return InventoryResult.Reject(17);
         // Client 普通装备购买实收 count=0，仍按一件购买；其他商品数量须为正。
         if (request.Count == 0 && template.Kind != ItemKind.Equipment)
             return InventoryResult.Reject(0x85);

@@ -36,6 +36,7 @@ internal sealed class TcpPeer : IDisposable
     public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
     public byte[] PremiumInfo { get; private set; } = [];
+    public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] InitialGameOptions { get; private set; } = [];
     public byte[] AdventureName { get; private set; } = [];
@@ -166,13 +167,44 @@ internal sealed class TcpPeer : IDisposable
 
     public WirePacket[] Batch(params (byte Kind, ushort Opcode)[] expected) => expected.Select(p => Expect(p.Kind, p.Opcode)).ToArray();
     public void SendBarrier() => Send(1347, [2, 0, 0, 0]);
-    public void ReadCardMembershipState(WirePacket? information = null)
+    public void ReadCardMembershipState(WirePacket? information = null, bool initialization = false)
     {
         information ??= Expect(0, 1760);
         TestCheck.That(information.Kind == 0 && information.Opcode == 1760, "会员状态必须从1760开始，不能跳过其他通知");
         CardMembershipInformation = information.Body;
         PremiumInfo = information.Body;
-        DevilService0 = Expect(1, 905).Body;
+        var next = Read();
+        while (next is { Kind: 0, Opcode: 66 })
+        {
+            TestCheck.That(!initialization, "登录不能在恢复选择之前发送契约横幅更新");
+            TestCheck.That(next.Body.Length == 11 && U16(next.Body, 0) == 2 && next.Body[2] is 27 or 84 or 97 &&
+                BinaryPrimitives.ReadInt64LittleEndian(next.Body.AsSpan(3)) >= 0,
+                "契约更新用本版66完整期限触发原生提示，不把1760当作效果刷新");
+            next = Read();
+        }
+        if (next is { Kind: 0, Opcode: 901 })
+        {
+            TestCheck.That(next.Body.Length == 2 && next.Body[0] <= 1 && (next.Body[1] < 6 || next.Body[1] == 255),
+                "晶体选择回放严格使用901原始两字段");
+            CubeContractInfo = next.Body;
+            next = Read();
+        }
+        if (next is { Kind: 0, Opcode: 2 })
+        {
+            TestCheck.That(next.Body.Length > 24 && next.Body[0] == 1, "契约权益与选择后只刷新本人Player，不重建Actor或场景");
+            next = Read();
+        }
+        var updates = new List<byte>();
+        while (next is { Kind: 0, Opcode: 66 })
+        {
+            TestCheck.That(next.Body.Length == 11 && U16(next.Body, 0) == 2 && next.Body[2] is 84 or 97 &&
+                BinaryPrimitives.ReadInt64LittleEndian(next.Body.AsSpan(3)) >= 0,
+                "契约横幅与真实期限更新均在选择集和Player之后发送");
+            updates.Add(next.Body[2]);
+            next = Read();
+        }
+        TestCheck.That(next.Kind == 1 && next.Opcode == 905,"契约初始化后保持魔王905包序");
+        DevilService0 = next.Body;
         TestCheck.That(CardMembershipInformation.Length == 1 + CardMembershipInformation[0] * 9, "1760完整契约目录长度与数量一致");
         PremiumServices = [];
         for (int index = 0; index < CardMembershipInformation[0]; index++)
@@ -182,6 +214,9 @@ internal sealed class TcpPeer : IDisposable
             TestCheck.That(type is > 0 and < 132 && remaining >= 0 && PremiumServices.TryAdd(type, remaining),
                 "统一契约目录类型合法、无重复且期限非负");
         }
+        if (initialization)
+            TestCheck.That(updates.SequenceEqual(PremiumServices.Where(pair => pair.Key is 84 or 97 && pair.Value > 0)
+                .Select(pair => pair.Key).Order()), "每次选角恢复成长/晶体横幅，既不提前触发空选择提醒，也不漏发原生显示刷新");
         TestCheck.That(PremiumServices.ContainsKey(56) && PremiumServices.ContainsKey(58),
             "统一契约列表包含56/58的有效期限或显式清除值，不覆盖22/27");
         TestCheck.That(DevilService0.Length == 77 && DevilService0[0] == 1 && U16(DevilService0, 1) == 1 &&
@@ -355,7 +390,7 @@ internal sealed class TcpPeer : IDisposable
             {
                 tail.Add(Expect(notice.Kind, notice.Opcode));
                 if (notice == ((byte)0, (ushort)53))
-                    ReadCardMembershipState();
+                    ReadCardMembershipState(initialization: true);
             }
         }
         if (resumeTown)

@@ -185,6 +185,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     public async Task ReturnFromFormalDungeonAsync(GameConnectionContext context, TownTravelReceipt receipt, string action)
     {
         bool CanSend() => context.Session.CanPublishTravel(receipt);
+        await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
         // 城镇场景绑定后重新投影当前任务，不依赖重新选角。
         if (quests is not null)

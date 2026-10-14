@@ -54,7 +54,7 @@ internal static partial class FormalDungeonTcpTests
                 That((string)active[0] == acceptance && active[1] is 1L &&
                     fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[long actualAttempt]] && actualAttempt == ++attempt,
                     "两种请求保留同一真实接取，分别只建立一次正式尝试："+scenario.Quest);
-                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
                 That(fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]] &&
                     fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,scenario.Quest) is [[0L]],
                     "真实未通关退出不制造条件、清图凭据或完成位："+scenario.Quest);

@@ -59,7 +59,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,90)); peer.Barrier();
             That(Stable() == original && fixture.Snapshot() == entered && EmptyRewardLedger(),
                 "体验Boss死亡只应答无掉落38，重放和伪造结算不发经验/任务/翻牌，不写普通奖励账本");
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             That(Stable() == original && fixture.Snapshot() == entered, "体验42恢复原入口位置，不改变原职业技能或资产");
             // 同一账号接管后重新加载，确认临时上下文没有持久化并恢复普通技能编辑。
             using var reconnect = Open(fixture);

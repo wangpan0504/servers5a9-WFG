@@ -105,7 +105,18 @@ internal static class SqliteMigrations
         }),
         new(39, "角色药剂与光环传送冷却", static (db, tx) => Execute(db, tx, TeleportCooldownSchema)),
         new(40, "物件终末场景清图来源", UpgradeQuestSceneClear),
+        new(41, "角色晶体契约选择", static (db, tx) =>
+        {
+            Execute(db, tx, CubePremiumSchema);
+        }),
     ];
+    const string CubePremiumSchema = """
+        CREATE TABLE cube_premium(
+            charac_no INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+            selected INTEGER NOT NULL CHECK(selected IN (0,1)),
+            cube_type INTEGER NOT NULL CHECK(cube_type BETWEEN -1 AND 5)
+        );
+        """;
 
     internal const string QuestSceneClearSchema = """
         CREATE TABLE character_dungeon_scene_clear_receipts(
@@ -997,6 +1008,7 @@ internal static class SqliteMigrations
         "SELECT account,job,grow,character_id FROM account_adventure_representatives LIMIT 0",
         "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month,name_initialized FROM account_adventures LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",
+        "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",
         "SELECT character_id,account,event_id,kind,instance_id,task_attempt,epoch,map_id,subject,experience,before_revision,revision,plan_snapshot FROM character_tutorial_receipts LIMIT 0",

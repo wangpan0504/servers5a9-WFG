@@ -156,7 +156,8 @@ internal sealed class QuestCompletionPlan
 
     public static QuestCompletionPreparation Prepare(Character expected, StoryQuest quest, ushort selector,
         QuestCatalog quests, QuestRewardParameterCatalog parameters, ItemCatalog items, GoldLimitCatalog goldLimits,
-        EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1)
+        EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1,
+        GrowthContractBenefits? growthContract = null)
     {
         try
         {
@@ -300,9 +301,12 @@ internal sealed class QuestCompletionPlan
                 throw new InvalidDataException("选择奖励索引不属于当前职业候选");
             if (selected.Length != 0) requested.Add(selected[selector]);
             var experience = QuestExperiencePolicy.Prepare(expected, quest, parameters, out int penalty);
+            uint contractBonus = GrowthContractPolicy.ExperienceBonus(expected, experience.Amount, growthContract, now.ToUnixTimeSeconds());
+            experience = experience with { Amount = checked(experience.Amount + contractBonus), GrowthContractExperience = contractBonus };
             ulong scaledExperience = checked((ulong)experience.Amount*multiplier);
             if (scaledExperience > int.MaxValue) throw new InvalidDataException("批量任务经验超出本版范围");
-            experience = experience with { Amount = (uint)scaledExperience };
+            experience = experience with { Amount = (uint)scaledExperience,
+                GrowthContractExperience = checked(experience.GrowthContractExperience * multiplier) };
             for (int at = 0; at < requested.Count; at++) requested[at] = requested[at] with { Count = checked(requested[at].Count*multiplier) };
             int goldBase = 0, goldMultiple = quest.DeclaredGoldMultiple ?? 100;
             uint gold = 0;

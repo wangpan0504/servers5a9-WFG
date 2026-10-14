@@ -50,6 +50,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public int GoldCarryLimit { get; init; }
     public int AuctionGoldLimit { get; init; } = CurrencyService.BaseAuctionLimit;
     public AccountWallet AccountWallet { get; init; } = AccountWallet.Empty;
+    public CubeContractState CubeContract { get; init; } = CubeContractState.Empty;
     public ushort CargoCapacity { get; init; } = 8;
     public AccountCargoState AccountCargo { get; init; } = new();
     public ImmutableArray<ShopPurchaseCount> ShopPurchases { get; init; } = [];
@@ -58,6 +59,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public void Validate(bool allocating = false)
     {
         AccountWallet.Validate();
+        CubeContract.Validate();
         EpicPieces.Validate();
         if (ShopPurchases.IsDefault || ShopPurchases.Any(row => row.NpcId < 0 || row.ItemId <= 0 || row.Count <= 0 || row.Day < 0) ||
             ShopPurchases.Select(row => (row.NpcId, row.ItemId, row.AccountWide, row.ResetDaily)).Distinct().Count() != ShopPurchases.Length)

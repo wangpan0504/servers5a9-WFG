@@ -72,7 +72,7 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
             result.Accepted ? "delete_item_committed" : "delete_item_rejected",
             result.Receipt is { } receipt ? () => context.Session.CanPublishInventory(receipt) : null);
         // ACK18按本次消耗量扣减材料；重复发送NOTI14会触发获得物品提示。
-        var acknowledgedSlots = request.Items.Where(item => item.Type == 2)
+        var acknowledgedSlots = request.Items.Where(item => item.Type is 2 or 3)
             .Select(item => new InventorySlot(request.List, item.Slot)).ToHashSet();
         await projection.RefreshAsync(context, result, acknowledgedSlots);
         return CommandResult.Handled;

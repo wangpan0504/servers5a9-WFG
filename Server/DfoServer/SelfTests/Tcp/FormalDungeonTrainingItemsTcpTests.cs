@@ -82,7 +82,7 @@ internal static partial class FormalDungeonTcpTests
             That(U16(delta,3) == 67 && U32(delta,9) == 4 && ItemCount(67) == 4 &&
                 fixture.Query("SELECT balance FROM account_currency_balances WHERE currency_kind=7") is [[20L]],
                 "修炼场混合无色/丢弃包只免无色，真实丢弃仍删除1件并同步原槽");
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
         }
         using (var peer = Open(fixture))
         {
@@ -92,7 +92,7 @@ internal static partial class FormalDungeonTcpTests
             Use(peer,65,1107); Accepted(peer,65,1107); peer.Barrier();
             Use(peer,66,1065); Accepted(peer,66,1065); peer.Barrier();
             That(ItemCount(65) == 0 && ItemCount(66) == 2,"离开修炼场重登后同两种药成功消费1件，不发送还原14或泄漏豁免");
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
         }
         Console.WriteLine("PASS 修炼场仅药剂/无色/复活币免消耗、1681静默还原、其它材料/丢弃/商城实际扣款及场外药剂正常消费TCP");
 

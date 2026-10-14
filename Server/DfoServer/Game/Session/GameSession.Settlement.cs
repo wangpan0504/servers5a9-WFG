@@ -95,6 +95,12 @@ internal sealed partial class GameSession
         var previous = Selected!;
         var reward = dungeon.Settlement?.Pending.Reward ?? rewards.Calculate(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),
             dungeon.Entry.Difficulty, rankPoint);
+        if (dungeon.Settlement is null)
+        {
+            uint bonus = GrowthContractPolicy.ExperienceBonus(Selected!, reward.BaseExperience, contracts?.Growth,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            reward = reward with { TotalExperience = checked(reward.TotalExperience + bonus), GrowthContractExperience = bonus };
+        }
         if (dungeon.Settlement is null && !(dungeon.Entry.IsTutorial && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
@@ -112,7 +118,8 @@ internal sealed partial class GameSession
         if (prepared.Pending is null || prepared.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
-            new(dungeon.ClearTimeMilliseconds, rankPoint, rewards.GradeForPoint(rankPoint), dungeon.KillExperienceTotal), Selected!)
+            new(dungeon.ClearTimeMilliseconds, rankPoint, rewards.GradeForPoint(rankPoint), dungeon.KillExperienceTotal)
+                { MonsterGrowthContractExperience = dungeon.KillGrowthContractExperience }, Selected!)
             { CardPolicy = cards };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");

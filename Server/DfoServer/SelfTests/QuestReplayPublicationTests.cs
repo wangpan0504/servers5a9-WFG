@@ -212,7 +212,7 @@ internal static class QuestReplayPublicationTests
                 var context = Context(f,output,sender,stop);
                 await commands.DispatchAsync(context,Entry(1)); await commands.DispatchAsync(context,Selection());
                 var reserved = f.Read(); output.Frames.Clear();
-                That(await commands.DispatchAsync(context,new(1,42,[])) == CommandResult.Handled && Frames(output,(1,42),(0,24)) &&
+                That(await commands.DispatchAsync(context,new(1,42,[])) == CommandResult.Handled && Frames(output,(1,42),(0,3),(0,24)) &&
                     Body(output.Frames[0]).SequenceEqual<byte>([1]) && f.Session.Phase == SessionPhase.Town &&
                     f.Session.DungeonSnapshot is null && !f.Session.BeginQuestReplayDungeonSelection(1).Pending && Same(reserved,f.Read()),
                     "Loading期间真实42回城清安装后的回放pending，只退场且保持已预留身份/任务");

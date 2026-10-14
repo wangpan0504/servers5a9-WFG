@@ -43,8 +43,11 @@ internal sealed class ItemResources
         EpicPieces = new(archive);
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
-        Contracts = PremiumContractCatalog.Load(archive);
-        Items = new(archive, equipment, stackable, Shops.EquipmentSellRate, Contracts.RecognizedItems);
+        Contracts = PremiumContractCatalog.Load(archive, equipment, stackable);
+        Boosters = new(archive, stackable);
+        Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
+            Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
+            Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary());
         RecoveryConsumables = new(archive, stackable);
         Enchantments = new(archive, stackable);
         Enhancements = new(archive, stackable, equipment);
@@ -54,7 +57,6 @@ internal sealed class ItemResources
         RandomOptions = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
-        Boosters = new(archive, stackable);
         CashShop = CashShopCatalog.Load(archive);
         MagicBoxes = new(archive, stackable);
         Rental = RentalCatalog.Load(archive);

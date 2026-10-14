@@ -51,7 +51,7 @@ internal static partial class FormalDungeonTcpTests
             That(fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE character_id=$p0",peer.Id) is [[0L]] &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
                 "修炼场加载及重复加载不写疲劳扣点回执，也不自动产生普通通关结算");
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_fatigue WHERE character_id=$p0",peer.Id) == fatigue &&
                 fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",peer.Id) == assets,
                 "零疲劳和有余额均可进入修炼场；加载、返回完整疲劳及原UID资产保持");
@@ -70,7 +70,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Expect(0,36,[140,0,156,0,0,0,16,0,0,0]); peer.Barrier();
                 That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[140L,16L]],
                     "修炼场返回后普通首房仍准确扣1点，原疲劳余额不变形");
-                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             }
         }
         Console.WriteLine("PASS 修炼场原始请求、真实地图、零疲劳入场及加载返回不扣点TCP");

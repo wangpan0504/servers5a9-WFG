@@ -7,6 +7,9 @@ using PvfLib;
 namespace DfoServer.GameWorld.Items;
 
 internal sealed record PremiumContract(int ItemId, int Type, long DurationSeconds);
+internal sealed record GrowthContractBenefits(int ExperiencePercent, int QuestItemDropPercent, ImmutableArray<int> IndependentDropPercent);
+internal sealed record CubeContractOption(int ItemId, int EquipmentId, int IntervalMilliseconds = 30000, int ConsumeCount = 1);
+internal sealed record PremiumContractResourceWarning(int Type, int ConfiguredItems, string Reason);
 
 // premiumlist_new.etc 是契约消耗品到账号服务类型和期限的权威映射。
 // 没有正期限的条目属于效果或选择器，不应被当作可激活契约。
@@ -29,12 +32,18 @@ internal sealed class PremiumContractCatalog
     public FrozenDictionary<int, ImmutableArray<string>> ConquerorEquipmentGroups { get; }
     public bool HasConquerorEquipmentRule { get; }
     public string? ConquerorRuleError { get; }
+    public GrowthContractBenefits? Growth { get; }
+    public ImmutableArray<int> GrowthEquipment { get; }
+    public ImmutableArray<CubeContractOption> Cubes { get; private set; }
+    public ImmutableArray<PremiumContractResourceWarning> ResourceWarnings { get; private set; } = [];
+    FrozenSet<int> missingStackables = FrozenSet<int>.Empty;
     readonly FrozenDictionary<(ItemKind Kind, byte Slot), int> equipmentAllowances;
 
     public PremiumContractCatalog(IReadOnlyDictionary<int, PremiumContract> contracts, int? expertSkillLevels = null,
         IReadOnlyDictionary<int, int>? conquerorEquipmentLevels = null,
         IReadOnlyDictionary<int, IReadOnlyList<string>>? conquerorEquipmentGroups = null,
-        IEnumerable<int>? recognizedItems = null)
+        IEnumerable<int>? recognizedItems = null, GrowthContractBenefits? growth = null,
+        IEnumerable<int>? growthEquipment = null, IEnumerable<CubeContractOption>? cubes = null)
     {
         if (expertSkillLevels is < 0 || conquerorEquipmentLevels?.Any(pair => pair.Key < 0 || pair.Value < 0) == true)
             throw new InvalidDataException("契约等级参数不能为负数");
@@ -49,6 +58,15 @@ internal sealed class PremiumContractCatalog
         ConquerorEquipmentGroups = (conquerorEquipmentGroups ?? new Dictionary<int, IReadOnlyList<string>>())
             .ToFrozenDictionary(pair => pair.Key, pair => pair.Value.ToImmutableArray());
         (equipmentAllowances, ConquerorRuleError) = EquipmentRules();
+        Growth = growth;
+        GrowthEquipment = growthEquipment?.ToImmutableArray() ?? [];
+        Cubes = cubes?.ToImmutableArray() ?? [];
+        if (growth is not null && (growth.ExperiencePercent < 0 || growth.QuestItemDropPercent < 0 ||
+            growth.IndependentDropPercent.Length != 4 || growth.IndependentDropPercent.Any(value => value < 0)) ||
+            GrowthEquipment.Any(id => id <= 0) || Cubes.Length is not (0 or 6) ||
+            Cubes.Any(row => row.ItemId <= 0 || row.EquipmentId <= 0 || row.IntervalMilliseconds <= 0 || row.ConsumeCount <= 0) ||
+            Cubes.Select(row => row.ItemId).Distinct().Count() != Cubes.Length)
+            throw new InvalidDataException("成长或晶体契约权益声明无效");
     }
     public PremiumContract? Get(int itemId) => ByItem.GetValueOrDefault(itemId);
     public bool Recognizes(int itemId) => RecognizedItems.Contains(itemId);
@@ -57,21 +75,66 @@ internal sealed class PremiumContractCatalog
     {
         definition = Get(itemId)!;
         // 其他 premium 服务另有疲劳、复活币或物品奖励，不能仅记期限就替代完整发放。
-        return definition is not null && definition.ItemId == itemId && definition.DurationSeconds > 0 &&
+        return definition is not null && !missingStackables.Contains(itemId) && definition.ItemId == itemId && definition.DurationSeconds > 0 &&
             (definition.Type == 27 && HasExpertSkillRule || definition.Type == 22 && HasConquerorEquipmentRule && ConquerorRuleError is null);
+    }
+
+    public bool TryAcquisitionContract(int itemId, out PremiumContract definition)
+    {
+        if (TryConsumableContract(itemId, out definition)) return true;
+        definition = Get(itemId)!;
+        return definition is { DurationSeconds: > 0 } && !missingStackables.Contains(itemId) &&
+            (definition.Type == 84 && Growth is not null && !GrowthEquipment.IsEmpty ||
+                definition.Type == 97 && Cubes.Length == 6);
     }
 
     public int EquipmentLevelAllowance(ItemTemplate template) => EquipmentLevelAllowance(template.Kind, template.EquipmentSlot);
     public int EquipmentLevelAllowance(ItemKind kind, byte slot) => equipmentAllowances.GetValueOrDefault((kind, slot));
 
-    public static PremiumContractCatalog Load(PvfArchive archive) => Parse(archive.ReadText("etc/premiumlist_new.etc"));
+    public static PremiumContractCatalog Load(PvfArchive archive, IReadOnlyDictionary<int, string>? equipment = null,
+        IReadOnlyDictionary<int, string>? stackable = null)
+    {
+        var catalog = Parse(archive.ReadText("etc/premiumlist_new.etc"), archive.ReadText("etc/premiumserviceeffect.etc"));
+        equipment ??= PvfScript.List(archive.ReadText("equipment/equipment.lst"));
+        foreach (int id in catalog.GrowthEquipment.Concat(catalog.Cubes.Select(row => row.EquipmentId)).Distinct())
+            if (!equipment.TryGetValue(id, out string? path) || !archive.Contains("equipment/" + path))
+                throw new InvalidDataException("契约附加装备缺失: " + id);
+        catalog.Cubes = catalog.Cubes.Select(option =>
+        {
+            var script = new PvfDocument(archive.ReadText("equipment/" + equipment[option.EquipmentId]));
+            var condition = new PvfDocument(script.Block("if"));
+            var action = new PvfDocument(script.Block("then"));
+            int[] consume = PvfScript.Integers(action.Section("consume item")).ToArray();
+            if (!condition.TryGetInt32("cooltime", out int interval) || interval <= 0 ||
+                consume.Length != 2 || consume[0] != option.ItemId || consume[1] <= 0)
+                throw new InvalidDataException("晶体契约周期或材料声明无效: " + option.EquipmentId);
+            return option with { IntervalMilliseconds = interval, ConsumeCount = consume[1] };
+        }).ToImmutableArray();
+        stackable ??= PvfScript.List(archive.ReadText("stackable/stackable.lst"));
+        catalog.InspectStackables(stackable, archive.Contains);
+        return catalog;
+    }
 
-    internal static PremiumContractCatalog Parse(string text)
+    public bool HasStackable(int itemId) => !missingStackables.Contains(itemId);
+
+    // 配置可包含当前未安装的STK，保留编号与期限，仅让缺资源的实际操作不可用。
+    internal void InspectStackables(IReadOnlyDictionary<int, string> stackable, Func<string, bool> contains)
+    {
+        var ids = ByItem.Values.Where(row => row.Type is 22 or 27 or 84 or 97).Select(row => row.ItemId)
+            .Concat(Cubes.Select(row => row.ItemId)).Distinct().Order();
+        missingStackables = ids.Where(id => !stackable.TryGetValue(id, out string? path) || !contains("stackable/" + path)).ToFrozenSet();
+        ResourceWarnings = ByItem.Values.Where(row => row.Type is 22 or 27 or 84 or 97).GroupBy(row => row.Type)
+            .Where(group => group.All(row => missingStackables.Contains(row.ItemId))).OrderBy(group => group.Key)
+            .Select(group => new PremiumContractResourceWarning(group.Key, group.Count(), "no_contract_stk_available")).ToImmutableArray();
+    }
+
+    internal static PremiumContractCatalog Parse(string text, string? effects = null)
     {
         var result = new Dictionary<int, PremiumContract>();
         int expertSkillLevels = 0;
         bool expertFieldFound = false;
         Dictionary<int, int>? conquerorEquipmentLevels = null;
+        GrowthContractBenefits? growth = null;
         foreach (Match typeMatch in TypeBlock.Matches(MaskStrings(text)))
         {
             if (!int.TryParse(typeMatch.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int type) || type <= 0)
@@ -112,6 +175,18 @@ internal sealed class PremiumContractCatalog
                         throw new InvalidDataException("霸王装备等级组编号重复");
                 }
             }
+            if (type == 84)
+            {
+                var experience = Values(new(@"\[bonus exp\](?<values>[^\[]*)"), parent);
+                var questDrop = Values(new(@"\[quest item drop rate\](?<values>[^\[]*)"), parent);
+                var independent = Values(new(@"\[independent drop rate\](?<values>[^\[]*)"), parent);
+                if (experience is not null || questDrop is not null || independent is not null)
+                {
+                    if (growth is not null || experience?.Length != 1 || questDrop?.Length != 1 || independent?.Length != 4)
+                        throw new InvalidDataException("成长契约权益缺失、重复或宽度无效");
+                    growth = new(Nonnegative(experience[0]), Nonnegative(questDrop[0]), independent.Select(Nonnegative).ToImmutableArray());
+                }
+            }
             int target = Number(Field(Target, parent));
             int targetTerm = Number(Field(Term, parent));
             if (target > 0 && targetTerm > 0)
@@ -125,7 +200,10 @@ internal sealed class PremiumContractCatalog
                     Add(new(itemId, type, Seconds(term, IsMinute(itemBody))));
             }
         }
-        return new(result, expertFieldFound ? expertSkillLevels : null, conquerorEquipmentLevels, EquipmentGroups(text), Recognized(text));
+        var equipmentEffects = ServiceEquipment(effects, 84, "add equipment list", 1);
+        var cubeEffects = ServiceEquipment(effects, 97, "add selectAble equipment list", 2);
+        return new(result, expertFieldFound ? expertSkillLevels : null, conquerorEquipmentLevels, EquipmentGroups(text), Recognized(text),
+            growth, equipmentEffects, Enumerable.Range(0, cubeEffects.Length / 2).Select(index => new CubeContractOption(cubeEffects[index * 2], cubeEffects[index * 2 + 1])));
 
         void Add(PremiumContract contract)
         {
@@ -180,6 +258,31 @@ internal sealed class PremiumContractCatalog
                 throw new InvalidDataException("契约等级参数必须是非负整数");
             return value;
         }
+    }
+
+    static int[] ServiceEquipment(string? text, int type, string tag, int width)
+    {
+        if (text is null) return [];
+        var rows = new List<int>();
+        bool found = false;
+        foreach (Match service in Regex.Matches(MaskStrings(text), @"\[premium service\](.*?)\[/premium service\]", RegexOptions.Singleline))
+        {
+            string block = text.Substring(service.Index, service.Length);
+            if (!Regex.IsMatch(MaskStrings(block), @"\[type\]\s*" + type + @"(?=\s|\[|\z)")) continue;
+            var matches = Regex.Matches(MaskStrings(block), @"\[" + Regex.Escape(tag) + @"\](?<values>[^\[]*)\[/" + Regex.Escape(tag) + @"\]");
+            if (matches.Count == 0) continue;
+            if (found || matches.Count != 1) throw new InvalidDataException("契约附加装备声明重复");
+            found = true;
+            var values = matches[0].Groups["values"];
+            foreach (string token in block.Substring(values.Index, values.Length).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out int id) || id <= 0)
+                    throw new InvalidDataException("契约附加装备编号无效");
+                rows.Add(id);
+            }
+        }
+        if (rows.Count % width != 0) throw new InvalidDataException("契约附加装备行宽无效");
+        return rows.ToArray();
     }
 
     static IEnumerable<int> Recognized(string text)

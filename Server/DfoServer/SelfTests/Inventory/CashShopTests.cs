@@ -177,7 +177,7 @@ internal static class CashShopTests
 
     static void VerifyUnsupportedPremiumPurchases(Character character, ItemResources resources)
     {
-        foreach (int type in new[] { 84, 97, 29 })
+        foreach (int type in new[] { 29 })
         {
             var contract = resources.Contracts.ByItem.Values.First(row => row.Type == type &&
                 CurrencyWallet.RewardKind(row.ItemId) is null && !resources.EpicPieces.ByPiece.ContainsKey(row.ItemId));

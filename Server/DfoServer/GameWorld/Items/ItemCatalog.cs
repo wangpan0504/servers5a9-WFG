@@ -12,6 +12,7 @@ internal sealed class ItemCatalog
     readonly IReadOnlyDictionary<int, string> equipment;
     readonly IReadOnlyDictionary<int, string> stackable;
     readonly IReadOnlySet<int> premiumServiceItems;
+    readonly IReadOnlyDictionary<int, PremiumContract> acquisitionContracts;
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
     readonly ConcurrentDictionary<int, Lazy<ItemTemplate>> pendingTemplates = new();
     readonly ConcurrentDictionary<int, QuestTicketDefinition> questTickets = new();
@@ -47,12 +48,14 @@ internal sealed class ItemCatalog
     readonly int equipmentSellRate;
 
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
-        IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null)
+        IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
+        IReadOnlyDictionary<int, PremiumContract>? acquisitionContracts = null)
     {
         pvf = archive;
         this.equipment = equipment;
         this.stackable = stackable;
         this.premiumServiceItems = premiumServiceItems ?? new HashSet<int>();
+        this.acquisitionContracts = acquisitionContracts ?? new Dictionary<int, PremiumContract>();
         this.equipmentSellRate = equipmentSellRate;
     }
 
@@ -90,6 +93,9 @@ internal sealed class ItemCatalog
             if (id <= 2)
                 continue;
             bool isEquipment = equipment.ContainsKey(id);
+            // 缺失的premium STK是可选声明，不能被掉落预热重新变成启动失败。
+            if (!isEquipment && premiumServiceItems.Contains(id) && !pvf.Contains("stackable/" + path))
+                continue;
             var document = isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
                 new PvfDocument(pvf.ReadText("stackable/" + path));
             int rate = CreationRate(document);
@@ -196,6 +202,7 @@ internal sealed class ItemCatalog
             name, text.Section("stackable type").Replace("`", "").Trim())
         {
             IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text),
+            AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
             WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&
                 text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),

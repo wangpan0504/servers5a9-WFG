@@ -59,7 +59,7 @@ internal static partial class FormalDungeonTcpTests
                 fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[long actual]] && actual==attempt,
                 "真实3778沿零难度原地图完成正式入场，失败请求不增加尝试");
             Load(peer); peer.Barrier();
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
         }
     }
 }

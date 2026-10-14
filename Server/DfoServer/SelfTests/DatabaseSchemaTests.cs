@@ -39,6 +39,7 @@ internal static class DatabaseSchemaTests
     // 旧结构夹具确实移除v40来源列和空场景表，保留旧清图、完成FK与历史行。
     internal static void RewindQuestSceneClearSchema(SqliteConnection db)
     {
+        Execute(db, "DROP TABLE IF EXISTS cube_premium");
         const string table = "character_quest_clear_receipts";
         if (Query(db,"SELECT count(*) FROM pragma_table_info('character_quest_clear_receipts') WHERE name='source_type'") is 1L)
         {
@@ -134,6 +135,7 @@ internal static class DatabaseSchemaTests
                 "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
                 "DROP TABLE character_game_settings",
+                "DROP TABLE cube_premium", "ALTER TABLE cube_premium DROP COLUMN cube_type",
                 "DROP TABLE character_quest_lifecycle_receipts",
                 "DROP TABLE character_tutorial_receipts", "ALTER TABLE character_tutorial_receipts DROP COLUMN plan_snapshot",
                 "DROP TABLE character_tutorial_state", "ALTER TABLE character_tutorial_state DROP COLUMN reward_received",
@@ -185,6 +187,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(failed);
 
             VerifyReleasedMigrations(root);
+            VerifyCubeContractMigration(root);
             VerifyPremiumContractsMigration(root);
             VerifyMasterQuest14Compatibility(root);
             VerifyQuestSystemMigration(root);
@@ -216,6 +219,57 @@ internal static class DatabaseSchemaTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
+    }
+
+    private static void VerifyCubeContractMigration(string root)
+    {
+        string path = Path.Combine(root, "cube-v40.db");
+        _ = new CharacterRepository(path);
+        new AuthenticationService(new AuthenticationRepository(path)).Create("cube-history", "fixture-password");
+        using (var db = Open(path))
+        {
+            Execute(db, """
+                INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
+                  VALUES('cube-history',0,'CubeHistory',7,38,1,450,234,0,123);
+                INSERT INTO account_wallets(account,revision,premium_contracts)
+                  VALUES('cube-history',5,'{"84":1800000000,"97":1900000000}');
+                INSERT INTO character_teleport_cooldowns VALUES(1,'cube-history',1000,2000);
+                DROP TABLE cube_premium;
+                PRAGMA user_version=40;
+                """);
+        }
+
+        string failed = Path.Combine(root, "cube-v41-rollback.db");
+        using (var source = Open(path))
+        using (var target = Open(failed))
+        {
+            source.BackupDatabase(target);
+            Execute(target, "ALTER TABLE accounts DROP COLUMN disabled");
+        }
+        string original = Snapshot(failed);
+        RejectDatabase(() => new CharacterRepository(failed));
+        Check(Snapshot(failed) == original, "v41末段校验失败回滚晶体表和版本，保留上游清图结构、传送冷却及原资产");
+
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                Query(db, "SELECT count(*) FROM cube_premium") is 0L,
+                "已发布v40只追加空晶体选择表，不推断旧角色颜色");
+            Check(Query(db, "SELECT revision||':'||gold FROM characters WHERE id=1") is "7:123" &&
+                Query(db, "SELECT revision||':'||premium_contracts FROM account_wallets WHERE account='cube-history'") is
+                    "5:{\"84\":1800000000,\"97\":1900000000}" &&
+                Query(db, "SELECT potion_until||':'||aura_until FROM character_teleport_cooldowns WHERE character_id=1") is "1000:2000",
+                "晶体迁移保留角色revision、资产、账号期限及上游冷却");
+            Execute(db, "INSERT INTO cube_premium VALUES(1,0,5)");
+            Reject<SqliteException>(() => Execute(db, "UPDATE cube_premium SET selected=2"), "晶体选择首字段保留0/1约束");
+            Reject<SqliteException>(() => Execute(db, "UPDATE cube_premium SET cube_type=6"), "晶体颜色拒绝超出六种类型");
+            Reject<SqliteException>(() => Execute(db, "INSERT INTO cube_premium VALUES(2,0,-1)"), "晶体选择不能绑定不存在的角色");
+        }
+        string upgraded = Snapshot(path);
+        _ = new CharacterRepository(path);
+        _ = new AuthenticationRepository(path);
+        Check(Snapshot(path) == upgraded, "v41重开幂等，保留已存晶体选择和账号期限");
     }
 
     private static void VerifyQuestEffectsMigration(string root)
@@ -296,8 +350,9 @@ internal static class DatabaseSchemaTests
         _=new CharacterRepository(path);
         using(var db=Open(path))
         {
-            Check(Query(db,"PRAGMA user_version") is 40L && Query(db,"SELECT count(*) FROM character_dungeon_scene_clear_receipts") is 0L,
-                "v39只增空场景来源并升级v40，不补造历史物件清图");
+            Check(Query(db,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                Query(db,"SELECT count(*) FROM character_dungeon_scene_clear_receipts") is 0L,
+                "v39连续升级到当前版本，保留空场景来源，不补造历史物件清图");
             Check(JsonSerializer.Serialize(TcpTestFixture.Rows(path,"SELECT "+clearColumns+" FROM character_quest_clear_receipts"))==clearRows &&
                 JsonSerializer.Serialize(TcpTestFixture.Rows(path,"SELECT rowid,* FROM character_quest_completion_receipts"))==completedRows &&
                 Query(db,"SELECT source_type||':'||growth_event_id FROM character_quest_clear_receipts") is string typed && typed=="MonsterDeath:"+eventId,
@@ -1262,6 +1317,8 @@ internal static class DatabaseSchemaTests
                 // 拍卖行挂牌表只出现在 v37：模拟 1..36 的旧库都必须把该表与三个索引一起移除
                 // （不能用「改版本号」冒充旧库，否则 v37 的 CREATE 会撞表）。
                 if (oldVersion < 37) DropAuctionListings(db);
+                if (oldVersion < 39) Execute(db, "DROP TABLE IF EXISTS character_teleport_cooldowns");
+                if (oldVersion < 41) Execute(db, "DROP TABLE IF EXISTS cube_premium");
                 if (oldVersion < 38) RemoveAdventureNames(db);
                 if (oldVersion < 3)
                     Execute(db, "DROP TABLE character_dungeon_growth_receipts");

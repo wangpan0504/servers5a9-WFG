@@ -4,7 +4,10 @@ using DfoServer.GameWorld.Quests;
 namespace DfoServer.Game.Quests;
 
 internal sealed record QuestExperienceReward(string ResourcePath, string QuestPath, int NativeIndex,
-    int BaseExperience, int RawAdditionalPercent, string DifficultyKey, int DifficultyWeight, uint Amount);
+    int BaseExperience, int RawAdditionalPercent, string DifficultyKey, int DifficultyWeight, uint Amount)
+{
+    public uint GrowthContractExperience { get; init; }
+}
 
 internal static class QuestExperiencePolicy
 {

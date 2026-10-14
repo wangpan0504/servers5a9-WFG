@@ -69,7 +69,9 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             var state = character.DungeonState ?? throw new InvalidOperationException("已提交任务成长缺少附属owner");
             var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)character.Inventory.WinPoints), state.GrowthCapsuleExperience,
                 state.ProficiencyLevel, state.ProficiencyExperience);
-            var display = CharacterExperienceDisplay.Ordinary;
+            var display = CharacterExperienceDisplay.Ordinary with
+            { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(commit.ExperienceReward.Amount - commit.ExperienceReward.GrowthContractExperience,
+                commit.ExperienceReward.GrowthContractExperience, commit.GainedExperience) };
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning, auxiliary, display),
                 "quest_reward_experience", Guard);
         }

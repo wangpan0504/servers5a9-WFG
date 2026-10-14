@@ -60,9 +60,9 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(41, key); peer.Expect(1, 41, [0, 1, 0]); peer.Barrier();
         That(Assets() == before, "无点券购买和零币复活失败均不改资产、revision或死亡计时");
         await Task.Delay(TimeSpan.FromSeconds(6.5));
-        peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+        peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
         That(watch.Elapsed >= TimeSpan.FromSeconds(9.5) && watch.Elapsed < TimeSpan.FromSeconds(15) && Assets() == before,
-            "死亡约10秒自动发布24回城及任务刷新，无ACK40/42或虚构扣币");
+            "死亡约10秒恢复本人城镇state0，再发布24及任务刷新，无ACK40/42或虚构扣币");
         peer.Send(41, key); peer.Barrier();
         That(Assets() == before, "自动回城后旧复活请求静默且不能再扣币");
         Console.WriteLine("PASS 零币死亡现场购买、实际复活取消计时及10秒自动回城TCP（非Windows实机）");

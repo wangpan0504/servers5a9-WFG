@@ -28,7 +28,10 @@ internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, Form
     public bool CapacityRejected { get; init; }
 }
 internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds, byte RankPoint, byte RankGrade,
-    uint MonsterExperience);
+    uint MonsterExperience)
+{
+    public uint MonsterGrowthContractExperience { get; init; }
+}
 internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     DfoServer.GameWorld.Dungeons.DungeonClearExperienceReward? Reward = null, DungeonSettlementPresentation? Presentation = null,
     Character? PreviousCharacter = null)

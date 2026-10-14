@@ -137,7 +137,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         "selected" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
         "formal_dungeon_settlement" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_enter" or "dungeon_entry_probe" or "dungeon_probe_return" or
-        "quest_lifecycle" or "quest_completion" or "consumable_use" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
+        "quest_lifecycle" or "quest_completion" or "consumable_use" or "cube_contract_select" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
         "quest_ticket_use" or "creature_hatch" or "enhancement" or "booster_open" or "gm" or "unimplemented" ||
         kind.EndsWith("_rejected", StringComparison.Ordinal) || kind.EndsWith("_failed", StringComparison.Ordinal);
 

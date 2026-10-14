@@ -12,7 +12,9 @@ namespace DfoServer.Network.Protocol;
 internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler loginHandler, GameCommandRegistry commands, ICharacterRepository repository, TownCatalog towns, OnlineSessionDirectory online, TownProjection projection, ServerLog log,
     Func<GameSession, IGameConnectionActivity>? createActivity = null, MailboxProjection? mailbox = null,
     DfoServer.GameWorld.Quests.QuestCatalog? quests = null, GameDebugSettings? debugSettings = null,
-    AdventureProjection? adventure = null, DfoServer.Game.Quests.QuestSkipEffects? questEffects=null) : IConnectionProtocol
+    AdventureProjection? adventure = null, DfoServer.Game.Quests.QuestSkipEffects? questEffects=null,
+    DfoServer.GameWorld.Items.PremiumContractCatalog? contracts = null, CharacterStatComputer? stats = null,
+    DfoServer.Network.Projection.Inventory.InventoryProjection? inventory = null, TimeProvider? time = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -20,8 +22,15 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (login is null)
             return;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = Convert.ToHexString(body.Span) }), connection.CaptureSent);
-        var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects);
+        var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
+        CubeContractConsumptionProjection? cubeConsumption = null;
+        if (contracts is not null)
+        {
+            var cubeService = new DfoServer.Game.Inventory.Services.CubeContractService(contracts);
+            context.Premiums = new(context, cubeService, stats ?? throw new InvalidOperationException("契约缺少属性投影"), time);
+            cubeConsumption = new(context, cubeService, inventory ?? throw new InvalidOperationException("契约缺少库存投影"), log, time);
+        }
         var elevator = new DungeonElevatorProjection(context, log);
         context.Elevator = elevator;
         var death = new DungeonDeathProjection(context, projection, log);
@@ -56,6 +65,13 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 var result = await commands.DispatchAsync(context, request);
                 if (result == CommandResult.CloseConnection)
                     return;
+                await context.CommandGate.WaitAsync(connection.Stop);
+                try
+                {
+                    if (context.Premiums is { } premiums) await premiums.RefreshAsync();
+                    if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
+                }
+                finally { context.CommandGate.Release(); }
                 if (result == CommandResult.Unhandled)
                     log.Write("unimplemented", new { Connection = connection.Id, Phase = session.Phase.ToString(), request.Kind,
                         request.Opcode, Name = name, Length = request.Body.Length, Body = body });
@@ -63,6 +79,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         finally
         {
+            if (cubeConsumption is not null) await cubeConsumption.DisposeAsync();
             await death.DisposeAsync();
             if (context.Cards is not null) await context.Cards.DisposeAsync();
             await elevator.DisposeAsync();

@@ -57,7 +57,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             {
                 if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
                     continue;
-                if (contracts?.TryConsumableContract(id, out _) == true)
+                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).AcquisitionContract is not null)
                     continue;
                 // 仅已实现的普通契约可直接写入账号期限；其他premium服务可能还有即时奖励，
                 // 必须拒绝整包，不能只记期限，也不能跳过实体模板与期限的预检。

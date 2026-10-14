@@ -60,7 +60,8 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             var source = row.ListFlag == 1 ? row.Items : row.ItemId > 0 ? ImmutableArray.Create(new DungeonSpecialDropItem(row.ItemId, 1)) : [];
             var pool = SpecialPool(source);
             if (pool.TotalWeight > 0)
-                trials.Add(new(threshold, pool, 1, 1, ProbabilityDenominator: 1000000, Attempts: attempts));
+                trials.Add(new(threshold, pool, 1, 1, ProbabilityDenominator: 1000000, Attempts: attempts,
+                    GrowthContractEligible: row.ListFlag == 1 && monsterType == 3));
         }
         if (special?.WorldByLevel.TryGetValue(level, out var world) == true)
         {

@@ -21,13 +21,17 @@ internal static class DungeonSettlementPackets
         return body;
     }
 
-    public static byte[] EmptyCardReward(DungeonClearExperienceReward reward, uint monsterExperience)
+    public static byte[] EmptyCardReward(DungeonClearExperienceReward reward, uint monsterExperience,
+        uint monsterGrowthContractExperience = 0)
     {
         // 所有动态名单和翻牌奖励为空。固定经验字段来自已经提交的同一次结算。
         // 本版固定尾部含八个独立bool，不能套用其他版本的210B正文。
         byte[] body = new byte[218];
         BinaryPrimitives.WriteUInt32LittleEndian(body, reward.BaseExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), reward.RankExperience);
+        // 02393C80分别投影到结果页两组“成长之契约”栏；不是组队或评分经验。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(49), reward.GrowthContractExperience);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(85), monsterGrowthContractExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(194), monsterExperience);
         return body;
     }
@@ -43,9 +47,10 @@ internal static class DungeonSettlementPackets
     }
 
     public static byte[] CardReward(DungeonClearExperienceReward reward, uint monsterExperience, DungeonCardReward? card,
-        DungeonCardOptions? options = null,DungeonCardReward? blackDiamond = null)
+        DungeonCardOptions? options = null,DungeonCardReward? blackDiamond = null,
+        uint monsterGrowthContractExperience = 0)
     {
-        var empty = EmptyCardReward(reward, monsterExperience);
+        var empty = EmptyCardReward(reward, monsterExperience, monsterGrowthContractExperience);
         if (card is null) return empty;
         card.Validate();
         var free = Display(card);

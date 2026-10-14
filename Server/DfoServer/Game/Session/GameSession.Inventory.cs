@@ -51,7 +51,7 @@ internal sealed partial class GameSession
     }
 
     InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError,
-        bool requireTown, bool allowSettlement, SessionPhase? requiredPhase = null)
+        bool requireTown, bool allowSettlement, SessionPhase? requiredPhase = null, Func<bool>? additionalGuard = null)
     {
         var capture = owner.Execute(() => (Character: CanPlan() ? Selected : null,
             SelectionEpoch, Phase, Dungeon: formalDungeon, Identity: formalDungeon?.Run.Snapshot.Identity));
@@ -72,7 +72,7 @@ internal sealed partial class GameSession
 
         bool CanPlan()
         {
-            if (!Ready || Selected is null || HasPendingQuestScene || HasPendingFormalCard ||
+            if (additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingQuestScene || HasPendingFormalCard ||
                 requiredPhase is { } expected && Phase != expected || formalDungeon?.PendingTutorialClear is not null) return false;
             // 既有城镇用例保持原资格；只有专用跨场景取放核对未完成事务与副本上下文。
             if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();

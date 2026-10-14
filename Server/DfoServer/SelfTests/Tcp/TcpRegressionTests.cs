@@ -145,6 +145,7 @@ internal static class TcpRegressionTests
         ("cash-shop", CashShopTcpTests.RunAsync),
         ("cera-package", CeraPackageTcpTests.RunAsync),
         ("premium-contract", PremiumContractTcpTests.RunAsync),
+        ("growth-cube-contract", GrowthCubeContractTcpTests.RunAsync),
         ("enchantment", EnchantmentTcpTests.RunAsync),
         ("enhancement", EnhancementTcpTests.RunAsync),
         ("creature-egg", CreatureEggTcpTests.RunAsync),

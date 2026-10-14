@@ -55,7 +55,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var reward = result.Reward ?? throw new InvalidOperationException("已提交结算缺少经验奖励");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints),
             state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
-        var display = CharacterExperienceDisplay.Ordinary;
+        var display = CharacterExperienceDisplay.Ordinary with
+        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(reward.TotalExperience - reward.GrowthContractExperience,
+            reward.GrowthContractExperience, result.GainedExperience) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
         await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
@@ -68,7 +70,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard);
         if (!receipt.Entry.IsTutorial)
             await DungeonCardMembershipProjection.RefreshAsync(context);
-        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(reward.Applied(result.GainedExperience), result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond), "formal_clear_reward", Guard);
+        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(reward.Applied(result.GainedExperience),
+            result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond,
+            result.Presentation.MonsterGrowthContractExperience), "formal_clear_reward", Guard);
         if (result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
                 RentalPackets.State(receipt.Character.Inventory, DateTimeOffset.UtcNow),
