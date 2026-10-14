@@ -646,6 +646,7 @@ internal static class QuestLifecycleTcpTests
         await QuestQuickClearTcpTests.RunAsync(extra,resources);
         VerifySequentialParent(extra,resources,growth);
         VerifyNonBossSettlement(extra,resources,growth);
+        VerifyMutationEntry(extra,resources,growth);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
@@ -773,6 +774,55 @@ internal static class QuestLifecycleTcpTests
             That(fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id",peer.Id) == accepted,
                 "诺伊佩拉父请求及真实副本内子31重连回放原持久接取，未清图不生成凭据");
         }
+    }
+
+    static void VerifyMutationEntry(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
+    {
+        var done = new HashSet<int> { 3347 };
+        var area = resources.Towns.Areas.Values.First(row => row.Level <= 48 && row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 52));
+        // 隔离准备入口资格；任务接取和副本加载走真实请求，不替代连续主线或客户端验收。
+        done.UnionWith(area.Quests);
+        if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+        var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
+            checked((ushort)(walk.X + walk.Width / 2)),checked((ushort)(walk.Y + walk.Height / 2)));
+        Character created;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare("QuestMutant",resources.Characters.Get(0),position,position,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,48,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(48) },resources.Learning);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level = 48, AcceptedStoryLevel = 48,
+                CompletedQuests = done.ToArray(),InitialLearning = learning });
+        }
+        string acceptance;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared: true,resumeTown: true,room: false);
+            peer.Send(31,[31,0,20,13]); peer.Expect(1,31,[1,20,13,1,0,0,0,0]);
+            peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            acceptance = Accepted();
+            foreach (ushort requestQuest in new ushort[] { 3348,0 })
+            {
+                peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27,new byte[42]);
+                byte[] request = new byte[25]; BinaryPrimitives.WriteUInt32LittleEndian(request,52);
+                BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(9),ushort.MaxValue);
+                BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),requestQuest);
+                peer.Send(16,request);
+                That(U32(peer.Expect(0,28).Body,0) == 52 && U32(peer.Expect(0,29).Body,14) == 76340,
+                    "真实3348及0请求均从D52任务起点加载，不返回拒绝ACK16 " + requestQuest);
+                FormalDungeonTcpTests.Load(peer);
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                That(Accepted() == acceptance && fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                    "未清图返回保留3348接取身份和进行中状态，不签发清图凭据 " + requestQuest);
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared: true,resumeTown: true,room: false); peer.Barrier();
+            That(Accepted() == acceptance,"3348接取和两次正式加载退出在重连后回放同一持久接取");
+        }
+        string Accepted() => fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id);
     }
 
     public static async Task RunContinuationAsync(ServerOptions options, string root, TcpTestResources resources)
