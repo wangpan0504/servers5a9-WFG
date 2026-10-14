@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Characters;
@@ -8,6 +9,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Builders;
 using DfoServer.Testing;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
@@ -40,6 +42,8 @@ internal static class QuestStoryRouteTests
                 scenario.Completed.Concat(skyCastle ? new[] {3155,3156,3161} : [])
                     .Concat(scenario.Id >= 3168 ? new[] {3167} : []).Distinct().ToArray());
             var quest = quests.Get(scenario.Id);
+            if (scenario.Id is 3149 or 3150 or 3151)
+                EarlyLevelBoundary(f.Session.Selected!,quest,scenario.Id == 3149 ? (ushort)4875 : checked((ushort)(scenario.Id-1)),quests);
             That(f.Session.LeaveRoom(), "新角色离开出生房间");
             var accept = f.Session.ChangeQuest(scenario.Id,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces);
             That(accept?.Commit is not null,$"实际Lv{scenario.Level}任务{scenario.Id}正常接取：{accept?.Reason}");
@@ -107,7 +111,35 @@ internal static class QuestStoryRouteTests
             That(finish.Outcome == QuestFinishOutcome.Committed && f.Read().CompletedQuests.Contains(scenario.Id), $"任务{scenario.Id}原子交付并保留完成记录");
             That(f.Session.ReturnFromFormalDungeon() is not null, "剧情完成正常回城");
         }
-        Console.WriteLine($"PASS {Count-checks} 实际Lv5–20清图路线与匹配客户端剧情死亡断言（非实机）");
+        Console.WriteLine($"PASS {Count-checks} 早期等级候选、实际Lv5–20清图路线与匹配客户端剧情死亡断言（非实机）");
+    }
+
+    static void EarlyLevelBoundary(Character ready,StoryQuest next,ushort previousId,QuestCatalog quests)
+    {
+        // 复用本路线已准备的真实前驱闭包，只改变快照；不重建服务或伪造现场角色完成事实。
+        byte below = checked((byte)(ready.Level-1));
+        That((next.Id,next.MinimumLevel,previousId) is (3149,11,4875) or (3150,13,3149) or (3151,15,3150) &&
+            ready.CompletedQuests.Contains(previousId),"格兰之森10/12/14级边界绑定准确资源及已准备前驱");
+        var waiting = ready with { Level = below, AcceptedStoryLevel = 1,
+            CompletedQuests = ready.CompletedQuests.Where(id => id != previousId).ToArray() };
+        var before = QuestEligibility.Evaluate(waiting,quests.Get(previousId),quests);
+        That(before is { Eligible:true,Visible:true } && Listed(waiting).Contains(previousId),
+            $"Lv{below}前驱{previousId}未交付时仍列入21候选，不能把资源等级空档当已完成");
+        That(QuestEligibility.Evaluate(waiting with { Level = ready.Level },next,quests) is
+            { Eligible:false,Visible:false,Reason:"前置组未达成" },
+            $"任务{next.Id}达到最低等级仍要求真实前驱交付");
+        var completed = ready with { Level = below, AcceptedStoryLevel = 1 };
+        That(QuestEligibility.Evaluate(completed,next,quests) is { Eligible:false,Visible:false,Reason:"等级不符" } &&
+            !Listed(completed).Contains(next.Id),"真实前驱已完成但10/12/14级仍不提前列出下一等级主线");
+        var eligible = completed with { Level = ready.Level };
+        That(QuestEligibility.Evaluate(eligible,next,quests) is { Eligible:true,Visible:true } &&
+            Listed(eligible).Contains(next.Id),$"任务{next.Id}达到资源等级后进入21候选");
+        foreach (var state in new[] { completed,eligible })
+            Bytes(Projection(state),Projection(state with { AcceptedStoryLevel = state.Level }),
+                $"Lv{state.Level}的21正文不由剧情接受标量代替真实等级和前置");
+
+        byte[] Projection(Character state) => QuestPackets.AvailableList(state.Level,QuestEligibility.Candidates(state,quests));
+        int[] Listed(Character state) => QuestLifecycleTcpTests.List(Projection(state),state.Level);
     }
 
     internal static DungeonPoint[] Path(DungeonStaticTopology topology,DungeonPoint start,DungeonPoint boss)
