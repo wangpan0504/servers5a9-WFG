@@ -10,6 +10,7 @@ internal static class SinglePlayerDungeonRunTests
     public static void RunCore()
     {
         int checks = Count;
+        VerifyLayeredBossTerminal();
         var authority = new FixtureCombatAuthority();
         var start = new DungeonMap("map", new(0, 0), 1, "map/fixture-start.map");
         var friendly = new DungeonMap("map", new(1, 0), 2, "map/fixture-friendly.map");
@@ -571,6 +572,94 @@ internal static class SinglePlayerDungeonRunTests
         That(committingRun.Return(committingRun.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted,
             "确认完成后解除待提交门禁，正常退出仍可执行");
         Console.WriteLine($"PASS {Count - checks} single-player lifecycle identity and confirmed-event assertions");
+    }
+
+    private static void VerifyLayeredBossTerminal()
+    {
+        var start = new DungeonMap("map", new(0, 0), 10, "map/fixture-layer-start.map");
+        var boss = new DungeonMap("boss", new(1, 0), 20, "map/fixture-dummy-boss.map");
+        var middle = new DungeonMap("layered", boss.Position, 30, "map/fixture-middle-boss.map");
+        var last = new DungeonMap("layered", boss.Position, 40, "map/fixture-real-boss.map");
+        var maze = new DungeonMaze(0, 2, 1, "fixture-layers", [start.Position], [boss.Position], [start, boss], [])
+            { LayeredMaps = [middle, last] };
+        var entry = new DungeonEntryPlan(99, 0, 3, 3145, 0, 0, maze, start, boss);
+        var dummy = Change(BossPlan(boss, 20), true);
+        var route = new DungeonFixedRoute([WithTeams(Plan(start, 10), 0), dummy, BossPlan(middle, 30), BossPlan(last, 40)],
+            [new(start.Position, boss.Position)]);
+        var authority = new FixtureCombatAuthority();
+        var run = Create(entry, route);
+        That(run.Entry.BossMap == last && run.Entry.BaseBossMap == boss && entry.BossMap == boss,
+            "Run冻结实际末层终点供结算及任务事务共享，输入计划和基础房身份保持原值");
+        That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity, 20, 1)).ClearFact is null &&
+            run.Phase == SinglePlayerDungeonPhase.Dungeon, "基础dummy死亡不能绕过真实末层提前结算");
+        Layer(run);
+        That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity, 30, 2)).ClearFact is null,
+            "同模板真实Boss在非末层死亡仍不能结算");
+        Layer(run);
+        var before = run.Snapshot.Identity;
+        var death = authority.Death(before, 40, 3);
+        var pending = run.PrepareConfirmedDeath(death).Pending!;
+        That(pending.Result.ClearFact is { ClearMap: var map, ConfirmedDeathEvents.Count: 3 } && map == last &&
+            run.ClearFact is null && run.Phase == SinglePlayerDungeonPhase.Dungeon,
+            "真实末层只规划原清图事实，提交前不改变状态");
+        That(run.CancelUncommittedDeath(pending) && run.ClearFact is null && run.CurrentLivingMonster(40) is not null,
+            "末层死亡回滚保留Boss存活和原状态");
+        pending = run.PrepareConfirmedDeath(death).Pending!;
+        var committed = run.ConfirmCommittedDeath(pending);
+        That(ReferenceEquals(committed.ClearFact, run.ClearFact) && run.ClearFact!.ClearMap == last &&
+            run.Phase == SinglePlayerDungeonPhase.Settlement && run.Snapshot.Identity.Epoch == before.Epoch + 1 &&
+            run.AcceptConfirmedDeath(death).Outcome == DungeonRunOutcome.Duplicate &&
+            run.MoveLayer(before, Guid.NewGuid(), boss.Position, true).Outcome == DungeonRunOutcome.Rejected,
+            "末层提交后发布唯一清图事实，重复死亡和旧身份不能恢复基础房或再次结算");
+        foreach (int variant in new[] { 0, 1, 2, 3 })
+        {
+            var changedEntry = variant == 0 ? entry with { HasExplicitClearMap = true } : entry;
+            var changedRoute = route with { Rooms = [route.Rooms[0], variant == 1 ? BossPlan(boss, 20) : dummy,
+                route.Rooms[2], variant == 2 ? Change(BossPlan(last, 40), false, 2) :
+                    variant == 3 ? Change(BossPlan(last, 40), true) : route.Rooms[3]] };
+            var unchanged = Create(changedEntry, changedRoute);
+            Layer(unchanged);
+            unchanged.AcceptConfirmedDeath(authority.Death(unchanged.Snapshot.Identity, 30, 1));
+            Layer(unchanged);
+            That(unchanged.AcceptConfirmedDeath(authority.Death(unchanged.Snapshot.Identity, 40, 2)).ClearFact is null &&
+                unchanged.Phase == SinglePlayerDungeonPhase.Dungeon,
+                "显式基础终点、真实基础Boss、异模板或末层dummy不被自动晋升 " + variant);
+        }
+        var explicitLayer = Create(entry with { BossMap = middle, HasExplicitClearMap = true }, route);
+        Layer(explicitLayer);
+        That(explicitLayer.AcceptConfirmedDeath(authority.Death(explicitLayer.Snapshot.Identity, 30, 1)).ClearFact?.ClearMap == middle,
+            "任务明确声明的非末层清图地图仍按原终点结算");
+        var livingDummy = Create(entry, route);
+        Layer(livingDummy);
+        livingDummy.AcceptConfirmedDeath(authority.Death(livingDummy.Snapshot.Identity, 30, 1));
+        Layer(livingDummy);
+        That(livingDummy.AcceptConfirmedDeath(authority.Death(livingDummy.Snapshot.Identity, 40, 2)).ClearFact is
+            { ClearMap: var finalMap, ConfirmedDeathEvents.Count: 2 } && finalMap == last,
+            "基础dummy仍存活时末层真实死亡正常结算，不补造基础dummy死亡事实");
+
+        SinglePlayerDungeonRun Create(DungeonEntryPlan planned, DungeonFixedRoute fixedRoute)
+        {
+            That(SinglePlayerDungeonRun.TryCreate(planned, 1, 100, fixedRoute, authority, out var result, out _),
+                "分层边界复用完整资源行与唯一对象key夹具");
+            result!.CompleteLoading(result.Snapshot.Identity, Guid.NewGuid());
+            That(result.Move(result.Snapshot.Identity, Guid.NewGuid(), boss.Position).Outcome == DungeonRunOutcome.Accepted,
+                "夹具沿已声明连接进入基础Boss房");
+            result.CompleteLoading(result.Snapshot.Identity, Guid.NewGuid());
+            return result;
+        }
+        void Layer(SinglePlayerDungeonRun target)
+        {
+            That(target.MoveLayer(target.Snapshot.Identity, Guid.NewGuid(), boss.Position, true).Outcome == DungeonRunOutcome.Accepted,
+                "基础入口或已清叠层沿原MoveLayer进入下一层");
+            target.CompleteLoading(target.Snapshot.Identity, Guid.NewGuid());
+        }
+        static DungeonMonsterPlan Change(DungeonMonsterPlan plan, bool isDummy, int template = 1)
+        {
+            var sources = plan.Room.Monsters.Select(source => source with { MonsterId = template,
+                RawValues = Array.AsReadOnly(new[] { template }.Concat(source.RawValues.Skip(1)).ToArray()),
+                Modifiers = isDummy ? ["[dummy]"] : [] }).ToArray();
+            return DungeonMonsterPlan.FromRoom(plan.Room with { Monsters = sources }, 99, plan.Monsters[0].ObjectKey);
+        }
     }
 
     private static DungeonMonsterPlan Plan(DungeonMap map, params ushort[] keys)

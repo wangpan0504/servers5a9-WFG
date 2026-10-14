@@ -647,6 +647,7 @@ internal static class QuestLifecycleTcpTests
         VerifySequentialParent(extra,resources,growth);
         VerifyNonBossSettlement(extra,resources,growth);
         VerifyMutationEntry(extra,resources,growth);
+        VerifyLayeredBossSettlement(extra,resources,growth);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
@@ -718,6 +719,84 @@ internal static class QuestLifecycleTcpTests
             That(fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3260",peer.Id) is [[1L]] &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
                 "重连恢复原任务交付和结算，不因友方终点补发奖励");
+        }
+    }
+
+    static void VerifyLayeredBossSettlement(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
+    {
+        var done = new HashSet<int> { 3274 };
+        var area = resources.Towns.Areas.Values.First(row => row.Level <= 39 && row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 239));
+        done.UnionWith(area.Quests);
+        if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+        var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
+            checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+        Character created;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            // 只准备隔离角色入口，接取、过房、末层死亡、结算及交付均通过真实TCP。
+            var candidate = CharacterCreation.Prepare("QuestCause",resources.Characters.Get(0),position,position,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,39,candidate.InitialLearning with { Experience=growth.GetLevelStartExperience(39) },resources.Learning);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level=39,AcceptedStoryLevel=39,
+                CompletedQuests=done.ToArray(),InitialLearning=learning });
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            var map = FormalDungeonTcpTests.Enter(peer,3275,239);
+            foreach (var point in new (byte X,byte Y)[] { (1,1),(2,1),(3,1),(3,0),(4,0),(5,0) })
+            {
+                FormalDungeonTcpTests.Load(peer);
+                for (int at=0; at<map[18]; at++)
+                {
+                    int offset=19+22*at;
+                    peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12]));
+                    DrainNotifications(peer);
+                }
+                Move(point.X,point.Y,0);
+            }
+            That(U32(map,14) == 70168 && U32(map,27) == 70150,
+                "3275沿完整真实路线抵达基础dummy房，不替换基础图或伪造Boss死亡");
+            FormalDungeonTcpTests.Load(peer);
+            That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "基础dummy仍存活时没有提前结算");
+            Move(5,0,1); FormalDungeonTcpTests.Load(peer);
+            That(U32(map,14) == 70171 && U32(map,27) == 70150,"原生kind1进入同坐标真实末层Boss图");
+            var death = new byte[74]; BinaryPrimitives.WriteUInt32LittleEndian(death,U16(map,25));
+            BinaryPrimitives.WriteUInt16LittleEndian(death.AsSpan(4),peer.Id);
+            death[31]=0x22; FormalDungeonTcpTests.SealDeath(death);
+            int bossAccepted=0,clearEnabled=0;
+            peer.Send(39,death);
+            DrainNotifications(peer,packet => { if (packet.Opcode == 115) bossAccepted++; if (packet.Opcode == 31) clearEnabled++; });
+            That(bossAccepted == 1 && clearEnabled == 1 && fixture.Query(
+                "SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3275",peer.Id) is [[0L]],
+                $"末层真实死亡持久推进猎杀目标，并发布一次Boss确认与结算许可：boss={bossAccepted},clear={clearEnabled}");
+            string committed=fixture.Snapshot();
+            peer.Send(39,death); DrainNotifications(peer);
+            That(fixture.Snapshot() == committed,"重复末层死亡不增加经验、任务或资产");
+            var report=DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99);
+            peer.Send(46,report); DrainNotifications(peer);
+            That(fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[70171L]],
+                "真实46按实际末层地图提交唯一通关经验与奖励凭据");
+            committed=fixture.Snapshot();
+            peer.Send(46,report); DrainNotifications(peer);
+            That(fixture.Snapshot() == committed,"重复46不发放第二份末层通关奖励");
+            peer.Send(34,[34,0,203,12,255,255,1,0,255,255]); That(Finished(peer).Body[0] == 1,"3275猎杀完成后正常交付");
+            DrainNotifications(peer);
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            void Move(byte x,byte y,byte layer)
+            {
+                var request=new byte[100]; request[0]=x; request[1]=y; request[10]=layer;
+                peer.Send(45,request); peer.Expect(1,45,[1]); map=peer.Expect(0,29).Body;
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true); peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3275",peer.Id) is [[1L]] &&
+                fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[70171L]],
+                "回城重连保持一次交付与实际末层结算记录");
         }
     }
 
@@ -990,7 +1069,7 @@ internal static class QuestLifecycleTcpTests
 
     static WirePacket Finished(TcpPeer peer, byte[]? expected = null) => peer.Expect(1,34,expected);
 
-    static void DrainNotifications(TcpPeer peer)
+    static void DrainNotifications(TcpPeer peer, Action<WirePacket>? observe = null)
     {
         peer.SendBarrier();
         for (int at = 0; at < 64; at++)
@@ -1003,6 +1082,7 @@ internal static class QuestLifecycleTcpTests
                 continue;
             }
             That(packet.Kind == 0,"剧情事件后只有通知，没有未检查的失败ACK");
+            observe?.Invoke(packet);
         }
         throw new InvalidDataException("任务剧情通知超过有界数量");
     }

@@ -178,6 +178,8 @@ internal sealed class SinglePlayerDungeonRun
         layeredRooms = route.Rooms.Where(plan => plan.Room.Map.Kind == "layered").ToDictionary(plan => plan.Room.Map,plan => new Room(plan));
         conditionalRooms = route.Rooms.Where(plan => plan.Room.Map.IsConditional).ToDictionary(plan => plan.Room.Map.Position,plan => new Room(plan));
         allRooms = [.. baseRooms, .. layeredRooms.Values, .. conditionalRooms.Values];
+        if (ResolveLayeredBossTerminal() is { } terminal)
+            this.entry = entry with { BossMap = terminal.Plan.Room.Map };
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = baseRooms.Single(room => room.Plan.Room.Map == entry.StartMap);
         storyStageIndex = entry.StartMap.StoryStageIndex;
@@ -544,6 +546,22 @@ internal sealed class SinglePlayerDungeonRun
     private bool MatchesClearCondition(DungeonPlannedMonster monster) => entry.Maze.ClearConditions is [var condition] &&
         condition.Count == 1 && condition.TargetId == monster.MonsterId && monster.AiCharacter is null &&
         (condition.Type == "hunt monster" || condition.Type == "hunt boss" && monster.IsBoss);
+
+    private Room? ResolveLayeredBossTerminal()
+    {
+        // 未声明清图地图的 dummy Boss 房只作为叠层入口；终点取同坐标末层的同模板真实 Boss。
+        if (entry.HasExplicitClearMap || entry.BossMap != entry.BaseBossMap || storyRooms.Length != 0 ||
+            conditionalRooms.ContainsKey(entry.BaseBossMap.Position)) return null;
+        var source = rooms[entry.BaseBossMap.Position].Plan.Monsters.Where(monster => monster.IsBlocking).ToArray();
+        if (source.Length == 0 || source.Any(monster => !monster.IsScriptedBoss)) return null;
+        var last = entry.Maze.LayeredMaps.LastOrDefault(map => map.Position == entry.BaseBossMap.Position);
+        if (last is null) return null;
+        var terminal = layeredRooms[last];
+        var bosses = terminal.Plan.Monsters.Where(monster => monster.IsBoss).ToArray();
+        if (bosses.Length == 0 || bosses.Any(monster => monster.IsScriptedBoss || monster.AiCharacter is not null) ||
+            !source.Select(monster => monster.MonsterId).ToHashSet().SetEquals(bosses.Select(monster => monster.MonsterId))) return null;
+        return terminal;
+    }
 
     private bool IsTerminalRoom() => entry.IsTerminalMap(current.Plan.Room.Map) &&
         (storyRooms.Length == 0 || storyStageIndex == storyRooms.Length-1);

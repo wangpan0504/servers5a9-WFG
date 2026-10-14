@@ -30,6 +30,7 @@ internal sealed record DungeonEntryPlan(
     public bool UsesFatigue => IsOrdinary && !IsTrainingRoom && !IsClassExperience;
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
+    public bool HasExplicitClearMap { get; init; }
     public uint RouteQuestId { get; init; } = QuestId;
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
     public float ExperienceWeight { get; init; } = 1;
@@ -242,6 +243,7 @@ internal sealed record DungeonEntryPlan(
             MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],
+            HasExplicitClearMap = layoutQuest is not null && QuestClearEligibility.IsSingleMap(layoutQuest),
             RouteQuestId = routeQuest,
             QuestAcceptances = definition.IsClassExperience ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),

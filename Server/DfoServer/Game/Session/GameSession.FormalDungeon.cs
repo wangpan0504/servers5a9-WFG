@@ -186,7 +186,7 @@ internal sealed partial class GameSession
         if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out _) ||
             !authority.BindTo(run!)) return null;
         var ground = new DungeonGroundState(run!, route.Rooms, groundReservations, drops is null ? "" : "monster/monster.lst");
-        var dungeon = new FormalDungeon(committedEntry, route, run!, authority, checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue)),
+        var dungeon = new FormalDungeon(run!.Entry, route, run, authority, checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue)),
             ground, pools, draw ?? RandomNumberGenerator.GetInt32, prepareDrops, dropPlans.ToImmutable())
             { QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn };
         return new(expected,epoch,dungeon,next);
