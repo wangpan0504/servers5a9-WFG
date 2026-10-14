@@ -645,6 +645,7 @@ internal static class QuestLifecycleTcpTests
         }
         await QuestQuickClearTcpTests.RunAsync(extra,resources);
         VerifySequentialParent(extra,resources,growth);
+        VerifyNonBossSettlement(extra,resources,growth);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
@@ -654,6 +655,68 @@ internal static class QuestLifecycleTcpTests
             That(body[0] == 0 && body.Length == 3+123*U16(body,1),"独立读器确认NOTI14 Main行长度");
             int offset = Enumerable.Range(0,U16(body,1)).Select(at => 3+123*at).Single(at => U16(body,at) == slot);
             That(U32(body,offset+2) == item && U32(body,offset+6) == balance,"NOTI14钱包slot与实际绝对余额一致");
+        }
+    }
+
+    static void VerifyNonBossSettlement(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
+    {
+        var done = new HashSet<int> { 3259 };
+        var area = resources.Towns.Areas.Values.First(row => row.Level <= 37 && row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 153));
+        done.UnionWith(area.Quests);
+        if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+        var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
+            checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+        Character created;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            // 仅准备隔离Lv37与资源入口前置；本组完整TCP不作为新角色连续游玩证据。
+            var candidate = CharacterCreation.Prepare("QuestGold",resources.Characters.Get(0),position,position,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,37,candidate.InitialLearning with { Experience=growth.GetLevelStartExperience(37) },resources.Learning);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level=37,AcceptedStoryLevel=37,
+                CompletedQuests=done.ToArray(),InitialLearning=learning });
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            var map = FormalDungeonTcpTests.Enter(peer,3260,153);
+            int deaths = 0;
+            foreach (var point in new (byte X,byte Y)[] { (1,2),(1,1),(1,0),(2,0),(3,0),(3,1) })
+            {
+                FormalDungeonTcpTests.Load(peer);
+                for (int at = 0; at < map[18]; at++)
+                {
+                    int offset = 19+22*at;
+                    peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12]));
+                    DrainNotifications(peer); deaths++;
+                }
+                var move = new byte[100]; move[0]=point.X; move[1]=point.Y;
+                peer.Send(45,move); peer.Expect(1,45,[1]); map=peer.Expect(0,29).Body;
+            }
+            That(U32(map,14) == 70107 && map[18] == 1 && U32(map,27) == 66417 && map[32] == 0,
+                "黄金矿洞终点保留真实普通友方66417，没有伪造Boss或删除演员");
+            FormalDungeonTcpTests.Load(peer); DrainNotifications(peer);
+            That(deaths == 40 && fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3260",peer.Id) is [[0L]],
+                "完整六房真实猎杀完成两通道目标，team110按相对本人仍属敌对");
+            long revision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id)[0][0]);
+            peer.Send(39,FormalDungeonTcpTests.Death(U16(map,25),peer.Id,map[31]));
+            var retired = peer.Expect(0,38).Body;
+            That(retired.Length == 9 && U16(retired,0) == U16(map,25) && U16(retired,2) == 0,
+                "友方非阻塞演员消失只投影空掉落通知，不作为敌对死亡"); peer.Barrier();
+            That(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id) is [[long same]] && same == revision,
+                "友方终点报告不授予额外任务、成长事实或revision变化");
+            peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
+            That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
+                "无Boss的已清终点沿真实46完成一次结算");
+            peer.Send(34,[34,0,188,12,255,255,1,0,255,255]); That(Finished(peer).Body[0] == 1,"3260实际猎杀完成后正常交付"); DrainNotifications(peer);
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true); peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3260",peer.Id) is [[1L]] &&
+                fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
+                "重连恢复原任务交付和结算，不因友方终点补发奖励");
         }
     }
 
