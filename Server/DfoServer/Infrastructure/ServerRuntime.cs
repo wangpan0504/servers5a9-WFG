@@ -59,6 +59,7 @@ internal static class ServerRuntime
             CharacterEmotionCatalog.Load(pvf));
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
         var questConnections = QuestConnectionCatalog.Load(pvf);
+        var imageCommunication = ImageCommunicationCatalog.Load(pvf, towns);
         var titleCatalog = new TitleCatalog(pvf, quests);
         var titleService = new Game.Titles.TitleAchievementService(titleCatalog, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var titleProjection = new TitleProjection(titleService);
@@ -194,6 +195,7 @@ internal static class ServerRuntime
                 contracts: itemResources.Contracts), inventoryProjection),
             new DungeonSelectionHandler(projection, log, tutorials),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
+            new ImageCommunicationHandler(imageCommunication, quests, log),
             new QuestHiddenHandler(quests,log),
             new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning),
             new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning),

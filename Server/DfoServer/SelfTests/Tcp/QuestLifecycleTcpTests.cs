@@ -651,6 +651,7 @@ internal static class QuestLifecycleTcpTests
         VerifyPassiveTerminalSettlement(extra,resources,growth);
         VerifyDungeonNpcMeeting(extra,resources,growth);
         VerifyLargeResearchMaterials(extra,resources,growth);
+        VerifyImageCommunication(extra,resources,growth);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
@@ -714,6 +715,129 @@ internal static class QuestLifecycleTcpTests
                 fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3763",created.Id) is [[1L]],
                 "终末子归档才推进父归零，父未自动发奖或标完成");
         }
+    }
+
+    static void VerifyImageCommunication(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
+    {
+        var quest = resources.Quests.Get(3734);
+        byte level = checked((byte)Math.Max(81,quest.MinimumLevel));
+        var done = quest.Definition!.PrerequisiteGroups.Take(1).SelectMany(group => group).Append(3697).ToHashSet();
+        var area = resources.Towns.Areas[(14,1)];
+        done.UnionWith(area.Quests);
+        if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+        var map = area.Map(done);
+        var walk = map.Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new DfoServer.GameWorld.Towns.Location(14,1,
+            checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+        That(quest is {Condition:"[meet npc]",SubType:-1} && quest.IntData.SequenceEqual([2000]) &&
+            map.Npcs.Any(npc => npc.Id == 78) && map.Npcs.All(npc => npc.Id != 2000),
+            "475 TCP使用真实3734、源装置78和不存在于静态地图的虚拟NPC2000");
+        var created = Prepare("QuestComm",50000,position,active:false);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            Accept(peer,3734);
+            string original = fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id);
+            RefuseMeeting(peer);
+            peer.Send(475); peer.Expect(1,475,Convert.FromHexString("0100000000409C0000")); peer.Barrier();
+            That(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id) is [[40000L]] &&
+                fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id) is [[1L]],
+                "空正文475完整9B确认实际绝对40000金币，付款不提前达成会面");
+            string paid = State(created.Id);
+            peer.Send(475); peer.Expect(1,475,Convert.FromHexString("0100000000409C0000")); peer.Barrier();
+            That(State(created.Id) == paid,"同场景475重放不再次扣费、不新建receipt或revision");
+            peer.Send(32,[32,0,150,14]); peer.Expect(1,32,[1,150,14]); DrainNotifications(peer);
+            Accept(peer,3734);
+            That(fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id) != original,
+                "真实32/31重接得到新接取身份，旧付款不能复活虚拟NPC");
+            RefuseMeeting(peer);
+            peer.Send(475); peer.Expect(1,475,Convert.FromHexString("010000000030750000")); peer.Barrier();
+            using var replacement = Open(fixture);
+            peer.Closed();
+            replacement.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            string inherited = State(created.Id);
+            RefuseMeeting(replacement);
+            That(State(created.Id) == inherited,"账号接管回放已扣金币及活动任务，但不继承旧generation通讯来源");
+            replacement.Send(475); replacement.Expect(1,475,Convert.FromHexString("0100000000204E0000")); replacement.Barrier();
+            replacement.Send(33,[33,0,150,14,0,0]); replacement.Expect(1,33,[1,150,14,0,0,0,0]); replacement.Barrier();
+            That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]],
+                "新owner本次付款后公共33保存3734虚拟NPC会面");
+            string met = State(created.Id);
+            replacement.Send(33,[33,0,150,14,0,0]); replacement.Expect(1,33,[1,150,14,0,0,0,0]); replacement.Barrier();
+            That(State(created.Id) == met,"同接取重复33不重复提交会面");
+            replacement.Send(34,[34,0,150,14,255,255,1,0,255,255]);
+            var finished = Finished(replacement).Body;
+            That(finished[0] == 1 && U16(finished,1) == 3734 && finished[3] == 4,
+                "真实34沿普通会面奖励合同交付3734");
+            DrainNotifications(replacement);
+            Accept(replacement,3735);
+            That(fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[3735L]] &&
+                fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3734",created.Id) is [[1L]],
+                "3734完成一次后真实31接取3735，不伪造后继物件进度");
+        }
+        foreach (var scenario in new[] { (Name:"CommPoor",Gold:9999u,Position:position),
+            (Name:"CommAway",Gold:50000u,Position:resources.Towns.Room) })
+        {
+            var refused = Prepare(scenario.Name,scenario.Gold,scenario.Position,active:true);
+            using var peer = Open(fixture);
+            peer.Select(refused.Slot,prepared:true,resumeTown:true,room:scenario.Position == resources.Towns.Room);
+            string before = State(refused.Id);
+            peer.Send(475); peer.Expect(1,475,[0,0,0]); peer.Barrier();
+            RefuseMeeting(peer);
+            That(State(refused.Id) == before,
+                "475金币不足或当前地图无源装置时完整中立3B失败，连接可继续且没有付款或NPC来源："+scenario.Name);
+        }
+        var rollback = Prepare("CommRollback",50000,position,active:true);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(rollback.Slot,prepared:true,resumeTown:true,room:false); peer.Barrier();
+            string before = State(rollback.Id);
+            fixture.Sql("CREATE TRIGGER communication_tcp_fail AFTER INSERT ON character_quest_lifecycle_receipts " +
+                "WHEN NEW.character_id="+rollback.Id+" BEGIN SELECT RAISE(ABORT,'communication TCP rollback'); END");
+            try
+            {
+                peer.Send(475); peer.Closed();
+                That(State(rollback.Id) == before,"实际475存储异常关闭原连接，金币、活动槽、receipt与revision全部回滚，没有成功ACK");
+            }
+            finally { fixture.Sql("DROP TRIGGER communication_tcp_fail"); }
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(rollback.Slot,prepared:true,resumeTown:true,room:false);
+            RefuseMeeting(peer);
+            peer.Send(475); peer.Expect(1,475,Convert.FromHexString("0100000000409C0000")); peer.Barrier();
+            That(fixture.Query("SELECT gold FROM characters WHERE id=$p0",rollback.Id) is [[40000L]] &&
+                fixture.Query("SELECT count(*) FROM character_quest_lifecycle_receipts WHERE character_id=$p0",rollback.Id) is [[1L]],
+                "回滚后的新连接没有残留来源，真实475恢复只收费一次");
+        }
+
+        Character Prepare(string name,uint gold,DfoServer.GameWorld.Towns.Location location,bool active)
+        {
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { });
+            var candidate = CharacterCreation.Prepare(name,resources.Characters.Get(0),location,location,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,level,candidate.InitialLearning with
+                { Experience=growth.GetLevelStartExperience(level) },resources.Learning);
+            return new CharacterRepository(fixture.Database).Create(owner,candidate with { Level=level,AcceptedStoryLevel=level,
+                CompletedQuests=done.ToArray(),InitialLearning=learning,Inventory=candidate.Inventory with {Gold=gold},
+                ActiveMainQuests=active ? [new(0,3734,1)] : [] });
+        }
+        void Accept(TcpPeer peer,ushort id)
+        {
+            peer.Send(31,[31,0,(byte)id,(byte)(id>>8)]);
+            var ack = peer.Expect(1,31).Body;
+            That(ack.Length >= 8 && ack[0] == 1 && U16(ack,1) == id,"通讯主线按实际公共31接取："+id);
+            if (id == 3734) Bytes(ack,[1,150,14,1,0,0,0,0],"真实3734接取scalar1完整金样");
+            DrainNotifications(peer);
+        }
+        void RefuseMeeting(TcpPeer peer)
+        {
+            string before = State(peer.Id);
+            peer.Send(33,[33,0,150,14,0,0]); peer.Expect(1,33,[0,19,0]); peer.Barrier();
+            That(State(peer.Id) == before,"未持有本次付款及原接取的2000来源时33中立拒绝，不改变持久状态");
+        }
+        string State(ushort id) => fixture.Snapshot("SELECT gold,revision FROM characters WHERE id=$p0",id) +
+            fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",id) +
+            fixture.Snapshot("SELECT * FROM character_quest_lifecycle_receipts WHERE character_id=$p0 ORDER BY revision",id);
     }
 
     static void VerifyPassiveTerminalSettlement(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)

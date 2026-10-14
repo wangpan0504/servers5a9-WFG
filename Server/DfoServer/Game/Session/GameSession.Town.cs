@@ -42,6 +42,7 @@ internal sealed partial class GameSession
         if (!plan.Accepted)
             return null;
         Selected = repository.Save(owner, Selected!, plan.Position!, plan.Return);
+        InvalidateImageCommunication();
         return new(Selected, owner.Generation, SelectionEpoch);
     }
 

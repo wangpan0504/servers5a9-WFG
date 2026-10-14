@@ -12,14 +12,15 @@ namespace DfoServer.Testing;
 
 internal static partial class FormalDungeonTcpTests
 {
-    static void VerifyQuestBaseBossEntry(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
+    static void VerifyQuestBossEntry(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
     {
         var dungeons = DungeonCatalog.Load(resources.Archive);
-        foreach (var scenario in new[] { (Quest:3772,Dungeon:235,Previous:3771), (Quest:3773,Dungeon:227,Previous:3772),
-            (Quest:3774,Dungeon:1005,Previous:3773), (Quest:3776,Dungeon:1007,Previous:3775), (Quest:3777,Dungeon:238,Previous:3776) })
+        foreach (var scenario in new[] { (Quest:3772,Dungeon:235,Previous:3771,Level:(byte)84), (Quest:3773,Dungeon:227,Previous:3772,Level:(byte)84),
+            (Quest:3774,Dungeon:1005,Previous:3773,Level:(byte)84), (Quest:3776,Dungeon:1007,Previous:3775,Level:(byte)84),
+            (Quest:3777,Dungeon:238,Previous:3776,Level:(byte)84), (Quest:3946,Dungeon:310,Previous:3945,Level:(byte)88) })
         {
             var done = new HashSet<int> { scenario.Previous };
-            var area = resources.Towns.Areas.Values.First(row => row.Level <= 84 && row.DungeonWorldMap is { } world &&
+            var area = resources.Towns.Areas.Values.First(row => row.Level <= scenario.Level && row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == scenario.Dungeon));
             done.UnionWith(area.Quests);
             if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
@@ -30,9 +31,9 @@ internal static partial class FormalDungeonTcpTests
             {
                 // 只在隔离测试库准备真实入口和前置；任务仍由生产31接取，不预造完成条件或清图凭据。
                 var candidate = CharacterCreation.Prepare("BossMap"+scenario.Quest,resources.Characters.Get(0),position,position,resources.Learning.Get);
-                var learning = SkillPointLedger.Synchronize(0,0,84,candidate.InitialLearning with
-                    { Experience = growth.GetLevelStartExperience(84) },resources.Learning);
-                created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level=84,AcceptedStoryLevel=84,
+                var learning = SkillPointLedger.Synchronize(0,0,scenario.Level,candidate.InitialLearning with
+                    { Experience = growth.GetLevelStartExperience(scenario.Level) },resources.Learning);
+                created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level=scenario.Level,AcceptedStoryLevel=scenario.Level,
                     CompletedQuests=done.ToArray(),InitialLearning=learning });
             }
             using var peer = Open(fixture);

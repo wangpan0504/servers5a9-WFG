@@ -65,6 +65,8 @@ internal static class TcpRegressionTests
             resources.Characters,resources.ItemResources,resources.Learning)),
         ("quest-core-rewards", async (_, _, resources) =>
         {
+            ImageCommunicationTests.RunResources(resources.Towns, resources.Archive, resources.Characters,
+                resources.ItemResources, resources.Quests, resources.Learning);
             QuestLifecycleTests.Run(resources.Towns, resources.ItemResources);
             QuestOrdinaryCompletionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             QuestCascadeCompletionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);

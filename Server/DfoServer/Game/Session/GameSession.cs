@@ -175,6 +175,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         // 提交成功后才替换内存。任务集合立即参与城镇准入；客户端画面仍等下次选角。
         if (Selected?.Id == updated.Id)
         {
+            InvalidateImageCommunication();
             Selected = updated;
             completed = DfoServer.Game.Quests.QuestEligibility.Completed(updated);
         }
@@ -201,7 +202,11 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                 HasPendingFormalCard && Selected?.Id == captured.Character.Id)
                 throw new InvalidOperationException("在线角色快照已变化，请重试");
             var updated = repository.ResetProgress(owner, plan);
-            if (Selected?.Id == updated.Id) Selected = updated;
+            if (Selected?.Id == updated.Id)
+            {
+                InvalidateImageCommunication();
+                Selected = updated;
+            }
             return updated;
         });
     }
@@ -216,6 +221,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         pendingQuestReplay = null;
         pendingQuestCompletion = null;
         pendingQuestLifecycle = null;
+        InvalidateImageCommunication();
         pendingQuestQuickClear = null;
         SelectionEpoch++;
         Selected = null;

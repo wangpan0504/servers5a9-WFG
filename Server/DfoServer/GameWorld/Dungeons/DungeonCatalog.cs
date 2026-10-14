@@ -258,6 +258,15 @@ internal sealed class DungeonCatalog
         for (int i = 0; i < sections.Count; i++)
         {
             var section = sections[i];
+            if (section.Tag == "beast dungeon")
+            {
+                if (section.Tokens.Count != 0)
+                    throw new InvalidDataException("beast dungeon 标记带有未知参数");
+                // 魔兽模式另有尺寸、地图种类和无普通Boss的布局，不归前一条普通迷宫。
+                // 原始区块仍完整保留；这里只结束普通路线，不启用魔兽玩法。
+                Finish();
+                continue;
+            }
             if (section.Tag == "maze info")
             {
                 if (section.Tokens.Count != 0)

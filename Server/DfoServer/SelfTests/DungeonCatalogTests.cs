@@ -39,7 +39,40 @@ internal static class DungeonCatalogTests
             !Definition(designated,levels,levels with { Tokens = [new(0,0),new(0,0),new(0,0),new(0,0),new(0,0)] }).AllowsDifficulty(2,false) &&
             !Definition(designated).AllowsDifficulty(2,false),
             "普通重复指定、冲突难度表和缺省难度边界保持原规则");
-        Console.WriteLine($"PASS {Count-checks} 无资源故事与普通难度作用域断言");
+        var fixture = new Fixture();
+        var beastTokens = new List<PvfToken>();
+        for (int variant = 0; variant < 3; variant++)
+        {
+            beastTokens.AddRange(fixture.Tag("Beast dungeon"));
+            beastTokens.AddRange(fixture.Tag("BEAST LEVEL",fixture.Int(90),fixture.Int(120)));
+            beastTokens.AddRange(fixture.Tag("size",fixture.Int(5),fixture.Int(3)));
+            beastTokens.AddRange(fixture.Tag("greed",fixture.String("JJNNNNNNMMLLPPPPPPOODDHHHHHHGG")));
+            beastTokens.AddRange(fixture.Tag("map specification",fixture.String("Beast"),fixture.Int(variant),fixture.Int(0),fixture.Int(59453 + variant)));
+            beastTokens.AddRange(fixture.Tag("/map specification"));
+            beastTokens.AddRange(fixture.Tag("start map",fixture.Int(0),fixture.Int(0)));
+            beastTokens.AddRange(fixture.Tag("/start map"));
+            beastTokens.AddRange(fixture.Tag("boss map",fixture.Int(-1),fixture.Int(-1)));
+            beastTokens.AddRange(fixture.Tag("/boss map"));
+        }
+        var modes = fixture.Parse(fixture.Maze().Concat(fixture.Maze())
+            .Concat(beastTokens).Concat(fixture.Maze()).ToArray());
+        That(modes.Mazes.Count == 3 && modes.Mazes.Select(maze => maze.SourceOrdinal).SequenceEqual([0,1,2]) &&
+            modes.Mazes.All(maze => maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
+                maze.Bosses.SequenceEqual([new DungeonPoint(0,0)]) && maze.MapSpecification is [{ Kind: "boss",Id: 1 }]),
+            "独立魔兽模式不污染前一条普通迷宫，后续普通maze仍按源序解析");
+        That(modes.RawSections.Count(section => section.Tag == "beast dungeon") == 3 &&
+            modes.RawSections.Where(section => section.Tag == "size").Select(section => section.Tokens[0].Value).SequenceEqual([1,1,5,5,5,1]) &&
+            modes.RawSections.Count(section => section.Tag == "boss map" && section.Tokens.SequenceEqual([fixture.Int(-1),fixture.Int(-1)])) == 3 &&
+            modes.RawSections.Where(section => section.Tag == "map specification" && fixture.Resolve(section.Tokens[0].Value) == "Beast")
+                .Select(section => section.Tokens[3].Value).SequenceEqual([59453,59454,59455]),
+            "魔兽重复布局、原地图类型与负Boss坐标完整保留在RawSections，不改写成普通路线");
+        Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze()
+            .Concat(fixture.Tag("size",fixture.Int(1),fixture.Int(1))).ToArray()),"同一普通迷宫重复size仍拒绝");
+        Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze()
+            .Concat(fixture.Tag("beast dungeon",fixture.Int(1))).Concat(beastTokens).ToArray()),"带参数的魔兽边界不能放行");
+        Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(fixture.Tag("unknown dungeon"))
+            .Concat(fixture.Tag("size",fixture.Int(5),fixture.Int(3))).ToArray()),"未知标记不能用作放宽重复布局的边界");
+        Console.WriteLine($"PASS {Count-checks} 无资源故事、普通难度及魔兽模式作用域断言");
 
         static DungeonDefinition Definition(params DungeonRawSection[] sections) => new(17,"dungeon/difficulty-fixture.dgn",1,1,[],sections);
     }
@@ -97,6 +130,15 @@ internal static class DungeonCatalogTests
         var grakkarak = catalog.Get(7120);
         That(grakkarak.MinimumLevel == 1 && grakkarak.BasisLevel == 1 && grakkarak.Mazes.Count == 1 && grakkarak.Mazes[0].Width == 6 && grakkarak.Mazes[0].Height == 1, "Dungeon7120 retains matching resource metadata and geometry");
         That(grakkarak.Mazes[0].MapSpecification is { Count: 6 } grakkarakMaps && grakkarakMaps.Select(m => m.Id).SequenceEqual(Enumerable.Range(57772, 6)), "Dungeon7120 retains explicit map references without claiming an entrance");
+        var plaza = catalog.Get(310);
+        That(plaza.Mazes.Count == 12 && plaza.Mazes.Select(maze => maze.SourceOrdinal).SequenceEqual(Enumerable.Range(0,12)) &&
+            plaza.Mazes[1] is { Width: 7,Height: 2,ResourceError: null } && plaza.Mazes[1].ConnectsQuest(3946) &&
+            QuestMaps(plaza,3946).SequenceEqual(Enumerable.Range(76670,9)) &&
+            plaza.Mazes[^1] is { Width: 2,Height: 1,ResourceError: null } && plaza.Mazes[^1].ConnectsQuest(3973),
+            "真实时间广场保留十二条普通路线，末尾魔兽布局不污染3946与3973");
+        That(plaza.RawSections.Count(section => section.Tag == "beast dungeon") == 3 &&
+            plaza.RawSections.Count(section => section.Tag == "boss map" && section.Tokens.SequenceEqual([new PvfToken(0,-1),new(0,-1)])) == 3,
+            "真实时间广场三个魔兽区块及无普通Boss声明仍完整可查询");
         That(JsonSerializer.Serialize(dungeon).Contains("QuestConnectionTokens", StringComparison.Ordinal), "resource definition is serializable");
         var shared = new DungeonDefinition[16];
         Parallel.For(0, shared.Length, i => shared[i] = catalog.Get(3));

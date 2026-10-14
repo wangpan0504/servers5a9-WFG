@@ -33,6 +33,7 @@ internal sealed partial class GameSession
                 plan.Cooldowns.PotionUntil == character.TeleportCooldowns.PotionUntil ? plan.Cooldowns.PotionUntil : checked(plan.Cooldowns.PotionUntil + elapsed),
                 plan.Cooldowns.AuraUntil == character.TeleportCooldowns.AuraUntil ? plan.Cooldowns.AuraUntil : checked(plan.Cooldowns.AuraUntil + elapsed)) };
             Selected = repository.CommitTeleport(owner, plan);
+            InvalidateImageCommunication();
             var inventory = new InventoryResult(true, 0, plan.Inventory)
             {
                 Receipt = new(Selected, owner.Generation, SelectionEpoch) { PreviousQuests = character.ActiveMainQuests }

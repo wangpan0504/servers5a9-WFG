@@ -31,7 +31,7 @@ internal sealed partial class GameSession
             var room = instance is not null && formalDungeon is { } dungeon
                 ? dungeon.Route.Rooms.Single(row => row.Room.Map == dungeon.Run.Snapshot.CurrentMap).Room : null;
             return (Character: character, SelectionEpoch, Phase, Identity: instance, Entry: formalDungeon?.Entry,
-                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear, Room: room);
+                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear, Room: room, Communication: CommunicationSources(Selected));
         });
         if (capture.Character is not { } expected) return null;
         var refusal = new QuestLifecycleReceipt(expected, null, owner.Generation, capture.SelectionEpoch, capture.Phase, capture.Identity, "任务资格不符");
@@ -110,7 +110,7 @@ internal sealed partial class GameSession
                 return QuestLifecyclePlan.SetCondition(expected,quest,QuestRelationProgress.Initial(quest,quests,expected.CompletedQuests));
             if (condition is { Channel: null, Reserved: 0 } answer && capture.Phase == SessionPhase.Town &&
                 QuestQuestionProgress.OrdinaryChoice(quest,answer.Value,quests) &&
-                QuestClientSceneProgress.DialogueNpc(expected,quest.IntData[0],quest,quests,towns))
+                HasDialogueNpc(quest.IntData[0]))
                 return QuestLifecyclePlan.SetCondition(expected,quest,answer.Value);
             if (quest.Condition is "[hunt enemy]" or "[hunt monster]" && QuestHuntProgress.TryTargets(quest,out var hunt) &&
                 condition is { Channel: 0x10 or 0x20 or 0x40, Value: 0, Reserved: 0 } report &&
@@ -160,7 +160,8 @@ internal sealed partial class GameSession
         bool HasDialogueNpc(int npcId)
         {
             if (capture.Phase == SessionPhase.Town)
-                return QuestClientSceneProgress.DialogueNpc(expected,npcId,quest,quests,towns);
+                return QuestClientSceneProgress.DialogueNpc(expected,npcId,quest,quests,towns) ||
+                    capture.Communication.Any(source => source.NpcId == QuestClientSceneProgress.ResolveNpc(expected,npcId,quest));
             if (capture.Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 capture.Entry is not { } entry || capture.Room is not { NpcMetadataError: null } room ||
                 quest.Definition?.Dungeons.Any(row => row.DungeonId == entry.DungeonId) != true ||

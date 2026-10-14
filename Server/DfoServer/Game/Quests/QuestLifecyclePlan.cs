@@ -41,6 +41,19 @@ internal sealed class QuestLifecyclePlan
     public ImmutableArray<int> CompletedAfter { get; private init; }
     public ImmutableArray<int> AccountCompletedAfter { get; private init; }
 
+    internal static QuestLifecyclePlan PayImageCommunication(Character expected, ushort questId, Guid acceptance,
+        uint charge, QuestCatalog quests, DateTimeOffset now)
+    {
+        if (acceptance == Guid.Empty || !expected.ActiveMainQuests.Any(row => row.QuestId == questId && row.AcceptanceId == acceptance) ||
+            expected.Inventory.Gold < charge)
+            throw new InvalidDataException("通讯装置需要本次活动接取和足额金币");
+        var inventory = expected.Inventory with { Gold = expected.Inventory.Gold - charge };
+        // 金币也是其它寻物任务的材料；沿共享库存重算，不让本次通讯费用直接完成会面。
+        return new(expected, QuestLifecycleAction.Condition, questId, acceptance,
+            QuestInventoryProgress.Refresh(expected.ActiveMainQuests, inventory, quests, now.ToUnixTimeSeconds()),
+            new(expected.Inventory, inventory, "quest_image_communication"));
+    }
+
     internal static QuestLifecyclePlan? ObservePassive(Character expected, QuestCatalog quests,
         DfoServer.Game.Dungeons.DungeonEntryPlan entry, QuestSceneEvent sceneEvent, QuestDropPlan? drops = null)
     {

@@ -79,6 +79,17 @@ internal static class DungeonEntryPlanTests
         var definition = catalog.Get(3);
         var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
+        var plazaQuest = quests.Get(3946);
+        var plazaCharacter = character with { Level = 88,CompletedQuests = [3945],
+            ActiveMainQuests = [new(5,3946,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(catalog,plazaCharacter,310,3946,0,out var plazaPlan,out var plazaReason,
+            quest: plazaQuest,quests: quests) && plazaPlan is { Maze.SourceOrdinal: 1,StartMap.Id: 76670,BossMap.Id: 76678,BaseBossMap.Kind: "boss" } &&
+            plazaPlan.QuestAcceptanceId == plazaCharacter.ActiveMainQuests.Single().AcceptanceId && plazaPlan.Maze.StaticTopology.Supported,
+            "真实杂乱的开始在魔兽区块之后仍可解析并选择原九图任务路线：" + plazaReason);
+        That(DungeonEntryPlan.TryCreate(catalog,plazaCharacter,310,0,0,out var automaticPlaza,out _,quests: quests) &&
+            automaticPlaza is { QuestId: 0,RouteQuestId: 3946,Maze.SourceOrdinal: 1,BossMap.Id: 76678,QuestAcceptanceId: var plazaAcceptance } &&
+            plazaAcceptance == Guid.Empty && automaticPlaza.QuestAcceptances.SequenceEqual(plazaCharacter.ActiveMainQuests),
+            "时间广场普通零请求复用当前3946路线，不借用魔兽布局或伪造请求接取身份");
         foreach (var scenario in new[] { (Quest:3772,Dungeon:235,Previous:3771), (Quest:3773,Dungeon:227,Previous:3772),
             (Quest:3774,Dungeon:1005,Previous:3773),
             (Quest:3776,Dungeon:1007,Previous:3775), (Quest:3777,Dungeon:238,Previous:3776) })
