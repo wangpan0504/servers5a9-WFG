@@ -17,7 +17,7 @@ internal sealed record EnhancementDefinition(int ItemId, EnhancementMode Mode, b
     {
         int level = Additional ? current + Level : Level;
         desired = 0;
-        if (!Available || current > 31 || level is < 1 or > 31 || Additional && RawLevelLimit >= 0 && current > RawLevelLimit)
+        if (!Available || current > 31 || level is < 1 or > 31 || Additional && RawLevelLimit >= 0 && current >= RawLevelLimit)
             return false;
         desired = (byte)level;
         return true;
@@ -79,7 +79,7 @@ internal sealed class EnhancementCatalog
         var match = Regex.Match(Value(text, field), @"^\s*(\d+)\s+(\d+)\s+`(fixed|additional)`\s+(-?\d+)\s*$", RegexOptions.CultureInvariant);
         if (!match.Success || !byte.TryParse(match.Groups[1].Value, out byte level) || level is < 1 or > 31 ||
             !int.TryParse(match.Groups[2].Value, out int chance) || chance is < 0 or > 100 ||
-            !int.TryParse(match.Groups[4].Value, out int maximum) || maximum < -1)
+            !int.TryParse(match.Groups[4].Value, out int maximum) || maximum is < -1 or > sbyte.MaxValue)
             return Pending("无效的等级/概率/覆盖模式或未知附加参数");
         if (match.Groups[3].Value == "fixed" && maximum != -1)
             return new(id, reinforce.Count == 1 ? EnhancementMode.Reinforce : EnhancementMode.Amplify,

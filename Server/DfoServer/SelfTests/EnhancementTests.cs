@@ -50,7 +50,11 @@ internal static class EnhancementTests
             !EnhancementCatalog.Parse(coupon, "[equipment reinforcement ticket]\n1 100 `additional` -1\n")!.TryTargetLevel(31, out _),
             "有效五位等级31仍能被固定券覆盖，追加券溢出保持拒绝");
         var additional = EnhancementCatalog.Parse(coupon, "[equipment reinforcement ticket]\n2 30 `additional` 12\n")!;
-        That(additional.TryTargetLevel(12, out byte more) && more == 14 && !additional.TryTargetLevel(13, out _), "增量券保留源等级上限");
+        That(additional.TryTargetLevel(10, out byte more) && more == 12 &&
+            !additional.TryTargetLevel(12, out _) && !additional.TryTargetLevel(13, out _), "追加券目标等级必须严格小于第四参数");
+        That(!EnhancementCatalog.Parse(coupon, "[equipment amplify reinforcement ticket]\n1 100 `additional` 0\n")!.TryTargetLevel(0, out _) &&
+            EnhancementCatalog.Parse(coupon, "[equipment amplify reinforcement ticket]\n1 100 `additional` -1\n")!.TryTargetLevel(0, out byte first) && first == 1,
+            "增幅共用严格源等级门槛，零上限不允许零级目标，-1保留不限语义");
         That(additional.RawLevelLimit == 12 && EnhancementCatalog.Parse(coupon,
             "[equipment reinforcement ticket]\n11 100 `fixed` 12\n") is { Available: false, RawLevelLimit: 12 },
             "第四整数保留原值，固定模式非-1的未闭合限制不被忽略");
@@ -61,7 +65,7 @@ internal static class EnhancementTests
             "village和village加seria的既有Town入口保留，只有seria时Pending而不扩大地点资格");
         That(EnhancementCatalog.Parse(coupon, "[name]\n`[equipment amplify reinforcement ticket] 1 1`\n" + fixedText) is { Available: true },
             "名称文字中的伪标签不能覆盖真实券模式");
-        foreach (string value in new[] { "0 100 `fixed` -1", "32 100 `fixed` -1", "11 101 `fixed` -1", "11 100 `random` -1", "11 100 `fixed` -2", "11 100 `fixed` -1 999" })
+        foreach (string value in new[] { "0 100 `fixed` -1", "32 100 `fixed` -1", "11 101 `fixed` -1", "11 100 `random` -1", "11 100 `fixed` -2", "1 100 `additional` 128", "11 100 `fixed` -1 999" })
             That(EnhancementCatalog.Parse(coupon, "[equipment reinforcement ticket]\n" + value) is { Available: false }, "未知或溢出券参数不夹紧成成功");
         foreach (string suffix in new[] { "[enchant random]\n1\n", "[need material]\n10007110 5\n[/need material]\n",
             "[total usable count]\n1\n", "[reinforcement usable item list]\n123\n", "[equipment amplify reinforcement ticket]\n10 100 `fixed` -1\n" })
@@ -122,10 +126,12 @@ internal static class EnhancementTests
             role with { Inventory = new([source, target with { Core = target.Core with { EquipmentLockId = 1 } }]) },
             role with { Inventory = new([source with { Core = source.Core with { ExpireTime = (int)now } }, target]) } })
             That(!Plan(bad, use, out _).Accepted, "临时UID、安全锁及准确到期实例拒绝");
-        That(!Plan(role, use, out _, restricted with { AllowedItems = [gear + 1] }).Accepted &&
+        That(!Plan(role, use, out _, additional with { RawLevelLimit = 14 }).Accepted &&
+            !Plan(amplified, use with { Mode = EnhancementMode.Amplify }, out _, additional with { Mode = EnhancementMode.Amplify, RawLevelLimit = 9 }).Accepted &&
+            !Plan(role, use, out _, restricted with { AllowedItems = [gear + 1] }).Accepted &&
             !Plan(role, use, out _, template: gearTemplate with { MinimumLevel = 96 }).Accepted &&
             !Plan(role, use, out _, template: gearTemplate with { EquipmentSlot = 13 }).Accepted && calls == rolled,
-            "目标清单、等级及称号资格失败均在随机与消费前拒绝");
+            "追加券相等门槛、目标清单、等级及称号资格失败均在随机与消费前拒绝");
         var timedRole = role with { Inventory = new([source with { Core = source.Core with { ExpireTime = (int)now + 10 } }, target]) };
         var timed = Plan(timedRole, use, out _);
         That(timed.Accepted && timed.Plan!.CharacterPrecondition!.Matches(timedRole, now + 9) &&
