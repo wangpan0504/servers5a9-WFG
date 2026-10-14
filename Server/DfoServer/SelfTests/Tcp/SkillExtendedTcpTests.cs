@@ -174,7 +174,47 @@ internal static class SkillExtendedTcpTests
         { Job = 0, GrowType = 5, Level = 49, AcceptedStoryLevel = 1, Skills = free.ToArray(),
             InitialLearning = defaultLearning.State!,
             Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)) });
+        var awakenedFree = catalog.FreeSkills(0, 0x15);
+        var awakenedState = SkillLearning.Initialize(0, awakenedFree, catalog).State! with
+            { Experience = growth.GetLevelStartExperience(48) };
+        awakenedState = SkillPointLedger.Synchronize(0, 0x15, 48, awakenedState, catalog);
+        var awakenedRole = repository.Create(owner, new NewCharacter("GhostNight", resources.Towns.Room, resources.Towns.InitialReturn)
+        { Job = 0, GrowType = 0x15, Level = 48, AcceptedStoryLevel = 1, Skills = awakenedFree.ToArray(),
+            InitialLearning = awakenedState,
+            Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)) });
         await fixture.StartAsync("extended-restart");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(awakenedRole.Slot);
+            var before = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
+            That(before.All(tree => tree.Skills.All(skill => skill.Id != 296)), "剑影觉醒夹具不提前赠送鬼夜");
+            foreach (byte context in new byte[] { 0, 1 })
+            {
+                byte expectedSlot = Enumerable.Range(54, 48).Select(value => (byte)value)
+                    .First(slot => before[context].Skills.All(skill => skill.Slot != slot));
+                peer.Send(29, [context, 1, 0x28, 1, 0, 1, 0]);
+                var learned = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
+                That(learned.Context == context && learned.Sp == before[context].Sp - 45 && learned.Tp == before[context].Tp &&
+                    learned.Skills.Single() == new LearnedSkill(expectedSlot, 296, 1),
+                    "鬼夜首次学习返回真实转职被动槽位和扣除45SP后的ACK " + context);
+                var saved = Role(awakenedRole.Slot).Learning;
+                That(saved.Trees[context].Skills.Single(skill => skill.Id == 296) == learned.Skills.Single() &&
+                    saved.Trees[context].Sp == learned.Sp && saved.Trees[1 - context].Sp == before[1 - context].Sp - (context == 1 ? 45 : 0),
+                    "鬼夜学习提交并保持双树独立 " + context);
+            }
+            var current = Role(awakenedRole.Slot);
+            peer.Send(29, Purchase(296, 1)); peer.Expect(1, 29, [0, 0xD9, 0]); peer.Barrier();
+            That(Role(awakenedRole.Slot).Revision == current.Revision, "Lv48不能再学鬼夜二级，失败不提交");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(awakenedRole.Slot);
+            var replay = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
+            That(replay.Zip(awakenedState.Trees).All(pair => pair.First.Skills.Single(skill => skill.Id == 296).Level == 1 &&
+                pair.First.Skills.Single(skill => skill.Id == 296).Slot is >= 54 and < 102 && pair.First.Sp == pair.Second.Sp - 45),
+                "鬼夜断线重连恢复两树等级、被动槽位及余额");
+            peer.Barrier();
+        }
         using (var peer = Open(fixture))
         {
             var expected = Role(1).Learning;
@@ -187,6 +227,9 @@ internal static class SkillExtendedTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(defaultRole.Slot);
+            long revision = Role(defaultRole.Slot).Revision;
+            peer.Send(29, Purchase(296, 1)); peer.Expect(1, 29, [0, 0x12, 0]);
+            That(Role(defaultRole.Slot).Revision == revision, "未觉醒剑影仍受鬼夜零上限限制，不因缺class放行");
             defaultReplay = peer.SceneSkillInfo;
             var trees = SkillPacketsTests.DecodeInitialized(defaultReplay);
             That(trees[0].Skills.Single(skill => skill.Id == 8).Level == 18 &&

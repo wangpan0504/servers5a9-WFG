@@ -48,8 +48,11 @@ internal static class SkillLearningCatalogTests
             "公会与expert技能资源不混用普通SP或达人超等级资格");
         var passive = (PvfToken[])active.Clone();
         passive[1] = new(6, 14);
-        That(Parse(passive).Type == SkillType.Passive && Parse(passive).SlotGroup is null,
-            "被动类型与未知分组分别保留，不默认主动");
+        That(Parse(passive).Type == SkillType.Passive && Parse(passive).SkillClass == 0 && Parse(passive).SlotGroup == 1,
+            "被动缺class沿原生初始化0，空方向进入转职组而非快捷槽");
+        That(Parse([.. passive, new(3, 16), new(0, 0), new(0, 1), new(0, 2)]).SlotGroup == 0 &&
+            Parse([.. passive, new(3, 15)]).SlotGroup is null,
+            "缺class仍按方向数量分组，显式空class不沿用缺省0");
         foreach (int rawClass in Enumerable.Range(0, 4))
         {
             var common = Parse([.. passive, new(3, 15), new(0, rawClass), new(3, 16), new(0, 0), new(0, 1), new(0, 2)]);
@@ -96,6 +99,13 @@ internal static class SkillLearningCatalogTests
             catalog.ActiveExpertContractLevels(1000, 1000) == 0 && catalog.ActiveExpertContractLevels(0, 1000) == 0,
             "目录只在契约有效时提供显式装配的资源加成，到期和无契约均为零");
         var ghost = catalog.Get(0, 5);
+        var ghostNight = catalog.Get(0, 296);
+        That(ghostNight.Type == SkillType.Passive && ghostNight.SkillClass == 0 && ghostNight.SlotGroup == 1 &&
+            ghostNight.SupportsOrdinarySpLearning && ghostNight.GetMaximum(5) == 0 && ghostNight.GetMaximum(0x11) == 0 &&
+            ghostNight.GetMaximum(0x15) == 30 && ghostNight.GetMaximum(0x25) == 30 &&
+            ghostNight.GetOrdinaryNextRequiredCharacterLevel(0) == 48 && ghostNight.GetOrdinaryResourceSpCost(0, 5) == 45 &&
+            catalog.FreeSkills(0, 0x15).All(skill => skill.Id != 296),
+            "真实鬼夜缺class使用转职被动组，仍受剑影觉醒、Lv48与45SP资格限制且非免费赠技");
         That(ghost.Type == SkillType.Active && ghost.SlotGroup == 3 && ghost.SkillClass == 3 && ghost.SkillFitnessGrowtypeCount == 6,
             "真实鬼斩保留主动类型、分组及方向数量");
         foreach (ushort passiveId in new ushort[] { 174, 179, 511 })

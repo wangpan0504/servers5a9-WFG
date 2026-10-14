@@ -64,7 +64,7 @@ internal sealed class SkillLearningDefinition
     public SkillType Type { get; }
     public int? SkillClass { get; }
     public int? SkillFitnessGrowtypeCount { get; }
-    // 分组元数据与 growtype fitness 费用折扣分别读取；缺少声明不猜普通被动组。
+    // 分组元数据与 growtype fitness 费用折扣分别读取；非法或重复声明仍保持未知。
     public int? SlotGroup => Type switch
     {
         SkillType.Active => 3,
@@ -295,7 +295,8 @@ internal sealed class SkillLearningCatalog
             : SkillType.Unknown;
         if (type == SkillType.Unknown)
             unsupported.Add("type");
-        int? skillClass = fields.ContainsKey("skill class") && !unsupported.Contains("skill class") ? Scalar("skill class") : null;
+        // 04231EF2..04231F4B 将 class 编码标量 +110 初始化为0；只有标签缺失时沿用。
+        int? skillClass = unsupported.Contains("skill class") ? null : fields.ContainsKey("skill class") ? Scalar("skill class") : 0;
         int? skillFitnessGrowtypeCount = unsupported.Contains("skill fitness growtype") ? null :
             fields.ContainsKey("skill fitness growtype") ? Integers("skill fitness growtype")?.Length : 0;
         int[]? skillFitness = fields.ContainsKey("skill fitness growtype") && !unsupported.Contains("skill fitness growtype")
