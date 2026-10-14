@@ -34,6 +34,7 @@ internal static partial class TownProtocolTcpTests
             // ACK6消费者随后确认选角上下文，冒险团回放使用未选角色的owner0。
             peer.Send(645);
             peer.Expect(1, 645, [1, 0]);
+            peer.Expect(0, 1375, new byte[5]);
             var adventure = peer.Expect(0, 1343).Body;
             That(U16(adventure, 0) == 0 && U32(adventure, 14) == 7440 &&
                 adventure.Length == 22 + 7440 + U32(adventure, 18 + 7440),

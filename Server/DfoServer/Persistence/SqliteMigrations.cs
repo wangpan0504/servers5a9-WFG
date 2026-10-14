@@ -98,6 +98,11 @@ internal static class SqliteMigrations
             foreach (string statement in AuctionListingSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                 Execute(db, tx, statement);
         }),
+        new(38, "冒险团首次命名资格与名称查询索引", static (db, tx) =>
+        {
+            Execute(db, tx, "ALTER TABLE account_adventures ADD COLUMN name_initialized INTEGER NOT NULL DEFAULT 1 CHECK(name_initialized IN (0,1))");
+            Execute(db, tx, "CREATE INDEX account_adventure_name ON account_adventures(name COLLATE NOCASE)");
+        }),
     ];
 
     // 拍卖行挂牌跨账号可见，不归属单个角色；卖家为机器人时 seller_character_id 为 NULL，
@@ -912,7 +917,7 @@ internal static class SqliteMigrations
         "SELECT account,area,ordinal,character_id,member_snapshot FROM account_adventure_expedition_members LIMIT 0",
         "SELECT account,event_id,character_id,action,amount,before_revision,revision FROM account_adventure_receipts LIMIT 0",
         "SELECT account,job,grow,character_id FROM account_adventure_representatives LIMIT 0",
-        "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month FROM account_adventures LIMIT 0",
+        "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month,name_initialized FROM account_adventures LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",

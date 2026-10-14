@@ -31,6 +31,14 @@ internal static class AdventureExpeditionTcpTests
             peer.Send(441, [0]);
             var available = peer.Expect(1, 441).Body;
             That(U16(available, 13) == 1, "空闲候选只使用本账号合法代表");
+            var unchanged = fixture.Query("SELECT revision FROM account_adventures WHERE account='expedition'")[0][0];
+            peer.Send(442, [1, 0x80, 0x51, 1, 0, 0, 0]);
+            peer.Expect(1, 442, [0, 22, 0]);
+            peer.Send(441, [0]);
+            Bytes(peer.Expect(1, 441).Body, available, "空成员拒绝后连接可继续查询，候选及远征未改变");
+            That(Equals(fixture.Query("SELECT revision FROM account_adventures WHERE account='expedition'")[0][0], unchanged) &&
+                fixture.Query("SELECT count(*) FROM account_adventure_expeditions") is [[0L]],
+                "空成员拒绝不写账号版本或无成员远征");
             peer.Send(442, Start(1)); peer.Expect(1, 442, [1]); peer.Expect(0, 1345); peer.Barrier();
             That(fixture.Query("SELECT character_id FROM account_adventure_expedition_members") is [[long chosen]] && chosen == member,
                 "出发绑定UID，不持久化临时视图selector");

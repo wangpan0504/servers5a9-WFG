@@ -63,7 +63,7 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Actor(Character character, ChannelIdentity channel = default, long? utcSeconds = null)
+    public static byte[] Actor(Character character, ChannelIdentity channel = default, long? utcSeconds = null, string adventureName = "")
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
@@ -73,9 +73,11 @@ internal static class TownPackets
             // 0267DA20按这两字节与NOTI1身份比较，决定本地角色表或跨频道缓存。
             writer.Write(channel.ServerIndex);
             writer.Write(channel.Number);
-            // 0267DA80 reads 0x74 bytes. The two fixed UTF-16 names remain empty.
+            // 0267DA80读取116B状态；偏移51为17B CP936冒险团昵称，最后一字节保留NUL。
             byte[] state = new byte[116];
             state[7] = 1;
+            CharacterName.Encoding.GetEncoder().Convert(adventureName.AsSpan(), state.AsSpan(51, 16), true,
+                out _, out _, out _);
             // Actor原始状态末尾u16为心情字段。
             System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(state.AsSpan(114), character.Emotion);
             writer.Write(state);

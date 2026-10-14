@@ -266,6 +266,11 @@ internal static class QuestCompletionRepositoryTests
     // 真实提交结果丢失，仅在第一次返回之后注入；保存原计划引用用于精确重试检查。
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
+        public string ReadAdventureName(AccountOwners.Lease owner) => inner.ReadAdventureName(owner);
+        public bool AdventureNameExists(AccountOwners.Lease owner, string name) => inner.AdventureNameExists(owner, name);
+        public DfoServer.Game.Adventure.AdventureNameCommit CommitAdventureName(AccountOwners.Lease owner,
+            DfoServer.Game.Adventure.AdventureNamePlan plan,DfoServer.GameWorld.Adventure.AdventureCatalog catalog,DateTimeOffset now) =>
+            inner.CommitAdventureName(owner,plan,catalog,now);
         public DfoServer.Game.Adventure.AdventureSnapshot CommitAdventureExpedition(AccountOwners.Lease owner,
             DfoServer.Game.Adventure.AdventureExpeditionPlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.CommitAdventureExpedition(owner, plan, catalog, now);
         public DfoServer.Game.Adventure.AdventureShopCommit CommitAdventureShop(AccountOwners.Lease owner,

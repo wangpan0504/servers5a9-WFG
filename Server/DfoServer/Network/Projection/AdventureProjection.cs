@@ -20,6 +20,11 @@ internal sealed class AdventureProjection(AdventureCatalog catalog)
         if (ack) await context.Reply(CmdPacketType.REQUEST_ADVENTURE_INFO, body, "adventure_information", Guard);
         else
         {
+            // 1343只更新冒险团信息，1375另行安装客户端账号显示名称；查询不重置名称上下文。
+            if (initialization || selected is null)
+                await context.Notify(NotiPacketType.REPRESENT_ACCOUNT_NAME,
+                    AdventurePackets.AccountName(snapshot.State.NameInitialized ? snapshot.State.Name : ""),
+                    "adventure_account_name", Guard);
             await context.Notify(NotiPacketType.ADVENTURE_INFO, body, selected is null ? "adventure_selector_information" : "adventure_information", Guard);
             if (selected is not null)
                 await context.Notify(NotiPacketType.ADVENTURE_LV_EXP, AdventurePackets.Refresh(selected.Id, snapshot.State, catalog), "adventure_actor_initialize", Guard);

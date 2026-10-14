@@ -38,6 +38,8 @@ internal sealed class TcpPeer : IDisposable
     public byte[] PremiumInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] InitialGameOptions { get; private set; } = [];
+    public byte[] AdventureName { get; private set; } = [];
+    public string ActorAdventureName { get; private set; } = "";
     public byte[] AdventureInfo { get; private set; } = [];
     public byte[] AdventureRefresh { get; private set; } = [];
     public byte[] CardMembershipInformation { get; private set; } = [];
@@ -222,6 +224,13 @@ internal sealed class TcpPeer : IDisposable
     });
     public static int NameWidth(string name) => names.GetByteCount(name);
     public static string DecodeName(byte[] body, int at, int width) => names.GetString(body, at, width);
+    public static string DecodeActorAdventureName(byte[] body)
+    {
+        ReadOnlySpan<byte> field = body.AsSpan(56, 17);
+        int length = field.IndexOf((byte)0);
+        TestCheck.That(length is >= 0 and <= 16, "Actor昵称的17B字段必须保留NUL终止");
+        return names.GetString(field[..length]);
+    }
     public static byte[] CreateBody(string name, byte job = 0, byte variant = 0) => [job, .. Name(name), 0, 0, 0, 0, 0, 0, 255, 0, variant, 0, 0, 0];
     public byte[] Create(string name, byte job = 0, byte variant = 0, bool withTutorial = false)
     {
@@ -325,9 +334,15 @@ internal sealed class TcpPeer : IDisposable
                         "本人称号簿owner为0，五种分类均下发空或完整表");
                     return book;
                 }).ToArray();
+                AdventureName = Expect(0, 1375).Body;
                 packet = Read();
                 TestCheck.That(packet.Kind == 0 && packet.Opcode == 1343, "冒险团信息在角色资产后初始化");
                 AdventureInfo = packet.Body;
+                int nameSize = checked((int)U32(AdventureInfo, 18 + 7440));
+                TestCheck.That(AdventureName.AsSpan().SequenceEqual(new byte[5]) ||
+                    AdventureName.Length == nameSize + 5 && AdventureName[^1] == 0 &&
+                    AdventureName.AsSpan(0, nameSize + 4).SequenceEqual(AdventureInfo.AsSpan(18 + 7440)),
+                    "1375回放已命名账号名称或未命名账号空名，尾标志为0");
                 AdventureRefresh = Expect(0, 1349).Body;
                 // #169 在冒险团之后初始化两种拍卖服务；逐包核验完整正文，保留原城镇状态断言。
                 Expect(0, 183, [0, 1]);
@@ -348,6 +363,11 @@ internal sealed class TcpPeer : IDisposable
         Mailbox = mails.ToArray();
         WirePacket[] packets = [.. prefix, .. middle, .. tail];
         Id = U16(packets[0].Body, 9);
+        ActorAdventureName = DecodeActorAdventureName(packets[2].Body);
+        string fullAdventureName = names.GetString(AdventureName, 4, AdventureName.Length - 5);
+        TestCheck.That(fullAdventureName.StartsWith(ActorAdventureName, StringComparison.Ordinal) &&
+            (NameWidth(fullAdventureName) <= 16 ? ActorAdventureName == fullAdventureName : NameWidth(ActorAdventureName) <= 16),
+            "本人Actor与1375回放同一账号名称，窄字段不截断双字节字符");
         if (appearanceFlags.HasValue)
             TestCheck.That(packets[2].Body[^23] == appearanceFlags.Value, "Actor外观flags与设置后357一致");
         TestCheck.That(packets[prepared ? 7 : 6].Body[0] == 2 && packets[prepared ? 8 : 7].Body[0] == 12,

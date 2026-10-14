@@ -139,8 +139,8 @@ internal static class TownPresenceTests
             {
                 Position = towns.InitialReturn
             };
-            presence.Join(a, aSend, ca);
-            presence.Join(b, bSend, cb);
+            presence.Join(a, aSend, ca, adventureName: "AlphaGroup");
+            presence.Join(b, bSend, cb, adventureName: "BetaGroup");
             for (int i = 0; i < 1000; i++)
             {
                 cb = cb with
@@ -163,6 +163,8 @@ internal static class TownPresenceTests
             var position = frames.Last(f => f.Opcode == 22).Body;
             That(BinaryPrimitives.ReadUInt16LittleEndian(position) == cb.Id && BinaryPrimitives.ReadUInt16LittleEndian(position.AsSpan(2)) == 632, "latest committed position projection survives coalescing");
             That(frames.Count(f => f.Opcode == 2) == 1, "initial peer actor published once");
+            Bytes(frames.Single(f => f.Opcode == 2).Body.AsSpan(56, 9),
+                System.Text.Encoding.ASCII.GetBytes("BetaGroup"), "同屏昵称来自发送者成员快照，不读取接收者账号");
             cb = cb with
             {
                 Inventory = new([new(1, new(InventoryListType.Equipment, 12), new(101010912, ItemKind.Equipment, 999999998))])
@@ -171,7 +173,12 @@ internal static class TownPresenceTests
             await aSend.Send(1, 1347, [1], "after-equipment-refresh");
             var refreshed = Frames(aStream);
             That(refreshed.Count(f => f.Opcode == 2) == 2 && refreshed.All(f => f.Opcode != 6), "known peer receives appearance without leave or duplicate join");
-            That(refreshed.Last(f => f.Opcode == 2).Body.SequenceEqual(TownPackets.Actor(cb)), "public appearance uses current committed worn inventory");
+            That(refreshed.Last(f => f.Opcode == 2).Body.SequenceEqual(TownPackets.Actor(cb, adventureName: "BetaGroup")),
+                "换装保留当前成员昵称并使用实际提交的装备");
+            presence.Refresh(b, bSend, cb, "NewBeta");
+            await aSend.Send(1, 1347, [1], "after-name-refresh");
+            Bytes(Frames(aStream).Last(f => f.Opcode == 2).Body,
+                TownPackets.Actor(cb, adventureName: "NewBeta"), "昵称更新复用成员身份和外观刷新，不离场或重复加入");
             presence.Remove(bSend);
             await aSend.Send(1, 1347, [1], "after-leave");
             That(Frames(aStream).Last(f => f.Opcode == 6).Body.SequenceEqual(TownPackets.RemoveActor(cb.Id)), "departure removes actual visible actor");

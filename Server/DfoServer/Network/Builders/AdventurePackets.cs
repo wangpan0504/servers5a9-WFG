@@ -21,6 +21,16 @@ internal static class AdventurePackets
         writer.Write(error == 0 ? (byte)1 : (byte)0);
         if (error != 0) writer.Write(error);
     });
+    public static byte[] AccountName(string name) => Build(writer =>
+    {
+        PacketEncoding.WriteString(writer, name);
+        writer.Write((byte)0);
+    });
+    public static byte[] NameAccepted(string name) => Build(writer =>
+    {
+        writer.Write((byte)1);
+        PacketEncoding.WriteString(writer, name);
+    });
     public static byte[] Information(ushort actor, AdventureSnapshot snapshot, AdventureCatalog catalog,
         IReadOnlyList<AdventureMember> representatives, byte region, bool ack = false) => Build(writer =>
     {

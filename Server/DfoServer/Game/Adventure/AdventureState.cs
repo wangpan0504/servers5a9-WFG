@@ -11,6 +11,7 @@ internal sealed record AdventureMember(ushort Id, ushort Slot, string Name, byte
 internal sealed record AdventureState(long Revision, string Name, int CreatedDate, int Level, ulong Experience, decimal Remainder,
     ulong CapsuleExperience, ulong BraveExperience, ImmutableArray<uint> Points, int Month)
 {
+    public bool NameInitialized { get; init; }
     public ImmutableDictionary<int, uint> Purchases { get; init; } = ImmutableDictionary<int, uint>.Empty;
     public ImmutableArray<AdventureSelection> Representatives { get; init; } = [];
     public ImmutableArray<AdventureExpedition> Expeditions { get; init; } = [];

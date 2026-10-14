@@ -21,11 +21,18 @@ internal static class DatabaseSchemaTests
 
     internal static void RemoveCardClaimSchema(SqliteConnection db)
     {
+        RemoveAdventureNames(db);
         Execute(db, "DROP TABLE IF EXISTS server_events");
         if (Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_card_rewards') WHERE name='claimed'") is 1L)
             Execute(db, "ALTER TABLE character_dungeon_card_rewards DROP COLUMN claimed");
         if (Query(db, "SELECT count(*) FROM pragma_table_info('account_card_memberships') WHERE name='returning_player_expires'") is 1L)
             Execute(db, "ALTER TABLE account_card_memberships DROP COLUMN returning_player_expires");
+    }
+    internal static void RemoveAdventureNames(SqliteConnection db)
+    {
+        Execute(db, "DROP INDEX IF EXISTS account_adventure_name");
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='name_initialized'") is 1L)
+            Execute(db, "ALTER TABLE account_adventures DROP COLUMN name_initialized");
     }
     internal static void RemoveAdventureExpeditions(SqliteConnection db)
     {
@@ -201,6 +208,7 @@ internal static class DatabaseSchemaTests
             new AuthenticationService(new AuthenticationRepository(path)).Create("effects-upgrade","fixture-password");
             using(var db=Open(path))
             {
+                RemoveAdventureNames(db);
                 Execute(db,"INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('effects-upgrade',0,'EffectOld',7,38,1,450,234,0)");
                 Execute(db,"INSERT INTO account_wallets(account,revision,rental_points,seria_luck) VALUES('effects-upgrade',11,23,0)");
                 if(local32)
@@ -291,6 +299,7 @@ internal static class DatabaseSchemaTests
             using (var copy = Open(path)) old.BackupDatabase(copy);
             using (var db = Open(path))
             {
+                RemoveAdventureNames(db);
                 Execute(db,"""
                     DROP TABLE character_quest_special_reward_claims;
                     DROP TABLE character_quest_effect_receipts;
@@ -999,7 +1008,7 @@ internal static class DatabaseSchemaTests
     // v37一步建出拍卖行挂牌表（含保证金列）；两个夹具都恢复到真实旧结构，不以改版本号冒充旧库。
     private static void VerifyAuctionListingSchema(string root)
     {
-        Check(SqliteMigrations.CurrentVersion == 37, "拍卖行挂牌与保证金落在连续迁移的v37");
+        Check(SqliteMigrations.CurrentVersion >= 37, "当前连续迁移包含v37拍卖行挂牌与保证金");
         string path = Path.Combine(root, "auction-v36.db");
         _ = new CharacterRepository(path);
         using (var db = Open(path))
@@ -1046,9 +1055,9 @@ internal static class DatabaseSchemaTests
         }
         ExecuteOn(upgrade, db =>
         {
-            // 挂牌表只由 v37 建出：把结构与版本一起退回真实 v36（其余表与当前结构相同），
-            // 于是重开时只执行 v37，能同时验证「建表 + 三个索引 + 保证金列」。
+            // 恢复真实v36后连续升级；v37的建表、三个索引及保证金断言不依赖最新版本号。
             DropAuctionListings(db);
+            RemoveAdventureNames(db);
             Execute(db, "PRAGMA user_version=36");
         });
         Check(Snapshot(upgrade) != Snapshot(path), "v36夹具与v37新库结构不同");
@@ -1057,8 +1066,8 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(upgrade);
         using (var db = Open(upgrade))
         {
-            Check(Query(db, "PRAGMA user_version") is long version && version == 37,
-                "v36只执行v37（建挂牌表与保证金列）并推进版本号");
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                "v36连续执行v37及后续迁移，推进到当前版本号");
             Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='index' AND tbl_name='auction_listings'") is 3L,
                 "v37升级为旧库补齐到期、卖家、模板三个索引");
             Check(Query(db, "SELECT c.revision||':'||w.revision||':'||w.rental_points FROM characters c JOIN account_wallets w USING(account) WHERE c.account='legacy'") is "7:5:17" &&
@@ -1180,6 +1189,7 @@ internal static class DatabaseSchemaTests
                 // 拍卖行挂牌表只出现在 v37：模拟 1..36 的旧库都必须把该表与三个索引一起移除
                 // （不能用「改版本号」冒充旧库，否则 v37 的 CREATE 会撞表）。
                 if (oldVersion < 37) DropAuctionListings(db);
+                if (oldVersion < 38) RemoveAdventureNames(db);
                 if (oldVersion < 3)
                     Execute(db, "DROP TABLE character_dungeon_growth_receipts");
                 if (oldVersion == 1)

@@ -677,6 +677,11 @@ internal static class FormalDungeonPublicationTests
     internal sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false,
         bool loseSettlement = false,bool losePaid = false,bool loseDiscard = false,bool loseFree = false) : ICharacterRepository
     {
+        public string ReadAdventureName(AccountOwners.Lease owner) => inner.ReadAdventureName(owner);
+        public bool AdventureNameExists(AccountOwners.Lease owner, string name) => inner.AdventureNameExists(owner, name);
+        public DfoServer.Game.Adventure.AdventureNameCommit CommitAdventureName(AccountOwners.Lease owner,
+            DfoServer.Game.Adventure.AdventureNamePlan plan,DfoServer.GameWorld.Adventure.AdventureCatalog catalog,DateTimeOffset now) =>
+            inner.CommitAdventureName(owner,plan,catalog,now);
         public DfoServer.Game.Adventure.AdventureSnapshot CommitAdventureExpedition(AccountOwners.Lease owner,
             DfoServer.Game.Adventure.AdventureExpeditionPlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.CommitAdventureExpedition(owner, plan, catalog, now);
         public DfoServer.Game.Adventure.AdventureShopCommit CommitAdventureShop(AccountOwners.Lease owner,

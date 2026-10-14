@@ -37,7 +37,8 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         // ACK确认UI选择；完整Actor只在城镇实体上下文刷新，其他场景的持久心情在后续入城回放。
         if (result.Changed && phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
-            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel), "emotion_actor", Guard);
+            await context.Notify(NotiPacketType.USERINFO,
+                TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName()), "emotion_actor", Guard);
             context.Owner.Execute(() =>
             {
                 if (Guard() && phase == SessionPhase.Town && !context.BlocksTownActions) projection.Refresh(context);

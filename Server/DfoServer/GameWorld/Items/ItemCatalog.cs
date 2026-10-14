@@ -119,6 +119,13 @@ internal sealed class ItemCatalog
         return QuestTicketDefinition.Parse(raw,Get(key));
     });
 
+    public AdventureNameTicketDefinition? AdventureNameTicket(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        var raw = StackableFile.Parse(id, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
+        return AdventureNameTicketDefinition.Parse(raw, Get(id));
+    }
+
     ItemTemplate Load(int id)
     {
         bool isEquipment = equipment.TryGetValue(id, out string? path);

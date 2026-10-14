@@ -67,6 +67,12 @@ internal static class AdventureExpeditionTests
             ReferenceEquals(AdventurePeriod.Apply(nextMonth, catalog, now), nextMonth), "月重置只投影声明的结晶，不改revision或倒退月份");
         AdventureRequests.Information([1, 1]);
         Reject<InvalidDataException>(() => AdventureRequests.Information([2, 1, 1]), "重复地区查询拒绝");
+        var empty = AdventureRequests.Start([1, 0x80, 0x51, 1, 0, 0, 0]);
+        That(empty is { Area: 1, Duration: 86400 } && empty.Members.IsEmpty &&
+            service.Start(snapshot, empty.Area, 21600, empty.Members, now) is { Plan: null, Error: 22 },
+            "原生空成员请求结构合法，由远征业务拒绝，不发放奖励或创建运行记录");
+        Reject<InvalidDataException>(() => AdventureRequests.Start([1, 0x80, 0x51, 1, 0, 1, 0]), "成员行缺失仍是包结构错误");
+        Reject<InvalidDataException>(() => AdventureRequests.Start([1, 0x80, 0x51, 1, 0, 0, 0, 0]), "空成员请求不接受额外行字节");
         Reject<InvalidDataException>(() => AdventureRequests.Start([1, 0, 0, 0, 0, 5, 0]), "远征成员超过四人拒绝");
         byte[] body = AdventurePackets.Expedition(running, expeditions, running.Representatives(catalog),
             expeditions.Areas.Keys.ToDictionary(area => area, area => service.AreaAttributes(area, now).ToArray()), now);

@@ -29,7 +29,9 @@ internal sealed partial class CharacterRepository
         state.Validate(catalog);
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.CommandText = """
-            INSERT INTO account_adventures VALUES($account,0,$name,$date,1,0,'0',0,0,$points,$month)
+            INSERT INTO account_adventures(account,revision,name,created_date,level,experience,remainder,
+                capsule_experience,brave_experience,points,month,name_initialized)
+            VALUES($account,0,$name,$date,1,0,'0',0,0,$points,$month,0)
             """;
         command.Parameters.AddWithValue("$account", owner.Account);
         command.Parameters.AddWithValue("$name", state.Name);
@@ -44,7 +46,7 @@ internal sealed partial class CharacterRepository
     static AdventureSnapshot ReadAdventure(SqliteConnection db, SqliteTransaction tx, string account, AdventureCatalog catalog, DateTimeOffset now)
     {
         using var query = db.CreateCommand(); query.Transaction = tx; query.Parameters.AddWithValue("$account", account);
-        query.CommandText = "SELECT revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month FROM account_adventures WHERE account=$account";
+        query.CommandText = "SELECT revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month,name_initialized FROM account_adventures WHERE account=$account";
         var state = AdventureState.Initial(account, now);
         using (var reader = query.ExecuteReader())
         {
@@ -57,7 +59,7 @@ internal sealed partial class CharacterRepository
                     Level = reader.GetInt32(3), Experience = checked((ulong)reader.GetInt64(4)),
                     Remainder = decimal.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
                     CapsuleExperience = checked((ulong)reader.GetInt64(6)), BraveExperience = checked((ulong)reader.GetInt64(7)),
-                    Points = points.ToImmutable(), Month = reader.GetInt32(9) };
+                    Points = points.ToImmutable(), Month = reader.GetInt32(9), NameInitialized = reader.GetBoolean(10) };
             }
         }
         query.CommandText = "SELECT item_id,count FROM account_adventure_purchases WHERE account=$account ORDER BY item_id";

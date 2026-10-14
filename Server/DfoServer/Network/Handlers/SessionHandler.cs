@@ -30,16 +30,7 @@ internal sealed class SessionHandler(TownProjection projection, ServerLog log) :
     async Task<CommandResult> ReturnAsync(GameConnectionContext context, Packet request)
     {
         SessionRequests.Empty(request.Body);
-        context.Session.ReturnToRoster();
-        context.Activity?.Reset();
-        await projection.DetachAsync(context);
-        context.RosterRequested = true;
-        context.SelectionRosterPushed = true;
-        await context.Reply(CmdPacketType.RETURN_SELECT_CHARACTER, SessionPackets.ReturnToSelection(), "return_selection_ack");
-        var roster = context.Session.PrepareRoster();
-        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "return_selection_roster",
-            () => context.Session.CanPublishRoster(roster));
-        context.Session.MarkRosterPublished(roster);
+        await projection.ReturnToSelectionAsync(context);
         return CommandResult.Handled;
     }
 

@@ -28,7 +28,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // 首次创建本人UI前先初始化主设置；地区绑定后仍回放完整设置，补齐依赖角色实体的应用。
         if (settings is not null && settingReceipt is not null)
             await settings.InitializeGameOptionsAsync(context, settingReceipt, "account_settings_before_player");
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(c, context.Channel), "actor");
+        await context.Notify(NotiPacketType.USERINFO,
+            TownPackets.Actor(c, context.Channel, adventureName: context.Session.ReadAdventureName()), "actor");
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c), context.Channel), "player");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
         await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
@@ -117,7 +118,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Owner.Execute(() =>
         {
             if (CanSend())
-                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel);
+                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName());
             return true;
         });
     }
@@ -125,7 +126,27 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     public void Join(GameConnectionContext context)
     {
         if (context.Session.Ready && context.Session.Selected is { } c)
-            presence?.Join(context.Owner, context.Sender, c, context.Channel);
+            presence?.Join(context.Owner, context.Sender, c, context.Channel, context.Session.ReadAdventureName());
+    }
+
+    public async Task ReturnToSelectionAsync(GameConnectionContext context, Func<bool>? canReturn = null)
+    {
+        bool returning = context.Owner.Execute(() =>
+        {
+            if (canReturn?.Invoke() == false) return false;
+            context.Session.ReturnToRoster();
+            context.Activity?.Reset();
+            return true;
+        });
+        if (!returning) return;
+        await DetachAsync(context);
+        context.RosterRequested = true;
+        context.SelectionRosterPushed = true;
+        await context.Reply(CmdPacketType.RETURN_SELECT_CHARACTER, SessionPackets.ReturnToSelection(), "return_selection_ack");
+        var roster = context.Session.PrepareRoster();
+        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "return_selection_roster",
+            () => context.Session.CanPublishRoster(roster));
+        context.Session.MarkRosterPublished(roster);
     }
 
     public async Task<bool> DetachForDungeonSelectionAsync(GameConnectionContext context, DungeonSelectionReceipt receipt)
@@ -152,7 +173,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Owner.Execute(() =>
         {
             if (CanSend())
-                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel);
+                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName());
             return true;
         });
     }
@@ -181,7 +202,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     public void Refresh(GameConnectionContext context)
     {
         if (context.Session.Selected is { } c)
-            presence?.Refresh(context.Owner, context.Sender, c);
+            presence?.Refresh(context.Owner, context.Sender, c, context.Session.ReadAdventureName());
     }
     public async Task DetachAsync(GameConnectionContext context)
     {

@@ -70,6 +70,11 @@ internal static class AdventureCoreTests
             BinaryPrimitives.ReadUInt16LittleEndian(info.AsSpan(86)) == 3 && info[18 + 72 + 42] == 2 &&
             BinaryPrimitives.ReadUInt16LittleEndian(info.AsSpan(18 + 7361)) == 2, "1343完整7440B、账号数量、地域、职业计数及u64经验");
         byte[] name = CharacterName.Encoding.GetBytes("测试团");
+        Bytes(AdventurePackets.AccountName("测试团"), [6, 0, 0, 0, 0xB2, 0xE2, 0xCA, 0xD4, 0xCD, 0xC5, 0],
+            "1375使用独立CP936名称和尾部标志，不混入1343或固定Actor状态");
+        var maximumName = AdventurePackets.AccountName(new string('测', 16));
+        That(maximumName.Length == 37 && BinaryPrimitives.ReadInt32LittleEndian(maximumName) == 32 && maximumName[^1] == 0,
+            "1375保留16个中文字符的32B边界及零标志");
         That(BinaryPrimitives.ReadInt32LittleEndian(info.AsSpan(18 + 7440)) == name.Length &&
             info.AsSpan(22 + 7440).SequenceEqual(name), "账号名称使用CP936字节长度，不按UTF8字符数发送");
         var ack = AdventurePackets.Information(0, snapshot, catalog, representatives, 2, ack: true);

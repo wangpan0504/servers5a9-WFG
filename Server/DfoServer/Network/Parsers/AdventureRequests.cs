@@ -1,10 +1,28 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Text;
+using DfoServer.Game.Characters;
 
 namespace DfoServer.Network.Parsers;
 
 internal static class AdventureRequests
 {
+    public static string Name(ReadOnlySpan<byte> body, bool rename = false)
+    {
+        if (body.Length < 4) throw new InvalidDataException("冒险团名称缺少长度");
+        int count = BinaryPrimitives.ReadInt32LittleEndian(body);
+        if (count is < 0 or > 32 || body.Length != 4 + count + (rename ? 4 : 0))
+            throw new InvalidDataException("冒险团名称长度或尾字段非法");
+        try { return CharacterName.Encoding.GetString(body.Slice(4, count)); }
+        catch (DecoderFallbackException error) { throw new InvalidDataException("冒险团名称不是CP936", error); }
+    }
+
+    public static (string Name, ushort Slot, ushort Mode) Rename(ReadOnlySpan<byte> body)
+    {
+        string name = Name(body, rename: true);
+        return (name, BinaryPrimitives.ReadUInt16LittleEndian(body[^4..]), BinaryPrimitives.ReadUInt16LittleEndian(body[^2..]));
+    }
+
     public static byte Area(ReadOnlySpan<byte> body)
     {
         if (body.Length != 1) throw new InvalidDataException("远征操作必须为地区u8");
@@ -24,7 +42,7 @@ internal static class AdventureRequests
     {
         if (body.Length < 7) throw new InvalidDataException("远征出发包缺少固定字段");
         ushort count = BinaryPrimitives.ReadUInt16LittleEndian(body[5..]);
-        if (count is < 1 or > 4 || body.Length != 7 + count * 3) throw new InvalidDataException("远征成员数量或行长度非法");
+        if (count > 4 || body.Length != 7 + count * 3) throw new InvalidDataException("远征成员数量或行长度非法");
         var rows = ImmutableArray.CreateBuilder<(byte, byte, byte)>();
         for (int i = 0; i < count; i++) rows.Add((body[7 + i * 3], body[8 + i * 3], body[9 + i * 3]));
         return (body[0], BinaryPrimitives.ReadUInt32LittleEndian(body[1..]), rows.ToImmutable());

@@ -9,12 +9,13 @@ namespace DfoServer.Network.Projection;
 internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = default)
 {
     sealed record Scene(byte Town, byte Area, string Map, string? RoomAccount);
-    sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, ChannelIdentity channel)
+    sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, ChannelIdentity channel, string adventureName)
     {
         public AccountOwners.Lease Owner { get; } = owner;
         public GameConnectionSender Sender { get; } = sender;
         public Scene Scene { get; } = scene;
         public Character Character { get; set; } = character;
+        public string AdventureName { get; set; } = adventureName;
         public long Serial { get; } = serial;
         public ChannelIdentity Channel { get; } = channel;
     }
@@ -41,7 +42,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     Bodies Capture(Member source, ChannelIdentity receiver)
     {
         var c = source.Character;
-        return new(TownPackets.Actor(c, receiver), TownPackets.ActorState(c.Id), TownPackets.Position(c, false));
+        return new(TownPackets.Actor(c, receiver, adventureName: source.AdventureName), TownPackets.ActorState(c.Id), TownPackets.Position(c, false));
     }
     Dictionary<ChannelIdentity, Bodies> Capture(Member source, Member[] targets)
     {
@@ -72,7 +73,8 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             target.Sender.Leave(departed.Character.Id, departed.Serial);
     }
 
-    public void Join(AccountOwners.Lease owner, GameConnectionSender sender, Character character, ChannelIdentity? entry = null) => owner.Execute(() =>
+    public void Join(AccountOwners.Lease owner, GameConnectionSender sender, Character character, ChannelIdentity? entry = null,
+        string adventureName = "") => owner.Execute(() =>
     {
         lock (gate)
         {
@@ -80,7 +82,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             // 同一角色被新generation选中时，只清理旧连接成员，不允许其稍后删掉新成员。
             if (characters.TryGetValue(character.Id, out var old))
                 RemoveCore(old.Sender);
-            var joined = new Member(owner, sender, SceneOf(owner, character), character, ++serial, entry ?? channel);
+            var joined = new Member(owner, sender, SceneOf(owner, character), character, ++serial, entry ?? channel, adventureName);
             members.Add(sender, joined);
             characters.Add(character.Id, joined);
             if (!scenes.TryGetValue(joined.Scene, out var scene))
@@ -116,13 +118,14 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         }
     });
     // 当前场景换装更新快照并投递Actor，不通过离场/重入改变成员身份。
-    public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character) => owner.Execute(() =>
+    public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character, string? adventureName = null) => owner.Execute(() =>
     {
         lock (gate)
         {
             if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id || source.Scene != SceneOf(owner, character))
                 throw new InvalidOperationException("外观刷新缺少当前场景成员");
             source.Character = character;
+            if (adventureName is not null) source.AdventureName = adventureName;
             var peers = Peers(source);
             if (peers.Length == 0)
                 return true;

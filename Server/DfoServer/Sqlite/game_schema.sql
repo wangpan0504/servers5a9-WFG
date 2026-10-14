@@ -5,7 +5,9 @@ CREATE TABLE account_adventures(
   level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 255),experience INTEGER NOT NULL CHECK(experience>=0),
   remainder TEXT NOT NULL,capsule_experience INTEGER NOT NULL CHECK(capsule_experience>=0),
   brave_experience INTEGER NOT NULL CHECK(brave_experience>=0),points BLOB NOT NULL CHECK(length(points)=20),
-  month INTEGER NOT NULL CHECK(month BETWEEN 190001 AND 999912));
+  month INTEGER NOT NULL CHECK(month BETWEEN 190001 AND 999912),
+  name_initialized INTEGER NOT NULL DEFAULT 1 CHECK(name_initialized IN (0,1)));
+CREATE INDEX account_adventure_name ON account_adventures(name COLLATE NOCASE);
 
 CREATE TABLE character_tutorial_state(
   character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),
