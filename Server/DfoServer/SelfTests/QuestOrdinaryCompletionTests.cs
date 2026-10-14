@@ -83,11 +83,35 @@ internal static class QuestOrdinaryCompletionTests
             That(ReferenceEquals(before, f.Session.Selected) && f.Read().CompletedQuests.Contains(100), "返回丢失不安装临时资产，但保留真实事务");
             That(f.Finish(0).Outcome == QuestFinishOutcome.Rejected && f.Receipts == 1, "不同选择不能冒充原pending请求");
             var recovered = f.Finish(1);
-            That(recovered.Receipt?.Commit is { Duplicate: true, ProjectionCurrent: true } && f.Lost!.SamePlan && f.Receipts == 1,
+            That(recovered.Receipt?.Commit is { Duplicate: true, ProjectionCurrent: true } && f.Lost!.SamePlan && f.Receipts == 1 &&
+                ReferenceEquals(recovered.Receipt.Commit.Character,f.Session.Selected) && f.Session.CanPublishQuestCompletion(recovered.Receipt),
                 "相同选择恢复原冻结结果，不重新消耗或抽取奖励");
             That(f.Finish(1).Outcome == QuestFinishOutcome.AlreadyCompleted && f.Receipts == 1, "安装后的重复交付正常拒绝");
             f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             That(Same(f.Session.Selected!, f.Read()) && f.Finish(1).Outcome == QuestFinishOutcome.AlreadyCompleted, "重选和进程仓储重开使用持久结果");
+        }
+        foreach (string change in new[] { "UPDATE characters SET revision=revision+1",
+            "INSERT INTO character_completed_quests(character_id,quest_id) VALUES(1,999)" })
+        using (var f = Make(seeking, loseResult: true))
+        {
+            var before = f.Session.Selected!;
+            TestCheck.Reject<IOException>(() => f.Finish(1), "普通交付已提交后丢失返回值，随后持久状态变化");
+            f.Sql(change);
+            var saved = f.Read();
+            var recovered = f.Finish(1);
+            That(recovered is { Outcome: QuestFinishOutcome.Committed, Receipt.Commit: { Duplicate: true, ProjectionCurrent: false } } &&
+                f.Lost!.SamePlan && ReferenceEquals(before,f.Session.Selected) &&
+                Same(saved,recovered.Receipt!.Commit.Character) && !f.Session.CanPublishQuestCompletion(recovered.Receipt),
+                "revision或同revision完成位变化后仅返回实际失效领奖回执，不安装Selected或发布成功");
+            var retried = f.Finish(1);
+            That(retried.Receipt?.Commit is { Duplicate: true, ProjectionCurrent: false } && f.Lost!.SamePlan &&
+                ReferenceEquals(before,f.Session.Selected) && Same(saved,f.Read()) &&
+                saved.Inventory.Items.Single(row => row.Core.ItemId == 10165055).Core.Value == 2 &&
+                saved.Inventory.Items.Single(row => row.Core.ItemId == 2058).Core.Value == 5 && f.Receipts == 1,
+                "失效领奖回执保留原pending精确重试，不重算、重复扣材料或发奖励");
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            That(Same(saved,f.Session.Selected!) && f.Finish(1).Outcome == QuestFinishOutcome.AlreadyCompleted && f.Receipts == 1,
+                "重选恢复最新完成位及资产，不重放旧领奖增量");
         }
         using (var f = Make(seeking, materialCount: 2))
             That(f.Prepare(1).Outcome == QuestCompletionOutcome.Rejected && f.Receipts == 0, "库存不足不依赖客户端scalar0放行");

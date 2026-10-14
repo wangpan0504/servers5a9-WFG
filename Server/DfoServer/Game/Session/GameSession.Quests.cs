@@ -90,11 +90,14 @@ internal sealed partial class GameSession
             // 不明提交结果保留这份冻结计划；精确查询同接取receipt，不生成新的领奖身份。
             pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity);
             var commit = repository.CommitQuestCompletion(owner, plan);
+            var result = new QuestFinishResult(QuestFinishOutcome.Committed,
+                new(commit, owner.Generation, captured.SelectionEpoch, captured.Identity) { Phase = captured.Phase });
+            // 失效投影仍保留实际提交回执和原pending，交由Handler关闭连接，不安装外部变更后的角色。
+            if (!commit.ProjectionCurrent) return result;
             Selected = commit.Character;
             completed = QuestEligibility.Completed(Selected);
             pendingQuestCompletion = null;
-            return new QuestFinishResult(QuestFinishOutcome.Committed,
-                new(commit, owner.Generation, captured.SelectionEpoch, captured.Identity) { Phase = captured.Phase });
+            return result;
         });
     }
 

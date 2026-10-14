@@ -89,8 +89,31 @@ internal static class QuestLifecycleTests
                 "返回丢失保留原在线快照和已提交回执");
             var recovered = f.Change(100, QuestLifecycleAction.Accept)!;
             That(recovered.Commit is { Duplicate: true, ProjectionCurrent: true } && f.Lost!.SameLifecyclePlan &&
-                recovered.Character.Inventory.Items.Single().Core.Value == 3 && f.Receipts == 1,
+                recovered.Character.Inventory.Items.Single().Core.Value == 3 && f.Receipts == 1 &&
+                ReferenceEquals(recovered.Character,f.Session.Selected) && f.Session.CanPublishQuestLifecycle(recovered),
                 "相同请求恢复冻结计划、随机/期限与原UID，不再发赠品");
+        }
+        foreach (string change in new[] { "UPDATE characters SET revision=revision+1",
+            "INSERT INTO character_completed_quests(character_id,quest_id) VALUES(1,999)" })
+        using (var f = new Fixture(towns, items, [gift], loseResult: true))
+        {
+            var before = f.Session.Selected!;
+            Reject<IOException>(() => f.Change(100, QuestLifecycleAction.Accept), "接取已提交后丢失返回值，随后持久状态变化");
+            f.Sql(change);
+            var saved = f.Read();
+            var recovered = f.Change(100, QuestLifecycleAction.Accept)!;
+            That(recovered is { Outcome: QuestLifecycleOutcome.Committed, Commit: { Duplicate: true, ProjectionCurrent: false } } &&
+                f.Lost!.SameLifecyclePlan && ReferenceEquals(before,f.Session.Selected) &&
+                Same(saved,recovered.Character) && !f.Session.CanPublishQuestLifecycle(recovered),
+                "revision或同revision完成位变化后仅返回实际失效回执，不安装Selected或发布成功");
+            var retried = f.Change(100, QuestLifecycleAction.Accept)!;
+            That(retried.Commit is { Duplicate: true, ProjectionCurrent: false } && f.Lost!.SameLifecyclePlan &&
+                ReferenceEquals(recovered.Commit!.Plan,retried.Commit.Plan) && ReferenceEquals(before,f.Session.Selected) &&
+                Same(saved,f.Read()) && saved.Inventory.Items.Single().Core.Value == 3 && f.Receipts == 1,
+                "失效回执保留原pending精确重试，不新建operation或重复赠品");
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            That(Same(saved,f.Session.Selected!) && f.Change(100,QuestLifecycleAction.Accept)!.Commit is null && f.Receipts == 1,
+                "重选恢复最新接取及资产，不重放旧接取增量");
         }
         var seeking = meet with { Condition = "[seeking]", IntData = [10165055, 1] };
         var seekingGift = seeking with { Definition = seeking.Definition! with { AcceptanceRewards = [new(0,10165055,null),new(0,1,null)] } };

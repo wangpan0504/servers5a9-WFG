@@ -78,6 +78,9 @@ internal sealed partial class GameSession
             if (pendingRental is not null || !CanPublishQuestLifecycle(refusal)) throw new InvalidOperationException("任务规划的原选角或实际场景已失效");
             pendingQuestLifecycle = new(plan, capture.SelectionEpoch, capture.Phase, capture.Identity, condition);
             var commit = repository.CommitQuestLifecycle(owner, plan);
+            var receipt = refusal with { Character = commit.Character, Commit = commit, Outcome = QuestLifecycleOutcome.Committed, Reason = "任务事务已提交" };
+            // 原操作已提交但投影失效时，只交回实际回执供Handler收尾；保留冻结计划，不安装新快照或绑定旧Run。
+            if (!commit.ProjectionCurrent) return receipt with { Reason = "任务事务已提交，当前投影已失效，需重新选角恢复" };
             Selected = commit.Character;
             completed = QuestEligibility.Completed(Selected);
             if (action == QuestLifecycleAction.Accept && capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && formalDungeon is { } dungeon &&
@@ -87,7 +90,7 @@ internal sealed partial class GameSession
                 formalDungeon = dungeon with { Entry = dungeon.Run.Entry };
             }
             pendingQuestLifecycle = null;
-            return refusal with { Character = commit.Character, Commit = commit, Outcome = QuestLifecycleOutcome.Committed, Reason = "任务事务已提交" };
+            return receipt;
         });
 
         QuestLifecyclePlan ConditionPlan()
