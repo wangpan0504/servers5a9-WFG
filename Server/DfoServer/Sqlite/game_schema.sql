@@ -1,4 +1,11 @@
 -- S5A9 当前完整数据库结构；账号与游戏数据统一保存。
+CREATE TABLE character_teleport_cooldowns(
+  character_id INTEGER PRIMARY KEY,
+  account TEXT NOT NULL,
+  potion_until INTEGER NOT NULL CHECK(potion_until>=0),
+  aura_until INTEGER NOT NULL CHECK(aura_until>=0),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TABLE account_adventures(
   account TEXT PRIMARY KEY REFERENCES accounts(account_id),revision INTEGER NOT NULL CHECK(revision>=0),
   name TEXT NOT NULL CHECK(length(name)>0),created_date INTEGER NOT NULL CHECK(created_date BETWEEN 19000101 AND 99991231),

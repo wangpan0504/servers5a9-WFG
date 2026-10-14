@@ -344,6 +344,7 @@ internal static class QuestCompletionRepositoryTests
         public CharacterDeletion LoadDeletionTarget(AccountOwners.Lease owner, ushort slot) => inner.LoadDeletionTarget(owner, slot);
         public CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected) => inner.Delete(owner, expected);
         public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back) => inner.Save(owner, expected, position, back);
+        public Character CommitTeleport(AccountOwners.Lease owner, DfoServer.Game.Town.TeleportPlan plan) => inner.CommitTeleport(owner, plan);
         public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? bonusSp = null, int? bonusTp = null) => inner.CommitLearning(owner, expected, learning, bonusSp, bonusTp);
         public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit) => inner.UpdateProgress(owner, edit);
         public Character AdvanceAcceptedStoryLevel(AccountOwners.Lease owner, Character expected) => inner.AdvanceAcceptedStoryLevel(owner, expected);

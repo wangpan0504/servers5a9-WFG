@@ -245,16 +245,9 @@ internal sealed class TownCatalog
         completed ??= NoQuests;
         if (current.Town == target.Town && current.Area == target.Area)
             return "same-area";
-        if (!Areas.TryGetValue((target.Town, target.Area), out var area))
-            return "target-not-in-pvf";
-        if (area.Map(completed).Error is { } error)
-            return error;
-        if (area.Level > level)
-            return "target-level-required";
-        if (!area.Quests.All(completed.Contains) || area.AnyQuests.Length > 0 && !area.AnyQuests.Any(completed.Contains))
-            return "target-quest-required";
-        if (area.ExceptQuests.Any(completed.Contains))
-            return "target-excluded-by-quest";
+        string destination = DestinationAdmission(target, level, completed);
+        if (destination != "ready") return destination;
+        var area = Areas[(target.Town, target.Area)];
         if (targetNpc != 0)
         {
             if (!Areas.TryGetValue((current.Town, current.Area), out var npcSource) || !npcSource.Map(completed).Npcs.Any(n => NpcMoves.TryGetValue(n.Id, out var to) && to.Contains(targetNpc)))
@@ -263,7 +256,6 @@ internal sealed class TownCatalog
                 return "npc-target-not-in-area";
             return "ready";
         }
-
         if (roomPortal)
         {
             if (!IsRoom(current, completed))
@@ -294,6 +286,18 @@ internal sealed class TownCatalog
         if (!links.Any(l => l.Quests.All(completed.Contains)))
             return "route-quest-required";
         return links.Any(l => Allowed(l.Quests, l.Conditions, completed)) ? "ready" : "route-state-required";
+    }
+
+    // 专用传送复用区域权限；普通旅行继续在Admission里验证来源及有向路线。
+    public string DestinationAdmission(Location target, int level, IReadOnlySet<int>? completed = null)
+    {
+        completed ??= NoQuests;
+        if (!Areas.TryGetValue((target.Town, target.Area), out var area)) return "target-not-in-pvf";
+        if (area.Map(completed).Error is { } error) return error;
+        if (area.Level > level) return "target-level-required";
+        if (!area.Quests.All(completed.Contains) || area.AnyQuests.Length > 0 && !area.AnyQuests.Any(completed.Contains))
+            return "target-quest-required";
+        return area.ExceptQuests.Any(completed.Contains) ? "target-excluded-by-quest" : "ready";
     }
 
     public bool CanTravel(Location current, Location target, int level, IReadOnlySet<int>? completed = null, Location? roomReturn = null) => Admission(current, target, level, completed, roomReturn) == "ready";

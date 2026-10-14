@@ -103,7 +103,18 @@ internal static class SqliteMigrations
             Execute(db, tx, "ALTER TABLE account_adventures ADD COLUMN name_initialized INTEGER NOT NULL DEFAULT 1 CHECK(name_initialized IN (0,1))");
             Execute(db, tx, "CREATE INDEX account_adventure_name ON account_adventures(name COLLATE NOCASE)");
         }),
+        new(39, "角色药剂与光环传送冷却", static (db, tx) => Execute(db, tx, TeleportCooldownSchema)),
     ];
+
+    internal const string TeleportCooldownSchema = """
+        CREATE TABLE IF NOT EXISTS character_teleport_cooldowns(
+          character_id INTEGER PRIMARY KEY,
+          account TEXT NOT NULL,
+          potion_until INTEGER NOT NULL CHECK(potion_until>=0),
+          aura_until INTEGER NOT NULL CHECK(aura_until>=0),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
 
     // 拍卖行挂牌跨账号可见，不归属单个角色；卖家为机器人时 seller_character_id 为 NULL，
     // 因此本表不建立指向 characters 的外键。item_entry 是物品条目的字节快照，长度与内容由物品条目写入方负责，本表只保存字节。
@@ -940,6 +951,7 @@ internal static class SqliteMigrations
         "SELECT character_id,bonus_sp FROM character_skill_point_sources LIMIT 0",
         "SELECT account,expires_at FROM account_expert_contracts LIMIT 0",
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
+        "SELECT character_id,account,potion_until,aura_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",

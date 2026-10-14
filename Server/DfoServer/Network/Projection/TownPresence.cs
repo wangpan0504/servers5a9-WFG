@@ -3,6 +3,7 @@ using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
 using DfoServer.Network.Builders;
 using DfoServer.GameWorld.Channels;
+using DfoServer.Game.Town;
 
 namespace DfoServer.Network.Projection;
 
@@ -142,4 +143,18 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             RemoveCore(sender);
     }
     public int Count { get { lock (gate) return members.Count; } }
+
+    // 只读取既有成员快照，不取目标账号锁；房间成员不能作为别人传送的落点。
+    public TeleportTarget? TeleportTarget(ChannelIdentity channel, string? name = null, int characterId = -1)
+    {
+        lock (gate)
+        {
+            var member = characterId > 0 && characterId <= ushort.MaxValue ? characters.GetValueOrDefault((ushort)characterId) :
+                members.Values.FirstOrDefault(value => string.Equals(value.Character.Name, name, StringComparison.OrdinalIgnoreCase));
+            return member is not null && member.Owner.IsCurrent && member.Channel == channel && member.Scene.RoomAccount is null
+                ? new(member.Character.Id, member.Character.Name, member.Character.Position, member.Channel, member.Serial,
+                    member.Character.Level, member.Character.Job, member.Character.GrowType) : null;
+        }
+    }
+    public bool CurrentTeleportTarget(TeleportTarget target) => TeleportTarget(target.Channel, characterId: target.CharacterId) == target;
 }

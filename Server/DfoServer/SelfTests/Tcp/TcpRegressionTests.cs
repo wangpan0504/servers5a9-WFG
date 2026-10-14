@@ -103,6 +103,7 @@ internal static class TcpRegressionTests
         ("jobs", TownProtocolTcpTests.JobsAsync),
         ("inventory", InventoryTcpTests.RunAsync),
         ("consumable-use", ConsumableUseTcpTests.RunAsync),
+        ("teleport", TeleportTcpTests.RunAsync),
         ("consumable-use-rules", (_, _, resources) =>
         {
             ConsumableUseTests.RunResources(resources.ItemResources);

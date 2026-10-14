@@ -13,8 +13,9 @@ namespace DfoServer.Network.Projection;
 
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
-    SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null)
+    SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null)
 {
+    readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
     {
         titles?.PrepareInitialization(context);
@@ -45,6 +46,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Avatar), "avatar_inventory_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Pet), "pet_inventory_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.GuildMedal), "medal_inventory_initialize");
+        if (c.TeleportCooldowns.AuraUntil > timer.GetUtcNow().ToUnixTimeMilliseconds())
+            await context.Notify(NotiPacketType.AURA_TYPE_COOLTIME, TeleportPackets.Cooldown(c, timer.GetUtcNow().ToUnixTimeMilliseconds()),
+                "teleport_aura_cooldown_initialize");
         await InventoryProjection.RestoreLocksAsync(context, c.Inventory, c.Inventory.Items.Select(item => item.Position));
         await context.Notify(NotiPacketType.UPGRADE_CARRY_GOLD, CurrencyPackets.GoldLimit(c.Inventory), "gold_limit_initialize");
         await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(c.Inventory.AccountWallet), "account_cera_initialize");

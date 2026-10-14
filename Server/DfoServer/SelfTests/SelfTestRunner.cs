@@ -100,6 +100,7 @@ internal static class SelfTestRunner
         CharacterReadTests.Run();
         await SessionPlanningTests.RunAsync();
         TownSelectionTests.Run();
+        TeleportTests.RunCore();
         TownDungeonMapTests.Run();
         InventoryChangeTests.Run();
         InventoryBehaviorTests.RunCore();

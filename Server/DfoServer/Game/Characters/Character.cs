@@ -31,6 +31,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public InventorySnapshot Inventory { get; init; } = InventorySnapshot.Empty;
     public CharacterDungeonState? DungeonState { get; init; }
     public CharacterFatigueState? Fatigue { get; init; }
+    public DfoServer.Game.Town.TeleportCooldowns TeleportCooldowns { get; init; } = new();
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public long BlackDiamondExpiresAt => Inventory.AccountWallet.ContractExpiry(56);
 }
