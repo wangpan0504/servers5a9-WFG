@@ -93,9 +93,11 @@ internal static class QuestTownSceneTests
         }
         using (var f = Make([3155,3156,3172],new(40,0,1214,250),20))
         {
-            That(Change(f,3173,QuestLifecycleAction.Accept)?.Commit is not null &&
-                f.Read().ActiveMainQuests.Single().ConditionState == 514,"实际Lv20任务3173初始缺两件物品且尚未会面");
             var target = quests.Get(3173);
+            That(Change(f,3173,QuestLifecycleAction.Accept)?.Commit is not null &&
+                f.Read().ActiveMainQuests.Single().ConditionState == 513 &&
+                QuestLifecyclePlan.MissingMaterials(f.Read().Inventory,target,DateTimeOffset.UtcNow.ToUnixTimeSeconds()) == 2,
+                "实际Lv20任务3173保留完整两件材料缺额，初值分别标记材料不足与尚未会面");
             That(target.IntData.SequenceEqual([10164787,1,10164789,1,29]),"3173按匹配PVF保留物品对与末尾罗杰NPC29");
             That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
                 [new(10164787,1),new(10164789,1)],items.Items,items.GoldLimits,items.EpicPieces)).Accepted &&

@@ -125,16 +125,16 @@ internal sealed partial class GameSession
                 condition is { Channel: 0x10 or 0x20, Reserved: 0 } seekReport &&
                 expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { } seekActive && seekActive.ConditionState <= 1023)
             {
-                uint missing = QuestLifecyclePlan.MissingMaterials(expected.Inventory,quest,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                uint seekScalar = (seekActive.ConditionState & 512u) | missing;
+                uint material = QuestLifecyclePlan.MaterialState(expected.Inventory,quest,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                uint seekScalar = (seekActive.ConditionState & 512u) | material;
                 if (seekReport.Channel == 0x20)
                 {
-                    if (seekReport.Value != 0 || missing != 0 ||
+                    if (seekReport.Value != 0 || material != 0 ||
                         !HasDialogueNpc(quest.IntData[^1]))
                         throw new InvalidDataException("寻物会面需要实际足额库存和当前目标NPC");
                     seekScalar = 0;
                 }
-                // 10只是库存重算信号；线上的单字节不能表示全部9位缺额，也不能当成减量。
+                // 10只是完整库存谓词的重算信号；客户端Boolean不能当成材料减量。
                 return QuestLifecyclePlan.SetCondition(expected,quest,seekScalar);
             }
             if (condition is { Channel: null, Value: 0, Reserved: 0 } && capture.Phase == SessionPhase.Town &&

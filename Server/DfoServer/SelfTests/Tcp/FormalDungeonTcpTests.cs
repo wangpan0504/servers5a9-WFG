@@ -530,6 +530,8 @@ internal static partial class FormalDungeonTcpTests
                 revision == completedOrdinaryRevision + 1 + (completedOrdinaryGoldLimit == expectedOrdinaryGoldLimit ? 0 : 1) && limit == expectedOrdinaryGoldLimit,
                 "普通回城重登仅推进出生归一化及必要金币上限初始化的revision，不重放奖励或费用");
         }
+        VerifyQuestBaseBossEntry(fixture,resources,growth);
+        VerifyStoryDifficultyEntry(fixture,resources,growth);
         await fixture.StopAsync();
         Console.WriteLine($"PASS 正式TCP静默拒绝后回城重进、全部职业和转职加载、原生统计合成击杀、六房升级、真实随机拾取{picked}件、重复拒绝及服务重启（非Windows实机；零样本不作拾取覆盖）");
     }

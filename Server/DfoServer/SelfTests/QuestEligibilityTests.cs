@@ -153,6 +153,30 @@ internal static class QuestEligibilityTests
         That(QuestEligibility.Evaluate(advanced,transferStory,transferCatalog).Visible &&
             !QuestEligibility.Evaluate(advanced with {GrowType=0},transferStory,transferCatalog).Eligible,
             "GM已转职可以使用零奖励普通替代，未转职不能借其越过转职");
+        var materials = Quest(123) with { Condition = "[seek n meet npc]", IntData = [3033,200,3034,200,3035,200,3036,200,1] };
+        var materialCatalog = new QuestCatalog(new() { [materials.Id] = materials });
+        var emptyInventory = DfoServer.Game.Inventory.Models.InventorySnapshot.Empty;
+        That(QuestLifecyclePlan.ValidSeeking(materials) && QuestCoverage.HasOrdinaryDeclarations(materials) &&
+            QuestLifecyclePlan.MissingMaterials(emptyInventory,materials,0) == 800 &&
+            QuestLifecyclePlan.MaterialState(emptyInventory,materials,0) == 1,
+            "四种材料各200保留完整800要求，type25材料通道只表示是否足额");
+        var waiting = new ActiveMainQuest(0,123,512) { AcceptanceId = Guid.NewGuid() };
+        That(QuestInventoryProgress.Refresh([waiting],emptyInventory,materialCatalog,0).Single().ConditionState == 513 &&
+            QuestInventoryProgress.Refresh([waiting with { ConditionState = 514 }],emptyInventory,materialCatalog,0).Single() == (waiting with { ConditionState = 513 }) &&
+            QuestInventoryProgress.Refresh([waiting with { ConditionState = 0 }],emptyInventory,materialCatalog,0).Single().ConditionState == 1,
+            "大材料缺额和旧缺额计数归一后保留原接取及NPC位，材料丢失恢复1且保留已完成会面");
+        var funded = emptyInventory;
+        foreach (int id in new[] {3033,3034,3035,3036})
+            funded = DfoServer.Game.Currency.CurrencyWallet.Set(funded,DfoServer.Game.Currency.CurrencyWallet.RewardKind(id)!.Value,200);
+        That(QuestLifecyclePlan.MissingMaterials(funded,materials,0) == 0 &&
+            QuestInventoryProgress.Refresh([waiting],funded,materialCatalog,0).Single().ConditionState == 512,
+            "完整钱包材料满足仅清材料通道，不能替代真实NPC会面");
+        var largeMaterials = materials with { IntData = [3033,int.MaxValue,3034,int.MaxValue,3033,int.MaxValue,1] };
+        That(QuestLifecyclePlan.MissingMaterials(emptyInventory,largeMaterials,0) == 3L*int.MaxValue &&
+            QuestLifecyclePlan.MaterialState(emptyInventory,largeMaterials,0) == 1 &&
+            !QuestLifecyclePlan.ValidSeeking(materials with { IntData = [3033,0,1] }) &&
+            !QuestLifecyclePlan.ValidSeeking(materials with { IntData = [3033,200,0] }),
+            "重复材料及总缺额超过uint仍完整聚合，非法数量和NPC继续拒绝");
         Console.WriteLine($"PASS {Count - checks} 任务资源入口、等级/职业及前置/子任务资格断言");
     }
 

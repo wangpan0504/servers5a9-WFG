@@ -178,6 +178,7 @@ internal static class SkillProtocolTcpTests
                 tree.Skills.Single(skill => skill.Slot == 0).Id == 7 &&
                 tree.Skills.Single(skill => skill.Slot == 1).Id == 1 && tree.Skills.Single(skill => skill.Id == 169).Slot == 2),
                 "新建角色重登从数据库恢复交换后的双树布局");
+            ExitBeforeOfflineGm(peer);
         }
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "level SkillNew 6", out string slotReply) && slotReply.StartsWith("OK "),
             "隔离fixture设置女圣职者学习等级，重登沿正常来源同步");
@@ -205,6 +206,7 @@ internal static class SkillProtocolTcpTests
                 trees[0].Skills.Single(skill => skill.Id == 2) == new LearnedSkill(0, 2, 1) &&
                 trees[0].Skills.Single(skill => skill.Id == 1).Slot == 198 &&
                 trees[1].Skills.All(skill => skill.Id is not (2 or 3)), "重登保留新技能补空位、主动手动扩展位置和独立另一树");
+            ExitBeforeOfflineGm(peer);
         }
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "sp TcpSkill 137", out string bonusReply) && bonusReply.StartsWith("OK "),
             "GM设置额外来源而非覆盖学习余额");
@@ -226,6 +228,7 @@ internal static class SkillProtocolTcpTests
             That(reset[0].Sp == initialSp + 137 && reset[1].Sp == initial[1].Sp &&
                 reset[0].Skills.Single(skill => skill.Id == 5).Slot == 6, "整树重置保留额外来源、另一树和免费技能已有槽位");
             peer.Barrier();
+            ExitBeforeOfflineGm(peer);
         }
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "contract TcpSkill 60", out string contractReply) && contractReply.StartsWith("OK "),
             "账号达人状态由可信来源设置");
@@ -237,6 +240,7 @@ internal static class SkillProtocolTcpTests
                 "契约登录通知包含type2、effect27及64位剩余秒数");
             peer.Send(29, [0, 1, 5, 0, 0, 12, 0]);
             That(SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body).Skills.Single().Level == 13, "TCP达人允许加五等级范围购买");
+            ExitBeforeOfflineGm(peer);
         }
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "contract TcpSkill 0", out string expiredReply) && expiredReply.StartsWith("OK "),
             "隔离fixture设置契约到期");
@@ -297,6 +301,14 @@ internal static class SkillProtocolTcpTests
         }
         await fixture.StopAsync();
         Console.WriteLine("PASS C# TCP 技能：两树扣除、额外SP、降级/重置、达人到期、换槽与重登重启；非Windows验收");
+    }
+
+    // ACK3之后继续等待服务端关闭，确保其会话和owner已清理，再执行下一条离线GM。
+    static void ExitBeforeOfflineGm(TcpPeer peer)
+    {
+        peer.Send(3,[0]);
+        peer.Expect(1,3,[1]);
+        peer.Closed();
     }
 
     private static void CheckDatabase(TcpTestFixture fixture, byte context, ushort sp, byte level, byte slot, ushort id = 5)

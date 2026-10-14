@@ -89,7 +89,7 @@ internal sealed class QuestLifecyclePlan
             "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest) => 1,
             "[question]" when QuestQuestionProgress.TryCount(quest,out _) => QuestQuestionProgress.Unanswered,
             "[seeking]" when quest.SubType == -1 && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
-            "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u + MissingMaterials(expected.Inventory, quest, now.ToUnixTimeSeconds()),
+            "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u | MaterialState(expected.Inventory, quest, now.ToUnixTimeSeconds()),
             "[clear map]" when QuestClearEligibility.IsSingleMap(quest) => 1,
             "[condition under clear]" when QuestDungeonClearProgress.TryTarget(quest,out _) => QuestDungeonClearProgress.Initial(quest),
             "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.Initial(quest),
@@ -111,7 +111,7 @@ internal sealed class QuestLifecyclePlan
             grant.Plan.ChangedEpicPieces.Length != 0)
             throw new NotSupportedException("接取赠品需要尚未确认的持有域投影");
         if (quest.Condition is "[seeking]" or "[seek n meet npc]")
-            initial = quest.Condition == "[seek n meet npc]" ? 512u + MissingMaterials(grant.Plan.After, quest, now.ToUnixTimeSeconds())
+            initial = quest.Condition == "[seek n meet npc]" ? 512u | MaterialState(grant.Plan.After, quest, now.ToUnixTimeSeconds())
                 : HasMaterials(expected with { Inventory = grant.Plan.After }, quest, now.ToUnixTimeSeconds()) ? 0u : 1u;
         byte free = Enumerable.Range(0, 30).Select(at => (byte)at).First(slot => expected.ActiveMainQuests.All(active => active.Slot != slot));
         var activeQuest = new ActiveMainQuest(free, checked((ushort)quest.Id), initial) { AcceptanceId = Guid.NewGuid() };
@@ -245,8 +245,7 @@ internal sealed class QuestLifecyclePlan
         int length = MaterialLength(quest);
         return length > 0 && length % 2 == 0 && quest.IntData.Take(length).Where((_,at) => at % 2 == 0).All(value => value >= 0) &&
             quest.IntData.Take(length).Where((_,at) => at % 2 != 0).All(value => value > 0) &&
-            (quest.Condition != "[seek n meet npc]" || quest.IntData[^1] > 0 &&
-                quest.IntData.Take(length).Where((_, at) => at % 2 != 0).Sum(value => (long)value) <= 511);
+            (quest.Condition != "[seek n meet npc]" || quest.IntData[^1] > 0);
     }
 
     internal static bool HasMaterials(Character character, StoryQuest quest, long utcSeconds)
@@ -254,9 +253,13 @@ internal sealed class QuestLifecyclePlan
         return ValidSeeking(quest) && MissingMaterials(character.Inventory, quest, utcSeconds) == 0;
     }
 
-    internal static uint MissingMaterials(InventorySnapshot inventory, StoryQuest quest, long utcSeconds)
+    // type25材料通道按完整库存谓词归零或恢复1；9位通道宽度不是材料数量上限。
+    internal static uint MaterialState(InventorySnapshot inventory, StoryQuest quest, long utcSeconds) =>
+        MissingMaterials(inventory, quest, utcSeconds) == 0 ? 0u : 1u;
+
+    internal static long MissingMaterials(InventorySnapshot inventory, StoryQuest quest, long utcSeconds)
     {
-        if (!ValidSeeking(quest)) throw new InvalidDataException("寻物目标不是完整物品/数量对或超出9位通道");
+        if (!ValidSeeking(quest)) throw new InvalidDataException("寻物目标不是完整物品/数量对或目标NPC无效");
         var wanted = new Dictionary<int, long>();
         for (int at = 0; at < MaterialLength(quest); at += 2)
             wanted[quest.IntData[at]] = wanted.GetValueOrDefault(quest.IntData[at]) + quest.IntData[at + 1];
@@ -267,6 +270,6 @@ internal sealed class QuestLifecyclePlan
         foreach (int id in wanted.Keys)
             if (CurrencyWallet.RewardKind(id) is { } kind)
                 counts[id] = CurrencyWallet.Get(inventory, kind);
-        return checked((uint)wanted.Sum(pair => Math.Max(0, pair.Value - counts.GetValueOrDefault(pair.Key))));
+        return wanted.Sum(pair => Math.Max(0, pair.Value - counts.GetValueOrDefault(pair.Key)));
     }
 }

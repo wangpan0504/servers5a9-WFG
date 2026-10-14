@@ -650,6 +650,7 @@ internal static class QuestLifecycleTcpTests
         VerifyLayeredBossSettlement(extra,resources,growth);
         VerifyPassiveTerminalSettlement(extra,resources,growth);
         VerifyDungeonNpcMeeting(extra,resources,growth);
+        VerifyLargeResearchMaterials(extra,resources,growth);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
@@ -659,6 +660,59 @@ internal static class QuestLifecycleTcpTests
             That(body[0] == 0 && body.Length == 3+123*U16(body,1),"独立读器确认NOTI14 Main行长度");
             int offset = Enumerable.Range(0,U16(body,1)).Select(at => 3+123*at).Single(at => U16(body,at) == slot);
             That(U32(body,offset+2) == item && U32(body,offset+6) == balance,"NOTI14钱包slot与实际绝对余额一致");
+        }
+    }
+
+    static void VerifyLargeResearchMaterials(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
+    {
+        var done = resources.Towns.AccessQuestIds.Append(3710).Append(3762)
+            .Where(id => id is not (3729 or 3763)).ToHashSet();
+        var area = resources.Towns.Areas.Values.First(row => row.Level <= 81 && row.Map(done).Npcs.Any(npc => npc.Id == 79));
+        var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
+            checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+        Character created;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare("QuestRes",resources.Characters.Get(0),position,position,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,81,candidate.InitialLearning with
+                { Experience = growth.GetLevelStartExperience(81) },resources.Learning);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level = 81,AcceptedStoryLevel = 81,
+                CompletedQuests = done.ToArray(),InitialLearning = learning,ActiveMainQuests = [new(5,3729,1) { AcceptanceId = Guid.NewGuid() }] });
+        }
+        // 同轮隔离账号准备真实钱包；799/800差异经断线重选装载，不绕过在线快照owner。
+        fixture.Sql("INSERT INTO account_wallets(account) VALUES($p0) ON CONFLICT(account) DO NOTHING",fixture.Options.DevelopmentAccount);
+        foreach (var (kind,balance) in new[] { (3,200),(4,200),(5,199),(6,200) })
+            fixture.Sql("INSERT INTO account_currency_balances(account,currency_kind,balance) VALUES($p0,$p1,$p2) " +
+                "ON CONFLICT(account,currency_kind) DO UPDATE SET balance=excluded.balance",fixture.Options.DevelopmentAccount,kind,balance);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared: true,resumeTown: true,room: false);
+            peer.Send(31,[31,0,179,14]); peer.Expect(1,31,[1,179,14,1,2,0,0,0]);
+            peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            string before = fixture.Snapshot();
+            peer.Send(33,[33,0,179,14,0x20,0,0]); peer.Expect(1,33,[0,19,0]); peer.Barrier();
+            That(fixture.Snapshot() == before,"真实3763总材料800仍可接取；缺一晶块不能由NPC报告假完成");
+        }
+        fixture.Sql("UPDATE account_currency_balances SET balance=200 WHERE account=$p0 AND currency_kind=5",fixture.Options.DevelopmentAccount);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared: true,resumeTown: true,room: false); peer.Barrier();
+            peer.Send(33,[33,0,179,14,0x10,0,0]); peer.Expect(1,33,[1,179,14,0,2,0,0]); peer.Barrier();
+            That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3763",created.Id) is [[512L]],
+                "重连后真实10通道按800足额材料归零，NPC仍未完成");
+            peer.Send(33,[33,0,179,14,0x20,0,0]); peer.Expect(1,33,[1,179,14,0,0,0,0]); peer.Barrier();
+            peer.Send(33,[33,0,145,14,0,0]); peer.Expect(1,33,[1,145,14,0,0,0,0]);
+            var delta = peer.Expect(0,14).Body; peer.Barrier();
+            var receipt = fixture.Query("SELECT condition_type,consumed FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3763",created.Id);
+            using var consumed = System.Text.Json.JsonDocument.Parse((string)receipt.Single()[1]);
+            That(U16(delta,1) == 4 && Enumerable.Range(0,4).All(at => U32(delta,3+123*at+6) == 0) &&
+                receipt is [[25L,string]] && consumed.RootElement.GetArrayLength() == 4 &&
+                consumed.RootElement.EnumerateArray().All(row => row.GetProperty("Count").GetInt32() == 200),
+                "原生父33沿完整材料事务消费四个200，NOTI14同步四钱包归零，回执保留四项消耗");
+            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[3729L,0L]] &&
+                fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3763",created.Id) is [[1L]],
+                "终末子归档才推进父归零，父未自动发奖或标完成");
         }
     }
 

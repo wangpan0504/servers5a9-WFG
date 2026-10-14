@@ -109,20 +109,23 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool AllowsDifficulty(byte difficulty, bool story)
     {
         if (difficulty > 4) return false;
+        if (story)
+        {
+            var markers = RawSections.Where(section => section.Tag is "story mode" or "/story mode").ToArray();
+            if (markers.Length != 0)
+            {
+                // 故事块有自己的难度范围；块外普通路线的指定难度和难度表不能覆盖它。
+                if (markers is not [{ Tag: "story mode", Tokens.Count: 0 },{ Tag: "/story mode", Tokens.Count: 0 }])
+                    return false;
+                int start = RawSections.ToList().FindIndex(section => section.Tag == "story mode");
+                var size = RawSections.Skip(start + 1).TakeWhile(section => section.Tag != "/story mode")
+                    .Where(section => section.Tag == "difficulty size").ToArray();
+                return size.Length == 1 && size[0].Tokens is [{ Type: 0, Value: >= 1 and <= 5 }] && difficulty < size[0].Tokens[0].Value;
+            }
+        }
         var designated = RawSections.Where(section => section.Tag == "designate dungeon difficulty").ToArray();
         if (designated.Length > 1 || designated.Length == 1 && (designated[0].Tokens is not [{ Type: 0, Value: >= -1 and <= 4 }] ||
             designated[0].Tokens[0].Value >= 0 && designated[0].Tokens[0].Value != difficulty)) return false;
-        if (story)
-        {
-            int start = RawSections.ToList().FindIndex(section => section.Tag == "story mode");
-            if (start >= 0)
-            {
-                var size = RawSections.Skip(start + 1).TakeWhile(section => section.Tag != "/story mode")
-                    .Where(section => section.Tag == "difficulty size").ToArray();
-                if (size.Length != 1 || size[0].Tokens is not [{ Type: 0, Value: >= 1 and <= 5 }] || difficulty >= size[0].Tokens[0].Value)
-                    return false;
-            }
-        }
         var levels = RawSections.Where(section => section.Tag == "difficulty level").ToArray();
         if (levels.Length == 0) return difficulty == 0;
         // 部分副本重复声明同一难度表；内容相同不构成冲突，未知或不一致声明仍拒绝。

@@ -10,6 +10,40 @@ namespace DfoServer;
 
 internal static class DungeonCatalogTests
 {
+    public static void RunCore()
+    {
+        int checks = Count;
+        var size = new DungeonRawSection("difficulty size",[new(0,1)]);
+        var start = new DungeonRawSection("story mode",[]);
+        var end = new DungeonRawSection("/story mode",[]);
+        var designated = new DungeonRawSection("designate dungeon difficulty",[new(0,2)]);
+        var levels = new DungeonRawSection("difficulty level",[new(0,1),new(0,1),new(0,1),new(0,1),new(0,1)]);
+        var mixed = Definition(start,size,end,designated,levels);
+        That(mixed.AllowsDifficulty(0,true) && !mixed.AllowsDifficulty(1,true) && !mixed.AllowsDifficulty(2,true) &&
+            mixed.AllowsDifficulty(2,false) && !mixed.AllowsDifficulty(0,false),
+            "故事零难度与普通指定二难度各自校验，不能互相覆盖");
+        var storyThree = Definition(start,size with { Tokens = [new(0,3)] },end,designated,
+            levels with { Tokens = [new(0,0),new(0,0),new(0,1),new(0,0),new(0,0)] });
+        That(Enumerable.Range(0,5).All(value => storyThree.AllowsDifficulty((byte)value,true) == (value < 3)) &&
+            storyThree.AllowsDifficulty(2,false) && !storyThree.AllowsDifficulty(byte.MaxValue,true),
+            "故事范围保留全部声明难度，普通难度表和协议上限仍有效");
+        var withoutStory = Definition(designated,levels);
+        That(Enumerable.Range(0,5).All(value => withoutStory.AllowsDifficulty((byte)value,true) == withoutStory.AllowsDifficulty((byte)value,false)),
+            "未声明故事块的任务连接仍沿既有普通难度合同");
+        foreach (var invalid in new[] { Definition(start,size),Definition(end),Definition(end,start,size,end),Definition(start,size,end,start,size,end),
+            Definition(start,size,size,end),Definition(start,end),Definition(start with { Tokens = [new(0,1)] },size,end),
+            Definition(start,size with { Tokens = [new(0,0)] },end),Definition(start,size with { Tokens = [new(0,6)] },end),
+            Definition(start,size with { Tokens = [new(7,1)] },end) })
+            That(!invalid.AllowsDifficulty(0,true),"不完整、重复或未知故事难度不能放行");
+        That(!Definition(designated,designated,levels).AllowsDifficulty(2,false) &&
+            !Definition(designated,levels,levels with { Tokens = [new(0,0),new(0,0),new(0,0),new(0,0),new(0,0)] }).AllowsDifficulty(2,false) &&
+            !Definition(designated).AllowsDifficulty(2,false),
+            "普通重复指定、冲突难度表和缺省难度边界保持原规则");
+        Console.WriteLine($"PASS {Count-checks} 无资源故事与普通难度作用域断言");
+
+        static DungeonDefinition Definition(params DungeonRawSection[] sections) => new(17,"dungeon/difficulty-fixture.dgn",1,1,[],sections);
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;

@@ -78,6 +78,50 @@ internal static class DungeonEntryPlanTests
 
         var definition = catalog.Get(3);
         var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
+        var rooms = DungeonRoomCatalog.Load(pvf);
+        foreach (var scenario in new[] { (Quest:3772,Dungeon:235,Previous:3771), (Quest:3773,Dungeon:227,Previous:3772),
+            (Quest:3774,Dungeon:1005,Previous:3773),
+            (Quest:3776,Dungeon:1007,Previous:3775), (Quest:3777,Dungeon:238,Previous:3776) })
+        {
+            var target = quests.Get(scenario.Quest);
+            var pending = character with { Level = 84, CompletedQuests = [scenario.Previous],
+                ActiveMainQuests = [new(5,checked((ushort)scenario.Quest),1) { AcceptanceId = Guid.NewGuid() }] };
+            var resource = catalog.Get(scenario.Dungeon);
+            var source = resource.Mazes.Single(maze => maze.ConnectsQuest(checked((uint)scenario.Quest)));
+            var sourceMaps = source.MapSpecification ?? throw new InvalidDataException("任务路线缺少显式地图：" + scenario.Quest);
+            var originalBoss = sourceMaps.Single(map => map.Position == source.Bosses.Single());
+            That(originalBoss.Kind == "map" && originalBoss.Id == target.IntData[0],
+                "真实任务Boss坐标的基础map行与清图目标一致：" + scenario.Quest);
+            That(DungeonEntryPlan.TryCreate(catalog,pending,checked((uint)scenario.Dungeon),checked((uint)scenario.Quest),0,
+                out var declared,out var declaredReason,quest: target,quests: quests),
+                "真实任务沿声明的Boss坐标进入原路线：" + scenario.Quest + "/" + declaredReason);
+            That(declared!.BaseBossMap == (originalBoss with { Kind = "boss" }) && declared.BossMap == declared.BaseBossMap &&
+                declared.QuestAcceptanceId == pending.ActiveMainQuests.Single().AcceptanceId &&
+                declared.QuestAcceptances.SequenceEqual(pending.ActiveMainQuests) && sourceMaps.Contains(originalBoss) &&
+                sourceMaps.Single(map => map.Position == originalBoss.Position).Kind == "map" && declared.Maze.StaticTopology.Supported,
+                "Boss投影保留原地图、接取及完整拓扑，不改共享资源：" + scenario.Quest);
+            That(DungeonEntryPlan.TryCreate(catalog,pending,checked((uint)scenario.Dungeon),0,0,out var automaticDeclared,out _,quests: quests) &&
+                automaticDeclared!.BossMap == declared.BossMap && automaticDeclared.RouteQuestId == scenario.Quest &&
+                automaticDeclared.QuestId == 0 && automaticDeclared.QuestAcceptanceId == Guid.Empty,
+                "普通选图的活动任务路线复用相同Boss投影：" + scenario.Quest);
+            var planned = new List<DungeonMonsterPlan>();
+            uint next = 100;
+            foreach (var map in declared.Maze.MapSpecification!)
+            {
+                var room = DungeonMonsterPlan.Create(rooms,map,pending.Id,checked((ushort)next),declared.BasisLevel,declared.PlayerTeam);
+                planned.Add(room);
+                if (room.Monsters.Count > 0 || room.SpecialObjects.Count > 0) next = room.NextObjectKey;
+            }
+            That(planned.Count == declared.Maze.MapSpecification.Count && planned.All(room =>
+                room.Room.Monsters.All(monster => room.Monsters.Any(actor => actor.Source == monster)) &&
+                room.Room.AiCharacters.All(actor => room.Monsters.Any(monster => monster.AiCharacter == actor)) &&
+                room.Room.SpecialObjects.All(sourceObject => room.SpecialObjects.Any(actor => actor.Source == sourceObject))),
+                "真实整条路线保留普通、dummy及友方APC演员：" + scenario.Quest);
+            var route = new DungeonFixedRoute(planned,declared.Maze.StaticTopology.Links!
+                .Select(link => new DungeonRouteConnection(link.First,link.Second)).ToArray());
+            That(SinglePlayerDungeonRun.TryCreate(declared,1,100,route,new NativeDungeonCombatAuthority(),out _,out _),
+                "Boss投影后的全部真实房间可建立原正式Run：" + scenario.Quest);
+        }
         That(DungeonEntryPlan.TryCreate(catalog,character,3,0,0,out var automatic,out _,quests: quests) &&
             automatic!.QuestId == 0 && automatic.RouteQuestId == 3145 && automatic.Maze.SourceOrdinal == 1 && automatic.QuestAcceptanceId == Guid.Empty,
             "普通选图请求优先选择唯一活动任务的资源路线");
@@ -91,6 +135,25 @@ internal static class DungeonEntryPlanTests
         That(catalog.Get(12).AllowsDifficulty(1,false) && !catalog.Get(12).AllowsDifficulty(2,false) &&
             !catalog.Get(12).AllowsDifficulty(1,true) && !catalog.Get(3).AllowsDifficulty(1,false),
             "合法普通难度按difficulty level检查，剧情difficulty size及designate限制仍保留");
+        var heart = character with { Level = 84, CompletedQuests = [3777],
+            ActiveMainQuests = [new(5,3778,1) { AcceptanceId = Guid.NewGuid() }] };
+        var heartQuest = quests.Get(3778);
+        var heartResource = catalog.Get(233);
+        That(heartResource.TryGetDesignatedDifficulty(out var normalHeartDifficulty) && normalHeartDifficulty == 2 &&
+            heartResource.AllowsDifficulty(0,true) && !heartResource.AllowsDifficulty(2,true),
+            "真实安徒恩心脏保留普通指定二难度元数据，故事只接受自身零难度");
+        That(DungeonEntryPlan.TryCreate(catalog,heart,233,3778,0,out var heartPlan,out var heartReason,quest: heartQuest,quests: quests) &&
+            heartPlan is { Difficulty: 0, StartMap.Id: 310064, BossMap.Id: 310065, IsQuestReplay: false } &&
+            heartPlan.QuestAcceptanceId == heart.ActiveMainQuests.Single().AcceptanceId && heartPlan.Maze.StaticTopology.Supported,
+            "真实3778显式请求选择原故事路线及接取：" + heartReason);
+        That(DungeonEntryPlan.TryCreate(catalog,heart,233,0,0,out var autoHeart,out _,quests: quests) &&
+            autoHeart is { Difficulty: 0, RouteQuestId: 3778, StartMap.Id: 310064, BossMap.Id: 310065, QuestId: 0 },
+            "普通0请求的活动3778路线同样使用故事难度");
+        var replayHeart = new DfoServer.Game.Quests.QuestReplayPlan(heart with { ActiveMainQuests = [], CompletedQuests = [3777,3778] },heartQuest,233);
+        That(DungeonEntryPlan.TryCreateReplay(catalog,replayHeart,out var heartReplay,out _) &&
+            heartReplay is { IsQuestReplay: true, Difficulty: 0, QuestId: 0, RouteQuestId: 3778, BossMap.Id: 310065 } &&
+            !DungeonEntryPlan.TryCreate(catalog,heart,233,3778,2,out _,out _,quest: heartQuest,quests: quests),
+            "已完成3778回放保留故事零难度，活动任务不能借普通指定二难度进入");
         var hero = character with { Job = 13, GrowType = 36, Level = 90, ActiveMainQuests = [new(3,3240,1) { AcceptanceId = Guid.NewGuid() }] };
         That(DungeonEntryPlan.TryCreate(catalog,hero,151,3240,0,out var heroPlan,out string heroReason,quest: quests.Get(3240),quests: quests),
             "向暗黑城前进可进入英雄冢：" + heroReason);
@@ -206,6 +269,30 @@ internal static class DungeonEntryPlanTests
         var unlinkedDefinition = definition with { Id = 17, Mazes = [unlinkedMaze] };
         var unlinkedQuest = clearTarget with { IntData = [456], Definition = clearTarget.Definition! with { Dungeons = [new(17,-1)] } };
         var pendingClear = otherCharacter with { ActiveMainQuests = [new(0,100,1)] };
+        var baseMapMaze = otherMaze with { MapSpecification = [fixtureStart,fixtureBoss with { Kind = "map" }] };
+        var baseMapDefinition = definition with { Id = 17, Mazes = [baseMapMaze] };
+        That(DungeonEntryPlan.TryCreate(baseMapDefinition,pendingClear,17,100,0,out var baseMapPlan,out _,quest: unlinkedQuest) &&
+            baseMapPlan!.BaseBossMap == fixtureBoss && baseMapMaze.MapSpecification.Single(map => map.Position == fixtureBoss.Position).Kind == "map",
+            "不同编号的显式清图目标仅投影唯一Boss坐标，不改原始map声明");
+        var sharedStartMaze = baseMapMaze with { Starts = [fixtureBoss.Position] };
+        That(DungeonEntryPlan.TryCreate(baseMapDefinition with { Mazes = [sharedStartMaze] },pendingClear,17,100,0,
+            out var sharedStart,out _,quest: unlinkedQuest) && sharedStart!.StartMap == sharedStart.BaseBossMap &&
+            sharedStart.Maze.MapSpecification!.Contains(sharedStart.StartMap) &&
+            sharedStartMaze.MapSpecification!.Single(map => map.Position == fixtureBoss.Position).Kind == "map",
+            "起点与Boss共图时同步本次投影身份，正式Run可复用迷宫内的起点，原资源仍保持map");
+        var conditionalBoss = fixtureStart with { Position = fixtureBoss.Position, IsConditional = true };
+        var conditionalStart = fixtureBoss with { Position = fixtureStart.Position, Kind = "map", IsConditional = true };
+        var conditionalMaze = baseMapMaze with { BossEntrance = new(0,0,[]),
+            WarpMaps = [new(fixtureBoss.Position,fixtureStart.Position),new(fixtureStart.Position,fixtureBoss.Position)],
+            ConditionalMaps = [conditionalBoss,conditionalStart] };
+        That(DungeonEntryPlan.TryCreate(baseMapDefinition with { Mazes = [conditionalMaze] },pendingClear,17,100,0,
+            out var conditionalPlan,out _,quest: unlinkedQuest) &&
+            conditionalPlan!.Maze.ConditionalMaps.SequenceEqual([conditionalBoss with { Kind = "boss" },conditionalStart]) &&
+            conditionalMaze.ConditionalMaps[0].Kind == "map",
+            "条件传送仅同步Boss来源的投影种类，保留替换图身份、其他来源及共享资源");
+        foreach (var invalid in new[] { unlinkedQuest with { IntData = [fixtureStart.Id] }, parent })
+            That(!DungeonEntryPlan.TryCreate(baseMapDefinition,pendingClear,17,100,0,out _,out _,quest: invalid),
+                "中途目标及父聚合条件不能将基础map升级为Boss");
         That(DungeonEntryPlan.TryCreate(unlinkedDefinition,pendingClear,17,100,0,out var unlinked,out _,quest: unlinkedQuest) &&
             unlinked is { QuestId: 100, RouteQuestId: 100, BossMap.Id: 456 },
             "合成不同任务和地图同样复用明确声明的唯一无连接清图路线，不硬编码转职编号");

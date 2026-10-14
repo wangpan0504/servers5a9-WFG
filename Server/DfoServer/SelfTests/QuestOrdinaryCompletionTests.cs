@@ -229,8 +229,8 @@ internal static class QuestOrdinaryCompletionTests
         var seekMeet = empty with { Condition = "[seek n meet npc]", IntData = [10165055,2,10165055,1,2] };
         using (var f = new Fixture(towns,characters,learning,growth,parameters,items,seekMeet,materialCount: 0,active: []))
         {
-            That(f.Change(100,QuestLifecycleAction.Accept)!.Character.ActiveMainQuests.Single().ConditionState == 515,
-                "寻物会面初值包含真实缺额3和独立NPC通道1");
+            That(f.Change(100,QuestLifecycleAction.Accept)!.Character.ActiveMainQuests.Single().ConditionState == 513,
+                "寻物会面初值分别保存材料不足和独立NPC通道，不以材料缺额作为条件计数");
             var before = f.Read();
             That(f.Change(100,QuestLifecycleAction.Condition,new(0x20,0,0))!.Commit is null && Same(before,f.Read()),
                 "材料不足不能先清会面通道");
@@ -261,6 +261,66 @@ internal static class QuestOrdinaryCompletionTests
             f.Change(100,QuestLifecycleAction.Accept);var before = f.Read();
             That(f.Change(100,QuestLifecycleAction.Condition,new(0x20,0,0))!.Commit is null && Same(before,f.Read()),
                 "不在当前场景的NPC不能由会面通道上报代替");
+        }
+        var research = actualQuestions.Get(3729);
+        var researchMeet = actualQuestions.Get(3762);
+        var researchMaterials = actualQuestions.Get(3763);
+        That(research.IntData.SequenceEqual([3762,3763]) && researchMaterials.IntData.SequenceEqual([3033,200,3034,200,3035,200,3036,200,79]) &&
+            QuestRelationProgress.SequentialParent(research,actualQuestions) && QuestCoverage.HasOrdinaryDeclarations(researchMaterials),
+            "危险的研究真实父子定义保持原顺序、NPC79及全部800晶块材料");
+        // 独立角色只准备城镇准入和已声明前置；目标父子仍从合法接取开始，不触碰现场存档。
+        var researchCompleted = towns.AccessQuestIds.Append(3710).Where(id => id is not (3729 or 3762 or 3763)).Distinct().ToArray();
+        var researchDone = researchCompleted.ToHashSet();
+        var researchArea = towns.Areas.Values.First(area => area.Map(researchDone).Npcs.Any(npc => npc.Id == 79));
+        var researchRegion = researchArea.Map(researchDone).Bounds.First(region => region.Conditions.Length == 0 && region.Quests.All(researchDone.Contains));
+        var researchPosition = new Location(researchArea.Town,researchArea.Area,
+            checked((ushort)(researchRegion.Bounds.X + researchRegion.Bounds.Width/2)),
+            checked((ushort)(researchRegion.Bounds.Y + researchRegion.Bounds.Height/2)));
+        using (var f = new Fixture(towns,characters,learning,growth,parameters,items,researchMaterials,materialCount: 0,active: [],
+            definitions: [research,researchMeet,researchMaterials,actualQuestions.Get(3710)],resumeTown: true,configure: candidate => candidate with
+            {
+                Level = 81, Position = researchPosition, Return = researchPosition, CompletedQuests = researchCompleted,
+                InitialLearning = SkillPointLedger.Synchronize(candidate.Job,candidate.GrowType,81,
+                    candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(81) },learning)
+            }))
+        {
+            That(QuestClientSceneProgress.DialogueNpc(f.Read(),79,researchMaterials,f.Catalog,towns),
+                "危险的研究夹具沿城镇重连入口保留实际NPC79地图");
+            var acceptedResearch = f.Change(3729,QuestLifecycleAction.Accept);
+            That(acceptedResearch?.Commit is not null,"危险的研究真实父任务合法接取：" + acceptedResearch?.Reason);
+            That(f.Change(3763,QuestLifecycleAction.Accept)?.Commit is null,
+                "危险的研究未完成会面子任务不能跳接材料步骤");
+            f.Change(3762,QuestLifecycleAction.Accept);
+            f.Change(3762,QuestLifecycleAction.Condition,new(null,0,0));
+            That(f.Finish(ushort.MaxValue,3762).Receipt is not null &&
+                f.Change(3763,QuestLifecycleAction.Accept)?.Character.ActiveMainQuests.Single(row => row.QuestId == 3763).ConditionState == 513,
+                "真实会面交付后可接800材料子任务，两通道初值513不会被误判为未接取");
+            That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                [new(3033,200),new(3034,200),new(3035,199),new(3036,200)],items.Items,items.GoldLimits,items.EpicPieces)).Accepted,
+                "隔离库按普通奖励入口准备四种真实钱包材料");
+            var insufficient = f.Read();
+            That(f.Change(3763,QuestLifecycleAction.Condition,new(0x20,0,0))?.Commit is null &&
+                f.Finish(ushort.MaxValue,3763).Outcome == QuestFinishOutcome.Rejected && Same(insufficient,f.Read()),
+                "四种晶块缺一件仍拒绝会面完成及交付，不按材料总数或客户端Boolean放行");
+            f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                [new(3035,1)],items.Items,items.GoldLimits,items.EpicPieces));
+            That(f.Read().ActiveMainQuests.Single(row => row.QuestId == 3763).ConditionState == 512 &&
+                f.Change(3763,QuestLifecycleAction.Condition,new(0x20,0,0))?.Commit is not null,
+                "全部800晶块足额先清材料，实际NPC事件才清第二通道");
+            var before = f.Read();
+            f.Sql("CREATE TRIGGER research_abort AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT RAISE(ABORT,'research rollback'); END");
+            TestCheck.Reject<SqliteException>(() => f.Finish(ushort.MaxValue,3763),"真实大材料子任务回执末段失败");
+            That(Same(before,f.Read()) && f.Receipts == 1,"四钱包材料、子完成与父归零同事务回滚");
+            f.Sql("DROP TRIGGER research_abort");
+            var completedResearch = f.Finish(ushort.MaxValue,3763).Receipt!.Commit;
+            That(completedResearch.Consumed.Length == 4 && completedResearch.Consumed.All(row => row.Count == 200) &&
+                completedResearch.Currencies.Length == 0 && completedResearch.Character.ActiveMainQuests is [{ QuestId: 3729, ConditionState: 0 }] &&
+                new[] {3033,3034,3035,3036}.All(id => CurrencyWallet.Get(f.Read().Inventory,CurrencyWallet.RewardKind(id)!.Value) == 0),
+                "真实子交付完整消费四种各200晶块并推进父归零，不截断为511或重复扣除");
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            That(f.Read().ActiveMainQuests is [{ QuestId: 3729, ConditionState: 0 }] &&
+                f.Finish(ushort.MaxValue,3729).Receipt?.Commit.Rewards is [{ Item.Core.ItemId: 10164775, GrantedCount: 1 }],
+                "重登保留大材料子完成及父进度，父只交付真实资源声明的废旧电池");
         }
         var hunt = empty with { Condition = "[hunt enemy]", IntData = [3,-1,1,1,1] };
         using (var f = Make(hunt,materialCount: 0))
@@ -676,7 +736,7 @@ internal static class QuestOrdinaryCompletionTests
         public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, CharacterGrowthCatalog growth,
             QuestRewardParameterCatalog parameters, ItemResources items, StoryQuest quest, int materialCount = 5, bool locked = false,
             bool fullEquipment = false, bool loseResult = false, StoryQuest[]? definitions = null, ActiveMainQuest[]? active = null,
-            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null)
+            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null,bool resumeTown=false)
         {
             this.items = items; this.growth = growth; this.parameters = parameters;
             Catalog = new((definitions ?? [quest]).ToDictionary(row => row.Id));
@@ -696,7 +756,8 @@ internal static class QuestOrdinaryCompletionTests
             }
             Repository.Create(Owner, candidate with { ActiveMainQuests = active ?? [new(0, (ushort)quest.Id, 1)], Inventory = candidate.Inventory with { Items = inventory.ToImmutable() } });
             Lost = loseResult ? new(Repository) : null;
-            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null,questEffects:questEffects); Session.Select(0); Session.MarkReady();
+            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null,questEffects:questEffects);
+            Session.Select(0,resumeTown: resumeTown); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner, 0);
         public QuestCompletionPreparation Prepare(ushort selector, ushort multiplier = 1) => QuestCompletionPlan.Prepare(Read(), Catalog.Get(100), selector,
