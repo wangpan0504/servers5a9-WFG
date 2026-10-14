@@ -91,6 +91,57 @@ internal static class DungeonRoomCatalogTests
             "可变标记保留中间dummy与末尾品级，不吞掉下一行，也不暴露可写集合");
         TestCheck.Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(flagged,1,100),
             "未确认的dummy标记不能因资源解析成功而生成普通怪物");
+        var npcValues = new[] { 62531, 1, 0, 912, 394, 0, 1, 1 };
+        var npcPrefix = fixture.Monster(npcValues)[1..^2];
+        var npcMarker = fixture.String("[NPC]");
+        var dummyMarker = fixture.String("[dummy]");
+        var displayMarker = fixture.String("[displayhuntdummy]");
+        var bossMarker = fixture.String("[boss]");
+        var npcMonsterTokens = fixture.Block("monster", [.. npcPrefix, npcMarker, new(0,0), dummyMarker, bossMarker, .. row]);
+        var npcMonsters = fixture.Parse([.. npcMonsterTokens, .. npcTokens]);
+        That(npcMonsters.Monsters is [{ MonsterId: 62531, NpcParameter: 0, RankKind: "[boss]", Modifiers: ["[NPC]", "[dummy]"] },
+                { MonsterId: 1, NpcParameter: null, RankKind: "[normal]", Modifiers.Count: 0 }] &&
+            npcMonsters.Monsters[0].RawValues.SequenceEqual(npcValues) && npcMonsters.Npcs.Select(npc => npc.Id).SequenceEqual([1000,1298]),
+            "真实NPC0/dummy/Boss原行保留八整数与参数，下一普通怪和独立地图NPC节不混淆");
+        npcMonsterTokens[npcPrefix.Length + 2] = new(0,9);
+        That(npcMonsters.Monsters[0].NpcParameter == 0 && npcMonsters.Monsters[0].Modifiers is IList npcModifiers && npcModifiers.IsReadOnly,
+            "原NPC参数及修饰独立于输入修改，缺省不会被补成0");
+        TestCheck.Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(npcMonsters,1,100,62),
+            "NPC参数解析恢复不授予普通演员生成、战斗或奖励资格");
+        foreach (int parameter in new[] { -1, int.MinValue, int.MaxValue })
+            That(fixture.Parse(fixture.Block("monster", [.. npcPrefix, npcMarker, new(0,parameter), bossMarker])).Monsters[0].NpcParameter == parameter,
+                "NPC原整数保留显式负值及边界，不猜编号范围或布尔含义");
+        var display = fixture.Parse(fixture.Block("monster", [.. npcPrefix, npcMarker, new(0,0), dummyMarker, displayMarker, bossMarker, .. row]));
+        That(display.Monsters[0].Modifiers.SequenceEqual(["[NPC]", "[dummy]", "[displayhuntdummy]"]) && display.Monsters[1].NpcParameter is null,
+            "NPC后的dummy与displayhuntdummy按原顺序保留，不吞下一行");
+        That(fixture.Parse(fixture.Block("monster", [.. npcPrefix, npcMarker, new(0,0), displayMarker, bossMarker])).Monsters[0].Modifiers
+            .SequenceEqual(["[NPC]", "[displayhuntdummy]"]), "独立displayhuntdummy声明不补造dummy标记");
+        var npcChampion = fixture.Parse(fixture.Block("monster", [.. npcPrefix, npcMarker, new(0,0), fixture.String("[champion]"), new(0,0), .. row]));
+        That(npcChampion.Monsters is [{ NpcParameter: 0, RankParameterCount: 0 }, { NpcParameter: null, RankKind: "[normal]" }],
+            "NPC参数和冠军空附加数量分别消费，保留相邻普通行");
+        var unknownMarker = fixture.String("[future modifier]");
+        var existingOpaque = fixture.Parse(fixture.Block("monster", [.. row[..^1], unknownMarker, row[^1], .. row]));
+        That(existingOpaque.Monsters[0].Modifiers.SequenceEqual(["[future modifier]"]) && existingOpaque.Monsters[1].Modifiers.Count == 0,
+            "无NPC行保留既有不透明修饰和相邻行，不以新顺序规则收窄旧解析");
+        TestCheck.Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(existingOpaque,1,100),
+            "既有不透明修饰仍不能借结构保留生成普通怪物");
+        var invalidNpcRows = new (string Name, PvfToken[] Tokens)[]
+        {
+            ("缺NPC整数", [.. npcPrefix, npcMarker, bossMarker]),
+            ("NPC后整行截断", [.. npcPrefix, npcMarker]),
+            ("NPC参数不是整数", [.. npcPrefix, npcMarker, new(4,0), bossMarker]),
+            ("多余NPC整数", [.. npcPrefix, npcMarker, new(0,0), new(0,7), bossMarker]),
+            ("重复NPC及参数", [.. npcPrefix, npcMarker, new(0,0), npcMarker, new(0,0), bossMarker]),
+            ("NPC标记顺序错误", [.. npcPrefix, dummyMarker, npcMarker, new(0,0), bossMarker]),
+            ("NPC后未知修饰", [.. npcPrefix, npcMarker, new(0,0), unknownMarker, bossMarker]),
+            ("NPC后重复dummy", [.. npcPrefix, npcMarker, new(0,0), dummyMarker, dummyMarker, bossMarker]),
+            ("NPC后display与dummy错序", [.. npcPrefix, npcMarker, new(0,0), displayMarker, dummyMarker, bossMarker]),
+            ("缺NPC整数不能吞下一怪物ID", [.. npcPrefix, npcMarker, .. row]),
+            ("缺NPC后品级不能吞下一普通行", [.. npcPrefix, npcMarker, new(0,0), .. row]),
+            ("NPC冠军缺效果数量", [.. npcPrefix, npcMarker, new(0,0), fixture.String("[champion]"), .. row])
+        };
+        foreach (var invalid in invalidNpcRows)
+            Reject(fixture.Block("monster", invalid.Tokens), invalid.Name);
         var elite = fixture.Parse(fixture.Block("monster",[.. row[..^1],fixture.String("[champion]"),new(0,0),.. row]));
         That(elite.Monsters is [{ RankKind: "[champion]" },{ MonsterId: 1, RankKind: "[normal]" }] &&
             DungeonMonsterPlan.FromRoom(elite,1,100).Monsters is [{ SpawnType: 1 },{ SpawnType: 0 }],
@@ -131,6 +182,22 @@ internal static class DungeonRoomCatalogTests
             story.Monsters[0].RawValues.SequenceEqual([107000909,1,0,855,233,0,1,1]),
             "Lv8真实76155保留完整八整数及fixed/dummy/boss声明");
         Reject(() => DungeonMonsterPlan.FromRoom(story,1,100), "76155未知dummy/相对等级生成规则仍拒绝，不能补普通Boss冒充剧情");
+        var mermanDungeon = dungeons.Get(162);
+        var mermanMap = mermanDungeon.Mazes.Single(candidate => candidate.QuestConnectionTokens.SequenceEqual(
+            [new PvfToken(0,0),new(0,3487),new(0,-1)])).MapSpecification!.Single(map => map.Id == 91548);
+        var merman = catalog.Get(mermanMap,requirePassiveDefinitions: false);
+        int[][] mermanRows = [[62531,1,0,912,394,0,1,1], [69022,1,0,662,316,0,1,1],
+            [69022,1,0,663,392,0,1,1], [65314,1,0,532,318,0,1,1], [65314,1,0,511,430,0,1,1]];
+        That(merman.Monsters.Count == 5 && merman.Monsters.Select((monster,index) => monster.RawValues.SequenceEqual(mermanRows[index])).All(value => value) &&
+            merman.Monsters[0] is { MonsterId: 62531, NpcParameter: 0, PlacementKind: "[fixed]", RankKind: "[boss]", Modifiers: ["[NPC]", "[dummy]"] } &&
+            merman.Monsters.Skip(1).All(monster => monster.NpcParameter is null && monster.PlacementKind == "[fixed]" &&
+                monster.RankKind == "[normal]" && monster.Modifiers.Count == 0),
+            "Q3487真实91548保留完整五怪原序、首NPC0/dummy/Boss及后续四行，不吞参数或下一怪物");
+        That(merman.AiCharacters is [{ Id: 55430, Faction: "[character]", RankKind: "[normal]" }] &&
+            merman.NpcMetadataError is null && merman.Npcs is [{ Id: 1000 }],
+            "91548真实APC55430与独立地图NPC1000分别保留，不被monster内NPC参数替代");
+        Reject(() => DungeonMonsterPlan.FromRoom(merman,1,100,mermanDungeon.BasisLevel),
+            "91548真实NPC参数行解析成功仍拒绝未闭合生成资格，不冒充普通Boss或战斗死亡");
         That(room.Map.Id == 76121 && room.Map.Path == "map/cataclysm/granflores/01_mirkwood/3145_76121.map",
             "room resolves the matching task first-map path");
         int[][] expected = [[1, 0, 3, 573, 197, 0, 1, 1], [1, 0, 3, 557, 280, 0, 1, 1],
@@ -234,7 +301,7 @@ internal static class DungeonRoomCatalogTests
             Block("monster", [.. (values ?? [1, 0, 3, 573, 197, 0, 1, 1]).Select(value => new PvfToken(0, value)), String(placement), String(rank)]);
         public DungeonRoomDefinition Parse(PvfToken[] tokens, bool exists = true, bool requirePassiveDefinitions = true) => DungeonRoomCatalog.ParseResource(
             new("map", new(0, 0), 1, "map/fixture.map"), tokens, id => strings[id],
-            new Dictionary<int, string> { [1] = "monster/fixture.mob" },
+            new Dictionary<int, string> { [1] = "monster/fixture.mob", [62531] = "monster/merman-king-fixture.mob" },
             new Dictionary<int, string> { [3] = "passiveobject/fixture.obj" }, _ => exists,requirePassiveDefinitions);
     }
 }

@@ -7,6 +7,8 @@ internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawV
 {
     public int? Team { get; init; }
     public bool ScriptedRetirement { get; init; }
+    // monster 内 [NPC] 的原整数；缺省与显式0/-1不同，不将它猜为NPC编号或生成资格。
+    public int? NpcParameter { get; init; }
     // 冠军/命名品级的附加数量独立于八整数；当前只恢复空附加集合，不截断未知正数量。
     public IReadOnlyList<string> Modifiers { get; init; } = Array.Empty<string>();
     public int? RankParameterCount { get; init; }
@@ -159,12 +161,35 @@ internal sealed class DungeonRoomCatalog
                 var values = Integers(monsterTokens.Skip(at).Take(8));
                 at += 8;
                 var labels = new List<string>();
+                int? npcParameter = null;
                 while (at < monsterTokens.Count && monsterTokens[at].Type == 6)
-                    labels.Add(resolve(monsterTokens[at++].Value));
+                {
+                    string label = resolve(monsterTokens[at++].Value);
+                    if (label == "[NPC]")
+                    {
+                        // Full03 0425D145/152在placement之后消费一个原整数，随后才读dummy及品级。
+                        if (labels.Count != 1)
+                            throw new NotSupportedException("unsupported: 房间 monster 的 NPC 标记重复或顺序无效");
+                        if (at >= monsterTokens.Count || monsterTokens[at].Type != 0)
+                            throw new NotSupportedException("unsupported: 房间 monster 的 NPC 参数不是完整整数");
+                        npcParameter = monsterTokens[at++].Value;
+                    }
+                    labels.Add(label);
+                }
                 if (labels.Count < 2)
                     throw new NotSupportedException("unsupported: 房间 monster 标记不是字符串");
                 if (labels.Any(label => label.Length == 0))
                     throw new NotSupportedException("unsupported: 房间 monster 标记为空");
+                if (npcParameter is not null)
+                {
+                    int rankAt = 2;
+                    if (rankAt < labels.Count && labels[rankAt] == "[dummy]")
+                        rankAt++;
+                    if (rankAt < labels.Count && labels[rankAt] == "[displayhuntdummy]")
+                        rankAt++;
+                    if (rankAt != labels.Count - 1 || labels[rankAt] is not ("[normal]" or "[champion]" or "[super champion]" or "[boss]"))
+                        throw new NotSupportedException("unsupported: 房间 monster 的 NPC 后续修饰顺序或品级尚未解析");
+                }
                 if (labels[^1] is "[champion]" or "[super champion]")
                 {
                     // Full03 0425D1F9/0425D23E在品级后读附加效果数量；0不带效果，不能当下一怪物ID。
@@ -175,8 +200,9 @@ internal sealed class DungeonRoomCatalog
                 string path = Resolve(values[0], monsterPaths, "monster");
                 monsterRows.Add(new(values[0], values, labels[0], labels[^1], path)
                 {
-                    // 76155真实行含[fixed] [dummy] [boss]；保留中间标记，生成层逐项确认后启用。
+                    // 保留NPC/dummy原标记；结构恢复不授予普通生成、死亡、奖励或会面资格。
                     Modifiers = Freeze(labels.Skip(1).Take(labels.Count - 2)),
+                    NpcParameter = npcParameter,
                     RankParameterCount = labels[^1] is "[champion]" or "[super champion]" ? 0 : null
                 });
             }
