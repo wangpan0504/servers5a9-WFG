@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Persistence;
@@ -11,15 +12,16 @@ namespace DfoServer.Testing;
 // 只验证真实外传接取，不代表目标剧情、交付或客户端界面通过。
 internal static class DefaultSideQuestTcpTests
 {
-    internal static void Verify(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
+    internal static Action Verify(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
         Action<TcpPeer, Action<WirePacket>?> drain)
     {
         int checks = Count;
+        var diagnostics = new List<(ushort Character, ushort Quest, long Revision, byte Level, byte Job, int Active, string Reason, bool Accepted)>();
         (ushort Id, byte Level, byte Job, uint Scalar, string Suffix, bool Allowed)[] cases =
         [
             (13601,25,0,1,"P",true), (62,60,0,1,"P",true), (649,60,0,1,"P",true),
             (6924,74,15,0,"P",true), (6404,95,0,1,"P",true), (2905,90,0,0,"P",true),
-            (13601,24,0,1,"L",false), (6924,74,0,0,"J",false)
+            (13601,24,0,1,"L",false), (6924,74,0,0,"J",false), (649,60,0,1,"R",false), (8681,90,0,1,"D",false)
         ];
         foreach (var scenario in cases)
         {
@@ -34,7 +36,7 @@ internal static class DefaultSideQuestTcpTests
                 (prerequisite.Length == 0 || definition.PrerequisiteGroups[0].SequenceEqual(prerequisite)),
                 "保持原任务前置，不把relation quest当完成记录：" + scenario.Id);
             // 3145只用于隔离角色已结束开场的城镇/356恢复准备；不写本条活动槽、条件或完成位。
-            var done = prerequisite.Append(3145).Distinct().ToArray();
+            var done = (scenario.Suffix == "R" ? [] : prerequisite).Append(3145).Distinct().ToArray();
             That(!done.Contains(scenario.Id), "准备不完成目标外传");
             string account = ("side127-" + scenario.Id + "-" + scenario.Suffix).ToLowerInvariant();
             string name = "Side" + scenario.Id + scenario.Suffix;
@@ -58,7 +60,7 @@ internal static class DefaultSideQuestTcpTests
             using (var peer = Open(fixture, account))
             {
                 var packets = Select(peer, created);
-                That(QuestLifecycleTcpTests.List(peer.AvailableQuests, scenario.Level).Contains(scenario.Id) == scenario.Allowed,
+                That(QuestLifecycleTcpTests.List(peer.AvailableQuests, scenario.Level).Contains(scenario.Id) == (scenario.Allowed || scenario.Id == 8681),
                     "实际登录21按原等级、职业与前置筛选真实外传：" + scenario.Id + scenario.Suffix);
                 ActiveProjection(packets, scenario.Id, null);
                 string before = State(created.Id);
@@ -66,7 +68,9 @@ internal static class DefaultSideQuestTcpTests
                 if (!scenario.Allowed)
                 {
                     peer.Expect(1, 31, [0, 18, 0]); peer.Barrier();
-                    That(State(created.Id) == before, "低一级/错误职业31拒绝且没有持久化：" + scenario.Id + scenario.Suffix);
+                    That(State(created.Id) == before, "等级/职业/前置/未确认声明31拒绝且没有持久化：" + scenario.Id + scenario.Suffix);
+                    Record(false, scenario.Id switch { 13601 => "等级不符", 6924 => "职业不符", 649 => "前置组未达成",
+                        _ => "任务声明尚未确认: searching information" });
                 }
                 else
                 {
@@ -92,12 +96,14 @@ internal static class DefaultSideQuestTcpTests
                             is [[long receiptQuest, string receiptId]] && receiptQuest == scenario.Id && receiptId == identity,
                         "活动槽和唯一持久接取回执使用同一非空AcceptanceId：" + scenario.Id);
                     NoCompletion(created.Id, scenario.Id);
+                    Record(true, "任务事务已提交");
                     if (scenario.Id == 13601)
                     {
                         string accepted = State(created.Id);
                         peer.Send(31, [31, 0, (byte)scenario.Id, (byte)(scenario.Id >> 8)]);
                         peer.Expect(1, 31, [0, 18, 0]); peer.Barrier();
                         That(State(created.Id) == accepted, "重复真实31不新建身份、回执或revision");
+                        Record(false, "已完成或已接取");
                     }
                 }
                 persisted = Progress(created.Id);
@@ -106,7 +112,7 @@ internal static class DefaultSideQuestTcpTests
             using (var peer = Open(fixture, account))
             {
                 var packets = Select(peer, created);
-                That(QuestLifecycleTcpTests.List(peer.AvailableQuests, scenario.Level).Contains(scenario.Id) == scenario.Allowed,
+                That(QuestLifecycleTcpTests.List(peer.AvailableQuests, scenario.Level).Contains(scenario.Id) == (scenario.Allowed || scenario.Id == 8681),
                     "实际重连21恢复本角色外传候选：" + scenario.Id + scenario.Suffix);
                 ActiveProjection(packets, scenario.Id, scenario.Allowed ? scenario.Scalar : null);
                 That(Progress(created.Id) == persisted, "重连不新增接取回执、条件或完成位：" + scenario.Id + scenario.Suffix);
@@ -116,8 +122,34 @@ internal static class DefaultSideQuestTcpTests
                 NoCompletion(created.Id, scenario.Id);
                 Cleanup(peer, created, account);
             }
+            void Record(bool accepted, string reason) => diagnostics.Add((created.Id, scenario.Id,
+                (long)fixture.Query("SELECT revision FROM characters WHERE id=$p0", created.Id)[0][0], scenario.Level, scenario.Job,
+                checked((int)(long)fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", created.Id)[0][0]),
+                reason, accepted));
         }
         Console.WriteLine($"PASS {Count-checks} 六条真实外传21/31持久接取与断线恢复（非目标通关或客户端验收）");
+        // 共享热服务正常停止后再读一次日志，避免等待刷盘或另启服务验证诊断。
+        return () =>
+        {
+            var events = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "quest_lifecycle")
+                .Select(row => row.GetProperty("Detail"))
+                // 通讯装置复用同名事件，但使用Action=image_communication；这里只核真实31的action=Accept。
+                .Where(row => row.TryGetProperty("action", out var action) && action.GetInt32() == 0).ToArray();
+            foreach (var expected in diagnostics)
+            {
+                var matches = events.Where(row => row.GetProperty("CharacterId").GetInt32() == expected.Character &&
+                    row.GetProperty("questId").GetInt32() == expected.Quest && row.GetProperty("Level").GetInt32() == expected.Level &&
+                    row.GetProperty("Job").GetInt32() == expected.Job && row.GetProperty("Reason").GetString() == expected.Reason).ToArray();
+                That(matches.Length == 1, "实际31只记录一次对应角色和具体拒绝/提交原因：" + expected.Quest + expected.Reason);
+                var detail = matches.Single();
+                That(detail.GetProperty("Revision").GetInt64() == expected.Revision && detail.GetProperty("ActiveQuestCount").GetInt32() == expected.Active &&
+                    detail.GetProperty("Phase").GetInt32() == (int)SessionPhase.Town && detail.GetProperty("GrowType").GetInt32() == 0 &&
+                    detail.GetProperty("Connection").GetInt32() > 0 && detail.GetProperty("action").GetInt32() == 0 &&
+                    detail.GetProperty("Accepted").GetBoolean() == expected.Accepted &&
+                    detail.GetProperty("Outcome").GetInt32() == (expected.Accepted ? 1 : 0),
+                    "实际31诊断绑定业务回执快照，不将拒绝写成提交或发送成功：" + expected.Quest);
+            }
+        };
 
         WirePacket[] Select(TcpPeer peer, Character role) => peer.Select(RoleIndex(peer.Roster, role), prepared: true,
             resumeTown: true, room: resources.Towns.IsRoom(role.Position, doneFor(role.Id)));

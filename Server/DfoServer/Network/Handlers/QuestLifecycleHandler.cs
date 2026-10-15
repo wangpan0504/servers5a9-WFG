@@ -28,7 +28,13 @@ internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog ite
         if (receipt is null) return CommandResult.Unhandled;
         bool Guard() => context.Session.CanPublishQuestLifecycle(receipt);
         var opcode = action == QuestLifecycleAction.Accept ? CmdPacketType.ACCEPT_QUEST : CmdPacketType.GIVEUP_QUEST;
-        log.Write("quest_lifecycle", new { Connection = context.Id, questId, action, receipt.Reason, receipt.Commit?.Duplicate });
+        log.Write("quest_lifecycle", new
+        {
+            Connection = context.Id, questId, action, receipt.Outcome, receipt.Reason, receipt.Commit?.Duplicate,
+            Accepted = receipt.Outcome != QuestLifecycleOutcome.Rejected, receipt.Phase,
+            CharacterId = receipt.Character.Id, receipt.Character.Revision, receipt.Character.Level,
+            receipt.Character.Job, receipt.Character.GrowType, ActiveQuestCount = receipt.Character.ActiveMainQuests.Length
+        });
         if (receipt.Commit is not { } commit)
         {
             if (action == QuestLifecycleAction.Giveup && receipt.Outcome == QuestLifecycleOutcome.Unchanged)

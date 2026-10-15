@@ -106,7 +106,7 @@ internal sealed class QuestLifecyclePlan
         var eligibility = QuestEligibility.Evaluate(expected, quest, catalog);
         if (!eligibility.Eligible || !eligibility.Visible && !QuestRelationProgress.DialogueChild(quest, catalog) &&
             !QuestRelationProgress.ThresholdParent(quest,catalog) && !QuestHiddenEntry.Direct(quest,catalog))
-            throw new InvalidDataException("任务当前不可从普通接取入口接取");
+            throw new InvalidDataException(eligibility.Reason);
         QuestCoverage.RequireOrdinaryDeclarations(quest);
         if (QuestCycle.Daily(quest) && expected.QuestCycleDay != QuestCycle.Day(now))
             throw new InvalidDataException("每日任务需要当前游戏日快照");

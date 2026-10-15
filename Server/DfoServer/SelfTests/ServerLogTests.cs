@@ -40,6 +40,10 @@ internal static class ServerLogTests
                 log.Write("character_deleted", new { Connection = 1, RosterIndex = 1, Character = 7, Slot = 2, Revision = 3, SelectionEpoch = 4 });
                 log.Write("character_delete_rejected", new { Connection = 1, RosterIndex = 31, Reason = "index-absent" });
                 log.Write("quest_completion", new { Connection = 1, Quest = 3156, Accepted = false, Failure = "ResourceUnsupported" });
+                log.Write("quest_lifecycle", new { Connection = 1, questId = 13601, action = 0, Outcome = 0,
+                    Reason = "level-mismatch", Accepted = false, Phase = 1, CharacterId = 7, Revision = 3, Level = 24, Job = 0, GrowType = 0, ActiveQuestCount = 0 });
+                log.Write("quest_lifecycle", new { Connection = 1, questId = 13601, action = 0, Outcome = 1,
+                    Reason = "committed", Accepted = true, Phase = 1, CharacterId = 7, Revision = 4, Level = 25, Job = 0, GrowType = 0, ActiveQuestCount = 1 });
                 log.Write("consumable_use", new { Connection = 1, Item = 1108, Slot = 65, Accepted = true, Reason = "committed", SourceUid = 7 });
                 log.Write("consumable_use", new { Connection = 1, Item = 1108, Slot = 65, Accepted = false, Reason = "cooldown" });
                 log.Write("random_option_change", new { Connection = 1, Slot = 13, OptionIndex = 1, Accepted = true, Result = "committed", Revision = 2 });
@@ -62,6 +66,10 @@ internal static class ServerLogTests
                 TestCheck.That(text.Contains("[WARN] [quest_completion] Quest completion") &&
                     text.Contains("Quest=3156 Accepted=False Failure=ResourceUnsupported"),
                     "任务拒绝日志标为WARN并记录编号和结构化分类，不输出任意资源正文");
+                TestCheck.That(text.Contains("[WARN] [quest_lifecycle] Quest update") && text.Contains("[INFO] [quest_lifecycle] Quest update") &&
+                    text.Contains("Outcome=0 Reason=level-mismatch Accepted=False Phase=1 CharacterId=7 Revision=3 Level=24 Job=0 GrowType=0 ActiveQuestCount=0") &&
+                    text.Contains("Outcome=1 Reason=committed Accepted=True Phase=1 CharacterId=7 Revision=4 Level=25 Job=0 GrowType=0 ActiveQuestCount=1"),
+                    "接取业务回执沿统一英文纯文本区分拒绝WARN与提交INFO，保留最小资格快照");
                 TestCheck.That(text.Contains("[INFO] [consumable_use] Consumable use") && text.Contains("[WARN] [consumable_use] Consumable use") &&
                     text.Contains("Item=1108 Slot=65") && text.Contains("Reason=cooldown"),
                     "道具使用日志以实际接受/拒绝标INFO/WARN并保留源身份和英文原因");
@@ -101,7 +109,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 92,
+            TestCheck.That(fileLines.Length == 94,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&

@@ -678,12 +678,13 @@ internal static class QuestLifecycleTcpTests
         QuestRoomClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
         QuestBilmarkEntryTcpTests.Verify(extra,resources,growth,DrainNotifications);
         QuestCollaboratorTcpTests.Verify(extra,resources,growth,DrainNotifications);
-        DefaultSideQuestTcpTests.Verify(extra,resources,growth,DrainNotifications);
+        var verifySideDiagnostics = DefaultSideQuestTcpTests.Verify(extra,resources,growth,DrainNotifications);
         ForestChildAcceptanceTcpTests.Verify(extra,resources,growth,DrainNotifications);
         MiddleQuestEntryTcpTests.Verify(extra,resources,growth);
         QuestCounterattackEntryTcpTests.Verify(extra,resources,growth,DrainNotifications);
         MetroQuestEntryTcpTests.Verify(extra,resources,growth,DrainNotifications);
         await extra.StopAsync();
+        verifySideDiagnostics();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
 
