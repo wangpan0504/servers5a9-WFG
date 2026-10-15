@@ -24,7 +24,7 @@ namespace DfoServer;
 
 internal static class QuestOrdinaryCompletionTests
 {
-    public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items)
+    public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items, QuestCatalog quests)
     {
         int checks = Count;
         var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf, learning);
@@ -50,6 +50,18 @@ internal static class QuestOrdinaryCompletionTests
             coverage.Quests.Single(row => row.Id == 101).ImplementedPath &&
             coverage.Quests.Where(row => row.Id is 102 or 103).All(row => !row.ImplementedPath) &&
             coverage.PrerequisiteCycles is [{ Length: 2 }], "覆盖清单支持已确认钱包材料，区分缺失模板、隐藏入口与前置循环");
+        var rental = quests.Get(8581);
+        var rentalCoverage = QuestCoverage.Scan(new(new[] { rental }.ToDictionary(row => row.Id)), items.Items, items.EpicPieces, parameters);
+        That(rentalCoverage.Quests.Single().ImplementedPath,
+            "真实8581的已支持租赁合同不被通用subtype0诊断误报");
+        foreach (var unsupportedRental in new[] { rental with { Id = 8582 }, rental with { IntData = [1,0,2] },
+            rental with { Definition = rental.Definition! with { AccountQuest = false } } })
+        {
+            var unsupportedCoverage = QuestCoverage.Scan(new(new[] { unsupportedRental }.ToDictionary(row => row.Id)),
+                items.Items, items.EpicPieces, parameters).Quests.Single();
+            That(!unsupportedCoverage.ImplementedPath && unsupportedCoverage.Restrictions.Contains("目标子类型尚未接入"),
+                "相邻任务、未知租赁事件和非账号custom仍保留未实现子类型诊断");
+        }
         using (var f = Make(seeking))
         {
             var before = f.Read();

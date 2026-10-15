@@ -213,7 +213,8 @@ internal static class QuestCoverage
                 bool range = QuestClientSceneProgress.TownRange(quest);
                 bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
                 bool state = QuestStateProgress.Type(quest) is not null;
-                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state) reasons.Add("目标子类型尚未接入");
+                bool rental = QuestRentalProgress.Supports(quest);
+                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental) reasons.Add("目标子类型尚未接入");
                 if (quest.MainQuest is not null && !QuestRelationProgress.DialogueChild(quest,catalog))
                     reasons.Add("隐藏子任务的实际对话及交付入口未接入");
                 bool target = HasSupportedTarget(quest,catalog);

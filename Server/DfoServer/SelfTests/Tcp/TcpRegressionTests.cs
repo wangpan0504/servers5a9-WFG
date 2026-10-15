@@ -66,6 +66,7 @@ internal static class TcpRegressionTests
             QuestCinematicSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             QuestSceneTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             MiddleQuestEntryTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            MetroQuestEntryCoverageTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             HarlemQuestEntryTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             await DungeonStoryEventPublicationTests.RunAsync(resources.Towns,resources.Archive,
                 resources.Characters,resources.ItemResources,resources.Learning);
@@ -75,7 +76,7 @@ internal static class TcpRegressionTests
             ImageCommunicationTests.RunResources(resources.Towns, resources.Archive, resources.Characters,
                 resources.ItemResources, resources.Quests, resources.Learning);
             QuestLifecycleTests.Run(resources.Towns, resources.ItemResources);
-            QuestOrdinaryCompletionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            QuestOrdinaryCompletionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests);
             QuestCascadeCompletionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             QuestCharacterRewardTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             QuestTpRewardTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);

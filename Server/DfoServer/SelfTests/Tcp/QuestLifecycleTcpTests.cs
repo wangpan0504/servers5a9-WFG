@@ -648,6 +648,7 @@ internal static class QuestLifecycleTcpTests
         VerifySequentialParent(extra,resources,growth);
         VerifyNonBossSettlement(extra,resources,growth);
         VerifyMutationEntry(extra,resources,growth);
+        QuestMutationClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
         VerifyLayeredBossSettlement(extra,resources,growth);
         VerifyPassiveTerminalSettlement(extra,resources,growth);
         VerifyDungeonNpcMeeting(extra,resources,growth);
@@ -661,6 +662,7 @@ internal static class QuestLifecycleTcpTests
         QuestBilmarkEntryTcpTests.Verify(extra,resources,growth,DrainNotifications);
         ForestChildAcceptanceTcpTests.Verify(extra,resources,growth,DrainNotifications);
         MiddleQuestEntryTcpTests.Verify(extra,resources,growth);
+        MetroQuestEntryTcpTests.Verify(extra,resources,growth,DrainNotifications);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
             f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");

@@ -217,13 +217,14 @@ internal static class SelfTestRunner
         QuestCatalogTests.Run(pvf);
         QuestLifecycleTests.Run(towns, itemResources);
         ImageCommunicationTests.RunResources(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
-        QuestOrdinaryCompletionTests.Run(towns, pvf, characters, itemResources);
+        QuestOrdinaryCompletionTests.Run(towns, pvf, characters, itemResources, sharedQuests);
         QuestStateProgressTests.Run(towns,pvf,characters,itemResources);
         QuestDungeonClearProgressTests.Run(towns,pvf,characters,itemResources);
         QuestConnectionCatalogTests.Run(pvf);
         QuestCharacterRewardTests.Run(towns,pvf,characters,itemResources);
         QuestSceneTests.Run(towns, pvf, characters, itemResources,sharedQuests,sharedSkills);
         MiddleQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestScriptedSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         FriendlyAiCharacterDeathTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
