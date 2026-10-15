@@ -56,6 +56,33 @@ internal static class QuestCharacterRewardTests
         That(QuestEligibility.InspectResource(Field("exception filter",[new(6,0,"future")])) is
             { Entry: QuestResourceEntry.Dedicated, Reason: "exception filter需要已确认的单字符串character声明" },
             "未确认filter保留专用入口与字段限制");
+        var searching = new QuestField("searching information",[new(0,0,null)],[]);
+        var noAuto = new QuestField("attribute",[new(6,0,"not check auto clear")],[]);
+        var explicitMeet = QuestEligibilityTests.Quest(101) with
+        {
+            Attributes = ["not check auto clear"], Definition = new([searching,noAuto]) { Job = "[all]" }
+        };
+        That(QuestCoverage.HasOrdinaryDeclarations(explicitMeet) && QuestCoverage.Unconfirmed(explicitMeet).IsEmpty,
+            "显式NPC会面保留searching0与禁止自动检查的精确声明");
+        foreach (var invalid in new[]
+        {
+            explicitMeet with { Condition = "[play only]" }, explicitMeet with { SubType = 1 },
+            explicitMeet with { IntData = [0] }, explicitMeet with { IntData = [1,2] },
+            explicitMeet with { Attributes = [] }, explicitMeet with { Attributes = ["not check auto clear","future"] },
+            Changed([noAuto]), Changed([searching,searching,noAuto]), Changed([searching,noAuto,noAuto]),
+            Changed([searching with { Values = [] },noAuto]),
+            Changed([searching with { Values = [new(0,1,null)] },noAuto]),
+            Changed([searching with { Values = [new(6,0,"0")] },noAuto]),
+            Changed([searching with { Values = [new(0,0,null),new(0,0,null)] },noAuto]),
+            Changed([searching with { Children = [new("unknown",[],[])] },noAuto]),
+            Changed([searching,noAuto with { Values = [new(6,0,"not check auto clear"),new(6,0,"slot expansion")] }])
+        })
+        {
+            That(!QuestCoverage.HasOrdinaryDeclarations(invalid),"其它目标、重复或不匹配声明不能借用显式NPC合同");
+            Reject<NotSupportedException>(() => QuestCoverage.RequireOrdinaryDeclarations(invalid),"精确声明不符仍拒绝");
+        }
+        StoryQuest Changed(ImmutableArray<QuestField> fields) => explicitMeet with
+            { Definition = explicitMeet.Definition! with { Fields = fields } };
         var empty = ReadPrerequisites(false); var mixed = ReadPrerequisites(true);
         var prerequisites = new QuestCatalog(new() { [100] = empty, [103] = QuestEligibilityTests.Quest(103) });
         That(empty.Definition is { Diagnostics.Length: 0, PrerequisiteGroups.Length: 0 } &&

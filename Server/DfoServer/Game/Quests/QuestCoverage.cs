@@ -34,7 +34,9 @@ internal static class QuestCoverage
     };
 
     public static ImmutableArray<string> Unconfirmed(StoryQuest quest) => quest.Definition?.Fields
-        .Where(field => !KnownFields.Contains(field.Name)).Select(field => field.Name).Distinct().Order().ToImmutableArray() ?? [];
+        .Where(field => !KnownFields.Contains(field.Name) &&
+            !(field.Name == "searching information" && ExplicitMeetWithoutAutoCheck(quest)))
+        .Select(field => field.Name).Distinct().Order().ToImmutableArray() ?? [];
 
     // OR前置只需一组完整引用；废弃冲突任务和隐藏条件仍报告，但不阻断有效入口。
     internal static bool HasRequiredReferences(StoryQuest quest, QuestCatalog catalog)
@@ -65,8 +67,18 @@ internal static class QuestCoverage
 
     // Full03 04181940的magic stone/slot expansion为属性28/29，02A36D52复制到客户端任务属性区。
     public static bool HasOrdinaryAttributes(StoryQuest quest) => quest.Definition is { } definition &&
-        quest.Attributes.All(SupportedAttribute) && definition.Fields.Where(field => field.Name == "attribute").All(field =>
-            field.Children.Length == 0 && field.Values.All(value => value.Type == 6 && SupportedAttribute(value.Text)));
+        (ExplicitMeetWithoutAutoCheck(quest) || quest.Attributes.All(SupportedAttribute) &&
+            definition.Fields.Where(field => field.Name == "attribute").All(field =>
+                field.Children.Length == 0 && field.Values.All(value => value.Type == 6 && SupportedAttribute(value.Text))));
+
+    // Full03的+540=0跳过批量检查；02016AA0仍以真实NPC事件推进sub-1，ACK31保留pending1。
+    static bool ExplicitMeetWithoutAutoCheck(StoryQuest quest) =>
+        quest is { Condition: "[meet npc]", SubType: -1, IntData: [> 0], Attributes: ["not check auto clear"] } &&
+        quest.Definition is { } definition &&
+        definition.Fields.Where(field => field.Name == "searching information").ToArray() is
+            [{ Children.Length: 0, Values: [{ Type: 0, Value: 0, Text: null }] }] &&
+        definition.Fields.Where(field => field.Name == "attribute").ToArray() is
+            [{ Children.Length: 0, Values: [{ Type: 6, Text: "not check auto clear" }] }];
 
     static bool SupportedAttribute(string? value) => value is "not give exp quest" or "slot expansion" or "magic stone";
 

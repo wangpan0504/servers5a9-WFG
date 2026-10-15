@@ -30,11 +30,12 @@ internal static class MetroQuestEntryTcpTests
         VerifySequential(3547, [(3566, 59)], 3567, 84, 69);
         VerifySequential(3540, [(3564, 57)], 3565, 83, 68);
         VerifySequential(3521, [(3555, 59), (3556, 58)], 3557, 81, 64);
+        VerifyYoungGizelEntry();
         VerifyMovement(7958, 311, 95, new(2, 0), 655666, 655667);
         VerifyMovement(3969, 311, 88, new(3, 0), 76886, null);
         VerifyGustDropChain();
         VerifyBellFeathers();
-        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、3971/3547/3540/3521父子阶段、层/warp、3987→3992材料来源及3993→3995→3998掉落交付（不代表完整剧情通关）");
+        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、3971/3547/3540/3521父子阶段、3640首子入场、层/warp、3987→3992材料来源及3993→3995→3998掉落交付（不代表完整剧情通关）");
 
         void VerifyBellFeathers()
         {
@@ -551,6 +552,110 @@ internal static class MetroQuestEntryTcpTests
             Accept(peer, 3954, 1);
             EntryRound(peer, 3954, 310, [3954, 0]);
             Cleanup(peer, created, account);
+        }
+
+        void VerifyYoungGizelEntry()
+        {
+            var parent = resources.Quests.Get(3640);
+            var first = resources.Quests.Get(3686);
+            var hunt = resources.Quests.Get(3687);
+            var delivery = resources.Quests.Get(3688);
+            That(QuestRelationProgress.SequentialParent(parent, resources.Quests) &&
+                parent.Definition!.PrerequisiteGroups is [{ } prerequisite] && prerequisite.SequenceEqual([3639]) &&
+                parent.IntData.SequenceEqual([3686,3687,3688]) && parent.MinimumLevel == 77 &&
+                first.MainQuest == 3640 && first.Condition == "[clear map]" && first.IntData.SequenceEqual([91845]) &&
+                first.Definition!.Dungeons.Select(row => row.DungeonId).SequenceEqual([517]) &&
+                hunt.MainQuest == 3640 && hunt.Condition == "[hunt monster]" && hunt.IntData.SequenceEqual([72,-1,56158,1]) &&
+                hunt.Rewards.Select(row => row.Value).SequenceEqual([10164766,1]) &&
+                delivery.MainQuest == 3640 && delivery.Condition == "[seek n meet npc]" &&
+                delivery.IntData.SequenceEqual([10164766,1,1013]) &&
+                delivery.Definition!.Dungeons.Select(row => row.DungeonId).SequenceEqual([517]),
+                "3640保留清图、猎杀奖励与寻物会面的三个真实阶段，不改成会面链");
+            var dungeon = dungeons.Get(517);
+            DungeonPoint[] coordinates = [new(0,0),new(1,0),new(1,1),new(2,1),new(3,1)];
+            int[][] monsterIds = [[61274,61243,61243,61243,61274,61243,61274],
+                [61276,61245,61276,61276,61276,61276,61245,61245],
+                [61245,61243,61245,61245,61243,61243,61243],
+                [61244,61274,61244,61274,61244,61244,61274,61244,61244,61244,61274,61274], [70216]];
+            foreach (var (id,ordinal,ids,passives) in new[]
+            {
+                (3686,2,new[] {91841,91842,91843,91844,91845},new[] {14,11,12,13,5}),
+                (3688,3,new[] {91861,91862,91863,91864,91865},new[] {14,11,12,13,3})
+            })
+            {
+                var maze = dungeon.Mazes.Single(row => row.ConnectsQuest(checked((uint)id)));
+                That(dungeon.MinimumLevel == 70 && dungeon.BasisLevel == 73 && maze.SourceOrdinal == ordinal &&
+                    maze.Width == 4 && maze.Height == 2 && maze.Starts.SequenceEqual([coordinates[0]]) &&
+                    maze.Bosses.SequenceEqual([coordinates[^1]]) && maze.MapSpecification!.Select(row => row.Id).SequenceEqual(ids) &&
+                    maze.MapSpecification!.Select(row => row.Position).SequenceEqual(coordinates) &&
+                    maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.StoryStages.Count == 0 && maze.WarpMaps.Count == 0,
+                    "D517两条连接保留各自完整五房与原坐标，不靠连续编号推断演员：" + id);
+                var plans = Plans(maze, 99, 100, dungeon.BasisLevel);
+                for (int index = 0; index < plans.Length; index++)
+                {
+                    var plan = plans[index];
+                    That(plan.Room.Map.Path == "map/cataclysm/act13/517_lawlessdistrict/" + ids[index] + ".map" &&
+                        plan.Monsters.Select(actor => actor.MonsterId).SequenceEqual(monsterIds[index]) &&
+                        plan.Room.PassiveObjects.Count == passives[index] && plan.SpecialObjects.Count == 0 &&
+                        plan.Room.AiCharacters.Count == 0 && plan.Monsters.All(actor => actor.CandidateLevel == 73 &&
+                            actor.Team == 100 && !actor.IsFriendly && actor.CanReportDeath && actor.Source is
+                                { PlacementKind: "[fixed]", NpcParameter: null }) &&
+                        (index == 4 ? plan.Monsters.Single() is { SpawnType: 3, IsBoss: true, IsScriptedBoss: true } :
+                            plan.Monsters.All(actor => actor.SpawnType == 0 && !actor.IsBoss && !actor.IsScriptedBoss)),
+                        "D517逐房保留原普通怪、装饰与唯一dummy，不制造战斗或剧情退场：" + ids[index]);
+                }
+                That(plans[^1].Room.NpcMetadataError is null && plans[^1].Room.Npcs.Select(row => row.Id)
+                    .SequenceEqual(id == 3686 ? new[] {1000} : new[] {1013,1000}),
+                    "末房NPC保持独立声明，不由dummy推断吉赛尔身份：" + id);
+            }
+            That(dungeons.Get(72).Mazes.Single(row => row.ConnectsQuest(3687)).MapSpecification!.Select(row => row.Id)
+                .SequenceEqual([91851,91852,91858,91859,91853,91854,91855,91856,91857]),
+                "中间猎杀属于D72九房，不误入D517的首子或交付路线");
+            // 只准备父前置3639及真实入口资格；本轮不完成三个子任务，不预填目标材料。
+            var done = new HashSet<int> {3639};
+            var entrance = Entrance(3686, 517, done);
+            That(!done.Overlaps([3640,3686,3687,3688]), "入口准备不包含目标父子完成位");
+            const string account = "young-gizel-180";
+            var created = Create(account, "YoungGizel", 0, 77, done, entrance);
+            That(created.Inventory.Items.All(row => row.Core.ItemId != 10164766), "首阶段不预填猎杀交付奖励材料");
+            string parentIdentity, childIdentity, accepted;
+            using (var peer = Open(fixture, account))
+            {
+                Select(peer, created);
+                Accept(peer, 3640, 3);
+                parentIdentity = Identity(peer.Id, 3640);
+                RejectAccept(peer, 3687); RejectAccept(peer, 3688);
+                EntryRound(peer, 3686, 517, [3640,0]);
+                That(fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0", peer.Id) is [[3640L]],
+                    "仅父活动时父/0请求只借首子布局，不替客户端接取3686");
+                Accept(peer, 3686, 1);
+                childIdentity = Identity(peer.Id, 3686);
+                RejectAccept(peer, 3687); RejectAccept(peer, 3688);
+                // 请求0的RunQuestId保持0；不假定子已活动时的RouteQuestId仍是父3640。
+                EntryRound(peer, 3686, 517, [3640,3686,0]);
+                That(Scalar(peer.Id, 3640) == 3 && Scalar(peer.Id, 3686) == 1 && Identity(peer.Id, 3640) == parentIdentity,
+                    "首子未清入场不推进3640三阶段或更换接取身份");
+                accepted = QuestState(peer.Id);
+            }
+            using (var peer = Open(fixture, account))
+            {
+                var packets = peer.Select(RoleIndex(peer.Roster, created), prepared: true, resumeTown: true, room: false);
+                peer.Barrier();
+                var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id);
+                var ack = packets.Single(packet => packet.Kind == 1 && packet.Opcode == 4).Body;
+                That(peer.Id == created.Id && ack.Length == 235 && ack[0] == 1 && active.Length == 2 &&
+                    QuestState(peer.Id) == accepted && Identity(peer.Id, 3640) == parentIdentity && Identity(peer.Id, 3686) == childIdentity &&
+                    Enumerable.Range(0,30).All(slot =>
+                    {
+                        var row = active.SingleOrDefault(row => (long)row[0] == slot);
+                        return U16(ack,22+6*slot) == (row is null ? ushort.MaxValue : (long)row[1]) &&
+                            U32(ack,24+6*slot) == (row is null ? 0 : (long)row[2]);
+                    }) && new[] {3640,3686,3687,3688}.All(id => peer.CompletedQuestHistory[4+id] == 0) && NoClear(peer.Id),
+                    "实际断线ACK4完整恢复原父子三十槽，目标历史全未完成且无清图凭据");
+                EntryRound(peer, 3686, 517, [0]);
+                That(QuestState(peer.Id) == accepted, "断线后普通0仍进入首子原路线，不补写后续任务或进度");
+                Cleanup(peer, created, account);
+            }
         }
 
         void VerifySequential(ushort parentId, (ushort Id, int Npc)[] meetings, ushort childId, uint dungeon, byte level)
