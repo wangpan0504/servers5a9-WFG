@@ -238,7 +238,7 @@ internal static class SelfTestRunner
         QuestRewardParameterTests.RunResources(pvf);
         QuestCompletionPlanTests.RunResources(pvf, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         QuestCompletionRepositoryTests.Run(towns, pvf, characters, itemResources);
-        QuestQuickClearPlanTests.Run(pvf, QuestCatalog.Load(pvf));
+        QuestQuickClearPlanTests.Run(pvf, sharedQuests);
         QuestQuickClearRepositoryTests.Run(towns, pvf, characters, itemResources);
         QuestCascadeCompletionTests.Run(towns, pvf, characters, itemResources);
         await QuestCompletionPublicationTests.RunAsync(towns, pvf, characters, itemResources);

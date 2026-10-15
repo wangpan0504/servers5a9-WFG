@@ -289,7 +289,7 @@ internal static class QuestOrdinaryCompletionTests
             That(Same(before,f.Read()) && f.Read().QuestAnswers.Count == 0 && f.Receipts == 0,
                 "任务回答、完成位和奖励同事务失败回滚，不能提前开放分支");
         }
-        var actualQuestions = QuestCatalog.Load(pvf);
+        var actualQuestions = quests;
         AlbertRequestTests.Run(towns,characters,items,actualQuestions,learning,growth,parameters);
         That(new[] {(3868,3),(3869,2),(6217,3),(6382,2),(6383,2)}.All(row =>
             QuestQuestionProgress.TryCount(actualQuestions.Get(row.Item1),out int count) && count == row.Item2) &&
@@ -530,7 +530,7 @@ internal static class QuestOrdinaryCompletionTests
             f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             That(Same(after,f.Session.Selected!) && f.Finish(ushort.MaxValue).Outcome == QuestFinishOutcome.AlreadyCompleted && f.Receipts == 1,
                 "转职重登恢复完整领域状态，重复请求不重置技能或发奖");
-            var actual = QuestCatalog.Load(pvf);
+            var actual = quests;
             var branches = actual.All.Where(quest => quest.Grade == "[epic]" && quest.MinimumLevel is >= 1 and <= 20 &&
                 quest.RewardType == "[grow type]" && quest.Definition!.JobChange == 1).ToArray();
             foreach (var quest in branches)

@@ -140,6 +140,12 @@ pwsh -NoProfile -File Tools/Check-Development.ps1
 
 脚本依次检查仓库链接与路径、构建（含分层分析器）、分层规则正反例、PvfLib 合成数据和服务端 `--selftest-core`，失败即非零退出。默认产物写到 `build/check`，可用 `-Configuration Release` 或 `-ArtifactsPath <目录>` 调整；测试只使用合成输入与临时 SQLite，不要求运行数据，也不启动游戏监听。该命令可直接用于本地或 CI。
 
+同时需要基础检查与完整资源自测时，传入 `-PvfPath <Script.pvf文件>`。脚本在构建和两个独立测试程序之后运行一次完整 `--selftest`，其中已包含 `--selftest-core`，无需再单独运行核心自测；各阶段输出实际耗时，任一步失败仍非零退出。此模式保留全部核心和资源覆盖，TCP 按影响范围另行执行。例如：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File Tools/Check-Development.ps1 -PvfPath Server/DfoServer/Data/Pvf/Script.pvf
+```
+
 `--selftest-core` 覆盖纯协议、命令参数、owner、认证、数据库基线及背包变化索引；新增无资源测试接入 `SelfTestRunner.RunCoreAsync`。完整 `--selftest` 包含全部基础测试和业务资源集成，不能以基础检查替代下表要求的完整自测或 TCP。百万文件资源普查单独使用 `--selftest-tcp resource-survey`，扫描器或 PVF 格式、读取、缓存变化时补跑；其合成解析边界仍由基础自测覆盖。资源相关用例需要 `Server/DfoServer/Data/Pvf/Script.pvf`。从仓库根执行，固定目录和启动参数见[环境与配置](Docs/开发/环境与配置.md)：
 
 ```powershell

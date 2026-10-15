@@ -154,8 +154,9 @@ internal static class QuestMainlineTests
         }
         void Npc(int id)
         {
+            // 导航使用会话已提交快照；交付、回滚与重登断言继续独立回读完整存档。
             var paths = f.TravelPaths(towns);
-            var current = f.Read();
+            var current = f.Session.Selected!;
             var done = QuestEligibility.Completed(current);
             var area = paths.Keys.Select(key => towns.Areas[key]).Where(area => area.Map(done).Npcs.Any(npc => npc.Id == id))
                 .OrderBy(area => area.Town == current.Position.Town ? 0 : 1).ThenBy(area => area.Town).First();
@@ -175,7 +176,7 @@ internal static class QuestMainlineTests
             int attempts = 0;
             while (true)
             {
-                var current = f.Read();
+                var current = f.Session.Selected!;
                 if (CurrencyWallet.Get(current.Inventory,CurrencyKind.ClearCube) >= count) break;
                 That(++attempts <= 60,"实际任务装备分解材料在有界次数内完成");
                 var equipment = current.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.Kind == ItemKind.Equipment &&
@@ -209,7 +210,7 @@ internal static class QuestMainlineTests
         void Gate(uint dungeon)
         {
             var paths = f.TravelPaths(towns);
-            var current = f.Read();
+            var current = f.Session.Selected!;
             var done = QuestEligibility.Completed(current);
             var area = paths.Keys.Select(key => towns.Areas[key]).Where(area => area.DungeonWorldMap is { } world &&
                 towns.DungeonMaps[world].Error is null && towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeon))
@@ -285,7 +286,7 @@ internal static class QuestMainlineTests
                     receipt = f.Session.CompleteFormalDungeonLoading()!;
                 }
                 if (through >= 30)
-                    foreach (var active in f.Read().ActiveMainQuests)
+                    foreach (var active in f.Session.Selected!.ActiveMainQuests)
                         if (QuestHuntProgress.TryTargets(quests.Get(active.QuestId),out var targets))
                             for (int index = 0; index < targets.Length; index++)
                                 if (targets[index].EnemyType == 3 && targets[index].DungeonId == entry.DungeonId &&
