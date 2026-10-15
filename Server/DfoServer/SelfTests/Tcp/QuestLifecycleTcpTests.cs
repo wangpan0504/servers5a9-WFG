@@ -658,6 +658,7 @@ internal static class QuestLifecycleTcpTests
         QuestPassiveClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
         QuestCinematicSettlementTcpTests.Verify(extra,resources,growth,DrainNotifications);
         QuestRoomClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
+        QuestBilmarkEntryTcpTests.Verify(extra,resources,growth,DrainNotifications);
         ForestChildAcceptanceTcpTests.Verify(extra,resources,growth,DrainNotifications);
         MiddleQuestEntryTcpTests.Verify(extra,resources,growth);
         await extra.StopAsync();
