@@ -133,9 +133,91 @@ internal static class QuestSceneTests
         VerifyPassiveSettlement(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         VerifyRoomProgress(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
         VerifyTerminalLayerReentry(towns,characters,items,quests,skills,growth,dungeons,rooms,kills);
+        VerifyMetroCages(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
         QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             DungeonClearExperienceCatalog.Load(pvf),parameters,DungeonDropRuleCatalog.Load(pvf),DungeonCardPriceCatalog.Load(pvf));
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
+    }
+
+    // 三个真实笼子分别由所在地图唯一寻址；合成33不证明客户端自然触发，也不借dummy死亡完成任务。
+    static void VerifyMetroCages(TownCatalog towns,CharacterCatalog characters,ItemResources items,QuestCatalog quests,
+        SkillLearningCatalog skills,CharacterGrowthCatalog growth,DungeonCatalog dungeons,DungeonRoomCatalog rooms,
+        DungeonKillExperienceCatalog kills,QuestRewardParameterCatalog parameters)
+    {
+        var quest = quests.Get(3959);
+        That(quest.MinimumLevel == 88 && quest.Prerequisites.SequenceEqual(new[] {3958}) &&
+            quest.Condition == "[hunt enemy]" && quest.IntData.SequenceEqual(new[] {310,-1,72325,3,3}),
+            "3959保留真实三笼目标，不简化任务或改为清图条件");
+        var entrance = MiddleQuestEntryTests.Entrance(towns,quest,310);
+        using var f = new Fixture(towns,characters,skills,growth,quests,false,88,entrance.Completed,position:entrance.Position);
+        That(!f.Read().CompletedQuests.Contains(3959) &&
+            f.Session.ChangeQuest(3959,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
+            "3959只准备入口前置，真实31建立接取");
+        var accepted = f.Read().ActiveMainQuests.Single(row => row.QuestId == 3959);
+        That(accepted.ConditionState == 3 && accepted.AcceptanceId != Guid.Empty,"三笼从本次接取的真实剩余数3开始");
+        ushort selector = QuestFixedRewardDefinition.Parse(quest with { Rewards=quest.Definition!.SelectRewards })
+            .ForJob(f.Read().Job,f.Read().GrowType).Length == 0 ? ushort.MaxValue : (ushort)0;
+        var opening = f.Session.EnterFormalDungeon(310,3959,0,dungeons,rooms)!;
+        That(opening is not null && opening.Entry.Maze.SourceOrdinal == 9 && opening.Entry.BossMap.Id == 76768 &&
+            opening.Entry.QuestAcceptances.Any(row => row.AcceptanceId == accepted.AcceptanceId),"三笼路线冻结原接取身份");
+        var receipt = f.Session.CompleteFormalDungeonLoading()!;
+        var before = f.Read();
+        That(Observe(new(0x10,0,0)) is null && Same(before,f.Read()),"起点没有72325，不能按目标模板提前减量");
+        var killed = new HashSet<ushort>();
+        foreach (var target in new[] { (Map:76763,Point:new DungeonPoint(2,0),Ordinal:24),
+            (Map:76764,Point:new DungeonPoint(2,2),Ordinal:24),(Map:76766,Point:new DungeonPoint(3,2),Ordinal:23) })
+        {
+            var path = QuestStoryRouteTests.Path(opening!.Entry.Maze.StaticTopology,receipt.Snapshot.CurrentMap.Position,target.Point);
+            foreach (var point in path.Skip(1))
+            {
+                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking && !killed.Contains(row.ObjectKey)))
+                {
+                    That(!monster.IsScriptedBoss && f.Session.ObserveFormalDungeonDeath(
+                        FormalDungeonSessionTests.Observation(receipt,monster),kills,growth).Outcome == DungeonRunOutcome.Accepted,
+                        "三笼之间只提交真实前房敌人，不造终点dummy死亡");
+                    killed.Add(monster.ObjectKey);
+                }
+                That(f.Session.MoveFormalDungeon(checked((byte)point.X),checked((byte)point.Y)) is not null,"沿真实门墙抵达下一笼子");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+            }
+            That(receipt.Snapshot.CurrentMap.Id == target.Map && receipt.Monsters.Room.PassiveObjects.Count(row => row.ObjectId == 72325) == 1 &&
+                receipt.Monsters.Room.PassiveObjects[target.Ordinal].ObjectId == 72325 &&
+                !rooms.ReportsQuestDeath(receipt.Monsters.Room.PassiveObjects[target.Ordinal]),"每笼保留真实地图、原ordinal及普通自动销毁声明");
+            before = f.Read();
+            var identity = f.Session.DungeonSnapshot!.Identity;
+            That(Observe(new(0x20,0,0)) is null && Observe(new(0x10,1,0)) is null && Observe(new(0x10,0,1)) is null &&
+                f.Session.ObserveFormalPassiveDeath(72325,true,new string('C',64),rooms) is null && Same(before,f.Read()),
+                "错通道、非终末字段及无must-be-destroyed的39不能冒充三笼33");
+            var progress = Observe(new(0x10,0,0));
+            var after = f.Read();
+            That(progress?.Commit?.Plan.SceneEvent is { TemplateId:72325 } source && source.MapId == target.Map &&
+                source.SourceOrdinal == target.Ordinal && source.Identity == identity &&
+                source.Identity.InstanceId == opening.Snapshot.Identity.InstanceId && progress.DungeonIdentity == identity &&
+                progress.Commit.Plan.AcceptanceId == accepted.AcceptanceId &&
+                after.ActiveMainQuests.Single(row => row.QuestId == 3959).ConditionState ==
+                    before.ActiveMainQuests.Single(row => row.QuestId == 3959).ConditionState-1 &&
+                Same(before with { Revision=after.Revision,ActiveMainQuests=after.ActiveMainQuests },after),
+                "本图唯一笼子只减原接取一次，不产生击杀成长、金币或物品");
+            That(Observe(new(0x10,0,0)) is null && Same(after,f.Read()),"同图重复33不能再次解救帝国军");
+            if (after.ActiveMainQuests.Single(row => row.QuestId == 3959).ConditionState != 0)
+                That(Finish().Outcome == QuestFinishOutcome.Rejected && Same(after,f.Read()),"三笼未齐不能提前34");
+        }
+        var finished = Finish();
+        That(finished.Receipt?.Commit is { ConditionType:6,Clear:null } complete && complete.AcceptanceId == accepted.AcceptanceId &&
+            f.Read().CompletedQuests.Contains(3959) && f.Session.Phase == SessionPhase.Dungeon &&
+            f.Session.EnableFormalDungeonSettlement() is null && f.Repository.LoadQuestClear(f.Owner,f.Read(),3959) is null &&
+            f.Query("SELECT count(*) FROM character_quest_lifecycle_receipts WHERE quest_id=3959 AND scene_event IS NOT NULL") is 3L,
+            "三笼在76766正常34，仅三条独立场景来源，不要求清图或杀75100");
+        before = f.Read();
+        That(Finish().Outcome == QuestFinishOutcome.AlreadyCompleted && Same(before,f.Read()),"重复三笼34不二次发奖");
+        That(f.Session.ReturnFromFormalDungeon() is not null,"未打dummy也可完成目标后回城");
+        f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+        That(f.Read().CompletedQuests.Contains(3959) && f.Read().ActiveMainQuests.All(row => row.QuestId != 3959) &&
+            f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id=3959") is 1L,"重选保留三笼交付且只有一条领奖回执");
+
+        QuestLifecycleReceipt? Observe(QuestClientCondition condition) =>
+            f.Session.ObserveFormalPassiveTrigger(3959,condition,new string('C',64),rooms);
+        QuestFinishResult Finish() => f.Session.FinishQuest(3959,selector,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
     }
 
     private static void VerifyPassiveSettlement(TownCatalog towns, CharacterCatalog characters, ItemResources items,
