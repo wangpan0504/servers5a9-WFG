@@ -9,6 +9,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
+using PvfLib;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -27,10 +28,11 @@ internal static class MetroQuestEntryTcpTests
         VerifyFaction(11, 3869, 3872, 3874);
         VerifySequential(3971, 3972, 3973, 455, 310, 88);
         VerifySequential(3547, 3566, 3567, 59, 84, 69);
+        VerifySequential(3540, 3564, 3565, 57, 83, 68);
         VerifyMovement(7958, 311, 95, new(2, 0), 655666, 655667);
         VerifyMovement(3969, 311, 88, new(3, 0), 76886, null);
         VerifyGustDropChain();
-        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、3971/3547父子阶段、层/warp及3993→3995→3998掉落交付（不代表完整剧情通关）");
+        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、3971/3547/3540父子阶段、层/warp及3993→3995→3998掉落交付（不代表完整剧情通关）");
 
         void VerifyGustDropChain()
         {
@@ -318,7 +320,7 @@ internal static class MetroQuestEntryTcpTests
                         is [[long completed]] && completed == meetingId,
                     "实际会面交付将原父scalar2推进为1，不换接取UUID：" + parentId);
                 TravelTo(peer, entrance);
-                if (parentId == 3547) SupplyRoute(peer);
+                if (parentId is 3547 or 3540) AntberRoute(peer);
                 EntryRound(peer, childId, dungeon, [parentId, 0]);
                 That(fixture.Query("SELECT slot FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", peer.Id, childId).Length == 0,
                     "父请求及普通0只借当前子路线，不伪造子任务接取：" + childId);
@@ -328,9 +330,9 @@ internal static class MetroQuestEntryTcpTests
                 That(Scalar(peer.Id, parentId) == 1 && Scalar(peer.Id, childId) == 1 && Identity(peer.Id, parentId) == parentIdentity,
                     "子路线入场未清图，不归零父子或发父奖励：" + parentId);
                 accepted = QuestState(peer.Id);
-                if (parentId != 3547) Cleanup(peer, created, account);
+                if (parentId is not (3547 or 3540)) Cleanup(peer, created, account);
             }
-            if (parentId != 3547) return;
+            if (parentId is not (3547 or 3540)) return;
             using (var peer = Open(fixture, account))
             {
                 var entry = peer.Select(RoleIndex(peer.Roster, created), prepared: true, resumeTown: true, room: false);
@@ -344,44 +346,79 @@ internal static class MetroQuestEntryTcpTests
                             U32(entry[0].Body, 24 + 6 * slot) == (row is null ? 0 : (long)row[2]);
                     }) && peer.CompletedQuestHistory[4 + meetingId] == 1 && peer.CompletedQuestHistory[4 + parentId] == 0 &&
                     peer.CompletedQuestHistory[4 + childId] == 0 && NoClear(peer.Id),
-                    "3547断线重连完整恢复三十槽、原父子身份和唯一会面完成历史");
+                    "断线重连完整恢复三十槽、原父子身份和唯一会面完成历史：" + parentId);
                 EntryRound(peer, childId, dungeon, [0]);
-                That(QuestState(peer.Id) == accepted && NoClear(peer.Id), "重连普通0仍可进入原3567路线且未清退出不完成父子");
+                That(QuestState(peer.Id) == accepted && NoClear(peer.Id), "重连普通0仍可进入原子路线且未清退出不完成父子：" + childId);
                 Cleanup(peer, created, account);
             }
 
-            void SupplyRoute(TcpPeer peer)
+            void AntberRoute(TcpPeer peer)
             {
-                var definition = dungeons.Get(84);
-                var maze = definition.Mazes.Single(row => row.ConnectsQuest(3567));
-                DungeonPoint[] route = [new(0,0),new(0,1),new(0,2),new(1,2),new(1,1),new(2,1),new(3,1),new(3,2),new(4,2)];
-                int[][] monsters = [[61216,61216,61216,61009,61009,61009],
+                bool midnight = parentId == 3540;
+                var definition = dungeons.Get(checked((int)dungeon));
+                var maze = definition.Mazes.Single(row => row.ConnectsQuest(childId));
+                int firstMap = midnight ? 92352 : 92407, target = midnight ? 92360 : 92415;
+                DungeonPoint[] positions = midnight
+                    ? [new(0,2),new(1,2),new(2,0),new(2,1),new(2,2),new(3,1),new(3,0),new(4,1),new(4,2)]
+                    : [new(0,0),new(0,1),new(0,2),new(1,2),new(1,1),new(2,1),new(3,1),new(3,2),new(4,2)];
+                // 午夜行动的DGN按资源行列出地图，真实连接顺序并不按地图ID递增。
+                DungeonPoint[] route = midnight
+                    ? [new(0,2),new(1,2),new(2,2),new(2,1),new(2,0),new(3,0),new(3,1),new(4,1),new(4,2)] : positions;
+                int[][] monsters = midnight
+                    ? [[61441,61443,61443,61441], [61437,61437,61437,61482,61482,61482],
+                        [61437,61437,61437,61437,61437], [61437,61437,61437,61437,61437],
+                        [61442,61442,61442,61442,61482,61482,61482], [61441,61443,61443,61441,61482,61482,61482],
+                        [61436,61436,61439,61436,61439,61439,61436], [61442,61442,61442,61441,61441,61443,61441,61443,61443],
+                        [61442,61442,61442,61442,61441,61441,61441,56001]]
+                    : [[61216,61216,61216,61009,61009,61009],
                     [61006,61006,61006,61009,61009,61009,61009,61009],
                     [61006,61006,61006,61009,61009,61009,61009], [61009,61009,61009,61009,61009,61009,61009],
                     [61005,61005,61005,61005,61005,61005], [56006,61216,61216,56006,61216,61216],
                     [61006,61005,61006,61005,61006,61005,61006,61005], [61014,61014,61014,61014,61014,61014], [63821]];
-                int[] passives = [17,13,21,22,23,14,16,17,15];
-                That(parent.Definition!.PrerequisiteGroups.Single().SequenceEqual([3546]) && child.IntData.SequenceEqual([92415]) &&
-                    definition.MinimumLevel == 69 && definition.BasisLevel == 72 && maze.SourceOrdinal == 4 && maze.Width == 5 && maze.Height == 3 &&
+                int[] passives = midnight ? [12,8,34,61,39,29,29,20,32] : [17,13,21,22,23,14,16,17,15];
+                int apcRoom = midnight ? 0 : 8, apc = midnight ? 10451 : 812, basis = midnight ? 71 : 72;
+                That(parent.Definition!.PrerequisiteGroups.Single().SequenceEqual([midnight ? 3539 : 3546]) && child.IntData.SequenceEqual([target]) &&
+                    definition.MinimumLevel == level && definition.BasisLevel == basis && maze.SourceOrdinal == (midnight ? 2 : 4) && maze.Width == 5 && maze.Height == 3 &&
                     maze.ResourceError is null && maze.MapSpecification!.Count == 9 && maze.LayeredMaps.Count == 0 &&
                     maze.ConditionalMaps.Count == 0 && maze.StoryStages.Count == 0 && maze.StaticTopology.Supported &&
                     QuestStoryRouteTests.Path(maze.StaticTopology, maze.Starts.Single(), maze.Bosses.Single()).SequenceEqual(route),
-                    "3547保持真实前置3546、3567目标92415和D84九房折线路线");
+                    "父子保持真实前置、目标与九房折线路线：" + parentId);
                 uint next = checked((uint)Convert.ToInt64(fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0", peer.Id).Single()[0]));
                 var plans = Plans(maze, peer.Id, next, definition.BasisLevel);
-                That(plans.Length == 9, "3567入场须准备全部九房，不能只准备92407掩盖末房资源失败");
-                for (int index = 0; index < route.Length; index++)
+                That(plans.Length == 9, "入场须准备全部九房，不能只准备起点掩盖末房资源失败：" + childId);
+                for (int index = 0; index < positions.Length; index++)
                 {
-                    var plan = plans.Single(plan => plan.Room.Map.Position == route[index]);
-                    That(plan.Room.Map.Id == 92407 + index && plan.Room.Monsters.Select(actor => actor.MonsterId).SequenceEqual(monsters[index]) &&
+                    var plan = plans.Single(plan => plan.Room.Map.Position == positions[index]);
+                    That(plan.Room.Map.Id == firstMap + index && plan.Room.Monsters.Select(actor => actor.MonsterId).SequenceEqual(monsters[index]) &&
                         plan.Room.PassiveObjects.Count == passives[index] && plan.SpecialObjects.Count == 0 &&
-                        plan.Room.AiCharacters.Count == (index == 8 ? 1 : 0) && plan.Monsters.Count == monsters[index].Length + (index == 8 ? 1 : 0) &&
-                        plan.Monsters.Where(actor => actor.AiCharacter is null).All(actor => actor.CandidateLevel == 72),
-                        "D84逐房保留真实普通怪、APC、装饰物及完整演员计划：" + plan.Room.Map.Id);
-                    if (index == 8)
+                        plan.Room.AiCharacters.Count == (index == apcRoom ? 1 : 0) && plan.Monsters.Count == monsters[index].Length + (index == apcRoom ? 1 : 0) &&
+                        plan.Monsters.Where(actor => actor.AiCharacter is null).All(actor => actor.CandidateLevel == basis &&
+                            actor.Source is { RawValues: var raw } && raw[1] == 1 && raw[2] == 0),
+                        "逐房保留真实普通怪、APC、装饰物及完整演员计划：" + plan.Room.Map.Id);
+                    if (index == apcRoom)
+                        That(plan.Monsters[^1] is { CandidateLevel: 70, SpawnType: 5, IsFriendly: true, IsBlocking: false, CanReportDeath: false } &&
+                            plan.Monsters[^1].MonsterId == apc, "友方APC使用原AIC70级，不套副本基准或伪造死亡：" + apc);
+                    if (!midnight && index == 8)
                         That(plan.Monsters[0] is { MonsterId: 63821, IsScriptedBoss: true } &&
                             plan.Monsters[1] is { MonsterId: 812, SpawnType: 5, IsFriendly: true, IsBlocking: false, CanReportDeath: false },
                             "92415保留原dummy Boss与友方APC812，本例不伪造其死亡或演出完成");
+                    if (midnight)
+                        That(plan.Monsters.Where(actor => actor.AiCharacter is null).All(actor => actor.CanReportDeath && actor.IsBlocking &&
+                            !actor.IsFriendly && !actor.IsScriptedBoss && actor.IsBoss == (actor.MonsterId == 56001) &&
+                            actor.SpawnType == (actor.MonsterId == 56001 ? 3 : 0)), "午夜行动保留真实敌人与56001普通Boss，不制造战斗事件");
+                }
+                if (midnight)
+                {
+                    const string mapPath = "map/cataclysm/antberr/83_nightassault/3540_92352.map";
+                    const string actionPath = "map/cataclysm/antberr/83_nightassault/action/3540_92352.act";
+                    That(maze.MapSpecification!.Single(map => map.Id == 92352).Path == mapPath &&
+                        TutorialSceneFile.BasicAction(resources.Archive.ReadTokens(mapPath), resources.Archive.ResolveString) == "Action/3540_92352.act",
+                        "午夜行动起点保留准确相对ACT引用");
+                    var action = resources.Archive.ReadTokens(actionPath);
+                    That(action.All(token => token.Type is 0 or 3) && action.Where(token => token.Type == 0).Select(token => token.Value).SequenceEqual([1,0,2221]) &&
+                        action.Where(token => token.Type == 3).Select(token => resources.Archive.ResolveString(token.Value).ToUpperInvariant()).SequenceEqual(
+                            ["[TRIGGER]","[ON START MAP]","[LIMIT]","[WHICH]","[CHARACTER]","[DO BEHAVIOR]","[ME]","[/TRIGGER]","[BEHAVIOR]","[CINEMATIC]","[/BEHAVIOR]"]),
+                        "只核ON START MAP一次性触发2221原声明；入场与37不证明自然播放、死亡或清图");
                 }
             }
         }
