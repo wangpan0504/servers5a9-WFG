@@ -47,6 +47,16 @@ internal static class MiddleQuestEntryTests
             [(655658,[]),(655659,[67095]),(655660,[]),(655661,[]),(655662,[])])
     });
 
+    internal static IReadOnlyList<Scenario> NpcScenarios { get; } = Array.AsReadOnly(new Scenario[]
+    {
+        new(3628,78,[91751,91752,91753,91754,91755,91756,91758,91759,91757],91757,
+            [(107000195,false)],[],[],[(91753,[10607]),(91754,[10607,10607]),(91755,[10607]),
+                (91756,[10607,10607]),(91759,[10607]),(91757,[10607,10607])]),
+        new(3639,72,[91831,91832,91833,91834,91835,91836,91837,91838,91839],91837,
+            [(107000197,false),(70216,true)],[],[],[(91833,[10607]),(91834,[10607,10607]),
+                (91835,[10607]),(91836,[10607,10607]),(91837,[10607,10607]),(91839,[10607])])
+    });
+
     // 复用整轮资源与既有角色/Session夹具；每个角色接取一次，两种入场共用原接取。
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills)
@@ -55,6 +65,29 @@ internal static class MiddleQuestEntryTests
         var growth = CharacterGrowthCatalog.Load(pvf,skills);
         var dungeons = DungeonCatalog.Load(pvf);
         var rooms = DungeonRoomCatalog.Load(pvf);
+        foreach (var (scenario,template,parameter,monsterCount,passiveCount) in new[]
+        {
+            (NpcScenarios[0],107000195,1020,60,325), (NpcScenarios[1],107000197,1069,55,287)
+        })
+        {
+            var dungeon = dungeons.Get(checked((int)scenario.Dungeon));
+            var maze = dungeon.Mazes.Single(row => row.ConnectsQuest(scenario.Quest));
+            var plans = maze.MapSpecification!.Select(map => DungeonMonsterPlan.Create(rooms,map,99,100,dungeon.BasisLevel,0)).ToArray();
+            var target = plans.Single(plan => plan.Room.Map.Id == scenario.TargetMap);
+            var npc = target.Monsters.Single(actor => actor.MonsterId == template);
+            That(plans.Select(plan => plan.Room.Map.Id).SequenceEqual(scenario.MapIds) && plans.Length == 9 &&
+                plans.Sum(plan => plan.Monsters.Count) == monsterCount && plans.Sum(plan => plan.Room.PassiveObjects.Count) == passiveCount &&
+                plans.Sum(plan => plan.SpecialObjects.Count) == 9, "NPC路线保留完整九房、原怪物及全部普通/特殊物件");
+            That(npc is { SourceOrdinal: 0, SpawnType: 3, CandidateLevel: 80, Team: 100, IsFriendly: false,
+                    IsBlocking: true, CanReportDeath: true, IsBoss: true, IsScriptedBoss: false } &&
+                npc.Source is { Modifiers: ["[NPC]"] } source && source.NpcParameter == parameter &&
+                ReferenceEquals(source,target.Room.Monsters[0]), "实际NPC参数与原monster源行绑定，保留默认阵营和普通Boss品级");
+            That(plans.SelectMany(plan => plan.Monsters).Count(actor => actor.Source?.NpcParameter is not null) == 1 &&
+                (scenario.Quest == 3628
+                    ? plans.SelectMany(plan => plan.Monsters).Count(actor => actor.Team == 50 && !actor.IsFriendly && actor.IsBlocking) == 10
+                    : target.Monsters.Single(actor => actor.MonsterId == 70216) is { IsScriptedBoss: true, SpawnType: 3 }),
+                "乌塔拉team50与无法地带独立dummy70216各保留原合同，不由NPC标记推断友方或脚本退场");
+        }
         foreach (var (dungeon,count) in new[] { (310,12),(311,17),(312,12),(313,16),(314,11) })
         {
             var definition = dungeons.Get(dungeon);

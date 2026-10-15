@@ -42,6 +42,17 @@ internal static class DungeonMonsterPacketsTests
                 }
             }
         }
+        byte[] npcRow = [0,0,0,0,0,0,10,0,10,4,0,0,20,3,0,0,255,0,0,0,0,0];
+        foreach (int parameter in new[] { 0, -1, 1069 })
+        foreach (var payload in new[] { DungeonMapPayload.Build,DungeonMapPayload.Refresh })
+        {
+            var npcPlan = DungeonMonsterPlan.FromRoom(room with
+                { Monsters = [source with { RankKind = "[boss]", Modifiers = ["[NPC]"], NpcParameter = parameter }], MonsterTeams = null },99,10);
+            byte[] body = DungeonPackets.StartMap(entry,npcPlan,1,payload: payload);
+            That(body.Length == 45 && body[18] == 1 && body.AsSpan(19,22).SequenceEqual(npcRow) &&
+                body.AsSpan(41).SequenceEqual(new byte[] { 0,0,0,255 }),
+                "纯NPC使用独立预期的完整22B原ordinal/key/模板/Boss行，不附加或截断原NPC参数");
+        }
         DungeonRoomAiCharacter Actor(int id,string faction) => new(id,[id,0,0,0,0,0],faction,"[normal]","aicharacter/fixture.aic",20);
         var apcs = DungeonMonsterPlan.FromRoom(new(map,[],[],[])
             { AiCharacters = [Actor(1,"[character]"),Actor(2,"[neutral]"),Actor(3,"[monster]")] },99,10);

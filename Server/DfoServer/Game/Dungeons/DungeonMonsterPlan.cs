@@ -54,10 +54,12 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             var raw = source.RawValues;
             if (raw.Count != 8 || raw[0] != source.MonsterId || source.MonsterId < 0
                 || source.PlacementKind != "[fixed]" || source.RankKind is not ("[normal]" or "[champion]" or "[super champion]" or "[boss]") ||
-                !(source.Modifiers.Count == 0 || source.RankKind == "[boss]" && source.Modifiers.SequenceEqual(new[] { "[dummy]" }))
+                !(source.NpcParameter.HasValue ? source.Modifiers is ["[NPC]"] :
+                    source.Modifiers.Count == 0 || source.RankKind == "[boss]" && source.Modifiers is ["[dummy]"])
                 || raw[6] is < 0 or > 255 || raw[7] is < 0 or > 255)
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的 monster 资源行 {index} 不是已支持的固定怪物条件");
             // 最后两项是参考资源中的掉落数量声明，不能把数量2误当成怪物创建条件。
+            // 纯NPC行由客户端沿原ordinal取模板+70，经02A160F7写actor+45E8；不增wire字段或改变阵营/品级。
 
             // 与参考服务端相同，标志1使用副本basis level加资源偏移；未知标志和缺失基础拒绝。
             if (raw[1] is not (0 or 1) || raw[1] == 1 && basisLevel is null)

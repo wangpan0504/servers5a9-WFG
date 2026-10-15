@@ -22,6 +22,32 @@ internal static class DungeonMonsterPlanTests
         That(ordinaryPlan.Monsters.Select(monster => monster.CandidateLevel).SequenceEqual([7, 3]) &&
             ordinaryPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 1, 0 }) &&
             ReferenceEquals(ordinaryPlan.Monsters[0].Source, relative), "本服普通相对和绝对等级分别计算，完整冠军原行和类型保留");
+        var npc = source with { RankKind = "[boss]", Modifiers = ["[NPC]"], NpcParameter = 1069 };
+        foreach (int parameter in new[] { 0, -1, 1069, int.MinValue, int.MaxValue })
+        {
+            var original = npc with { NpcParameter = parameter };
+            var npcPlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [source, original] },99,98,playerTeam: 0);
+            That(npcPlan.Monsters[1] is { SourceOrdinal: 1, ObjectKey: 100, SpawnType: 3, CandidateLevel: 3,
+                    Team: 100, IsFriendly: false, IsBlocking: true, CanReportDeath: true, IsBoss: true, IsScriptedBoss: false,
+                    Source: { } retained } && ReferenceEquals(retained,original) && retained.NpcParameter == parameter &&
+                retained.RawValues.SequenceEqual(source.RawValues),
+                "纯NPC参数保留完整有符号值、原行/ordinal及独立key，不授予友方或脚本Boss身份");
+        }
+        foreach (var (rank,spawn) in new[] { ("[normal]",0),("[champion]",1),("[super champion]",2),("[boss]",3) })
+        {
+            var row = npc with { RankKind = rank, RankParameterCount = rank is "[champion]" or "[super champion]" ? 0 : null };
+            var actor = DungeonMonsterPlan.FromRoom(room with { Monsters = [row], MonsterTeams = [7] },99,10,playerTeam: 7).Monsters.Single();
+            That(actor.SpawnType == spawn && actor.Team == 7 && actor.IsFriendly && !actor.IsBlocking && !actor.CanReportDeath &&
+                !actor.IsBoss && !actor.IsScriptedBoss, "NPC品级仍来自rank，同阵营排除仍来自本人实际team");
+        }
+        foreach (var row in new[]
+        {
+            npc with { NpcParameter = null }, npc with { Modifiers = [] },
+            npc with { Modifiers = ["[NPC]","[dummy]"] }, npc with { Modifiers = ["[NPC]","[displayhuntdummy]"] },
+            npc with { Modifiers = ["[NPC]","[NPC]"] }, npc with { Modifiers = ["[future]"] }
+        })
+            Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(room with { Monsters = [source,row] },99,10),
+                "NPC缺参数、缺标记或未闭合修饰组合整批拒绝，不发布残缺演员");
         var child = new DungeonRoomSpecialChild(1, "[monster]", Array.AsReadOnly(new[] { 1, 5, 2, 5, -1 }), "monster/fixture.mob");
         var trap = new DungeonRoomSpecialChild(0, "[trap]", [40002, 40, 1, 10, -1], null);
         var parent = new DungeonRoomSpecialObject(0, 3, [3, 100, 200, 0, 2], "passiveobject/fixture.obj", [trap, child]);

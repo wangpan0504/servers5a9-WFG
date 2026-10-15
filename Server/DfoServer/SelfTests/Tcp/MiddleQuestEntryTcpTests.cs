@@ -18,7 +18,9 @@ internal static class MiddleQuestEntryTcpTests
     {
         var dungeons = DungeonCatalog.Load(resources.Archive);
         var rooms = DungeonRoomCatalog.Load(resources.Archive);
-        foreach (var scenario in MiddleQuestEntryTests.Scenarios)
+        // NPC两条路线只复用入场wire夹具；不制造NPC退场、dummy死亡或sub11结算。
+        var scenarios = MiddleQuestEntryTests.NpcScenarios.Concat(MiddleQuestEntryTests.Scenarios);
+        foreach (var scenario in scenarios)
         {
             string originalRoles = Roles();
             var quest = resources.Quests.Get(scenario.Quest);

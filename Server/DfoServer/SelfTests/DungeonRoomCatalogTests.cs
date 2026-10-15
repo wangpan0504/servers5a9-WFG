@@ -107,7 +107,7 @@ internal static class DungeonRoomCatalogTests
         That(npcMonsters.Monsters[0].NpcParameter == 0 && npcMonsters.Monsters[0].Modifiers is IList npcModifiers && npcModifiers.IsReadOnly,
             "原NPC参数及修饰独立于输入修改，缺省不会被补成0");
         TestCheck.Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(npcMonsters,1,100,62),
-            "NPC参数解析恢复不授予普通演员生成、战斗或奖励资格");
+            "NPC与dummy组合的解析不授予普通演员生成、战斗或奖励资格");
         foreach (int parameter in new[] { -1, int.MinValue, int.MaxValue })
             That(fixture.Parse(fixture.Block("monster", [.. npcPrefix, npcMarker, new(0,parameter), bossMarker])).Monsters[0].NpcParameter == parameter,
                 "NPC原整数保留显式负值及边界，不猜编号范围或布尔含义");
