@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
@@ -680,6 +681,7 @@ internal static class QuestLifecycleTcpTests
         DefaultSideQuestTcpTests.Verify(extra,resources,growth,DrainNotifications);
         ForestChildAcceptanceTcpTests.Verify(extra,resources,growth,DrainNotifications);
         MiddleQuestEntryTcpTests.Verify(extra,resources,growth);
+        QuestCounterattackEntryTcpTests.Verify(extra,resources,growth,DrainNotifications);
         MetroQuestEntryTcpTests.Verify(extra,resources,growth,DrainNotifications);
         await extra.StopAsync();
         string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
@@ -1028,6 +1030,7 @@ internal static class QuestLifecycleTcpTests
                 created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level=checked((byte)scenario.Level),
                     AcceptedStoryLevel=checked((uint)scenario.Level),CompletedQuests=done.ToArray(),InitialLearning=learning });
             }
+            string? settledAssets = null;
             using (var peer = Open(fixture))
             {
                 peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
@@ -1071,17 +1074,78 @@ internal static class QuestLifecycleTcpTests
                 peer.Expect(1,33,[1,(byte)scenario.Quest,(byte)(scenario.Quest>>8),0,0,0,0]); Drain();
                 That(enabled == 1 && bossChecks == 0 && beforeRepeat == fixture.Snapshot("SELECT revision FROM characters WHERE id="+peer.Id),
                     "同一物件33重放只确认原条件，不重复发31、伪造115或推进revision " + scenario.Quest);
-                peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();
+                if (scenario.Quest == 3205) VerifyFirstSpineReward();
+                else { peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain(); }
                 That(fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id)
                     is [[long settledMap]] && settledMap == scenario.Map,"收到许可后真实46按实际终点结算 " + scenario.Quest);
                 peer.Send(34,[34,0,(byte)scenario.Quest,(byte)(scenario.Quest>>8),255,255,1,0,255,255]);
                 That(Finished(peer).Body[0] == 1,"实际条件及结算完成后正常交付 " + scenario.Quest); Drain();
                 peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                if (scenario.Quest == 3205) settledAssets = SavedAssets();
                 void Drain() => DrainNotifications(peer,packet =>
                 {
                     if (packet.Opcode == 31) enabled++;
                     if (packet.Opcode == 115) bossChecks++;
                 });
+                void VerifyFirstSpineReward()
+                {
+                    ulong beforeExperience = checked((ulong)(long)fixture.Query("SELECT experience FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                    byte level = checked((byte)(long)fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                    var reward = DungeonClearExperienceCatalog.Load(resources.Archive).Calculate(dungeons.Get(25),0,99);
+                    ulong expectedExperience = checked(beforeExperience+reward.TotalExperience);
+                    while (expectedExperience >= growth.GetCumulativeExperienceBoundary(level)) level++;
+                    byte[] report = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99);
+                    string inventory = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",peer.Id);
+                    peer.Send(46,report); ReadReward();
+                    That(fixture.Query("SELECT experience FROM characters WHERE id=$p0",peer.Id) is [[long experience]] &&
+                        checked((ulong)experience) == expectedExperience && fixture.Query(
+                        "SELECT claimed,mail_id FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id) is [[0L,DBNull]] &&
+                        inventory == fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",peer.Id),
+                        "第一脊椎物件清图后46实际提交一次基础/评分经验，免费牌仅冻结不提前入包");
+                    string committed = SavedAssets(), revision = Revision();
+                    peer.Send(46,report); ReadReward();
+                    That(SavedAssets() == committed && Revision() == revision,"同一物件ClearFact重复46重放结果正文，经验、牌计划及revision均不重复");
+                    peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,90)); peer.Barrier();
+                    That(SavedAssets() == committed && Revision() == revision,"第一脊椎已冻结评分不能被不同46正文替换");
+                    var card = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>((string)fixture.Query(
+                        "SELECT reward_json FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id).Single()[0])!;
+                    long gold = (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0];
+                    long maximumUid = (long)fixture.Query("SELECT coalesce(max(item_uid),0) FROM character_inventory_items")[0][0];
+                    peer.Send(69); peer.Expect(1,69,[1]);
+                    peer.Send(70); var rights = peer.Expect(1,70).Body;
+                    That(rights.Length == 17 && rights[0] == 1 && Enumerable.Range(1,7).All(index => U16(rights,1+index*2) == ushort.MaxValue),
+                        "实际物件终点结算仍按八席完整70开放本人免费牌");
+                    // 等实际自动选择ACK而非固定睡眠，随后手动重复核对同一领取。
+                    byte[] selected = peer.Expect(1,71).Body; Drain();
+                    var expectedSelected = new byte[33]; expectedSelected[0] = 1;
+                    for (int index=0; index<8; index++) { expectedSelected[1+index*4] = 255; expectedSelected[2+index*4] = 255; }
+                    expectedSelected[1] = 0;
+                    Bytes(selected,expectedSelected,"第一脊椎免费牌ACK71只揭示35预载的本人席");
+                    var actualCores = fixture.Query("SELECT item_core FROM character_inventory_items WHERE character_id=$p0 AND item_uid>$p1 ORDER BY item_uid",peer.Id,maximumUid)
+                        .Select(row => (string)row[0]).ToArray();
+                    That(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id) is [[long actualGold]] && actualGold == gold+card.Gold &&
+                        fixture.Query("SELECT claimed,mail_id FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id) is [[1L,DBNull]] &&
+                        actualCores.SequenceEqual(card.Items().Select(item => JsonSerializer.Serialize(item))),
+                        "第一脊椎真实领取按冻结金币和完整物品Core生成新UID，未凭展示包认定发奖");
+                    committed = SavedAssets(); revision = Revision(); peer.Send(71,[0,0]); peer.Expect(1,71,selected); peer.Barrier();
+                    That(SavedAssets() == committed && Revision() == revision,"重复71不增加金币、UID、邮件、领取回执或revision");
+
+                    void ReadReward()
+                    {
+                        var notices = new List<WirePacket>(); DrainNotifications(peer,notices.Add);
+                        That(notices.Where(packet => packet.Opcode is 34 or 37 or 35).Select(packet => packet.Opcode).SequenceEqual(new ushort[] { 34,37,35 }),
+                            "第一脊椎结算通知顺序34、37、35各一次，不以数据库回执替代实际结果包");
+                        var result = notices.Single(packet => packet.Opcode == 34).Body;
+                        var exp = notices.Single(packet => packet.Opcode == 37).Body;
+                        var display = notices.Single(packet => packet.Opcode == 35).Body;
+                        That(result.Length == 16 && result[6] == 99 && result[7] == 1 && result[8] == 1 && U16(result,9) == peer.Id &&
+                            exp.Length == 91 && exp[0] == level && BinaryPrimitives.ReadUInt64LittleEndian(exp.AsSpan(1)) == expectedExperience &&
+                            display.Length >= 218 && U32(display,0) == reward.BaseExperience && U32(display,4) == reward.RankExperience,
+                            "第一脊椎真实46按34→37→35投影实际评分、已提交累计经验与基础/评分奖励");
+                        FormalDungeonTcpTests.ReadCommittedCard(fixture,peer,display);
+                    }
+                    string Revision() => fixture.Snapshot("SELECT revision FROM characters WHERE id=$p0",peer.Id);
+                }
             }
             using (var peer = Open(fixture))
             {
@@ -1089,7 +1153,13 @@ internal static class QuestLifecycleTcpTests
                 That(fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1",peer.Id,scenario.Quest) is [[1L]] &&
                     fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[long settledMap]] && settledMap == scenario.Map,
                     "回城重连保持一次真实物件交付和结算记录 " + scenario.Quest);
+                if (settledAssets is not null) That(SavedAssets() == settledAssets,"第一脊椎回城重连完整保留经验、金币、UID及免费牌领取事实");
             }
+            string SavedAssets() => fixture.Snapshot("SELECT experience,gold FROM characters WHERE id=$p0",created.Id) +
+                fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0",created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_card_rewards WHERE character_id=$p0",created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_card_options WHERE character_id=$p0",created.Id);
         }
     }
 

@@ -23,6 +23,8 @@ internal sealed record DungeonMaze(
     IReadOnlyList<PvfToken> QuestConnectionTokens)
 {
     public IReadOnlyList<DungeonMap> LayeredMaps { get; init; } = Array.Empty<DungeonMap>();
+    // 保留覆盖前来源供任务地图池排除；不参与有效路线、候选抽取或演员准备。
+    public IReadOnlyList<DungeonMap> OverriddenMaps { get; init; } = Array.Empty<DungeonMap>();
     public IReadOnlyList<DungeonMap> StoryStages { get; init; } = Array.Empty<DungeonMap>();
     public DungeonBossEntrance? BossEntrance { get; init; }
     public IReadOnlyList<DungeonWarpMap> WarpMaps { get; init; } = Array.Empty<DungeonWarpMap>();
@@ -433,6 +435,23 @@ internal sealed class DungeonCatalog
             }
             specification = Freeze(bases.Concat(stages));
         }
+        var overridden = new List<DungeonMap>();
+        if (stages.Count == 0 && specification is not null)
+        {
+            var effective = new List<DungeonMap>();
+            foreach (var group in specification.GroupBy(map => map.Position))
+            {
+                // Full03 0409C98C按坐标取同一格，0409C9B9先清普通map候选再追加本行。
+                // 仅解释同种普通map；既有Boss剧情阶段、混合种类校验与叠层身份保持独立。
+                if (group.All(map => map.Kind == "map"))
+                {
+                    effective.Add(group.Last());
+                    overridden.AddRange(group.SkipLast(1));
+                }
+                else effective.AddRange(group);
+            }
+            specification = Freeze(effective);
+        }
         if (specification is not null && specification.GroupBy(map => map.Position).Any(group => group.Count() > 1 &&
             (stages.Count == 0 || group.Count(map => map.StoryStageIndex < 0) > 1))) throw new InvalidDataException("重复 map specification 坐标");
         var entrance = DungeonMazeConditions.Entrance(mazeSections,resolve);
@@ -445,7 +464,7 @@ internal sealed class DungeonCatalog
             }
         }
         var maze = new DungeonMaze(ordinal,width,height,greed,starts,bosses,specification,quest)
-            { LayeredMaps = Freeze(layered),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
+            { LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
                 ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve) };
         return maze with { ConditionalMaps = ConditionalMaps(maze) };
         IReadOnlyList<PvfToken> Required(string tag) => sections.TryGetValue(tag, out var value) ? value.Tokens : throw new InvalidDataException("maze 缺少字段: " + tag);

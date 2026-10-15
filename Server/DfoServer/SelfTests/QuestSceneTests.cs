@@ -130,7 +130,8 @@ internal static class QuestSceneTests
             QuestLifecycleReceipt? Observe(uint id,bool checksum) => f.Session.ObserveFormalPassiveDeath(id,checksum,new string('B',64),rooms);
             QuestFinishResult Finish(ushort id) => f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
         }
-        VerifyPassiveSettlement(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
+        VerifyPassiveSettlement(towns, characters, items, quests, skills, growth, dungeons, rooms, kills,
+            DungeonClearExperienceCatalog.Load(pvf),DungeonDropRuleCatalog.Load(pvf));
         VerifyRoomProgress(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
         VerifyTerminalLayerReentry(towns,characters,items,quests,skills,growth,dungeons,rooms,kills);
         VerifyMetroCages(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
@@ -222,7 +223,8 @@ internal static class QuestSceneTests
 
     private static void VerifyPassiveSettlement(TownCatalog towns, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons,
-        DungeonRoomCatalog rooms, DungeonKillExperienceCatalog kills)
+        DungeonRoomCatalog rooms, DungeonKillExperienceCatalog kills, DungeonClearExperienceCatalog clear,
+        DungeonDropRuleCatalog drops)
     {
         var area = towns.Areas.Values.First(row => row.Level <= 28 && row.DungeonWorldMap is { } world &&
             towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 25));
@@ -230,10 +232,10 @@ internal static class QuestSceneTests
         if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)), checked((ushort)(bounds.Y + bounds.Height / 2)));
-        foreach (string mode in new[] { "rollback", "lost", "stale", "independent" })
+        foreach (string mode in new[] { "rollback", "lost", "stale", "independent", "lostSettlement" })
         {
             using var f = new Fixture(towns, characters, skills, growth, quests, mode is "lost" or "stale",
-                28, done.ToArray(), position: position);
+                28, done.ToArray(), position: position,loseSettlement: mode == "lostSettlement");
             That(f.Session.ChangeQuest(3205, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces)?.Commit is not null,
                 "隔离真实入口正常接取3205");
             if (mode == "independent")
@@ -292,6 +294,36 @@ internal static class QuestSceneTests
                 "同物件33重放或39镜像不再次推进revision或结算");
             f.Session.ConfirmFormalDungeonSettlementEnabled(enable!.Value.Receipt);
             That(f.Session.EnableFormalDungeonSettlement() is null, "成功发布后本实例不重复许可结算");
+            if (mode == "lostSettlement")
+            {
+                var expected = clear.Calculate(dungeons.Get(25),0,99);
+                var previous = f.Session.Selected!;
+                int draws = 0;
+                var cards = new DungeonCardRewardPolicy(drops,items.DungeonDropItems,items.Items,items.GoldLimits,items.EpicPieces,
+                    _ => { draws++; return 0; });
+                TestCheck.Reject<IOException>(() => Settle(),"第一脊椎真实物件ClearFact结算COMMIT后返回丢失");
+                var saved = f.Read(); int frozenDraws = draws;
+                That(ReferenceEquals(previous,f.Session.Selected) && saved.Learning.Experience == previous.Learning.Experience+expected.TotalExperience &&
+                    f.Query("SELECT count(*) FROM character_dungeon_settlement_receipts") is 1L &&
+                    f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 0L &&
+                    saved.Inventory.Gold == previous.Inventory.Gold && f.Session.ReturnFromFormalDungeon() is null,
+                    "未知结果保留原在线快照且拒绝离场，持久经验与未领牌仅一次提交");
+                var restored = Settle();
+                That(restored.Outcome == DungeonRunOutcome.Accepted && restored.Card is not null && restored.Inventory is null &&
+                    draws == frozenDraws && Same(saved,f.Session.Selected!) && Same(saved,f.Read()),
+                    "第一脊椎原46恢复安装持久结果，不重复抽牌、经验或资产");
+                That(Settle().Outcome == DungeonRunOutcome.Duplicate && Same(saved,f.Read()) &&
+                    f.Query("SELECT count(*) FROM character_dungeon_card_rewards") is 1L,
+                    "原物件结算恢复后的重复请求保持唯一牌计划");
+                That(f.Session.ReturnFromFormalDungeon() is not null,"已恢复物件结算允许正常回城，不遗留未决事务互锁");
+                f.Session.ReturnToRoster(); f.Session.Select(0,resumeTown:true); f.Session.MarkReady();
+                That(f.Session.Selected!.Learning.Experience == saved.Learning.Experience &&
+                    System.Text.Json.JsonSerializer.Serialize(f.Session.Selected.Inventory) == System.Text.Json.JsonSerializer.Serialize(saved.Inventory) &&
+                    f.Read().ActiveMainQuests.Single(row => row.QuestId == 3205).ConditionState == 0 &&
+                    f.Query("SELECT count(*) FROM character_dungeon_settlement_receipts") is 1L,
+                    "重选回放已保存经验和已达成物件条件，不恢复旧Run或重发通关奖励");
+                FormalDungeonSettlementResult Settle() => f.Session.SettleFormalDungeon(previous.Id,99,99,[11,3,25],dungeons,clear,growth,cards);
+            }
             QuestLifecycleReceipt? Observe() => f.Session.ObserveFormalPassiveTrigger(3205, new(0x10, 0, 0), new string('C', 64), rooms);
         }
     }

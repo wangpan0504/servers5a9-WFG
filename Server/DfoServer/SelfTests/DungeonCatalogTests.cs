@@ -72,9 +72,47 @@ internal static class DungeonCatalogTests
             .Concat(fixture.Tag("beast dungeon",fixture.Int(1))).Concat(beastTokens).ToArray()),"带参数的魔兽边界不能放行");
         Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(fixture.Tag("unknown dungeon"))
             .Concat(fixture.Tag("size",fixture.Int(5),fixture.Int(3))).ToArray()),"未知标记不能用作放宽重复布局的边界");
+        VerifyOrdinaryMapOverrides();
         Console.WriteLine($"PASS {Count-checks} 无资源故事、普通难度及魔兽模式作用域断言");
 
         static DungeonDefinition Definition(params DungeonRawSection[] sections) => new(17,"dungeon/difficulty-fixture.dgn",1,1,[],sections);
+    }
+
+    static void VerifyOrdinaryMapOverrides()
+    {
+        var fixture = new Fixture();
+        foreach (var ids in new[] { new[] {1,2,3}, new[] {3,1,2} })
+        {
+            var rows = new PvfToken[] { fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(ids[0]),
+                fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(ids[1]),fixture.Int(ids[2]) };
+            var overridden = fixture.Parse(fixture.Maze(mapRows: rows));
+            That(overridden.Mazes.Single() is { ResourceError: null, MapSpecification: [{ Kind: "map" } map] } &&
+                map.Id == ids[1] && map.CandidateIds.SequenceEqual(ids.Skip(1)) &&
+                overridden.Mazes[0].OverriddenMaps is [{ Id: var oldId }] && oldId == ids[0] &&
+                overridden.RawSections.Single(section => section.Tag == "map specification").Tokens.SequenceEqual(rows),
+                "普通同格末行替换完整候选列表并保留本行顺序与原始token，不合并旧候选");
+        }
+        var narrowed = fixture.Parse(fixture.Maze(mapRows: [fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1),fixture.Int(2),
+            fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(3)]));
+        That(narrowed.Mazes.Single().MapSpecification is [{ Id: 3, CandidateIds: [3] }] &&
+            narrowed.Mazes[0].OverriddenMaps is [{ CandidateIds: [1,2] }],
+            "后声明单图覆盖前声明多候选，旧候选仅留资源来源不参与有效路线");
+        var mixed = fixture.Parse(fixture.Maze(mapRows: [fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1),
+            fixture.String("boss"),fixture.Int(0),fixture.Int(0),fixture.Int(2)]));
+        That(mixed.Mazes.Single() is { MapSpecification: null, ResourceError: not null } rejected &&
+            rejected.ResourceError.Contains("重复 map specification 坐标",StringComparison.Ordinal),
+            "未确认普通与Boss混合重叠不能借用同种map覆盖规则");
+        var repeated = fixture.Parse(fixture.Maze(mapRows: [fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1),
+            fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(2),
+            fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(3)]));
+        That(repeated.Mazes.Single().MapSpecification is [{ Id: 3 }] &&
+            repeated.Mazes[0].OverriddenMaps.Select(map => map.Id).SequenceEqual([1,2]) &&
+            repeated.Mazes[0].OverriddenMaps is IList history && history.IsReadOnly,
+            "三次覆盖保留前两行的只读来源，只有末行参与有效布局");
+        var invalid = fixture.Parse(fixture.Maze(mapRows: [fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(99),
+            fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1)]));
+        That(invalid.Mazes.Single() is { ResourceError: not null, MapSpecification: null },
+            "旧行存在非法单图引用时保留原资源拒绝，不借末行覆盖隐藏畸形引用");
     }
 
     public static void Run(PvfArchive pvf)
@@ -139,6 +177,17 @@ internal static class DungeonCatalogTests
         That(plaza.RawSections.Count(section => section.Tag == "beast dungeon") == 3 &&
             plaza.RawSections.Count(section => section.Tag == "boss map" && section.Tokens.SequenceEqual([new PvfToken(0,-1),new(0,-1)])) == 3,
             "真实时间广场三个魔兽区块及无普通Boss声明仍完整可查询");
+        var finalBattle = catalog.Get(85);
+        var finalBattleMaze = finalBattle.Mazes.Single(maze => maze.ConnectsQuest(3553));
+        That(finalBattleMaze is { ResourceError: null, MapSpecification.Count: 10, StoryStages.Count: 0, LayeredMaps.Count: 0 } &&
+            finalBattleMaze.MapSpecification.Single(map => map.Position == new DungeonPoint(5,1)) is
+                { Id: 92470, Kind: "map", CandidateIds: [92470] } &&
+            finalBattleMaze.OverriddenMaps is [{ Id: 92467, CandidateIds: [92467] }] &&
+            !finalBattleMaze.MapSpecification.Any(map => map.Id == 92467) && finalBattleMaze.StaticTopology is { Supported: true, Links.Count: 9 } &&
+            finalBattle.RawSections.Any(section => section.Tag == "map specification" &&
+                section.Tokens.Any(token => token.Type == 0 && token.Value == 92467) &&
+                section.Tokens.Any(token => token.Type == 0 && token.Value == 92470)),
+            "3553按本版末行覆盖保留十个有效格及92470，原始重复声明仍完整可查询");
         That(JsonSerializer.Serialize(dungeon).Contains("QuestConnectionTokens", StringComparison.Ordinal), "resource definition is serializable");
         var shared = new DungeonDefinition[16];
         Parallel.For(0, shared.Length, i => shared[i] = catalog.Get(3));
@@ -245,7 +294,7 @@ internal static class DungeonCatalogTests
         }
 
         public PvfToken[] Tag(string tag, params PvfToken[] values) => [new(3, String("[" + tag + "]").Value), .. values];
-        public PvfToken[] Maze(int width = 1, int height = 1, int startX = 0, string greed = "BB", string kind = "boss", int mapId = 1, bool duplicateMap = false, bool duplicateStart = false, bool closeMap = true)
+        public PvfToken[] Maze(int width = 1, int height = 1, int startX = 0, string greed = "BB", string kind = "boss", int mapId = 1, bool duplicateMap = false, bool duplicateStart = false, bool closeMap = true, PvfToken[]? mapRows = null)
         {
             var tokens = new List<PvfToken>();
             tokens.AddRange(Tag("maze info"));
@@ -260,7 +309,7 @@ internal static class DungeonCatalogTests
             };
             if (duplicateMap)
                 maps.AddRange([String(kind), Int(0), Int(0), Int(mapId)]);
-            tokens.AddRange(Tag("map specification", maps.ToArray()));
+            tokens.AddRange(Tag("map specification", mapRows ?? maps.ToArray()));
             if (closeMap)
                 tokens.AddRange(Tag("/map specification"));
             var starts = new List<PvfToken>
@@ -277,6 +326,7 @@ internal static class DungeonCatalogTests
             return tokens.ToArray();
         }
 
-        public DungeonDefinition Parse(PvfToken[] tokens, bool exists = true) => DungeonCatalog.ParseResource(3, "dungeon/test.dgn", tokens, Resolve, new Dictionary<int, string> { [1] = "map/test.map" }, _ => exists);
+        public DungeonDefinition Parse(PvfToken[] tokens, bool exists = true) => DungeonCatalog.ParseResource(3, "dungeon/test.dgn", tokens, Resolve,
+            new Dictionary<int, string> { [1] = "map/test.map", [2] = "map/second.map", [3] = "map/third.map" }, _ => exists);
     }
 }

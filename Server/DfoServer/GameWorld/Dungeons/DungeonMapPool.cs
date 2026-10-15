@@ -57,7 +57,7 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             maze.Starts.Count == 0 || maze.Bosses.Count == 0) return maze;
         var maps = (maze.MapSpecification ?? []).ToDictionary(row => row.Position);
         var excluded = definition.Mazes.Where(row => row.QuestConnectionTokens.Count != 0)
-            .SelectMany(row => (row.MapSpecification ?? []).Concat(row.LayeredMaps))
+            .SelectMany(row => (row.MapSpecification ?? []).Concat(row.LayeredMaps).Concat(row.OverriddenMaps))
             .Concat(definition.Mazes.SelectMany(row => row.LayeredMaps))
             .SelectMany(row => row.CandidateIds.Count == 0 ? new[] { row.Id } : row.CandidateIds).ToHashSet();
         var pool = entries.Where(row => row.Dungeons.Contains(definition.Id) && !excluded.Contains(row.Id)).ToArray();

@@ -1110,7 +1110,7 @@ internal static partial class FormalDungeonTcpTests
         fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0 ORDER BY instance_id", id) +
         fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0", id);
 
-    static void ReadCommittedCard(TcpTestFixture fixture, TcpPeer peer, byte[] body, bool duplicate = false)
+    internal static void ReadCommittedCard(TcpTestFixture fixture, TcpPeer peer, byte[] body, bool duplicate = false)
     {
         var row = fixture.Query("SELECT reward_json FROM character_dungeon_card_rewards WHERE character_id=$p0 ORDER BY revision DESC LIMIT 1",peer.Id).Single();
         var card = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardReward>((string)row[0])!;

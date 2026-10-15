@@ -48,6 +48,17 @@ internal static class DungeonMapPoolTests
             new(201,"map/boss.map",[10],"[boss]",16)]);
         That(protectedPool.Resolve(definition with { Mazes = [maze,protectedStory] },maze,_ => 0).MapSpecification!
             .Select(map => map.Id).SequenceEqual([101,201]),"普通池排除剧情和叠层全部候选，不只排除首张地图");
+        var overriddenStory = protectedStory with
+        {
+            OverriddenMaps = [explicitMap with { CandidateIds = [107,108] },explicitMap with { CandidateIds = [109] }]
+        };
+        var historyPool = new DungeonMapPool([new(107,"map/overridden1.map",[10],"[normal]",2),
+            new(108,"map/overridden2.map",[10],"[normal]",2),new(109,"map/overridden3.map",[10],"[normal]",2),
+            new(101,"map/start.map",[10],"[normal]",2),new(201,"map/boss.map",[10],"[boss]",16)]);
+        That(protectedStory.SameLayout(overriddenStory) &&
+            historyPool.Resolve(definition with { Mazes = [maze,overriddenStory] },maze,_ => 0).MapSpecification!
+                .Select(map => map.Id).SequenceEqual([101,201]),
+            "覆盖历史不改变有效路线等价性，任务专用历史的全部候选仍不能进入普通池");
         ExplicitCandidates();
         var trainingMaze = new DungeonMaze(0,1,1,"BB",[new(0,0)],[new(0,0)],null,[]);
         var trainingDefinition = new DungeonDefinition(5000,"dungeon/poongjintrainingroom/poongjintrainingroom.dgn",1,null,[trainingMaze],[]);
@@ -66,7 +77,8 @@ internal static class DungeonMapPoolTests
     {
         var start = new DungeonMap("map",new(0,0),100,"map/start.map") { CandidateIds = [100,101,101] };
         var boss = new DungeonMap("boss",new(1,0),200,"map/boss.map");
-        var maze = new DungeonMaze(0,2,1,"BBEE",[start.Position],[boss.Position],[start,boss],[]);
+        var maze = new DungeonMaze(0,2,1,"BBEE",[start.Position],[boss.Position],[start,boss],[])
+            { OverriddenMaps = [start with { Id = 300, CandidateIds = [300,301] }] };
         var paths = new Dictionary<int,string> { [100] = start.Path,[101] = "map/start2.map",[200] = boss.Path };
         int draws = 0;
         var selected = DungeonCatalog.ResolveMapCandidates(maze,paths,_ => true,limit =>
@@ -75,6 +87,8 @@ internal static class DungeonMapPoolTests
         });
         That(draws == 1 && selected.MapSpecification![0].Id == 101 && selected.MapSpecification[0].Path == paths[101] &&
             selected.MapSpecification[0].CandidateIds.SequenceEqual([101]),"入场规划冻结实际地图ID与路径，单候选不重复抽签");
+        That(ReferenceEquals(selected.OverriddenMaps,maze.OverriddenMaps),
+            "候选冻结不解析或丢失覆盖历史，历史不会重新参与入场抽选");
         That(maze.MapSpecification![0] == start && maze.MapSpecification[0].CandidateIds.SequenceEqual([100,101,101]),
             "抽选不修改共享资源定义或另一账号的候选");
         That(ReferenceEquals(DungeonCatalog.ResolveMapCandidates(selected,paths,_ => true,_ => throw new InvalidOperationException()),selected),
