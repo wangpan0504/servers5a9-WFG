@@ -4,7 +4,10 @@ using System.Threading.Channels;
 
 namespace DfoServer.Network;
 
-internal sealed record RemoteTownActor(ushort Id, long Membership, ReadOnlyMemory<byte> Actor, ReadOnlyMemory<byte> State, ReadOnlyMemory<byte> Position, Func<bool> Visible);
+internal sealed record RemoteTownActor(ushort Id, long Membership, ReadOnlyMemory<byte> Actor, ReadOnlyMemory<byte> State, ReadOnlyMemory<byte> Position, Func<bool> Visible)
+{
+    public ReadOnlyMemory<byte> Area { get; init; }
+}
 // 一个连接只有一个写入泵；账号 gate 内只入队，网络等待及日志在泵内执行。
 internal sealed class GameConnectionSender : IAsyncDisposable
 {
@@ -139,7 +142,8 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         return false;
     }
 
-    static long ActorBytes(RemoteTownActor actor) => (long)actor.Actor.Length + actor.State.Length + actor.Position.Length + 3 * 16;
+    static long ActorBytes(RemoteTownActor actor) => (long)actor.Actor.Length + actor.State.Length + actor.Position.Length + 3 * 16 +
+        (actor.Area.IsEmpty ? 0 : actor.Area.Length + 16L);
 
     void Cancel() => _ = cancellation.Value;
 
@@ -220,6 +224,9 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                         if (await EnsureActor(enter, message.Epoch) && Visible(enter, message.Epoch))
                         {
                             await Write(0, (ushort)NotiPacketType.USER_STATE, enter.State, "town_peer_state");
+                            // 资料包只建立缓存；23的远端分支才为同区域角色创建地图实体。
+                            if (!enter.Area.IsEmpty && Visible(enter, message.Epoch))
+                                await Write(0, (ushort)NotiPacketType.USER_AREA, enter.Area, "town_peer_area");
                             if (Visible(enter, message.Epoch))
                                 await Write(0, (ushort)NotiPacketType.USER_POSITION, enter.Position, "town_peer_position");
                         }

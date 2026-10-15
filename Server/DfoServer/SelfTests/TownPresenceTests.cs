@@ -301,8 +301,11 @@ internal static class TownPresenceTests
             flightTargetStream.Release();
             await flightTargetSend.Send(1, 1347, [1], "drain-in-flight-replacement").WaitAsync(TimeSpan.FromSeconds(2));
             var flightFrames = Frames(flightTargetStream);
-            That(flightFrames.Select(f => f.Opcode).SequenceEqual(new ushort[] { 2, 6, 2, 3, 22, 1347 }), "in-flight old Actor is removed without stale State or Position before replacement snapshot");
-            That(flightFrames[1].Body.SequenceEqual(TownPackets.RemoveActor(flightSourceCharacter.Id)) && flightFrames[4].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter, false)), "old Actor cleanup and replacement committed position retain the reused actor id");
+            That(flightFrames.Select(f => f.Opcode).SequenceEqual(new ushort[] { 2, 6, 2, 3, 23, 22, 1347 }), "in-flight old Actor is removed without stale State, Area or Position before replacement snapshot");
+            That(flightFrames[1].Body.SequenceEqual(TownPackets.RemoveActor(flightSourceCharacter.Id)) &&
+                flightFrames[4].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter, true)) &&
+                flightFrames[5].Body.SequenceEqual(TownPackets.Position(flightReplacementCharacter, false)),
+                "旧Actor清理、新成员区域入场与已提交坐标均保留复用的角色ID");
             // 旧连接的finally可晚于新成员入场；再次清理不得删除新membership，后续位置仍能送达。
             presence.Remove(flightSourceSend);
             flightReplacementCharacter = repo.Save(flightReplacement, flightReplacementCharacter, flightReplacementCharacter.Position with { X = 634 }, towns.InitialReturn);

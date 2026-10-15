@@ -765,3 +765,29 @@ CREATE TABLE character_quest_special_reward_claims(
   character_id INTEGER NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),operation_id TEXT NOT NULL,
   PRIMARY KEY(character_id,quest_id),
   FOREIGN KEY(character_id,operation_id) REFERENCES character_quest_effect_receipts(character_id,operation_id));
+-- 公会不归属单个角色：guilds 不建立指向 characters 的外键，会长删角由删除业务同事务解散公会，
+-- guild_members.character_id 才外键到 characters 并在角色删除时随行清理。
+-- name 的唯一约束就是「公会名重复确认」的唯一依据。
+CREATE TABLE guilds(
+  guild_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(guild_id BETWEEN 1 AND 2147483647),
+  name TEXT NOT NULL UNIQUE CHECK(length(name) BETWEEN 1 AND 14),
+  address TEXT NOT NULL UNIQUE CHECK(length(address) BETWEEN 1 AND 24),
+  master_character_id INTEGER NOT NULL CHECK(master_character_id>0),
+  tier INTEGER NOT NULL DEFAULT 0 CHECK(tier BETWEEN 0 AND 4),
+  level INTEGER NOT NULL DEFAULT 1 CHECK(level BETWEEN 1 AND 50),
+  experience INTEGER NOT NULL DEFAULT 0 CHECK(experience>=0),
+  public_funds INTEGER NOT NULL DEFAULT 0 CHECK(public_funds BETWEEN 0 AND 2147483647),
+  guild_crystal INTEGER NOT NULL DEFAULT 0 CHECK(guild_crystal BETWEEN 0 AND 2147483647),
+  notice TEXT NOT NULL DEFAULT '',
+  memo TEXT NOT NULL DEFAULT '',
+  created_at_unix INTEGER NOT NULL CHECK(created_at_unix>=0));
+CREATE TABLE guild_members(
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  character_id INTEGER NOT NULL UNIQUE CHECK(character_id>0) REFERENCES characters(id) ON DELETE CASCADE,
+  grade INTEGER NOT NULL DEFAULT 0 CHECK(grade BETWEEN 0 AND 255),
+  contribution INTEGER NOT NULL DEFAULT 0 CHECK(contribution BETWEEN 0 AND 2147483647),
+  member_memo TEXT NOT NULL DEFAULT '',
+  joined_at_unix INTEGER NOT NULL CHECK(joined_at_unix>=0),
+  last_login_unix INTEGER NOT NULL DEFAULT 0 CHECK(last_login_unix>=0),
+  PRIMARY KEY(guild_id,character_id));
+CREATE INDEX guild_members_grade ON guild_members(guild_id,grade);

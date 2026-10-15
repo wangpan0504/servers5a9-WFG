@@ -111,6 +111,12 @@ internal static class SqliteMigrations
         }),
         new(42, "租赁任务原生完成来源", UpgradeQuestRentalCompletion),
         new(43, "物件零击杀结算与完整契约经验", DungeonSceneSettlementSchema.Upgrade),
+        // 公会只追加空表，不改写主线已发布的迁移或角色资产。
+        new(44, "公会与成员基础表", static (db, tx) =>
+        {
+            foreach (string statement in GuildSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                Execute(db, tx, statement);
+        }),
     ];
     // 在已发布v18和经验封顶声明上只扩展native19，不改写历史迁移。
     internal static string QuestCompletionSchemaV42 => ExperienceCapSchema.Definition(
@@ -240,6 +246,42 @@ internal static class SqliteMigrations
         CREATE INDEX IF NOT EXISTS auction_listings_expiry ON auction_listings(state,expires_at_unix);
         CREATE INDEX IF NOT EXISTS auction_listings_seller ON auction_listings(seller_character_id,state);
         CREATE INDEX IF NOT EXISTS auction_listings_template ON auction_listings(state,item_template_id,listing_id);
+        """;
+
+    // 公会不归属单个角色：`guilds` 不建立指向 characters 的外键，会长删角由删除业务同事务解散公会。
+    // `guild_members.character_id` 外键到 characters，普通成员删角只清理自己的成员行。
+    // 名称唯一约束就是「公会名重复确认」的唯一依据，业务不得另建第二套内存去重。
+    // 本结构由 v44 一步建出，与 `Sqlite/game_schema.sql` 的当前结构逐列一致；`IF NOT EXISTS` 的理由与 v37 相同。
+    internal const string GuildSchema = """
+        CREATE TABLE IF NOT EXISTS guilds(
+          guild_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(guild_id BETWEEN 1 AND 2147483647),
+          -- name: 客户端提交的 GBK 名称按 UTF-8 原样保存；唯一约束（默认 BINARY 比较）即查重判据。
+          -- 长度上限取客户端提示「中文7字符或英文14字符」，按 CP936 字节数 14 折算到字符数即 ≤14。
+          name TEXT NOT NULL UNIQUE CHECK(length(name) BETWEEN 1 AND 14),
+          -- address: 创建窗口的「地址/域名」字段（客户端 0x9D CHECK_GUILD_ADDREASS_DOUBLE 同样要求唯一）。
+          address TEXT NOT NULL UNIQUE CHECK(length(address) BETWEEN 1 AND 24),
+          master_character_id INTEGER NOT NULL CHECK(master_character_id>0),
+          -- tier: 0=low class 1=mid class 2=high class 3=guardian 4=conqueror，与 etc/guildreform.etc 的档位同名。
+          tier INTEGER NOT NULL DEFAULT 0 CHECK(tier BETWEEN 0 AND 4),
+          level INTEGER NOT NULL DEFAULT 1 CHECK(level BETWEEN 1 AND 50),
+          experience INTEGER NOT NULL DEFAULT 0 CHECK(experience>=0),
+          public_funds INTEGER NOT NULL DEFAULT 0 CHECK(public_funds BETWEEN 0 AND 2147483647),
+          guild_crystal INTEGER NOT NULL DEFAULT 0 CHECK(guild_crystal BETWEEN 0 AND 2147483647),
+          notice TEXT NOT NULL DEFAULT '',
+          memo TEXT NOT NULL DEFAULT '',
+          created_at_unix INTEGER NOT NULL CHECK(created_at_unix>=0)
+        );
+        CREATE TABLE IF NOT EXISTS guild_members(
+          guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+          character_id INTEGER NOT NULL UNIQUE CHECK(character_id>0) REFERENCES characters(id) ON DELETE CASCADE,
+          grade INTEGER NOT NULL DEFAULT 0 CHECK(grade BETWEEN 0 AND 255),
+          contribution INTEGER NOT NULL DEFAULT 0 CHECK(contribution BETWEEN 0 AND 2147483647),
+          member_memo TEXT NOT NULL DEFAULT '',
+          joined_at_unix INTEGER NOT NULL CHECK(joined_at_unix>=0),
+          last_login_unix INTEGER NOT NULL DEFAULT 0 CHECK(last_login_unix>=0),
+          PRIMARY KEY(guild_id,character_id)
+        );
+        CREATE INDEX IF NOT EXISTS guild_members_grade ON guild_members(guild_id,grade);
         """;
 
     internal const string QuestEffectsSchema = """
@@ -1030,6 +1072,9 @@ internal static class SqliteMigrations
         // 拍卖行挂牌表由 v37 建出（`IF NOT EXISTS`），列是否齐全在这里兜底：
         // 缺列或缺表都会在建库/升级阶段直接拒绝启动，而不是等到运行时读挂牌才发现。
         "SELECT listing_id,seller_character_id,seller_name,item_template_id,item_kind,item_count,item_entry,starting_price,buyout_price,current_bid,current_bidder_character_id,state,posted_at_unix,expires_at_unix,settled_at_unix,deposit_gold FROM auction_listings LIMIT 0",
+        // 公会两表由 v44 建出（`IF NOT EXISTS`），同样缺表或缺列直接拒绝启动。
+        "SELECT guild_id,name,address,master_character_id,tier,level,experience,public_funds,guild_crystal,notice,memo,created_at_unix FROM guilds LIMIT 0",
+        "SELECT guild_id,character_id,grade,contribution,member_memo,joined_at_unix,last_login_unix FROM guild_members LIMIT 0",
         "SELECT character_id,operation_id,before_revision,revision,claimed_quests,changed_items FROM character_quest_effect_receipts LIMIT 0",
         "SELECT character_id,quest_id,operation_id FROM character_quest_special_reward_claims LIMIT 0",
         "SELECT account,item_id,count FROM account_adventure_purchases LIMIT 0",

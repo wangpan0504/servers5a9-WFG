@@ -92,7 +92,7 @@ internal static class TownPackets
             writer.Write(new byte[4]);
             writer.Write(new byte[8]); // 0267DF38..0267D678.
             writer.Write((byte)0);
-            writer.Write(0u);
+            writer.Write(character.Guild?.Id ?? 0u);
             writer.Write((byte)0);
             var creature = character.Inventory.Find(new(InventoryListType.Equipment, 26));
             // 0267B3B0读取模板/名称/启用标志；0267B425取反后经02A8E040写入城镇宠物禁用位。
@@ -104,7 +104,7 @@ internal static class TownPackets
             // 02677430写Actor+344h；02AA85A4/02AA8ACC据此绘制金色名称和pcroompremiumreward.img的index3。
             writer.Write(character.BlackDiamondExpiresAt > (utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()) ? (byte)1 : (byte)0);
             writer.Write(0u);
-            PacketEncoding.WriteString(writer, "");
+            PacketEncoding.WriteString(writer, character.Guild?.Name ?? "");
             writer.Write(0u);
             writer.Write((ushort)0); // 026775E3 / 026775F9: mandatory fields after the name.
             writer.Write(0u);

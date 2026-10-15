@@ -47,6 +47,11 @@ internal static class SelfTestRunner
         DungeonPickupProtocolTests.Run();
         DungeonPickupPlanningTests.RunCore();
         SkillLearningDisconnectTests.Run();
+        GuildParameterTests.RunCore();
+        GuildDirectoryTests.RunCore();
+        GuildPermitTests.RunCore();
+        GuildPermitHandlerTests.Run();
+        GuildCommitTests.Run();
         QuestFixedRewardTests.Run();
         QuestProtocolTests.Run();
         TitleTests.RunCore();
@@ -247,6 +252,8 @@ internal static class SelfTestRunner
         ItemCatalogTests.Run(pvf);
         StackableCatalogTests.Run(pvf);
         SkillCatalogTests.Run(pvf);
+        GuildParameterTests.Run(pvf);
+        GuildCreationTests.Run(towns, characters, itemResources, pvf);
         CharacterGrowthCatalogTests.Run(pvf);
         CharacterGrowthTests.Run(towns, pvf);
         DungeonKillExperienceCatalogTests.Run(pvf);

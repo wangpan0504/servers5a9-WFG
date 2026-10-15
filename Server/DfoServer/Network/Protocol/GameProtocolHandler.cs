@@ -14,7 +14,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.GameWorld.Quests.QuestCatalog? quests = null, GameDebugSettings? debugSettings = null,
     AdventureProjection? adventure = null, DfoServer.Game.Quests.QuestSkipEffects? questEffects=null,
     DfoServer.GameWorld.Items.PremiumContractCatalog? contracts = null, CharacterStatComputer? stats = null,
-    DfoServer.Network.Projection.Inventory.InventoryProjection? inventory = null, TimeProvider? time = null) : IConnectionProtocol
+    DfoServer.Network.Projection.Inventory.InventoryProjection? inventory = null, TimeProvider? time = null,
+    GuildProjection? guild = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -37,6 +38,12 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         context.Death = death;
         if (mailbox is not null)
             session.MailboxArrived = receipt => mailbox.Alarm(context, receipt);
+        if (guild is not null)
+        {
+            // 建会认证的两个跨连接入口都绑定本条连接：邀请/取消推给被邀请方，建会结果（金币差额 + 3 个通知）发布给创建者。
+            session.GuildPermitNoticeArrived = notice => guild.Notice(context, notice);
+            session.GuildPermitResolved = outcome => guild.ResolvedAsync(context, outcome);
+        }
         try
         {
             online.Register(login.Owner, session);

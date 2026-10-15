@@ -61,6 +61,8 @@ internal static class ServerRuntime
         var questConnections = QuestConnectionCatalog.Load(pvf);
         var imageCommunication = ImageCommunicationCatalog.Load(pvf, towns);
         var titleCatalog = new TitleCatalog(pvf, quests);
+        // 公会参数（建会花费、仓库格数、等级经验曲线）：数值只从 PVF 读，业务层不写死常数。
+        var guildParameters = new GameWorld.Guilds.GuildParameterCatalog(pvf);
         var titleService = new Game.Titles.TitleAchievementService(titleCatalog, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var titleProjection = new TitleProjection(titleService);
         adventureCatalog ??= new GameWorld.Adventure.AdventureCatalog(pvf);
@@ -73,8 +75,13 @@ internal static class ServerRuntime
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock);
+        // 建会认证申请与入城补投：入城序列只依赖窄投递接口（顺序模式：创建者与被邀请方不同时在线）。
+        var guildPermits = new Game.Guild.GuildPermitRegistry();
+        var guildPermitDelivery = new GuildPermitDelivery(guildPermits);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
+        // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
+        var guildProjection = new GuildProjection(inventoryProjection, presence);
         var debugSettings = new GameDebugSettings();
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -206,6 +213,9 @@ internal static class ServerRuntime
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection),
             dungeon,
             new AgitWarHandler(),
+            // 公会：创建窗口的两次查重（CMD 0x9C / 0x9D）、介绍校验（0x2E3）与建会认证链路（0x2E5 / 0x2E6 / 0x2E7）。
+            // 顺序模式下创建者可能已经下线：接受认证时用离线账号租约提交，因此这里显式注入账号 owner 表。
+            new GuildHandler(new Game.Guild.GuildDirectory(repository, guildParameters), guildPermits, online, owners, log, guildProjection),
             new AuctionHandler(itemResources.Items, auctions, inventoryProjection, auctionProbe.NextSearch, auctionProbe.NextAverage,
                 auctionProbe.NextMyList, log),
             new ClientNoticeHandler(log)
@@ -217,7 +227,7 @@ internal static class ServerRuntime
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });

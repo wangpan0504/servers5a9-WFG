@@ -11,21 +11,21 @@ internal static class EmotionTcpTests
         await fixture.StartAsync();
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         using var actor = Open(fixture, "moodowner", gamePort: endpoints[21], channelNumber: 21);
-        using var observer = Open(fixture, "moodobserver", gamePort: endpoints[11], channelNumber: 11);
+        using var observer = Open(fixture, "moodobserver", gamePort: endpoints[21], channelNumber: 21);
         actor.Send(254, [1, 0]); actor.Expect(1, 254, [0, 3, 0]);
         actor.Create("MoodFirst");
         actor.Create("MoodSecond");
         observer.Create("MoodOther");
         actor.Select(); observer.Select();
         actor.Send(1426); actor.SendBarrier(); actor.Batch((0, 23), (0, 24), (1, 1347));
-        observer.Send(1426); observer.SendBarrier(); observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 22), (1, 1347));
-        actor.SendBarrier(); actor.Batch((0, 2), (0, 3), (0, 22), (1, 1347));
+        observer.Send(1426); observer.SendBarrier(); observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
+        actor.SendBarrier(); actor.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
         actor.Send(254, [1, 0]); actor.Expect(1, 254, [1, 1, 0]);
         var own = actor.Expect(0, 2);
         actor.Barrier();
         observer.SendBarrier(); var broadcast = observer.Batch((0, 2), (1, 1347));
-        That(own.Body[4] == 21 && broadcast[0].Body[4] == 11 && U16(own.Body, 119) == 1 && U16(broadcast[0].Body, 119) == 1,
-            "实收CMD254先提交并ACK，本人和跨频道同屏Actor按各接收者频道投影已提交心情");
+        That(own.Body[4] == 21 && broadcast[0].Body[4] == 21 && U16(own.Body, 119) == 1 && U16(broadcast[0].Body, 119) == 1,
+            "实收CMD254先提交并ACK，本人和同频道同屏Actor投影已提交心情");
         That(fixture.Query("SELECT name,emotion FROM characters ORDER BY id") is [["MoodFirst", 1L], ["MoodSecond", 0L], ["MoodOther", 0L]],
             "角色独立保存，不把同账号或其他账号的心情一起修改");
         string saved = fixture.Snapshot();

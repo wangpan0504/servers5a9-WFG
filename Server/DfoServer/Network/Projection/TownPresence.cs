@@ -9,8 +9,8 @@ namespace DfoServer.Network.Projection;
 
 internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = default)
 {
-    sealed record Scene(byte Town, byte Area, string Map, string? RoomAccount);
-    sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, ChannelIdentity channel, string adventureName)
+    sealed record Scene(ChannelIdentity Channel, byte Town, byte Area, string Map, string? RoomAccount);
+    sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, string adventureName)
     {
         public AccountOwners.Lease Owner { get; } = owner;
         public GameConnectionSender Sender { get; } = sender;
@@ -18,7 +18,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         public Character Character { get; set; } = character;
         public string AdventureName { get; set; } = adventureName;
         public long Serial { get; } = serial;
-        public ChannelIdentity Channel { get; } = channel;
+        public ChannelIdentity Channel => Scene.Channel;
     }
 
     readonly object gate = new();
@@ -26,10 +26,10 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     readonly Dictionary<ushort, Member> characters = [];
     readonly Dictionary<Scene, HashSet<Member>> scenes = [];
     long serial;
-    Scene SceneOf(AccountOwners.Lease owner, Character character)
+    Scene SceneOf(AccountOwners.Lease owner, Character character, ChannelIdentity identity)
     {
         var map = towns.Areas[(character.Position.Town, character.Position.Area)].Map(character.CompletedQuests.ToHashSet());
-        return new(character.Position.Town, character.Position.Area, map.Path, map.IsRoom ? owner.Account : null);
+        return new(identity, character.Position.Town, character.Position.Area, map.Path, map.IsRoom ? owner.Account : null);
     }
 
     bool Visible(Member source, Member target)
@@ -39,22 +39,17 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
                 members.TryGetValue(target.Sender, out var recipient) && ReferenceEquals(recipient, target) &&
                 source.Scene == target.Scene && source.Owner.IsCurrent && target.Owner.IsCurrent;
     }
-    readonly record struct Bodies(ReadOnlyMemory<byte> Actor, ReadOnlyMemory<byte> State, ReadOnlyMemory<byte> Position);
-    Bodies Capture(Member source, ChannelIdentity receiver)
+    readonly record struct Bodies(ReadOnlyMemory<byte> Actor, ReadOnlyMemory<byte> State, ReadOnlyMemory<byte> Position,
+        ReadOnlyMemory<byte> Area);
+    Bodies Capture(Member source)
     {
         var c = source.Character;
-        return new(TownPackets.Actor(c, receiver, adventureName: source.AdventureName), TownPackets.ActorState(c.Id), TownPackets.Position(c, false));
-    }
-    Dictionary<ChannelIdentity, Bodies> Capture(Member source, Member[] targets)
-    {
-        var result = new Dictionary<ChannelIdentity, Bodies>();
-        // 不隔离场景；同一角色按接收者身份进入其本地Actor表，包体仅在本次投递内复用。
-        foreach (var target in targets)
-            if (!result.ContainsKey(target.Channel)) result.Add(target.Channel, Capture(source, target.Channel));
-        return result;
+        return new(TownPackets.Actor(c, source.Channel, adventureName: source.AdventureName), TownPackets.ActorState(c.Id),
+            TownPackets.Position(c, false), TownPackets.Position(c, true));
     }
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>
-        new(source.Character.Id, source.Serial, bodies.Actor, bodies.State, bodies.Position, () => Visible(source, target));
+        new(source.Character.Id, source.Serial, bodies.Actor, bodies.State, bodies.Position, () => Visible(source, target))
+        { Area = bodies.Area };
 
     // 只枚举当前场景，固定接收者快照后入队。
     Member[] Peers(Member source) => scenes[source.Scene].Where(member => !ReferenceEquals(member, source)).ToArray();
@@ -83,7 +78,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             // 同一角色被新generation选中时，只清理旧连接成员，不允许其稍后删掉新成员。
             if (characters.TryGetValue(character.Id, out var old))
                 RemoveCore(old.Sender);
-            var joined = new Member(owner, sender, SceneOf(owner, character), character, ++serial, entry ?? channel, adventureName);
+            var joined = new Member(owner, sender, SceneOf(owner, character, entry ?? channel), character, ++serial, adventureName);
             members.Add(sender, joined);
             characters.Add(character.Id, joined);
             if (!scenes.TryGetValue(joined.Scene, out var scene))
@@ -92,11 +87,11 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             var peers = Peers(joined);
             if (peers.Length == 0)
                 return true;
-            var bodies = Capture(joined, peers);
+            var bodies = Capture(joined);
             foreach (var peer in peers)
             {
-                sender.Enter(Projection(peer, joined, Capture(peer, joined.Channel)));
-                peer.Sender.Enter(Projection(joined, peer, bodies[peer.Channel]));
+                sender.Enter(Projection(peer, joined, Capture(peer)));
+                peer.Sender.Enter(Projection(joined, peer, bodies));
             }
 
             return true;
@@ -106,15 +101,15 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     {
         lock (gate)
         {
-            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id || source.Scene != SceneOf(owner, character))
+            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id || source.Scene != SceneOf(owner, character, source.Channel))
                 throw new InvalidOperationException("Town move without current membership");
             source.Character = character;
             var peers = Peers(source);
             if (peers.Length == 0)
                 return true;
-            var bodies = Capture(source, peers);
+            var bodies = Capture(source);
             foreach (var target in peers)
-                target.Sender.Move(Projection(source, target, bodies[target.Channel]));
+                target.Sender.Move(Projection(source, target, bodies));
             return true;
         }
     });
@@ -123,16 +118,16 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     {
         lock (gate)
         {
-            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id || source.Scene != SceneOf(owner, character))
+            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id || source.Scene != SceneOf(owner, character, source.Channel))
                 throw new InvalidOperationException("外观刷新缺少当前场景成员");
             source.Character = character;
             if (adventureName is not null) source.AdventureName = adventureName;
             var peers = Peers(source);
             if (peers.Length == 0)
                 return true;
-            var bodies = Capture(source, peers);
+            var bodies = Capture(source);
             foreach (var target in peers)
-                target.Sender.Refresh(Projection(source, target, bodies[target.Channel]));
+                target.Sender.Refresh(Projection(source, target, bodies));
             return true;
         }
     });

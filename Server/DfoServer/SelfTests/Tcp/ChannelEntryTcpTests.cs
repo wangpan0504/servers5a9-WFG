@@ -27,20 +27,27 @@ internal static class ChannelEntryTcpTests
         }
 
         using var alpha = Open(fixture, "entrya", gamePort: endpoints[11], channelNumber: 11);
-        using var beta = Open(fixture, "entryb", gamePort: endpoints[12], channelNumber: 12);
+        using var isolated = Open(fixture, "entryb", gamePort: endpoints[12], channelNumber: 12);
         That(U32(alpha.LoginEndpoint, 13 + checked((int)U32(alpha.LoginEndpoint, 9))) == endpoints[11] &&
-            U32(beta.LoginEndpoint, 13 + checked((int)U32(beta.LoginEndpoint, 9))) == endpoints[12],
+            U32(isolated.LoginEndpoint, 13 + checked((int)U32(isolated.LoginEndpoint, 9))) == endpoints[12],
             "LOGIN端点与本连接NOTI1和实际入口相同，不把分类重新指向主端口");
-        alpha.Create("EntryA"); beta.Create("EntryB");
-        alpha.Select(); beta.Select(); alpha.Barrier(); beta.Barrier();
+        alpha.Create("EntryA"); isolated.Create("EntryB");
+        alpha.Select(); isolated.Select(); alpha.Barrier(); isolated.Barrier();
         alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24), (1, 1347));
-        beta.Send(1426); beta.SendBarrier();
-        var toBeta = beta.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 22), (1, 1347));
-        alpha.SendBarrier(); var toAlpha = alpha.Batch((0, 2), (0, 3), (0, 22), (1, 1347));
-        That(U16(toAlpha[0].Body, 121) == beta.Id && U16(toBeta[2].Body, 121) == alpha.Id &&
-            toAlpha[0].Body[4] == 11 && toBeta[2].Body[4] == 12,
-            "不同分类不隔离同屏；双方Actor均归接收者本地上下文，不落入跨频道缓存");
-        alpha.Send(35, Move(633, 196)); alpha.Barrier();
+        isolated.Send(1426); isolated.SendBarrier(); isolated.Batch((0, 23), (0, 24), (1, 1347));
+        alpha.Barrier();
+        alpha.Send(35, Move(633, 196)); alpha.Barrier(); isolated.Barrier();
+        That(fixture.Query("SELECT id,name FROM characters ORDER BY id") is [[_, "EntryA"], [_, "EntryB"]],
+            "不同频道城镇不互发入场和移动，但仍共用角色库及账号归属");
+        isolated.Send(3, [1]); isolated.Expect(1, 3, [1]); isolated.Closed();
+        using var beta = Open(fixture, "entryb", gamePort: endpoints[11], channelNumber: 11);
+        beta.Select(resumeTown: true, room: false);
+        beta.SendBarrier(); var toBeta = beta.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
+        alpha.SendBarrier(); var toAlpha = alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
+        That(U16(toAlpha[0].Body, 121) == beta.Id && U16(toBeta[0].Body, 121) == alpha.Id &&
+            toAlpha[0].Body[4] == 11 && toBeta[0].Body[4] == 11,
+            "换入相同频道后双方收到完整同屏入场，Actor归当前频道上下文");
+        alpha.Send(35, Move(634, 196)); alpha.Barrier();
         beta.SendBarrier(); beta.Batch((0, 22), (1, 1347));
         That(fixture.Query("SELECT id,name FROM characters ORDER BY id") is [[_, "EntryA"], [_, "EntryB"]],
             "各入口共用角色库，移动与账号归属不分片");
@@ -96,13 +103,12 @@ internal static class ChannelEntryTcpTests
         That(fixture.Snapshot("SELECT town,area,x,y FROM characters WHERE id=$p0", id) == "[[38,2,949,267]]",
             "非gate换频道后可以继续在原图移动");
         switched.Send(36, Area(38, 0, 629, 196, 38, 2)); switched.SendBarrier();
-        switched.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 22), (1, 1347));
-        beta.SendBarrier(); var afterSwitch = beta.Batch((0, 2), (0, 3), (0, 22), (1, 1347));
-        That(afterSwitch[0].Body[4] == 12 && U16(afterSwitch[0].Body, 121) == id,
-            "换入口后仍回到同一公共场景，新频道身份不改变对方本地缓存键");
+        switched.Batch((0, 23), (0, 24), (1, 1347));
+        beta.Barrier();
+        That(switched.Id == id, "换频道回到相同城镇仍保留角色，但不向旧频道重新发送同屏入场");
 
         using var takeover = Open(fixture, "entrya");
-        switched.Closed(); beta.SendBarrier(); beta.Batch((0, 6), (1, 1347));
+        switched.Closed(); beta.Barrier();
         takeover.Select(settings: settings); takeover.Barrier();
         That(takeover.Id == id, "跨入口接管沿用唯一账号generation，旧连接清理不删除新owner");
         That(fixture.Snapshot("SELECT town,area,x,y FROM characters WHERE id=$p0", id) == "[[38,1,450,234]]",

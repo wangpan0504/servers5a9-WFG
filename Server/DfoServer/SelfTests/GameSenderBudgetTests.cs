@@ -90,11 +90,11 @@ internal static class GameSenderBudgetTests
         using var stop = new CancellationTokenSource();
         using var stream = new HeldStream();
         await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
-        sender.Move(Actor(1, 1, 100, 200, 300));
+        sender.Move(Actor(1, 1, 100, 200, 300) with { Area = new byte[10] });
         await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        TestCheck.That(sender.PendingMoves == 0 && sender.PendingBytes == 648, "active move stays charged after leaving the coalescing dictionary");
+        TestCheck.That(sender.PendingMoves == 0 && sender.PendingBytes == 674, "active snapshot also charges the area payload and its frame header");
         sender.Move(Actor(1, 1, 9, 8, 7));
-        TestCheck.That(sender.PendingMoves == 1 && sender.PendingBytes == 648 + 72, "next move and active move have independent charges");
+        TestCheck.That(sender.PendingMoves == 1 && sender.PendingBytes == 674 + 72, "next move and active move have independent charges");
         Task clear = sender.ClearScene();
         await sender.DisposeAsync();
         await FailuresAsync([clear]);

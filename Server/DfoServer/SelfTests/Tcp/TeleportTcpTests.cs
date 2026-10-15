@@ -60,8 +60,8 @@ internal static class TeleportTcpTests
                 precheck.AsSpan(16, 3).SequenceEqual(new byte[] { 1, 0, 0 }),
                 "玩家预检查只查询当前公开城镇成员，不创建离线目标");
             peer.Send(470, Solo(target.Id, -1, 255, 255, 0, 0)); peer.Expect(1, 470, [1]); peer.Expect(0, 378, [1, 2, 164, 1, 0, 0]);
-            peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 2); peer.Expect(0, 3); peer.Expect(0, 22); peer.Barrier();
-            target.Expect(0, 2); target.Expect(0, 3); target.Expect(0, 22); target.Barrier();
+            peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 2); peer.Expect(0, 3); peer.Expect(0, 23); peer.Expect(0, 22); peer.Barrier();
+            target.Expect(0, 2); target.Expect(0, 3); target.Expect(0, 23); target.Expect(0, 22); target.Barrier();
             That(fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[38L, 0L, 622L, 196L]],
                 "玩家传送取实际目标位置，伪造客户端目的地不进入保存；同屏双方收到真实角色");
         }

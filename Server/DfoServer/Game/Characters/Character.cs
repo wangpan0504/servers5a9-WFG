@@ -13,6 +13,8 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public byte VisibilityFlags { get; init; } = 6;
     public ushort Emotion { get; init; }
     public byte Level { get; init; } = 1;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public DfoServer.Game.Guild.GuildMembership? Guild { get; init; }
     public DfoServer.Game.Tutorials.CharacterTutorialState? Tutorial { get; init; }
     public uint AcceptedStoryLevel { get; init; }
     public int[] CompletedQuests { get; init; } = [];

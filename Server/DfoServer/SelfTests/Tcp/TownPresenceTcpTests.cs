@@ -23,11 +23,14 @@ internal static class TownPresenceTcpTests
             alpha.Batch((0, 23), (0, 24), (1, 1347));
             beta.Send(1426);
             beta.SendBarrier();
-            var bEntry = beta.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 22), (1, 1347));
+            var bEntry = beta.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             alpha.SendBarrier();
-            var aEntry = alpha.Batch((0, 2), (0, 3), (0, 22), (1, 1347));
+            var aEntry = alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             That(aEntry[0].Body[0] == 0 && U16(aEntry[0].Body, 121) == beta.Id && bEntry[2].Body[0] == 0 && U16(bEntry[2].Body, 121) == alpha.Id, "mutual public actor snapshots");
-            Bytes(aEntry[2].Body, Position(beta.Id, 622, 196), "peer entrance position");
+            Bytes(aEntry[2].Body, Build(w => { w.Write(beta.Id); w.Write((byte)38); w.Write((byte)0);
+                w.Write((ushort)622); w.Write((ushort)196); w.Write((byte)0); w.Write((byte)3); }),
+                "远端23携带同一地图与显示位，创建实体而不切换接收者地图");
+            Bytes(aEntry[3].Body, Position(beta.Id, 622, 196), "peer entrance position");
             string selectionBefore = fixture.Snapshot();
             alpha.Send(15, new byte[4]);
             var select = alpha.Batch((0, 6), (1, 15), (0, 3), (0, 27));
@@ -37,9 +40,9 @@ internal static class TownPresenceTcpTests
             beta.Expect(1, 1347, [1]);
             alpha.Send(132);
             alpha.SendBarrier();
-            alpha.Batch((1, 132), (0, 3), (0, 23), (0, 24), (0, 2), (0, 3), (0, 22), (1, 1347));
+            alpha.Batch((1, 132), (0, 3), (0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             beta.SendBarrier();
-            beta.Batch((0, 2), (0, 3), (0, 22), (1, 1347));
+            beta.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             That(fixture.Snapshot() == selectionBefore, "选图离场和回城重建双向同屏，不改变两账号资产");
             alpha.Send(35, Move(633, 196));
             alpha.Barrier();
@@ -58,9 +61,9 @@ internal static class TownPresenceTcpTests
             beta.Expect(1, 1347, [1]);
             alpha.Send(1426);
             alpha.SendBarrier();
-            alpha.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 22), (1, 1347));
+            alpha.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             beta.SendBarrier();
-            beta.Batch((0, 2), (0, 3), (0, 22), (1, 1347));
+            beta.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             using (var replacement = Open(fixture, "alpha"))
             {
                 alpha.Closed();
@@ -76,9 +79,9 @@ internal static class TownPresenceTcpTests
                 That(fixture.Snapshot("SELECT level,x FROM characters WHERE account='alpha'") == "[[40,461]]", "movement retains GM update after takeover");
                 replacement.Send(1426);
                 replacement.SendBarrier();
-                replacement.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 22), (1, 1347));
+                replacement.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
                 beta.SendBarrier();
-                beta.Batch((0, 2), (0, 3), (0, 22), (1, 1347));
+                beta.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
                 replacement.Send(7);
                 replacement.SendBarrier();
                 replacement.Batch((0, 6), (1, 7), (0, 2));

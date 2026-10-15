@@ -13,7 +13,8 @@ namespace DfoServer.Network.Projection;
 
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
-    SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null)
+    SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
+    IGuildPermitDeliverer? guildPermits = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
@@ -32,6 +33,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(c, context.Channel, adventureName: context.Session.ReadAdventureName()), "actor");
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c), context.Channel), "player");
+        if (c.Guild is { } membership)
+            await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
         await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
         if (c.CompletedQuests.Length > 0 || c.AccountCompletedQuests.Length > 0)
@@ -87,6 +90,10 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await quests.InitializeAsync(context, c);
         if (!resumeTown)
             await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "enter_gameworld_complete");
+        // 建会认证的补投（顺序模式：创建者与被邀请方不同时在线）：入城序列发完后，若登记表里有指向
+        // 本人的未过期申请就推 NOTI 0x2AD。公会规则归 GuildPermitDelivery，这里只调用可选投递器。
+        if (guildPermits is not null)
+            await guildPermits.DeliverPendingAsync(context);
     }
 
     public Task ReconcileQuestsAsync(GameConnectionContext context) => quests?.CloseReadyChildrenAsync(context,refreshList: true) ?? Task.CompletedTask;

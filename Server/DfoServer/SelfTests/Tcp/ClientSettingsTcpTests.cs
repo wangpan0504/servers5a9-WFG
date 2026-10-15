@@ -363,9 +363,9 @@ internal static class ClientSettingsTcpTests
             owner.Batch((0, 23), (0, 24), (1, 1347));
             watcher.Send(1426);
             watcher.SendBarrier();
-            var entry = watcher.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 22), (1, 1347));
+            var entry = watcher.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             owner.SendBarrier();
-            owner.Batch((0, 2), (0, 3), (0, 22), (1, 1347));
+            owner.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             That(entry[2].Body[^23] == Flags(mainA), "公共场景同屏Actor使用选中角色的flags");
             byte previousFlags = Flags(mainA);
             Write(mainA, 1, 0);
