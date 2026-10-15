@@ -35,6 +35,12 @@ internal static class ItemModelTests
             That(!new PvfDocument("[sub type]\n" + value, subtypeParent).TryGetInt32("sub type", out _),
                 "empty ambiguous or invalid integer cannot fall back to parent");
         That(!new PvfDocument("").TryGetInt32("sub type", out _), "missing strict integer stays unknown");
+        var stringParent = new PvfDocument("[item group name]\n`lt coat`");
+        That(new PvfDocument("", stringParent).TryGetString("item group name", out string group) && group == "lt coat",
+            "字符串字段沿有效导入继承，保留中间空格");
+        foreach (string value in new[] { "", "lt coat", "`lt coat` 1", "`lt coat` `cl coat`", "`lt coat`\n[item group name]\n`cl coat`" })
+            That(!new PvfDocument("[item group name]\n" + value, stringParent).TryGetString("item group name", out _),
+                "空值、非字符串、尾随token与重复声明不能借父模板补成有效字符串");
         Reject<InvalidDataException>(() => new PvfDocument("[x]1[/x]\n[x]2[/x]").Block("x"));
         var scripts = new Dictionary<string, string>
         {

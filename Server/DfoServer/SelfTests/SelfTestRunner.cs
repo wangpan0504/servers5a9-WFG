@@ -141,6 +141,7 @@ internal static class SelfTestRunner
         ItemRequestTests.Run();
         ConsumableUseTests.RunCore();
         RandomOptionTests.RunCore();
+        EquipmentRandomOptionChangeTests.RunCore();
         MailboxProtocolTests.Run();
         MailboxPersistenceTests.Run();
         await MailboxPublicationTests.RunAsync();

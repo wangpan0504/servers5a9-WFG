@@ -5,6 +5,13 @@ namespace DfoServer.Network.Parsers.Inventory;
 
 internal static class RandomOptionRequests
 {
+    public static EquipmentRandomOptionChangeRequest Change(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 5)
+            throw new InvalidDataException("装备随机属性变换请求必须为5字节");
+        return new(BinaryPrimitives.ReadUInt16LittleEndian(body), BinaryPrimitives.ReadUInt16LittleEndian(body[2..]), body[4]);
+    }
+
     public static UnsealRandomOptionRequest Read(ReadOnlySpan<byte> body)
     {
         if (body.Length != 4)

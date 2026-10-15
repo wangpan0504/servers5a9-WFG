@@ -56,6 +56,18 @@ public sealed class PvfDocument
             System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value);
     }
 
+    public bool TryGetString(string tag, out string value)
+    {
+        value = "";
+        if (!fields.TryGetValue(tag, out var field))
+            return parent?.TryGetString(tag, out value) == true;
+        var textValue = text.AsSpan(field.Start, field.End - field.Start).Trim();
+        if (field.Count != 1 || textValue.Length < 2 || textValue[0] != '`' || textValue[1..].IndexOf('`') != textValue.Length - 2)
+            return false;
+        value = textValue[1..^1].ToString();
+        return true;
+    }
+
     public string Section(string tag) => fields.TryGetValue(tag, out var field)
         ? text.AsSpan(field.Start, field.End - field.Start).TrimStart().ToString()
         : parent?.Section(tag) ?? "";

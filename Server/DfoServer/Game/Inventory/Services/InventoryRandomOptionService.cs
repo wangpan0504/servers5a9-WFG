@@ -4,7 +4,7 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryRandomOptionService(ItemCatalog items, RandomOptionCatalog options,
+internal sealed partial class InventoryRandomOptionService(ItemCatalog items, RandomOptionCatalog options,
     Func<long, long>? random = null)
 {
     readonly Func<long, long> roll = random ?? Random.Shared.NextInt64;
@@ -20,14 +20,14 @@ internal sealed class InventoryRandomOptionService(ItemCatalog items, RandomOpti
         var definition = options.Resolve(items.Get(target.Core.ItemId));
         if (definition is null || before.Gold < definition.GoldCost)
             return InventoryResult.Reject();
-        int poolIndex = Choose(definition.Pools.Select((row, index) => (Value: index, row.Weight)).ToArray());
+        int poolIndex = Choose(definition.Pools.Select((row, index) => (Value: index, row.Weight)).ToArray(), roll);
         var pool = definition.Pools[poolIndex];
         var selected = new RandomOption[3];
         var used = new HashSet<byte>();
         for (int i = 0; i < pool.Count; i++)
         {
             var candidates = pool.Groups[i].Where(row => !used.Contains(row.Type)).ToArray();
-            int index = Choose(candidates.Select((row, at) => (Value: at, row.Weight)).ToArray());
+            int index = Choose(candidates.Select((row, at) => (Value: at, row.Weight)).ToArray(), roll);
             var value = candidates[index];
             selected[i] = new(value.Type, value.Value1, value.Value2);
             used.Add(value.Type);
@@ -44,12 +44,12 @@ internal sealed class InventoryRandomOptionService(ItemCatalog items, RandomOpti
         }, "random_option_unseal", new(character)));
     }
 
-    int Choose((int Value, long Weight)[] entries)
+    static int Choose((int Value, long Weight)[] entries, Func<long, long> random)
     {
         long total = entries.Aggregate(0L, (sum, entry) => checked(sum + entry.Weight));
         if (total <= 0)
             throw new InvalidDataException("魔法封印没有可选权重");
-        long value = roll(total);
+        long value = random(total);
         if (value < 0 || value >= total)
             throw new InvalidDataException("魔法封印随机值越界");
         foreach (var entry in entries)

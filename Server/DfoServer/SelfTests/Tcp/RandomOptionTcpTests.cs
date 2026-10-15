@@ -9,7 +9,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class RandomOptionTcpTests
+internal static partial class RandomOptionTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -17,13 +17,18 @@ internal static class RandomOptionTcpTests
         var repository = new CharacterRepository(fixture.Database);
         var template = resources.ItemResources.Items.Get(100260138);
         var core = InventoryRewardGrantService.Create(template) with { Attr = 7, SealFlag = 1, EnchantCardId = 3175, Rune = 8 };
+        var changeCore = ChangeCore(resources);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             repository.Create(owner, new("SealTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Skills = resources.Characters.Get(0).Skills, AcceptedStoryLevel = 1, DungeonState = CharacterDungeonState.NewOrdinary,
                 Inventory = new([new(0, Bag(3), core), new(0, Bag(9), core), new(0, Bag(10), core),
                     new(0, Bag(11), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10400))),
-                    new(0, Bag(12), core with { EquipmentLockId = 1 })], Gold: 1000)
+                    new(0, Bag(12), core with { EquipmentLockId = 1 }), new(0, Bag(13), changeCore),
+                    new(0, Bag(14), changeCore with { EquipmentLockId = 1, SortLockFlag = 0 }),
+                    new(0, Bag(15), changeCore with { IsRental = true, SortLockFlag = 0 }),
+                    new(0, Bag(16), changeCore with { ItemId = 10400, SortLockFlag = 0 }),
+                    new(0, Bag(17), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(100060156)))], Gold: 1000)
             });
         string initialIds = JsonSerializer.Serialize(fixture.Query("SELECT item_uid,list_type,slot_index FROM character_inventory_slots ORDER BY item_uid"));
         await fixture.StartAsync();
@@ -32,7 +37,8 @@ internal static class RandomOptionTcpTests
         {
             peer.Send(401, [9, 0, 255, 255]);
             peer.Expect(1, 401, [0]);
-            var entry = peer.Select(inventoryNotices: [(0, 251)]);
+            peer.Send(437, [13, 0, 0, 0, 1]); peer.Expect(1, 437, [0, 19, 0]);
+            var entry = peer.Select(inventoryNotices: [(1, 713), (0, 251)]);
             var full = entry.First(packet => packet.Kind == 0 && packet.Opcode == 13 && packet.Body[0] == 0).Body;
             var original = Row(full, 9, true);
             peer.Send(401, [9, 0, 255, 255]);
@@ -67,7 +73,7 @@ internal static class RandomOptionTcpTests
         }
         using (var peer = Open(fixture))
         {
-            var entry = peer.Select(inventoryNotices: [(0, 251)]);
+            var entry = peer.Select(inventoryNotices: [(1, 713), (0, 251)]);
             var full = entry.First(packet => packet.Kind == 0 && packet.Opcode == 13 && packet.Body[0] == 0).Body;
             That(Row(full, 9, true).SequenceEqual(townRow), "重连恢复逐字节一致的解封词条与完整核心");
             string before = Snapshot();
@@ -79,13 +85,14 @@ internal static class RandomOptionTcpTests
         }
         using (var peer = Open(fixture))
         {
-            peer.Select(inventoryNotices: [(0, 251)]);
+            peer.Select(inventoryNotices: [(1, 713), (0, 251)]);
             peer.Send(401, [10, 0, 0, 0]);
             var delta = peer.Expect(0, 14).Body;
             That(U32(Row(delta, 0), 6) == 700 && Row(delta, 10)[71] > 0, "回滚后重连可正常解封且只扣一次费用");
             peer.Expect(1, 401, [1]);
             peer.Barrier();
         }
+        VerifyChange(fixture, resources);
         That(JsonSerializer.Serialize(fixture.Query("SELECT item_uid,list_type,slot_index FROM character_inventory_slots ORDER BY item_uid")) == initialIds,
             "城镇和副本解封均保留原实例UID与槽位");
         await fixture.StopAsync();

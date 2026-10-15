@@ -32,7 +32,7 @@ internal static class RandomOptionTests
             ["etc/randomoption/optiongroupselection.etc"] = "[choose option group]\n2 -1 `lt shoes` 1 3 1000 1000 1000 0 0 1000\n3 -1 `lswd` 1 3 1000 1000 1000 0 0 1000\n[/choose option group]",
             ["etc/randomoption/optiongrouping.etc"] = "[option group]\n1000 1 10 2 1\n[/option group]\n[option group]\n1001 1 2\n[/option group]",
             ["etc/randomoption/randomizedoptionoverall2.etc"] = "[break seal cost]\n2 1 1 0 2 15 1 100 2 15 2 0 3 1 1 10\n[/break seal cost]",
-            ["equipment/common/shoes/leather/test.equ"] = "[random option]\n1\n[equipment type]\n`[shoes]` 0",
+            ["equipment/common/shoes/leather/test.equ"] = "[random option]\n1\n[equipment type]\n`[shoes]` 0\n[item group name]\n`lt shoes`",
             ["equipment/swordman/weapon/hsword/test.equ"] = "[random option]\n1\n[equipment type]\n`[weapon]` 0",
             ["etc/randomoption/options/one.etc"] = "[dungeon]\n[option]\n15\n[level]\n1\n[physical attack]\n1 2\n[/level]\n[level]\n15\n[physical attack]\n-1.9 300\n[/level]\n[/dungeon]",
             ["etc/randomoption/options/two.etc"] = "[dungeon]\n[option]\n244\n[level]\n1\n[elemental property]\n`[fire element]`\n[/elemental property]\n`[fire element]`\n[/elemental property]\n[/level]\n[/dungeon]"
@@ -60,6 +60,8 @@ internal static class RandomOptionTests
             "巨剑路径别名匹配稀有度分组");
         That(catalog.Resolve(template with { Rarity = 0 }) is null && catalog.Resolve(template with { Kind = ItemKind.Material }) is null,
             "普通装备和堆叠物没有魔法封印资格");
+        EquipmentRandomOptionChangeTests.RunCatalog((readTokens, resolve) => new RandomOptionCatalog(path => texts[path],
+            new Dictionary<int, string> { [1] = "common/shoes/leather/test.equ" }, readTokens, resolve), template);
         texts["equipment/common/shoes/leather/test.equ"] = "[random option]\n0";
         That(catalog.Resolve(template) is null, "显式零random option不解封");
         texts["etc/randomoption/optionquantity.etc"] = "[common]\n1 -1\n[/common]\n[unique]\n1 1\n[/unique]";

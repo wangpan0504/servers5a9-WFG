@@ -12,7 +12,7 @@ internal sealed record RandomOptionPool(byte Count, long Weight, ImmutableArray<
 internal sealed record RandomOptionDefinition(uint GoldCost, ImmutableArray<RandomOptionPool> Pools);
 
 // 魔法封印使用本版随机词条资源，与普通装备的封装/绑定无关。
-internal sealed class RandomOptionCatalog
+internal sealed partial class RandomOptionCatalog
 {
     const string Root = "etc/randomoption/";
     readonly Func<string, string> read;
@@ -25,9 +25,10 @@ internal sealed class RandomOptionCatalog
     readonly ConcurrentDictionary<(int Group, byte Level), ImmutableArray<RandomOptionCandidate>> candidates = new();
 
     public RandomOptionCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment)
-        : this(archive.ReadText, equipment) { }
+        : this(archive.ReadText, equipment, archive.ReadTokens, archive.ResolveString) { }
 
-    public RandomOptionCatalog(Func<string, string> read, IReadOnlyDictionary<int, string> equipment)
+    public RandomOptionCatalog(Func<string, string> read, IReadOnlyDictionary<int, string> equipment,
+        Func<string, PvfToken[]>? readTokens = null, Func<int, string>? resolve = null)
     {
         this.read = read;
         this.equipment = equipment;
@@ -76,6 +77,9 @@ internal sealed class RandomOptionCatalog
         costs = fees.Where(row => row[2] == 1).Select(row => (row[0], row[1], (uint)row[3])).ToArray();
         if (selections.Values.SelectMany(value => value).Any(id => !groups.ContainsKey(id)) || costs.Length == 0)
             throw new InvalidDataException("魔法封印资源引用缺失");
+        if ((readTokens is null) != (resolve is null))
+            throw new ArgumentException("随机属性token读取器和字符串解析器必须同时提供");
+        changeRules = readTokens is not null ? ReadChangeRules(readTokens, resolve!) : null;
     }
 
     public RandomOptionDefinition? Resolve(ItemTemplate template)

@@ -11,8 +11,32 @@ namespace DfoServer.Network.Handlers.Inventory;
 internal sealed class RandomOptionHandler(InventoryRandomOptionService options, InventoryProjection projection,
     ServerLog log) : IGameCommandModule
 {
-    public void Register(GameCommandRegistry commands) =>
+    public void Register(GameCommandRegistry commands)
+    {
         commands.Register(CmdPacketType.UNSEAL_RANDOM_OPTION, Handle, nameof(RandomOptionHandler));
+        commands.Register(CmdPacketType.CHANGE_RANDOM_OPTION, Change, nameof(RandomOptionHandler));
+    }
+
+    async Task<CommandResult> Change(GameConnectionContext context, Packet packet)
+    {
+        EquipmentRandomOptionChangeRequest request;
+        try { request = RandomOptionRequests.Change(packet.Body); }
+        catch (InvalidDataException)
+        {
+            log.Write("random_option_change", new { Connection = context.Id, Length = packet.Body.Length, Accepted = false, Result = "malformed" });
+            await context.Reply(CmdPacketType.CHANGE_RANDOM_OPTION, CargoPackets.Ack(InventoryResult.Reject(19)), "random_option_change_malformed");
+            return CommandResult.Handled;
+        }
+        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+            context.Session.PlanAndCommitInventory(character => options.Change(character, request), 19, requireTown: false);
+        log.Write("random_option_change", new { Connection = context.Id, Slot = request.Slot, request.OptionIndex,
+            result.Accepted, result.Error, Result = result.Accepted ? "committed" : "rejected", Revision = result.Receipt?.Character.Revision });
+        await projection.RefreshAsync(context, result);
+        await context.Reply(CmdPacketType.CHANGE_RANDOM_OPTION, CargoPackets.Ack(result),
+            result.Accepted ? "random_option_changed" : "random_option_change_rejected",
+            result.Receipt is { } receipt ? () => context.Session.CanPublishInventory(receipt) : null);
+        return CommandResult.Handled;
+    }
 
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
     {
