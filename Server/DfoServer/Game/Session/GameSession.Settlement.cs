@@ -6,6 +6,8 @@ using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Quests;
+using DfoServer.GameWorld.Quests;
 
 namespace DfoServer.Game.Session;
 
@@ -48,10 +50,27 @@ internal sealed partial class GameSession
                 !snapshot.LivingMonsters.Contains(monster.ObjectKey) && !dungeon.Run.IsCulledMonster(monster.ObjectKey)).ToArray();
         var boss = terminal.FirstOrDefault(monster => monster.ObjectKey == reportedBossKey) ??
             terminal.FirstOrDefault(monster => monster.IsBoss) ?? terminal.FirstOrDefault();
-        if (boss is null) return dungeon.Run.HasCommittedPassiveClearCondition
+        bool cinematic = NonCombatCinematicTerminal(dungeon) is { } movie &&
+            dungeon.Run.ClearFact.ConfirmedDeathEvents.Count > 0 && Selected!.ActiveMainQuests.Any(active =>
+                active.QuestId == movie.Id && active.ConditionState == 0 && QuestHuntProgress.Bound(active,dungeon.Entry));
+        if (boss is null) return dungeon.Run.HasCommittedPassiveClearCondition || cinematic
             ? (FormalReceipt(), (ushort?)null) : ((FormalDungeonReceipt, ushort?)?)null;
         return (FormalReceipt(), boss.ObjectKey);
     });
+
+    // 原Run先在真实战斗层产生ClearFact，再返回全非战斗演出终点；不从演出或友方退场创建清图。
+    StoryQuest? NonCombatCinematicTerminal(FormalDungeon dungeon)
+    {
+        var snapshot = dungeon.Run.Snapshot;
+        if (dungeon.Entry.IsTutorial || dungeon.Entry.IsClassExperience || dungeon.Entry.IsQuestReplay || dungeon.Run.HasCommittedPassiveClearCondition ||
+            dungeon.Entry.RouteQuestId is 0 or >= 30000 || questCatalog is null ||
+            !questCatalog.TryGet((int)dungeon.Entry.RouteQuestId,out var quest) || !QuestClientSceneProgress.DungeonCinematic(quest) ||
+            quest.CinematicMapId != snapshot.CurrentMap.Id || !dungeon.Entry.IsTerminalMap(snapshot.CurrentMap) ||
+            !quest.Definition!.Dungeons.Any(row => row.DungeonId == dungeon.Entry.DungeonId) ||
+            !dungeon.Route.Rooms.Single(room => room.Room.Map == snapshot.CurrentMap).Monsters.All(monster => !monster.CanReportDeath))
+            return null;
+        return quest;
+    }
 
     public void ConfirmFormalDungeonSettlementEnabled(FormalDungeonReceipt receipt) => owner.Execute(() =>
     {
@@ -91,6 +110,9 @@ internal sealed partial class GameSession
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
             dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
+            return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
+        // 这一演出类别须先成功发布空31；其后34清槽不撤销许可，SQL结果不明仍按原冻结结算恢复。
+        if (dungeon.Settlement is null && !dungeon.SettlementEnabled && NonCombatCinematicTerminal(dungeon) is not null)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var previous = Selected!;
         var reward = dungeon.Settlement?.Pending.Reward ?? rewards.Calculate(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),

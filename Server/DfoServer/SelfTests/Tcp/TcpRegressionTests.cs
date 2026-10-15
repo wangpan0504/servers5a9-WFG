@@ -63,6 +63,7 @@ internal static class TcpRegressionTests
         }),
         ("dungeon-story-events", async (_, _, resources) =>
         {
+            QuestCinematicSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             QuestSceneTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             MiddleQuestEntryTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             HarlemQuestEntryTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);

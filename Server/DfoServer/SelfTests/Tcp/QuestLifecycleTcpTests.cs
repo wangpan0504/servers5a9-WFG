@@ -656,6 +656,7 @@ internal static class QuestLifecycleTcpTests
         VerifyAlbertRequest(extra,resources,growth);
         AlbertHuntTcpTests.Verify(extra,resources,growth,DrainNotifications);
         QuestPassiveClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
+        QuestCinematicSettlementTcpTests.Verify(extra,resources,growth,DrainNotifications);
         QuestRoomClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
         ForestChildAcceptanceTcpTests.Verify(extra,resources,growth,DrainNotifications);
         MiddleQuestEntryTcpTests.Verify(extra,resources,growth);

@@ -9,7 +9,7 @@ internal static class DungeonSettlementProjection
     {
         if (context.Session.EnableFormalDungeonSettlement(reportedBossKey) is not { } completion) return;
         bool Guard() => context.Session.CanPublishDungeonSettlement(completion.Receipt);
-        // 空终点的物件条件只许可结算，不编造115需要的怪物key。
+        // 空终点的物件或演出条件只许可已有清图的结算，不编造115需要的怪物key。
         if (completion.BossKey is { } bossKey)
             await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(bossKey), "formal_boss_confirmed", Guard);
         bool enabled = false;

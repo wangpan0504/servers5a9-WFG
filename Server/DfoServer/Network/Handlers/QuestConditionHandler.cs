@@ -80,7 +80,11 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
             await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(closed.Commit.Character.ActiveMainQuests),"quest_child_parent_progress",Guard);
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(closed.Commit.Character),"quest_child_completed",Guard);
         }
-        if (changed?.Commit?.Plan.SceneEvent is not null)
+        // 演出进度已保存但31尚未成功发布时，重复33的Unchanged也可沿Session原资格补发。
+        if (changed?.Commit?.Plan.SceneEvent is not null ||
+            request is { Channel: null, Value: 0, Reserved: 0 } && scalar == 0 &&
+            changed?.Outcome is QuestLifecycleOutcome.Committed or QuestLifecycleOutcome.Unchanged &&
+            quests is not null && quests.TryGet(request.QuestId,out var movie) && QuestClientSceneProgress.DungeonCinematic(movie))
             await DungeonSettlementProjection.EnableAsync(context);
         return CommandResult.Handled;
     }
