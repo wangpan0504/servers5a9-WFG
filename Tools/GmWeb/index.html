@@ -39,12 +39,18 @@
   <section>
     <h2>商城调试</h2>
     <div class="row">
-      <div><label for="cash-shop-expiration">商城与礼包期限覆盖</label><select id="cash-shop-expiration" disabled><option value="off">关闭：遵循 PVF 期限</option><option value="on">开启：统一到期于 2038 年</option></select></div>
+      <div><label for="cash-shop-expiration">忽略固定到期时间</label><select id="cash-shop-expiration" disabled><option value="off">关闭：保留固定到期时间</option><option value="on">开启：忽略固定到期时间</option></select></div>
       <button id="set-cash-shop-expiration" type="button" disabled>应用</button>
       <button id="read-cash-shop-expiration" class="quiet" type="button">读取状态</button>
       <span id="cash-shop-status" class="meta">尚未读取</span>
     </div>
-    <p class="meta" style="margin:8px 0 0">默认开启，重启恢复开启。商城购买及已有随机、选择礼包开箱的主商品、附赠和内部道具统一到期于 2038-01-19 11:14:07（UTC+8）；关闭后遵循原 PVF 期限。不追溯修改已发放物品。</p>
+    <div class="row" style="margin-top:12px">
+      <div><label for="cash-shop-usable-period">忽略获得后使用期限</label><select id="cash-shop-usable-period" disabled><option value="off">关闭：保留相对期限</option><option value="on">开启：忽略相对期限</option></select></div>
+      <button id="set-cash-shop-usable-period" type="button" disabled>应用</button>
+      <button id="read-cash-shop-usable-period" class="quiet" type="button">读取状态</button>
+      <span id="cash-shop-period-status" class="meta">尚未读取</span>
+    </div>
+    <p class="meta" style="margin:8px 0 0">绝对日期忽略默认开启，相对期限忽略默认关闭。永久物品仍无期限，不追溯修改已发放物品。</p>
   </section>
   <section>
     <h2>疲劳调试</h2>
@@ -221,16 +227,18 @@ async function post(line) {
   return body.text;
 }
 
-async function cashShopExpiration(mode) {
-  const text = await post(`cash-shop-expiration${mode === undefined ? "" : ` ${mode}`}`);
+async function cashShopExpiration(mode, relative = false) {
+  const command = relative ? "cash-shop-usable-period" : "cash-shop-expiration";
+  const property = relative ? "ignoreUsablePeriod" : "ignoreAbsoluteExpiration";
+  const text = await post(`${command}${mode === undefined ? "" : ` ${mode}`}`);
   if (!text.startsWith("OK ")) throw new Error(text);
   const state = JSON.parse(text.slice(3));
-  if (typeof state.ignoreAbsoluteExpiration !== "boolean") throw new Error("商城调试状态无效");
-  const input = document.querySelector("#cash-shop-expiration");
-  input.value = state.ignoreAbsoluteExpiration ? "on" : "off";
+  if (typeof state[property] !== "boolean") throw new Error("商城调试状态无效");
+  const input = document.querySelector(`#${command}`);
+  input.value = state[property] ? "on" : "off";
   input.disabled = false;
-  document.querySelector("#set-cash-shop-expiration").disabled = false;
-  document.querySelector("#cash-shop-status").textContent = state.ignoreAbsoluteExpiration ? "统一覆盖到 2038 年" : "遵循 PVF 期限";
+  document.querySelector(`#set-${command}`).disabled = false;
+  document.querySelector(relative ? "#cash-shop-period-status" : "#cash-shop-status").textContent = state[property] ? "忽略已开启" : "保留原期限";
   show(text, "ok");
 }
 
@@ -299,6 +307,8 @@ function number(id) {
 document.querySelector("#refresh").addEventListener("click", guard(refresh));
 document.querySelector("#read-cash-shop-expiration").addEventListener("click", guard(() => cashShopExpiration()));
 document.querySelector("#set-cash-shop-expiration").addEventListener("click", guard(() => cashShopExpiration(document.querySelector("#cash-shop-expiration").value)));
+document.querySelector("#read-cash-shop-usable-period").addEventListener("click", guard(() => cashShopExpiration(undefined, true)));
+document.querySelector("#set-cash-shop-usable-period").addEventListener("click", guard(() => cashShopExpiration(document.querySelector("#cash-shop-usable-period").value, true)));
 document.querySelector("#read-infinite-fatigue").addEventListener("click", guard(() => infiniteFatigue()));
 document.querySelector("#set-infinite-fatigue").addEventListener("click", guard(() => infiniteFatigue(document.querySelector("#infinite-fatigue").value)));
 document.querySelector("#detail").addEventListener("click", guard(async () => {

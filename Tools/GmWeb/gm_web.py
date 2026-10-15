@@ -125,14 +125,16 @@ def serve(gm_port, port):
 def self_check():
     received = []
     cash_shop_debug = True
+    usable_period_debug = False
     infinite_fatigue = True
+    commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2", "account 10000 grow-options 测角", "account 10000 grow 测角 1 2", "cash-shop-expiration", "cash-shop-expiration off", "cash-shop-expiration on", "cash-shop-usable-period", "cash-shop-usable-period on", "cash-shop-usable-period off", "infinite-fatigue", "infinite-fatigue off", "infinite-fatigue on")
     listener = socket.socket()
     listener.bind((BIND, 0))
     listener.listen(8)
     gm_port = listener.getsockname()[1]
 
     def once():
-        nonlocal cash_shop_debug, infinite_fatigue
+        nonlocal cash_shop_debug, usable_period_debug, infinite_fatigue
         conn, _ = listener.accept()
         with conn:
             data = b""
@@ -161,6 +163,12 @@ def self_check():
                 elif line.endswith(" off"):
                     cash_shop_debug = False
                 reply = "OK " + json.dumps({"ignoreAbsoluteExpiration": cash_shop_debug})
+            elif line in ("cash-shop-usable-period", "cash-shop-usable-period on", "cash-shop-usable-period off"):
+                if line.endswith(" on"):
+                    usable_period_debug = True
+                elif line.endswith(" off"):
+                    usable_period_debug = False
+                reply = "OK " + json.dumps({"ignoreUsablePeriod": usable_period_debug})
             elif line in ("infinite-fatigue", "infinite-fatigue on", "infinite-fatigue off"):
                 if line.endswith(" on"):
                     infinite_fatigue = True
@@ -171,7 +179,7 @@ def self_check():
                 reply = "ERR 未识别"
             conn.sendall((reply + "\n").encode("utf-8"))
 
-    for _ in range(12):
+    for _ in commands:
         threading.Thread(target=once, daemon=True).start()
     probe = socket.socket()
     probe.bind((BIND, 0))
@@ -192,8 +200,8 @@ def self_check():
         assert 'id="gold"' in page and 'id="item-id"' in page and 'id="item-count"' in page and "通过邮件发放" in page
         assert 'id="grow-first"' in page and 'id="grow-second"' in page and "重置技能" in page
         assert 'id="cash-shop-expiration"' in page and 'id="cash-shop-status"' in page
+        assert 'id="cash-shop-usable-period"' in page and 'id="cash-shop-period-status"' in page
         assert 'id="infinite-fatigue"' in page and 'id="fatigue-status"' in page
-        commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2", "account 10000 grow-options 测角", "account 10000 grow 测角 1 2", "cash-shop-expiration", "cash-shop-expiration off", "cash-shop-expiration on", "infinite-fatigue", "infinite-fatigue off", "infinite-fatigue on")
         for line in commands:
             req = Request(
                 f"http://{BIND}:{web_port}/api/command",
@@ -207,6 +215,8 @@ def self_check():
                 assert json.loads(body["text"][3:])["options"]["growTypes"][1]["awakenings"] == ["剑圣", "剑神"]
             if line.startswith("cash-shop-expiration"):
                 assert json.loads(body["text"][3:])["ignoreAbsoluteExpiration"] == (not line.endswith(" off"))
+            if line.startswith("cash-shop-usable-period"):
+                assert json.loads(body["text"][3:])["ignoreUsablePeriod"] == line.endswith(" on")
             if line.startswith("infinite-fatigue"):
                 assert json.loads(body["text"][3:])["infiniteFatigue"] == (not line.endswith(" off"))
         assert received == list(commands), received
