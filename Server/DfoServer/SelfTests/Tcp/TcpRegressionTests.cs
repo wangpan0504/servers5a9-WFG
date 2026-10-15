@@ -165,6 +165,7 @@ internal static class TcpRegressionTests
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("booster", BoosterTcpTests.RunAsync),
+        ("lottery", LotteryTcpTests.RunAsync),
         ("booster-selection", BoosterSelectionTcpTests.RunAsync),
         ("booster-equipment", BoosterEquipmentTcpTests.RunAsync),
         ("authentication", AuthenticationTcpTests.RunAsync),

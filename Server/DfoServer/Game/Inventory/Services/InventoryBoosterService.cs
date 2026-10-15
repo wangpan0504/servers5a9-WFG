@@ -12,6 +12,35 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
         => OpenCore(character, request, out receipt, utcNow, ceraPackage: false);
 
+    public InventoryResult OpenLottery(Character character, LotteryOpenRequest request, out LotteryReceipt? receipt,
+        DateTimeOffset? utcNow = null)
+    {
+        receipt = null;
+        if (request.Mode != 0 || request.Slot < 0)
+            return InventoryResult.Reject(19);
+        var result = OpenCore(character, new(request.Slot, 1), out var opened, utcNow, ceraPackage: false, lottery: true);
+        if (!result.Accepted)
+            return result;
+        var reward = opened!.Rewards.Single();
+        var plan = result.Plan!;
+        var destinations = plan.After.Items.Where(item => item.Core.ItemId == reward.ItemId &&
+            item.Core.Count - PriorCount(item) > 0).ToArray();
+        // ACK27只有一个普通物品记录；在提交前确认本次奖励可完整表达，失败保留源和全部资产。
+        if (destinations.Length != 1 || destinations[0].Position.List != InventoryListType.Main ||
+            destinations[0].Core.Count - PriorCount(destinations[0]) != reward.Count)
+            return InventoryResult.Reject(4);
+        receipt = new(request.Slot, destinations[0].Position, reward.ItemId, reward.Count);
+        return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) };
+
+        int PriorCount(InventoryItem item)
+        {
+            var prior = plan.BeforeIndex.Find(item.Position);
+            int count = prior?.Core.ItemId == reward.ItemId ? prior.Core.Count : 0;
+            return count - (item.Position == new InventorySlot(InventoryListType.Main, request.Slot) &&
+                prior?.Core.ItemId == reward.ItemId ? 1 : 0);
+        }
+    }
+
     public InventoryResult OpenCeraPackage(Character character, CeraPackageOpenRequest request, out BoosterReceipt? receipt,
         DateTimeOffset? utcNow = null)
     {
@@ -23,7 +52,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     }
 
     InventoryResult OpenCore(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt,
-        DateTimeOffset? utcNow, bool ceraPackage)
+        DateTimeOffset? utcNow, bool ceraPackage, bool lottery = false)
     {
         receipt = null;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
@@ -35,7 +64,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
         var definition = boosters.Get(source.Core.ItemId);
-        if (!definition.Available || ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty)
+        if (!definition.Available || ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty || lottery != definition.Lottery)
             return InventoryResult.Reject(19);
         BoosterChoice[]? choices = null;
         if (definition.Selection is { } selection)
@@ -56,6 +85,11 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
             foreach (int id in ids.Distinct())
             {
+                if (lottery && (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
+                    contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id) ||
+                    catalog.Get(id).AcquisitionContract is not null ||
+                    ItemSlotBoundService.List(catalog.Get(id).Kind) != InventoryListType.Main))
+                    return InventoryResult.Reject(19);
                 if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
                     continue;
                 if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).AcquisitionContract is not null)

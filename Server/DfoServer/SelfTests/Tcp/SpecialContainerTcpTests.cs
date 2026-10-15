@@ -107,7 +107,7 @@ internal static class SpecialContainerTcpTests
         const int nameWidth = 10; // SpecialTcp的CP936字节数。
         int offset = 156 + nameWidth + body[133 + nameWidth] * 25;
         That(body[0] == 0 && U32(body, offset) == template && U32(body, offset + 4) == 0 &&
-            body[offset + 8] == 0, message);
+            body[offset + 8] == (template == 0 ? 0 : 1), message + "；同步模板与启用标志");
     }
 
     static byte[] Move(byte fromList, short fromSlot, int fromId, byte toList, short toSlot, int toId) => Build(writer =>

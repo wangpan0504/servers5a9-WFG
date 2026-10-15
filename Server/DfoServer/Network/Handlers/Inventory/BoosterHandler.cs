@@ -14,7 +14,39 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.USE_BOOSTER_ITEM, Handle, nameof(BoosterHandler));
+        commands.Register(CmdPacketType.USE_LOTTERY_ITEM, HandleLottery, nameof(BoosterHandler));
         commands.Register(CmdPacketType.OPEN_CERAPACKAGE, HandleCeraPackage, nameof(BoosterHandler));
+    }
+
+    async Task<CommandResult> HandleLottery(GameConnectionContext context, Packet packet)
+    {
+        var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        LotteryReceipt? receipt = null;
+        LotteryOpenRequest? request = null;
+        InventoryResult result;
+        try
+        {
+            request = BoosterRequests.ReadLottery(packet.Body);
+            result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+                context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, capture.Selected) ?
+                    booster.OpenLottery(character, request, out receipt, (clock ?? TimeProvider.System).GetUtcNow()) :
+                    InventoryResult.Reject(19), 19, requireTown: false);
+        }
+        catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
+        {
+            result = InventoryResult.Reject(19);
+        }
+        bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) :
+            context.Owner.Execute(() => ReferenceEquals(capture.Selected, context.Session.Selected) &&
+                capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);
+        log.Write("lottery_open", new { Connection = context.Id, request?.Mode, request?.Slot,
+            SourceItemId = request is null ? null : capture.Selected?.Inventory.Find(new(InventoryListType.Main, request.Slot))?.Core.ItemId,
+            result.Accepted, result.Error, Reason = result.Accepted ? "accepted" : "operation_rejected", Reward = receipt,
+            Revision = result.Receipt?.Character.Revision });
+        await context.Reply(CmdPacketType.USE_LOTTERY_ITEM, LotteryPackets.Opened(result, receipt),
+            result.Accepted ? "lottery_opened" : "lottery_rejected", Guard);
+        await projection.RefreshAsync(context, result);
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)

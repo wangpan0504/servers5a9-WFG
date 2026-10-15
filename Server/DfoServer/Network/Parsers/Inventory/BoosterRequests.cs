@@ -5,6 +5,12 @@ namespace DfoServer.Network.Parsers.Inventory;
 
 internal static class BoosterRequests
 {
+    public static LotteryOpenRequest ReadLottery(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4)
+            throw new InvalidDataException("袖珍罐请求必须是模式u16和源槽位i16");
+        return new(BinaryPrimitives.ReadUInt16LittleEndian(body), BinaryPrimitives.ReadInt16LittleEndian(body[2..]));
+    }
     public static short ReadSourceSlot(ReadOnlySpan<byte> body)
     {
         if (body.Length < 6) throw new InvalidDataException("礼包请求源字段未完整闭合");

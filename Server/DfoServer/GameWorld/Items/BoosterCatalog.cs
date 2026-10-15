@@ -10,7 +10,7 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record BoosterReward(int ItemId, long Weight, int Count);
 internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewards);
 internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, string? PendingRule = null,
-    BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default)
+    BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default, bool Lottery = false)
 {
     public bool Available => PendingRule is null && (Pools.Length != 0 || Selection is not null || !PackageRewards.IsDefaultOrEmpty);
 }
@@ -27,7 +27,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
     internal static BoosterDefinition Parse(string text)
     {
         string type = Regex.Match(PvfScript.Section(text, "stackable type"), @"`\[([^\]]+)\]`").Groups[1].Value;
-        if (type is not ("usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection"))
+        if (type is not ("usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or "upgradable legacy"))
             return new([], "其他开箱入口");
         // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
         string tags = Regex.Replace(text, "`[^`]*`", "");
@@ -38,6 +38,29 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             "daybreak drop item", "battle royal", "action usable server type", "usable game server type", "usable server type" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);
+        if (type == "upgradable legacy")
+        {
+            // 此类型经独立的CMD27入口一次抽取一行；不能交给CMD160忽略其回包合同。
+            if (!Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$"))
+                return new([], "袖珍罐子类型待确认");
+            var data = Regex.Matches(text, @"\[int data\](.*?)\[/int data\]", RegexOptions.Singleline);
+            if (data.Count != 1 || Regex.Matches(tags, @"\[int data\]").Count != 1 ||
+                Regex.Matches(tags, @"\[/int data\]").Count != 1)
+                return new([], "袖珍罐奖池缺失或重复");
+            string[] tokens = data[0].Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0 || tokens.Length % 3 != 0)
+                return new([], "袖珍罐奖池行宽无效");
+            var rewards = ImmutableArray.CreateBuilder<BoosterReward>();
+            for (int i = 0; i < tokens.Length; i += 3)
+                if (!int.TryParse(tokens[i], out int id) || id <= 0 ||
+                    !int.TryParse(tokens[i + 1], out int weight) || weight < 0 ||
+                    !int.TryParse(tokens[i + 2], out int count) || count <= 0)
+                    return new([], "袖珍罐物品、权重或数量无效");
+                else
+                    rewards.Add(new(id, weight, count));
+            return rewards.Sum(row => row.Weight) > 0
+                ? new([new(1, rewards.ToImmutable())], Lottery: true) : new([], "袖珍罐总权重为零");
+        }
         if (type == "usable cera package")
         {
             var packageBlocks = Regex.Matches(text, @"\[package data\](.*?)\[/package data\]", RegexOptions.Singleline);

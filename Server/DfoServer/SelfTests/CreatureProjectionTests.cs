@@ -24,6 +24,11 @@ internal static class CreatureProjectionTests
         Check(current with { Inventory = new([second with { Position = worn.Position }, first]) },
             63001, "Second", "交换后投影新的已穿戴实例");
         Check(current with { Inventory = new([first, second]) }, 0, "", "脱下后清除实体模板及名称");
+        var victoria = worn with { Core = worn.Core with { ItemId = 400990444, EnchantCardId = 490705461 },
+            Creature = new() { Satiety = 100, Level = 1, Experience = 0 } };
+        var victoriaBefore = System.Text.Json.JsonSerializer.Serialize(victoria);
+        Check(role with { Inventory = new([victoria]) }, 400990444, "", "维多利亚空自定义名称仍启用城镇实体");
+        That(System.Text.Json.JsonSerializer.Serialize(victoria) == victoriaBefore, "投影保留真实模板的完整实例、附魔和详情");
         That(worn.Creature == first.Creature && worn.Core.Value == 91 && current.Revision == 1,
             "Actor投影不改成长、饱食度、UID或revision");
 
@@ -38,7 +43,7 @@ internal static class CreatureProjectionTests
             That(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset)) == itemId &&
                 System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset + 4)) == expectedName.Length &&
                 body.AsSpan(offset + 8, expectedName.Length).SequenceEqual(expectedName) &&
-                body[offset + 8 + expectedName.Length] == 0, message);
+                body[offset + 8 + expectedName.Length] == (itemId == 0 ? 0 : 1), message + "；有实例时明确启用，无实例时关闭");
             That(body.Length == 243 + nameWidth + body[countOffset] * 25 + expectedName.Length,
                 "宠物名称只扩展对应DSTR，后续Actor尾字段完整");
         }

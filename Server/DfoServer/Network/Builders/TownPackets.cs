@@ -95,10 +95,11 @@ internal static class TownPackets
             writer.Write(0u);
             writer.Write((byte)0);
             var creature = character.Inventory.Find(new(InventoryListType.Equipment, 26));
-            // 0267B3B0读取模板/名称/死亡标志；Actor+330经02BAF647创建宠物实体，不能只同步槽26与105详情。
-            writer.Write(creature?.Creature is not null ? checked((uint)creature.Core.ItemId) : 0u);
+            // 0267B3B0读取模板/名称/启用标志；0267B425取反后经02A8E040写入城镇宠物禁用位。
+            bool creatureEnabled = creature?.Creature is not null;
+            writer.Write(creatureEnabled ? checked((uint)creature!.Core.ItemId) : 0u);
             PacketEncoding.WriteString(writer, creature?.Creature?.Name ?? "");
-            writer.Write((byte)0); // 当前详情没有死亡状态；零沿原合同表示存活。
+            writer.Write(creatureEnabled ? (byte)1 : (byte)0); // 零会令02CD6FA0跳过场景挂接与更新。
             writer.Write((byte)0); // 02677320：PC房效果，与黑钻分开。
             // 02677430写Actor+344h；02AA85A4/02AA8ACC据此绘制金色名称和pcroompremiumreward.img的index3。
             writer.Write(character.BlackDiamondExpiresAt > (utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()) ? (byte)1 : (byte)0);
