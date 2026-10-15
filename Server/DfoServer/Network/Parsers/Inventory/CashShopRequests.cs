@@ -13,8 +13,8 @@ internal static class CashShopRequests
     {
         if (body.Length < HeaderSize + ItemStride)
             throw new InvalidDataException("商城购买请求长度不足");
-        int count = body[2] == 0 ? 1 : body[2];
-        if (count > MaxItems || body.Length < HeaderSize + count * ItemStride)
+        int count = body[2];
+        if (count is < 1 or > MaxItems || body.Length != HeaderSize + count * ItemStride)
             throw new InvalidDataException("商城购买请求商品数量无效");
         var items = new CashShopPurchaseItem[count];
         for (int index = 0; index < count; index++)
@@ -23,8 +23,9 @@ internal static class CashShopRequests
             uint commodity = BinaryPrimitives.ReadUInt32LittleEndian(body[(offset + 3)..]);
             if (commodity == 0 || commodity > int.MaxValue)
                 throw new InvalidDataException("商城商品号无效");
-            items[index] = new((int)commodity, body[offset + 1]);
+            items[index] = new((int)commodity, body[offset + 1], body[offset + 2], body[offset], body[offset + 7], body[offset + 8],
+                BinaryPrimitives.ReadUInt32LittleEndian(body[(offset + 9)..]), BinaryPrimitives.ReadUInt16LittleEndian(body[(offset + 13)..]));
         }
-        return new(body[4], items);
+        return new(body[4], items) { CurrencyMode = body[0], GiftMode = body[1], PcRoom = body[3] };
     }
 }

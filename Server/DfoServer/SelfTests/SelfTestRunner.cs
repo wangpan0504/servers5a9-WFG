@@ -22,6 +22,7 @@ internal static class SelfTestRunner
         EnhancementTests.RunCore();
         CreatureEggTests.RunCore();
         AvatarPackageTests.RunCore();
+        AvatarDyeTests.RunCore();
         FrameCrcTests.Run();
         CreatureProjectionTests.RunCore();
         await BufferedLogTests.RunAsync();
@@ -171,6 +172,7 @@ internal static class SelfTestRunner
         EnhancementTests.RunResources(itemResources, itemResources.Enhancements);
         CreatureEggTests.RunResources(itemResources.CreatureEggs, itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
+        AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
         MagicBoxTests.Run(towns, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);

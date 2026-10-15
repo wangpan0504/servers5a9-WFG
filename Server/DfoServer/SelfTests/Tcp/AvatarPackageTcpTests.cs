@@ -120,8 +120,8 @@ internal static class AvatarPackageTcpTests
             identities = fixture.Query("SELECT json_extract(i.item_core,'$.ItemId'),i.item_uid FROM character_inventory_items i JOIN mailbox_attachments a USING(item_uid) WHERE a.claimed=0")
                 .ToDictionary(row => Convert.ToInt32(row[0]), row => Convert.ToInt64(row[1]));
             var persisted = fixture.Query("SELECT d.item_uid,json_extract(d.detail,'$.ExpireTime') FROM inventory_avatar_details d JOIN mailbox_attachments a USING(item_uid) WHERE a.claimed=0");
-            That(persisted.Length == choices.Length && persisted.All(row => Convert.ToInt64(row[1]) == int.MaxValue),
-                "Runtime默认开启商城调试后，每个邮件装扮详情保存2038截止；遗漏共享开关接线不能通过");
+            That(persisted.Length == choices.Length && persisted.All(row => Convert.ToInt64(row[1]) == 0),
+                "Runtime默认只忽略绝对日期，原永久装扮邮件详情仍为0");
             foreach (var summary in mailbox.Summaries)
                 CheckAvatarMailSummary(summary, choices);
             peer.Barrier();
@@ -146,14 +146,13 @@ internal static class AvatarPackageTcpTests
             That(mailbox.Details.Single().Id == mailId && mailbox.Summaries.Length == choices.Length, "服务重建恢复原九件邮件，无额外赠送");
             var summaries = mailbox.Summaries;
             foreach (var summary in summaries) CheckAvatarMailSummary(summary, choices);
-            long claimStarted = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             peer.Send(95, Build(writer => { writer.Write(1); writer.Write(mailId); }));
             peer.Expect(1, 95, Build(writer =>
             {
                 writer.Write((byte)1); writer.Write(summaries.Length);
                 foreach (var summary in summaries) { writer.Write(summary.MailId); writer.Write(summary.ClaimId); writer.Write(0); }
             }));
-            CheckAvatarRows(peer.Expect(0, 14).Body, choices, expectedExpiry: int.MaxValue, earliestUtcSeconds: claimStarted);
+            CheckAvatarRows(peer.Expect(0, 14).Body, choices);
             MailboxTcpTests.ReadList(peer.Expect(0, 97).Body, avatarIds);
             peer.Barrier();
         }
@@ -164,8 +163,8 @@ internal static class AvatarPackageTcpTests
             foreach (var choice in choices)
             {
                 var item = restored.Inventory.Items.Single(item => item.Uid == identities[choice.ItemId]);
-                That(item.Core.Durability == choice.Ability && item.Avatar is { ExpireTime: int.MaxValue } && item.Core.Value == item.Uid,
-                    "领取后保留邮件原UID、核心选项和2038装扮详情期限");
+                That(item.Core.Durability == choice.Ability && item.Avatar is { ExpireTime: 0 } && item.Core.Value == item.Uid,
+                    "领取后保留邮件原UID、核心选项和原永久期限");
                 if (item.Core.ItemId == 401580026)
                     That(item.Avatar!.Socket0 == new AvatarSocket(239, -1) && item.Avatar.Socket1 == new AvatarSocket(239, -1), "双M孔经过邮件及领取仍完整保留");
             }

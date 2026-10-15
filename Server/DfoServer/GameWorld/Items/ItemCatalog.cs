@@ -219,6 +219,7 @@ internal sealed class ItemCatalog
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = Int("clear avatar", 0) == 1 || text.Section("item category").Contains("clear avatar", StringComparison.OrdinalIgnoreCase),
             BorrowAvatarAppearance = kind == ItemKind.Avatar && slot != 9,
+            AvatarGiftType = isEquipment ? null : AvatarTypeSelectionFile.GiftType(text),
             GuardianGemEffects = kind == ItemKind.GuardianGem ? ReadGuardianGemEffects(text) : [],
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),

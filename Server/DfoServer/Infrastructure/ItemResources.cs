@@ -26,6 +26,7 @@ internal sealed class ItemResources
     public EnhancementCatalog Enhancements { get; }
     public CreatureEggCatalog CreatureEggs { get; }
     public AvatarPackageCatalog AvatarPackages { get; }
+    public AvatarDyeCatalog AvatarDyes { get; }
     public TeleportCatalog Teleports { get; }
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
     readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
@@ -53,6 +54,7 @@ internal sealed class ItemResources
         Enhancements = new(archive, stackable, equipment);
         CreatureEggs = new(archive, equipment, Items);
         AvatarPackages = new(archive, equipment, stackable);
+        AvatarDyes = new(archive, equipment, stackable);
         Teleports = new(archive.ReadText, equipment, stackable);
         RandomOptions = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));

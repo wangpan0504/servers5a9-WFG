@@ -93,6 +93,8 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "creature_hatch" => "Creature egg hatch", "enhancement" => "Equipment enhancement",
             "booster_open" => "Package open",
             "random_option_change" => "Equipment random option change",
+            "cash_shop_buy" => "Cash shop purchase",
+            "avatar_dye" => "Avatar dye",
             _ => kind.Replace('_', ' ')
         };
         return title + ": " + DetailText(fields);
@@ -139,7 +141,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         "formal_dungeon_settlement" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_enter" or "dungeon_entry_probe" or "dungeon_probe_return" or
         "quest_lifecycle" or "quest_completion" or "consumable_use" or "cube_contract_select" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
-        "quest_ticket_use" or "creature_hatch" or "enhancement" or "booster_open" or "random_option_change" or "gm" or "unimplemented" ||
+        "quest_ticket_use" or "creature_hatch" or "enhancement" or "booster_open" or "random_option_change" or "cash_shop_buy" or "avatar_dye" or "gm" or "unimplemented" ||
         kind.EndsWith("_rejected", StringComparison.Ordinal) || kind.EndsWith("_failed", StringComparison.Ordinal);
 
     public void Flush() => file.Flush();

@@ -73,19 +73,26 @@ internal static class BoosterEquipmentTests
         var debugService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
             itemResources.EpicPieces, debugRandom, debugSettings);
         var debugOpen = debugService.Open(current, Select(3, 401000005), out _, now);
+        That(debugOpen.Accepted && debugOpen.Plan!.After.Items.Single().Core.ExpireTime == Core(401000005).ExpireTime,
+            "只忽略绝对日期仍保留礼包内部60天期限");
+        debugSettings.IgnoreCashShopUsablePeriod = true;
+        debugOpen = debugService.Open(current, Select(3, 401000005), out _, now);
         That(debugOpen.Accepted && debugOpen.Plan!.After.Items.Single().Core is { ExpireTime: int.MaxValue, Attr: 7, GenuineUpgrade: 3 },
-            "礼包内部60天装备在调试开启时统一2038期限，原装备属性保持");
+            "额外开启相对忽略后，60天奖励使用协议上限且保持原装备属性");
         debugSettings.IgnoreCashShopAbsoluteExpiration = false;
+        debugSettings.IgnoreCashShopUsablePeriod = false;
         var normalOpen = debugService.Open(current, Select(3, 401000005), out _, now);
         That(normalOpen.Accepted && normalOpen.Plan!.After.Items.Single().Core.ExpireTime == Core(401000005).ExpireTime &&
             debugOpen.Plan!.After.Items.Single().Core.ExpireTime == int.MaxValue, "关闭恢复内部奖励相对期限，不改写已规划实例");
         debugSettings.IgnoreCashShopAbsoluteExpiration = true;
+        debugSettings.IgnoreCashShopUsablePeriod = true;
         debugRandom.Values.Enqueue(0);
-        debugRandom.BeforeDraw = () => debugSettings.IgnoreCashShopAbsoluteExpiration = false;
+        debugRandom.BeforeDraw = () => { debugSettings.IgnoreCashShopAbsoluteExpiration = false; debugSettings.IgnoreCashShopUsablePeriod = false; };
         var randomSource = current with { Inventory = new([new(1, Bag(3), Core(10014751))]) };
         debugOpen = debugService.Open(randomSource, Select(3, 16000), out _, now);
-        That(debugOpen.Accepted && debugOpen.Plan!.After.Items.Single().Core.ExpireTime == int.MaxValue &&
-            !debugSettings.IgnoreCashShopAbsoluteExpiration, "抽取期间切换GM时，整次开箱仍使用入口冻结的期限状态");
+        That(debugOpen.Accepted && debugOpen.Plan!.After.Items.Single().Core.ExpireTime == 0 &&
+            !debugSettings.IgnoreCashShopAbsoluteExpiration && !debugSettings.IgnoreCashShopUsablePeriod,
+            "抽取期间切换开关，原永久装备仍无期限；有限期限冻结另由装扮开包用例覆盖");
         current = current with { Inventory = new([new(1, Bag(3), Core(10014751, 2))]) };
         var source = current;
         random.Values.Enqueue(0);

@@ -4,10 +4,12 @@ using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
+using DfoServer.Infrastructure;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopService cashShop, InventoryProjection projection) : IGameCommandModule
+internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopService cashShop, InventoryProjection projection,
+    ServerLog log) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -20,18 +22,24 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     async Task<CommandResult> BuyCeraShop(GameConnectionContext context, Packet packet)
     {
         CashShopPurchaseReceipt? receipt = null;
+        CashShopPurchaseRequest request;
         InventoryResult result;
         try
         {
-            var request = CashShopRequests.Buy(packet.Body);
+            request = CashShopRequests.Buy(packet.Body);
             result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(17) :
                 context.Session.PlanAndCommitInventory(character => cashShop.Buy(character, request, out receipt), 17, requireTown: false);
         }
         catch (InvalidDataException)
         {
+            log.Write("cash_shop_buy", new { Connection = context.Id, Length = packet.Body.Length, Accepted = false, Result = "malformed" });
             await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM, CashShopPackets.Failure(), "cash_shop_buy_malformed");
             return CommandResult.Handled;
         }
+        log.Write("cash_shop_buy", new { Connection = context.Id, Count = request.Items.Count,
+            Commodities = string.Join(',', request.Items.Select(item => item.CommodityId)),
+            PaymentModes = string.Join(',', request.Items.Select(item => item.PaymentMode)), result.Accepted, result.Error,
+            Result = result.Accepted ? "committed" : "rejected", Revision = result.Receipt?.Character.Revision });
         if (!result.Accepted || receipt is null)
         {
             await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM, CashShopPackets.Failure(), "cash_shop_buy_rejected");

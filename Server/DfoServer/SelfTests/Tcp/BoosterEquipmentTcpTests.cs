@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
+using DfoServer.Network.Management;
 using static DfoServer.Testing.BoosterSelectionTcpTests;
 using static DfoServer.Testing.BoosterTcpTests;
 using static DfoServer.Testing.TcpPeer;
@@ -88,12 +89,16 @@ internal static class BoosterEquipmentTcpTests
                 That(EquipmentEntry(full, (short)(9 + i), true).SequenceEqual(committedEntries[i]),
                     "reconnect restores every byte including fixed and random levels and original expiry");
             SetExpirationDebug(fixture, true);
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "cash-shop-usable-period on", out string relativeReply) &&
+                relativeReply == "OK {\"ignoreUsablePeriod\":true}", "独立开启礼包相对期限忽略");
             SendSelect(peer, 6, [401000005]);
             ExpectAck(peer, 10005273, 6, [(401000005, 1)]);
             byte[] debugDelta = peer.Expect(0, 14).Body;
             That(U32(EquipmentEntry(debugDelta, 14), 56) == int.MaxValue,
-                "GM开启后，礼包内部相对期限装备在NOTI14中统一下发2038截止");
+                "相对忽略开启后，礼包内部60天装备的NOTI14下发协议上限");
             SetExpirationDebug(fixture, false);
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "cash-shop-usable-period off", out relativeReply) &&
+                relativeReply == "OK {\"ignoreUsablePeriod\":false}", "独立关闭礼包相对期限忽略");
             long earliestExpiry = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 * 86400;
             SendSelect(peer, 7, [401000005]);
             ExpectAck(peer, 10005273, 7, [(401000005, 1)]);

@@ -18,10 +18,11 @@ using DfoServer.Game.Session;
 
 namespace DfoServer.Testing.Inventory;
 
-internal static class CashShopTests
+internal static partial class CashShopTests
 {
     public static void RunCore()
     {
+        AvatarCore();
         int checks = Count;
         var now = new DateTimeOffset(2026, 10, 11, 10, 0, 0, TimeSpan.FromHours(8));
         var absolute = ItemExpiration.Parse(new PvfLib.PvfDocument("[expiration date]\n`2020-04-09 06:00:00`"));
@@ -31,10 +32,21 @@ internal static class CashShopTests
         {
             var relative = absolute with { Days = days };
             That(relative.Resolve(now) == now.ToUnixTimeSeconds() + (long)days * 86400 &&
-                relative.ResolveShop(now) == int.MaxValue, "正常规则保留相对期限，调试统一覆盖");
+                relative.ResolveShop(now) == relative.Resolve(now), "绝对忽略开关不影响相对期限");
+            foreach (bool ignoreAbsolute in new[] { false, true })
+            foreach (bool ignoreRelative in new[] { false, true })
+            {
+                int expected = !ignoreRelative ? (int)now.AddDays(days).ToUnixTimeSeconds() :
+                    ignoreAbsolute ? int.MaxValue : absolute.Resolve(now);
+                That(relative.Resolve(now, ignoreAbsolute, ignoreRelative) == expected,
+                    "双声明四种组合：相对期限优先，忽略相对后仍遵守未忽略的绝对截止");
+                That(new ItemExpiration(Days: days).Resolve(now, ignoreAbsolute, ignoreRelative) ==
+                    (ignoreRelative ? int.MaxValue : (int)now.AddDays(days).ToUnixTimeSeconds()), "相对期限仅受自己的忽略开关控制");
+                That(new ItemExpiration().Resolve(now, ignoreAbsolute, ignoreRelative) == 0, "永久物品不被调试开关制造截止");
+            }
         }
-        That(new ItemExpiration().Resolve(now) == 0 && new ItemExpiration().ResolveShop(now) == int.MaxValue,
-            "无期限配置正常保持永久，调试同样统一截止");
+        That(new ItemExpiration().Resolve(now) == 0 && new ItemExpiration().ResolveShop(now) == 0,
+            "无期限配置在绝对日期调试开启时仍保持永久");
         That(DateTimeOffset.FromUnixTimeSeconds(absolute.ResolveShop(now)).ToOffset(TimeSpan.FromHours(8)) ==
             new DateTimeOffset(2038, 1, 19, 11, 14, 7, TimeSpan.FromHours(8)), "调试截止为UTC+8的2038协议上限");
         long distantTime = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds();
@@ -64,8 +76,12 @@ internal static class CashShopTests
                 { Expiration = absolute with { Days = 7 } };
             var core = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: true);
             var item = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 65), core);
-            That((item.Avatar?.ExpireTime ?? item.Creature?.ExpireTime ?? item.Core.ExpireTime) == int.MaxValue,
-                "2038覆盖进入实际核心或独立详情期限 " + kind);
+            That((item.Avatar?.ExpireTime ?? item.Creature?.ExpireTime ?? item.Core.ExpireTime) == now.AddDays(7).ToUnixTimeSeconds(),
+                "只忽略绝对日期时，核心或独立详情保留七天期限 " + kind);
+            var ignored = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: true, ignoreUsablePeriod: true);
+            var ignoredItem = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 65), ignored);
+            That((ignoredItem.Avatar?.ExpireTime ?? ignoredItem.Creature?.ExpireTime ?? ignoredItem.Core.ExpireTime) == int.MaxValue,
+                "两个声明均忽略时，核心或独立详情使用协议上限 " + kind);
             That(InventoryRewardGrantService.Create(template, utcNow: now).ExpireTime == now.ToUnixTimeSeconds() + 7 * 86400,
                 "其他创建入口保留原相对期限 " + kind);
             var futureTemplate = template with { Expiration = distant };
@@ -89,7 +105,11 @@ internal static class CashShopTests
         foreach (var (line, expected) in new[] { ("cash-shop-expiration", -1), ("cash-shop-expiration on", 1), ("cash-shop-expiration off", 0) })
             That(DevelopmentRequest.Parse(line, "10000") is { Action: DevelopmentAction.CashShopExpiration, Name: "" } request &&
                 request.Primary == expected, "商城调试查询和切换不依赖角色");
-        foreach (string line in new[] { "cash-shop-expiration true", "cash-shop-expiration on extra", "cash-shop-expiration 1" })
+        foreach (var (line, expected) in new[] { ("cash-shop-usable-period", -1), ("cash-shop-usable-period on", 1), ("cash-shop-usable-period off", 0) })
+            That(DevelopmentRequest.Parse(line, "10000") is { Action: DevelopmentAction.CashShopUsablePeriod, Name: "" } request &&
+                request.Primary == expected && request.Writes == (expected >= 0), "相对期限忽略有独立命令且不翻转布尔值");
+        foreach (string line in new[] { "cash-shop-expiration true", "cash-shop-expiration on extra", "cash-shop-expiration 1",
+            "cash-shop-usable-period true", "cash-shop-usable-period on extra", "cash-shop-usable-period 1" })
         {
             bool rejected = false;
             try { DevelopmentRequest.Parse(line, "10000"); }
@@ -101,10 +121,13 @@ internal static class CashShopTests
 
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
     {
+        var now = DateTimeOffset.UtcNow;
         var product = resources.CashShop.Products.Values
-            .First(row => row.CeraPrice > 0 && row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
+            .OrderBy(row => row.CommodityId)
+            .First(row => row.CeraPrice is > 0 and < 100_000 && row.Section is not ("avatar" or "visual" or "selectable character premium" or "charac premium package") &&
                 CurrencyWallet.RewardKind(row.ItemId) is null && !resources.Contracts.Recognizes(row.ItemId) &&
-                resources.Items.Get(row.ItemId).Kind is not ItemKind.Equipment);
+                resources.Items.Get(row.ItemId).Kind is not ItemKind.Equipment &&
+                resources.Items.Get(row.ItemId).Expiration.Resolve(now) is var expiry && (expiry == 0 || expiry > now.ToUnixTimeSeconds()));
         string path = Path.Combine(Path.GetTempPath(), "s5a9-cash-shop-" + Guid.NewGuid().ToString("N"), "game.db");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var repo = new CharacterRepository(path);
@@ -125,7 +148,6 @@ internal static class CashShopTests
         };
         var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, contracts: resources.Contracts)
             { IgnoreAbsoluteExpiration = false };
-        var now = DateTimeOffset.UtcNow;
         var expired = resources.CashShop.Products.Values.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
             row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
             !resources.Contracts.Recognizes(row.ItemId) && CurrencyWallet.RewardKind(row.ItemId) is null &&
@@ -149,6 +171,14 @@ internal static class CashShopTests
             "关闭恢复正常规则，不追溯改写已规划实例");
         That(new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces).IgnoreAbsoluteExpiration,
             "重新装配商城服务默认开启");
+        That(!service.IgnoreUsablePeriod && DevelopmentGm.Answer("cash-shop-usable-period", "10000", repo, owners,
+            _ => throw new Exception("不应查询角色"), cashShop: service) == "OK {\"ignoreUsablePeriod\":false}", "相对期限默认保留，查询不加载角色");
+        That(DevelopmentGm.Answer("cash-shop-usable-period on", "10000", repo, owners, _ => null, cashShop: service) ==
+            "OK {\"ignoreUsablePeriod\":true}" && service.IgnoreUsablePeriod && !service.IgnoreAbsoluteExpiration,
+            "开启相对忽略不翻转或修改绝对忽略状态");
+        DevelopmentGm.Answer("cash-shop-usable-period off", "10000", repo, owners, _ => null, cashShop: service);
+        That(!service.IgnoreUsablePeriod && DevelopmentGm.Answer("cash-shop-usable-period on", "10000", repo, owners, _ => null).StartsWith("ERR "),
+            "相对开关可关闭，未装配的离线服务不能伪报成功");
         That(DevelopmentGm.Answer("cash-shop-expiration on", "10000", repo, owners, _ => null).StartsWith("ERR "),
             "未装配在线商城的GM不能伪报调试成功");
         var requestBody = new byte[19];
@@ -172,6 +202,7 @@ internal static class CashShopTests
             "unknown cash shop commodity is rejected without a charge");
         VerifyFullRewards(repo, owner, character.Slot, towns, resources);
         VerifyUnsupportedPremiumPurchases(character, resources);
+        VerifyAvatars(towns, resources);
         Console.WriteLine("PASS cash shop purchase parser, Cera charge, reward placement and ACK assertions");
     }
 

@@ -8,7 +8,7 @@ namespace DfoServer.GameWorld.Items;
 
 // PVF 商城商品号与实际物品模板号分离；网络请求只携带商品号，费用和奖励必须从同一份资源目录解析。
 internal sealed record CashShopProduct(int CommodityId, int ItemId, int Count, int CeraPrice, string Section,
-    int DurationDays = 0, int ContractType = 0);
+    int DurationDays = 0, int ContractType = 0, int AvatarType = 0);
 internal sealed record CashShopBonus(int ItemId, int Count);
 
 internal sealed class CashShopCatalog
@@ -22,7 +22,7 @@ internal sealed class CashShopCatalog
         ("item mod or ext", 9, 5), ("privilege service", 9, 5),
         ("selectable character premium", 9, 5), ("charac premium package", 9, 5),
         ("package", 11, 4), ("regular package", 11, 4), ("community package", 11, 4),
-        ("visual", 8, 5), ("avatar", 6, 5)
+        ("avatar dye", 9, 5), ("visual", 8, 5), ("avatar", 6, 5)
     ];
     static readonly Regex TokenPattern = new("`[^`]*`|-?\\d+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -68,13 +68,13 @@ internal sealed class CashShopCatalog
                 if (!Number(values[offset + 1], out int item) || item <= 0)
                     continue;
                 int count = Number(values[offset + 2], out int parsedCount) && parsedCount > 0 ? parsedCount : 1;
-                if (!Number(values[offset + priceOffset], out int price) || price < 0)
+                if (!Number(values[offset + priceOffset], out int price) || price < (section == "avatar" ? -1 : 0))
                 {
-                    // Avatar rows may defer the price to the selected equipment
-                    // duration. They are intentionally not ordinary Cera products.
-                    if (section == "avatar") continue;
                     throw new InvalidDataException($"商城商品价格无效: section={section}, commodity={commodity}");
                 }
+                int avatarType = section == "avatar" && Number(values[offset + 2], out int selector) ? selector : 0;
+                if (section == "avatar" && avatarType is < 1 or > 255)
+                    throw new InvalidDataException("商城装扮类型索引无效: " + commodity);
                 int durationDays = section == "visual"
                     ? Number(values[offset + 3], out int parsedDays) && parsedDays > 0 ? parsedDays : 30
                     : section == "charac premium package" && Number(values[offset + 7], out parsedDays) && parsedDays > 0 ? parsedDays : 0;
@@ -82,7 +82,7 @@ internal sealed class CashShopCatalog
                     ? checked(580 + slot) : 0;
                 if (section == "selectable character premium" && Number(values[offset + 3], out int selectableDays) && selectableDays > 0)
                     durationDays = selectableDays;
-                products[commodity] = new(commodity, item, count, price, section, durationDays, contractType);
+                products[commodity] = new(commodity, item, section == "avatar" ? 1 : count, price, section, durationDays, contractType, avatarType);
             }
         }
         if (products.Count == 0)

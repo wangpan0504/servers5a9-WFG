@@ -6,12 +6,18 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record ItemExpiration(long AbsoluteTime = 0, int Days = 0)
 {
     // 资源保留远期原值；新实例的期限仍映射到匹配客户端的有符号32位上限。
-    public int Resolve(DateTimeOffset now) => (int)Math.Min(int.MaxValue,
-        Days > 0 ? now.ToUnixTimeSeconds() + (long)Days * 86400 : AbsoluteTime);
+    public int Resolve(DateTimeOffset now, bool ignoreAbsoluteExpiration = false, bool ignoreUsablePeriod = false)
+    {
+        if (Days > 0 && !ignoreUsablePeriod)
+            return (int)Math.Min(int.MaxValue, now.ToUnixTimeSeconds() + (long)Days * 86400);
+        if (AbsoluteTime > 0 && !ignoreAbsoluteExpiration)
+            return (int)Math.Min(int.MaxValue, AbsoluteTime);
+        // 模板带期限时，客户端不能用0取消其倒计时；只覆盖实际被忽略的期限，无期限物品仍为永久。
+        return Days > 0 || AbsoluteTime > 0 ? int.MaxValue : 0;
+    }
 
-    // 商城/礼包调试统一覆盖为协议上限：2038-01-19 11:14:07（UTC+8）。
-    // 带PVF期限的客户端模板不会把0视为永久；正常购买和其他奖励仍使用 Resolve。
-    public int ResolveShop(DateTimeOffset _) => int.MaxValue;
+    // 兼容既有调用，只忽略绝对日期，不覆盖相对天数或永久物品。
+    public int ResolveShop(DateTimeOffset now) => Resolve(now, ignoreAbsoluteExpiration: true);
 
     public static ItemExpiration Parse(PvfDocument text)
     {

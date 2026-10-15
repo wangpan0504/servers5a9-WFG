@@ -11,7 +11,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class CashShopTcpTests
+internal static partial class CashShopTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -48,6 +48,7 @@ internal static class CashShopTcpTests
         }
         await fixture.StartAsync();
         That(Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "Runtime商城调试默认开启");
+        That(Command("cash-shop-usable-period") == "OK {\"ignoreUsablePeriod\":false}", "Runtime默认不忽略相对期限");
         That(Command("cash-shop-expiration off") == "OK {\"ignoreAbsoluteExpiration\":false}", "可显式恢复PVF期限规则");
         using (var peer = Open(fixture))
         {
@@ -117,17 +118,24 @@ internal static class CashShopTcpTests
                 "关闭开关不追溯修改已持久化调试物品");
         await fixture.StartAsync("restart");
         That(Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "重建Runtime恢复默认开启");
+        That(Command("cash-shop-usable-period") == "OK {\"ignoreUsablePeriod\":false}", "重建Runtime默认保留相对期限");
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "商城 TCP 事务保持 SQLite 完整性");
+        await AvatarAsync(source, root, resources);
 
-        string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT id,revision,gold,revive_coins,win_points FROM characters ORDER BY id")) +
+        string Snapshot() => PurchaseSnapshot(fixture);
+    }
+
+    static string PurchaseSnapshot(TcpTestFixture fixture) => JsonSerializer.Serialize(fixture.Query("SELECT id,revision,gold,revive_coins,win_points FROM characters ORDER BY id")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM inventory_avatar_details ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM mailbox_messages ORDER BY mail_id")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM mailbox_attachments ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_wallets ORDER BY account")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM sqlite_sequence ORDER BY name")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log"));
-    }
 }

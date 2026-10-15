@@ -59,6 +59,12 @@ internal static partial class DevelopmentGm
                 if (request.Primary >= 0) cashShop.IgnoreAbsoluteExpiration = request.Primary == 1;
                 return "OK " + JsonSerializer.Serialize(new { ignoreAbsoluteExpiration = cashShop.IgnoreAbsoluteExpiration });
             }
+            if (request.Action == DevelopmentAction.CashShopUsablePeriod)
+            {
+                if (cashShop is null) throw new InvalidOperationException("商城相对期限调试开关仅支持在线服务");
+                if (request.Primary >= 0) cashShop.IgnoreUsablePeriod = request.Primary == 1;
+                return "OK " + JsonSerializer.Serialize(new { ignoreUsablePeriod = cashShop.IgnoreUsablePeriod });
+            }
             if (request.Action == DevelopmentAction.Item)
                 return SendItem(request, mailbox ?? throw new InvalidOperationException("邮件服务未装配"),
                     items ?? throw new InvalidOperationException("物品资源未装配"));

@@ -27,6 +27,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     {
         receipt = null;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
+        bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         var before = character.Inventory;
         var now = utcNow ?? DateTimeOffset.UtcNow;
         var source = before.Find(new(InventoryListType.Main, request.Slot));
@@ -65,7 +66,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     return InventoryResult.Reject(19);
                 var template = catalog.Get(id);
                 if (template.IsPremiumService) return InventoryResult.Reject(19);
-                if (InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration).IsExpired(now.ToUnixTimeSeconds()))
+                if (InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration,
+                    ignoreUsablePeriod: ignoreUsablePeriod).IsExpired(now.ToUnixTimeSeconds()))
                     return InventoryResult.Reject(19);
             }
             if (choices is not null && choices.Any(row => (row.Upgrade != 0 || row.Refinement != 0) &&
@@ -187,7 +189,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         else
             grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
         var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, grants, catalog, goldLimits, pieces, now,
-            shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: !definition.PackageRewards.IsDefaultOrEmpty);
+            shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: !definition.PackageRewards.IsDefaultOrEmpty,
+            ignoreUsablePeriod: ignoreUsablePeriod);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());

@@ -43,6 +43,10 @@ internal static class ServerLogTests
                 log.Write("consumable_use", new { Connection = 1, Item = 1108, Slot = 65, Accepted = false, Reason = "cooldown" });
                 log.Write("random_option_change", new { Connection = 1, Slot = 13, OptionIndex = 1, Accepted = true, Result = "committed", Revision = 2 });
                 log.Write("random_option_change", new { Connection = 1, Slot = 13, OptionIndex = 0, Accepted = false, Error = 4 });
+                log.Write("cash_shop_buy", new { Connection = 1, Count = 1, Commodities = "270623", Accepted = true, Result = "committed", Revision = 3 });
+                log.Write("cash_shop_buy", new { Connection = 1, Count = 1, Commodities = "270623", Accepted = false, Error = 17 });
+                log.Write("avatar_dye", new { Connection = 1, SourceSlot = 74, AvatarSlot = 0, Accepted = true, Reason = "committed", Revision = 4, Color1 = 1, Color2 = 0 });
+                log.Write("avatar_dye", new { Connection = 1, SourceSlot = 74, AvatarSlot = 0, Accepted = false, Reason = "source-qualification" });
                 log.Write("resource_warning", new { MissingMaps = new[] { new { Path = "maps/with spaces/map.map", Error = "missing" } } });
                 string text = output.ToString();
                 TestCheck.That(text.Contains("[INFO] [server_ready] Server ready") && text.Contains("[WARN] [auth_rejected]") &&
@@ -63,6 +67,11 @@ internal static class ServerLogTests
                 TestCheck.That(text.Contains("[INFO] [random_option_change] Equipment random option change") &&
                     text.Contains("[WARN] [random_option_change]") && text.Contains("Slot=13 OptionIndex=1 Accepted=True Result=committed Revision=2"),
                     "属性变换日志区分实际提交与拒绝，保留目标、候选索引和提交revision");
+                TestCheck.That(text.Contains("[INFO] [cash_shop_buy] Cash shop purchase") && text.Contains("[WARN] [cash_shop_buy]") &&
+                    text.Contains("Commodities=270623 Accepted=True Result=committed Revision=3"), "商城日志保留真实商品、拒绝和提交版本");
+                TestCheck.That(text.Contains("[INFO] [avatar_dye] Avatar dye") && text.Contains("[WARN] [avatar_dye]") &&
+                    text.Contains("SourceSlot=74 AvatarSlot=0 Accepted=True Reason=committed Revision=4 Color1=1 Color2=0"),
+                    "漂染日志保留两个槽位、拒绝原因与实际提交颜色");
                 TestCheck.That(text.Contains("Loading Script.pvf...") && text.Contains("Script.pvf: OK (12.5 ms).") &&
                     text.Contains("Channel #ch.10 listening on TCP 127.0.0.1:23100") && text.Contains("GM control: disabled"),
                     "startup uses S4A21-style English text instead of serialized fields");
@@ -88,7 +97,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 87,
+            TestCheck.That(fileLines.Length == 91,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&

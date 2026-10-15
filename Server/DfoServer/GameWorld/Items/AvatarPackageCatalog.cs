@@ -16,7 +16,7 @@ internal sealed record AvatarPackageDefinition(int SelectionCount, ImmutableArra
     public bool Recognized { get; init; }
     public bool Available => Recognized && PendingRule is null && !Categories.IsDefaultOrEmpty;
 }
-internal sealed record AvatarPackageType(int Days, AvatarSocketTypes Sockets);
+internal sealed record AvatarPackageType(int Days, AvatarSocketTypes Sockets, int Gold = 0, int WinPoints = 0, int Cera = 0);
 internal sealed record AvatarPackageItemDefinition(ImmutableArray<AvatarPackageType> Types,
     ImmutableHashSet<byte> Abilities, string? PendingRule = null);
 
@@ -165,32 +165,26 @@ internal sealed class AvatarPackageCatalog
     {
         AvatarPackageItemDefinition Reject(string reason) => new([], [], reason);
         if (Fields(text, "import script").Count != 0) return Reject("装扮import继承视图尚未闭合");
-        string typeData = Block(text, "avatar type select");
-        var values = Tokens(typeData);
-        if (values.Length == 0) return Reject("装扮期限类型缺失");
+        ImmutableArray<AvatarTypeSelectionRow> rawTypes;
+        try { rawTypes = AvatarTypeSelectionFile.Parse(new PvfDocument(text)); }
+        catch (InvalidDataException error) { return Reject(error.Message); }
+        if (rawTypes.IsEmpty) return Reject("装扮期限类型缺失");
         // Client 04135EE0先插入index0的7天无孔类型，再追加PVF显式行；礼盒直接使用该索引。
         var types = ImmutableArray.CreateBuilder<AvatarPackageType>();
         types.Add(new(7, default));
-        for (int at = 0; at < values.Length;)
+        foreach (var raw in rawTypes)
         {
-            if (values.Length - at < 7) return Reject("装扮期限类型行过短");
-            var raw = new int[7];
-            for (int i = 0; i < 7; i++)
-                if (!int.TryParse(values[at++], NumberStyles.Integer, CultureInfo.InvariantCulture, out raw[i]))
-                    return Reject("装扮期限类型参数无效");
-            if (raw[0] < 0 || raw[6] is < 0 or > 5 || values.Length - at < raw[6])
-                return Reject("装扮期限或孔位数量无效");
             var sockets = new ushort[5];
-            for (int i = 0; i < raw[6]; i++)
+            for (int i = 0; i < raw.Sockets.Length; i++)
             {
-                sockets[i] = values[at++] switch
+                sockets[i] = raw.Sockets[i] switch
                 {
-                    "`[A socket]`" => 1, "`[B socket]`" => 2, "`[C socket]`" => 4,
-                    "`[D socket]`" => 8, "`[S socket]`" => 16, "`[M socket]`" => 239, _ => 0
+                    "[A socket]" => 1, "[B socket]" => 2, "[C socket]" => 4,
+                    "[D socket]" => 8, "[S socket]" => 16, "[M socket]" => 239, _ => 0
                 };
                 if (sockets[i] == 0) return Reject("未知装扮孔位类型");
             }
-            types.Add(new(raw[0], new(sockets[0], sockets[1], sockets[2], sockets[3], sockets[4])));
+            types.Add(new(raw.Days, new(sockets[0], sockets[1], sockets[2], sockets[3], sockets[4]), raw.Gold, raw.WinPoints, raw.Cera));
         }
         string direct = Block(text, "avatar select ability");
         ImmutableHashSet<byte> abilities;

@@ -18,6 +18,7 @@ ArchiveBoundaryTests.Run();
 ScriptTests.Run();
 ItemModelTests.Run();
 RandomOptionFileTests.Run();
+AvatarTypeSelectionTests.Run();
 TutorialFileTests.Run();
 RecoveryConsumableTests.Run();
 Console.WriteLine($"PASS {TestCheck.Count} PvfLib assertions");

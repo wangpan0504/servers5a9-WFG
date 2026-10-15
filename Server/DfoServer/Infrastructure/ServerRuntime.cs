@@ -78,7 +78,7 @@ internal static class ServerRuntime
         var debugSettings = new GameDebugSettings();
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces,
-            debugSettings, itemResources.Contracts);
+            debugSettings, itemResources.Contracts, itemResources.AvatarPackages);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
@@ -180,9 +180,10 @@ internal static class ServerRuntime
             new ShopHandler(
                 new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces),
                 cashShop,
-                inventoryProjection),
+                inventoryProjection, log),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions), inventoryProjection, log),
+            new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new EnchantmentHandler(new InventoryEnchantmentService(itemResources.Items, itemResources.Enchantments, clock), inventoryProjection, log),
             new EnhancementHandler(new InventoryEnhancementService(itemResources.Items, itemResources.Enhancements, clock: clock), inventoryProjection, log),

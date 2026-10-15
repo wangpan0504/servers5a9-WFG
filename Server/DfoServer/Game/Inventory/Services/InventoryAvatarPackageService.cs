@@ -15,6 +15,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     {
         receipt = null;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
+        bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         var now = utcNow ?? DateTimeOffset.UtcNow;
         var source = Source(character, request.Slot, request.Count, now);
         if (source is null) return InventoryResult.Reject(19);
@@ -22,7 +23,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         var category = definition.Categories.FirstOrDefault(row => row.Category == request.Category && row.Subcategory == request.Subcategory);
         if (!definition.Available || category is null || !TrySelect(definition, category, request.ItemIds, out var rows))
             return InventoryResult.Reject(19);
-        return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, out receipt, now);
+        return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod, out receipt, now);
     }
 
     public InventoryResult OpenCeraPackage(Character character, CeraPackageOpenRequest request, out BoosterReceipt? receipt,
@@ -30,6 +31,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     {
         receipt = null;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
+        bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         // 518成功回执会消耗一个客户端源格；空选择不能当作打开面板成功，也不能自动选职业。
         if (request.Choices.Length == 0) return InventoryResult.Reject(19);
         var now = utcNow ?? DateTimeOffset.UtcNow;
@@ -48,7 +50,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         }
         if (selected is null) return InventoryResult.Reject(19);
         return Grant(character, source, 1, selected, request.Choices.Select(choice => new AvatarPackageChoice(choice.ItemId, choice.Option)).ToArray(),
-            true, shopExpiration, out receipt, now);
+            true, shopExpiration, ignoreUsablePeriod, out receipt, now);
     }
 
     InventoryItem? Source(Character character, short slot, int count, DateTimeOffset now)
@@ -65,7 +67,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         InventoryMoveService.RequiredSkillSatisfied(character, template);
 
     InventoryResult Grant(Character character, InventoryItem source, int count, AvatarPackageRow[] rows,
-        AvatarPackageChoice[] choices, bool allowOverflowMail, bool shopExpiration, out BoosterReceipt? receipt, DateTimeOffset now)
+        AvatarPackageChoice[] choices, bool allowOverflowMail, bool shopExpiration, bool ignoreUsablePeriod,
+        out BoosterReceipt? receipt, DateTimeOffset now)
     {
         receipt = null;
         if (choices.Any(choice => choice.ItemId <= 0) || choices.Select(choice => choice.ItemId).Distinct().Count() != choices.Length ||
@@ -110,7 +113,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             var (row, template, type, ability) = definition;
             int days = template.Expiration.Days > 0 ? template.Expiration.Days : type.Days;
             var expiration = template.Expiration with { Days = days };
-            int expires = shopExpiration ? expiration.ResolveShop(now) : expiration.Resolve(now);
+            int expires = expiration.Resolve(now, shopExpiration, ignoreUsablePeriod);
             if (expires != 0 && expires <= now.ToUnixTimeSeconds()) return InventoryResult.Reject(19);
             var core = InventoryRewardGrantService.Create(template, utcNow: now) with { Durability = ability, ExpireTime = expires };
             var prototype = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, 0), core);

@@ -191,20 +191,25 @@ internal static class AvatarPackageTests
             result.Plan.CharacterPrecondition!.Matches(character, expires - 1) && !result.Plan.CharacterPrecondition.Matches(character, expires),
             "160期限类型生成七天和三十天奖励，实际计划绑定全部产物的最早截止");
         debug.IgnoreCashShopAbsoluteExpiration = true;
-        int shopExpiry = resources.Items.Get(hatId).Expiration.ResolveShop(now);
+        result = service.Open(character, request, out _, now);
+        That(result.Accepted && result.Plan!.After.Items.Select(item => item.ExpireTime).Order().SequenceEqual(
+            new[] { (int)expires, (int)now.AddDays(30).ToUnixTimeSeconds() }), "只忽略绝对日期不改变装扮类型七天/三十天期限");
+        debug.IgnoreCashShopUsablePeriod = true;
+        int shopExpiry = int.MaxValue;
         result = service.Open(character, request, out _, now);
         That(result.Accepted && result.Plan!.After.Items.All(item => item.Avatar?.ExpireTime == shopExpiry) &&
             result.Plan.CharacterPrecondition!.Matches(character, shopExpiry - 1L) && !result.Plan.CharacterPrecondition.Matches(character, shopExpiry),
-            "开启商城调试时，七天和三十天装扮统一复用ResolveShop期限及真实提交截止");
+            "独立开启相对忽略后，装扮类型期限使用协议上限及真实提交截止");
         var frozenPackages = new AvatarPackageCatalog(path =>
         {
             debug.IgnoreCashShopAbsoluteExpiration = false;
+            debug.IgnoreCashShopUsablePeriod = false;
             return path == "stackable/box.stk" ? package : avatar;
         }, new Dictionary<int, string> { [hatId] = "hat.equ", [skinId] = "skin.equ" }, new Dictionary<int, string> { [packageId] = "box.stk" });
         var frozenService = new InventoryAvatarPackageService(resources.Items, frozenPackages, resources.GoldLimits, resources.EpicPieces, debug);
         result = frozenService.Open(character, request, out _, now);
         That(result.Accepted && !debug.IgnoreCashShopAbsoluteExpiration && result.Plan!.After.Items.All(item => item.Avatar?.ExpireTime == shopExpiry),
-            "资源解析期间切换GM时，整次开包仍使用入口冻结的开关值");
+            "资源解析期间切换两个GM开关，整次开包仍使用入口冻结的各自状态");
         var filled = Enumerable.Range(0, ItemSlotBoundService.AvatarCapacity).Select(slot => InventoryRewardGrantService.CreateItem(resources.Items.Get(hatId),
             new(InventoryListType.Avatar, (short)slot), InventoryRewardGrantService.Create(resources.Items.Get(hatId))) with
             { Uid = slot + 1, Core = InventoryRewardGrantService.Create(resources.Items.Get(hatId)) with { Value = slot + 1 } }).ToImmutableArray();
@@ -214,11 +219,13 @@ internal static class AvatarPackageTests
             result.Plan.CharacterPrecondition!.Matches(character, expires - 1) && !result.Plan.CharacterPrecondition.Matches(character, expires),
             "518全部溢出到邮件时，原型期限及实际提交前置条件仍包含最早奖励期限");
         debug.IgnoreCashShopAbsoluteExpiration = true;
+        debug.IgnoreCashShopUsablePeriod = true;
         result = service.OpenCeraPackage(character, new(73, [new(hatId, 0), new(skinId, 0)]), out _, now);
         That(result.Accepted && result.Plan!.OverflowItems.Length == 2 && result.Plan.OverflowItems.All(item => item.Avatar?.ExpireTime == shopExpiry) &&
             result.Plan.CharacterPrecondition!.Matches(character, shopExpiry - 1L) && !result.Plan.CharacterPrecondition.Matches(character, shopExpiry),
-            "518调试开关覆盖邮件完整详情期限，最早奖励截止不丢失");
+            "518开启相对忽略后覆盖邮件完整详情期限，最早奖励截止不丢失");
         debug.IgnoreCashShopAbsoluteExpiration = false;
+        debug.IgnoreCashShopUsablePeriod = false;
         long sourceExpiry = now.ToUnixTimeSeconds() + 1;
         character = character with { Inventory = new([source with { Core = source.Core with { ExpireTime = (int)sourceExpiry } }]) };
         result = service.Open(character, request, out _, now);
