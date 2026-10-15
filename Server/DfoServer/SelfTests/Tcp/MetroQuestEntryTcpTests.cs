@@ -26,13 +26,14 @@ internal static class MetroQuestEntryTcpTests
         var rooms = DungeonRoomCatalog.Load(resources.Archive);
         VerifyFaction(0, 3868, 3871, 3873);
         VerifyFaction(11, 3869, 3872, 3874);
-        VerifySequential(3971, 3972, 3973, 455, 310, 88);
-        VerifySequential(3547, 3566, 3567, 59, 84, 69);
-        VerifySequential(3540, 3564, 3565, 57, 83, 68);
+        VerifySequential(3971, [(3972, 455)], 3973, 310, 88);
+        VerifySequential(3547, [(3566, 59)], 3567, 84, 69);
+        VerifySequential(3540, [(3564, 57)], 3565, 83, 68);
+        VerifySequential(3521, [(3555, 59), (3556, 58)], 3557, 81, 64);
         VerifyMovement(7958, 311, 95, new(2, 0), 655666, 655667);
         VerifyMovement(3969, 311, 88, new(3, 0), 76886, null);
         VerifyGustDropChain();
-        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、3971/3547/3540父子阶段、层/warp及3993→3995→3998掉落交付（不代表完整剧情通关）");
+        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、3971/3547/3540/3521父子阶段、层/warp及3993→3995→3998掉落交付（不代表完整剧情通关）");
 
         void VerifyGustDropChain()
         {
@@ -278,49 +279,58 @@ internal static class MetroQuestEntryTcpTests
             Cleanup(peer, created, account);
         }
 
-        void VerifySequential(ushort parentId, ushort meetingId, ushort childId, int npc, uint dungeon, byte level)
+        void VerifySequential(ushort parentId, (ushort Id, int Npc)[] meetings, ushort childId, uint dungeon, byte level)
         {
             var parent = resources.Quests.Get(parentId);
             var child = resources.Quests.Get(childId);
             That(QuestRelationProgress.SequentialParent(parent, resources.Quests) &&
-                parent.IntData.SequenceEqual([(int)meetingId, childId]) &&
-                resources.Quests.Get(meetingId).IntData.SequenceEqual([npc]),
+                meetings.Length > 0 && parent.IntData.SequenceEqual(meetings.Select(row => (int)row.Id).Append(childId)) &&
+                meetings.All(row => resources.Quests.Get(row.Id).IntData.SequenceEqual([row.Npc])),
                 "真实父子顺序与会面NPC不改定义：" + parentId);
             var done = parent.Definition!.PrerequisiteGroups.Single().ToHashSet();
             var entrance = Entrance(childId, dungeon, done);
-            var meeting = Npc(npc, level, done);
-            That(!done.Overlaps([(int)parentId, meetingId, childId]), "父子准备只包含原前置和入口资格：" + parentId);
+            var positions = meetings.Select(row => Npc(row.Npc, level, done)).ToArray();
+            That(!done.Overlaps(parent.IntData.Append(parentId)), "父子准备只包含原前置和入口资格：" + parentId);
             string account = "metro-sequence-" + parentId;
-            var created = Create(account, "MetroSeq" + parentId, 0, level, done, meeting);
+            var created = Create(account, "MetroSeq" + parentId, 0, level, done, positions[0]);
             string parentIdentity, childIdentity, accepted;
             using (var peer = Open(fixture, account))
             {
                 Select(peer, created);
-                Accept(peer, parentId, 2);
+                uint remaining = checked((uint)meetings.Length + 1);
+                Accept(peer, parentId, remaining);
                 parentIdentity = Identity(peer.Id, parentId);
                 RejectAccept(peer, childId);
-                TravelTo(peer, entrance);
-                SelectMap(peer);
-                string blocked = State(peer.Id) + DungeonState(peer.Id);
-                peer.Send(16, Selection(dungeon, parentId)); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
-                That(State(peer.Id) + DungeonState(peer.Id) == blocked,
-                    "当前会面阶段拒绝父请求借后继迷宫，不预留key或attempt：" + parentId);
-                // 普通0此时可能选择普通迷宫，不将会面阶段误解为整个副本封禁。
-                peer.Send(132); peer.Expect(1, 132, [1]);
-                peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
-                peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier();
-                TravelTo(peer, meeting);
-                Accept(peer, meetingId, 1);
-                Condition(peer, meetingId, 0, 0);
-                That(Scalar(peer.Id, parentId) == 2 && Identity(peer.Id, parentId) == parentIdentity,
-                    "真实NPC33先保存会面，父身份及顺序仍等子34：" + meetingId);
-                Finish(peer, meetingId, 4);
-                That(Scalar(peer.Id, parentId) == 1 && Identity(peer.Id, parentId) == parentIdentity &&
-                    fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1", peer.Id, meetingId)
-                        is [[long completed]] && completed == meetingId,
-                    "实际会面交付将原父scalar2推进为1，不换接取UUID：" + parentId);
+                for (int index = 0; index < meetings.Length; index++)
+                {
+                    var meeting = meetings[index];
+                    foreach (var later in meetings.Skip(index + 1)) RejectAccept(peer, later.Id);
+                    TravelTo(peer, entrance);
+                    SelectMap(peer);
+                    string blocked = State(peer.Id) + DungeonState(peer.Id);
+                    peer.Send(16, Selection(dungeon, parentId)); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
+                    That(State(peer.Id) + DungeonState(peer.Id) == blocked,
+                        "当前会面阶段拒绝父请求借后继迷宫，不预留key或attempt：" + parentId + "/" + meeting.Id);
+                    // 普通0此时可能选择普通迷宫，不将会面阶段误解为整个副本封禁。
+                    peer.Send(132); peer.Expect(1, 132, [1]);
+                    peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
+                    peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier();
+                    TravelTo(peer, positions[index]);
+                    Accept(peer, meeting.Id, 1);
+                    Condition(peer, meeting.Id, 0, 0);
+                    That(Scalar(peer.Id, parentId) == remaining && Identity(peer.Id, parentId) == parentIdentity,
+                        "真实NPC33先保存会面，父身份及顺序仍等子34：" + meeting.Id);
+                    Finish(peer, meeting.Id, 4);
+                    remaining--;
+                    That(Scalar(peer.Id, parentId) == remaining && Identity(peer.Id, parentId) == parentIdentity &&
+                        fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1", peer.Id, meeting.Id)
+                            is [[long completed]] && completed == meeting.Id,
+                        "实际会面交付逐阶段推进原父，不换接取UUID：" + parentId + "/" + remaining);
+                    if (index + 1 < meetings.Length) RejectAccept(peer, childId);
+                }
                 TravelTo(peer, entrance);
                 if (parentId is 3547 or 3540) AntberRoute(peer);
+                if (parentId == 3521) GuardianRoute(peer);
                 EntryRound(peer, childId, dungeon, [parentId, 0]);
                 That(fixture.Query("SELECT slot FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", peer.Id, childId).Length == 0,
                     "父请求及普通0只借当前子路线，不伪造子任务接取：" + childId);
@@ -330,26 +340,84 @@ internal static class MetroQuestEntryTcpTests
                 That(Scalar(peer.Id, parentId) == 1 && Scalar(peer.Id, childId) == 1 && Identity(peer.Id, parentId) == parentIdentity,
                     "子路线入场未清图，不归零父子或发父奖励：" + parentId);
                 accepted = QuestState(peer.Id);
-                if (parentId is not (3547 or 3540)) Cleanup(peer, created, account);
+                if (parentId is not (3547 or 3540 or 3521)) Cleanup(peer, created, account);
             }
-            if (parentId is not (3547 or 3540)) return;
+            if (parentId is not (3547 or 3540 or 3521)) return;
             using (var peer = Open(fixture, account))
             {
                 var entry = peer.Select(RoleIndex(peer.Roster, created), prepared: true, resumeTown: true, room: false);
                 peer.Barrier();
                 var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id);
                 That(peer.Id == created.Id && QuestState(peer.Id) == accepted && Identity(peer.Id, parentId) == parentIdentity &&
-                    Identity(peer.Id, childId) == childIdentity && active.Length == 2 && Enumerable.Range(0, 30).All(slot =>
+                    Identity(peer.Id, childId) == childIdentity && entry[0] is { Kind: 1, Opcode: 4, Body.Length: 235 } &&
+                    active.Length == 2 && Enumerable.Range(0, 30).All(slot =>
                     {
                         var row = active.SingleOrDefault(row => (long)row[0] == slot);
                         return U16(entry[0].Body, 22 + 6 * slot) == (row is null ? ushort.MaxValue : (long)row[1]) &&
                             U32(entry[0].Body, 24 + 6 * slot) == (row is null ? 0 : (long)row[2]);
-                    }) && peer.CompletedQuestHistory[4 + meetingId] == 1 && peer.CompletedQuestHistory[4 + parentId] == 0 &&
+                    }) && meetings.All(row => peer.CompletedQuestHistory[4 + row.Id] == 1) && peer.CompletedQuestHistory[4 + parentId] == 0 &&
                     peer.CompletedQuestHistory[4 + childId] == 0 && NoClear(peer.Id),
-                    "断线重连完整恢复三十槽、原父子身份和唯一会面完成历史：" + parentId);
+                    "断线重连ACK4完整恢复三十槽、原父子身份及全部真实会面完成历史：" + parentId);
+                if (parentId == 3521)
+                    That(fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id IN (3521,3555,3556,3557) ORDER BY quest_id",peer.Id)
+                        is [[3555L],[3556L]] && fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",peer.Id)
+                        is [[3555L],[3556L]], "3521只持久完成两次真实会面，没有清图子或父任务奖励");
                 EntryRound(peer, childId, dungeon, [0]);
-                That(QuestState(peer.Id) == accepted && NoClear(peer.Id), "重连普通0仍可进入原子路线且未清退出不完成父子：" + childId);
+                That(QuestState(peer.Id) == accepted && NoClear(peer.Id), "重连普通0仍可进入原子任务路线且未清退出不完成父子：" + childId);
                 Cleanup(peer, created, account);
+            }
+
+            void GuardianRoute(TcpPeer peer)
+            {
+                var definition = dungeons.Get(81);
+                var maze = definition.Mazes.Single(row => row.ConnectsQuest(3557));
+                DungeonPoint[] positions = [new(0,1),new(1,1),new(1,2),new(2,0),new(2,1),new(2,2),new(3,0),new(3,1),new(4,1)];
+                int[][] monsters = [[61494,61494,61801,61801,61801],
+                    [61113,61113,61494,61494,61800,61800,61800,61800],
+                    [61113,61113,61801,61801,61801,61801,56106],
+                    [56501,61801,61801,61801,61801,61801,61801],
+                    [61494,61494,61494,61803,61803,61800,61800,61800],
+                    [61800,61494,61800,61800,61494,61494,56501],
+                    [61800,61800,61800,61800,61800,61800,61800,61800],
+                    [61113,61113,61113,61801,61801,61801,61801],
+                    [61800,61800,61800,61800,61800,61494,61494,61800,61800,61800]];
+                int[] passives = [16,19,18,24,31,15,15,13,46];
+                That(parent.Definition!.PrerequisiteGroups.Single().SequenceEqual([3520]) &&
+                    parent.IntData.SequenceEqual([3555,3556,3557]) && child.IntData.SequenceEqual([92217]) &&
+                    meetings.Select(row => row.Id).SequenceEqual(new ushort[] {3555,3556}) &&
+                    meetings.Select(row => row.Npc).SequenceEqual([59,58]) &&
+                    definition.MinimumLevel == 64 && definition.BasisLevel == 67 && maze.SourceOrdinal == 1 &&
+                    maze.Width == 5 && maze.Height == 3 && maze.ResourceError is null && maze.UnsupportedReason is null &&
+                    maze.StaticTopology.Supported && maze.MapSpecification!.Count == 9 && maze.Starts.Single() == positions[0] &&
+                    maze.Bosses.Single() == positions[^1] && maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 &&
+                    maze.StoryStages.Count == 0 && maze.WarpMaps.Count == 0,
+                    "3521保持前置3520、两次真实会面及D81九房3557连接，不借后继3522迷宫");
+                uint next = checked((uint)Convert.ToInt64(fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0",peer.Id).Single()[0]));
+                var plans = Plans(maze,peer.Id,next,definition.BasisLevel);
+                That(plans.Length == 9 && plans.Sum(plan => plan.Room.Monsters.Count) == 67 &&
+                    plans.Sum(plan => plan.Room.PassiveObjects.Count) == 197 && plans.Sum(plan => plan.Room.AiCharacters.Count) == 1,
+                    "3557准备全部67普通怪、197装饰物和唯一敌方Boss APC，不只验证起点");
+                for (int index = 0; index < plans.Length; index++)
+                {
+                    var plan = plans[index];
+                    That(plan.Room.Map.Id == 92209+index && plan.Room.Map.Position == positions[index] &&
+                        plan.Room.Map.Path == "map/cataclysm/antberr/81_genteastgate/3521_"+(92209+index)+".map" &&
+                        plan.Room.Monsters.Select(actor => actor.MonsterId).SequenceEqual(monsters[index]) &&
+                        plan.Room.Monsters.All(actor => actor.RawValues[1] == 1 && actor.RawValues[2] == 0 &&
+                            actor.PlacementKind == "[fixed]" && actor.RankKind == "[normal]" && actor.Modifiers.Count == 0) &&
+                        plan.Room.PassiveObjects.Count == passives[index] && plan.SpecialObjects.Count == 0 &&
+                        plan.Room.AiCharacters.Count == (index == 8 ? 1 : 0) &&
+                        plan.Monsters.Count == monsters[index].Length+(index == 8 ? 1 : 0) &&
+                        plan.Monsters.Where(actor => actor.AiCharacter is null).All(actor => actor is
+                            { CandidateLevel:67, SpawnType:0, Team:100, IsFriendly:false, IsBlocking:true, IsBoss:false }),
+                        "D81逐房独立核对原坐标、MAP路径、普通演员等级及装饰物数量："+plan.Room.Map.Id);
+                }
+                That(plans[^1].Monsters[^1] is { MonsterId:14002, CandidateLevel:67, SpawnType:8, Source:null,
+                    IsFriendly:false, IsBlocking:false, CanReportDeath:true, IsBoss:true,
+                    AiCharacter: { Id:14002, Faction:"[monster]", RankKind:"[boss]",
+                        Path:"aicharacter/gunner/tmh_signalman/tmhsignalman_q1.aic", Level:67 } },
+                    "92217保留AIC最低信息真实Lv67的敌方Boss14002，不改阵营、不转普通monster或删演员");
+                // 九图没有直接ACT/ME；本回归不从NPC、装饰物或APC存在推导死亡、演出或清图事实。
             }
 
             void AntberRoute(TcpPeer peer)
