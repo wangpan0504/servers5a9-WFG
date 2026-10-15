@@ -62,7 +62,7 @@ internal static class DefaultSideQuestTcpTests
             }
             That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", created.Id) is [[0L]],
                 "隔离角色没有预填活动槽或接取身份：" + scenario.Id);
-            string identity = "", persisted = "";
+            string identity = "", persisted = "", nextIdentity = "", nextPersisted = "";
             using (var peer = Open(fixture, account))
             {
                 var packets = Select(peer, created);
@@ -105,6 +105,10 @@ internal static class DefaultSideQuestTcpTests
                     if (scenario.Id == 8681)
                     {
                         string accepted = State(created.Id);
+                        That(!QuestLifecycleTcpTests.List(peer.AvailableQuests,scenario.Level).Contains(8682),
+                            "8681未交付时8682不能凭relation声明成为可接任务");
+                        peer.Send(31,[31,0,234,33]); peer.Expect(1,31,[0,18,0]); peer.Barrier();
+                        Record(false,"前置组未达成",8682);
                         peer.Send(34,[34,0,233,33,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); peer.Barrier();
                         peer.Send(33,[33,0,233,33,0,0]); peer.Expect(1,33,[0,19,0]); peer.Barrier();
                         That(State(created.Id) == accepted, "未会面先交付及错误真实场景33均拒绝，pending1保持");
@@ -133,15 +137,49 @@ internal static class DefaultSideQuestTcpTests
                         is [[string restored]] && restored == identity, "重连恢复原AcceptanceId，不重接：" + scenario.Id);
                 NoCompletion(created.Id, scenario.Id);
                 if (scenario.Id == 8681 && scenario.Allowed)
+                {
                     CompleteExplicitMeet(peer,created,identity,done.ToHashSet());
-                Cleanup(peer, created, account);
+                    var next = resources.Quests.Get(8682);
+                    That(next.Condition == "[meet npc]" && next.SubType == -1 && next.IntData.SequenceEqual([400000040]) &&
+                        next.Definition!.PrerequisiteGroups is [var previous] && previous.SequenceEqual([8681]),
+                        "真实8682要求8681已完成，目标仍为400000040");
+                    peer.Send(31,[31,0,234,33]); peer.Expect(1,31,[1,234,33,1,0,0,0,0]);
+                    drain(peer,null);
+                    var active = fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id);
+                    That(active is [[8682L,1L,string]],"8681真实交付后实际31只提交8682的pending1");
+                    nextIdentity = (string)active[0][2];
+                    That(Guid.TryParseExact(nextIdentity,"N",out var nextAcceptance) && nextAcceptance != Guid.Empty && nextIdentity != identity &&
+                        fixture.Query("SELECT acceptance_id FROM character_quest_lifecycle_receipts WHERE character_id=$p0 AND quest_id=8682",created.Id)
+                            is [[string receipt]] && receipt == nextIdentity,"8682沿独立非空接取身份和唯一回执落库");
+                    Record(true,"任务事务已提交",8682);
+                    string accepted = State(created.Id);
+                    peer.Send(33,[33,0,234,33,0,0]); peer.Expect(1,33,[0,19,0]); peer.Barrier();
+                    peer.Send(34,[34,0,234,33,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); peer.Barrier();
+                    That(State(created.Id) == accepted,"8682错误房间会面和提前交付拒绝，保留pending1及原8681完成记录");
+                    NoCompletion(created.Id,8682);
+                    nextPersisted = Progress(created.Id);
+                }
+                else Cleanup(peer, created, account);
             }
-            void Record(bool accepted, string reason) => diagnostics.Add((created.Id, scenario.Id,
-                (long)fixture.Query("SELECT revision FROM characters WHERE id=$p0", created.Id)[0][0], scenario.Level, scenario.Job,
-                checked((int)(long)fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", created.Id)[0][0]),
-                reason, accepted));
+            if (nextIdentity.Length > 0)
+            {
+                using var peer = Open(fixture,account);
+                ActiveProjection(peer.Select(RoleIndex(peer.Roster,created),prepared: true,resumeTown: true,room: true),8682,1);
+                That(Progress(created.Id) == nextPersisted &&
+                    fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id)
+                        is [[string restored]] && restored == nextIdentity,"8682真正断线后完整ACK4恢复原身份和pending1");
+                CompleteExplicitMeet(peer,created,nextIdentity,doneFor(created.Id),8682);
+                Cleanup(peer,created,account);
+            }
+            void Record(bool accepted, string reason, ushort? questId = null)
+            {
+                var current = fixture.Query("SELECT revision,level FROM characters WHERE id=$p0",created.Id)[0];
+                diagnostics.Add((created.Id,questId ?? scenario.Id,(long)current[0],checked((byte)(long)current[1]),scenario.Job,
+                    checked((int)(long)fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id)[0][0]),
+                    reason,accepted));
+            }
         }
-        Console.WriteLine($"PASS {Count-checks} 真实外传21/31持久接取、断线恢复及8681显式NPC会面交付（非客户端验收）");
+        Console.WriteLine($"PASS {Count-checks} 真实外传21/31持久接取、断线恢复及8681→8682显式NPC链交付（非客户端验收）");
         // 共享热服务正常停止后再读一次日志，避免等待刷盘或另启服务验证诊断。
         return () =>
         {
@@ -180,7 +218,7 @@ internal static class DefaultSideQuestTcpTests
         void NoCompletion(ushort id, ushort quest)
         {
             That(fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1", id, quest) is [[0L]] &&
-                fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0", id) is [[0L]],
+                fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1", id, quest) is [[0L]],
                 "接取不预写个人完成位或交付奖励回执：" + quest);
             if (quest == 2905)
                 That(fixture.Query("SELECT count(*) FROM account_completed_quests WHERE account=$p0 AND quest_id=$p1", "side127-2905-p", quest) is [[0L]],
@@ -190,38 +228,45 @@ internal static class DefaultSideQuestTcpTests
             fixture.Snapshot("SELECT * FROM character_quest_lifecycle_receipts WHERE character_id=$p0 ORDER BY revision", id) +
             fixture.Snapshot("SELECT * FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", id);
         string State(ushort id) => Progress(id) + fixture.Snapshot("SELECT * FROM characters WHERE id=$p0", id);
-        void CompleteExplicitMeet(TcpPeer peer, Character role, string acceptance, HashSet<int> done)
+        void CompleteExplicitMeet(TcpPeer peer, Character role, string acceptance, HashSet<int> done, ushort questId = 8681)
         {
             var towns = resources.Towns;
-            var target = towns.Room;
-            That(towns.Areas[(role.Position.Town,role.Position.Area)].Map(done).Npcs.All(npc => npc.Id != 2) &&
-                towns.Areas[(target.Town,target.Area)].Map(done).Npcs.Any(npc => npc.Id == 2),
-                "错误街区和目标房间的NPC2来自本轮真实城镇资源");
-            var arrival = towns.Entrance(role.Position,target,done)!;
-            That(arrival is not null && towns.Admission(role.Position,arrival,role.Level,done,role.Return) == "ready",
-                "沿资源中的合法入口前往NPC2，不伪造NPC或场景");
-            peer.Travel(arrival!.Town,arrival.Area,arrival.X,arrival.Y,role.Position.Town,role.Position.Area,
-                returnTown: role.Position.Town);
-            peer.Send(33,[33,0,233,33,0,0]); peer.Expect(1,33,[1,233,33,0,0,0,0]); peer.Barrier();
+            var from = questId == 8681 ? role.Position : towns.Room;
+            var target = questId == 8681 ? towns.Room : towns.InitialReturn;
+            uint npcId = questId == 8681 ? 2u : 400000040u;
+            byte low = (byte)questId, high = (byte)(questId >> 8);
+            That(towns.Areas[(from.Town,from.Area)].Map(done).Npcs.All(npc => npc.Id != npcId) &&
+                towns.Areas[(target.Town,target.Area)].Map(done).Npcs.Any(npc => npc.Id == npcId),
+                "错误场景和真实目标NPC来自本轮城镇资源：" + questId);
+            var arrival = towns.Entrance(from,target,done)!;
+            That(arrival is not null && towns.Admission(from,arrival,role.Level,done,role.Return) == "ready",
+                "沿资源中的合法入口往返NPC，不伪造NPC或场景：" + questId);
+            peer.Travel(arrival!.Town,arrival.Area,arrival.X,arrival.Y,from.Town,from.Area,
+                returnTown: questId == 8681 ? from.Town : null);
+            peer.Send(33,[33,0,low,high,0,0]); peer.Expect(1,33,[1,low,high,0,0,0,0]); peer.Barrier();
             That(fixture.Query("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",role.Id)
                 is [[0L,string identity]] && identity == acceptance,"真实NPC会面沿恢复的原AcceptanceId归零");
-            NoCompletion(role.Id,8681);
+            NoCompletion(role.Id,questId);
             string met = State(role.Id);
-            peer.Send(33,[33,0,233,33,0,0]); peer.Expect(1,33,[1,233,33,0,0,0,0]); peer.Barrier();
+            peer.Send(33,[33,0,low,high,0,0]); peer.Expect(1,33,[1,low,high,0,0,0,0]); peer.Barrier();
             That(State(role.Id) == met,"重复显式会面不增加revision或生命周期回执");
             long gold = (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0",role.Id)[0][0];
-            peer.Send(34,[34,0,233,33,255,255,1,0,255,255]);
+            peer.Send(34,[34,0,low,high,255,255,1,0,255,255]);
             byte[] ack = peer.Expect(1,34).Body;
-            That(ack.Length >= 10 && ack[0] == 1 && U16(ack,1) == 8681 && ack[3] == 4,"8681沿普通34完整奖励投影交付");
-            drain(peer,null);
-            That(fixture.Query("SELECT q.acceptance_id,q.condition_type,q.event_id IS NULL,q.instance_id IS NULL,q.revision=c.revision,q.after_experience=c.experience,q.after_level=c.level,q.gold_amount=c.gold-$p1,q.rewards,q.consumed FROM character_quest_completion_receipts q JOIN characters c ON c.id=q.character_id WHERE q.character_id=$p0",role.Id,gold)
+            That(ack.Length >= 10 && ack[0] == 1 && U16(ack,1) == questId && ack[3] == 4,"显式会面沿普通34完整奖励投影交付");
+            bool nextCandidate = false;
+            byte currentLevel = checked((byte)(long)fixture.Query("SELECT level FROM characters WHERE id=$p0",role.Id)[0][0]);
+            drain(peer,packet => { if (packet.Opcode == 21) nextCandidate = QuestLifecycleTcpTests.List(packet.Body,currentLevel).Contains(8682); });
+            if (questId == 8681) That(nextCandidate,"8681真实交付后刷新21才开放8682候选");
+            That(fixture.Query("SELECT q.acceptance_id,q.condition_type,q.event_id IS NULL,q.instance_id IS NULL,q.revision=c.revision,q.after_experience=c.experience,q.after_level=c.level,q.gold_amount=c.gold-$p1,q.rewards,q.consumed FROM character_quest_completion_receipts q JOIN characters c ON c.id=q.character_id WHERE q.character_id=$p0 AND q.quest_id=$p2",role.Id,gold,questId)
                 is [[string receipt,4L,1L,1L,1L,1L,1L,1L,"[]","[]"]] && receipt == acceptance,
                 "实际完成回执、成长与金币原子提交，无伪造清图或额外物品");
             That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",role.Id) is [[0L]] &&
-                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id IN(8681,8682)",role.Id) is [[8681L]],
-                "只关闭实际8681活动槽和完成自身，不自动完成relation8682");
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id IN(8681,8682) ORDER BY quest_id",role.Id)
+                    .Select(row => (long)row[0]).SequenceEqual(questId == 8681 ? [8681L] : [8681L,8682L]),
+                "每次只关闭和完成实际交付任务，不自动完成relation");
             string completed = State(role.Id) + fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0",role.Id);
-            peer.Send(34,[34,0,233,33,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); peer.Barrier();
+            peer.Send(34,[34,0,low,high,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); peer.Barrier();
             That(State(role.Id) + fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0",role.Id) == completed,
                 "重复34拒绝且不重复金币、成长或完成回执");
         }
