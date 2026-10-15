@@ -39,6 +39,7 @@ internal static class QuestReplayPublicationTests
             await ReselectDuringSendAsync();
             await ReselectRejectedEntryAsync();
             await StaleOwnerAsync();
+            await CancelContinuationAsync();
 
             GameCommandRegistry Registry(QuestCycleContinuationTests.Fixture fixture)
             {
@@ -269,6 +270,45 @@ internal static class QuestReplayPublicationTests
                     return;
                 }
                 throw new InvalidOperationException("FAIL: stale replay owner was accepted");
+            }
+
+            async Task CancelContinuationAsync()
+            {
+                using var f = new QuestCycleContinuationTests.Fixture(DateTimeOffset.UtcNow,forReplay:true);
+                var before = f.Read(); f.PrepareContinuation(); var commands = Registry(f);
+                using var stop = new CancellationTokenSource(); using var output = new ControlledOutput();
+                await using var sender = new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_) => { });
+                var context = Context(f,output,sender,stop);
+                That(await commands.DispatchAsync(context,Entry(0)) == CommandResult.Handled && Frames(output,(1,15),(0,3),(0,27)) &&
+                    f.Session.Phase == SessionPhase.MapSelect && Same(before,f.Read()),
+                    "连图15通过真实Handler只打开MapSelect，16前无地图通知或持久预留");
+                output.Frames.Clear();
+                foreach (int offset in new[] { 0,4,5,7,8,9,11,15,16,20,21 })
+                {
+                    byte[] body = Convert.FromHexString("010000000000000000FFFF0000000000650000000000000000");
+                    body[offset] ^= 1;
+                    That(await commands.DispatchAsync(context,new(1,16,body)) == CommandResult.Handled && Frames(output,(1,16)) &&
+                        Body(output.Frames.Single()).SequenceEqual<byte>([0,9,0,0]) && Same(before,f.Read()) && f.Session.DungeonSnapshot is null,
+                        "连图16拒绝错误目标、qid、难度及全部普通模式字段，不fallback其他入口");
+                    output.Frames.Clear();
+                }
+                That(await commands.DispatchAsync(context,new(1,(ushort)CmdPacketType.BACK_2_VILLAGE,[])) == CommandResult.Handled &&
+                    f.Session.Phase == SessionPhase.Town && f.Session.HasDungeonContinuationRequest() && Same(before,f.Read()),
+                    "真实取消连图选图保留有界终态，无持久预留");
+                output.Frames.Clear();
+                byte[] late = Convert.FromHexString("010000000000000000FFFF0000000000000000000000000000");
+                That(await commands.DispatchAsync(context,new(1,16,late)) == CommandResult.Handled && Frames(output,(1,16)) &&
+                    Body(output.Frames.Single()).SequenceEqual<byte>([0,9,0,0]) && Same(before,f.Read()),
+                    "取消后普通目标的迟到16也不能fallback普通准入");
+                output.Frames.Clear();
+                // 已授权回放准备复用现有夹具，不重载资源；真正15必须消费旧连图取消终态。
+                f.PrepareContinuation(forReplay:true);
+                That(await commands.DispatchAsync(context,Entry(1)) == CommandResult.Handled && Frames(output,(1,15),(0,3)) &&
+                    !f.Session.HasDungeonContinuationRequest(),"合法回放15在原选择身份复验后消费连图取消终态");
+                output.Frames.Clear();
+                That(await commands.DispatchAsync(context,Selection()) == CommandResult.Handled && Frames(output,(0,28),(0,29)) &&
+                    f.Read().DungeonState!.LastAttempt == before.DungeonState!.LastAttempt+1,
+                    "取消连图后新回放真实16仍可安装且只预留一次attempt");
             }
         }
         finally { Directory.Delete(root,true); }

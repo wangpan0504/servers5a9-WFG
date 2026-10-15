@@ -108,6 +108,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool experience = selection.DungeonIndex == 7142 && selection.Unknown8 == 1 && selection.Unknown16 == 0;
         bool direct = training || experience;
         bool replay = selection.Unknown8 == 1 && !direct;
+        bool continuation = context.Session.HasDungeonContinuationRequest();
+        if (continuation && (direct || replay)) return await RejectAsync();
         // 两种直入与剧情回放共享offset8=1；副本、难度、token及完整模式字段共同判别。
         if (selection.DungeonIndex == 5000 && (!training || selection.Parameter != 0)) return await RejectAsync();
         if (selection.DungeonIndex == 7142 && (!experience || selection.Parameter != 0)) return await RejectAsync();
@@ -116,11 +118,12 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             (selection.Unknown7 != 0 || selection.Unknown8 != (direct ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
              selection.Unknown15 != 0 || selection.Unknown20 != 0 || selection.Unknown21 != 0))
             return await RejectAsync();
-        var receipt = replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
+        var receipt = continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
+            replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
             context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms,
                 drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
                 classExperience: experience);
-        log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay,
+        log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Continuation = continuation,
             Training = training, ClassExperience = experience, Request = selection, receipt?.Snapshot.Identity });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);

@@ -77,7 +77,7 @@ internal sealed partial class GameSession
             // 城镇未提交手册和已安装回答缓存可随库存自然失效；副本继续保留专用取放资格。
             if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();
             return (Phase == SessionPhase.Town || pendingQuestQuickClear is null) &&
-                pendingDungeonContinuation is null && !HasPendingQuestReplay &&
+                !HasActiveDungeonContinuation && !HasPendingQuestReplay &&
                 formalDungeon?.Ground.HasPendingOperation != true &&
                 (Phase == SessionPhase.Town || Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
                     formalDungeon is { HasPendingFatigue: false } dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);

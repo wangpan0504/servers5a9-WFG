@@ -77,16 +77,28 @@ internal static class QuestCycleContinuationTests
             That(f.Session.AdvanceQuestCycle(before) is null && f.Session.AdvanceQuestCycle(after) is null &&
                 ReferenceEquals(selected,f.Session.Selected) && Same(selected,f.Read()),
                 "06:00跨日不替换待连图原角色、不清每日完成或增加revision");
-            var installed = f.Session.CompleteFormalDungeonContinuation();
-            That(installed.Pending && installed.Dungeon is not null && installed.Town is null && installed.Replay is null &&
-                f.Session.Phase == SessionPhase.Loading,"原连图准备仍可经真实Session安装新副本");
-            var entered = installed.Dungeon!;
+            var opening = f.Session.CompleteFormalDungeonContinuation();
+            That(opening is { Pending:true,Selection:not null,Opened:true } && f.Session.Phase == SessionPhase.MapSelect &&
+                f.Session.DungeonSnapshot is null && Same(selected,f.Read()) && f.Session.AdvanceQuestCycle(after) is null,
+                "连图15只打开选择阶段，无持久预留且继续保护跨日");
+            That(f.Session.CompleteFormalDungeonContinuation(2).Selection is null &&
+                f.Session.EnterFormalDungeonContinuation(2,101,0) is null &&
+                f.Session.EnterFormalDungeonContinuation(1,102,0) is null &&
+                f.Session.EnterFormalDungeonContinuation(1,101,1) is null && Same(selected,f.Read()),
+                "错误15目标和16副本、qid、难度不能使用后继规划或产生持久预留");
+            var retrySelection = f.Session.CompleteFormalDungeonContinuation(1);
+            That(retrySelection is { Selection:not null,Opened:false } &&
+                retrySelection.Selection.SelectionId == opening.Selection!.SelectionId,
+                "15(0)后15(dungeon)复用同一选择身份");
+            var entered = f.Session.EnterFormalDungeonContinuation(1,101,0);
+            That(entered is not null && f.Session.Phase == SessionPhase.Loading,"真实16经Session安装已规划的唯一后继");
             var reserved = f.Session.Selected!;
             That(reserved.Revision == selected.Revision+1 && reserved.QuestCycleDay == selected.QuestCycleDay &&
                 reserved.DungeonState!.LastAttempt == selected.DungeonState!.LastAttempt+1 && Same(reserved,f.Read()),
                 "安装仅提交一次新副本身份预留，未把跨日混入入场准备");
             var replay = f.Session.CompleteFormalDungeonContinuation();
-            That(replay.Pending && replay.Dungeon is null && ReferenceEquals(replay.Replay,entered) &&
+            That(replay.Pending && replay.Selection is null && ReferenceEquals(replay.Replay,entered) &&
+                f.Session.EnterFormalDungeonContinuation(1,101,0) is null &&
                 f.Session.AdvanceQuestCycle(after) is null && ReferenceEquals(reserved,f.Session.Selected) && Same(reserved,f.Read()),
                 "重复15重放原初始化，等待真实加载完成前仍延后切日");
             var loaded = f.Session.CompleteFormalDungeonLoading();
@@ -120,7 +132,8 @@ internal static class QuestCycleContinuationTests
         {
             var selected = f.Session.Selected!;
             f.PrepareContinuation();
-            var entered = f.Session.CompleteFormalDungeonContinuation().Dungeon;
+            f.Session.CompleteFormalDungeonContinuation();
+            var entered = f.Session.EnterFormalDungeonContinuation(1,101,0);
             That(entered is not null && f.Session.Phase == SessionPhase.Loading &&
                 f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town &&
                 !f.Session.HasFormalDungeonContinuation() && f.Session.CompleteFormalDungeonLoading() is null,
@@ -130,6 +143,69 @@ internal static class QuestCycleContinuationTests
                 rolled.Character.CompletedQuests.Length == 0 &&
                 rolled.Character.ActiveMainQuests.SequenceEqual(selected.ActiveMainQuests) && Same(rolled.Character,f.Read()),
                 "加载取消后不再阻挡正常06:00切日，保留原接取且不重复预留副本");
+            That(f.Session.HasDungeonContinuationRequest() && f.Session.EnterFormalDungeonContinuation(1,101,0) is null &&
+                f.Session.CompleteFormalDungeonLoading() is null && Same(rolled!.Character,f.Read()),
+                "取消加载保留有界终态，迟到16不能重新安装后继");
+        }
+        using (var f = new Fixture(before))
+        {
+            f.PrepareContinuation(); f.Session.CompleteFormalDungeonContinuation();
+            var returned = f.Session.ReturnFromDungeonSelection();
+            That(returned is not null && f.Session.Phase == SessionPhase.Town && !f.Session.HasFormalDungeonContinuation() &&
+                f.Session.HasDungeonContinuationRequest() && f.Session.EnterFormalDungeonContinuation(1,101,0) is null,
+                "MapSelect取消保留终态拦迟到16且旧72尾包不再归活动连图");
+            var teleport = typeof(GameSession).GetMethod("CanTeleport",BindingFlags.Instance|BindingFlags.NonPublic)!;
+            That((bool)teleport.Invoke(f.Session,null)! && f.Session.AdvanceQuestCycle(after) is not null,
+                "取消后恢复城镇传送准入和每日周期，不让终态冻结城镇业务");
+            var newSelection = f.Session.BeginClassExperienceSelection();
+            That(newSelection is not null && f.Session.ConfirmNewDungeonSelection(newSelection) &&
+                !f.Session.HasDungeonContinuationRequest(),"取消后合法新15选择可消费终态并恢复独立入口");
+            f.Session.ReturnToRoster();
+            That(!f.Session.HasDungeonContinuationRequest() && f.Session.EnterFormalDungeonContinuation(1,101,0) is null,
+                "返回选角清除原连图终态，旧规划不得在新epoch安装");
+        }
+        using (var f = new Fixture(before))
+        {
+            f.PrepareContinuation(); f.Session.CompleteFormalDungeonContinuation();
+            var character = f.Session.Selected!;
+            // 同槽位同qid重新接取仍替换原快照，不能复用旧规划。
+            var changed = character with { ActiveMainQuests = [character.ActiveMainQuests[0] with { AcceptanceId = Guid.NewGuid() }] };
+            typeof(GameSession).GetProperty(nameof(GameSession.Selected))!.SetValue(f.Session,changed);
+            That(f.Session.EnterFormalDungeonContinuation(1,101,0) is null && Same(character,f.Read()),
+                "原快照失效不能安装后继或预留attempt");
+        }
+        using (var f = new Fixture(DateTimeOffset.UtcNow))
+        {
+            var character = f.Read();
+            foreach (var binding in new[] { (Guid.NewGuid(),(byte)0),(character.ActiveMainQuests[0].AcceptanceId,(byte)1) })
+            {
+                f.PrepareContinuation(acceptanceId:binding.Item1,slot:binding.Item2); f.Session.CompleteFormalDungeonContinuation();
+                That(f.Session.EnterFormalDungeonContinuation(1,101,0) is null && Same(character,f.Read()),
+                    "快照仍相同时复验规划中原AcceptanceId与槽位，错身份不预留attempt");
+                f.Session.ReturnFromDungeonSelection();
+            }
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            That(!f.Session.HasDungeonContinuationRequest() && f.Session.EnterFormalDungeonContinuation(1,101,0) is null,
+                "同角色重新选角不恢复旧epoch的后继规划");
+        }
+        using (var f = new Fixture(DateTimeOffset.UtcNow))
+        {
+            f.Session.ReturnToRoster(); f.Sql("UPDATE characters SET accepted_story_level=0");
+            f.Session.Select(0); f.Session.MarkReady();
+            f.PrepareContinuation(); var opening = f.Session.CompleteFormalDungeonContinuation();
+            var beforeDigest = f.Read(); var updated = f.Session.AcceptStoryDigest();
+            var entered = f.Session.EnterFormalDungeonContinuation(1,101,0);
+            That(opening.Selection is not null && updated is not null && updated.AcceptedStoryLevel == updated.Level &&
+                updated.Revision == beforeDigest.Revision+1 && entered is not null &&
+                entered.Character.Revision == updated.Revision+1 && entered.Entry.CharacterRevision == entered.Character.Revision &&
+                f.Session.CurrentDungeonSelection is null && Same(entered.Character,f.Read()),
+                "MapSelect中1446真实更新同步原规划快照，随后16按新revision仅安装一次");
+        }
+        using (var f = new Fixture(before))
+        {
+            f.PrepareContinuation(); f.Session.CompleteFormalDungeonContinuation(); f.Owner.Dispose();
+            Testing.TestCheck.Reject<InvalidOperationException>(() => f.Session.EnterFormalDungeonContinuation(1,101,0),
+                "失效owner不得提交后继身份预留");
         }
         using (var f = new Fixture(before,forReplay:true))
         {
@@ -203,13 +279,13 @@ internal static class QuestCycleContinuationTests
             db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
         }
 
-        public void PrepareContinuation(bool forReplay = false)
+        public void PrepareContinuation(bool forReplay = false,Guid? acceptanceId = null,byte? slot = null)
         {
             var character = Session.Selected!; var state = character.DungeonState!;
             var map = new DungeonMap("boss",new(0,0),1,"map/synthetic-cycle.map");
             var maze = new DungeonMaze(0,1,1,"synthetic",[map.Position],[map.Position],[map],[]);
-            var entry = new DungeonEntryPlan(character.Id,character.Revision+1,1,0,byte.MaxValue,0,maze,map,map)
-                { IsQuestReplay = forReplay,RouteQuestId = 101u };
+            var entry = new DungeonEntryPlan(character.Id,character.Revision+1,1,forReplay ? 0u : 101u,forReplay ? byte.MaxValue : slot ?? (byte)0,0,maze,map,map)
+                { IsQuestReplay = forReplay,RouteQuestId = 101u,QuestAcceptanceId = forReplay ? Guid.Empty : acceptanceId ?? character.ActiveMainQuests[0].AcceptanceId };
             var source = new DungeonRoomMonster(1,[1,0,1,100,100,0,1,1],"[fixed]","[boss]","monster/synthetic-cycle.mob");
             uint key = state.NextObjectKey == character.Id ? state.NextObjectKey+1 : state.NextObjectKey;
             var plan = DungeonMonsterPlan.FromRoom(new(map,[source],[],[]),character.Id,checked((ushort)key));

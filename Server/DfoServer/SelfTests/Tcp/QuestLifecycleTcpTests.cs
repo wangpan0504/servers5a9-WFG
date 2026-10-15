@@ -1652,14 +1652,25 @@ internal static class QuestLifecycleTcpTests
         peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
         peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]);
         peer.Expect(0,27,new byte[42]);
+        peer.Barrier();
+        That(Attempt() == attempt,"连图真实15只打开选择阶段，16前不预留attempt或发送28/29");
+        byte[] chosen = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(chosen,6);
+        peer.Send(15,chosen); peer.Expect(1,15,[1]); peer.Barrier();
+        That(Attempt() == attempt,"连图15(0)后的15(dungeon)只确认原选择，不重复选图或安装实例");
+        byte[] selection = Convert.FromHexString("060000000000000000FFFF00000000004B0C00000000000000");
+        byte[] wrongTarget = (byte[])selection.Clone(); wrongTarget[0] = 3;
+        peer.Send(16,wrongTarget); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+        peer.Send(72,[1,3]); peer.Barrier();
+        That(Attempt() == attempt,"MapSelect中错误16不fallback普通副本，旧72尾包保持静默且不预留attempt");
+        peer.Send(16,selection);
         var nextInfo = peer.Expect(0,28).Body; var map = peer.Expect(0,29).Body;
         That(U32(nextInfo,0) == 6 && U32(map,14) == 76141 && Attempt() == attempt+1,
-            "3146到3147的真实15建立一次新尝试，进入地下城6的76141而非重开旧图");
+            "3146到3147的真实16建立一次新尝试，进入地下城6的76141而非重开旧图");
         string loading = fixture.Snapshot();
         if (storyRevision is { } savedRevision)
         {
             That(fixture.Query("SELECT revision FROM characters WHERE id=$p0",peer.Id) is [[long entryRevision]] &&
-                entryRevision == savedRevision+1,"1446后保留预备路线，真实15仅以更新后的revision安装一次新副本");
+                entryRevision == savedRevision+1,"1446后保留预备路线，真实16仅以更新后的revision安装一次新副本");
             peer.Send(1446,[]); peer.Barrier();
             That(fixture.Snapshot() == loading,"新图加载前重复1446无写入或通知，保留已安装Run及pending重放快照");
         }
@@ -1668,6 +1679,8 @@ internal static class QuestLifecycleTcpTests
         peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Barrier();
         That(fixture.Snapshot() == loading && Attempt() == attempt+1,
             "新图加载前重复15只重放ACK，不创建副本或重发地图");
+        peer.Send(16,selection); peer.Barrier();
+        That(fixture.Snapshot() == loading && Attempt() == attempt+1,"Loading重复16不重发28/29或预留新尝试");
         FormalDungeonTcpTests.Load(peer); peer.Barrier();
         string durable = fixture.Snapshot();
         peer.Send(39,FormalDungeonTcpTests.Death(U16(oldMap,25),peer.Id,oldMap[31])); peer.Barrier();

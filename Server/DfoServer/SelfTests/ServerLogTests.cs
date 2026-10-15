@@ -25,6 +25,7 @@ internal static class ServerLogTests
                 log.Write("server_ready", new { Pid = 1 });
                 log.Write("auth_rejected", new { Connection = 1, Failure = "InvalidCredentials" });
                 log.Write("formal_dungeon_entry", new { Connection = 1, Accepted = false });
+                log.Write("formal_quest_continuation_selection", new { Connection = 1, DungeonIndex = 6, Opened = true, SelectionId = 2 });
                 log.Write("unimplemented", new { Connection = 1, Phase = "Town", Kind = 1, Opcode = 65535,
                     Name = "65535", Length = 3, Body = "10ABFF" });
                 log.Write("unimplemented", new { Connection = 1, Phase = "Town", Kind = 1, Opcode = 65534,
@@ -51,6 +52,9 @@ internal static class ServerLogTests
                 string text = output.ToString();
                 TestCheck.That(text.Contains("[INFO] [server_ready] Server ready") && text.Contains("[WARN] [auth_rejected]") &&
                     text.Contains("[WARN] [formal_dungeon_entry]"), "English events expose readiness and rejection severity");
+                TestCheck.That(text.Contains("[INFO] [formal_quest_continuation_selection] Quest continuation selection") &&
+                    text.Contains("DungeonIndex=6 Opened=True SelectionId=2"),
+                    "连图选择日志保留英文阶段及选择身份，不将选图准备标为副本入场成功");
                 TestCheck.That(text.Contains("[INFO] [character_deleted] Character deleted") &&
                     text.Contains("RosterIndex=1 Character=7 Slot=2 Revision=3 SelectionEpoch=4") &&
                     text.Contains("[WARN] [character_delete_rejected] Character deletion rejected") && text.Contains("Reason=index-absent"),
@@ -97,7 +101,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 91,
+            TestCheck.That(fileLines.Length == 92,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&

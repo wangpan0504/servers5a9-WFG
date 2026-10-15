@@ -8,8 +8,29 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     sealed record PendingDungeonContinuation(FormalDungeonReceipt Previous, PreparedFormalDungeon? Dungeon,
-        TownTravelReceipt? Return = null, FormalDungeonReceipt? Entered = null);
+        TownTravelReceipt? Return = null, FormalDungeonReceipt? Entered = null)
+    {
+        public DungeonSelectionContext? Selection { get; init; }
+        public bool Cancelled { get; init; }
+    }
     PendingDungeonContinuation? pendingDungeonContinuation;
+    bool HasActiveDungeonContinuation => pendingDungeonContinuation is { Cancelled: false };
+    public bool HasDungeonContinuationRequest() => owner.Execute(() => pendingDungeonContinuation is not null);
+
+    // 保留一个有界终态拦截迟到16；下一次合法15或换角才消费，普通城镇操作不受阻。
+    void CancelDungeonContinuation()
+    {
+        if (pendingDungeonContinuation is { } pending)
+            pendingDungeonContinuation = pending with { Cancelled = true, Dungeon = null, Return = null, Entered = null, Selection = null };
+    }
+
+    public bool ConfirmNewDungeonSelection(DungeonSelectionReceipt receipt) => owner.Execute(() =>
+    {
+        if (!CanPublishDungeonSelection(receipt)) return false;
+        if (pendingDungeonContinuation is { Cancelled: true })
+            pendingDungeonContinuation = null;
+        return true;
+    });
 
     public FormalDungeonReceipt? BeginFormalDungeonQuestContinuation(FormalDungeonReceipt current, DungeonCatalog dungeons,
         DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces,
@@ -66,33 +87,59 @@ internal sealed partial class GameSession
 
     // 连图退场中的1,3是旧结算页尾包；回复ACK72会重新写入旧页面的操作状态。
     public bool HasFormalDungeonContinuation() => owner.Execute(() =>
-        pendingDungeonContinuation is { Return: { } returning } && Ready &&
+        pendingDungeonContinuation is { Cancelled: false, Return: { } returning } && Ready &&
         returning.Generation == owner.Generation && returning.SelectionEpoch == SelectionEpoch &&
-        (Phase == SessionPhase.Town && ReferenceEquals(Selected,returning.Character) ||
+        (Phase is SessionPhase.Town or SessionPhase.MapSelect && ReferenceEquals(Selected,returning.Character) ||
             pendingDungeonContinuation.Entered is { } entered && CanPublishFormalDungeon(entered)));
 
-    // external 的真实24→客户端15边界：15确认旧场景结束，再安装后继，不重新打开普通选图。
-    public (bool Pending, FormalDungeonReceipt? Dungeon, TownTravelReceipt? Town, FormalDungeonReceipt? Replay) CompleteFormalDungeonContinuation() => owner.Execute(() =>
+    // 15只建立客户端选图上下文；真实16复验原规划后才提交attempt并发布28/29。
+    public (bool Pending, DungeonSelectionReceipt? Selection, bool Opened, FormalDungeonReceipt? Replay) CompleteFormalDungeonContinuation(uint dungeonId = 0) => owner.Execute(() =>
     {
-        if (pendingDungeonContinuation is not { } pending) return (false,(FormalDungeonReceipt?)null,(TownTravelReceipt?)null,(FormalDungeonReceipt?)null);
+        if (pendingDungeonContinuation is not { Cancelled: false } pending) return (false,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
         if (pending.Entered is { } installed)
             return Ready && Phase == SessionPhase.Loading && CanPublishFormalDungeon(installed)
-                ? (true,(FormalDungeonReceipt?)null,(TownTravelReceipt?)null,installed)
-                : (true,(FormalDungeonReceipt?)null,(TownTravelReceipt?)null,(FormalDungeonReceipt?)null);
-        if (pending.Return is not { } returning) return (true,(FormalDungeonReceipt?)null,(TownTravelReceipt?)null,(FormalDungeonReceipt?)null);
-        if (!Ready || Phase != SessionPhase.Town || formalDungeon is not null || returning.Generation != owner.Generation ||
-            returning.SelectionEpoch != SelectionEpoch || !ReferenceEquals(Selected,returning.Character))
+                ? (true,(DungeonSelectionReceipt?)null,false,installed)
+                : (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+        if (pending.Return is not { } returning) return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+        if (!Ready || Phase is not (SessionPhase.Town or SessionPhase.MapSelect) || formalDungeon is not null || returning.Generation != owner.Generation ||
+            returning.SelectionEpoch != SelectionEpoch || !ReferenceEquals(Selected,returning.Character) ||
+            pending.Dungeon is not { } prepared || !ReferenceEquals(prepared.Character,Selected) || prepared.SelectionEpoch != SelectionEpoch)
         {
-            pendingDungeonContinuation = null;
-            return (false,(FormalDungeonReceipt?)null,(TownTravelReceipt?)null,(FormalDungeonReceipt?)null);
+            CancelDungeonContinuation();
+            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
         }
-        if (pending.Dungeon is null)
+        if (dungeonId != 0 && dungeonId != prepared.Dungeon.Entry.DungeonId)
+            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+        bool opened = pending.Selection is null;
+        if (opened)
         {
-            pendingDungeonContinuation = null;
-            return (true,(FormalDungeonReceipt?)null,returning,(FormalDungeonReceipt?)null);
+            if (Phase != SessionPhase.Town || CurrentDungeonSelection is not null)
+                return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+            CurrentDungeonSelection = new(++dungeonSelectionId,SelectionEpoch,Selected!.Id,Selected.Position,Selected.Position);
+            pendingDungeonContinuation = pending with { Selection = CurrentDungeonSelection };
         }
-        var entered = InstallFormalDungeon(pending.Dungeon);
+        else if (Phase != SessionPhase.MapSelect || !ReferenceEquals(CurrentDungeonSelection,pending.Selection))
+            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+        ValidateDungeonSelection();
+        SetState(SessionPhase.MapSelect);
+        return (true,new DungeonSelectionReceipt(Selected!,owner.Generation,SelectionEpoch,dungeonSelectionId),opened,(FormalDungeonReceipt?)null);
+    });
+
+    public FormalDungeonReceipt? EnterFormalDungeonContinuation(uint dungeonId,uint questId,byte difficulty) => owner.Execute(() =>
+    {
+        if (pendingDungeonContinuation is not { Cancelled: false, Dungeon: { } prepared, Return: { } returning, Selection: { } selection } pending ||
+            !Ready || Phase != SessionPhase.MapSelect || formalDungeon is not null || returning.Generation != owner.Generation ||
+            returning.SelectionEpoch != SelectionEpoch || prepared.SelectionEpoch != SelectionEpoch ||
+            !ReferenceEquals(Selected,returning.Character) || !ReferenceEquals(Selected,prepared.Character) ||
+            !ReferenceEquals(CurrentDungeonSelection,selection) || selection.Id != dungeonSelectionId ||
+            selection.SelectionEpoch != SelectionEpoch || selection.CharacterId != Selected!.Id ||
+            selection.OriginPosition != Selected.Position) return null;
+        var entry = prepared.Dungeon.Entry;
+        if (entry.DungeonId != dungeonId || entry.QuestId != questId || entry.Difficulty != difficulty ||
+            !Selected.ActiveMainQuests.Any(active => active.QuestId == entry.QuestId && active.Slot == entry.ActiveQuestSlot &&
+                active.AcceptanceId == entry.QuestAcceptanceId && active.AcceptanceId != Guid.Empty)) return null;
+        var entered = InstallFormalDungeon(prepared);
         if (entered is not null) pendingDungeonContinuation = pending with { Entered = entered };
-        return (true,entered,(TownTravelReceipt?)null,(FormalDungeonReceipt?)null);
+        return entered;
     });
 }

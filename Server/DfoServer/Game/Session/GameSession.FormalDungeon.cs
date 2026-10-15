@@ -66,7 +66,7 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false)
     {
-        var (expected, epoch, selection) = owner.Execute(() => (Ready && CanEnterFormalDungeon(retry) &&
+        var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) && CanEnterFormalDungeon(retry) &&
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null)
             return null;
@@ -471,7 +471,7 @@ internal sealed partial class GameSession
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRun();
         formalDungeon = null;
-        pendingDungeonContinuation = null;
+        CancelDungeonContinuation();
         pendingQuestReplay = null;
         SetState(SessionPhase.Town);
         return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch);

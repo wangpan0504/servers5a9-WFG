@@ -86,6 +86,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "resource_warning" => "Resource warning", "exit" => "Exit request", "travel" => "Town travel",
             "room_exit" => "Room exit", "dungeon_entry" => "Dungeon selection",
             "formal_dungeon_entry" => "Dungeon entry", "formal_dungeon_settlement" => "Dungeon settlement",
+            "formal_quest_continuation_selection" => "Quest continuation selection",
             "formal_character_death" => "Dungeon character death", "formal_character_revive" => "Dungeon character revive",
             "dungeon_selection_return" => "Dungeon selection return", "formal_dungeon_return" => "Returned to town",
             "quest_lifecycle" => "Quest update", "quest_completion" => "Quest completion", "gm" => "GM command",
@@ -139,7 +140,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         "connected" or "disconnected" or "closed" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
         "selected" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
         "formal_dungeon_settlement" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
-        "formal_quest_continuation" or "formal_quest_continuation_enter" or "dungeon_entry_probe" or "dungeon_probe_return" or
+        "formal_quest_continuation" or "formal_quest_continuation_selection" or "dungeon_entry_probe" or "dungeon_probe_return" or
         "quest_lifecycle" or "quest_completion" or "consumable_use" or "cube_contract_select" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
         "quest_ticket_use" or "creature_hatch" or "enhancement" or "booster_open" or "random_option_change" or "cash_shop_buy" or "avatar_dye" or "gm" or "unimplemented" ||
         kind.EndsWith("_rejected", StringComparison.Ordinal) || kind.EndsWith("_failed", StringComparison.Ordinal);

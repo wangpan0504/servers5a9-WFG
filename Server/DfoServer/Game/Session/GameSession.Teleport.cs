@@ -8,7 +8,7 @@ internal sealed partial class GameSession
 {
     // 未决提交和已冻结连图/回放依赖原快照；未提交手册及已提交回答缓存仍可随普通操作失效。
     bool CanTeleport() => pendingRental is null && Ready && Phase == SessionPhase.Town && Selected is not null && !HasPendingTownQuestCommit &&
-        pendingDungeonContinuation is null && !HasPendingQuestReplay && !HasPendingFormalCard;
+        !HasActiveDungeonContinuation && !HasPendingQuestReplay && !HasPendingFormalCard;
 
     public TeleportResult TeleportPotion(PotionTeleportRequest request, TeleportService service, bool blocked = false) =>
         PlanTeleport(character => service.Potion(character, request, service.Clock.GetUtcNow().ToUnixTimeMilliseconds()), service.Clock, blocked);

@@ -23,25 +23,23 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
-        var continuation = context.Session.CompleteFormalDungeonContinuation();
+        var continuation = context.Session.CompleteFormalDungeonContinuation(entry.DungeonIndex);
         if (continuation.Pending)
         {
-            if (continuation.Dungeon is { } entered)
+            if (continuation.Selection is { } selected)
             {
-                await projection.DetachAsync(context);
-                bool Guard() => context.Session.CanPublishFormalDungeon(entered);
-                log.Write("formal_quest_continuation_enter",new { Connection = context.Id, entered.Entry.QuestId,
-                    entered.Entry.DungeonId, entered.Snapshot.Identity });
+                if (!await projection.DetachForDungeonSelectionAsync(context,selected)) return CommandResult.Handled;
+                bool Guard() => context.Session.CanPublishDungeonSelection(selected);
+                log.Write("formal_quest_continuation_selection",new { Connection = context.Id, entry.DungeonIndex,
+                    continuation.Opened, selected.SelectionId });
                 // 27隐藏旧Scene界面并切换场景模块；ACK15/state1不能替代，缺少它会保留旧结算页。
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_confirm",Guard);
-                await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(entered.Character.Id),"formal_next_quest_entry_state",Guard);
-                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.EmptySelectNotice(),"formal_next_quest_scene_transition",Guard);
-                await context.Notify(NotiPacketType.DUNGEON_INFO,DungeonPackets.Information(entered.Entry),"formal_next_quest_information",Guard);
-                await context.Notify(NotiPacketType.START_MAP,DungeonPackets.StartMap(entered.Entry,entered.Monsters,entered.MapSeed),"formal_next_quest_start_map",Guard);
+                if (continuation.Opened)
+                {
+                    await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(selected.Character.Id),"formal_next_quest_entry_state",Guard);
+                    await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.EmptySelectNotice(),"formal_next_quest_scene_transition",Guard);
+                }
             }
-            else if (continuation.Town is { } town)
-                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_town_finalizer",
-                    () => context.Session.CanPublishTravel(town));
             else if (continuation.Replay is { } replay)
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_replay",
                     () => context.Session.CanPublishFormalDungeon(replay));
@@ -54,6 +52,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         {
             if (questReplaySelection.Receipt is { } selected)
             {
+                if (!context.Session.ConfirmNewDungeonSelection(selected)) return CommandResult.Handled;
                 if (!await projection.DetachForDungeonSelectionAsync(context,selected)) return CommandResult.Handled;
                 bool Guard() => context.Session.CanPublishDungeonSelection(selected);
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"quest_replay_selection_opened",Guard);
@@ -85,6 +84,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
                     ReferenceEquals(context.Session.Selected,replayBefore.Selected) && context.Session.DungeonSnapshot?.Identity == replayBefore.Identity));
             return CommandResult.Handled;
         }
+        if (!context.Session.ConfirmNewDungeonSelection(receipt)) return CommandResult.Handled;
         if (!await projection.DetachForDungeonSelectionAsync(context, receipt))
             return CommandResult.Handled;
         bool CanSend() => context.Session.CanPublishDungeonSelection(receipt);

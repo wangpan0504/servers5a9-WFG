@@ -206,7 +206,7 @@ internal sealed partial class GameSession
     {
         if (questCatalog is null || !Ready || Selected is not { } expected || expected.QuestCycleDay >= QuestCycle.Day(now) ||
             pendingRental is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } || HasPendingQuestScene ||
-            pendingDungeonContinuation is not null || HasPendingQuestReplay ||
+            HasActiveDungeonContinuation || HasPendingQuestReplay ||
             HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true)
             return null;
         Selected = repository.AdvanceQuestCycle(owner, expected, QuestCycle.Day(now));
