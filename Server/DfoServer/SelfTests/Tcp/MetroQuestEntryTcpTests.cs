@@ -33,7 +33,281 @@ internal static class MetroQuestEntryTcpTests
         VerifyMovement(7958, 311, 95, new(2, 0), 655666, 655667);
         VerifyMovement(3969, 311, 88, new(3, 0), 76886, null);
         VerifyGustDropChain();
-        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、3971/3547/3540/3521父子阶段、层/warp及3993→3995→3998掉落交付（不代表完整剧情通关）");
+        VerifyBellFeathers();
+        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、3971/3547/3540/3521父子阶段、层/warp、3987→3992材料来源及3993→3995→3998掉落交付（不代表完整剧情通关）");
+
+        void VerifyBellFeathers()
+        {
+            // 3991仅作为隔离前置，不代表连续游玩3988..3991；钟必须由本角色真实3987领奖取得，不预填材料。
+            const string account = "metro-bell-feather";
+            var done = new HashSet<int> { 3986, 3991 };
+            var fearEntrance = Entrance(3987, 312, done);
+            var gustEntrance = Entrance(3992, 313, done);
+            That(!done.Overlaps([3987, 3992]), "钟与羽毛链不准备两个目标完成位");
+            var source = resources.Quests.Get(3987); var target = resources.Quests.Get(3992);
+            var drops = target.Definition!.Drops;
+            That(source.MinimumLevel == 89 && source.Prerequisites.SequenceEqual([3986]) &&
+                source.Condition == "[look cinematic]" && source.IntData.SequenceEqual([2845]) && source.CinematicMapId == 76997 &&
+                source.RewardType == "[item]" && source.Rewards is [{ Type: 0, Value: 10164808 }, { Type: 0, Value: 1 }] &&
+                target.MinimumLevel == 89 && target.Prerequisites.SequenceEqual([3991]) && target.Condition == "[seeking]" &&
+                target.IntData.SequenceEqual([10164808, 1, 10164806, 15]) && target.RewardType == "[item]" &&
+                target.Rewards is [{ Type: 0, Value: 10164803 }, { Type: 0, Value: 1 }] && drops.Length == 2 &&
+                drops.All(row => row.EnemyType == 1 && row.DungeonId == 313 && row.Difficulty == -1 &&
+                    row.ItemId == 10164806 && row.Rate == 100 && row.MaximumHeld == 15) &&
+                drops.Any(row => row.TemplateId == 65729 && row.Count == 1) &&
+                drops.Any(row => row.TemplateId == 74656 && row.Count == 2),
+                "真实3987奖励钟，3992消耗钟及十五羽毛后奖励服从之钟，display send不是发放声明");
+            var created = Create(account, "MetroBell", 0, 89, done, fearEntrance);
+            That(Materials(10164808).Length == 0 && Materials(10164806).Length == 0 && Materials(10164803).Length == 0,
+                "新角色没有钟、羽毛或目标奖励");
+            var oldDeaths = new List<byte[]>();
+            long bellUid = 0, rewardUid = 0;
+            using (var peer = Open(fixture, account))
+            {
+                Select(peer, created);
+                foreach (var scenario in new (ushort Quest, uint Dungeon, int Rooms, int FirstMap)[]
+                    { (3987, 312, 8, 76990), (3992, 313, 10, 77040) })
+                {
+                    bool bell = scenario.Quest == 3987;
+                    int enabled = 0, bossChecks = 0, killed = 0, feathers = 0;
+                    TravelTo(peer, bell ? fearEntrance : gustEntrance);
+                    Accept(peer, scenario.Quest, 1);
+                    string acceptance = Identity(peer.Id, scenario.Quest);
+                    long slot = (long)fixture.Query("SELECT slot FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",
+                        peer.Id, scenario.Quest).Single()[0];
+                    RejectFinish();
+                    var maze = dungeons.Get(checked((int)scenario.Dungeon)).Mazes.Single(row => row.ConnectsQuest(scenario.Quest));
+                    That(maze.MapSpecification?.Count == scenario.Rooms && maze.LayeredMaps.Count == 0 &&
+                        maze.StoryStages.Count == 0 && (bell
+                            ? maze.ClearConditions is [{ Type: "destroy object", TargetId: 85194, Count: 1 }]
+                            : maze.ClearConditions.Count == 0), "两条真实路线保留各自房数和物件终末规则");
+                    uint next = checked((uint)(long)fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]);
+                    long previousAttempt = (long)fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0];
+                    var plans = Plans(maze, peer.Id, next, dungeons.Get(checked((int)scenario.Dungeon)).BasisLevel);
+                    var map = Enter(peer, scenario.Quest, scenario.Dungeon, bell ? (ushort)0 : scenario.Quest, maze);
+                    long attempt = (long)fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0];
+                    That(attempt == previousAttempt + 1, "每条16只建立一次独立尝试");
+                    var path = QuestStoryRouteTests.Path(maze.StaticTopology, maze.Starts.Single(), maze.Bosses.Single());
+                    That(path.Length == scenario.Rooms && path.Select(point => maze.MapSpecification!.Single(row => row.Position == point).Id)
+                        .SequenceEqual(Enumerable.Range(scenario.FirstMap, scenario.Rooms)), "真实门墙路径完整经过八房或十房，不跳图到终点");
+                    string[] normalGroups = ["65712:3,65729:4", "65710:3,65712:4", "65708:3,65712:4", "65708:4,65731:3",
+                        "65712:4,65729:3", "65731:1,65732:1,65733:2,65734:1", "65729:6", "65731:3,65735:3",
+                        "65729:3,65735:4", "65729:3,65735:4"];
+                    int[] passiveCounts = [27, 17, 15, 11, 16, 24, 31, 20, 18, 35];
+                    for (int at = 0; at < path.Length; at++)
+                    {
+                        var plan = plans.Single(row => row.Room.Map.Position == path[at]);
+                        Actors(peer, map, plan, scenario.Quest);
+                        if (!bell)
+                            That(string.Join(",", plan.Monsters.Where(row => row.AiCharacter is null && !row.IsBoss)
+                                    .GroupBy(row => row.MonsterId).OrderBy(group => group.Key).Select(group => group.Key + ":" + group.Count())) == normalGroups[at] &&
+                                plan.Monsters.Where(row => row.AiCharacter is null && !row.IsBoss).All(row => row is
+                                    { CandidateLevel: 91, SpawnType: 0, IsBlocking: true, IsFriendly: false, CanReportDeath: true, IsScriptedBoss: false }) &&
+                                plan.Room.PassiveObjects.Count == passiveCounts[at] && plan.SpecialObjects.Count == (at == 9 ? 3 : 0) &&
+                                plan.SpecialObjects.All(row => row.Source.ObjectId == 109000302) &&
+                                plan.Monsters.Where(row => row.AiCharacter is not null).All(row => at == 0 && row.MonsterId == 16802 &&
+                                    row.CandidateLevel == 85 && row.IsFriendly && !row.CanReportDeath) &&
+                                plan.Monsters.Count(row => row.AiCharacter is not null) == (at == 0 ? 1 : 0),
+                                "3992十房保留普通怪、原passive、三泰拉石父对象及85级友方16802");
+                        FormalDungeonTcpTests.Load(peer); Drain();
+                        if (!bell && at == 0)
+                        {
+                            string before = Assets();
+                            foreach (var old in oldDeaths) { peer.Send(39, old); Drain(); }
+                            That(Assets() == before && Identity(peer.Id, 3992) == acceptance,
+                                "3992新实例拒绝前次3987的物件及Boss39，不改新接取或原钟库存");
+                        }
+                        foreach (var actor in plan.Monsters.Where(row => row.CanReportDeath && !row.IsBoss))
+                        {
+                            var body = Kill(actor);
+                            if (!bell)
+                            {
+                                if (actor.MonsterId == 65729) feathers = Math.Min(15, feathers + 1);
+                                That(Materials(10164806).Sum(row => (long)row[1]) == feathers &&
+                                    Materials(10164808) is [[long uid, 1L]] && uid == bellUid &&
+                                    Scalar(peer.Id, 3992) == (feathers == 15 ? 0u : 1u) && Identity(peer.Id, 3992) == acceptance && enabled == 0,
+                                    "只有真实65729逐个产生羽毛，持有上限十五且原钟UID、接取身份不变");
+                                if (feathers == 1 && actor.MonsterId == 65729)
+                                {
+                                    oldDeaths.Add(body); string before = Assets();
+                                    peer.Send(39, body); Drain();
+                                    That(Assets() == before, "重复首只羽毛来源39不再增长材料、经验或掉落账本");
+                                    RejectFinish();
+                                }
+                            }
+                        }
+                        That(enabled == 0 && Identity(peer.Id, scenario.Quest) == acceptance,
+                            "加载和全部普通怪死亡不提前许可终点结算或改变原接取");
+                        if (at + 1 < path.Length) map = MoveMap(peer, path[at + 1], 0);
+                    }
+                    var terminal = plans.Single(row => row.Room.Map.Id == (bell ? 76997 : 77049));
+                    var boss = terminal.Monsters.Single(row => row.MonsterId == (bell ? 75099 : 74656));
+                    That(boss is { IsBoss: true, CanReportDeath: true, IsBlocking: true, IsFriendly: false } && boss.IsScriptedBoss == bell,
+                        "3987只报告真实可报告75099，3992只报告普通Boss74656，不构造额外演员");
+                    if (!bell) That(boss is { CandidateLevel: 91, SpawnType: 3 }, "3992 Boss沿D313 basis91创建，不误用MOB自身89级");
+                    byte[] bossDeath;
+                    if (bell)
+                    {
+                        That(terminal.Room.PassiveObjects.Count(row => row.ObjectId == 85194) == 1 &&
+                            terminal.Room.PassiveObjects[15].ObjectId == 85194 &&
+                            terminal.Monsters.Single(row => row.AiCharacter?.Id == 17002) is { IsFriendly: true, CanReportDeath: false },
+                            "3987保留唯一85194原ordinal15与友方17002");
+                        byte[] passive = QuestPassiveClearTcpTests.PassiveDeath(85194);
+                        string before = Assets(); peer.Send(39, passive); Drain();
+                        That(Assets() == before && enabled == 0, "75099未退场时85194不能提前提交场景清图");
+                        bossDeath = new byte[74]; BinaryPrimitives.WriteUInt32LittleEndian(bossDeath, boss.ObjectKey);
+                        BinaryPrimitives.WriteUInt16LittleEndian(bossDeath.AsSpan(4), peer.Id); bossDeath[31] = 0x22;
+                        FormalDungeonTcpTests.SealDeath(bossDeath);
+                        peer.Send(39, bossDeath); Drain(); killed++;
+                        That(enabled == 0 && Scalar(peer.Id, 3987) == 1 && fixture.Query(
+                            "SELECT count(*) FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0", peer.Id) is [[0L]],
+                            "明确合成的75099脚本39仍不能替代85194或2845终末33");
+                        before = Assets(); peer.Send(39, bossDeath); Drain();
+                        That(Assets() == before && enabled == 0, "重复75099脚本39不代替物件清图或重发成长");
+                        peer.Send(39, passive); Drain(); oldDeaths.Add(passive);
+                        var clear = fixture.Query("""
+                            SELECT c.source_type,c.map_id,c.template_id,c.source_ordinal,c.quest_id,c.before_epoch,c.epoch,
+                              c.instance_id,c.task_attempt,length(c.death_events)/16,l.acceptance_id,l.revision,c.revision
+                            FROM character_dungeon_scene_clear_receipts c JOIN character_quest_lifecycle_receipts l
+                              ON l.character_id=c.character_id AND l.operation_id=c.operation_id WHERE c.character_id=$p0
+                            """, peer.Id);
+                        That(clear is [["PassiveObject", 76997L, 85194L, 15L, 0L, long beforeEpoch, long epoch, string instance,
+                            long savedAttempt, long deaths, string original, long lifecycleRevision, long sceneRevision]] &&
+                            beforeEpoch + 1 == epoch && Guid.TryParseExact(instance, "N", out _) && savedAttempt == attempt && deaths == killed &&
+                            original == acceptance && lifecycleRevision == sceneRevision && enabled == 1 && bossChecks == 1 && Scalar(peer.Id, 3987) == 1,
+                            "52B合成物件39保留普通0实例、原Acceptance、attempt及完整死亡集合的独立PassiveSource");
+                        before = Assets(); peer.Send(39, passive); Drain();
+                        That(Assets() == before && enabled == 1, "重复85194报告不再提交场景清图或发布31");
+                        RejectFinish(); Condition(peer, 3987, 0, 0);
+                        before = Assets(); Condition(peer, 3987, 0, 0);
+                        That(Assets() == before && Identity(peer.Id, 3987) == acceptance, "重复2845终末33只恢复原接取已存进度");
+                        peer.Send(46, DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99)); Drain();
+                        That(fixture.Query("""
+                            SELECT quest_id,map_id,instance_id,task_attempt,epoch FROM character_dungeon_settlement_receipts
+                            WHERE character_id=$p0
+                            """, peer.Id) is [[0L, 76997L, string settledInstance, long settledAttempt, long settledEpoch]] &&
+                            settledInstance == (string)clear[0][7] && settledAttempt == attempt && settledEpoch == (long)clear[0][6],
+                            "3987真实46沿同一普通0场景清图实例、attempt及epoch提交结算");
+                        Finish(peer, 3987, 65);
+                        bellUid = Reward(3987, 10164808, acceptance, 65);
+                        That(Materials(10164806).Length == 0 && Materials(10164803).Length == 0 && fixture.Query(
+                            "SELECT consumed FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3987", peer.Id) is [["[]"]],
+                            "真实3987的34仅发原钟，不预先发羽毛、服从之钟或消费材料");
+                    }
+                    else
+                    {
+                        That(feathers == 15 && Materials(10164806).Sum(row => (long)row[1]) == 15 && Scalar(peer.Id, 3992) == 0,
+                            "3992普通路线在Boss前已经足额，不假定必须先清图才能交付寻物任务");
+                        bossDeath = Kill(boss);
+                        That(enabled == 1 && bossChecks == 1 && Materials(10164806).Sum(row => (long)row[1]) == 15,
+                            "74656合法末击可清图，已满羽毛不因Boss两件声明超过十五；2867自然发包仍未验");
+                        var grants = fixture.Query("""
+                            SELECT sum(json_extract(o.value,'$.Granted')),count(*),min(d.revision=g.revision),
+                              min(g.quest_id=3992),min(g.task_attempt=$p1),min(json_extract(o.value,'$.AcceptanceId')=$p2),
+                              min(json_extract(d.plan_snapshot,'$.EnemyType')=1),count(DISTINCT g.instance_id),
+                              min(g.monster_id=65729),min(json_extract(o.value,'$.Rolled')=1),min(json_extract(o.value,'$.Error')=0),
+                              min(json_extract(d.changed_items,'$[0].Core.ItemId')=10164806),
+                              min(json_extract(d.changed_items,'$[0].Uid') IN (SELECT i.item_uid FROM character_inventory_slots s
+                                JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND s.list_type=0
+                                  AND json_extract(i.item_core,'$.ItemId')=10164806))
+                            FROM character_quest_drop_receipts d JOIN character_dungeon_growth_receipts g
+                              ON g.character_id=d.character_id AND g.event_id=d.event_id,
+                              json_each(d.plan_snapshot,'$.Outcomes') o
+                            WHERE d.character_id=$p0 AND json_extract(o.value,'$.QuestId')=3992
+                            """, peer.Id, attempt, Guid.ParseExact(acceptance, "N").ToString());
+                        That(grants.Length == 1 && grants[0][0] is 15L && grants[0][1] is 15L && grants[0].Skip(2).All(value => value is 1L),
+                            "十五次普通死亡掉落与同一实例成长共事务revision，逐次绑定原Acceptance、attempt及真实羽毛UID");
+                        var feathersBefore = Materials(10164806);
+                        Finish(peer, 3992, 0);
+                        rewardUid = Reward(3992, 10164803, acceptance, 0);
+                        using var consumed = JsonDocument.Parse((string)fixture.Query(
+                            "SELECT consumed FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3992", peer.Id).Single()[0]);
+                        var rows = consumed.RootElement.EnumerateArray().ToArray();
+                        That(rows.Length == feathersBefore.Length + 1 && rows.Count(row => row.GetProperty("Uid").GetInt64() == bellUid &&
+                                row.GetProperty("ItemId").GetInt32() == 10164808 && row.GetProperty("Count").GetInt32() == 1) == 1 &&
+                            feathersBefore.All(item => rows.Count(row => row.GetProperty("Uid").GetInt64() == (long)item[0] &&
+                                row.GetProperty("ItemId").GetInt32() == 10164806 && row.GetProperty("Count").GetInt64() == (long)item[1]) == 1) &&
+                            Materials(10164808).Length == 0 && Materials(10164806).Length == 0,
+                            "3992真实34一次消费3987原钟UID及全部十五羽毛实际UID，不留下旧材料复用");
+                    }
+                    oldDeaths.Add(bossDeath); RejectFinish();
+                    string completed = Assets(); peer.Send(39, bossDeath); Drain();
+                    That(Assets() == completed && IdentityClosed(), "34后迟到Boss39不恢复材料、活动槽或重复资产");
+                    Return(peer);
+
+                    byte[] Kill(DungeonPlannedMonster actor)
+                    {
+                        That(actor.AiCharacter is null && actor.Source is { SpecialChild: null, ScriptedRetirement: false } &&
+                            actor.CanReportDeath && !actor.IsScriptedBoss, "普通合成39只使用当前真实可报告敌人的对象key");
+                        var body = FormalDungeonTcpTests.Death(actor.ObjectKey, peer.Id, checked((byte)actor.CandidateLevel));
+                        peer.Send(39, body); Drain(); killed++; return body;
+                    }
+                    void Drain() => drain(peer, packet =>
+                    {
+                        if (packet.Opcode == 31) { Bytes(packet.Body, [], "钟与羽毛链结算许可为完整空31"); enabled++; }
+                        if (packet.Opcode == 115) bossChecks++;
+                    });
+                    void RejectFinish()
+                    {
+                        string before = Assets(); peer.Send(34, [34, 0, (byte)scenario.Quest, (byte)(scenario.Quest >> 8), 255, 255, 1, 0, 255, 255]);
+                        peer.Expect(1, 34, [0, 19, 0]); Drain();
+                        That(Assets() == before, "未足额或已经交付的34拒绝且整笔资产不变：" + scenario.Quest);
+                    }
+                    bool IdentityClosed() => fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",
+                        peer.Id, scenario.Quest) is [[0L]] && fixture.Query(
+                        "SELECT acceptance_id,json_extract(plan_snapshot,'$.QuestSlot') FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1",
+                        peer.Id, scenario.Quest) is [[string original, long savedSlot]] && original == acceptance && savedSlot == slot;
+                }
+            }
+            using (var peer = Open(fixture, account))
+            {
+                Select(peer, created); peer.Barrier();
+                That(Active(peer.Id) == "[]" && peer.CompletedQuestHistory[4 + 3987] == 1 && peer.CompletedQuestHistory[4 + 3992] == 1 &&
+                    Materials(10164808).Length == 0 && Materials(10164806).Length == 0 &&
+                    Materials(10164803) is [[long uid, 1L]] && uid == rewardUid && bellUid != rewardUid &&
+                    fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id", peer.Id) is [[3987L], [3992L]],
+                    "重选恢复两次真实唯一交付及服从之钟原UID，不伪造中间四任务领奖回执");
+                string before = Assets();
+                foreach (var body in oldDeaths) { peer.Send(39, body); drain(peer, null); }
+                foreach (ushort id in new ushort[] { 3987, 3992 })
+                {
+                    peer.Send(34, [34, 0, (byte)id, (byte)(id >> 8), 255, 255, 1, 0, 255, 255]);
+                    peer.Expect(1, 34, [0, 19, 0]); drain(peer, null);
+                }
+                That(Assets() == before, "重选后重放旧普通、脚本和物件39及34不重发钟、羽毛或奖励");
+                Cleanup(peer, created, account);
+            }
+
+            object[][] Materials(int item) => fixture.Query("""
+                SELECT i.item_uid,json_extract(i.item_core,'$.Value') FROM character_inventory_slots s
+                JOIN character_inventory_items i ON i.item_uid=s.item_uid
+                WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=$p1 ORDER BY i.item_uid
+                """, created.Id, item);
+            long Reward(ushort id, int item, string acceptance, byte type)
+            {
+                var actual = Materials(item);
+                That(actual is [[long uid, 1L]] && uid > 0 && fixture.Query("""
+                    SELECT acceptance_id,condition_type,json_array_length(rewards),json_extract(rewards,'$[0].Item.Uid'),
+                      json_extract(rewards,'$[0].Item.Core.ItemId'),json_extract(rewards,'$[0].GrantedCount')
+                    FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1
+                    """, created.Id, id) is [[string original, long savedType, 1L, long savedUid, long savedItem, 1L]] &&
+                    original == acceptance && savedType == type && savedUid == uid && savedItem == item,
+                    "真实34奖励回执引用同一实际提交UID和一件增量：" + id);
+                return (long)actual.Single()[0];
+            }
+            string Assets() => State(created.Id) + DungeonState(created.Id) +
+                fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_quest_drop_receipts WHERE character_id=$p0 ORDER BY event_id", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY event_id", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_quest_clear_receipts WHERE character_id=$p0 ORDER BY quest_id", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0 ORDER BY operation_id", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0 ORDER BY instance_id", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_loot_receipts WHERE character_id=$p0 ORDER BY event_id", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_drop_batches WHERE character_id=$p0 ORDER BY event_id", created.Id) +
+                fixture.Snapshot("SELECT * FROM character_dungeon_drop_objects WHERE character_id=$p0 ORDER BY ground_key", created.Id) +
+                fixture.Snapshot("SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind", account);
+        }
 
         void VerifyGustDropChain()
         {
