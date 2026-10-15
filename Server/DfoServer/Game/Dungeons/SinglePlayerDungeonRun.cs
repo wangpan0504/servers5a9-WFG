@@ -197,7 +197,9 @@ internal sealed class SinglePlayerDungeonRun
         conditionalRooms = route.Rooms.Where(plan => plan.Room.Map.IsConditional).ToDictionary(plan => plan.Room.Map.Position,plan => new Room(plan));
         allRooms = [.. baseRooms, .. layeredRooms.Values, .. conditionalRooms.Values];
         passiveClearTarget = route.PassiveClearTarget;
-        if (ResolveLayeredBossTerminal() is { } terminal)
+        if (ResolvePassiveLayerTerminal() is { } passiveTerminal)
+            this.entry = entry with { PassiveClearTerminalMap = passiveTerminal.Plan.Room.Map };
+        else if (ResolveLayeredBossTerminal() is { } terminal)
             this.entry = entry with { BossMap = terminal.Plan.Room.Map };
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = baseRooms.Single(room => room.Plan.Room.Map == entry.StartMap);
@@ -216,6 +218,12 @@ internal sealed class SinglePlayerDungeonRun
         reason = "unsupported: 需要正式战斗权威及已确认门墙连接";
         if (approvedRoute is null || combatAuthority is null)
             return false;
+        // 此字段只由本Run依据完整批准路线派生，调用方不能预先声明一个任意末层。
+        if (entry.PassiveClearTerminalMap is not null)
+        {
+            reason = "invalid: 被动物件末层终点只能由原实例批准路线冻结";
+            return false;
+        }
         if (!ValidExplicitTerminalLayer(entry, approvedRoute))
         {
             reason = "invalid: 显式末层终点的资源或原接取身份不完整";
@@ -674,6 +682,44 @@ internal sealed class SinglePlayerDungeonRun
         return terminal;
     }
 
+    private Room? ResolvePassiveLayerTerminal()
+    {
+        if (entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay || entry.HasExplicitClearMap ||
+            entry.QuestClearMap is not null || entry.TerminalLayerMap is not null || entry.BossMap != entry.BaseBossMap ||
+            storyRooms.Length != 0 || conditionalRooms.Count != 0 || passiveClearTarget is not { } target || target <= 0 ||
+            entry.Maze.ClearConditions is not [{ Type: "destroy object", Count: 1 } condition] || condition.TargetId != target ||
+            entry.RouteQuestId is 0 or >= 30000) return null;
+        var acceptances = entry.QuestAcceptances.Where(row => row.QuestId == entry.RouteQuestId).ToArray();
+        if (acceptances is not [{ Slot: <= 29 } accepted] || accepted.AcceptanceId == Guid.Empty ||
+            entry.QuestAcceptances.Count(row => row.Slot == accepted.Slot) != 1 ||
+            entry.QuestAcceptances.Count(row => row.AcceptanceId == accepted.AcceptanceId) != 1 ||
+            entry.QuestId != 0 && !entry.QuestAcceptances.Any(row => row.QuestId == entry.QuestId &&
+                row.Slot == entry.ActiveQuestSlot && row.AcceptanceId == entry.QuestAcceptanceId && row.AcceptanceId != Guid.Empty))
+            return null;
+        var last = entry.Maze.LayeredMaps.LastOrDefault(map => map.Position == entry.BaseBossMap.Position);
+        if (last is null || last.Id <= 0 || last.Path.Length == 0 || !layeredRooms.TryGetValue(last,out var terminal) ||
+            terminal.Plan.Room.DeclaredType != "[boss]" ||
+            allRooms.Sum(room => room.Plan.Room.PassiveObjects.Count(source => source.ObjectId == target)) != 1 ||
+            terminal.Plan.Room.PassiveObjects.Count(source => source.ObjectId == target) != 1) return null;
+        var blocking = rooms[entry.BaseBossMap.Position].Plan.Monsters.Where(monster => monster.IsBlocking).ToArray();
+        if (!blocking.Any(monster => monster.IsBoss) || blocking.Any(monster => monster.Source is null ||
+            monster.AiCharacter is not null || !monster.CanReportDeath || monster.IsFriendly || monster.IsScriptedBoss ||
+            monster.IsSpecialChild || monster.IsScriptedRetirement)) return null;
+        return terminal;
+    }
+
+    private bool HasCommittedPassiveBaseDeaths()
+    {
+        if (entry.PassiveClearTerminalMap is null) return true;
+        var basis = rooms[entry.BaseBossMap.Position];
+        // Cleared允许清退，Dead也包含非战斗退休；基础阻挡必须另有本Run实际提交的原死亡候选。
+        return basis.Plan.Monsters.Where(monster => monster.IsBlocking).All(monster => basis.Dead.Contains(monster.ObjectKey) &&
+            committedPreparations.Any(prepared => ReferenceEquals(prepared.Monster,monster) && IsConfirmedDeath(prepared) &&
+                ReferenceEquals(prepared.Death.Authority,authority) && prepared.Death.Identity.InstanceId == identity.InstanceId &&
+                prepared.Death.Identity.TaskAttempt == identity.TaskAttempt && prepared.Death.Identity.CharacterId == identity.CharacterId &&
+                prepared.Death.Identity.QuestId == identity.QuestId));
+    }
+
     private static bool ValidExplicitTerminalLayer(DungeonEntryPlan entry, DungeonFixedRoute route)
     {
         if (entry.TerminalLayerMap is not { } layer) return entry.TerminalLayerAcceptanceId == Guid.Empty &&
@@ -708,7 +754,7 @@ internal sealed class SinglePlayerDungeonRun
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。
-        if (!IsTerminalRoom() || HasPendingBossDeaths(preparedMonsterKey) ||
+        if (!IsTerminalRoom() || !HasCommittedPassiveBaseDeaths() || HasPendingBossDeaths(preparedMonsterKey) ||
             passiveClearTarget is not null && !HasCommittedPassiveClearCondition && !passiveConfirmed)
             return false;
         if (entry.IsTutorial && current.Plan.Room.TutorialCinematics.Any(movie => movie.DestroyTargets.Count > 0) &&

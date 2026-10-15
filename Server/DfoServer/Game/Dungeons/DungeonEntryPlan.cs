@@ -38,6 +38,8 @@ internal sealed record DungeonEntryPlan(
     public ushort TerminalLayerQuestId { get; init; }
     public byte TerminalLayerQuestSlot { get; init; } = byte.MaxValue;
     public Guid TerminalLayerAcceptanceId { get; init; }
+    // Run从批准路线冻结的单物件末层，只覆盖领域终点，不改原BossMap的wire投影。
+    public DungeonMap? PassiveClearTerminalMap { get; init; }
     public uint RouteQuestId { get; init; } = QuestId;
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
     public float ExperienceWeight { get; init; } = 1;
@@ -45,7 +47,8 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
-    public bool IsTerminalMap(DungeonMap map) => TerminalLayerMap is { } layer ? map == layer :
+    public bool IsTerminalMap(DungeonMap map) => PassiveClearTerminalMap is { } passive ? map == passive :
+        TerminalLayerMap is { } layer ? map == layer :
         map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
         map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map);
 

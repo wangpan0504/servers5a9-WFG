@@ -13,6 +13,7 @@ internal static class SinglePlayerDungeonRunTests
         VerifyLayeredBossTerminal();
         VerifyExplicitTerminalLayer();
         VerifyPassiveClearCondition();
+        VerifyPassiveTerminalLayer();
         var authority = new FixtureCombatAuthority();
         var start = new DungeonMap("map", new(0, 0), 1, "map/fixture-start.map");
         var friendly = new DungeonMap("map", new(1, 0), 2, "map/fixture-friendly.map");
@@ -695,6 +696,162 @@ internal static class SinglePlayerDungeonRunTests
         That(ordinary.ClearFact is null && ordinary.Phase==SinglePlayerDungeonPhase.Dungeon &&
             ordinary.PreparePassiveClear(ordinary.Snapshot.Identity,Guid.NewGuid(),80458,0) is null,
             "普通无scene空死亡仍不取得结算，不能由空房加载推导清图事实");
+    }
+
+    private static void VerifyPassiveTerminalLayer()
+    {
+        var start = new DungeonMap("map", new(0, 0), 10, "map/passive-layer-start.map");
+        var boss = new DungeonMap("boss", new(1, 0), 20, "map/passive-layer-boss.map");
+        var middle = new DungeonMap("layered", boss.Position, 30, "map/passive-layer-middle.map");
+        var last = new DungeonMap("layered", boss.Position, 40, "map/passive-layer-last.map");
+        var passive = new DungeonRoomPassiveObject(80458, [80458, 10, 10, 0], "passiveobject/fixture.obj");
+        var maze = new DungeonMaze(0, 2, 1, "passive-layer", [start.Position], [boss.Position], [start, boss], [])
+            { LayeredMaps = [middle, last], ClearConditions = [new("destroy object", 80458, 1)] };
+        var active = new DfoServer.Game.Characters.ActiveMainQuest(0, 3205, 1) { AcceptanceId = Guid.NewGuid() };
+        var entry = new DungeonEntryPlan(99, 0, 25, 3205, 0, 0, maze, start, boss)
+            { QuestAcceptanceId = active.AcceptanceId, QuestAcceptances = [active] };
+        var baseRoom = BossPlan(boss, 20, 21);
+        baseRoom = DungeonMonsterPlan.FromRoom(baseRoom.Room with
+            { Monsters = baseRoom.Room.Monsters.Select((row, index) => index == 1 ? row with { RankKind = "[normal]" } : row).ToArray() }, 99, 20);
+        var end = WithTeams(Plan(last, 40), 0);
+        end = end with { Room = end.Room with { PassiveObjects = [passive], DeclaredType = "[boss]" } };
+        var route = new DungeonFixedRoute([Plan(start), baseRoom, Plan(middle), end], [new(start.Position, boss.Position)])
+            { PassiveClearTarget = 80458 };
+        var authority = new FixtureCombatAuthority();
+        var run = Create(entry, route);
+        That(run.Entry.PassiveClearTerminalMap == last && run.Entry.BossMap == boss && run.Entry.BaseBossMap == boss &&
+            entry.PassiveClearTerminalMap is null && run.Entry.IsTerminalMap(last) && !run.Entry.IsTerminalMap(boss),
+            "真实基础Boss后的唯一物件末层只冻结领域终点，输入和原Boss投影保持不变");
+
+        var alive = Create(entry, route);
+        Last(alive);
+        That(alive.PreparePassiveClear(alive.Snapshot.Identity, Guid.NewGuid(), 80458, 0) is null && alive.ClearFact is null,
+            "可以进入末层，但基础Boss及阻挡仍活着时不能准备物件结算");
+        var pendingRun = Create(entry, route);
+        var uncommitted = pendingRun.PrepareConfirmedDeath(authority.Death(pendingRun.Snapshot.Identity, 20, 1)).Pending!;
+        That(pendingRun.MoveLayer(pendingRun.Snapshot.Identity, Guid.NewGuid(), boss.Position, true).Outcome == DungeonRunOutcome.Rejected &&
+            pendingRun.CancelUncommittedDeath(uncommitted), "基础死亡仅准备未提交时不能换层，回滚不安装死亡事实");
+        Last(pendingRun);
+        That(pendingRun.PreparePassiveClear(pendingRun.Snapshot.Identity, Guid.NewGuid(), 80458, 0) is null,
+            "曾准备并回滚的基础死亡不能替代本Run已提交事实");
+        var partlyDead = Create(entry, route);
+        partlyDead.AcceptConfirmedDeath(authority.Death(partlyDead.Snapshot.Identity, 20, 1));
+        Last(partlyDead);
+        That(partlyDead.PreparePassiveClear(partlyDead.Snapshot.Identity, Guid.NewGuid(), 80458, 0) is null,
+            "基础真Boss已死但原阻挡小怪未提交死亡仍拒绝末层清图");
+        foreach (string displaySet in new[] { "Dead", "Culled" })
+        {
+            var forged = Create(entry, route);
+            // 注入无法由合法场景生成的显示现场，验证显示清空不等价原提交事实。
+            var table = (System.Collections.IDictionary)typeof(SinglePlayerDungeonRun)
+                .GetField("rooms", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(forged)!;
+            var source = table[boss.Position]!;
+            ((HashSet<ushort>)source.GetType().GetProperty(displaySet)!.GetValue(source)!).UnionWith([20, 21]);
+            Last(forged);
+            That(forged.PreparePassiveClear(forged.Snapshot.Identity, Guid.NewGuid(), 80458, 0) is null && forged.ClearFact is null,
+                "仅退场或清退集合不能替代已提交死亡及原准备引用：" + displaySet);
+        }
+
+        var old = run.Snapshot.Identity;
+        var deaths = new[] { authority.Death(old, 21, 1), authority.Death(old, 20, 2) };
+        foreach (var death in deaths)
+            That(run.AcceptConfirmedDeath(death).ClearFact is null, "基础每个阻挡提交后仍等待真实物件末层");
+        Layer(run);
+        That(run.PreparePassiveClear(run.Snapshot.Identity, Guid.NewGuid(), 80458, 0) is null,
+            "真实基础死亡不授予非末层物件终点资格");
+        Layer(run);
+        var before = run.Snapshot.Identity;
+        var operation = Guid.NewGuid();
+        foreach (var invalid in new[] { old, before with { InstanceId = Guid.NewGuid() },
+            before with { TaskAttempt = before.TaskAttempt + 1 } })
+            That(run.PreparePassiveClear(invalid, operation, 80458, 0) is null, "旧epoch、其他实例和尝试均不能使用基础已提交死亡");
+        That(run.PreparePassiveClear(before, operation, 80457, 0) is null &&
+            run.PreparePassiveClear(before, operation, 80458, 1) is null, "末层仍核对唯一模板及实际行号");
+        var prepared = run.PreparePassiveClear(before, operation, 80458, 0)!;
+        That(prepared is not null && run.ClearFact is null && run.Snapshot.Identity == before &&
+            prepared.Result.ClearFact!.ConfirmedDeathEvents.SequenceEqual(deaths.Select(death => death.EventId)) &&
+            !prepared.Result.ClearFact.ConfirmedDeathEvents.Contains(operation), "物件仅冻结完整真实死亡集合，准备不提前结算或混入物件操作ID");
+        run.CancelUncommittedPassiveClear(prepared!);
+        That(run.ConfirmCommittedPassiveClear(prepared!).Outcome == DungeonRunOutcome.Rejected && run.Snapshot.Identity == before,
+            "场景回滚后旧准备不能推进末层或留下通关事实");
+        prepared = run.PreparePassiveClear(before, operation, 80458, 0)!;
+        That(ReferenceEquals(run.PreparePassiveClear(before, operation, 80458, 0), prepared) &&
+            run.ConfirmCommittedPassiveClear(new(prepared.Source, prepared.Result)).Outcome == DungeonRunOutcome.Rejected,
+            "结果未明时精确重试复用原准备，复制来源不能替代其引用");
+        var clear = run.ConfirmCommittedPassiveClear(prepared);
+        That(clear.ClearFact is { ClearMap: var map, ConfirmedDeathEvents.Count: 2 } && map == last &&
+            run.Phase == SinglePlayerDungeonPhase.Settlement && run.Snapshot.Identity.Epoch == before.Epoch + 1 &&
+            run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 40 }) && run.Entry.BossMap == boss &&
+            run.ConfirmCommittedPassiveClear(prepared).Outcome == DungeonRunOutcome.Duplicate && run.ClearFact == clear.ClearFact,
+            "真实末层物件提交仅推进一次结算，重放保留原集合、友方演员及Boss投影");
+        var reward = new DungeonClearExperienceReward(90, 10, 100, 1, "fixture-clear", "fixture/clear.tbl");
+        var settlement = run.PrepareSettlement(clear.ClearFact!, [1], reward).Pending!;
+        run.ConfirmCommittedSettlement(settlement);
+        That(run.PrepareSettlement(clear.ClearFact!, [1], reward).Outcome == DungeonRunOutcome.Duplicate,
+            "末层物件来源复用原结算去重，不因重复确认重新结算");
+
+        var blockedEnd = Plan(last, 40);
+        blockedEnd = blockedEnd with { Room = blockedEnd.Room with { PassiveObjects = [passive], DeclaredType = "[boss]" } };
+        var currentBlocked = Create(entry, route with { Rooms = [route.Rooms[0], baseRoom, route.Rooms[2], blockedEnd] });
+        currentBlocked.AcceptConfirmedDeath(authority.Death(currentBlocked.Snapshot.Identity, 20, 1));
+        currentBlocked.AcceptConfirmedDeath(authority.Death(currentBlocked.Snapshot.Identity, 21, 2));
+        Last(currentBlocked);
+        That(currentBlocked.PreparePassiveClear(currentBlocked.Snapshot.Identity, Guid.NewGuid(), 80458, 0) is null,
+            "新增终点资格不绕过当前末层原阻挡规则");
+        currentBlocked.AcceptConfirmedDeath(authority.Death(currentBlocked.Snapshot.Identity, 40, 3));
+        That(currentBlocked.PreparePassiveClear(currentBlocked.Snapshot.Identity, Guid.NewGuid(), 80458, 0)?.Result.ClearFact is
+            { ConfirmedDeathEvents.Count: 3 }, "末层真实阻挡死亡仍进入完整原集合后才允许物件准备");
+
+        var otherLast = last with { Position = start.Position };
+        var duplicates = route with { Rooms = [route.Rooms[0], baseRoom, route.Rooms[2], end with { Room = end.Room with { PassiveObjects = [passive, passive] } }] };
+        var globalDuplicate = route with { Rooms = [route.Rooms[0] with { Room = route.Rooms[0].Room with { PassiveObjects = [passive] } }, .. route.Rooms.Skip(1)] };
+        var nonLast = route with { Rooms = [route.Rooms[0], baseRoom, route.Rooms[2] with { Room = route.Rooms[2].Room with { PassiveObjects = [passive] } }, end with { Room = end.Room with { PassiveObjects = [] } }] };
+        var dummyBase = DungeonMonsterPlan.FromRoom(baseRoom.Room with
+            { Monsters = baseRoom.Room.Monsters.Select(row => row.RankKind == "[boss]" ? row with { Modifiers = ["[dummy]"] } : row).ToArray() }, 99, 20);
+        foreach (var variant in new[]
+        {
+            ("末层重复行", entry, duplicates), ("跨房重复行", entry, globalDuplicate), ("非末层目标", entry, nonLast),
+            ("其他坐标", entry with { Maze = maze with { LayeredMaps = [middle, otherLast] } },
+                route with { Rooms = [route.Rooms[0], baseRoom, route.Rooms[2], end with { Room = end.Room with { Map = otherLast } }] }),
+            ("明确基础终点", entry with { HasExplicitClearMap = true }, route),
+            ("任务重放", entry with { IsQuestReplay = true }, route),
+            ("基础dummy", entry, route with { Rooms = [route.Rooms[0], dummyBase, route.Rooms[2], end] }),
+            ("末层类型缺失", entry, route with { Rooms = [.. route.Rooms.Take(3), end with { Room = end.Room with { DeclaredType = null } }] }),
+            ("接取缺失", entry with { QuestAcceptances = [] }, route),
+            ("接取身份不符", entry with { QuestAcceptanceId = Guid.NewGuid() }, route),
+            ("任务槽共享", entry with { QuestAcceptances = [active, new(0, 3206, 1) { AcceptanceId = Guid.NewGuid() }] }, route),
+            ("接取ID共享", entry with { QuestAcceptances = [active, new(1, 3206, 1) { AcceptanceId = active.AcceptanceId }] }, route),
+            ("RouteQuest重复", entry with { QuestAcceptances = [active, new(1, 3205, 1) { AcceptanceId = Guid.NewGuid() }] }, route)
+        })
+        {
+            var unchanged = Create(variant.Item2, variant.Item3);
+            That(unchanged.Entry.PassiveClearTerminalMap is null, "歧义或未授权范围不自动晋升物件末层：" + variant.Item1);
+        }
+        foreach (var invalid in new[] { entry with { PassiveClearTerminalMap = last },
+            entry with { Maze = maze with { ClearConditions = [new("destroy object", 80458, 2)] } },
+            entry with { Maze = maze with { ClearConditions = [new("destroy object", 80458, 1), new("destroy object", 80457, 1)] } } })
+            That(!SinglePlayerDungeonRun.TryCreate(invalid, 1, 100, route, authority, out _, out _),
+                "调用方预批准、多实例计数或多个maze条件不能接入单物件末层");
+        var ordinary = Create(entry with { QuestId = 0, ActiveQuestSlot = byte.MaxValue, QuestAcceptanceId = Guid.Empty }, route);
+        That(ordinary.Entry.PassiveClearTerminalMap == last && ordinary.Entry.QuestId == 0 && ordinary.Entry.RouteQuestId == 3205,
+            "普通0请求保持原wire身份并通过真实RouteQuest接取冻结同一末层");
+
+        SinglePlayerDungeonRun Create(DungeonEntryPlan planned, DungeonFixedRoute approved)
+        {
+            That(SinglePlayerDungeonRun.TryCreate(planned, 1, 100, approved, authority, out var result, out _),
+                "物件末层夹具保持真实资源行及原实例入口");
+            result!.CompleteLoading(result.Snapshot.Identity, Guid.NewGuid());
+            result.Move(result.Snapshot.Identity, Guid.NewGuid(), boss.Position);
+            result.CompleteLoading(result.Snapshot.Identity, Guid.NewGuid());
+            return result;
+        }
+        void Layer(SinglePlayerDungeonRun target)
+        {
+            That(target.MoveLayer(target.Snapshot.Identity, Guid.NewGuid(), boss.Position, true).Outcome == DungeonRunOutcome.Accepted,
+                "沿原同坐标叠层入口移动");
+            target.CompleteLoading(target.Snapshot.Identity, Guid.NewGuid());
+        }
+        void Last(SinglePlayerDungeonRun target) { Layer(target); Layer(target); }
     }
 
     private static void VerifyLayeredBossTerminal()
