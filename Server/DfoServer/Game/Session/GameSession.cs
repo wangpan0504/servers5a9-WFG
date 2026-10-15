@@ -173,6 +173,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             throw new InvalidOperationException("翻牌结果待确认，不能覆盖当前角色进度");
         if (request.Account != owner.Account)
             throw new InvalidDataException("账号与当前会话不一致");
+        // 达人契约属于账号；即使命令目标是另一角色，也会替换当前技能快照。
+        if (HasPendingTownQuestCommit && (request.Field == CharacterProgressField.ExpertContract ||
+            string.Equals(Selected?.Name, request.Name, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("任务结果待确认，不能覆盖当前角色进度");
         var updated = repository.UpdateProgress(owner, request);
         // 提交成功后才替换内存。任务集合立即参与城镇准入；客户端画面仍等下次选角。
         if (Selected?.Id == updated.Id)
@@ -194,6 +198,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (pendingRental is not null)
                 throw new InvalidOperationException("租赁结果待确认，须恢复原提交或重新选角");
             if (request.Account != owner.Account) throw new InvalidDataException("账号与当前会话不一致");
+            if (HasPendingTownQuestCommit && string.Equals(Selected?.Name, request.Name, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("任务结果待确认，不能重置当前角色进度");
             var target = repository.ListRoster(owner).SingleOrDefault(value => string.Equals(value.Name, request.Name, StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidDataException("角色不存在");
             var character = repository.LoadCharacter(owner, target.Slot);
@@ -203,7 +209,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         return owner.Execute(() =>
         {
             if (pendingRental is not null || !ReferenceEquals(Selected, captured.Selected) || SelectionEpoch != captured.SelectionEpoch ||
-                HasPendingFormalCard && Selected?.Id == captured.Character.Id)
+                (HasPendingFormalCard || HasPendingTownQuestCommit) && Selected?.Id == captured.Character.Id)
                 throw new InvalidOperationException("在线角色快照已变化，请重试");
             var updated = repository.ResetProgress(owner, plan);
             if (Selected?.Id == updated.Id)

@@ -10,8 +10,8 @@ internal sealed partial class GameSession
     readonly UsedConsumable?[] usedConsumables = new UsedConsumable?[2];
     InventoryPlan? pendingConsumableUse;
 
-    bool CanUseConsumable() => Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
-        !HasPendingQuestScene && pendingQuestCompletion is null && formalDungeon?.HasPendingFatigue != true &&
+    bool CanUseConsumable() => pendingRental is null && !HasPendingTownQuestCommit && Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
+        formalDungeon?.HasPendingFatigue != true &&
         formalDungeon?.Run.HasPendingDeath != true && formalDungeon?.Run.HasPendingSettlement != true && !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true;
 
     ConsumableUseGuard UseGuard() => new(Selected, owner.Generation, SelectionEpoch, Phase, formalDungeon?.Run.Snapshot.Identity);

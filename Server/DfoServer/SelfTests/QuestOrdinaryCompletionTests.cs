@@ -30,6 +30,8 @@ internal static class QuestOrdinaryCompletionTests
         var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf, learning);
         var parameters = QuestRewardParameterCatalog.Load(pvf);
         QuestGoldMailTests.Run(towns, characters, items, learning, growth, parameters);
+        QuestInventoryPendingTests.Run(towns, characters, items, learning, growth, parameters);
+        QuestTownMutationPendingTests.Run(towns, characters, items, learning, growth, parameters);
         QuestRewardToken[] Rows(params int[] values) => values.Select(value => new QuestRewardToken(0, value, null)).ToArray();
         var seeking = QuestEligibilityTests.Quest(100) with
         {
@@ -81,14 +83,45 @@ internal static class QuestOrdinaryCompletionTests
             var before = f.Session.Selected!;
             TestCheck.Reject<IOException>(() => f.Finish(1), "普通交付真实提交后返回丢失");
             That(ReferenceEquals(before, f.Session.Selected) && f.Read().CompletedQuests.Contains(100), "返回丢失不安装临时资产，但保留真实事务");
+            var saved = f.Read(); var original = f.Lost!.FirstPlan!;
             That(f.Finish(0).Outcome == QuestFinishOutcome.Rejected && f.Receipts == 1, "不同选择不能冒充原pending请求");
+            That(f.Change(100,QuestLifecycleAction.Accept) is null && f.Change(100,QuestLifecycleAction.Giveup) is null &&
+                f.Change(100,QuestLifecycleAction.Condition,new(null,0,0)) is null &&
+                ReferenceEquals(before,f.Session.Selected) && Same(saved,f.Read()) && f.Receipts == 1 && f.Lost.Calls == 1,
+                "未决领奖期间31/32/33入口不能覆盖状态或创建另一生命周期事务");
             var recovered = f.Finish(1);
             That(recovered.Receipt?.Commit is { Duplicate: true, ProjectionCurrent: true } && f.Lost!.SamePlan && f.Receipts == 1 &&
-                ReferenceEquals(recovered.Receipt.Commit.Character,f.Session.Selected) && f.Session.CanPublishQuestCompletion(recovered.Receipt),
+                ReferenceEquals(recovered.Receipt.Commit.Character,f.Session.Selected) && Same(saved,recovered.Receipt.Commit.Character) &&
+                recovered.Receipt.Commit.AcceptanceId == original.AcceptanceId && f.Lost.Calls == 2 && f.Session.CanPublishQuestCompletion(recovered.Receipt),
                 "相同选择恢复原冻结结果，不重新消耗或抽取奖励");
             That(f.Finish(1).Outcome == QuestFinishOutcome.AlreadyCompleted && f.Receipts == 1, "安装后的重复交付正常拒绝");
             f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             That(Same(f.Session.Selected!, f.Read()) && f.Finish(1).Outcome == QuestFinishOutcome.AlreadyCompleted, "重选和进程仓储重开使用持久结果");
+        }
+        var pendingAcceptance = QuestEligibilityTests.Quest(101);
+        using (var f = new Fixture(towns,characters,learning,growth,parameters,items,seeking,
+            definitions: [seeking,pendingAcceptance],loseLifecycleResult: true))
+        {
+            var before = f.Session.Selected!;
+            TestCheck.Reject<IOException>(() => f.Change(101,QuestLifecycleAction.Accept),"接取提交返回丢失时另一任务已经具备领奖材料");
+            var saved = f.Read();
+            string operation;
+            using (var db = f.Open())
+            using (var command = db.CreateCommand())
+            {
+                command.CommandText = "SELECT operation_id FROM character_quest_lifecycle_receipts";
+                operation = (string)command.ExecuteScalar()!;
+            }
+            That(f.Finish(1).Receipt is null && f.Receipts == 0 && f.Lost!.Calls == 0 &&
+                ReferenceEquals(before,f.Session.Selected) && Same(saved,f.Read()),
+                "未决接取期间34不能另开领奖提交或改变原在线快照");
+            var recovered = f.Change(101,QuestLifecycleAction.Accept)!;
+            That(recovered.Commit is { Duplicate: true, ProjectionCurrent: true } && f.Lost!.SameLifecyclePlan &&
+                recovered.Commit.Plan.OperationId.ToString("N") == operation && Same(saved,recovered.Character) && f.Receipts == 0,
+                "互斥拒绝后按原operation恢复接取一次，资产和活动槽等于已提交存档");
+            That(f.Finish(1).Receipt is { Commit.Duplicate: false } && f.Receipts == 1 &&
+                f.Read().ActiveMainQuests.Single().QuestId == 101,
+                "接取恢复后允许原合法领奖，保留另一活动接取");
         }
         foreach (string change in new[] { "UPDATE characters SET revision=revision+1",
             "INSERT INTO character_completed_quests(character_id,quest_id) VALUES(1,999)" })
@@ -762,7 +795,7 @@ internal static class QuestOrdinaryCompletionTests
         public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, CharacterGrowthCatalog growth,
             QuestRewardParameterCatalog parameters, ItemResources items, StoryQuest quest, int materialCount = 5, bool locked = false,
             bool fullEquipment = false, bool loseResult = false, StoryQuest[]? definitions = null, ActiveMainQuest[]? active = null,
-            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null,bool resumeTown=false)
+            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null,bool resumeTown=false,bool loseLifecycleResult=false)
         {
             this.items = items; this.growth = growth; this.parameters = parameters;
             Catalog = new((definitions ?? [quest]).ToDictionary(row => row.Id));
@@ -781,7 +814,7 @@ internal static class QuestOrdinaryCompletionTests
                     inventory.Add(new(0, new(InventoryListType.Main, slot), InventoryRewardGrantService.Create(items.Items.Get(10403))));
             }
             Repository.Create(Owner, candidate with { ActiveMainQuests = active ?? [new(0, (ushort)quest.Id, 1)], Inventory = candidate.Inventory with { Items = inventory.ToImmutable() } });
-            Lost = loseResult ? new(Repository) : null;
+            Lost = loseResult || loseLifecycleResult ? new(Repository) { LoseCompletionResult = loseResult, LoseLifecycleResult = loseLifecycleResult } : null;
             Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null,questEffects:questEffects);
             Session.Select(0,resumeTown: resumeTown); Session.MarkReady();
         }

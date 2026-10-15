@@ -261,7 +261,8 @@ internal sealed class QuestLifecyclePlan
         bool seekMeet = quest.Condition == "[seek n meet npc]" && ValidSeeking(quest) && scalar <= 1023;
         bool parent = quest.Condition == "[quest clear]" && quest.SubType == 2 && scalar <= quest.IntData.Count ||
             QuestRelationProgress.ThresholdShape(quest) && scalar == QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected));
-        bool scene = scalar <= 1 && (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _));
+        bool scene = scalar <= 1 && (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _) ||
+            QuestClientSceneProgress.DungeonCinematic(quest));
         bool question = QuestQuestionProgress.TryCount(quest,out int answers) && scalar < answers;
         bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest);
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;

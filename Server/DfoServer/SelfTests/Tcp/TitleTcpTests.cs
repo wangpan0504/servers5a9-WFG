@@ -19,6 +19,12 @@ internal static class TitleTcpTests
         int checks = Count;
         var real = new TitleCatalog(resources.Archive, resources.Quests);
         var registered = resources.Quests.All.Where(quest => quest.Grade == "[title]").ToArray();
+        That(real.Quests[6583].Quest.Condition == "[seeking]" && real.Quests[6583].Quest.SubType == 25 &&
+            real.Quests[6583].Quest.IntData.SequenceEqual([-7, 5]) && real.RewardSlot(6583, 26691) == (1, 73),
+            "真实6583要求拥有五个已孵化宠物，奖励绑定原称号槽");
+        That(resources.ItemResources.Items.Get(63022).CreatureSubType == 1 &&
+            resources.ItemResources.Items.Get(63023).CreatureSubType == 0,
+            "真实波比蛋与成宠从各自EQU读取subtype1和0，不从实例SealFlag推定");
         That(real.Quests.Count == registered.Length, "称号只按quest.lst的有效注册ID装配，不把目录内未注册旧文件作为可用任务: " +
             real.Quests.Count + "/" + registered.Length + "; skipped=" + string.Join(',', registered.Where(quest => !real.Quests.ContainsKey(quest.Id)).Select(quest => quest.Id)));
         That(real.Quests[6501].Quest.Condition == "[clear quest]" && real.Quests[6501].Initial == new TitleCounters(1, 0, 0) &&
@@ -50,6 +56,13 @@ internal static class TitleTcpTests
         var template = resources.ItemResources.Items.Get(26596);
         var core = InventoryRewardGrantService.Create(template) with { Attr = 7, Durability = 5, Marker16 = 3,
             EnchantCardId = 3185, EnchantUpgrade = 2, Extension97 = 0x12340056, Rune = 4, GuardianGemKeys = 0x10203040 };
+        var sealedTemplate = resources.ItemResources.Items.Get(26059);
+        That(sealedTemplate.EquipmentSlot == 13 && sealedTemplate.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) &&
+            real.Fits(4, 10, sealedTemplate.Id), "真实26059为可存活动自由格的封装称号");
+        var sealedCore = InventoryRewardGrantService.Create(sealedTemplate) with { SealFlag = 1, Attr = 7, Marker16 = 3,
+            EnchantCardId = 3185, EnchantUpgrade = 2, ExpireTime = checked((int)DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds()) };
+        var wornCore = InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(26597));
+        long sealedUid, wornUid;
         long manualUid;
         ushort awakeningId;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -67,6 +80,47 @@ internal static class TitleTcpTests
             {
                 Level = 95, AcceptedStoryLevel = 95, GrowType = 33, Skills = resources.Characters.Get(0).Skills
             }).Id;
+            foreach (int adults in new[] { 0, 4, 5 })
+            {
+                var pets = Enumerable.Range(0, 5).Select(index =>
+                {
+                    var petTemplate = resources.ItemResources.Items.Get(index < adults ? 63023 : 63022);
+                    return InventoryRewardGrantService.CreateItem(petTemplate, new(InventoryListType.Pet, (short)index),
+                        InventoryRewardGrantService.Create(petTemplate));
+                }).ToImmutableArray();
+                That(pets.All(item => item.Core.SealFlag == 0), "复现统一授予蛋和成宠的现有SealFlag0，不伪造不同实例字段");
+                repo.Create(owner, new("Pets" + adults, resources.Towns.Room, resources.Towns.InitialReturn)
+                {
+                    Level = 10, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                    Inventory = new(pets)
+                });
+            }
+        }
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var swap = repo.Create(owner, new("TitleSwap", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 10, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, new(InventoryListType.Main, 9), sealedCore),
+                    new(0, new(InventoryListType.Equipment, 13), wornCore)])
+            });
+            sealedUid = swap.Inventory.Find(new(InventoryListType.Main, 9))!.Uid;
+            wornUid = swap.Inventory.Find(new(InventoryListType.Equipment, 13))!.Uid;
+            var books = new TitleBookService(real, resources.ItemResources.Items);
+            var stored = new InventoryItem(sealedUid, TitleBookService.Slot(4, 10), sealedCore);
+            var prepared = swap with { Inventory = swap.Inventory with { Items =
+                [stored, swap.Inventory.Find(new(InventoryListType.Equipment, 13))!] } };
+            var request = new TitleBookRequest(3, 13, 26597, 4, 10);
+            foreach (var blocked in new[] { sealedCore with { EquipmentLockId = 1 }, sealedCore with { ExpireTime = 1 } })
+                That(!books.Put(prepared with { Inventory = prepared.Inventory with { Items =
+                    [stored with { Core = blocked }, prepared.Inventory.Find(new(InventoryListType.Equipment, 13))!] } },
+                    request, DateTimeOffset.UtcNow.ToUnixTimeSeconds()).Accepted, "反向穿戴仍拒绝锁定或到期的旧称号");
+            var nonSealing = wornCore with { SealFlag = 1 };
+            var retained = books.Put(prepared with { Inventory = prepared.Inventory with { Items =
+                [stored with { Core = nonSealing }, prepared.Inventory.Find(new(InventoryListType.Equipment, 13))!] } },
+                request, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            That(retained.Accepted && retained.Plan!.After.Find(new(InventoryListType.Equipment, 13))!.Core == nonSealing,
+                "非sealing模板的既有标记保持，不对所有称号无条件清零");
         }
         await fixture.StartAsync();
         using (var peer = Open(fixture))
@@ -115,8 +169,59 @@ internal static class TitleTcpTests
             That(Read(InventoryListType.Equipment, 13)?.Core.ItemId == 26596 && fixture.Query("SELECT count(*) FROM character_title_book_slots WHERE list_type=18 AND slot_index=0") is [[0L]],
                 "成就称号可以穿戴但不能取包，ACK先移动客户端对象，不发送完整Actor重建");
         }
+        for (ushort slot = 2; slot <= 4; slot++)
+        {
+            using var peer = Open(fixture);
+            peer.Select(slot: slot);
+            string before = Snapshot();
+            peer.Send(417, Trigger(6583, 1, 0, 0));
+            if (slot < 4)
+            {
+                peer.Expect(1, 417, [0, 2, 0, 183, 25, 0, 0]); peer.Barrier();
+                That(Snapshot() == before, "五蛋或四成宠一蛋拒绝6583，进度、称号奖励、原实例和revision均不变");
+            }
+            else
+            {
+                peer.Expect(1, 417, [1, 183, 25, 0, 0, 0, 0, 0, 0, 0, 0]);
+                var completed = peer.Expect(0, 360).Body;
+                That(U32(completed, 0) == 6583 && U32(completed, 4) == 1 && U32(completed, 8) == 73 && U32(completed, 12) == 26691,
+                    "五只真实成宠经417完成并发实际称号奖励");
+                peer.Expect(0, 359); ReadBooks(peer); peer.Barrier();
+                string after = Snapshot();
+                peer.Send(417, Trigger(6583, 1, 0, 0));
+                peer.Expect(1, 417, [0, 2, 0, 183, 25, 0, 0]); peer.Barrier();
+                That(Snapshot() == after, "成宠称号完成后重放不重复发奖");
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(slot: 5);
+            peer.Send(412, Book(0, 9, 26059, 4, 10)); peer.Expect(1, 412, Ack(0, 9, 4, 10)); peer.Expect(0, 14); ReadBooks(peer); peer.Barrier();
+            That(Read(InventoryListType.TitleEvent, 10, 5) is { Uid: var storedUid, Core: var storedCore } &&
+                storedUid == sealedUid && storedCore == sealedCore, "封装称号放入自由格不提前消封且保留UID及完整核心");
+            peer.Send(412, Book(3, 13, 26597, 4, 10)); peer.Expect(1, 412, Ack(3, 13, 4, 10)); ReadBooks(peer); peer.Barrier();
+            That(Read(InventoryListType.Equipment, 13, 5) is { Uid: var equippedUid, Core: var equippedCore } &&
+                equippedUid == sealedUid && equippedCore == sealedCore with { SealFlag = 0 } &&
+                Read(InventoryListType.TitleEvent, 10, 5) is { Uid: var oldUid, Core: var oldCore } && oldUid == wornUid && oldCore == wornCore,
+                "412同格交换反向穿戴仅清封装，双方UID、期限及其他核心不变");
+            string afterSwap = Snapshot();
+            peer.Send(412, Book(3, 13, 26597, 4, 10)); peer.Expect(1, 412, [0, 2, 0, 3, 0, 0, 0, 4, 0, 0, 0]); peer.Barrier();
+            That(Snapshot() == afterSwap, "重放旧源模板的交换请求拒绝，不能再次换位或改写封装与revision");
+            peer.Send(413, Book(0, 9, 26597, 4, 10)); peer.Expect(1, 413, Ack(0, 9, 4, 10)); peer.Expect(0, 14); ReadBooks(peer); peer.Barrier();
+            That(Read(InventoryListType.Main, 9, 5) is { Uid: var returnedUid, Core: var returnedCore } &&
+                returnedUid == wornUid && returnedCore == wornCore, "交换后的原穿戴称号可完整取回背包，不复制实例");
+        }
         await fixture.StopAsync();
         await fixture.StartAsync("titles-restarted");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(slot: 5);
+            That(Read(InventoryListType.Equipment, 13, 5) is { Uid: var equippedUid, Core: var equippedCore } &&
+                equippedUid == sealedUid && equippedCore == sealedCore with { SealFlag = 0 } &&
+                Read(InventoryListType.Main, 9, 5) is { Uid: var returnedUid, Core: var returnedCore } &&
+                returnedUid == wornUid && returnedCore == wornCore,
+                "服务重启及重选恢复交换消封结果和原称号，不重新封装或重造UID");
+        }
         using (var peer = Open(fixture))
         {
             peer.Select(prepared: true);
@@ -138,13 +243,23 @@ internal static class TitleTcpTests
                 fixture.Query("SELECT json_extract(item_core,'$.ItemId') FROM character_inventory_items WHERE character_id=$p0 ORDER BY json_extract(item_core,'$.ItemId')", awakeningId)
                     is [[100331607L], [100331608L]], "二觉选角只授力量苏醒、无上传奇，不寄超时空或其他章节称号");
         }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(slot: 4);
+            That(fixture.Query("SELECT remaining1,remaining2,remaining3 FROM character_title_progress WHERE character_id=$p0 AND quest_id=6583", peer.Id)
+                is [[0L, 0L, 0L]] && fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=26691", peer.Id)
+                is [[1L]], "重启恢复成宠称号完成状态和唯一真实奖励实例");
+            string before = Snapshot();
+            peer.Send(417, Trigger(6583, 1, 0, 0)); peer.Expect(1, 417, [0, 2, 0, 183, 25, 0, 0]); peer.Barrier();
+            That(Snapshot() == before, "重启后重复成宠称号请求仍不发奖或修改revision");
+        }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "TCP取放、重启和穿戴后外键完整");
         Console.WriteLine($"PASS {Count - checks} 称号进度、称号簿取放、穿戴和重启TCP断言");
 
-        InventoryItem? Read(InventoryListType list, short slot)
+        InventoryItem? Read(InventoryListType list, short slot, ushort characterSlot = 0)
         {
             using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
-            return repo.LoadCharacter(owner, 0).Inventory.Find(new(list, slot));
+            return repo.LoadCharacter(owner, characterSlot).Inventory.Find(new(list, slot));
         }
         string Snapshot() => JsonSerializer.Serialize(new { Character = fixture.Query("SELECT revision,gold FROM characters"),
             Progress = fixture.Query("SELECT * FROM character_title_progress ORDER BY quest_id"), Items = fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") });

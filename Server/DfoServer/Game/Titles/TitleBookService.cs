@@ -29,6 +29,10 @@ internal sealed class TitleBookService(TitleCatalog titles, ItemCatalog items, P
         if (request.Category == 3 && item.Core.SealFlag != 0) return InventoryResult.Reject(1);
         if (previous is not null && (!Valid(previous, previous.Core.ItemId, utcSeconds) ||
             !InventoryMoveService.Allows(character, source, previous.Core, items, utcSeconds, contracts))) return InventoryResult.Reject(6);
+        // 同格交换也会把旧称号实际穿戴；只沿普通装备的[sealing]消封规则变更该字段。
+        if (source.List == InventoryListType.Equipment && previous is not null && previous.Core.SealFlag != 0 &&
+            items.Get(previous.Core.ItemId).AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase))
+            previous = previous with { Core = previous.Core with { SealFlag = 0 } };
         return Move(character, item, target, previous, source, "title_book_put",
             source.List == InventoryListType.Equipment && previous is not null ? QualificationExpiry(character, previous) : null);
     }

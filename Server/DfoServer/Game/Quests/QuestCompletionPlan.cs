@@ -243,7 +243,8 @@ internal sealed class QuestCompletionPlan
                     QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)) != 0)
                     throw new InvalidDataException("阈值父任务必须达到真实子任务完成数量");
             }
-            else if (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _))
+            else if (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _) ||
+                QuestClientSceneProgress.DungeonCinematic(quest))
             {
                 if (active.ConditionState != 0) throw new InvalidDataException("范围或演出的原生终末事件尚未达成");
             }

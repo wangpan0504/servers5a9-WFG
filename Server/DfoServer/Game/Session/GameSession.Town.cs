@@ -4,9 +4,13 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
+    // 已进入提交的任务依赖原角色快照恢复；未提交手册与已提交回答缓存仍按普通操作自然失效。
+    bool HasPendingTownQuestCommit => pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null ||
+        pendingQuestQuickClear is { CommitStarted: true } or { Plan.IsPreparedSkip: false } || HasPendingQuestScene;
+
     public bool Move(PositionRequest request) => owner.Execute(() =>
     {
-        if (pendingRental is not null || Phase != SessionPhase.Town || Selected is null)
+        if (pendingRental is not null || HasPendingTownQuestCommit || Phase != SessionPhase.Town || Selected is null)
             return false;
         var target = TownTravel.Walk(Selected, request, towns, completed);
         if (target is null)
@@ -39,7 +43,7 @@ internal sealed partial class GameSession
     TownTravelReceipt? CommitTravel(TownTravelPlan plan)
     {
         TravelReason = plan.Reason;
-        if (pendingRental is not null || !plan.Accepted)
+        if (pendingRental is not null || HasPendingTownQuestCommit || !plan.Accepted)
             return null;
         Selected = repository.Save(owner, Selected!, plan.Position!, plan.Return);
         InvalidateImageCommunication();

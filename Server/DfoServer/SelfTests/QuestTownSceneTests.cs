@@ -1,8 +1,10 @@
 using DfoServer.Game.Quests;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Session;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
@@ -223,7 +225,119 @@ internal static class QuestTownSceneTests
                 child,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Plan is null,
                 "同类历史归档不代替未达成的"+child.Condition+"条件");
         }
-        Console.WriteLine($"PASS {Count - checks} 实际城镇范围、演出121/122、寻物会面与自动交付及原子回滚断言（非实机）");
+        DungeonCinematic();
+        Console.WriteLine($"PASS {Count - checks} 实际城镇范围、城镇/地下城演出、寻物会面与交付及原子回滚断言（非实机）");
+
+        void DungeonCinematic()
+        {
+            // 真实3599/2406/96全部资源装配；只走基础门墙到76114，不遍历76113叠层演出。
+            // 合成终末33与前序敌对击杀只验证进度事务，不代表完整路线、播放或dummy退场结算。
+            var quest = quests.Get(3599);
+            var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf);
+            var kills = DungeonKillExperienceCatalog.Load(pvf);
+            That(QuestClientSceneProgress.DungeonCinematic(quest) && quest.IntData is [2406] && quest.CinematicMapId == 76114,
+                "紧急会议保持真实地下城演出资源，不改写普通清图目标");
+            var area = towns.Areas.Values.First(row => row.Level <= 74 && row.DungeonWorldMap is { } world &&
+                towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 96 &&
+                    (option.QuestId == -1 || option.InProgress && option.QuestId == 3599 || !option.InProgress && option.QuestId != 3599)));
+            var done = new HashSet<int>(area.Quests) { 3598 };
+            if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+            var option = towns.DungeonMaps[area.DungeonWorldMap!.Value].Options.First(row => row.DungeonId == 96 &&
+                (row.QuestId == -1 || row.InProgress && row.QuestId == 3599 || !row.InProgress && row.QuestId != 3599));
+            if (!option.InProgress && option.QuestId > 0) done.Add(option.QuestId);
+            foreach (int id in area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0 && !gate.Quests.Contains(3599)).Quests)
+                done.Add(id);
+            var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+            var position = new Location(area.Town,area.Area,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
+            using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,74,done.ToArray(),position:position);
+            That(Change(f,3599,QuestLifecycleAction.Condition)?.Commit is null,"未接取不能用演出33建任务进度");
+            That(Change(f,3599,QuestLifecycleAction.Accept)?.Commit is not null &&
+                f.Read().ActiveMainQuests.Single(row => row.QuestId == 3599).ConditionState == 1,
+                "3599正常接取初值1，接取不能替代终末通知");
+            That(Change(f,3599,QuestLifecycleAction.Condition)?.Commit is null && Finish(f,3599).Outcome == QuestFinishOutcome.Rejected,
+                "城镇提前33及未达成34均不能完成地下城演出");
+            var receipt = EnterTarget();
+            var original = f.Read().ActiveMainQuests.Single(row => row.QuestId == 3599);
+            That(QuestHuntProgress.Bound(original,receipt.Entry) &&
+                !QuestHuntProgress.Bound(original with { AcceptanceId = Guid.NewGuid() },receipt.Entry) &&
+                !QuestHuntProgress.Bound(original with { Slot = checked((byte)(original.Slot+1)) },receipt.Entry),
+                "演出绑定复用完整qid/slot/Acceptance三元组，不能只按任务号");
+            var wrongMap = quest with { CinematicMapId = 76112 };
+            var wrongDungeon = quest with { Definition = quest.Definition! with { Dungeons = [new(97,-1)] } };
+            foreach (var wrong in new[] { wrongMap,wrongDungeon })
+            {
+                var catalog = new QuestCatalog(quests.All.Select(row => row.Id == quest.Id ? wrong : row).ToDictionary(row => row.Id));
+                That(f.Session.ChangeQuest(3599,QuestLifecycleAction.Condition,catalog,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0))?.Commit is null,
+                    "当前真实地图或地下城与演出声明不符时拒绝终末通知");
+            }
+            foreach (var malformed in new QuestClientCondition[] { new(0x10,0,0),new(null,1,0),new(null,0,1) })
+                That(f.Session.ChangeQuest(3599,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,malformed)?.Commit is null,
+                    "地下城演出只接受无channel/value0/reserved0的6B形状");
+
+            That(Change(f,3599,QuestLifecycleAction.Giveup)?.Commit is not null &&
+                Change(f,3599,QuestLifecycleAction.Accept)?.Commit is not null,
+                "同一副本内放弃后重接产生新的接取身份");
+            That(f.Read().ActiveMainQuests.Single(row => row.QuestId == 3599).AcceptanceId != original.AcceptanceId &&
+                Change(f,3599,QuestLifecycleAction.Condition)?.Commit is null,
+                "原Run绑定的旧接取不能替新接取签发进度，需重新入场绑定");
+            f.Session.ReturnToRoster(); f.Session.Select(0,resumeTown:true); f.Session.MarkReady();
+            receipt = EnterTarget();
+            var before = f.Read(); var snapshot = f.Session.DungeonSnapshot!;
+            That(f.Session.ReadClearedQuest(3599) is null && f.Session.EnableFormalDungeonSettlement() is null,
+                "演出终点仍没有独立清图与结算事实");
+            f.Sql("CREATE TRIGGER dungeon_cinematic_abort AFTER INSERT ON character_quest_lifecycle_receipts BEGIN SELECT RAISE(ABORT,'cinematic rollback'); END");
+            Reject<SqliteException>(() => Change(f,3599,QuestLifecycleAction.Condition),"地下城演出进度SQL失败");
+            That(QuestCompletionRepositoryTests.Same(before,f.Read()) && QuestCompletionRepositoryTests.Same(before,f.Session.Selected!) &&
+                f.Session.DungeonSnapshot!.Identity == snapshot.Identity,"SQL失败不安装角色进度或推进Run");
+            f.Sql("DROP TRIGGER dungeon_cinematic_abort");
+            var progress = Change(f,3599,QuestLifecycleAction.Condition)!;
+            That(progress.Commit is not null && progress.Character.ActiveMainQuests.Single(row => row.QuestId == 3599).ConditionState == 0 &&
+                progress.Character.Learning.Experience == before.Learning.Experience &&
+                f.Session.DungeonSnapshot!.Identity == snapshot.Identity &&
+                f.Session.DungeonSnapshot!.LivingMonsters.SequenceEqual(snapshot.LivingMonsters) &&
+                f.Session.ReadClearedQuest(3599) is null && f.Session.EnableFormalDungeonSettlement() is null,
+                "原终末通知重试只保存scalar0，不生成死亡、经验、清图或结算入口");
+            var progressIdentity = progress.DungeonIdentity!;
+            That(f.Session.CanPublishQuestLifecycle(progress) && !f.Session.CanPublishQuestLifecycle(progress with
+                { DungeonIdentity = progressIdentity with { Epoch = progressIdentity.Epoch-1 } }),
+                "原Run回执可发布，切图前的旧epoch回执不能通过同一提交/发布门禁");
+            var committed = f.Read();
+            That(Change(f,3599,QuestLifecycleAction.Condition)?.Outcome == QuestLifecycleOutcome.Unchanged &&
+                QuestCompletionRepositoryTests.Same(committed,f.Read()),"重复33不增加revision或重复授予进度");
+            f.Session.ReturnToRoster(); f.Session.Select(0,resumeTown:true); f.Session.MarkReady();
+            That(!f.Session.CanPublishQuestLifecycle(progress) &&
+                f.Read().ActiveMainQuests.Single(row => row.QuestId == 3599).ConditionState == 0,
+                "离场重选保留原接取持久进度，旧选角回执不能发布");
+            var finished = Finish(f,3599);
+            That(finished.Receipt?.Commit.ConditionType == 65 && f.Read().CompletedQuests.Contains(3599) &&
+                Finish(f,3599).Outcome == QuestFinishOutcome.AlreadyCompleted,
+                "离场重登后沿普通34完成演出任务及真实奖励，重复34不重发");
+
+            FormalDungeonReceipt EnterTarget()
+            {
+                var opening = f.Session.EnterFormalDungeon(96,3599,0,dungeons,rooms)
+                    ?? throw new InvalidOperationException("3599真实演出实例未建立");
+                That(Change(f,3599,QuestLifecycleAction.Condition) is null,"未完成地图加载不能提交演出33");
+                var loaded = f.Session.CompleteFormalDungeonLoading()!;
+                That(loaded.Snapshot.CurrentMap.Id != quest.CinematicMapId && Change(f,3599,QuestLifecycleAction.Condition)?.Commit is null,
+                    "已加载的前序地图也不能提前满足终点演出");
+                var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology,opening.Entry.StartMap.Position,opening.Entry.BossMap.Position);
+                foreach (var point in path.Skip(1))
+                {
+                    foreach (var monster in loaded.Monsters.Monsters.Where(row => row.IsBlocking).OrderBy(row => row.IsBoss))
+                        That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(loaded,monster),kills,growth).Outcome == DungeonRunOutcome.Accepted,
+                            "演出进度测试仅合成前序敌对演员死亡以到达真实终点");
+                    That(f.Session.MoveFormalDungeon(checked((byte)point.X),checked((byte)point.Y)) is not null,
+                        "沿实际门墙进入演出地图");
+                    That(Change(f,3599,QuestLifecycleAction.Condition) is null,"切图加载期拒绝终末通知");
+                    loaded = f.Session.CompleteFormalDungeonLoading()!;
+                }
+                That(loaded.Snapshot.CurrentMap.Id == quest.CinematicMapId &&
+                    loaded.Monsters.Monsters.Single(row => row.MonsterId == 62959) is { IsFriendly: true, CanReportDeath: false },
+                    "真实76114的62959保留友方dummy，演出33不放行普通死亡");
+                return loaded;
+            }
+        }
         QuestSceneTests.Fixture Make(int[] completed,Location position,byte level = 17)
         {
             var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,level,completed);

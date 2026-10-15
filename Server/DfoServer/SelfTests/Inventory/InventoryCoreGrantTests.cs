@@ -108,6 +108,54 @@ internal static class InventoryCoreGrantTests
             var unsupported = Template(70000 + (int)kind, kind, 1);
             Reject(empty, new(unsupported.Id, kind, 1), unsupported, 1, "非普通装备/堆叠核心不借用此入口: " + kind);
         }
+        // 地面策略只改变新消耗品的空槽选择，其他授予及首兼容堆合同保持不变。
+        foreach (int occupied in Enumerable.Range(0, 7))
+        {
+            var quickItems = Enumerable.Range(3, occupied).Select(slot => new InventoryItem(slot,
+                new(InventoryListType.Main, (short)slot), equipment)).ToImmutableArray();
+            var pickup = Pickup(CharacterWith(quickItems), core, stackTemplate);
+            short expectedSlot = (short)(occupied < 6 ? 3 + occupied : 65);
+            That(pickup.Accepted && pickup.Plan!.ChangedSlots.SequenceEqual(new[] { new InventorySlot(InventoryListType.Main, expectedSlot) }) &&
+                pickup.Plan.After.Find(new(InventoryListType.Main, expectedSlot)) is { Uid: 0 } added && added.Core == core &&
+                quickItems.All(item => pickup.Plan.After.Find(item.Position) == item),
+                "空快捷栏按3–8升序放置，全部占满回退普通页并保留已有物品: " + occupied);
+        }
+        var pageMerge = Pickup(CharacterWith([later]), core, stackTemplate);
+        That(pageMerge.Accepted && pageMerge.Plan!.ChangedSlots.SequenceEqual(new[] { later.Position }) &&
+            pageMerge.Plan.After.Find(later.Position) is { Uid: 11 } pageTarget && pageTarget.Core == (later.Core with { Value = 9 }),
+            "普通页已有兼容堆优先于空快捷栏，保留原UID");
+        var quickMerge = Pickup(beforeMerge, core, stackTemplate);
+        That(quickMerge.Accepted && quickMerge.Plan!.After.Find(target.Position)!.Core == (target.Core with { Value = 8 }) &&
+            quickMerge.Plan.After.Find(later.Position) == later, "地面策略仍按槽号合入首兼容堆并保留排序锁");
+        foreach (int count in new[] { 98, 100 })
+        {
+            var blocked = CharacterWith([later with { Core = later.Core with { Value = count } }]);
+            var refused = Pickup(blocked, core, stackTemplate);
+            That(!refused.Accepted && refused.Error == 17 && refused.Plan is null && blocked.Inventory.Items.Single().Core.Count == count,
+                "已有堆不足整条或满栈时不借空快捷栏溢出、拆堆: " + count);
+        }
+        var fullPagePickup = Pickup(CharacterWith(fullStacks), core, stackTemplate);
+        That(fullPagePickup.Accepted && fullPagePickup.Plan!.After.Find(new(InventoryListType.Main, 3))!.Core == core,
+            "普通消耗品页已满仍可使用空快捷栏");
+        var allFull = fullStacks.AddRange(Enumerable.Range(3, 6).Select(slot => new InventoryItem(slot,
+            new(InventoryListType.Main, (short)slot), equipment)));
+        That(!Pickup(CharacterWith(allFull), core, stackTemplate).Accepted, "快捷栏及普通页均满时整笔拒绝");
+        var incompatible = Pickup(CharacterWith([target with { Core = target.Core with { ExpireTime = core.ExpireTime + 1 } }]),
+            core, stackTemplate);
+        That(incompatible.Accepted && incompatible.Plan!.After.Find(new(InventoryListType.Main, 4))!.Core == core,
+            "不兼容期限不合堆，另选空快捷槽并保留完整核心");
+        foreach (var template in new[] { equipmentTemplate, Template(2000, ItemKind.Material, 100),
+            Template(2001, ItemKind.Quest, 100), Template(2002, ItemKind.CreatureConsumable, 100) })
+        {
+            var input = FullCore(template, template.Kind == ItemKind.Equipment ? 0 : 3);
+            var pickup = Pickup(empty, input, template);
+            var ordinary = Grant(empty, input, template);
+            That(pickup.Accepted && ordinary.Accepted && pickup.Plan!.After.Items.SequenceEqual(ordinary.Plan!.After.Items),
+                "非消耗品启用地面策略仍使用原容器页面: " + template.Kind);
+        }
+
+        InventoryResult Pickup(Character character, ItemCore input, ItemTemplate template) =>
+            InventoryRewardGrantService.TryGrantCore(character, input, template, Pieces, Now, preferEmptyConsumableQuickSlot: true);
         Console.WriteLine($"PASS {Count - checks} 完整核心发放纯规则断言");
 
         InventoryResult Grant(Character character, ItemCore input, ItemTemplate template) =>

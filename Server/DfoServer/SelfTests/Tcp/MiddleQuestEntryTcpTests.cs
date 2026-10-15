@@ -13,7 +13,7 @@ namespace DfoServer.Testing;
 
 internal static class MiddleQuestEntryTcpTests
 {
-    // 借用已启动的正式fixture，不为六条路线新建服务或另装PVF。
+    // 借用已启动的正式fixture，不为各条路线新建服务或另装PVF。
     internal static void Verify(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
     {
         var dungeons = DungeonCatalog.Load(resources.Archive);
@@ -63,6 +63,10 @@ internal static class MiddleQuestEntryTcpTests
                 That(maze.ConnectsQuest(scenario.Quest) && U32(map,14) == scenario.StartMap &&
                     information[8] == maze.Bosses.Single().X && information[9] == maze.Bosses.Single().Y,
                     $"地轨实际TCP显式/0选择同一原任务迷宫与Boss grid：quest={scenario.Quest} request={request}");
+                That(maze.MapSpecification!.Concat(maze.LayeredMaps).Concat(maze.ConditionalMaps)
+                        .Select(row => row.Id).SequenceEqual(scenario.MapIds) &&
+                    maze.MapSpecification!.Single(row => row.Position == maze.Bosses.Single()).Id == scenario.TargetMap,
+                    "TCP选中完整显式MAP名册及真实末图，不按连续编号推算："+scenario.Quest);
                 var start = maze.MapSpecification!.Single(row => row.Position == maze.Starts.Single());
                 var expected = DungeonMonsterPlan.Create(rooms,start,peer.Id,100,dungeons.Get(checked((int)scenario.Dungeon)).BasisLevel,0);
                 That(map[18] == expected.Monsters.Count+expected.SpecialObjects.Count,

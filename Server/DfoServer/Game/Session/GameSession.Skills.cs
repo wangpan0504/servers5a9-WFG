@@ -32,7 +32,7 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
         {
             // 初始化发生在入城投影前，不能借用只接受 Town 的选角检查。
-            if (pendingRental is not null || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character) ||
+            if (pendingRental is not null || HasPendingTownQuestCommit || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character) ||
                 Ready != captured.Ready || Phase != captured.Phase)
                 throw new InvalidOperationException("Stale skill initialization state");
             if (result.Success && !ReferenceEquals(result.State, captured.Character.Learning))
@@ -64,7 +64,7 @@ internal sealed partial class GameSession
     private SkillLearningResult ApplySkillLearning(Func<Character, SkillLearningResult> plan)
     {
         var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
-            SelectionEpoch, Phase, Allowed: pendingRental is null && Ready && !HasClassExperienceContext));
+            SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
         if (!captured.Allowed)
             return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
 
@@ -75,7 +75,7 @@ internal sealed partial class GameSession
         catch (KeyNotFoundException) { return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()); }
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
+            if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
                 throw new InvalidOperationException("Stale skill learning state");
             if (!result.Success)
                 return result;
@@ -95,13 +95,13 @@ internal sealed partial class GameSession
     internal SkillLayoutResult MoveSkillSlot(SkillSlotChangeCommand command, Func<byte, ushort, SkillLearningDefinition> definition)
     {
         var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
-            SelectionEpoch, Phase, Allowed: pendingRental is null && Ready && !HasClassExperienceContext));
+            SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
         if (!captured.Allowed)
             return new(SkillLearningFailure.Unsupported, null);
         var result = SkillLayout.Move(captured.Character.Job, captured.Character.Learning, command, definition);
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character))
+            if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character))
                 throw new InvalidOperationException("Stale skill layout state");
             if (!result.Success)
                 return result;

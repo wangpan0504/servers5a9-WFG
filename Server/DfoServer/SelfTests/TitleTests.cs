@@ -16,9 +16,35 @@ namespace DfoServer;
 
 internal static class TitleTests
 {
+    static void CheckHatchedCreature()
+    {
+        foreach (string declaration in new[] { "", "[sub type]\n", "[sub type]\n0 1", "[sub type]\n0\n[sub type]\n0",
+            "[sub type]\n-1", "[sub type]\n256", "[sub type]\n2147483648" })
+            That(ItemCatalog.ReadCreatureSubType(new(declaration)) == -1, "宠物类型缺失、重复、越界或非单整数不补为成宠");
+        That(ItemCatalog.ReadCreatureSubType(new("[sub type]\n0")) == 0 &&
+            ItemCatalog.ReadCreatureSubType(new("[sub type]\n1")) == 1 &&
+            ItemCatalog.ReadCreatureSubType(new("[sub type]\n2")) == 2, "保留实际宠物类型，不把未知非零类型归一为成宠");
+        var template = new ItemTemplate(63023, ItemKind.Creature, 26, 1, 0, 1, 0, 1, 1, "[trade]", ushort.MaxValue, 0, "成宠")
+        { CreatureSubType = 0 };
+        var item = new InventoryItem(1, new(InventoryListType.Pet, 0), new(63023, ItemKind.Creature, 1))
+        { Creature = new() { ExpireTime = 1000 } };
+        That(TitleAchievementService.IsHatchedCreature(item, template, 999) &&
+            !TitleAchievementService.IsHatchedCreature(item with { Core = item.Core with { SealFlag = 2 } }, template, 999),
+            "成宠资格同时核对模板并保留原非零实例类型拒绝边界");
+        foreach (int subtype in new[] { -1, 1, 2, 255 })
+            That(!TitleAchievementService.IsHatchedCreature(item, template with { CreatureSubType = subtype }, 999),
+                "即使SealFlag为0，蛋及未知模板类型也不能计入成宠数量");
+        That(!TitleAchievementService.IsHatchedCreature(item, template, 1000) &&
+            !TitleAchievementService.IsHatchedCreature(item, template with { Id = 63022 }, 999) &&
+            !TitleAchievementService.IsHatchedCreature(item, template with { Kind = ItemKind.Equipment }, 999) &&
+            !TitleAchievementService.IsHatchedCreature(item with { Core = item.Core with { Kind = ItemKind.Equipment } }, template, 999),
+            "精确到期、模板身份不符及非宠物不能计入成宠数量");
+    }
+
     public static void RunCore()
     {
         int start = Count;
+        CheckHatchedCreature();
         var characterLevel = new Character(1, 0, "TitleLevel", 0, new(1, 0, 10, 10), null) { Level = 4 };
         var titleLevel = QuestEligibilityTests.Quest(6501) with { Grade = "[title]", MaximumLevel = 3 };
         var levelCatalog = new QuestCatalog(new[] { titleLevel }.ToDictionary(quest => quest.Id));

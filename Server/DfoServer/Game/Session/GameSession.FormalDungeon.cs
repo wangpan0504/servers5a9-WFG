@@ -211,13 +211,13 @@ internal sealed partial class GameSession
         return new(expected,epoch,dungeon,next);
     }
 
-    bool CanEnterFormalDungeon(FormalDungeonReceipt? retry) => retry is null ?
+    bool CanEnterFormalDungeon(FormalDungeonReceipt? retry) => !HasPendingTownQuestCommit && (retry is null ?
         Phase is SessionPhase.Town or SessionPhase.MapSelect && formalDungeon is null :
-        CanPublishFormalDungeon(retry) && CanReplaceSettledDungeon(formalDungeon, retry) && !HasPendingQuestScene && !HasPendingFormalCard;
+        CanPublishFormalDungeon(retry) && CanReplaceSettledDungeon(formalDungeon, retry) && !HasPendingQuestScene && !HasPendingFormalCard);
 
     FormalDungeonReceipt? InstallFormalDungeon(PreparedFormalDungeon prepared)
     {
-        if (!Ready || SelectionEpoch != prepared.SelectionEpoch || !ReferenceEquals(Selected,prepared.Character)) return null;
+        if (HasPendingTownQuestCommit || !Ready || SelectionEpoch != prepared.SelectionEpoch || !ReferenceEquals(Selected,prepared.Character)) return null;
         if (prepared.Dungeon.Entry.IsClassExperience && (prepared.ClassExperienceSelection is not { IsClassExperience: true } ||
             !ReferenceEquals(CurrentDungeonSelection, prepared.ClassExperienceSelection))) return null;
         // 先持久预留key/attempt；通知失败也不回绕key或复用旧身份。
@@ -444,7 +444,7 @@ internal sealed partial class GameSession
                 DungeonPickupPlanning.Item(Selected, original.Content, items.Get(original.Core.ItemId), goldLimits, pieces, now);
         else
             plan = original.IsGold ? InventoryResult.Reject() :
-                InventoryRewardGrantService.TryGrantCore(Selected, original.Core, items.Get(original.Core.ItemId), pieces, now);
+                InventoryRewardGrantService.TryGrantCore(Selected, original.Core, items.Get(original.Core.ItemId), pieces, now, preferEmptyConsumableQuickSlot: true);
         if (!plan.Accepted)
         {
             dungeon.Ground.CancelPickup(prepared);

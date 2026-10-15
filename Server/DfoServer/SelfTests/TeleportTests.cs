@@ -1,9 +1,11 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
 using DfoServer.Game.Town;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
@@ -21,6 +23,7 @@ internal static class TeleportTests
 
     public static void RunCore()
     {
+        PendingQuestTransactions();
         var potion = TeleportRequests.Potion(Convert.FromHexString("41004EAC27000026002F05EA0001"));
         That(potion == new PotionTeleportRequest(65, 2600014, 0, new(38, 0, 1327, 234, 1)), "原生237请求完整保留源槽、模板、模式和目的地");
         That(TeleportRequests.Solo(Convert.FromHexString("FFFFFFFF0700000027030F03CD0005")) ==
@@ -73,6 +76,99 @@ internal static class TeleportTests
             "新仓储和新owner恢复已提交光环冷却");
     }
 
+    static void PendingQuestTransactions()
+    {
+        foreach (bool loseResult in new[] { false, true })
+        {
+            using var fixture = new Fixture(loseResult);
+            var session = fixture.Session;
+            session.Select(0); session.MarkReady();
+            var original = session.Selected!;
+            if (loseResult)
+                Reject<IOException>(() => fixture.AcceptQuest(), "接取实际提交后丢失返回值");
+            else
+            {
+                fixture.Sql("CREATE TRIGGER teleport_quest_fail AFTER INSERT ON character_quest_lifecycle_receipts BEGIN SELECT RAISE(ABORT,'rollback'); END");
+                Reject<SqliteException>(() => fixture.AcceptQuest(), "接取晚期失败保留原冻结计划");
+                fixture.Sql("DROP TRIGGER teleport_quest_fail");
+            }
+            AssertBlocked(fixture, original);
+            var restored = fixture.AcceptQuest();
+            That(restored?.Commit is { ProjectionCurrent: true } commit && commit.Duplicate == loseResult &&
+                fixture.Scalar("SELECT count(*) FROM character_quest_lifecycle_receipts") == 1,
+                "传送拒绝后原接取可恢复，返回丢失不重复提交");
+            That(session.Move(new(35, 35, 0, 0, 0, 0)) && session.Travel(fixture.TravelRequest),
+                "原任务恢复后合法步行和相邻切图均可提交");
+            if (session.Selected!.Position.Town != 1)
+                That(session.Travel(fixture.TravelRequest), "恢复后可沿真实入口返回房间");
+            That(session.LeaveRoom(), "恢复后真实房间返回可提交");
+            That(session.CanPrecheckTeleport(fixture.Service) && session.TeleportPotion(fixture.Request, fixture.Service).Accepted,
+                "原任务明确恢复后解除传送门禁");
+        }
+
+        using var manual = new Fixture();
+        manual.Session.Select(0); manual.Session.MarkReady();
+        var prepared = manual.Session.PrepareManualQuestSkip(manual.Quests);
+        That(prepared?.Prepared is { IsManual: true } && manual.Session.Move(new(35, 35, 0, 0, 0, 0)),
+            "未提交手册不阻止合法步行");
+        That(manual.Session.PrepareManualQuestSkip(manual.Quests)?.Prepared is { IsManual: true } &&
+            manual.Session.Travel(manual.TravelRequest), "未提交手册不阻止相邻切图");
+        That(manual.Session.PrepareManualQuestSkip(manual.Quests)?.Prepared is { IsManual: true } &&
+            manual.Session.CanPrecheckTeleport(manual.Service) &&
+            manual.Session.TeleportPotion(manual.Request, manual.Service).Accepted,
+            "尚未提交的手册不阻止正常传送");
+        That(manual.Session.FinishManualQuestSkip() is null && manual.Read().CompletedQuests.Length == 0,
+            "传送替换快照后旧手册自然失效，不写任务完成");
+        manual.Clock.Now += 10000;
+        That(manual.Session.PrepareManualQuestSkip(manual.Quests)?.Prepared is { IsManual: true }, "新位置重新准备真实手册");
+        var before = manual.Session.Selected!;
+        manual.Sql("CREATE TRIGGER teleport_skip_fail AFTER INSERT ON character_quest_skip_receipts BEGIN SELECT RAISE(ABORT,'rollback'); END");
+        Reject<SqliteException>(() => manual.Session.FinishManualQuestSkip(), "手册提交晚期失败保留恢复上下文");
+        manual.Sql("DROP TRIGGER teleport_skip_fail");
+        AssertBlocked(manual, before);
+        That(manual.Session.FinishManualQuestSkip()?.Commit is { ProjectionCurrent: true } &&
+            manual.Read().CompletedQuests.Contains(100) && manual.Session.TeleportSolo(new(-1, 7, new(2, 0, 30, 30)), manual.Service, null).Accepted,
+            "原手册恢复后光环传送重新可用");
+
+        var question = QuestEligibilityTests.Quest(100) with
+        {
+            Condition = "[question]", Definition = new([new("question info",
+                [new(6, 0, "标题"), new(6, 0, "正文"), new(6, 0, "继续")], [])])
+        };
+        var next = QuestEligibilityTests.Quest(101) with { Definition = new([]) { RequiredAnswers = [new(100, 0)] } };
+        using var answered = new Fixture(quests: new(new() { [100] = question, [101] = next }));
+        answered.Session.Select(0); answered.Session.MarkReady();
+        That(answered.Session.PrepareManualQuestSkip(answered.Quests)?.Prepared?.PendingQuestions.SequenceEqual([100]) == true &&
+            answered.Session.AnswerManualQuestSkip([new(100, 0)], answered.Quests)?.Commit is { ProjectionCurrent: true },
+            "最终手册回答已提交并保留重复回答缓存");
+        That(answered.Session.CanPrecheckTeleport(answered.Service) &&
+            answered.Session.Move(new(35, 35, 0, 0, 0, 0)) && answered.Session.Travel(answered.TravelRequest) &&
+            answered.Session.TeleportPotion(answered.Request, answered.Service).Accepted &&
+            answered.Session.FinishManualQuestSkip() is null &&
+            answered.Scalar("SELECT count(*) FROM character_quest_skip_receipts") == 1,
+            "已提交回答缓存不挡步行、切图和传送，旧最终动作不能重复任务事务");
+
+        static void AssertBlocked(Fixture fixture, Character original)
+        {
+            string stored = System.Text.Json.JsonSerializer.Serialize(fixture.Read());
+            var completed = QuestEligibility.Completed(original);
+            That(TownTravel.Walk(original, new(35, 35, 0, 0, 0, 0), fixture.Towns, completed) is not null &&
+                TownTravel.Plan(original, fixture.TravelRequest, fixture.Towns, completed).Accepted,
+                "被门禁拒绝的步行坐标和双向城镇路线原本合法");
+            That(!fixture.Session.CanPrecheckTeleport(fixture.Service) &&
+                !fixture.Session.TeleportPotion(fixture.Request, fixture.Service).Accepted &&
+                !fixture.Session.TeleportSolo(new(-1, 7, new(2, 0, 30, 30)), fixture.Service, null).Accepted &&
+                !fixture.Session.Move(new(35, 35, 0, 0, 0, 0)) && !fixture.Session.Travel(fixture.TravelRequest) &&
+                ReferenceEquals(fixture.Session.Selected, original) &&
+                stored == System.Text.Json.JsonSerializer.Serialize(fixture.Read()),
+                "未决任务拒绝预检查、传送、步行及切图，位置、完整库存、冷却、revision和原在线快照不变");
+            if (fixture.Towns.IsRoom(original.Position, completed))
+                That(TownTravel.LeaveRoom(original, fixture.Towns, completed).Accepted && !fixture.Session.LeaveRoom() &&
+                    ReferenceEquals(fixture.Session.Selected, original) && stored == System.Text.Json.JsonSerializer.Serialize(fixture.Read()),
+                    "合法房间返回也不能覆盖未决任务快照");
+        }
+    }
+
     sealed class Clock : TimeProvider
     {
         public long Now = 2000000000000;
@@ -88,14 +184,23 @@ internal static class TeleportTests
         public GameSession Session { get; }
         public TeleportService Service { get; }
         public Clock Clock { get; } = new();
+        public QuestCatalog Quests { get; }
+        public TownCatalog Towns { get; }
+        public AreaRequest TravelRequest => new(Session.Selected!.Position.Town == 1 ? (byte)2 : (byte)1, 0,
+            20, 20, 0, Session.Selected.Position.Town, Session.Selected.Position.Area, 0);
+        readonly GoldLimitCatalog limits = new("[gold limit from level]\n0 100000\n1 100000\n[/gold limit from level]");
+        readonly EpicPieceCatalog pieces = new("[piece list]\n1 2\n[/piece list]");
         public PotionTeleportRequest Request { get; } = new(65, 2600014, 0, new(2, 0, 20, 20, 1));
-        public Fixture()
+        public Fixture(bool loseLifecycleResult = false, QuestCatalog? quests = null)
         {
-            Directory.CreateDirectory(root); Owner = Owners.Acquire("teleport", () => { }); Repository = new(Database);
+            Quests = quests ?? new(new() { [100] = QuestEligibilityTests.Quest(100) });
+            Directory.CreateDirectory(root); Owner = Owners.Acquire("teleport", () => { }); Repository = new(Database, Quests);
             TownArea Area(byte town, bool room, int[] quests) => new(town, 0, 1, quests, [], [], new(town, 0, 10, 10),
-                new("test.map", [new(new(0, 0, 100, 100), [], [])], [], room, [new(7, 20, 20)]), [], []);
+                new("test.map", [new(new(0, 0, 100, 100), [], [])],
+                    [new(new(0, 0, 40, 40), town == 1 ? (byte)2 : (byte)1, 0, [], [])], room, [new(7, 20, 20)]), [], []);
             var towns = new TownCatalog(new() { [(1, 0)] = Area(1, true, []), [(2, 0)] = Area(2, false, []), [(3, 0)] = Area(3, false, [42]) },
                 new(1, 0, 10, 10), new(2, 0, 10, 10), new(0, [], []), [], new Dictionary<uint, uint[]>());
+            Towns = towns;
             var definitions = new TeleportCatalog(path => path.StartsWith("stackable", StringComparison.Ordinal) ? PotionText : AuraText,
                 new Dictionary<int, string> { [101590011] = "aura.equ" }, new Dictionary<int, string> { [2600014] = "potion.stk" });
             Service = new(towns, definitions, id => new(id, ItemKind.Avatar, 9, 1, 0, 1, 0, 2, 1, "free", ushort.MaxValue, 0, "Aura"), Clock);
@@ -105,8 +210,12 @@ internal static class TeleportTests
                 Inventory = new([new(0, new(InventoryListType.Main, 65), new(2600014, ItemKind.Consumable, 3)),
                     new(0, new(InventoryListType.Equipment, 9), new(101590011, ItemKind.Avatar, 0)) { Avatar = new() }])
             });
-            Session = new(Repository, towns, Owner);
+            Session = new(loseLifecycleResult
+                ? new QuestCompletionRepositoryTests.LostResultRepository(Repository) { LoseLifecycleResult = true }
+                : Repository, towns, Owner, questCatalog: Quests);
         }
+        // 合成会面无赠品，不读取物品资源；复用真实任务事务及恢复路径。
+        public QuestLifecycleReceipt? AcceptQuest() => Session.ChangeQuest(100, QuestLifecycleAction.Accept, Quests, null!, limits, pieces);
         public Character Read() => Repository.LoadCharacter(Owner, 0);
         public long Scalar(string sql)
         {

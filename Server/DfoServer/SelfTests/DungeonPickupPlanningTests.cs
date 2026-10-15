@@ -43,8 +43,18 @@ internal static class DungeonPickupPlanningTests
         var originalCore = InventoryRewardGrantService.Create(physical, 7, now);
         var granted = DungeonPickupPlanning.Item(character, new(originalCore), physical, limits, pieces, now);
         That(granted.Accepted && granted.Plan!.After.Items.Single().Core == originalCore &&
-            granted.Plan.After.Items.Single().Uid == 0 && character.Inventory.Items.IsEmpty,
+            granted.Plan.After.Items.Single() is { Uid: 0, Position.Index: 3 } && character.Inventory.Items.IsEmpty,
             "真实消耗品拾取纯规划保留冻结七件数量和完整Core，UID只在提交时产生");
+        var nextCharacter = character with { Inventory = granted.Plan!.After };
+        var secondTemplate = items.Get(1000);
+        var secondCore = InventoryRewardGrantService.Create(secondTemplate, 2, now);
+        var second = DungeonPickupPlanning.Item(nextCharacter, new(secondCore), secondTemplate, limits, pieces, now);
+        var repeated = DungeonPickupPlanning.Item(character with { Inventory = second.Plan!.After },
+            new(originalCore), physical, limits, pieces, now);
+        That(second.Accepted && second.Plan.After.Find(new(InventoryListType.Main, 4))!.Core == secondCore &&
+            repeated.Accepted && repeated.Plan!.After.Find(new(InventoryListType.Main, 3))!.Core == (originalCore with { Value = 14 }) &&
+            repeated.Plan.After.Items.Length == 2 && repeated.Plan.After.Find(new(InventoryListType.Main, 4))!.Core == secondCore,
+            "集合逐件拾取使用更新快照，不同消耗品依次占快捷栏，后续同模板合并原堆");
         var cube = items.Get(3037);
         var cubeCore = InventoryRewardGrantService.Create(cube, 7, now);
         var wallet = DungeonPickupPlanning.Item(character, new(cubeCore), cube, limits, pieces, now);

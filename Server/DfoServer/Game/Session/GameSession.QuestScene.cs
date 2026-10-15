@@ -61,7 +61,7 @@ internal sealed partial class GameSession
         var matches = capture.Room.PassiveObjects.Select((source,ordinal) => (source,ordinal))
             .Where(row => row.source.ObjectId == templateId).ToArray();
         // 标识只有模板时，重复模板行无法唯一寻址；不按接取目标或数量反猜物件身份。
-        // maze明确声明的唯一终末物件有独立39来源；零击杀结算仍未接入。
+        // maze明确声明的唯一终末物件有独立39来源；精确零击杀结算仍须独立场景清图凭据。
         if (matches.Length != 1) return null;
         bool reportsQuestDeath = resources.ReportsQuestDeath(matches[0].source);
         bool mazeClear = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, matches[0].ordinal);

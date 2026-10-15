@@ -9,7 +9,7 @@ internal sealed partial class GameSession
 
     public DungeonSelectionReceipt? BeginDungeonSelection() => owner.Execute<DungeonSelectionReceipt?>(() =>
     {
-        if (pendingRental is not null) return null;
+        if (pendingRental is not null || HasPendingTownQuestCommit) return null;
         if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.MapSelect))
             throw new InvalidDataException("Invalid dungeon-selection state");
         if (CurrentDungeonSelection is null || CurrentDungeonSelection.IsClassExperience)
@@ -26,7 +26,7 @@ internal sealed partial class GameSession
 
     public DungeonSelectionReceipt? ReturnFromDungeonSelection(bool restorePosition = true) => owner.Execute(() =>
     {
-        if (CurrentDungeonSelection is null)
+        if (pendingRental is not null || HasPendingTownQuestCommit || CurrentDungeonSelection is null)
             return null;
         if (!Ready || Phase != SessionPhase.MapSelect)
             throw new InvalidOperationException("Dungeon-selection phase changed");

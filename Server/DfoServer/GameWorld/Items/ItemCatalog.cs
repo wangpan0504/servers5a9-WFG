@@ -132,6 +132,10 @@ internal sealed class ItemCatalog
         return AdventureNameTicketDefinition.Parse(raw, Get(id));
     }
 
+    // 只有唯一、完整的类型声明参与成宠资格；缺项和未知格式不按成宠0补齐。
+    internal static int ReadCreatureSubType(PvfDocument document) =>
+        document.TryGetInt32("sub type", out int subtype) && subtype is >= 0 and <= byte.MaxValue ? subtype : -1;
+
     ItemTemplate Load(int id)
     {
         bool isEquipment = equipment.TryGetValue(id, out string? path);
@@ -205,6 +209,7 @@ internal sealed class ItemCatalog
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
             WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&
                 text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
+            CreatureSubType = kind == ItemKind.Creature ? ReadCreatureSubType(text) : -1,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
             AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
             PersonalCargoUpgradeTarget = cargoTarget,

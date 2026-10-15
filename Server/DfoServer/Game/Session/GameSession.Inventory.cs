@@ -14,7 +14,7 @@ internal sealed partial class GameSession
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
     {
-        if (pendingRental is not null || !Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingQuestScene || HasPendingFormalCard ||
+        if (pendingRental is not null || !Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
             formalDungeon?.PendingTutorialClear is not null || formalDungeon?.PendingInventoryDiscard is not null)
             return InventoryResult.Reject(invalidStateError);
         var result = operation(Selected);
@@ -72,12 +72,12 @@ internal sealed partial class GameSession
 
         bool CanPlan()
         {
-            if (pendingRental is not null || additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingQuestScene || HasPendingFormalCard ||
+            if (pendingRental is not null || additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
                 requiredPhase is { } expected && Phase != expected || formalDungeon?.PendingTutorialClear is not null) return false;
-            // 既有城镇用例保持原资格；只有专用跨场景取放核对未完成事务与副本上下文。
+            // 城镇未提交手册和已安装回答缓存可随库存自然失效；副本继续保留专用取放资格。
             if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();
-            return !HasPendingQuestScene && pendingQuestCompletion is null && pendingQuestLifecycle is null &&
-                pendingQuestQuickClear is null && pendingDungeonContinuation is null && !HasPendingQuestReplay &&
+            return (Phase == SessionPhase.Town || pendingQuestQuickClear is null) &&
+                pendingDungeonContinuation is null && !HasPendingQuestReplay &&
                 formalDungeon?.Ground.HasPendingOperation != true &&
                 (Phase == SessionPhase.Town || Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
                     formalDungeon is { HasPendingFatigue: false } dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);

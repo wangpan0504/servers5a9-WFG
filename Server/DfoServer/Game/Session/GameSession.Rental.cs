@@ -50,7 +50,7 @@ internal sealed partial class GameSession
                 { Phase = SessionPhase.Town, PreviousQuests = expected.ActiveMainQuests } };
         });
 
-        bool CanRent() => Ready && Phase == SessionPhase.Town && Selected is not null && !HasPendingQuestScene &&
+        bool CanRent() => pendingCommunication is null && Ready && Phase == SessionPhase.Town && Selected is not null && !HasPendingQuestScene &&
             !HasPendingFormalCard && pendingQuestCompletion is null && pendingQuestLifecycle is null &&
             pendingQuestQuickClear is null && pendingDungeonContinuation is null && !HasPendingQuestReplay &&
             formalDungeon?.PendingTutorialClear is null && formalDungeon?.PendingInventoryDiscard is null;

@@ -8,7 +8,7 @@ internal sealed partial class GameSession
 
     public DungeonSelectionReceipt? BeginClassExperienceSelection() => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
+        if (pendingCommunication is not null || !Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
             formalDungeon is not null || HasPendingQuestReplay || pendingDungeonContinuation is not null ||
             pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is not null ||
             CurrentDungeonSelection?.IsTutorial == true || Selected.Tutorial is { Completed: false })

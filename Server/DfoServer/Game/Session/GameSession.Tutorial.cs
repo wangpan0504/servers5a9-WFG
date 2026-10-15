@@ -11,7 +11,7 @@ internal sealed partial class GameSession
 {
     public DungeonSelectionReceipt? BeginTutorialSelection(uint dungeonId, TutorialCatalog tutorials) => owner.Execute(() =>
     {
-        if (!Ready || Selected?.Tutorial is not { Completed: false } pending || pending.DungeonId != dungeonId ||
+        if (pendingCommunication is not null || !Ready || Selected?.Tutorial is not { Completed: false } pending || pending.DungeonId != dungeonId ||
             tutorials.Get(Selected.Job) is not { } flow || flow.DungeonId != dungeonId || formalDungeon is not null ||
             Phase is not (SessionPhase.Town or SessionPhase.MapSelect) || !towns.IsPosition(flow.Destination, completed)) return null;
         if (CurrentDungeonSelection is { IsTutorial: false }) return null;

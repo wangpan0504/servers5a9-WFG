@@ -127,7 +127,7 @@ internal static class InventoryRewardGrantService
 
     // 地面等业务提供已冻结的完整核心；此入口不接存量UID，不确认来源资格或重复拾取。
     public static InventoryResult TryGrantCore(Character character, ItemCore core, ItemTemplate template,
-        EpicPieceCatalog pieces, DateTimeOffset? utcNow = null)
+        EpicPieceCatalog pieces, DateTimeOffset? utcNow = null, bool preferEmptyConsumableQuickSlot = false)
     {
         ArgumentNullException.ThrowIfNull(character);
         ArgumentNullException.ThrowIfNull(core);
@@ -165,7 +165,7 @@ internal static class InventoryRewardGrantService
         // ItemCore及其附属值均不可变，直接共享完整核心；不重新Create或计算期限。
         var inventory = character.Inventory;
         var placement = new RewardPlacement(inventory, [core.ItemId]);
-        if (!placement.TryAdd(template, core, core.Count))
+        if (!placement.TryAdd(template, core, core.Count, preferEmptyConsumableQuickSlot: preferEmptyConsumableQuickSlot))
             return InventoryResult.Reject(17);
         var after = inventory with { Items = placement.Items() };
         after.Validate(allocating: true);
@@ -196,7 +196,8 @@ internal static class InventoryRewardGrantService
         public ImmutableArray<InventoryItem> Items() => planned.Values.OrderBy(item => item.Position.List)
             .ThenBy(item => item.Position.Index).ToImmutableArray();
 
-        public bool TryAdd(ItemTemplate template, ItemCore prototype, int remaining, InventoryItem? instance = null)
+        public bool TryAdd(ItemTemplate template, ItemCore prototype, int remaining, InventoryItem? instance = null,
+            bool preferEmptyConsumableQuickSlot = false)
         {
             var range = ItemSlotBoundService.Range(template.Kind, inventory.Expansion);
             var list = ItemSlotBoundService.List(template.Kind);
@@ -250,6 +251,15 @@ internal static class InventoryRewardGrantService
                         return false;
                 }
             }
+
+            // 地面消耗品仅在没有兼容堆时优先空快捷栏；满堆仍按原规则整笔拒绝。
+            if (remaining > 0 && preferEmptyConsumableQuickSlot && template.Kind == ItemKind.Consumable)
+                for (short quickSlot = 3; quickSlot <= 8; quickSlot++)
+                    if (!planned.ContainsKey(new(InventoryListType.Main, quickSlot)))
+                    {
+                        range = (quickSlot, quickSlot);
+                        break;
+                    }
 
             var page = (list, range.Start, range.End);
             short slot = freeSlots.GetValueOrDefault(page, range.Start);

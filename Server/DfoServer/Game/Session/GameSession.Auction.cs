@@ -32,7 +32,7 @@ internal sealed partial class GameSession
     {
         // 规划在锁外做，因此进锁后先复核「计划所依据的角色就是当前在线角色」：
         // 换角/接管/快照被别的提交替换后不能再拿旧计划去扣道具（仓储还会在写事务内再核一次 revision）。
-        if (pendingRental is not null || !Ready || Phase != SessionPhase.Town || !ReferenceEquals(Selected, expected))
+        if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || Phase != SessionPhase.Town || !ReferenceEquals(Selected, expected))
             return (AuctionListingRegisterResult.Reject(AuctionRegisterError.StalePlan), (InventoryResult?)null);
         var previous = expected.ActiveMainQuests;
         var result = service.Register(owner, expected, plan);
@@ -64,7 +64,7 @@ internal sealed partial class GameSession
     public (AuctionListingCancelResult Listing, InventoryResult? Inventory) CancelListing(
         AuctionService service, Character expected, AuctionCancelPlan plan) => owner.Execute(() =>
     {
-        if (pendingRental is not null || !Ready || Phase != SessionPhase.Town || !ReferenceEquals(Selected, expected))
+        if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || Phase != SessionPhase.Town || !ReferenceEquals(Selected, expected))
             return (AuctionListingCancelResult.Reject(AuctionCancelError.StalePlan), (InventoryResult?)null);
         var previous = expected.ActiveMainQuests;
         var result = service.Cancel(owner, expected, plan);
@@ -103,7 +103,7 @@ internal sealed partial class GameSession
     {
         // 规划在锁外做，因此进锁后先复核「计划所依据的角色就是当前在线角色」：
         // 换角/接管/快照被别的提交替换后不能再拿旧计划去扣钱（仓储还会在写事务内再核一次 revision）。
-        if (pendingRental is not null || !Ready || Phase != SessionPhase.Town || !ReferenceEquals(Selected, expected))
+        if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || Phase != SessionPhase.Town || !ReferenceEquals(Selected, expected))
             return (AuctionListingBuyResult.Reject(AuctionBuyError.StalePlan, "规划资格已变化：换角、接管或阶段不符"), null);
         var result = service.Buy(owner, expected, plan);
         if (result.Character is null)

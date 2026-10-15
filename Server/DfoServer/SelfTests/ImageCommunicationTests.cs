@@ -110,23 +110,101 @@ internal static class ImageCommunicationTests
         }
         using (var f = new Fixture())
         {
-            var before = f.Read();
+            var before = f.Session.Selected!;
             f.Sql("CREATE TRIGGER communication_fail AFTER INSERT ON character_quest_lifecycle_receipts BEGIN SELECT RAISE(ABORT,'communication rollback'); END");
             Reject<SqliteException>(() => f.Use(),"receipt晚期SQL失败");
             That(QuestCompletionRepositoryTests.Same(before,f.Read()) && QuestCompletionRepositoryTests.Same(before,f.Session.Selected!) && f.Receipts == 0,
                 "晚期失败回滚金币、寻物进度和revision，不安装通讯来源");
-            That(f.Condition()!.Outcome == QuestLifecycleOutcome.Rejected,"SQL失败后的临时NPC不可用");
+            AssertFrozen(f,before);
+            That(f.Condition() is null,"SQL失败后的临时NPC不可用，原付款优先恢复");
             f.Sql("DROP TRIGGER communication_fail");
-            That(f.Use() is {Accepted:true} && f.Read().Inventory.Gold == 40000 && f.Receipts == 1,"冻结付款计划恢复后只扣一次");
+            That(f.Use() is {Accepted:true} && f.Lost!.SameLifecyclePlan && f.Read().Inventory.Gold == 40000 && f.Receipts == 1,
+                "冻结付款计划恢复后只扣一次，仍为原Plan");
+            That(f.Session.Move(new(51,52,0,0,0,0)) && f.Condition()?.Outcome == QuestLifecycleOutcome.Committed,
+                "付款恢复后普通移动和会面保存恢复，不冻结成功来源缓存");
         }
         using (var f = new Fixture(lose:true))
         {
+            var before = f.Session.Selected!;
             Reject<IOException>(() => f.Use(),"真实SQL提交后返回结果丢失");
+            AssertFrozen(f,before);
             That(f.Read().Inventory.Gold == 40000 && f.Session.Selected!.Inventory.Gold == 50000 &&
-                f.Condition()!.Outcome == QuestLifecycleOutcome.Rejected,"丢结果不提前安装来源或成功快照");
+                f.Condition() is null,"丢结果不提前安装来源或成功快照");
             var recovered = f.Use();
             That(recovered is {Accepted:true,Commit.Duplicate:true,Commit.ProjectionCurrent:true} && f.Lost!.SameLifecyclePlan &&
                 f.Read().Inventory.Gold == 40000 && f.Receipts == 1,"按原operation恢复原付款receipt，不再次扣费");
+        }
+        using (var f = new Fixture())
+        {
+            var before = f.Session.Selected!;
+            f.Sql("CREATE TRIGGER communication_reverse_fail AFTER INSERT ON character_quest_lifecycle_receipts BEGIN SELECT RAISE(ABORT,'lifecycle rollback'); END");
+            Reject<SqliteException>(() => f.Change(QuestLifecycleAction.Giveup),"普通32失败留下原任务计划");
+            That(f.Use() is null && ReferenceEquals(before,f.Session.Selected) && f.Receipts == 0 &&
+                QuestCompletionRepositoryTests.Same(before,f.Read()),"通讯不能覆盖未决普通生命周期");
+            f.Sql("DROP TRIGGER communication_reverse_fail");
+            That(f.Change(QuestLifecycleAction.Giveup)?.Commit is {ProjectionCurrent:true} && f.Lost!.SameLifecyclePlan &&
+                f.Receipts == 1,"普通生命周期按原Plan恢复，不被475替换");
+        }
+        using (var f = new Fixture())
+        {
+            var before = f.Session.Selected!; int calls = 0;
+            f.Sql("CREATE TRIGGER communication_interleave_fail AFTER INSERT ON character_quest_lifecycle_receipts BEGIN SELECT RAISE(ABORT,'communication planning rollback'); END");
+            var result = f.Session.PlanAndCommitInventory(character =>
+            {
+                calls++;
+                Reject<SqliteException>(() => f.Use(),"库存锁外规划期间通讯提交失败");
+                return DfoServer.Game.Currency.CurrencyService.SetGold(character,60000);
+            });
+            That(!result.Accepted && calls == 1 && ReferenceEquals(before,f.Session.Selected) &&
+                QuestCompletionRepositoryTests.Same(before,f.Read()) && f.Receipts == 0,
+                "库存回锁再次检查通讯冻结，不能覆盖原付款快照");
+            f.Sql("DROP TRIGGER communication_interleave_fail");
+            That(f.Use() is {Accepted:true} && f.Lost!.SameLifecyclePlan && f.Receipts == 1 &&
+                f.Session.PlanAndCommitInventory(character => DfoServer.Game.Currency.CurrencyService.SetGold(character,60000)).Accepted &&
+                f.Read().Inventory.Gold == 60000,"通讯原Plan恢复后库存可重新规划提交");
+        }
+        using (var f = new Fixture(lose:true))
+        {
+            var before = f.Session.Selected!;
+            Reject<IOException>(() => f.Use(),"建立提交成功但返回丢失的通讯计划");
+            var paid = f.Read();
+            f.Repository.Save(f.Owner,paid,paid.Position with { X = 51 },paid.Return);
+            var actual = f.Read();
+            var stale = f.Use()!;
+            That(stale.Commit is {Duplicate:true,ProjectionCurrent:false} && f.Lost!.SameLifecyclePlan &&
+                ReferenceEquals(before,f.Session.Selected) && !f.Session.CanPublishImageCommunication(stale),
+                "外部写入后的旧付款回执不能安装或发布");
+            AssertFrozen(f,before);
+            That(f.Use()?.Commit is {Duplicate:true,ProjectionCurrent:false} && f.Lost!.SameLifecyclePlan &&
+                QuestCompletionRepositoryTests.Same(actual,f.Read()) && f.Receipts == 1,
+                "失效投影仍保留原Plan，不清pending或再次扣费");
+        }
+        using (var f = new Fixture(renameTicket:true))
+        {
+            var catalog = AdventureCoreTests.SyntheticCatalog(); var now = DateTimeOffset.UtcNow;
+            var service = new DfoServer.Game.Adventure.AdventureNameService(catalog,
+                id => id == 2000 ? new(2000,1,95,ushort.MaxValue) : null);
+            f.Repository.InitializeAdventure(f.Owner,catalog,now);
+            var before = f.Session.Selected!;
+            var adventure = f.Repository.ReadAdventure(f.Owner,catalog,now);
+            That(service.Prepare(adventure,before,"RecoveredGroup",false,65,0,now).Plan is {Inventory:not null},
+                "真实改名券与冒险团目录可规划角色库存写入，非无效参数拒绝对照");
+            f.Sql("CREATE TRIGGER communication_adventure_fail AFTER INSERT ON character_quest_lifecycle_receipts BEGIN SELECT RAISE(ABORT,'communication adventure rollback'); END");
+            Reject<SqliteException>(() => f.Use(),"冒险团写入前建立通讯付款回滚");
+            That(!f.Session.ChangeAdventureName(service,"RecoveredGroup",false,65,0,now).Accepted &&
+                ReferenceEquals(before,f.Session.Selected) && QuestCompletionRepositoryTests.Same(before,f.Read()) &&
+                f.Session.ReadAdventureName() == "" &&
+                f.Repository.ReadAdventure(f.Owner,catalog,now).State.Revision == adventure.State.Revision,
+                "未决通信拒绝可执行冒险团改名，不消费券、改名或覆盖原角色");
+            f.Sql("DROP TRIGGER communication_adventure_fail");
+            That(f.Use() is {Accepted:true} && f.Lost!.SameLifecyclePlan && f.Receipts == 1,
+                "冒险团拒绝后通信仍按原Plan恢复一次");
+            var paid = f.Session.Selected!;
+            That(f.Session.ChangeAdventureName(service,"RecoveredGroup",false,65,0,now).Accepted &&
+                f.Session.ReadAdventureName() == "RecoveredGroup" && f.Read().Inventory.Find(new(InventoryListType.Main,65)) is null &&
+                f.Read().Inventory.Gold == 40000 && f.Read().Revision == paid.Revision+1 &&
+                QuestCompletionRepositoryTests.Same(f.Read(),f.Session.Selected!) && f.Receipts == 1,
+                "通信恢复后真实冒险团改名消费券并安装新快照，不重复付款");
         }
         using (var f = new Fixture())
         {
@@ -136,6 +214,36 @@ internal static class ImageCommunicationTests
             Reject<InvalidOperationException>(() => f.Use(),"旧owner不能再次付款或发布来源");
         }
         Console.WriteLine($"PASS {Count-checks} 通讯资源、费用事务、会面来源及生命周期核心断言");
+    }
+
+    static void AssertFrozen(Fixture f, Character expected)
+    {
+        var persisted = f.Read(); long receipts = f.Receipts; int calls = 0;
+        That(!f.Session.Move(new(51,52,0,0,0,0)) && !f.Session.Travel(new(14,2,50,50,0,14,1,0)),
+            "未决通讯禁止走动和切图，保留原场景及快照");
+        foreach (bool town in new[] { false,true })
+        {
+            That(!f.Session.MutateInventory(character => { calls++; return InventoryResult.Reject(); },requireTown:town).Accepted &&
+                !f.Session.PlanAndCommitInventory(character => { calls++; return InventoryResult.Reject(); },requireTown:town).Accepted,
+                "未决通讯拒绝城镇及通用库存入口");
+        }
+        That(calls == 0 && f.Change(QuestLifecycleAction.Giveup) is null && f.Change(QuestLifecycleAction.Accept) is null &&
+            f.Condition() is null && f.Session.FinishQuest(3734,ushort.MaxValue,f.Quests,null!,null!,null!,null!,null!).Outcome ==
+                QuestFinishOutcome.Unsupported,"通信冻结先于普通31/32/33/34规划");
+        // 这些入口须在读取资源前拒绝；null目录证明不会进入锁外规划或直接库存提交。
+        That(f.Session.QuickClearQuest(1,f.Quests,null!) is null && f.Session.PrepareManualQuestSkip(f.Quests) is null &&
+            f.Session.AnswerManualQuestSkip([],f.Quests) is null && f.Session.FinishManualQuestSkip() is null &&
+            !f.Session.RentEquipment(null!,1,0,0,DateTimeOffset.UtcNow).Accepted &&
+            !f.Session.UpdateTitleAchievements(null!).Accepted &&
+            f.Session.UseConsumable(new(new(InventoryListType.Main,0),0,1,0),null!).Outcome == ConsumableUseOutcome.Rejected,
+            "未决通信阻止跳过准备/提交、租赁、称号和直接消费写入");
+        That(f.Session.BeginDungeonSelection() is null && f.Session.BeginClassExperienceSelection() is null &&
+            f.Session.BeginTutorialSelection(1,null!) is null && f.Session.EnterFormalDungeon(1,0,0,null!,null!) is null &&
+            f.Session.Phase == SessionPhase.Town,"选择和直接入场不能隐式清除未决通信");
+        Reject<InvalidOperationException>(() => f.Session.SetCharacterGold(expected.Name,60000),"未决通信拒绝GM金币覆盖");
+        That(f.Session.AcceptStoryDigest() is null && ReferenceEquals(expected,f.Session.Selected) &&
+            QuestCompletionRepositoryTests.Same(persisted,f.Read()) && f.Receipts == receipts,
+            "全部拒绝保持在线原引用、持久资产和回执数量");
     }
 
     public static void RunResources(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
@@ -192,7 +300,7 @@ internal static class ImageCommunicationTests
         public GameSession Session {get;}
         public QuestCatalog Quests {get;}
         public LostResultRepository? Lost {get;}
-        public Fixture(uint gold=50000,bool source=true,uint scalar=1,bool lose=false,bool active=true)
+        public Fixture(uint gold=50000,bool source=true,uint scalar=1,bool lose=false,bool active=true,bool renameTicket=false)
         {
             path=Path.Combine(root,"game.db"); var point = new Location(14,1,50,50);
             var map = new TownMap("fixture/communication.map",[new(new(0,0,2000,1000),[],[])],
@@ -203,10 +311,13 @@ internal static class ImageCommunicationTests
             var meet = QuestEligibilityTests.Quest(3734) with {IntData=[2000]};
             var seek = QuestEligibilityTests.Quest(100) with {Condition="[seeking]",IntData=[0,45000]};
             Quests=new(new(){[3734]=meet,[100]=seek}); Repository=new(path,Quests); Owner=Owners.Acquire("communication",() => { });
+            if (renameTicket) new DfoServer.Game.Auth.AuthenticationService(new AuthenticationRepository(path))
+                .Create("communication","fixture-password");
             Repository.Create(Owner,new("ImageTest",point,point)
-            {Inventory=InventorySnapshot.Empty with {Gold=gold},ActiveMainQuests=active ?
+            {Inventory=InventorySnapshot.Empty with {Gold=gold,Items=renameTicket ?
+                [new(0,new(InventoryListType.Main,65),new(2000,ItemKind.Consumable,1))] : []},ActiveMainQuests=active ?
                 [new(0,3734,scalar),new(1,100,gold>=45000 ? 0u : 1u)] : [new(1,100,gold>=45000 ? 0u : 1u)]});
-            Lost=lose ? new(Repository){LoseLifecycleResult=true} : null;
+            Lost=new(Repository){LoseLifecycleResult=lose,LoseCompletionResult=false};
             Session=new(Lost is null ? Repository : Lost,towns,Owner);
             Session.Select(0,resumeTown:true); Session.MarkReady();
         }

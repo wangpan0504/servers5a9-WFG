@@ -43,9 +43,7 @@ internal sealed partial class GameSession
 
     public ImageCommunicationReceipt? UseImageCommunication(ImageCommunicationCatalog catalog, QuestCatalog quests)
     {
-        var capture = owner.Execute(() => (Character: pendingRental is null && Ready && Phase == SessionPhase.Town && Selected is not null &&
-            pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null && !HasPendingQuestScene &&
-            !HasPendingFormalCard && towns.IsPosition(Selected.Position, QuestEligibility.Completed(Selected)) ? Selected : null,
+        var capture = owner.Execute(() => (Character: CanUseImageCommunication() ? Selected : null,
             SelectionEpoch, Scene: communicationSceneEpoch, Pending: pendingCommunication, Sources: CommunicationSources(Selected)));
         if (capture.Character is not { } expected) return null;
         var refusal = new ImageCommunicationReceipt(expected, null, owner.Generation, capture.SelectionEpoch, capture.Scene, false, "通讯场景或活动任务不符");
@@ -64,7 +62,7 @@ internal sealed partial class GameSession
         QuestLifecyclePlan plan;
         if (capture.Pending is { } pending)
         {
-            if (!SameCommunicationScene(pending.Scene, expected) || !pending.Scene.Sources.SequenceEqual(eligible)) return refusal;
+            if (!ReferenceEquals(pending.Plan.Expected, expected) || !SameCommunicationScene(pending.Scene, expected) || !pending.Scene.Sources.SequenceEqual(eligible)) return refusal;
             // 原提交结果丢失时先按原operation查receipt，不能依据旧余额再扣一次。
             plan = pending.Plan; scene = pending.Scene;
         }
@@ -76,7 +74,8 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !SameCommunicationScene(scene, expected) || !ReferenceEquals(Selected, expected))
+            if (!CanUseImageCommunication() || !ReferenceEquals(pendingCommunication, capture.Pending) ||
+                !SameCommunicationScene(scene, expected) || !ReferenceEquals(Selected, expected))
                 throw new InvalidOperationException("通讯规划的原选角或场景已失效");
             pendingCommunication = new(plan, scene);
             var commit = repository.CommitQuestLifecycle(owner, plan);
@@ -89,6 +88,11 @@ internal sealed partial class GameSession
             return refusal with { Character = commit.Character, Commit = commit, Accepted = true, Reason = "通讯费用与任务库存同事务提交" };
         });
     }
+
+    // 原付款可恢复；这里只排斥其它未决事务，不把自己的pending加入循环门禁。
+    bool CanUseImageCommunication() => pendingRental is null && Ready && Phase == SessionPhase.Town && Selected is not null &&
+        pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null && !HasPendingQuestScene &&
+        !HasPendingFormalCard && towns.IsPosition(Selected.Position, QuestEligibility.Completed(Selected));
 
     public bool CanPublishImageCommunication(ImageCommunicationReceipt receipt) => owner.Execute(() => Ready &&
         Phase == SessionPhase.Town && owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch &&

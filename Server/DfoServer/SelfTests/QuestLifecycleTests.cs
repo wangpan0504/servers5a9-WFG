@@ -69,7 +69,7 @@ internal static class QuestLifecycleTests
             That(!f.Repository.CommitQuestLifecycle(f.Owner, reacquired.Commit!.Plan).ProjectionCurrent,
                 "同revision外部完成位改变使回放增量失效");
         }
-        using (var f = new Fixture(towns, items, [gift]))
+        using (var f = new Fixture(towns, items, [gift,gift with { Id = 101 }]))
         {
             var before = f.Session.Selected!;
             f.Sql("CREATE TRIGGER quest_accept_fail AFTER INSERT ON character_quest_lifecycle_receipts BEGIN SELECT RAISE(ABORT,'quest lifecycle rollback'); END");
@@ -77,21 +77,44 @@ internal static class QuestLifecycleTests
             That(Same(before, f.Read()) && ReferenceEquals(before, f.Session.Selected) && f.Receipts == 0,
                 "失败回滚赠品、UID、活动槽、revision，Session不安装规划资产");
             f.Sql("DROP TRIGGER quest_accept_fail");
+            That(f.Change(101,QuestLifecycleAction.Accept) is { Commit: null } && Same(before,f.Read()) &&
+                ReferenceEquals(before,f.Session.Selected) && f.Receipts == 0,
+                "已回滚但仍待精确重试的接取不被另一个合法任务抢占");
             var accepted = f.Change(100, QuestLifecycleAction.Accept)!;
             That(accepted.Commit is { Duplicate: false } && accepted.Character.Inventory.Items.Single().Uid == 1,
                 "已回滚接取可重试同一冻结规划且UID序列没有泄漏");
         }
-        using (var f = new Fixture(towns, items, [gift], loseResult: true))
+        using (var f = new Fixture(towns, items, [gift,gift with { Id = 101 },meet with { Id = 102 }],
+            active: [new(0,102,1)], loseResult: true))
         {
             var before = f.Session.Selected!;
             Reject<IOException>(() => f.Change(100, QuestLifecycleAction.Accept), "真实提交后返回值丢失");
-            That(ReferenceEquals(before, f.Session.Selected) && f.Read().ActiveMainQuests.Length == 1 && f.Receipts == 1,
+            var saved = f.Read();
+            string operation;
+            using (var db = f.Open())
+            using (var command = db.CreateCommand())
+            {
+                command.CommandText = "SELECT operation_id FROM character_quest_lifecycle_receipts";
+                operation = (string)command.ExecuteScalar()!;
+            }
+            That(ReferenceEquals(before, f.Session.Selected) && saved.ActiveMainQuests.Length == 2 && f.Receipts == 1,
                 "返回丢失保留原在线快照和已提交回执");
+            That(f.Change(101,QuestLifecycleAction.Accept) is { Commit: null } &&
+                f.Change(102,QuestLifecycleAction.Giveup) is { Commit: null } &&
+                f.Session.ChangeQuest(102,QuestLifecycleAction.Condition,f.Catalog,items.Items,items.GoldLimits,items.EpicPieces,
+                    new(null,0,0)) is { Commit: null } && Same(saved,f.Read()) && ReferenceEquals(before,f.Session.Selected) && f.Receipts == 1,
+                "不同接取、放弃与条件不得替换未决operation，原资产和在线快照不变");
             var recovered = f.Change(100, QuestLifecycleAction.Accept)!;
             That(recovered.Commit is { Duplicate: true, ProjectionCurrent: true } && f.Lost!.SameLifecyclePlan &&
                 recovered.Character.Inventory.Items.Single().Core.Value == 3 && f.Receipts == 1 &&
+                recovered.Commit.Plan.OperationId.ToString("N") == operation && Same(saved,recovered.Character) &&
                 ReferenceEquals(recovered.Character,f.Session.Selected) && f.Session.CanPublishQuestLifecycle(recovered),
                 "相同请求恢复冻结计划、随机/期限与原UID，不再发赠品");
+            var abandoned = f.Change(100,QuestLifecycleAction.Giveup)!;
+            var accepted = f.Change(100,QuestLifecycleAction.Accept)!;
+            That(abandoned.Commit is { Duplicate: false } && accepted.Commit is { Duplicate: false } && f.Receipts == 3 &&
+                accepted.Character.ActiveMainQuests.Single(row => row.QuestId == 100).AcceptanceId != recovered.Commit!.Plan.AcceptanceId,
+                "恢复安装之后允许正常放弃和新接取，不永久锁住任务");
         }
         foreach (string change in new[] { "UPDATE characters SET revision=revision+1",
             "INSERT INTO character_completed_quests(character_id,quest_id) VALUES(1,999)" })

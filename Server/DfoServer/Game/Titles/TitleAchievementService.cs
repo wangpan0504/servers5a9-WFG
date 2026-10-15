@@ -58,7 +58,11 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
         };
     }
 
-    static bool Holds(Character character, StoryQuest quest, long now)
+    internal static bool IsHatchedCreature(InventoryItem item, ItemTemplate template, long now) =>
+        item.Core.Kind == ItemKind.Creature && item.Core.SealFlag == 0 && template.Id == item.Core.ItemId &&
+        template.Kind == ItemKind.Creature && template.CreatureSubType == 0 && !item.IsExpired(now);
+
+    bool Holds(Character character, StoryQuest quest, long now)
     {
         if (quest.IntData.Count == 0 || quest.IntData.Count % 2 != 0) return false;
         for (int at = 0; at < quest.IntData.Count; at += 2)
@@ -67,7 +71,9 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
             long held;
             if (CurrencyWallet.RewardKind(itemId) is { } currency) held = CurrencyWallet.Get(character.Inventory, currency);
             else if (itemId > 0) held = character.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == itemId && !item.IsExpired(now)).Sum(item => (long)item.Core.Count);
-            else if (itemId == -7 && quest.SubType == 25) held = character.Inventory.Items.Count(item => item.Core.Kind == ItemKind.Creature && item.Core.SealFlag == 0 && !item.IsExpired(now));
+            // 资源要求已孵化宠物；实例SealFlag不证明模板是成宠，未孵化蛋也可能为0。
+            else if (itemId == -7 && quest.SubType == 25) held = character.Inventory.Items.Count(item =>
+                item.Core.Kind == ItemKind.Creature && IsHatchedCreature(item, items.Get(item.Core.ItemId), now));
             else if (itemId == -7) held = character.Inventory.Items.Count(item => item.Core.Kind == ItemKind.Avatar && !item.IsExpired(now));
             else return false;
             if (count <= 0 || held < count) return false;

@@ -39,7 +39,8 @@ internal sealed partial class GameSession
     {
         var captured = owner.Execute(() =>
         {
-            if (pendingRental is not null || !Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||
+                !Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true || HasPendingQuestScene)
                 return (Character: (DfoServer.Game.Characters.Character?)null, SelectionEpoch, Phase,
                     Identity: (DungeonRunIdentity?)null, Clear: (QuestClearReceipt?)null, Pending: (PendingQuestCompletion?)null);
@@ -51,7 +52,8 @@ internal sealed partial class GameSession
             // 提交已发生但返回值丢失时，Selected仍是原旧快照；先以原计划查receipt，不能先用旧revision重读活动槽。
             bool completedParentChild = quests.TryGet(questId,out var target) &&
                 QuestRelationProgress.CompletedParentChild(Selected,target,quests) is not null;
-            var clear = !Selected.CompletedQuests.Contains(questId) && !completedParentChild
+            // 不同请求不能用旧revision读取或替换未决领奖；同请求继续使用冻结清图凭据。
+            var clear = (pending is null || samePending) && !Selected.CompletedQuests.Contains(questId) && !completedParentChild
                 ? samePending ? pending!.Plan.AuthoritativeClear : ReadClearedQuest(questId)?.Clear : null;
             return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion);
         });
@@ -68,7 +70,9 @@ internal sealed partial class GameSession
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
-        if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RewardSelector != selector || incomplete.Plan.Multiplier != multiplier))
+        if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RewardSelector != selector ||
+            incomplete.Plan.Multiplier != multiplier || incomplete.SelectionEpoch != captured.SelectionEpoch || incomplete.Phase != captured.Phase ||
+            incomplete.DungeonIdentity != captured.Identity || !ReferenceEquals(incomplete.Plan.Expected, expected)))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         QuestCompletionPreparation preparation;
         if (captured.Pending is { } pending && pending.SelectionEpoch == captured.SelectionEpoch && pending.Phase == captured.Phase &&
@@ -80,7 +84,8 @@ internal sealed partial class GameSession
                 growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth);
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !CanPublishQuestRefusal(rejection))
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||
+                !ReferenceEquals(pendingQuestCompletion,captured.Pending) || !CanPublishQuestRefusal(rejection))
                 throw new InvalidOperationException("领奖资源规划的原选角、角色快照或实例已失效");
             if (preparation.Outcome != QuestCompletionOutcome.Accepted || preparation.Plan is null)
                 return new QuestFinishResult(preparation.Outcome == QuestCompletionOutcome.InsufficientSpace &&

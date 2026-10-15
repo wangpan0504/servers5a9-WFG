@@ -29,7 +29,7 @@ internal static class DungeonPickupPlanning
                 return InventoryResult.Reject();
             return Currency(character, kind, core.Count, limits);
         }
-        return InventoryRewardGrantService.TryGrantCore(character, core, template, pieces, now);
+        return InventoryRewardGrantService.TryGrantCore(character, core, template, pieces, now, preferEmptyConsumableQuickSlot: true);
     }
 
     static InventoryResult Currency(Character character, CurrencyKind kind, int amount, GoldLimitCatalog limits)

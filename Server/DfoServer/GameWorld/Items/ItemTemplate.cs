@@ -23,6 +23,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     ushort Jobs, ushort RequiredSkill, string Name, string StackableType = "")
 {
     public int WeaponSubType { get; init; } = -1;
+    public int CreatureSubType { get; init; } = -1;
     public bool IsPremiumService { get; init; }
     public PremiumContract? AcquisitionContract { get; init; }
     public bool PersonalCargoForbidden { get; init; }

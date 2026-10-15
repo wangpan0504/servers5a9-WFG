@@ -25,16 +25,26 @@ internal sealed partial class GameSession
         var capture = owner.Execute(() =>
         {
             Character? character = Ready && Selected is not null && Phase is not (SessionPhase.Unselected or SessionPhase.Loading) &&
-                pendingRental is null && !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
+                pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null && pendingQuestQuickClear is not { CommitStarted: true } &&
+                !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
             var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
             var room = instance is not null && formalDungeon is { } dungeon
                 ? dungeon.Route.Rooms.Single(row => row.Room.Map == dungeon.Run.Snapshot.CurrentMap).Room : null;
+            // 加载事实记录的是Advance前epoch；当前phase和完整Map确认已加载，提交再复验当前RunIdentity。
+            bool loaded = instance is not null && formalDungeon is { Entry.IsClassExperience: false } current &&
+                current.Run.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
+                current.Run.LastLoadingFact is { } loading && loading.Map == current.Run.Snapshot.CurrentMap;
             return (Character: character, SelectionEpoch, Phase, Identity: instance, Entry: formalDungeon?.Entry,
-                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear, Room: room, Communication: CommunicationSources(Selected));
+                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear, Room: room, Loaded: loaded, Communication: CommunicationSources(Selected));
         });
         if (capture.Character is not { } expected) return null;
         var refusal = new QuestLifecycleReceipt(expected, null, owner.Generation, capture.SelectionEpoch, capture.Phase, capture.Identity, "任务资格不符");
+        // 未知提交结果只能恢复原请求；放弃或另一条件也不能覆盖原operation。
+        if (capture.Pending is { } unfinished && (unfinished.Plan.QuestId != questId || unfinished.Plan.Action != action ||
+            !ReferenceEquals(unfinished.Plan.Expected, expected) || unfinished.SelectionEpoch != capture.SelectionEpoch ||
+            unfinished.Phase != capture.Phase || unfinished.Identity != capture.Identity || unfinished.Condition != condition))
+            return refusal with { Reason = "前一任务事务尚待原请求恢复" };
         if (!quests.TryGet(questId, out var quest)) return refusal;
         // 觉醒券本地消费者补发关联活动任务32；只确认本次已提交券事务实际关闭的接取槽。
         if (action == QuestLifecycleAction.Giveup && expected.ActiveMainQuests.All(row => row.QuestId != questId) &&
@@ -75,7 +85,8 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !CanPublishQuestLifecycle(refusal)) throw new InvalidOperationException("任务规划的原选角或实际场景已失效");
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestQuickClear is { CommitStarted: true } ||
+                !ReferenceEquals(pendingQuestLifecycle,capture.Pending) || !CanPublishQuestLifecycle(refusal)) throw new InvalidOperationException("任务规划的原选角或实际场景已失效");
             pendingQuestLifecycle = new(plan, capture.SelectionEpoch, capture.Phase, capture.Identity, condition);
             var commit = repository.CommitQuestLifecycle(owner, plan);
             var receipt = refusal with { Character = commit.Character, Commit = commit, Outcome = QuestLifecycleOutcome.Committed, Reason = "任务事务已提交" };
@@ -147,6 +158,14 @@ internal sealed partial class GameSession
             if (condition is { Channel: null, Value: 0, Reserved: 0 } && capture.Phase == SessionPhase.Town &&
                 QuestClientSceneProgress.Matches(expected,quest,towns))
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
+            // 0102A20F→0203D070→event42→02011B80：33是演出终末/关闭通知，不含CMT或接取身份，也不签发清图。
+            if (condition is { Channel: null, Value: 0, Reserved: 0 } &&
+                QuestClientSceneProgress.DungeonCinematic(quest) && capture.Loaded &&
+                capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && capture.Entry is { } cinematicEntry &&
+                capture.Room?.Map.Id == quest.CinematicMapId &&
+                quest.Definition!.Dungeons.Any(row => row.DungeonId == cinematicEntry.DungeonId) &&
+                expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,cinematicEntry)))
+                return QuestLifecyclePlan.SetCondition(expected,quest,0);
             if (condition is not { Channel: null, Value: 0, Reserved: 0 } ||
                 capture.Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 quest.Definition is not { Diagnostics.Length: 0 } || quest.SubType != -1 ||
@@ -186,7 +205,7 @@ internal sealed partial class GameSession
     public QuestCycleReceipt? AdvanceQuestCycle(DateTimeOffset now) => owner.Execute(() =>
     {
         if (questCatalog is null || !Ready || Selected is not { } expected || expected.QuestCycleDay >= QuestCycle.Day(now) ||
-            pendingRental is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } || HasPendingQuestScene ||
+            pendingRental is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } || HasPendingQuestScene ||
             pendingDungeonContinuation is not null || HasPendingQuestReplay ||
             HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true)
             return null;

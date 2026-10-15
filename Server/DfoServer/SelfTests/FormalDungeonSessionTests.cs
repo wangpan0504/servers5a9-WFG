@@ -983,7 +983,8 @@ internal static class FormalDungeonSessionTests
             var empty = full.Read();
             var range = ItemSlotBoundService.Range(DfoServer.GameWorld.Items.ItemKind.Consumable, empty.Inventory.Expansion);
             var fullCore = InventoryRewardGrantService.Create(itemResources.Items.Get(1047), 1000);
-            var occupied = Enumerable.Range(range.Start, range.End - range.Start + 1)
+            // 地面消耗品也能进入快捷栏，满包场景须同时占满3–8，保留原拒绝/恢复边界。
+            var occupied = Enumerable.Range(3, 6).Concat(Enumerable.Range(range.Start, range.End - range.Start + 1))
                 .Select(slot => new InventoryItem(0, new(InventoryListType.Main, checked((short)slot)), fullCore)).ToImmutableArray();
             full.Repository.CommitInventory(full.Owner, empty, new(empty.Inventory,
                 empty.Inventory with { Items = empty.Inventory.Items.AddRange(occupied) }, "explicit-full-bag-fixture"));

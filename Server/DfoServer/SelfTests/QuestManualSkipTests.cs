@@ -4,6 +4,7 @@ using System.Net;
 using System.Text.Json;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Quests;
@@ -252,6 +253,56 @@ internal static class QuestManualSkipTests
                     output.Opcodes.SequenceEqual(new ushort[] {1431,574,21,356}) &&
                     f.Read().CompletedQuests.SequenceEqual([100,101,200,202]),"最后一批1431一次提交完整多轮实际答案和选择分支");
             }
+            foreach (bool quick in new[] { false,true })
+            foreach (bool completion in new[] { false,true })
+            {
+                var observed = new InterleavedRewards([]);
+                var definitions = new[] {
+                    QuestEligibilityTests.Quest(100) with { Rewards = quick ? [] : observed },
+                    Question(400) with { MinimumLevel=20 },
+                    QuestEligibilityTests.Quest(500) with { MinimumLevel=20, Rewards = quick ? observed : [] },
+                    QuestEligibilityTests.Quest(999) with { Grade="[invisible]",IntData=[-1],
+                        Definition=new([new("synchronization account quest",[new(0,1,null)],[])]) },
+                    QuestEligibilityTests.Quest(600) with { Grade="[side]" },
+                    QuestEligibilityTests.Quest(601) with { Grade="[side]",Condition="[seeking]",IntData=[10165055,1],
+                        Rewards=[new(0,2058,null),new(0,1,null)],Attributes=["not give exp quest"] }
+                };
+                using var f = Fixture(definitions,quick ? [Active(0,400,QuestQuestionProgress.Unanswered),Active(1,601)] : [Active(0,601)],capturePlans:true);
+                var before = f.Session.Selected!;
+                string table = completion ? "character_quest_completion_receipts" : "character_quest_lifecycle_receipts";
+                f.Sql($"CREATE TRIGGER interleaved_quest_abort AFTER INSERT ON {table} BEGIN SELECT RAISE(ABORT,'interleaved rollback'); END");
+                observed.BeforeRead = () =>
+                {
+                    // 资源读取发生在跳过入口释放owner后，精确插入另一业务的失败提交。
+                    if (completion) TestCheck.Reject<SqliteException>(() => f.Finish(ushort.MaxValue,601),"跳过规划期间领奖SQL晚期回滚");
+                    else TestCheck.Reject<SqliteException>(() => f.Change(600,QuestLifecycleAction.Accept),"跳过规划期间接取SQL晚期回滚");
+                    f.Sql("DROP TRIGGER interleaved_quest_abort");
+                };
+                TestCheck.Reject<InvalidOperationException>(() => Prepare(),"锁外跳过规划返回后必须重新检查另一路未决提交");
+                That(observed.Calls == 1 && ReferenceEquals(before,f.Session.Selected) && Same(before,f.Read()) &&
+                    Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts") == 0 && Scalar(f,$"SELECT count(*) FROM {table}") == 0,
+                    "确定性交错只触发一次；跳过未入库，原Selected、资产、任务与revision完整保留");
+                if (completion)
+                {
+                    var original = f.Lost!.FirstPlan!; var recovered = f.Finish(ushort.MaxValue,601);
+                    That(recovered.Receipt is { Commit.Duplicate: false } && f.Lost.SamePlan && f.Lost.Calls == 2 &&
+                        recovered.Receipt.Commit.AcceptanceId == original.AcceptanceId && Scalar(f,$"SELECT count(*) FROM {table}") == 1,
+                        "跳过被拒后原领奖冻结Plan及Acceptance只提交一次");
+                }
+                else
+                {
+                    var recovered = f.Change(600,QuestLifecycleAction.Accept)!;
+                    That(recovered.Commit is { Duplicate: false } && f.Lost!.SameLifecyclePlan && Scalar(f,$"SELECT count(*) FROM {table}") == 1,
+                        "跳过被拒后原接取冻结Plan与Operation仍可提交一次");
+                }
+                var prepared = Prepare();
+                That(quick ? prepared?.Commit is { Duplicate: false } : prepared?.Prepared is not null &&
+                    f.Session.FinishManualQuestSkip()?.Commit is { Duplicate: false },
+                    "原事务恢复后新的显式跳过可以正常提交，不留下伪pending");
+
+                QuestQuickClearReceipt? Prepare() => quick ? f.Session.QuickClearQuest(1007,f.Catalog,Connections()) :
+                    f.Session.PrepareManualQuestSkip(f.Catalog);
+            }
             using (var f = Fixture(QuestionDefinitions(chained:false),[],useCycles:true))
             {
                 var before = f.Read(); var original = f.Session.PrepareManualQuestSkip(f.Catalog)!.Prepared!;
@@ -352,31 +403,42 @@ internal static class QuestManualSkipTests
                 TestCheck.Reject<SqliteException>(() => f.Session.FinishManualQuestSkip(),"建立已开始提交的手册恢复状态");
                 f.Sql("DROP TRIGGER manual_pending_abort");
                 var next = plan.Expected.Position with { X=checked((ushort)(plan.Expected.Position.X+1)) };
-                That(f.Session.Move(new(next.X,next.Y,0,0,0,0)),"恢复状态下合法普通动作更新Selected，不重抽手册范围");
-                That(f.Session.PrepareManualQuestSkip(f.Catalog) is { Prepared:null } &&
+                That(!f.Session.Move(new(next.X,next.Y,0,0,0,0)) && ReferenceEquals(plan.Expected,f.Session.Selected) && Same(plan.Expected,f.Read()),
+                    "恢复状态阻止位置写入，保留原Selected、revision和存档供精确重试");
+                That(ReferenceEquals(f.Session.PrepareManualQuestSkip(f.Catalog)?.Prepared,plan) &&
                     f.Session.AdvanceQuestCycle(DateTimeOffset.UtcNow.AddDays(1)) is null &&
                     Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts") == 0 && f.Read().CompletedQuests.Length == 0,
-                    "Capture不能把已开始提交的失效pending误清；拒绝新准备并保留恢复边界");
+                    "被拒移动不会清除已开始提交的pending；原手册准备与切日门禁保持");
+                var restored = f.Session.FinishManualQuestSkip();
+                That(restored?.Commit is { Duplicate:false,ProjectionCurrent:true } && ReferenceEquals(restored.Commit.Plan,plan) &&
+                    Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts") == 1,
+                    "被拒移动后原OperationId和冻结计划可完整恢复一次");
                 f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
                 That(f.Session.AdvanceQuestCycle(DateTimeOffset.UtcNow.AddDays(1)) is not null,
-                    "明确重选结束原在线恢复上下文，真实持久状态仍可正常切日");
+                    "重选恢复已提交存档，真实持久状态仍可正常切日");
             }
-            using (var f = Fixture(PlainDefinitions(),[]))
+            using (var f = Fixture(PlainDefinitions(),[],useCycles:true))
             {
                 var plan = f.Session.PrepareManualQuestSkip(f.Catalog)!.Prepared!;
                 f.Sql("UPDATE characters SET revision=revision+1");
                 TestCheck.Reject<InvalidOperationException>(() => f.Session.FinishManualQuestSkip(),"旧revision不能提交手册规划");
                 That(Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts") == 0 && f.Read().CompletedQuests.Length == 0,
                     "过期规划不完成任何任务");
+                That(f.Session.AdvanceQuestCycle(DateTimeOffset.UtcNow.AddDays(1)) is null,
+                    "失效手册提交仍保留未决状态，不能让切日覆盖原恢复上下文");
+                f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+                That(f.Session.AdvanceQuestCycle(DateTimeOffset.UtcNow.AddDays(1)) is not null &&
+                    Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts") == 0 && f.Read().CompletedQuests.Length == 0,
+                    "明确重选结束失效pending，按持久revision恢复且不补做旧手册");
             }
 
-            QuestOrdinaryCompletionTests.Fixture Fixture(StoryQuest[] definitions,ActiveMainQuest[] active,bool useCycles=false) =>
+            QuestOrdinaryCompletionTests.Fixture Fixture(StoryQuest[] definitions,ActiveMainQuest[] active,bool useCycles=false,bool capturePlans=false) =>
                 new(towns,characters,skills,growth,parameters,items,definitions[0],materialCount:5,definitions:definitions,active:active,
                     configure:candidate => candidate with
                     {
                         Level=20,InitialLearning=SkillPointLedger.Synchronize(candidate.Job,candidate.GrowType,20,
                             candidate.InitialLearning with { Experience=growth.GetLevelStartExperience(20) },skills)
-                    },useCycles:useCycles);
+                    },useCycles:useCycles,loseResult:capturePlans);
             GameCommandRegistry Registry(QuestOrdinaryCompletionTests.Fixture fixture)
             {
                 var commands = new GameCommandRegistry();
@@ -458,6 +520,23 @@ internal static class QuestManualSkipTests
         That(!QuestQuickClearPlan.TryCreateManual(source,Guid.NewGuid(),choices,ImmutableDictionary<int,byte>.Empty,out _,out _,towns) &&
             !QuestQuickClearPlan.TryCreateManual(source,Guid.NewGuid(),choices,ImmutableDictionary<int,byte>.Empty.Add(600,1),out _,out _,towns),
             "独立区域支线问题不排进主线问答，也不能提交其回答");
+    }
+
+    // 仅测试资源容器：用一次读取回调安排锁外规划交错，不改变生产目录或增加时序等待。
+    sealed class InterleavedRewards(IReadOnlyList<QuestRewardToken> values) : IReadOnlyList<QuestRewardToken>
+    {
+        public Action? BeforeRead { get; set; }
+        public int Calls { get; private set; }
+        void Observe()
+        {
+            var callback = BeforeRead;
+            if (callback is null) return;
+            BeforeRead = null; Calls++; callback();
+        }
+        public int Count { get { Observe(); return values.Count; } }
+        public QuestRewardToken this[int index] { get { Observe(); return values[index]; } }
+        public IEnumerator<QuestRewardToken> GetEnumerator() { Observe(); return values.GetEnumerator(); }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     static StoryQuest[] PlainDefinitions()

@@ -28,7 +28,7 @@ internal sealed partial class GameSession
         var capture = owner.Execute(() =>
         {
             Character? current = Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
-                pendingRental is null && pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasPendingQuestScene &&
+                pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasPendingQuestScene &&
                 !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
                 formalDungeon?.Run.HasPendingSettlement != true ? Selected : null;
             // 新的明确1714可替换尚未提交的手册或已安装缓存；仅提交结果待恢复时保留互斥。
@@ -51,7 +51,8 @@ internal sealed partial class GameSession
         if(capture.Pending is null && !FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !CanPublishQuestQuickClear(receipt)) throw new InvalidOperationException("跳过规划的原选角或场景已失效");
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestCompletion is not null || !CanPublishQuestQuickClear(receipt) ||
+                !ReferenceEquals(pendingQuestQuickClear,capture.Pending)) throw new InvalidOperationException("跳过规划的原选角或场景已失效");
             pendingQuestQuickClear = new(plan!,capture.SelectionEpoch,capture.Phase,capture.Identity,CommitStarted:true);
             var commit = repository.CommitQuestQuickClear(owner,plan!);
             if (!commit.ProjectionCurrent) throw new InvalidOperationException("跳过已提交，但原角色状态已变化，需要重连恢复");
@@ -79,7 +80,8 @@ internal sealed partial class GameSession
         if(capture.Pending is null && !FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !CanPublishQuestQuickClear(receipt)) throw new InvalidOperationException("手册规划的原选角或场景已失效");
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestCompletion is not null || !CanPublishQuestQuickClear(receipt) ||
+                !ReferenceEquals(pendingQuestQuickClear,capture.Pending)) throw new InvalidOperationException("手册规划的原选角或场景已失效");
             pendingQuestQuickClear = capture.Pending ?? new(plan!,capture.SelectionEpoch,capture.Phase,capture.Identity);
             return receipt with { Prepared = plan, Reason = capture.Pending?.Committed is not null ? "手册已提交，保留同一回答恢复上下文" :
                 plan!.PendingQuestions.Length == 0 ? "等待手册1457最终动作" : "等待手册问题回答" };
@@ -124,7 +126,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,capture.Pending))
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestCompletion is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,capture.Pending))
                 throw new InvalidOperationException("任务券准备的原快照已失效");
             pendingQuestQuickClear = pending ?? new(plan!,capture.SelectionEpoch,capture.Phase,capture.Identity);
             return receipt with { Prepared = plan, Reason = plan!.PendingQuestions.Length == 0 ? "任务券等待真实515消费" : "任务券等待真实问题回答" };
@@ -194,7 +196,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,capture.Pending))
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestCompletion is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,capture.Pending))
                 throw new InvalidOperationException("任务券消费的原快照已失效");
             if (pending.Committed is { } installed)
                 return receipt with { Commit = installed with { Duplicate = true }, TicketAcknowledged = pending.TicketAcknowledged };
@@ -232,7 +234,7 @@ internal sealed partial class GameSession
         if (!pending.AnsweredBatch.IsDefaultOrEmpty && pending.AnsweredBatch.SequenceEqual(answers))
             return owner.Execute(() =>
             {
-                if (pendingRental is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,pending))
+                if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestCompletion is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,pending))
                     throw new InvalidOperationException("重复手册回答的原上下文已失效");
                 return pending.Plan.PendingQuestions.Length == 0 && !pending.Plan.IsTicket
                     ? CommitManualQuestSkip(pending,receipt,retainAnswered:true)
@@ -256,7 +258,7 @@ internal sealed partial class GameSession
         if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,pending))
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestCompletion is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,pending))
                 throw new InvalidOperationException("手册回答的原上下文已失效");
             var answered = new PendingQuestQuickClear(plan!,capture.SelectionEpoch,capture.Phase,capture.Identity,answers.ToImmutableArray());
             pendingQuestQuickClear = answered;
@@ -274,7 +276,7 @@ internal sealed partial class GameSession
         var receipt = new QuestQuickClearReceipt(expected,null,owner.Generation,capture.SelectionEpoch,capture.Phase,capture.Identity,"手册最终动作待提交");
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,pending))
+            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestCompletion is not null || !CanPublishQuestQuickClear(receipt) || !ReferenceEquals(pendingQuestQuickClear,pending))
                 throw new InvalidOperationException("手册最终动作的原选角或场景已失效");
             // 1430的mode1在最终1431 ACK后仍可发送1457；已答流程只消费上下文，不能二次提交/投影。
             if (pending.Committed is not null) { pendingQuestQuickClear = null; return null; }
@@ -299,7 +301,7 @@ internal sealed partial class GameSession
     (Character? Character,long SelectionEpoch,SessionPhase Phase,DungeonRunIdentity? Identity,PendingQuestQuickClear? Pending) CaptureManualSkip() => owner.Execute(() =>
     {
         Character? current = Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
-            pendingRental is null && pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasPendingQuestScene &&
+            pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasPendingQuestScene &&
             !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
             formalDungeon?.Run.HasPendingSettlement != true ? Selected : null;
         var identity = formalDungeon?.Run.Snapshot.Identity;
