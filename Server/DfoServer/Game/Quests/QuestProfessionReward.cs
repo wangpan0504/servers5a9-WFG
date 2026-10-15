@@ -5,7 +5,7 @@ using DfoServer.GameWorld.Quests;
 
 namespace DfoServer.Game.Quests;
 
-// 正常转职及逐级觉醒保留已学技能、快捷槽、指令、连招和额外点数；不调用GM重置。
+// 首次转职重建双树；逐级觉醒叠加赠技，均保留已核算的额外点数来源。
 internal static class QuestProfessionReward
 {
     public static byte Target(Character expected, StoryQuest quest, SkillLearningCatalog skills)
@@ -42,6 +42,20 @@ internal static class QuestProfessionReward
     {
         if (!learning.Initialized || learning.BonusSp is null || learning.BonusTp is null)
             throw new NotSupportedException("职业变化需要已核算的两树SP/TP来源");
+        if (expected.GrowType == 0 && target is >= 1 and <= 5)
+        {
+            // 旧端 set_grow_type 首次转职先清两树；觉醒不走此分支。新树按免费基线核算，不再扣旧加点费用。
+            var initialized = SkillLearning.Initialize(expected.Job, skills.FreeSkills(expected.Job, target), skills);
+            if (!initialized.Success)
+                throw new NotSupportedException("首次转职赠技无法初始化: " + initialized.Failure);
+            learning = initialized.State! with
+            {
+                Experience = learning.Experience,
+                BonusSp = learning.BonusSp,
+                BonusTp = learning.BonusTp,
+                ExpertContractExpiresAt = learning.ExpertContractExpiresAt
+            };
+        }
         var result = SkillPointLedger.Synchronize(expected.Job, target, level, learning, skills,
             skills.ActiveExpertContractLevels(learning.ExpertContractExpiresAt, now.ToUnixTimeSeconds()));
         result.Validate();

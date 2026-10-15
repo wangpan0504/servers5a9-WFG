@@ -553,7 +553,18 @@ internal static class QuestLifecycleTcpTests
             var candidate = CharacterCreation.Prepare("QuestCareer",resources.Characters.Get(14),resources.Towns.Room,
                 resources.Towns.InitialReturn,resources.Learning.Get);
             var learning = SkillPointLedger.Synchronize(14,0,15,candidate.InitialLearning with {
-                Experience = growth.GetLevelStartExperience(15) },resources.Learning);
+                Experience = growth.GetLevelStartExperience(15), BonusSp = 137, BonusTp = 11 },resources.Learning);
+            var active = learning.Trees[0].Skills.First(skill => resources.Learning.Get(14,skill.Id) is
+                { Type: SkillType.Active, SupportsOrdinarySpLearning: true, FixedLevel: null } resource &&
+                resource.GetMaximum(0) > skill.Level && resource.GetOrdinaryNextRequiredCharacterLevel(skill.Level) <= 15);
+            foreach (byte context in new byte[] { 0, 1 })
+            {
+                var paid = SkillLearning.Plan(14,0,15,learning,new(context,0,[new(active.Id,false,1)]),resources.Learning);
+                That(paid.Success,"TCP转职前两树保留实际消费的技能等级");
+                learning = paid.State!;
+            }
+            learning = learning with { Trees = learning.Trees.Select(tree => tree with
+                { Skills = tree.Skills.Select(skill => skill.Id == active.Id ? skill with { Command = "020304" } : skill).ToArray() }).ToArray() };
             new CharacterRepository(extra.Database).Create(owner,candidate with { Level = 15,
                 CompletedQuests = [3145,4873,3146,3147,3148,4875,3149,3150,3151,3152,3153,6929],InitialLearning = learning });
         }
@@ -589,7 +600,12 @@ internal static class QuestLifecycleTcpTests
                 if (point != boss) Move(path[Array.IndexOf(path,point)+1],0);
             }
             peer.Send(34,[34,0,36,27,255,255,1,0,255,255]);
-            That(peer.Expect(0,19).Body.Length > 0,"转职ACK前先装载同事务提交的完整技能快照");
+            var reset = SkillPacketsTests.DecodeInitialized(peer.Expect(0,19).Body);
+            byte committedLevel = checked((byte)(long)extra.Query("SELECT level FROM characters WHERE id=$p0",peer.Id)[0][0]!);
+            var free = SkillPointLedger.FreeBaseline(14,3,committedLevel,resources.Learning);
+            That(reset.All(tree => tree.Sp == resources.Learning.TotalSp(committedLevel) + 137 && tree.Tp == resources.Learning.TotalTp(committedLevel) + 11 &&
+                tree.Skills.Length == free.Count && tree.Skills.All(skill => free.GetValueOrDefault(skill.Id) == skill.Level && skill.Command.Length == 0)),
+                "转职ACK前完整19清除两树付费等级和旧指令，按CHR赠技并保留额外SP/TP");
             var result = Finished(peer).Body;
             That(result is [1,36,27,3,_,_,_,_,1,3,0,0],"真实6948任务返回mode1、巫女分支3和两页技能count");
             peer.Expect(0,37);

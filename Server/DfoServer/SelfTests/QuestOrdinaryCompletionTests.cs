@@ -495,10 +495,15 @@ internal static class QuestOrdinaryCompletionTests
         NewCharacter AtTransferLevel(NewCharacter candidate)
         {
             var state = SkillPointLedger.Synchronize(candidate.Job, 0, 15, candidate.InitialLearning with
-                { Experience = growth.GetLevelStartExperience(15), BonusSp = 137, BonusTp = 11 }, learning);
-            var paid = SkillLearning.Plan(candidate.Job, 0, 15, state, new(0,0,[new(5,false,2)]), learning);
-            That(paid.Success, "转职前保留实际已购买技能的合法来源");
-            state = paid.State! with { Trees = paid.State!.Trees.Select(tree => tree with
+                { Experience = growth.GetLevelStartExperience(15), BonusSp = 137, BonusTp = 11,
+                    ExpertContractExpiresAt = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds() }, learning);
+            foreach (byte context in new byte[] { 0, 1 })
+            {
+                var paid = SkillLearning.Plan(candidate.Job, 0, 15, state, new(context,0,[new(5,false,(byte)(context + 2))]), learning);
+                That(paid.Success, "转职前两树分别购买技能，保留真实点数来源");
+                state = paid.State!;
+            }
+            state = state with { Trees = state.Trees.Select(tree => tree with
                 { Skills = tree.Skills.Select(skill => skill.Id == 5 ? skill with { Command = "000302" } : skill).ToArray() }).ToArray() };
             return candidate with { Level = 15, InitialLearning = state,
                 Skills = state.Trees[0].Skills.Select(skill => new CharacterSkill(skill.Id,skill.Level)).OrderBy(skill => skill.Id).ToArray() };
@@ -518,9 +523,10 @@ internal static class QuestOrdinaryCompletionTests
             That(result.Receipt?.Commit is { ProfessionGrowType: 1, PreviousGrowType: 0, Clear: null } && after.GrowType == 1 &&
                 after.Revision == before.Revision + 1 && after.CompletedQuests.Contains(100) && after.ActiveMainQuests.Length == 0 &&
                 after.Learning.BonusSp == 137 && after.Learning.BonusTp == 11 &&
-                before.Learning.Trees.Zip(after.Learning.Trees).All(pair => pair.First.Skills.All(skill =>
-                    pair.Second.Skills.Any(saved => saved.Id == skill.Id && saved.Slot == skill.Slot && saved.Level >= skill.Level && saved.Command == skill.Command))) &&
-                Same(before with { Inventory = after.Inventory },before), "正常转职同事务保留两树已购买技能、原槽、指令、额外来源和所有物品");
+                after.Learning.Experience == before.Learning.Experience &&
+                after.Learning.ExpertContractExpiresAt == before.Learning.ExpertContractExpiresAt &&
+                Same(before with { Inventory = after.Inventory },before), "正常转职同事务保留经验、契约、额外点数和所有物品");
+            VerifyReset(after, 1);
             f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             That(Same(after,f.Session.Selected!) && f.Finish(ushort.MaxValue).Outcome == QuestFinishOutcome.AlreadyCompleted && f.Receipts == 1,
                 "转职重登恢复完整领域状态，重复请求不重置技能或发奖");
@@ -539,6 +545,53 @@ internal static class QuestOrdinaryCompletionTests
             That(QuestCompletionPlan.Prepare(before with { GrowType = 1 },profession,ushort.MaxValue,f.Catalog,parameters,items.Items,
                 items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Outcome == QuestCompletionOutcome.Rejected,
                 "已转职角色不能再次领取首次转职奖励");
+
+            var highLevel = SkillPointLedger.Synchronize(0,0,95,before.Learning with
+                { Experience = growth.GetLevelStartExperience(95) },learning,learning.ExpertContractLevels);
+            var tpSkill = PvfScript.List(pvf.ReadText("skill/swordmanskill.lst")).Keys.Select(id => learning.Get(0,(ushort)id))
+                .First(skill => skill.SupportsTpLearning && skill.GetMaximum(0) >= 2 && skill.Prerequisites!.Count == 0);
+            foreach (byte context in new byte[] { 0, 1 })
+            {
+                var paid = SkillLearning.Plan(0,0,95,highLevel,new(context,0,[new(tpSkill.SkillId,false,2)]),learning);
+                That(paid.Success && paid.State!.Trees[context].Tp < highLevel.Trees[context].Tp, "延后转职的两树均真实消耗TP");
+                highLevel = paid.State!;
+            }
+            var reset = QuestProfessionReward.Prepare(before with { Level = 95, Learning = highLevel },1,95,highLevel,learning,DateTimeOffset.UtcNow);
+            VerifyReset(before with { Level = 95, GrowType = 1, Learning = reset }, 1);
+        }
+        foreach (byte branch in new byte[] { 1, 2, 3, 4, 5 })
+        {
+            NewCharacter LadyBeforeTransfer(NewCharacter _)
+            {
+                var candidate = CharacterCreation.Prepare("Ordinary",characters.Get(11),towns.Room,towns.InitialReturn,learning.Get);
+                var state = SkillPointLedger.Synchronize(11,0,15,candidate.InitialLearning with
+                    { Experience = growth.GetLevelStartExperience(15), BonusSp = 137, BonusTp = 11 },learning);
+                foreach (byte context in new byte[] { 0, 1 })
+                {
+                    var bought = SkillLearning.Plan(11,0,15,state,new(context,0,[new(31,false,1)]),learning);
+                    That(bought.Success, "女鬼剑未转职两树可按真实上限学习唤魔蛇腹剑");
+                    state = bought.State!;
+                }
+                return candidate with { Level = 15, InitialLearning = state,
+                    Skills = state.Trees[0].Skills.Select(skill => new CharacterSkill(skill.Id,skill.Level)).ToArray() };
+            }
+            using var f = new Fixture(towns,characters,learning,growth,parameters,items,profession with { Rewards = Rows(branch) },
+                materialCount: 0,configure: LadyBeforeTransfer);
+            f.Change(100,QuestLifecycleAction.Condition,new(null,0,0));
+            That(f.Finish(ushort.MaxValue).Outcome == QuestFinishOutcome.Committed, "女鬼剑正常首次转职 " + branch);
+            var after = f.Read();
+            VerifyReset(after,branch);
+            That(after.Learning.Trees.All(tree => tree.Skills.Any(skill => skill.Id == 31) == (branch == 3)),
+                "唤魔蛇腹剑仅由契魔者CHR重新赠送，其余分支不残留被动 " + branch);
+        }
+        void VerifyReset(Character character, byte branch)
+        {
+            var free = SkillPointLedger.FreeBaseline(character.Job,branch,character.Level,learning,
+                learning.ActiveExpertContractLevels(character.Learning.ExpertContractExpiresAt,DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            That(character.Learning.Trees.All(tree => tree.Sp == learning.TotalSp(character.Level) + 137 &&
+                tree.Tp == learning.TotalTp(character.Level) + 11 && tree.Skills.Count == free.Count &&
+                tree.Skills.All(skill => free.GetValueOrDefault(skill.Id) == skill.Level && skill.Command.Length == 0) &&
+                tree.Combos.Count == 0), "首次转职两树仅有CHR及固定赠技，清指令/连招并全额返还已用SP/TP");
         }
         using (var f = new Fixture(towns,characters,learning,growth,parameters,items,profession with { Attributes = [] },materialCount: 0,
             loseResult: true,configure: AtTransferLevel))
