@@ -7,17 +7,26 @@
 首次运行所需的 Script.pvf；仅在运行目录尚无该文件时复制，不替换已有资源。
 .PARAMETER SingleFile
 将启动器和服务端托管依赖合并为一个 S5A9Server.exe，默认输出 dist/win-x64-single。
+.PARAMETER PackageVersion
+仅与 SingleFile 同用，生成可分发 ZIP 和 SHA256，默认输出 dist/releases。输出目录必须为空，不读取运行数据。
 #>
 [CmdletBinding()]
 param(
     [ValidateNotNullOrEmpty()][string]$OutputDirectory = 'dist/win-x64',
     [string]$PvfPath,
-    [switch]$SingleFile
+    [switch]$SingleFile,
+    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?$')]
+    [ValidateLength(1, 64)][string]$PackageVersion
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
+$package = $PSBoundParameters.ContainsKey('PackageVersion')
+$windows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+if ($package -and (-not $SingleFile -or $PSBoundParameters.ContainsKey('PvfPath'))) {
+    throw '分发打包必须使用 -SingleFile，不能传入 PvfPath。'
+}
 if ($SingleFile -and -not $PSBoundParameters.ContainsKey('OutputDirectory')) {
-    $OutputDirectory = 'dist/win-x64-single'
+    $OutputDirectory = if ($package) { 'dist/releases' } else { 'dist/win-x64-single' }
 }
 $program = if ($SingleFile) { 'S5A9Server.exe' } else { 'DfoServer.exe' }
 
@@ -28,7 +37,8 @@ function Get-FullPath([string]$Path) {
 
 function Test-Within([string]$Path, [string]$Parent) {
     return $Path.Equals($Parent, [StringComparison]::OrdinalIgnoreCase) -or
-        $Path.StartsWith($Parent.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+        $Path.StartsWith($Parent.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)
 }
 
 function Assert-NoLinks([string]$Path) {
@@ -49,9 +59,17 @@ function Invoke-Dotnet([string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "dotnet 执行失败，退出码：$LASTEXITCODE" }
 }
 
-if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw '本脚本发布 Windows x64 本机测试包，请在 Windows 上执行。' }
+function Remove-Stage {
+    $resolvedStage = (Resolve-Path -LiteralPath $stage).Path
+    if (-not (Test-Within $resolvedStage $buildRoot) -or $resolvedStage -eq $buildRoot) {
+        throw '临时目录边界检查失败，未清理。'
+    }
+    Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+}
+
+if (-not $windows -and -not $package) { throw '本机运行目录只能在 Windows 上构建；非 Windows 仅支持 -SingleFile -PackageVersion。' }
 $output = Get-FullPath $OutputDirectory
-if ((Test-Within $root $output) -or $output -eq [IO.Path]::GetPathRoot($output).TrimEnd('\')) {
+if ((Test-Within $root $output) -or $output -eq [IO.Path]::GetPathRoot($output).TrimEnd([IO.Path]::DirectorySeparatorChar)) {
     throw '输出目录不能是磁盘根目录、仓库根目录或仓库的父目录。'
 }
 foreach ($name in @('Server', 'Tools', 'Docs', '.git', '.idea', '.forgejo', 'build')) {
@@ -62,6 +80,9 @@ foreach ($name in @('Server', 'Tools', 'Docs', '.git', '.idea', '.forgejo', 'bui
 Assert-NoLinks $output
 if (Test-Path -LiteralPath $output) {
     if (-not (Test-Path -LiteralPath $output -PathType Container)) { throw '输出路径必须是目录。' }
+    if ($package -and @(Get-ChildItem -LiteralPath $output -Force).Count) {
+        throw '分发打包要求空输出目录，不能使用已有运行目录或覆盖旧包。'
+    }
     if (@(Get-ChildItem -LiteralPath $output -Force).Count -and
         -not (Test-Path -LiteralPath (Join-Path $output $(if ($SingleFile) { $program } else { 'DfoServer.dll' })) -PathType Leaf)) {
         throw '已有非空目录与本次发布模式不匹配；请选择空目录或同一模式的运行目录。'
@@ -100,6 +121,7 @@ $launcherArguments = @('publish', (Join-Path $root 'Tools/ServerLauncher/ServerL
     '-p:EnableCompressionInSingleFile=true',
     '--artifacts-path', (Join-Path $stage 'artifacts'), '-o', $launcherPayload)
 if ($SingleFile) { $launcherArguments += '-p:BundleServer=true' }
+if ($package) { $launcherArguments += @('-p:EnableWindowsTargeting=true', '-m:1') }
 Invoke-Dotnet $launcherArguments
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $launcherPayload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -Destination $payload
@@ -111,17 +133,61 @@ foreach ($name in $requiredFiles) {
         throw "发布文件缺失：$name；临时产物保留在 $stage"
     }
 }
-if ($SingleFile) {
+if (-not $windows) {
+    Write-Warning '本次为 Windows 交叉编译，未执行 Windows EXE 启动及内置 GM 检查；不代表客户端验收通过。'
+} elseif ($SingleFile) {
     $serverCheck = Start-Process -FilePath (Join-Path $payload $program) -ArgumentList '--server','--help' -WindowStyle Hidden -Wait -PassThru
     if ($serverCheck.ExitCode -ne 0) { throw "内置服务端启动检查失败；临时产物保留在 $stage" }
 } else {
     & (Join-Path $payload $program) --help
     if ($LASTEXITCODE -ne 0) { throw "发布程序启动检查失败；临时产物保留在 $stage" }
 }
-$launcherCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--help' -WindowStyle Hidden -Wait -PassThru
-if ($launcherCheck.ExitCode -ne 0) { throw "启动器检查失败；临时产物保留在 $stage" }
-$gmCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--selftest-gm' -WindowStyle Hidden -Wait -PassThru
-if ($gmCheck.ExitCode -ne 0) { throw "内置GM网页检查失败；临时产物保留在 $stage" }
+if ($windows) {
+    $launcherCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--help' -WindowStyle Hidden -Wait -PassThru
+    if ($launcherCheck.ExitCode -ne 0) { throw "启动器检查失败；临时产物保留在 $stage" }
+    $gmCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--selftest-gm' -WindowStyle Hidden -Wait -PassThru
+    if ($gmCheck.ExitCode -ne 0) { throw "内置GM网页检查失败；临时产物保留在 $stage" }
+}
+
+if ($package) {
+    # 只收集明确列出的程序与说明，不压缩运行目录，避免夹带资源、存档、配置或日志。
+    $revision = & git -C $root rev-parse HEAD
+    if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') { throw '无法确定源码提交。' }
+    $changes = & git -C $root status --porcelain --untracked-files=normal
+    if ($LASTEXITCODE -ne 0) { throw '无法检查源码状态。' }
+    $archiveRoot = Join-Path $stage 'archive'
+    New-Item -ItemType Directory -Path $archiveRoot | Out-Null
+    Copy-Item -LiteralPath (Join-Path $payload $program) -Destination $archiveRoot
+    $metadata = [ordered]@{
+        version = $PackageVersion; commit = $revision; modified = [bool]$changes
+        runtime = 'win-x64'; configuration = 'Release'; windowsStartupChecked = $windows
+    }
+    [IO.File]::WriteAllText((Join-Path $archiveRoot 'build-info.json'),
+        ($metadata | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    $instructions = @"
+S5A9Server $PackageVersion (Windows x64)
+解压到独立目录，双击 S5A9Server.exe 打开启动器，无需另装 .NET。
+自行准备匹配客户端的 Script.pvf，并在启动器中选择资源和存档目录。
+本包不包含客户端、PVF、玩家数据库、日志及本机配置。
+更新前正常停服并关闭启动器，只替换 EXE，保留原 Data、Logs 和配置。
+命令行帮助：S5A9Server.exe --server --help
+源码提交与 Windows 启动检查状态见 build-info.json；自动检查不代替客户端验收。
+"@
+    [IO.File]::WriteAllText((Join-Path $archiveRoot 'README.txt'), $instructions, [Text.UTF8Encoding]::new($true))
+    New-Item -ItemType Directory -Path $output -Force | Out-Null
+    $archive = Join-Path $output "S5A9Server-$PackageVersion-win-x64.zip"
+    Compress-Archive -LiteralPath @((Join-Path $archiveRoot $program),
+        (Join-Path $archiveRoot 'README.txt'), (Join-Path $archiveRoot 'build-info.json')) -DestinationPath $archive
+    $stream = [IO.File]::OpenRead($archive)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { $hash = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $sha256.Dispose() }
+    [IO.File]::WriteAllText(($archive + '.sha256'), "$hash  $([IO.Path]::GetFileName($archive))`n", [Text.UTF8Encoding]::new($false))
+    Remove-Stage
+    Write-Host "分发包：$archive"
+    Write-Host "SHA256：$archive.sha256"
+    return
+}
 
 $data = Join-Path $output 'Data'
 New-Item -ItemType Directory -Path $data -Force | Out-Null
@@ -198,11 +264,7 @@ try {
 }
 
 # 仅删除本次创建、且经绝对路径核对位于 build 内的临时产物。
-$resolvedStage = (Resolve-Path -LiteralPath $stage).Path
-if (-not (Test-Within $resolvedStage $buildRoot) -or $resolvedStage -eq $buildRoot) {
-    throw '临时目录边界检查失败，未清理。'
-}
-Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+Remove-Stage
 if ($SingleFile) {
     Write-Host "构建完成。单程序：$output\$program"
     Write-Host '分发程序只需复制这个 EXE，无需附带 DLL、Resources、Sqlite 或启动脚本。PVF 和存档仍由启动界面选择。'

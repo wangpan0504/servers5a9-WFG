@@ -1,0 +1,61 @@
+name: 打包 Windows 单 EXE Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '留空自动递增（首次 v0.1.0）；也可填写 v1.0.0 等新版本号'
+        required: false
+        type: string
+
+concurrency:
+  group: server-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: ${{ forgejo.ref == 'refs/heads/master' }}
+    runs-on: codeberg-medium
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:10.0-noble
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VERSION: ${{ inputs.version }}
+      SOURCE_COMMIT: ${{ forgejo.sha }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      MSBUILDDISABLENODEREUSE: '1'
+    steps:
+      - name: 检出本次选择的 master 提交
+        shell: bash
+        env:
+          REPOSITORY_URL: ${{ forgejo.server_url }}/${{ forgejo.repository }}.git
+        run: |
+          set -eu
+          git init .
+          git remote add origin "$REPOSITORY_URL"
+          git fetch --depth=1 origin "$SOURCE_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+
+      - name: 检查版本号与仓库发布入口
+        id: version
+        env:
+          FORGEJO_TOKEN: ${{ forgejo.token }}
+        run: ./Tools/Publish-Release.ps1 -Version $env:VERSION -Commit $env:SOURCE_COMMIT -CheckOnly
+
+      - name: Release 无资源基础检查
+        run: ./Tools/Check-Development.ps1 -Configuration Release
+
+      - name: 沿用单 EXE 构建入口生成 ZIP 与 SHA256
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: ./Tools/Build-Server.ps1 -SingleFile -PackageVersion $env:PACKAGE_VERSION
+
+      - name: 上传完整附件并发布到 Releases
+        env:
+          FORGEJO_TOKEN: ${{ forgejo.token }}
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: ./Tools/Publish-Release.ps1 -Version $env:PACKAGE_VERSION -Commit $env:SOURCE_COMMIT
