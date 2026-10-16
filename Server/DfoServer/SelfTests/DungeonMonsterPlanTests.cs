@@ -22,6 +22,23 @@ internal static class DungeonMonsterPlanTests
         That(ordinaryPlan.Monsters.Select(monster => monster.CandidateLevel).SequenceEqual([7, 3]) &&
             ordinaryPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 1, 0 }) &&
             ReferenceEquals(ordinaryPlan.Monsters[0].Source, relative), "本服普通相对和绝对等级分别计算，完整冠军原行和类型保留");
+        var display = source with { RankKind = "[boss]", Modifiers = ["[displayhuntdummy]"] };
+        var displayPlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [source, display] },99,10,playerTeam:0);
+        That(displayPlan.Monsters[1] is { SourceOrdinal:1, ObjectKey:11, SpawnType:3, Team:100,
+                IsFriendly:false, IsBlocking:false, CanReportDeath:false, IsBoss:false, IsScriptedBoss:false } &&
+            ReferenceEquals(displayPlan.Monsters[1].Source,display),
+            "显示控制演员保留原Boss生成与敌方阵营，但不冒充战斗、dummy或清房阻挡");
+        foreach (var invalid in new[]
+        {
+            display with { RankKind="[normal]" }, display with { PlacementKind="[random]" },
+            display with { NpcParameter=0 },
+            display with { Modifiers=["[displayhuntdummy]","[displayhuntdummy]"] },
+            display with { Modifiers=["[dummy]","[displayhuntdummy]"] },
+            display with { Modifiers=["[displayhuntdummy]","[dummy]"] },
+            display with { Modifiers=["[future]"] }
+        })
+            Reject<NotSupportedException>(()=>DungeonMonsterPlan.FromRoom(room with { Monsters=[invalid] },99,10),
+                "显示标记只接纳已确认的单标记fixed Boss，未知及组合修饰仍拒绝");
         var npc = source with { RankKind = "[boss]", Modifiers = ["[NPC]"], NpcParameter = 1069 };
         foreach (int parameter in new[] { 0, -1, 1069, int.MinValue, int.MaxValue })
         {

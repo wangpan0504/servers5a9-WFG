@@ -20,6 +20,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("class-change", ClassChangeTcpTests.RunAsync),
+        ("stadium-quest", MetroQuestEntryTcpTests.RunStadiumAsync),
         ("titles", TitleTcpTests.RunAsync),
         ("adventure", AdventureCoreTcpTests.RunAsync),
         ("adventure-names", AdventureNameTcpTests.RunAsync),

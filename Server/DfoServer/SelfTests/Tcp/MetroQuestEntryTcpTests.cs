@@ -17,13 +17,34 @@ namespace DfoServer.Testing;
 
 internal static class MetroQuestEntryTcpTests
 {
+    internal static async Task RunStadiumAsync(ServerOptions options,string root,TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(options,Path.Combine(root,"stadium-quest"),resources:resources);
+        await fixture.StartAsync();
+        Verify(fixture,resources,SelfTestCatalogs.Growth(resources.Archive,resources.Learning),Drain,stadiumOnly:true);
+        static void Drain(TcpPeer peer,Action<WirePacket>? observe)
+        {
+            peer.SendBarrier();
+            for (int at=0;at<64;at++)
+            {
+                var packet=peer.Read();
+                if (packet.Kind==1 && packet.Opcode==1347) { Bytes(packet.Body,[1],"竞技场事件有界处理完成"); return; }
+                if (packet.Kind==0 && packet.Opcode==1760) { peer.ReadCardMembershipState(packet); continue; }
+                That(packet.Kind==0,"竞技场事件后无遗漏失败ACK");
+                observe?.Invoke(packet);
+            }
+            throw new InvalidDataException("竞技场通知超出有界数量");
+        }
+    }
+
     // 共用quests组的隔离服务；入口等级与前置可准备，目标接取、回答、会面和移动全部走wire。
     internal static void Verify(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
-        Action<TcpPeer, Action<WirePacket>?> drain)
+        Action<TcpPeer, Action<WirePacket>?> drain,bool stadiumOnly=false)
     {
         int checks = Count;
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);
+        if (stadiumOnly) { VerifyStadium(); return; }
         VerifyFaction(0, 3868, 3871, 3873);
         VerifyFaction(11, 3869, 3872, 3874);
         VerifySequential(3971, [(3972, 455)], 3973, 310, 88);
@@ -37,6 +58,100 @@ internal static class MetroQuestEntryTcpTests
         VerifyGustClearChain();
         VerifyBellFeathers();
         Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、父子阶段、3640首子入场、层/warp、3988→3991连续交付、3987→3992材料及3993→3995→3998掉落（不代表完整剧情通关）");
+
+        void VerifyStadium()
+        {
+            int startChecks=Count;
+            foreach (ushort request in new ushort[] {6304,0})
+            {
+                string account="stadium-"+request;
+                var quest=resources.Quests.Get(6304);
+                var entrance=MiddleQuestEntryTests.Entrance(resources.Towns,quest,9609);
+                var created=Create(account,"Stadium"+request,0,95,entrance.Completed.ToHashSet(),entrance.Position);
+                using var peer=Open(fixture,account);
+                Select(peer,created); Accept(peer,6304,1);
+                string acceptance=Identity(peer.Id,6304);
+                var maze=dungeons.Get(9609).Mazes.Single(row=>row.ConnectsQuest(6304));
+                uint next=checked((uint)(long)fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
+                var plans=Plans(maze,peer.Id,next,dungeons.Get(9609).BasisLevel);
+                var map=Enter(peer,6304,9609,request,maze);
+                int enabled=0,confirmed=0,emptyRetirements=0,deathGrowth=0;
+                ushort? focus=null;
+                for (byte x=0;x<5;x++)
+                {
+                    var plan=plans.Single(row=>row.Room.Map.Id==655510+x);
+                    Actors(peer,map,plan,6304);
+                    FormalDungeonTcpTests.Load(peer); Drain();
+                    if (x==4)
+                    {
+                        That(map[18]==2 && U32(map,27)==109008549 && map[32]==0 && map[40]==0 &&
+                            U32(map,49)==63821 && map[54]==3 && map[62]==1,
+                            "真实29末房保留真敌和显示演员，独立确认原品级及显示排除位");
+                        var display=plan.Monsters.Single(row=>row.MonsterId==63821);
+                        if (request==0)
+                        {
+                        string assets=Assets();
+                        int beforeRetire=emptyRetirements,beforeGrowth=deathGrowth;
+                        peer.Send(39,FormalDungeonTcpTests.Death(display.ObjectKey,peer.Id,95)); Drain();
+                        That(Assets()==assets && Scalar(peer.Id,6304)==1 && enabled==0 && confirmed==0 &&
+                            emptyRetirements==beforeRetire+1 && deathGrowth==beforeGrowth,
+                            "真实39显示演员退场不写成长、掉落、清图或115/31");
+                        }
+                    }
+                    foreach (var actor in plan.Monsters.Where(row=>row.IsBlocking))
+                    {
+                        byte[] death=FormalDungeonTcpTests.Death(actor.ObjectKey,peer.Id,checked((byte)actor.CandidateLevel));
+                        peer.Send(39,death); Drain();
+                        string committed=Assets();
+                        peer.Send(39,death); Drain();
+                        That(Assets()==committed,"真实TCP死亡重试不重复任何资产或清图凭据");
+                        if (x==4) That(actor.MonsterId==109008549 && focus==actor.ObjectKey && enabled==1 && confirmed==1,
+                            "真敌芮兹死亡只发布一次31，115实际key不引用显示63821");
+                    }
+                    if (x<4)
+                    {
+                        That(enabled==0 && Scalar(peer.Id,6304)==1,"前四房死亡不提前清图6304");
+                        map=MoveMap(peer,new(x+1,0),0);
+                    }
+                }
+                That(Scalar(peer.Id,6304)==0 && Identity(peer.Id,6304)==acceptance &&
+                    fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0 AND quest_id=6304",peer.Id) is [[1L]],
+                    "完整真实TCP五房形成原接取唯一ClearFact和条件达成");
+                byte[] report= DungeonSettlementProtocolTests.Report(peer.Id,99);
+                peer.Send(46,report); Drain();
+                That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
+                    "真实46沿既有结算事务提交一次");
+                string settled=Assets(); peer.Send(46,report); Drain();
+                That(Assets()==settled,"真实46精确重试不重复结算");
+                Finish(peer,6304,3);
+                That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=6304",peer.Id) is [[0L]],
+                    "真实34交付6304并关闭原活动槽");
+                Return(peer); Cleanup(peer,created,account);
+
+                string Assets()=>State(peer.Id)+fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index",peer.Id)+
+                    fixture.Snapshot("SELECT i.* FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 ORDER BY i.item_uid",peer.Id)+
+                    fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY event_id",peer.Id)+
+                    fixture.Snapshot("SELECT * FROM character_quest_clear_receipts WHERE character_id=$p0 ORDER BY quest_id",peer.Id)+
+                    fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0 ORDER BY instance_id",peer.Id);
+                void Drain()=>drain(peer,packet=>
+                {
+                    if(packet.Opcode==37) deathGrowth++;
+                    if(packet.Opcode==38 && U16(packet.Body)==plans.Last().Monsters.Single(row=>row.MonsterId==63821).ObjectKey)
+                    {
+                        ushort key=U16(packet.Body);
+                        Bytes(packet.Body,[(byte)key,(byte)(key>>8),0,0,0,0,255,0,0],"显示演员退场沿既有空38应答，不构造掉落");
+                        emptyRetirements++;
+                    }
+                    if(packet.Opcode==31) { Bytes(packet.Body,[],"竞技场只发完整空31"); enabled++; }
+                    if(packet.Opcode==115)
+                    {
+                        That(packet.Body.Length==4 && packet.Body[0]==1 && packet.Body[1]==1,"竞技场115保持原确认格式");
+                        focus=U16(packet.Body,2); confirmed++;
+                    }
+                });
+            }
+            Console.WriteLine($"PASS {Count-startChecks} 中央竞技场6304显式/普通0真实TCP五房、显示演员、清图、结算及交付（合成C2S，非实机）");
+        }
 
         void VerifyGustClearChain()
         {
@@ -1479,7 +1594,7 @@ internal static class MetroQuestEntryTcpTests
             That(U32(map, offset + 2) == (actor.Source?.SpecialChild?.SourceOrdinal ?? actor.SourceOrdinal) &&
                 U16(map, offset + 6) == actor.ObjectKey && U32(map, offset + 8) == actor.MonsterId &&
                 map[offset + 12] == actor.CandidateLevel && map[offset + 13] == actor.SpawnType &&
-                map[offset + 21] == (actor.IsSpecialChild || actor.IsFriendly ? 1 : 0),
+                map[offset + 21] == (actor.IsSpecialChild || actor.IsFriendly || actor.Source?.IsDisplayHuntDummy == true ? 1 : 0),
                 "29逐行核原ordinal、独立key、模板、等级、类型与清房排除位：" + quest);
         }
         for (int at = 0; at < expected.SpecialObjects.Count; at++)

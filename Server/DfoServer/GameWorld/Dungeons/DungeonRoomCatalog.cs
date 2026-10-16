@@ -11,6 +11,9 @@ internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawV
     public int? NpcParameter { get; init; }
     // 冠军/命名品级的附加数量独立于八整数；当前只恢复空附加集合，不截断未知正数量。
     public IReadOnlyList<string> Modifiers { get; init; } = Array.Empty<string>();
+    // 屏外显示控制演员保留原Boss行；仅接纳已确认的单标记固定声明。
+    public bool IsDisplayHuntDummy => NpcParameter is null && PlacementKind == "[fixed]" && RankKind == "[boss]" &&
+        Modifiers is ["[displayhuntdummy]"];
     public int? RankParameterCount { get; init; }
     public DungeonRoomSpecialObject? SpecialParent { get; init; }
     public DungeonRoomSpecialChild? SpecialChild { get; init; }

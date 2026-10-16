@@ -55,7 +55,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (raw.Count != 8 || raw[0] != source.MonsterId || source.MonsterId < 0
                 || source.PlacementKind != "[fixed]" || source.RankKind is not ("[normal]" or "[champion]" or "[super champion]" or "[boss]") ||
                 !(source.NpcParameter.HasValue ? source.Modifiers is ["[NPC]"] :
-                    source.Modifiers.Count == 0 || source.RankKind == "[boss]" && source.Modifiers is ["[dummy]"])
+                    source.Modifiers.Count == 0 || source.RankKind == "[boss]" && source.Modifiers is ["[dummy]"] || source.IsDisplayHuntDummy)
                 || raw[6] is < 0 or > 255 || raw[7] is < 0 or > 255)
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的 monster 资源行 {index} 不是已支持的固定怪物条件");
             // 最后两项是参考资源中的掉落数量声明，不能把数量2误当成怪物创建条件。
@@ -85,7 +85,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 // 02A15E31保留显式team；02C9F43C相对本人比较，不把0或非100统一当作友军。
                 Team = team,
                 IsFriendly = friendly,
-                IsBlocking = !source.ScriptedRetirement && !friendly
+                IsBlocking = !source.ScriptedRetirement && !friendly && !source.IsDisplayHuntDummy
             });
             nextKey++;
         }
