@@ -33,7 +33,7 @@ internal static class TownPresenceTcpTests
             Bytes(aEntry[3].Body, Position(beta.Id, 622, 196), "peer entrance position");
             string selectionBefore = fixture.Snapshot();
             alpha.Send(15, new byte[4]);
-            var select = alpha.Batch((0, 6), (1, 15), (0, 3), (0, 27));
+            var select = alpha.Batch((0, 6), (1, 15), (0, 3), (0, 1536), (0, 27));
             Bytes(select[2].Body, [1, (byte)alpha.Id, (byte)(alpha.Id >> 8), 1], "选图本人从Town状态0变为State1");
             beta.SendBarrier();
             beta.Expect(0, 6, Build(w => w.Write(alpha.Id)));

@@ -39,6 +39,8 @@ internal sealed partial class GameSession
         public (PreparedDungeonDeath Death, DungeonExperienceReward Reward, DateTimeOffset At)? PendingDeathReward { get; set; }
         public DfoServer.Game.Tutorials.TutorialCheckpointPlan? PendingTutorialClear { get; set; }
         public ushort? TutorialClearTarget { get; set; }
+        public AssaultModeSelection? Assault { get; init; }
+        public AssaultModeRewardServices? AssaultRewards { get; init; }
     }
     FormalDungeon? formalDungeon;
     bool PreservesTrainingItems => Phase == SessionPhase.Dungeon && formalDungeon?.Entry.IsTrainingRoom == true;
@@ -70,6 +72,21 @@ internal sealed partial class GameSession
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null)
             return null;
+        // #233 强袭：只有 ACK1547 授权过的任务副本可绕过选图地图选项，改以主副本(7300)在当前选图中核对。
+        var assault = owner.Execute(() => CurrentAssaultAuthorization(expected, dungeonId, questId));
+        if (assault is not null)
+        {
+            if (retry is not null || classExperience) return null;
+            DungeonDefinition assaultDefinition;
+            try { assaultDefinition = catalog.Get(checked((int)dungeonId)); }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return null; }
+            if (!assaultDefinition.TryGetDesignatedDifficulty(out byte designated) ||
+                difficulty != designated && difficulty != AssaultModeEntryPolicy.ClientAssaultDifficulty) return null;
+            difficulty = designated;
+            if (!AssaultModeEntryPolicy.ConsumptionPlan(expected.Inventory, assault.Selection.Requirement, assault.Pieces,
+                DateTimeOffset.UtcNow).Accepted) return null;
+        }
+        uint optionDungeon = assault?.Selection.Parent ?? dungeonId;
         if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
             selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return null;
@@ -81,7 +98,7 @@ internal sealed partial class GameSession
         bool trainingRoom = dungeonId == 5000 && questId == 0 && difficulty == 0;
         if (!training && !trainingRoom && !classExperience && (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
             area.DungeonWorldMap is not { } worldMap || !towns.DungeonMaps.TryGetValue(worldMap,out var selectionMap) ||
-            selectionMap.Error is not null || !selectionMap.Options.Any(option => option.DungeonId == dungeonId &&
+            selectionMap.Error is not null || !selectionMap.Options.Any(option => option.DungeonId == optionDungeon &&
                 (option.QuestId == -1 || (option.InProgress ? expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) :
                     done.Contains(option.QuestId)))) ||
             !area.Map(done).DungeonGates.Any(gate =>
@@ -109,7 +126,8 @@ internal sealed partial class GameSession
                 questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return null;
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes);
-        return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null };
+        return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null,
+            Dungeon = assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
         bool HasOriginalTerminalClear(ActiveMainQuest original) =>
@@ -249,7 +267,24 @@ internal sealed partial class GameSession
         if (prepared.Dungeon.Entry.IsClassExperience && (prepared.ClassExperienceSelection is not { IsClassExperience: true } ||
             !ReferenceEquals(CurrentDungeonSelection, prepared.ClassExperienceSelection))) return null;
         // 先持久预留key/attempt；通知失败也不回绕key或复用旧身份。
-        var committed = repository.ReserveDungeonAttempt(owner,prepared.Character,prepared.NextKey);
+        var character = prepared.Character;
+        var installing = prepared.Dungeon;
+        System.Collections.Immutable.ImmutableArray<InventorySlot> assaultSlots = [];
+        if (installing.Assault is { } assault)
+        {
+            // #233 入场提交才扣强袭材料：授权必须仍是同一份选择，按当前背包重新规划后先提交扣除，再重基入场revision。
+            if (assaultAuthorization is not { } authorization || !ReferenceEquals(authorization.Selection, assault) ||
+                authorization.CharacterId != character.Id) return null;
+            var spent = AssaultModeEntryPolicy.ConsumptionPlan(character.Inventory, assault.Requirement, authorization.Pieces, DateTimeOffset.UtcNow);
+            if (!spent.Accepted || spent.Plan is not { } plan) return null;
+            character = repository.CommitInventory(owner, character, plan);
+            assaultSlots = plan.ChangedSlots;
+            var rebased = installing.Entry with { CharacterRevision = checked(character.Revision + 1) };
+            installing.Run.RebasePreparedRevision(rebased.CharacterRevision);
+            installing = installing with { Entry = rebased };
+            assaultAuthorization = null;
+        }
+        var committed = repository.ReserveDungeonAttempt(owner,character,prepared.NextKey);
         prepared.Dungeon.Ground.PublishPassiveEntry();
         if (formalDungeon is { } previous)
         {
@@ -258,12 +293,12 @@ internal sealed partial class GameSession
             previous.Ground.ExpireRun();
         }
         Selected = committed;
-        formalDungeon = prepared.Dungeon;
+        formalDungeon = installing;
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
         CurrentDungeonSelection = null;
         SetState(SessionPhase.Loading);
-        return FormalReceipt();
+        return FormalReceipt() with { AssaultConsumedSlots = assaultSlots };
     }
 
     bool CanReplaceSettledDungeon(FormalDungeon? dungeon, FormalDungeonReceipt receipt) =>
@@ -498,7 +533,8 @@ internal sealed partial class GameSession
         else
         {
             var before = Selected.Inventory;
-            var after = !dungeon.Entry.IsTutorial && !PreservesTrainingItems && Selected.Level >= 6 &&
+            // 转职体验(7142)带[no fatigue]且承诺不改资产：未通关退出不写魔王虚弱期限。
+            var after = !dungeon.Entry.IsTutorial && !dungeon.Entry.IsClassExperience && !PreservesTrainingItems && Selected.Level >= 6 &&
                 dungeon.Run.Phase == SinglePlayerDungeonPhase.Dungeon
                 ? before with { StaminaUntil = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 600 } : before;
             var back = dungeon.OrdinaryReturnPosition ?? Selected.Position;

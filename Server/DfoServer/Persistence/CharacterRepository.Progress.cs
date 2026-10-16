@@ -6,7 +6,7 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
-    // 单字段进度编辑保留原合同；GM等级、转职入口使用ResetProgress原子重建并递增revision。
+    // 单字段进度编辑保留原合同；GM等级（保留技能重算余额）、转职（重建技能树）入口使用ResetProgress原子提交并递增revision。
     public Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit request) => owner.Execute(() =>
     {
         if (request.Account != owner.Account)
@@ -31,6 +31,13 @@ internal sealed partial class CharacterRepository
                 cmd.Parameters.AddWithValue("$bonus", request.Primary);
                 cmd.CommandText = "UPDATE character_skill_point_sources SET bonus_sp=$bonus WHERE character_id=$id";
                 if (cmd.ExecuteNonQuery() != 1) throw new InvalidDataException("额外SP来源缺失");
+                break;
+            case CharacterProgressField.BonusTp:
+                if (!current.Learning.BonusTp.HasValue)
+                    throw new InvalidDataException("旧角色TP来源尚未接管，请先重新进入角色；不覆盖未知余额");
+                cmd.Parameters.AddWithValue("$bonus", request.Primary);
+                cmd.CommandText = "UPDATE character_tp_sources SET bonus_tp=$bonus WHERE character_id=$id";
+                if (cmd.ExecuteNonQuery() != 1) throw new InvalidDataException("额外TP来源缺失");
                 break;
             case CharacterProgressField.ExpertContract:
                 cmd.Parameters.AddWithValue("$expires", DateTimeOffset.UtcNow.ToUnixTimeSeconds() + (request.Primary == 0 ? -1L : request.Primary));

@@ -103,7 +103,7 @@ public static class ServerApplication
             log?.Write("startup", new { Stage = stage, State = "complete", Pid = Environment.ProcessId,
                 options.ListenAddress, options.AdvertisedAddress, options.ChannelPort, options.GamePort, options.GmPort,
                 options.PvfPath, Database = Path.Combine(options.DataDirectory, "game.db"), options.LogDirectory,
-                PacketCapture = options.PacketCaptureDirectory ?? "disabled", options.DevelopmentDungeonEntryProbe });
+                PacketCapture = options.PacketCaptureDirectory ?? "disabled", options.DevelopmentDungeonEntryProbe, options.TeleportPotionGates });
             using var pvf = Load("PVF archive", () => PvfArchive.Open(options.PvfPath));
 
             if (command.Kind == ServerCommandKind.InspectDungeon)

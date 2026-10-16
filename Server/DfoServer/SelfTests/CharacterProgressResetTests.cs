@@ -59,13 +59,20 @@ internal static class CharacterProgressResetTests
             before = repository.CommitLearning(owner, before, bought.State!, bought.TotalSp, bought.TotalTp);
             var command = SkillCustomization.Commands(0, before.Learning, [new(5, "020304")], false, skills);
             before = repository.CommitLearning(owner, before, command.State!);
+            var tree0 = before.Learning.Trees.Single(tree => tree.Context == 0);
+            int spent = skills.TotalSp(95) + 137 - tree0.Sp;
+            var ghost = tree0.Skills.Single(skill => skill.Id == 5);
             var plan50 = reset.Prepare(before, new(CharacterProgressField.Level, owner.Account, before.Name, 50, 0));
             var after = repository.ResetProgress(owner, plan50);
-            That(after.Level == 50 && after.Learning.Experience == growth.GetLevelStartExperience(50) && after.Revision == before.Revision + 1 &&
-                after.Learning.Trees.All(tree => tree.Sp == skills.TotalSp(50) + 137 && tree.Tp == skills.TotalTp(50) + 7), "改等级原子重算经验、两树SP/TP并保留额外来源");
-            That(after.Learning.Trees.All(tree => tree.Skills.All(skill => skill.Command == "")) && after.Position == before.Position &&
+            That(spent > 0 && after.Level == 50 && after.Learning.Experience == growth.GetLevelStartExperience(50) && after.Revision == before.Revision + 1 &&
+                after.Learning.Trees.All(tree => tree.Sp == skills.TotalSp(50) + 137 - (tree.Context == 0 ? spent : 0) && tree.Tp == skills.TotalTp(50) + 7),
+                "改等级原子重算经验、两树SP/TP=新总额+额外来源−已学费用");
+            That(after.Learning.Trees.Single(tree => tree.Context == 0).Skills.Contains(ghost) && ghost.Command == "020304" &&
+                after.Position == before.Position &&
                 after.Return == before.Return && after.AcceptedStoryLevel == 10 && JsonSerializer.Serialize(after.Inventory) == JsonSerializer.Serialize(before.Inventory) &&
-                after.CompletedQuests.SequenceEqual(before.CompletedQuests), "重置清除指令，保留剧情、位置、任务和资产");
+                after.CompletedQuests.SequenceEqual(before.CompletedQuests), "改等级保留已学技能、槽位、指令，以及剧情、位置、任务和资产");
+            Reject(() => reset.Prepare(after, new(CharacterProgressField.Level, owner.Account, after.Name, 1, 0)), "降到低于已学技能需求等级整笔拒绝");
+            That(Same(after, repository.LoadCharacter(owner, after.Slot)), "拒绝降级不改存档");
             Reject(() => repository.ResetProgress(owner, plan50), "旧重置规划不能重复提交");
             var changed = repository.ResetProgress(owner, reset.Prepare(after, new(CharacterProgressField.Grow, owner.Account, after.Name, 33, 0)));
             That(changed.GrowType == 33 && changed.Level == 50 && changed.Learning.Experience == after.Learning.Experience &&
@@ -107,7 +114,10 @@ internal static class CharacterProgressResetTests
             var dk = roles[9];
             var combo = SkillCustomization.Combo(9, dk.Learning, 0, [new(118, new ushort[] { 46 })], skills);
             dk = repository.CommitLearning(owner, dk, combo.State!);
-            var dkReset = repository.ResetProgress(owner, reset.Prepare(dk, new(CharacterProgressField.Level, owner.Account, dk.Name, 60, 0)));
+            var dkLevel = repository.ResetProgress(owner, reset.Prepare(dk, new(CharacterProgressField.Level, owner.Account, dk.Name, 60, 0)));
+            That(dkLevel.Level == 60 && dkLevel.Learning.Trees[0].Combos.Single(value => value.Root == 118).Children.SequenceEqual(new ushort[] { 46 }),
+                "黑暗武士改等级保留自定义连招");
+            var dkReset = repository.ResetProgress(owner, reset.Prepare(dkLevel, new(CharacterProgressField.Grow, owner.Account, dk.Name, dkLevel.GrowType, 0)));
             That(dkReset.Learning.Trees.All(tree => tree.Skills.Where(skill => skills.Get(9, skill.Id).HasComboDeclaration).All(skill => skill.Slot < 6) &&
                 tree.Combos.Count == 6) && !dkReset.Learning.Trees[0].Combos.Single(value => value.Root == 118).Children.SequenceEqual(new ushort[] { 46 }),
                 "黑暗武士重置恢复资源默认连招及根槽位");

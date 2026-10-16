@@ -134,6 +134,51 @@ internal static class DevelopmentGmTests
             }
 
             string Level(string name, int level) => DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("level " + name + " " + level, "gm"), progress: progress);
+
+            void KeepSkillsOnLevel()
+            {
+                using (var owner = owners.Acquire("keep", () => { }))
+                    repo.Create(owner, new("GmKeep", towns.Room, towns.InitialReturn));
+                DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("level GmKeep 20", "keep"), progress: progress);
+                var base20 = Read("keep", "GmKeep");
+                That(base20.Learning.BonusSp is int && base20.Learning.BonusTp is int, "新角色额外SP/TP来源已登记");
+                int bonusSp = base20.Learning.BonusSp ?? 0;
+                var planned = global::DfoServer.Game.Skills.SkillLearning.Plan(base20.Job, base20.GrowType, base20.Level, base20.Learning, new(0, 0, [new(5, false, 2)]), learning);
+                That(planned.Success, "GM改等级前学习鬼斩两级");
+                Character learned;
+                using (var owner = owners.Acquire("keep", () => { }))
+                    learned = repo.CommitLearning(owner, base20, planned.State!, learning.TotalSp(20) + bonusSp);
+                var ghost = learned.Learning.Trees[0].Skills.Single(skill => skill.Id == 5);
+                int spent20 = learning.TotalSp(20) + bonusSp - learned.Learning.Trees[0].Sp;
+                That(spent20 > 0, "学习消耗了SP");
+                That(DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("level GmKeep 30", "keep"), progress: progress).Contains("保留已学技能"), "level 回执说明保留技能");
+                var up = Read("keep", "GmKeep");
+                That(up.Level == 30 && up.Learning.Trees[0].Skills.Contains(ghost) &&
+                    up.Learning.Trees[0].Sp == learning.TotalSp(30) + bonusSp - spent20 &&
+                    up.Learning.Trees[1].Sp == learned.Learning.Trees[1].Sp + learning.TotalSp(30) - learning.TotalSp(20) &&
+                    up.Learning.BonusSp == bonusSp && up.Learning.BonusTp == base20.Learning.BonusTp, "升级保留已学技能与槽位，SP=新总额+额外−已用");
+                var down = DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("level GmKeep 25", "keep"), progress: progress);
+                That(Read("keep", "GmKeep") is { Level: 25 } d25 && d25.Learning.Trees[0].Skills.Contains(ghost) &&
+                    d25.Learning.Trees[0].Sp == learning.TotalSp(25) + bonusSp - spent20 && down.StartsWith("OK"), "门槛内降级保留技能并按新总额重算");
+                int required = learning.Get(base20.Job, 5).GetOrdinaryNextRequiredCharacterLevel(ghost.Level - 1);
+                That(required > 1, "鬼斩当前等级有高于1级的门槛");
+                var before = Read("keep", "GmKeep");
+                var rejected = DevelopmentGm.Answer("level GmKeep 1", "keep", repo, owners, _ => null, progress: progress);
+                var after = Read("keep", "GmKeep");
+                That(rejected.StartsWith("ERR") && rejected.Contains("需求等级") && after.Level == 25 && after.Revision == before.Revision &&
+                    after.Learning.Trees[0].Skills.Contains(ghost), "降级低于已学技能门槛整笔拒绝，不截断技能");
+                That(DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("tp GmKeep 9", "keep"), progress: progress).StartsWith("OK") &&
+                    Read("keep", "GmKeep").Learning.BonusTp == 9, "tp 设置额外TP来源");
+                Reject(() => DevelopmentRequest.Parse("tp GmKeep 50001", "keep"), "tp 50001 rejected");
+                Reject(() => DevelopmentRequest.Parse("tp GmKeep -1", "keep"), "negative tp rejected");
+                That(DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("level GmKeep 40", "keep"), progress: progress).StartsWith("OK") &&
+                    Read("keep", "GmKeep") is { } tp40 && tp40.Learning.Trees.All(tree => tree.Tp == learning.TotalTp(40) + 9) && tp40.Learning.Trees[0].Skills.Contains(ghost),
+                    "改等级把额外TP计入总额");
+                DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("grow GmKeep 0", "keep"), progress: progress);
+                var reset = Read("keep", "GmKeep");
+                That(reset.Learning.Trees[0].Skills.Single(skill => skill.Id == 5).Level < ghost.Level &&
+                    reset.Learning.Trees.All(tree => tree.Sp == learning.TotalSp(40) + bonusSp && tree.Tp == learning.TotalTp(40) + 9), "grow 仍重置技能树并恢复完整额度");
+            }
             var written = Level("GmHero", 40);
             Character Read(string account, string name)
             {
@@ -149,6 +194,7 @@ internal static class DevelopmentGmTests
             That(written.Contains("level=40") && written.Contains("rev=1") && written.Contains("已写入"), "level response reports the committed row");
             That(DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("story GmHero 7", "gm"), progress: progress).Contains("story=7") && Read("gm", "GmHero").AcceptedStoryLevel == 7, "story level persists");
             That(DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("grow GmHero 33", "gm"), progress: progress).Contains("grow=33") && Read("gm", "GmHero") is { GrowType: 33, Level: 40, Revision: 2 }, "转职重置技能与点数并递增revision");
+            KeepSkillsOnLevel();
             DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-add GmHero 10100", "gm"), progress: progress);
             DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-add GmHero 10100", "gm"), progress: progress);
             DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-add GmHero 12", "gm"), progress: progress);

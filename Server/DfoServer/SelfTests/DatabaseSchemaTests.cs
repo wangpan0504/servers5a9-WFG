@@ -192,6 +192,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(failed);
 
             VerifyReleasedMigrations(root);
+            VerifyAcceptanceAssaultV47(root);
             VerifyCubeContractMigration(root);
             VerifyQuestRentalCompletionMigration(root);
             VerifyQuestRentalCompletionMigration(root,45);
@@ -1789,6 +1790,32 @@ internal static class DatabaseSchemaTests
         );
         """;
 
+    // #233 验收构建以v47发布强袭表：恢复该库真实结构（有强袭表，缺master v47角色栏、v48装扮、v49魔王列），须补跑v47起并保留强袭行。
+    private static void VerifyAcceptanceAssaultV47(string root)
+    {
+        string path = Path.Combine(root, "acceptance-assault-v47.db");
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            RewindDevilServices(db);
+            Execute(db, "ALTER TABLE characters DROP COLUMN avatar_expansion");
+            Execute(db, "ALTER TABLE account_wallets DROP COLUMN character_slots");
+            Execute(db, "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql,'CHECK(slot BETWEEN 0 AND 61)','CHECK(slot BETWEEN 0 AND 31)') WHERE name='characters'; " +
+                "UPDATE sqlite_schema SET sql=replace(replace(sql,'CHECK(list_type<>1 OR slot_index<420)','CHECK(list_type<>1 OR slot_index<210)'),'CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419))','CHECK(slot_index BETWEEN 0 AND 351)') WHERE name='character_inventory_slots'; " +
+                "PRAGMA writable_schema=OFF; PRAGMA schema_version=9000; PRAGMA user_version=47");
+            Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('accept',0,'Accept',3,38,1,450,234,0,2,60,0)");
+            Execute(db, "INSERT INTO character_assault_daily VALUES(1,'accept',20000,2,1)");
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                Query(db, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='character_slots'") is 1L &&
+                Query(db, "SELECT avatar_expansion||':'||devil_usage FROM characters WHERE name='Accept'") is "105:[]" &&
+                Query(db, "SELECT clear_count||':'||hidden_count FROM character_assault_daily") is "2:1" &&
+                Query(db, "PRAGMA integrity_check") is "ok",
+                "验收v47强袭库补跑角色栏/装扮/魔王迁移并保留强袭次数");
+    }
+
     private static void VerifyReleasedMigrations(string root)
     {
         foreach (int oldVersion in Enumerable.Range(1, SqliteMigrations.CurrentVersion - 1))
@@ -1797,7 +1824,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                RewindDevilServices(db);
+                if (oldVersion < 49) RewindDevilServices(db);
                 if (oldVersion < 46) RewindQuestDungeonAlternatives(db);
                 if (oldVersion < 45)
                 {
@@ -1860,6 +1887,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 37) DropAuctionSchema(db);
                 if (oldVersion < 44) DropGuildSchema(db);
                 if (oldVersion < 39) Execute(db, "DROP TABLE IF EXISTS character_teleport_cooldowns");
+                if (oldVersion < 50) Execute(db, "DROP TABLE IF EXISTS character_assault_daily");
                 if (oldVersion < 41) Execute(db, "DROP TABLE IF EXISTS cube_premium");
                 if (oldVersion < 38) RemoveAdventureNames(db);
                 if (oldVersion < 3)

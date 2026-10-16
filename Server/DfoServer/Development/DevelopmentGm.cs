@@ -127,7 +127,9 @@ internal static partial class DevelopmentGm
                     var before = repository.LoadCharacter(lease, target.Slot);
                     return repository.ResetProgress(lease, reset.Prepare(before, edit));
                 });
-                return "OK " + Summary(character) + " 已写入。双技能树已重建，SP/TP恢复为当前等级的完整额度，保留已登记的额外点数。客户端回到选角并再次进入后刷新。";
+                return "OK " + Summary(character) + (request.Action == DevelopmentAction.Level
+                    ? " 已写入。保留已学技能、快捷栏、指令与连招，SP/TP按新等级总额（含额外点数）减已学费用重算。客户端回到选角并再次进入后刷新。"
+                    : " 已写入。双技能树已重建，SP/TP恢复为当前等级的完整额度，保留已登记的额外点数。客户端回到选角并再次进入后刷新。");
             }
             var updated = live is null ? WithLease(owners, request.Account, lease => repository.UpdateProgress(lease, request.ToProgressEdit())) : live.UpdateProgress(request.ToProgressEdit());
             return "OK " + Summary(updated) + Written;

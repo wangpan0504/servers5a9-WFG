@@ -86,7 +86,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         if (doubled) paid = DoubleItems(paid);
         return new(paid,
             golden ? 0 : prices.Price(dungeon.BasisLevel ?? throw new InvalidDataException("付费牌没有基准等级")), golden,membership,
-            membership.BlackDiamondActive(now.ToUnixTimeSeconds()) ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now) : null)
+            membership.BlackDiamondActive(now.ToUnixTimeSeconds()) && !dungeon.DisableBlackDiamondCardReward
+                ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now) : null)
         {
             DoublePaidItems = doubled,
             GoldCardEventRevision = goldCardEvent?.Schedule.Revision ?? 0

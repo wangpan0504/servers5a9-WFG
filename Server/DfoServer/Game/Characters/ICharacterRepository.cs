@@ -65,4 +65,6 @@ internal interface ICharacterRepository
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
     Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan);
     InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId);
+    DfoServer.Game.Dungeons.AssaultDailyCounts LoadAssaultDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);
+    DfoServer.Game.Dungeons.AssaultDailyCommit CommitAssaultClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, bool hidden, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
 }

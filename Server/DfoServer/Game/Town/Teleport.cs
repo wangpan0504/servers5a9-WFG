@@ -7,6 +7,9 @@ using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Town;
 
+// Open（默认）：瞬间移动药剂不按 `[int data]` 地下城选择地图白名单限制有 `[dungeon gate]` 的区域；Pvf：恢复严格白名单。
+internal enum TeleportPotionGateMode { Open, Pvf }
+
 internal sealed record TeleportCooldowns(long PotionUntil = 0, long AuraUntil = 0);
 internal sealed record PotionTeleportRequest(short Slot, int ItemId, byte Mode, Location Target);
 internal sealed record SoloTeleportRequest(int CharacterId, int NpcId, Location Target);
@@ -20,7 +23,8 @@ internal sealed record TeleportResult(string Reason, TeleportReceipt? Receipt = 
     public bool Accepted => Receipt is not null;
 }
 
-internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definitions, Func<int, ItemTemplate> item, TimeProvider? clock = null)
+internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definitions, Func<int, ItemTemplate> item, TimeProvider? clock = null,
+    TeleportPotionGateMode potionGates = TeleportPotionGateMode.Open)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     public SoloTeleportDefinition? Aura(Character character, long now)
@@ -44,7 +48,8 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
         if (character.TeleportCooldowns.PotionUntil > now) return ("potion-cooldown", null);
         var access = Destination(character, request.Target);
         if (access != "ready") return (access, null);
-        if (towns.Areas[(request.Target.Town, request.Target.Area)].DungeonWorldMap is { } map && !definition.DungeonMaps.Contains(map))
+        if (potionGates == TeleportPotionGateMode.Pvf &&
+            towns.Areas[(request.Target.Town, request.Target.Area)].DungeonWorldMap is { } map && !definition.DungeonMaps.Contains(map))
             return ("potion-dungeon-map-unavailable", null);
         var deleted = InventoryDeleteService.Plan(character.Inventory, slot, request.ItemId, 1);
         if (!deleted.Accepted) return ("potion-locked", null);

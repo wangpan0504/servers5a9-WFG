@@ -204,7 +204,8 @@ internal static class SkillProtocolTcpTests
             var trees = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
             That(trees[0].Skills.Single(skill => skill.Id == 3) == new LearnedSkill(3, 3, 1) &&
                 trees[0].Skills.Single(skill => skill.Id == 2) == new LearnedSkill(0, 2, 1) &&
-                trees[0].Skills.Single(skill => skill.Id == 1).Slot == 198 &&
+                // GM level 保留技能与快捷栏：原第一格的技能7被移到198，技能1仍在第二格。
+                trees[0].Skills.Single(skill => skill.Id == 7).Slot == 198 && trees[0].Skills.Single(skill => skill.Id == 1).Slot == 1 &&
                 trees[1].Skills.All(skill => skill.Id is not (2 or 3)), "重登保留新技能补空位、主动手动扩展位置和独立另一树");
             ExitBeforeOfflineGm(peer);
         }

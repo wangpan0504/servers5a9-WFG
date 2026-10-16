@@ -134,7 +134,15 @@ internal static class SqliteMigrations
             Execute(db, tx, "ALTER TABLE characters ADD COLUMN devil_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(devil_usage) AND json_type(devil_usage)='array')");
             Execute(db, tx, "ALTER TABLE characters ADD COLUMN stamina_until INTEGER NOT NULL DEFAULT 0 CHECK(stamina_until>=0)");
         }),
+        new(50, "强袭模式每日通关次数", static (db, tx) => Execute(db, tx, AssaultDailySchema)),
     ];
+
+    internal static bool IsAcceptanceAssaultV47(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT (SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_assault_daily')*10+(SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='character_slots')";
+        return query.ExecuteScalar() is 10L;
+    }
 
     static void UpgradeCharacterSlots(SqliteConnection db, SqliteTransaction tx)
     {
@@ -336,6 +344,17 @@ internal static class SqliteMigrations
         using var reader = command.ExecuteReader();
         if (reader.Read()) throw new InvalidDataException("场景清图迁移不能保全旧清图或完成外键");
     }
+
+    internal const string AssaultDailySchema = """
+        CREATE TABLE IF NOT EXISTS character_assault_daily(
+          character_id INTEGER PRIMARY KEY,
+          account TEXT NOT NULL,
+          day INTEGER NOT NULL,
+          clear_count INTEGER NOT NULL CHECK(clear_count BETWEEN 0 AND 255),
+          hidden_count INTEGER NOT NULL CHECK(hidden_count BETWEEN 0 AND 255),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
 
     internal const string TeleportCooldownSchema = """
         CREATE TABLE IF NOT EXISTS character_teleport_cooldowns(
@@ -1132,6 +1151,8 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        // #233 验收构建曾把强袭表作为v47发布：该库v47有强袭表却缺master的角色栏扩展，视为v46，重跑v47起（v50强袭建表幂等）。
+        if (version == 47 && current >= 50 && IsAcceptanceAssaultV47(db, tx)) version = 46;
         bool existingFatigue = version == 14 && HasPublishedFatigue(db, tx);
         if (version == 34 && current >= 36 && DungeonCardClaimSchema.IsPreviousLayout(db,tx))
         {
@@ -1246,6 +1267,7 @@ internal static class SqliteMigrations
         "SELECT account,expires_at FROM account_expert_contracts LIMIT 0",
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
         "SELECT character_id,account,potion_until,aura_until FROM character_teleport_cooldowns LIMIT 0",
+        "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",

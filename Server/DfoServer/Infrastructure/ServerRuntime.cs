@@ -129,9 +129,11 @@ internal static class ServerRuntime
         IGameCommandModule? questReplay = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
         DungeonPassiveDropPolicy? passiveDrops = null;
+        AssaultModeCatalog? assaultMode = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
             var dungeonCatalog = DungeonCatalog.Load(pvf);
+            assaultMode = AssaultModeCatalog.Load(pvf, dungeonCatalog);
             var rooms = DungeonRoomCatalog.Load(pvf);
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;
@@ -178,8 +180,8 @@ internal static class ServerRuntime
             new AdventureCapsuleHandler(new Game.Adventure.AdventureCapsuleService(adventureCatalog, growth), levelProjection, clock),
             new SkillHandler(learning, log),
             new TownHandler(projection, log),
-            new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock),
-                projection, inventoryProjection, presence, log),
+            new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
+                options.TeleportPotionGates), projection, inventoryProjection, presence, log),
             new SettingsHandler(settings, log, projection),
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
             new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, projection, online),
@@ -209,6 +211,7 @@ internal static class ServerRuntime
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),
             new DungeonSelectionHandler(projection, log, tutorials),
+            new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new ImageCommunicationHandler(imageCommunication, quests, log),
             new QuestHiddenHandler(quests,log),

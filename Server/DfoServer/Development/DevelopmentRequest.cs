@@ -21,6 +21,7 @@ internal enum DevelopmentAction
     Gold,
     Item,
     Sp,
+    Tp,
     Contract,
     BlackDiamond,
     GoldCard,
@@ -71,7 +72,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["quest-chain"] = (DevelopmentAction.QuestChain, true, 1, 1),
         ["quest-batch"] = (DevelopmentAction.QuestBatch, true, 1, 1)
     };
-    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | event status/on/off/auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量> [强化0-31] | item-info <道具ID> | items <角色> | wallet <角色> | currency <角色> <revive|win|cera|token|happy|rental|*-cube|*-soul> <set|add|sub> <数量> | item-categories | item-search <偏移> <最低等级> <最高等级> <稀有度|*> <分类|*> [关键字] | grant <角色> <道具ID> <数量> <强化> <锻造> <mail|direct> [amp:<类型1-4>:<异次元值>] | set-grant <角色> <套装编号> <强化> <锻造> <mail|direct> [amp:<类型>:<值>] | item-amplify <角色> <容器:位置:UID> <amp:<类型0-4>:<值>> <等级0-31> | item-delete <角色> <容器:位置:UID,…> | item-clear <角色> <容器> | mails <角色> | mail-delete <角色> <邮件ID,…|all> | quest-search <角色> [关键字] | quest-chain <角色> <任务> | quest-batch <角色> <任务,…> | cash-shop-expiration [on|off]（忽略绝对日期，默认on） | cash-shop-usable-period [on|off]（忽略相对期限，默认off） | infinite-fatigue [on|off]（显示满疲劳且不扣点，默认on）。调试开关仅在线。其他账号在命令前加 account <账号>。";
+    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95>（保留技能） | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | tp <角色> <额外TP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | event status/on/off/auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量> [强化0-31] | item-info <道具ID> | items <角色> | wallet <角色> | currency <角色> <revive|win|cera|token|happy|rental|*-cube|*-soul> <set|add|sub> <数量> | item-categories | item-search <偏移> <最低等级> <最高等级> <稀有度|*> <分类|*> [关键字] | grant <角色> <道具ID> <数量> <强化> <锻造> <mail|direct> [amp:<类型1-4>:<异次元值>] | set-grant <角色> <套装编号> <强化> <锻造> <mail|direct> [amp:<类型>:<值>] | item-amplify <角色> <容器:位置:UID> <amp:<类型0-4>:<值>> <等级0-31> | item-delete <角色> <容器:位置:UID,…> | item-clear <角色> <容器> | mails <角色> | mail-delete <角色> <邮件ID,…|all> | quest-search <角色> [关键字] | quest-chain <角色> <任务> | quest-batch <角色> <任务,…> | cash-shop-expiration [on|off]（忽略绝对日期，默认on） | cash-shop-usable-period [on|off]（忽略相对期限，默认off） | infinite-fatigue [on|off]（显示满疲劳且不扣点，默认on）。调试开关仅在线。其他账号在命令前加 account <账号>。";
     public static DevelopmentRequest Parse(string line, string defaultAccount)
     {
         if (string.IsNullOrWhiteSpace(line) || line.Length > 512)
@@ -127,6 +128,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             "grow" when tokens.Length == i + 3 => Numbered(DevelopmentAction.Grow, account, tokens[i + 1], tokens[i + 2]),
             "grow" when tokens.Length == i + 4 => Growth(account, tokens[i + 1], tokens[i + 2], tokens[i + 3]),
             "sp" when tokens.Length == i + 3 => Numbered(DevelopmentAction.Sp, account, tokens[i + 1], tokens[i + 2]),
+            "tp" when tokens.Length == i + 3 => Numbered(DevelopmentAction.Tp, account, tokens[i + 1], tokens[i + 2]),
             "contract" when tokens.Length == i + 3 => Numbered(DevelopmentAction.Contract, account, tokens[i + 1], tokens[i + 2]),
             "black-diamond" when tokens.Length == i+3 => Numbered(DevelopmentAction.BlackDiamond,account,tokens[i+1],tokens[i+2]),
             "gold-card" when tokens.Length == i+3 => Numbered(DevelopmentAction.GoldCard,account,tokens[i+1],tokens[i+2]),
@@ -201,7 +203,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
     public bool Writes => Action == DevelopmentAction.Event ? Event?.Operation != "status" :
         Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue ? Primary >= 0 :
         Action is DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify ||
-        Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard;
+        Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Tp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard;
 
     public CharacterProgressEdit ToProgressEdit()
     {
@@ -215,6 +217,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             DevelopmentAction.QuestClear => CharacterProgressField.QuestClear,
             DevelopmentAction.Skill => CharacterProgressField.Skill,
             DevelopmentAction.Sp => CharacterProgressField.BonusSp,
+            DevelopmentAction.Tp => CharacterProgressField.BonusTp,
             DevelopmentAction.Contract => CharacterProgressField.ExpertContract,
             _ => throw new InvalidDataException("不是写入命令")
         };

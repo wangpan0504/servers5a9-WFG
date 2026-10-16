@@ -84,6 +84,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
+    // 强袭任务副本均带 [disable black diamond card reward]（无值标记）：通关翻牌不提供黑钻额外卡。
+    public bool DisableBlackDiamondCardReward => RawSections.Any(row => row.Tag == "disable black diamond card reward" && row.Tokens.Count == 0);
     public bool IsClassExperience => Id == 7142 &&
         Path.Equals("dungeon/cataclysm/changeclass/7142_changeclass.dgn", StringComparison.OrdinalIgnoreCase) &&
         Marker("disable drop item") && Marker("disable clear reward") && Marker("no fatigue") &&

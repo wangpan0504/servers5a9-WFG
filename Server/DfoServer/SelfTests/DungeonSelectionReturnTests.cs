@@ -115,10 +115,10 @@ internal static class DungeonSelectionReturnTests
                 projection.Join(context);
                 var back = new Packet(1, 132, []);
                 await commands.DispatchAsync(context, new(1, 15, new byte[4]));
-                That(sent.Select(frame => (frame.Kind, frame.Opcode)).SequenceEqual(new (byte, ushort)[] { (1, 15), (0, 3), (0, 27) }) && presence.Count == 0,
+                That(sent.Select(frame => (frame.Kind, frame.Opcode)).SequenceEqual(new (byte, ushort)[] { (1, 15), (0, 3), (0, 1536), (0, 27) }) && presence.Count == 0,
                     "ACK15→本人State1→NOTI27同步选图，离开同屏");
                 That(sent[1].Body.SequenceEqual(new byte[] { 1, (byte)session.Selected!.Id, (byte)(session.Selected.Id >> 8), 1 }), "开选图发送实际角色State1");
-                That(await commands.DispatchAsync(context, back with { Body = [0] }) == CommandResult.Unhandled && sent.Count == 3, "非空132不消费当前选择");
+                That(await commands.DispatchAsync(context, back with { Body = [0] }) == CommandResult.Unhandled && sent.Count == 4, "非空132不消费当前选择");
                 var before = repository.LoadCharacter(owner, 0);
                 AccountOwners.Lease? replacement = null;
                 Task? queued = null;
@@ -156,18 +156,18 @@ internal static class DungeonSelectionReturnTests
                     That(failed == (scenario is "owner" or "gm" or "failed-write"), "失败/接管/同revision快照更新正确收尾：" + scenario);
                     if (scenario == "normal")
                     {
-                        That(sent.Skip(3).Select(frame => (frame.Kind, frame.Opcode)).SequenceEqual(new (byte, ushort)[] { (1, 132), (0, 3), (0, 23), (0, 24) }),
+                        That(sent.Skip(4).Select(frame => (frame.Kind, frame.Opcode)).SequenceEqual(new (byte, ushort)[] { (1, 132), (0, 3), (0, 23), (0, 24) }),
                             "返回ACK132→State3→Area23→Transition24，不追加124");
-                        That(sent[3].Body.SequenceEqual(new byte[] { 1 }) && sent[4].Body.SequenceEqual(new byte[] { 1, (byte)session.Selected!.Id, (byte)(session.Selected.Id >> 8), 0 }),
+                        That(sent[4].Body.SequenceEqual(new byte[] { 1 }) && sent[5].Body.SequenceEqual(new byte[] { 1, (byte)session.Selected!.Id, (byte)(session.Selected.Id >> 8), 0 }),
                             "ACK及本人状态包体精确");
                         var expected = before with { Position = new(38, 2, 89, 249), Revision = before.Revision + 1 };
                         That(presence.Count == 1 && session.CurrentDungeonSelection is null && JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == JsonSerializer.Serialize(expected),
                             "恢复同屏与安全位置，仅提交位置和revision");
                         await commands.DispatchAsync(context, back);
-                        That(sent.Count == 7 && session.Move(new(1084, 249, 5, 0, 0, 0)), "重复返回不重发场景，回城后移动恢复");
+                        That(sent.Count == 8 && session.Move(new(1084, 249, 5, 0, 0, 0)), "重复返回不重发场景，回城后移动恢复");
                     }
                     else
-                        That(presence.Count == 0 && sent.Skip(3).All(frame => frame.Opcode is not (132 or 3 or 23 or 24)), "过期/失败出队不发旧回城也不加入场景：" + scenario);
+                        That(presence.Count == 0 && sent.Skip(4).All(frame => frame.Opcode is not (132 or 3 or 23 or 24)), "过期/失败出队不发旧回城也不加入场景：" + scenario);
                 }
                 finally
                 {
@@ -236,7 +236,7 @@ internal static class DungeonSelectionReturnTests
         areas[(38,2)] = area;
         int beforeRecovery = sent.Count;
         await commands.DispatchAsync(context,new(1,15,new byte[4]));
-        That(sent.Skip(beforeRecovery).Select(frame => (frame.Kind,frame.Opcode)).SequenceEqual(new (byte,ushort)[] {(1,15),(0,3),(0,27)}) &&
+        That(sent.Skip(beforeRecovery).Select(frame => (frame.Kind,frame.Opcode)).SequenceEqual(new (byte,ushort)[] {(1,15),(0,3),(0,1536),(0,27)}) &&
             session.Phase == SessionPhase.MapSelect && presence.Count == 0 &&
             session.CurrentDungeonSelection is { IsClassExperience: false } ordinary && ordinary.Id > experience!.Id,
             "原连接在恢复合法几何后可正常开选图，没有吞结构错误或遗留选择身份");

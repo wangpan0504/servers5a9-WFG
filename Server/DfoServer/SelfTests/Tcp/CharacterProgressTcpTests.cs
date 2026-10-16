@@ -48,17 +48,23 @@ internal static class CharacterProgressTcpTests
             peer.Select();
             peer.Send(29, [0, 1, 5, 0, 0, 1, 0]); peer.Expect(1, 29);
             peer.Send(331, [1, 5, 0, 3, 2, 3, 4]); peer.Expect(1, 331); peer.Expect(0, 19);
+            var learned = Role(0);
             That(Command("level GmTcp0 60").StartsWith("OK "), "在线GM改等级提交");
             var role = Role(0);
+            var free60 = SkillPointLedger.FreeBaseline(0, 0, 60, catalog);
             That(role.Level == 60 && role.Learning.Experience == growth.GetLevelStartExperience(60) &&
-                role.Learning.Trees.All(tree => tree.Sp == catalog.TotalSp(60) + 137 && tree.Tp == catalog.TotalTp(60) + 7 &&
-                    tree.Skills.All(skill => skill.Command == "")), "在线GM重新发满点并清除两树指令");
+                role.Learning.Trees.Zip(learned.Learning.Trees).All(pair =>
+                    pair.First.Sp == catalog.TotalSp(60) + 137 - SkillPointLedger.Spent(pair.First.Skills, free60, 0, id => catalog.Get(0, id)) &&
+                    pair.First.Tp == catalog.TotalTp(60) + 7 - SkillPointLedger.Spent(pair.First.Skills, free60, 0, id => catalog.Get(0, id), tp: true) &&
+                    pair.Second.Skills.Where(skill => catalog.Get(0, skill.Id).FixedLevel is null).All(pair.First.Skills.Contains)) &&
+                role.Learning.Trees[0].Skills.Single(skill => skill.Id == 5) is { Level: 2 } ghost && ghost.Command != "" &&
+                role.Learning.Trees[0].Sp < role.Learning.Trees[1].Sp, "在线GM改等级保留已学技能与指令，SP/TP按新总额减已学费用重算");
             peer.Barrier();
         }
         using (var peer = Open(fixture))
         {
             peer.Select();
-            Bytes(peer.SkillInfo, SkillPackets.Initialized(Role(0).Learning), "重登收到重置后的技能和点数");
+            Bytes(peer.SkillInfo, SkillPackets.Initialized(Role(0).Learning), "重登收到改等级后的技能和点数");
             That(Command("grow GmTcp0 1 2").StartsWith("OK ") && Role(0).GrowType == 33, "分支和二觉命令闭合");
             long revision = Role(0).Revision;
             That(Command("grow GmTcp0 0 1").StartsWith("ERR ") && Role(0).Revision == revision, "非法未转职觉醒不写库");

@@ -36,6 +36,7 @@ internal sealed class TcpPeer : IDisposable
     public WirePacket[] SpecialContainers { get; private set; } = [];
     public byte[][] Mailbox { get; private set; } = [];
     public byte[] TitleProgress { get; private set; } = [];
+    public byte[] AssaultDailyInfo { get; private set; } = [];
     public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
     public byte[] PremiumInfo { get; private set; } = [];
@@ -166,6 +167,12 @@ internal sealed class TcpPeer : IDisposable
     public WirePacket Expect(byte kind, ushort opcode, byte[]? body = null)
     {
         var packet = Read();
+        // #233 打开选图时 NOTI1536(5B) 紧挨 NOTI27 之前下发；未显式期待它的旧用例在等待27时记录并跳过。
+        if (kind == 0 && opcode == 27 && packet.Kind == 0 && packet.Opcode == 1536 && packet.Body.Length == 5)
+        {
+            AssaultDailyInfo = packet.Body;
+            packet = Read();
+        }
         TestCheck.That(packet.Kind == kind && packet.Opcode == opcode, $"packet order: expected ({kind},{opcode}), got ({packet.Kind},{packet.Opcode})");
         if (body is not null)
             TestCheck.Bytes(packet.Body, body, $"body ({kind},{opcode})");
@@ -387,14 +394,30 @@ internal sealed class TcpPeer : IDisposable
         ClientSettings = [];
         foreach (var notice in inventoryNotices ?? [])
             tail.Add(Expect(notice.Kind, notice.Opcode));
+        bool staminaChecked = false;
+        bool ExpectSelectionStamina()
+        {
+            ushort character = U16(prefix[0].Body, 9);
+            var saved = fixture!.Query("SELECT stamina_until FROM characters WHERE id=$p0", character);
+            TestCheck.That(saved is [[long]], "选角场景虚弱状态绑定本人持久角色");
+            if (Convert.ToInt64(saved[0][0]) > 0 || staminaPercent is < 100)
+                ValidateStamina(Expect(0, 4), character, selectionStarted);
+            return true;
+        }
         foreach (var notice in expected.Skip(afterCargo))
         {
+            // 重连回城（resumeTown）时区域与虚弱投影先于赛丽亚事件下发：在108前核验NOTI4，24处不再重复期待。
+            if (resumeTown && notice == ((byte)0, (ushort)124) && fixture is not null) staminaChecked = ExpectSelectionStamina();
             if (notice == ((byte)0, (ushort)124)) ReadSeriaInitialization();
             // 普通入城在124前恢复；换频道等最终24绑定后恢复。
             if (!resumeTown && notice == ((byte)0, (ushort)124)) ReadSceneInitialization();
             if (notice == ((byte)0, (ushort)3))
             {
                 var packet = Read();
+                // #233 史诗之书后、邮件前下发 NOTI1536 强袭每日信息(5B)。
+                TestCheck.That(packet.Kind == 0 && packet.Opcode == 1536 && packet.Body.Length == 5, "强袭每日信息在邮件前初始化");
+                AssaultDailyInfo = packet.Body;
+                packet = Read();
                 while (packet.Kind == 0 && packet.Opcode == 97)
                 {
                     mails.Add(packet.Body);
@@ -430,14 +453,8 @@ internal sealed class TcpPeer : IDisposable
             else
             {
                 tail.Add(Expect(notice.Kind, notice.Opcode));
-                if (notice == ((byte)0, (ushort)24) && fixture is not null)
-                {
-                    ushort character = U16(prefix[0].Body, 9);
-                    var saved = fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0", character);
-                    TestCheck.That(saved is [[long]], "选角场景虚弱状态绑定本人持久角色");
-                    if (Convert.ToInt64(saved[0][0]) > 0 || staminaPercent is < 100)
-                        ValidateStamina(Expect(0, 4), character, selectionStarted);
-                }
+                if (notice == ((byte)0, (ushort)24) && fixture is not null && !staminaChecked)
+                    ExpectSelectionStamina();
                 if (notice == ((byte)0, (ushort)53))
                     ReadCardMembershipState(initialization: true);
             }

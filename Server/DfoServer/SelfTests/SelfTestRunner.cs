@@ -35,6 +35,7 @@ internal static class SelfTestRunner
         AuctionNoticeTests.Run();
         AuctionReplyTests.Run();
         DungeonRequestTests.Run();
+        AssaultModePacketTests.Run();
         DungeonSettlementProtocolTests.Run();
         BlackDiamondTests.RunCore();
         ServerEventTests.RunCore();
@@ -167,6 +168,7 @@ internal static class SelfTestRunner
         PacketCompatibilityTests.Run(characters);
         CharacterBoundaryTests.Run(towns, characters);
         SelfTests.Run(towns);
+        TeleportTests.RunResources(towns, itemResources);
         CharacterPreparationTests.Run(towns, pvf, characters);
         CharacterCreationTests.Run(towns, characters);
         CharacterAttributeResourceTests.RunResources(characters);
@@ -211,6 +213,7 @@ internal static class SelfTestRunner
         await TownPresenceTests.Run(towns);
         await TownPresenceIndexTests.RunAsync(towns);
         DungeonCatalogTests.Run(pvf);
+        AssaultModePacketTests.RunResources(pvf);
         DungeonGreedGridTests.Run(pvf);
         DungeonRoomCatalogTests.Run(pvf);
         DungeonMonsterPlanTests.Run(pvf);

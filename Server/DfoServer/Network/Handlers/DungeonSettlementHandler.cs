@@ -79,6 +79,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_lucky_star", Guard);
         if (result.Inventory is { } inventory)
             await (inventoryProjection ?? throw new InvalidOperationException("免费牌缺少库存投影")).RefreshAsync(context, inventory);
+        if (result.AssaultClear is { } assaultClear)
+        {
+            log.Write("assault_mode_clear_committed", new { Connection = context.Id, assaultClear.Counts.Clears, assaultClear.Counts.Hidden,
+                RewardItem = assaultClear.Reward?.ItemId, RewardCount = assaultClear.Reward?.Count, assaultClear.RewardIssue });
+            if (assaultClear.Inventory is { } assaultInventory)
+                await (inventoryProjection ?? throw new InvalidOperationException("assault reward projection unavailable")).RefreshAsync(context, assaultInventory);
+            await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, assaultClear.Counts),
+                "assault_mode_daily_info", Guard);
+        }
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
         return CommandResult.Handled;
     }

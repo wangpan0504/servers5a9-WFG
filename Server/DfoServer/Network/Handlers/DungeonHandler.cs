@@ -135,6 +135,13 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry), "formal_dungeon_information", Guard);
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
             passiveItems: receipt.PassiveItems), "formal_start_map", Guard);
+        if (!receipt.AssaultConsumedSlots.IsDefaultOrEmpty)
+        {
+            log.Write("assault_mode_entry_committed", new { Connection = context.Id, receipt.Entry.DungeonId,
+                Slots = receipt.AssaultConsumedSlots.Select(slot => slot.Index).ToArray() });
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, [.. receipt.AssaultConsumedSlots]), "assault_mode_entry_items", Guard);
+        }
         return CommandResult.Handled;
 
         async Task<CommandResult> RejectAsync()

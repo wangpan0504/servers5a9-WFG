@@ -24,6 +24,7 @@ internal static class TeleportTests
     public static void RunCore()
     {
         PendingQuestTransactions();
+        PotionGateModes();
         var potion = TeleportRequests.Potion(Convert.FromHexString("41004EAC27000026002F05EA0001"));
         That(potion == new PotionTeleportRequest(65, 2600014, 0, new(38, 0, 1327, 234, 1)), "原生237请求完整保留源槽、模板、模式和目的地");
         That(TeleportRequests.Solo(Convert.FromHexString("FFFFFFFF0700000027030F03CD0005")) ==
@@ -74,6 +75,43 @@ internal static class TeleportTests
         Reject<InvalidOperationException>(() => session.TeleportPotion(fixture.Request, fixture.Service), "旧generation不能传送");
         That(new CharacterRepository(fixture.Database).LoadCharacter(replacement, 0).TeleportCooldowns.AuraUntil == fixture.Clock.Now + 420000,
             "新仓储和新owner恢复已提交光环冷却");
+    }
+
+    // 合成入口区域：world map 49 不在药剂 int data（1 2）内。默认开放，Pvf 模式恢复白名单拒绝；其余准入照常。
+    static void PotionGateModes()
+    {
+        TownArea Area(byte town, byte area, int[] quests, int? world) => new(town, area, 1, quests, [], [], new(town, area, 10, 10),
+            new("test.map", [new(new(0, 0, 100, 100), [], [])], [], false, []), [], []) { DungeonWorldMap = world };
+        var towns = new TownCatalog(new() { [(2, 0)] = Area(2, 0, [], null), [(54, 2)] = Area(54, 2, [], 49), [(54, 3)] = Area(54, 3, [42], 49) },
+            new(2, 0, 10, 10), new(2, 0, 10, 10), new(0, [], []), [], new Dictionary<uint, uint[]>());
+        var definitions = new TeleportCatalog(_ => PotionText, new Dictionary<int, string>(), new Dictionary<int, string> { [2600014] = "potion.stk" });
+        var character = new Character(1, 0, "Gate", 1, new(2, 0, 10, 10), null) { Level = 60,
+            Inventory = new([new(1, new(InventoryListType.Main, 65), new(2600014, ItemKind.Consumable, 3))]) };
+        var request = new PotionTeleportRequest(65, 2600014, 0, new(54, 2, 20, 20, 1));
+        TeleportService Service(TeleportPotionGateMode mode) => new(towns, definitions, _ => throw new InvalidOperationException(), null, mode);
+        That(Service(TeleportPotionGateMode.Open).Potion(character, request, 0).Reason == "ready" &&
+            Service(TeleportPotionGateMode.Pvf).Potion(character, request, 0).Reason == "potion-dungeon-map-unavailable",
+            "默认开放白名单外的地下城入口，Pvf模式恢复int data拒绝");
+        That(Service(TeleportPotionGateMode.Open).Potion(character, request with { Target = new(54, 3, 20, 20, 1) }, 0).Reason == "target-quest-required" &&
+            Service(TeleportPotionGateMode.Open).Potion(character with { Level = 59 }, request, 0).Plan is null &&
+            Service(TeleportPotionGateMode.Open).Potion(character, request with { Target = new(54, 2, 500, 500, 1) }, 0).Reason == "target-position-unavailable",
+            "开放入口仍保留任务、药剂等级和可走位置检查");
+    }
+
+    // 真实PVF：黑市入口 54/2（[dungeon gate] 49 哈林）不在 2600014 的 int data 内。
+    public static void RunResources(TownCatalog towns, DfoServer.Infrastructure.ItemResources itemResources)
+    {
+        var character = new Character(1, 0, "Gate", 1, new(54, 1, 1599, 567, 1), null) { Level = 90, CompletedQuests = [5936],
+            Inventory = new([new(1, new(InventoryListType.Main, 65), new(2600014, ItemKind.Consumable, 3))]) };
+        var request = new PotionTeleportRequest(65, 2600014, 0, new(54, 2, 892, 230, 1));
+        TeleportService Service(TeleportPotionGateMode mode) => new(towns, itemResources.Teleports, itemResources.Items.Get, null, mode);
+        That(towns.Areas[(54, 2)].DungeonWorldMap == 49 && itemResources.Teleports.Potion(2600014) is { } potion && !potion.DungeonMaps.Contains(49),
+            "真实资源：54/2为哈林地下城入口且不在药剂白名单");
+        string open = Service(TeleportPotionGateMode.Open).Potion(character, request, 0).Reason,
+            strict = Service(TeleportPotionGateMode.Pvf).Potion(character, request, 0).Reason;
+        That(open == "ready" && strict == "potion-dungeon-map-unavailable", $"真实资源黑市入口默认可达、Pvf模式拒绝（{open}/{strict}）");
+        That(Service(TeleportPotionGateMode.Open).Potion(character with { CompletedQuests = [] }, request, 0).Plan is null,
+            "真实资源开放入口仍要求黑市前置任务");
     }
 
     static void PendingQuestTransactions()

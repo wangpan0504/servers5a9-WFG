@@ -1,4 +1,12 @@
 -- S5A9 当前完整数据库结构；账号与游戏数据统一保存。
+CREATE TABLE character_assault_daily(
+  character_id INTEGER PRIMARY KEY,
+  account TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  clear_count INTEGER NOT NULL CHECK(clear_count BETWEEN 0 AND 255),
+  hidden_count INTEGER NOT NULL CHECK(hidden_count BETWEEN 0 AND 255),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TABLE character_teleport_cooldowns(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,

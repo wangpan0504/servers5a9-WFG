@@ -209,7 +209,7 @@ def self_check():
         assert 'id="cash-shop-usable-period"' in page and 'id="cash-shop-period-status"' in page
         assert 'id="infinite-fatigue"' in page and 'id="fatigue-status"' in page
         assert 'id="item-upgrade"' in page and 'id="item-info"' in page and 'id="inventory"' in page
-        assert 'id="sp"' in page and 'id="contract"' in page and 'id="black-diamond"' in page and 'id="event-status"' in page
+        assert 'id="sp"' in page and 'id="tp"' in page and 'id="contract"' in page and 'id="black-diamond"' in page and 'id="event-status"' in page
         for line in commands:
             req = Request(
                 f"http://{BIND}:{web_port}/api/command",

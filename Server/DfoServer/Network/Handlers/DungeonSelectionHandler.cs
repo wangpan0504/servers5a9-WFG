@@ -94,6 +94,9 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "dungeon_entry_opened", CanSend);
         // 同步客户端选图状态，触发旧城镇实体清理；仅切服务端阶段不会结束客户端旧动作。
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "dungeon_selection_state", CanSend);
+        // #233 实验：打开选图前刷新强袭模式每日信息（跨日后客户端不会自行更新今日索引）。
+        if (dungeon == 0)
+            await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, context.Session.AssaultDailyCounts(TimeProvider.System.GetLocalNow())), "assault_mode_daily_info", CanSend);
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector)
             await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(), "dungeon_select_notice", CanSend);
         return CommandResult.Handled;

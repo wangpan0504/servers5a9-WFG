@@ -9,6 +9,8 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed)
 {
     public ImmutableArray<DungeonGroundObject> PassiveItems { get; init; } = [];
+    // #233 强袭入场提交时扣除材料变化的背包格，仅入场回执携带。
+    public ImmutableArray<InventorySlot> AssaultConsumedSlots { get; init; } = [];
 }
 internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,
@@ -46,6 +48,7 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     public DungeonCardReward? Card { get; init; }
     public InventoryResult? Inventory { get; init; }
     public uint? MailId { get; init; }
+    public DfoServer.Game.Session.AssaultClearResult? AssaultClear { get; init; }
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
 }

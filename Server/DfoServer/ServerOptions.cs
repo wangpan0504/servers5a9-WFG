@@ -30,6 +30,8 @@ internal sealed record ServerOptions
     public string? DevelopmentAuctionProbe { get; init; }
     // 开发用拍卖行种子条数；0 = 不种子（默认）。表内已有挂牌时不再写入。见 Game/Auction/AuctionService.cs。
     public int AuctionSeedCount { get; init; }
+    // 瞬间移动药剂地下城入口限制；默认 Open 开放全部入口，Pvf 恢复药剂 `[int data]` 白名单。见 Game/Town/Teleport.cs。
+    public Game.Town.TeleportPotionGateMode TeleportPotionGates { get; init; }
     public int SessionTtlSeconds { get; init; } = 300;
     public string ProtocolVersion => "matched-client";
 
@@ -60,6 +62,7 @@ internal sealed record ServerOptions
                     "--dungeon-entry-probe" => value with { DevelopmentDungeonEntryProbe = Mode<DungeonEntryProbeMode>(argument, name) },
                     "--auction-probe" => value with { DevelopmentAuctionProbe = argument },
                     "--auction-seed" => value with { AuctionSeedCount = Number(argument, name) },
+                    "--teleport-potion-gates" => value with { TeleportPotionGates = Mode<Game.Town.TeleportPotionGateMode>(argument, name) },
                     _ => throw new InvalidDataException("未知运行参数：" + name)
                 };
             }

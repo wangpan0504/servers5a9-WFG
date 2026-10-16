@@ -233,7 +233,7 @@
         <h2>等级与职业</h2>
         <div class="row">
           <div><label for="level">等级 1–95</label><input id="level" type="number" min="1" max="95" value="50" class="w-sm"></div>
-          <button id="set-level" type="button">设置等级并重置技能</button>
+          <button id="set-level" type="button">设置等级（保留技能）</button>
           <div><label for="story">剧情接受等级 0–95</label><input id="story" type="number" min="0" max="95" value="50" class="w-sm"></div>
           <button id="set-story" class="quiet" type="button">设置剧情</button>
         </div>
@@ -243,10 +243,15 @@
           <button id="set-grow" type="button" disabled>设置职业并重置技能</button>
           <span id="grow-base" class="meta"></span>
         </div>
-        <p class="note">调整等级或职业会重建双技能树，清除已加点、快捷栏调整、技能指令和连招；SP/TP 恢复为该等级的完整额度，保留额外点数。执行前会再次确认。</p>
+        <p class="note">调整等级保留已学技能、快捷栏、指令和连招，SP/TP 按新等级总额减已学费用重算；降级后技能超出等级门槛或点数不足时拒绝。调整职业会重建双技能树，清除已加点、快捷栏调整、技能指令和连招，SP/TP 恢复为完整额度，保留额外点数。执行前会再次确认。</p>
         <div class="row">
           <div><label for="sp">额外 SP 0–50000</label><input id="sp" type="number" min="0" max="50000" value="0" class="w-sm"></div>
           <button id="set-sp" class="quiet" type="button">设置额外 SP</button>
+          <span class="meta">需已有可核算来源；重登按总来源减技能费用派生余额。</span>
+        </div>
+        <div class="row">
+          <div><label for="tp">额外 TP 0–50000</label><input id="tp" type="number" min="0" max="50000" value="0" class="w-sm"></div>
+          <button id="set-tp" class="quiet" type="button">设置额外 TP</button>
           <span class="meta">需已有可核算来源；重登按总来源减技能费用派生余额。</span>
         </div>
       </section>
@@ -916,13 +921,14 @@ on("#quest-search", searchQuests);
 $("#quest-q").addEventListener("keydown", event => { if (event.key === "Enter") $("#quest-search").click(); });
 $("#quest-all").addEventListener("change", event => { for (const box of document.querySelectorAll("#quests tbody input[type=checkbox]:not(:disabled)")) box.checked = event.target.checked; updateSelections(); });
 on("#quest-batch", batchQuests);
-on("#set-level", async () => { const role = name(); if (confirm(`将 ${role} 设为 ${number("#level")} 级并重置技能？`)) await run(`level ${role} ${number("#level")}`, true); });
+on("#set-level", async () => { const role = name(); if (confirm(`将 ${role} 设为 ${number("#level")} 级（保留技能，重算 SP/TP）？`)) await run(`level ${role} ${number("#level")}`, true); });
 on("#set-story", () => { const role = name(); return run(`story ${role} ${number("#story")}`, true); });
 on("#set-grow", async () => {
   const role = name();
   if (growthChoice && confirm(`调整 ${role} 的职业并重置技能？`)) await run(`grow ${role} ${$("#grow-first").value} ${$("#grow-second").value}`, true);
 });
 on("#set-sp", () => { const role = name(); return run(`sp ${role} ${number("#sp")}`, true); });
+on("#set-tp", () => { const role = name(); return run(`tp ${role} ${number("#tp")}`, true); });
 on("#set-contract", () => { const role = name(); return run(`contract ${role} ${number("#contract")}`, false); });
 on("#set-black-diamond", () => { const role = name(); return run(`black-diamond ${role} ${number("#black-diamond")}`, false); });
 on("#set-gold-card", () => { const role = name(); return run(`gold-card ${role} ${number("#gold-card")}`, false); });

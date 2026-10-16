@@ -19,6 +19,7 @@ internal sealed partial class GameSession
         public DungeonSettlementPresentation Presentation { get; } = presentation;
         public Character Expected { get; } = expected;
         public bool Committed { get; set; }
+        public bool AssaultSettled { get; set; }
         public bool ScoreScrolled { get; set; }
         public bool CardsShown { get; set; }
         public byte? SelectedCard { get; set; }
@@ -189,8 +190,17 @@ internal sealed partial class GameSession
                 };
             settlement.Committed = true;
         }
+        AssaultClearResult? assaultClear = null;
+        if (settlement.Committed && !settlement.AssaultSettled && !dungeon.Entry.IsTutorial &&
+            dungeon.Assault is { } assault && dungeon.AssaultRewards is { } assaultServices)
+        {
+            // 先置位：提交异常时宁可丢失本次强袭计数/奖励也不重复发放。
+            settlement.AssaultSettled = true;
+            assaultClear = CommitAssaultClear(assault, assaultServices);
+        }
         return new FormalDungeonSettlementResult(prepared.Outcome, FormalReceipt(), settlement.Pending.Reward,
             settlement.Presentation, previous) { Card = settlement.Card, Inventory = inventory, MailId = settlement.MailId,
+                AssaultClear = assaultClear,
                 GainedExperience = settlement.GainedExperience,
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,

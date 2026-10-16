@@ -9,7 +9,59 @@ internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillL
 {
     public CharacterGrowthOptions GetOptions(byte job) => characters.Get(job).GrowthOptions;
 
-    public CharacterProgressResetPlan Prepare(Character before, CharacterProgressEdit request)
+    // Level保留已学技能并按新等级重算余额；Grow仍重建双技能树。
+    public CharacterProgressResetPlan Prepare(Character before, CharacterProgressEdit request) =>
+        request.Field == CharacterProgressField.Level ? PrepareLevel(before, request) : PrepareReset(before, request);
+
+    // GM改等级：保留已学技能、槽位（快捷栏）、指令与连招，只按新等级的总来源（含额外SP/TP）减已学费用派生余额。
+    // 降级后已学技能超出新等级门槛或费用超过新总额时整笔拒绝，不截断技能、不把负余额钳为0；额外来源未接管的旧状态同样拒绝。
+    CharacterProgressResetPlan PrepareLevel(Character before, CharacterProgressEdit request)
+    {
+        request.Validate();
+        if (request.Field != CharacterProgressField.Level || !string.Equals(request.Name, before.Name, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("等级调整目标不一致");
+        byte level = checked((byte)request.Primary);
+        var learning = before.Learning;
+        // 尚未初始化技能树（新建且未进入过的角色）没有可保留的学习记录，按免费基线建树与重置等价。
+        if (!learning.Initialized) return PrepareReset(before, request);
+        if (!SkillPointLedger.SupportsGrowth(before.GrowType, before.Job))
+            throw new InvalidDataException("角色技能状态不支持保留技能改等级；可用 grow 重置技能树");
+        if (learning.BonusSp is not int bonusSp || learning.BonusTp is not int bonusTp)
+            throw new InvalidDataException("旧角色额外SP/TP来源尚未接管，请先进入角色一次；不按余额猜测来源");
+        int totalSp = checked(skills.TotalSp(level) + bonusSp), totalTp = checked(skills.TotalTp(level) + bonusTp);
+        if (totalSp > ushort.MaxValue || totalTp > ushort.MaxValue) throw new InvalidDataException("技能点总来源超出协议范围");
+        int contractLevels = skills.ActiveExpertContractLevels(learning.ExpertContractExpiresAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        CharacterLearningState target;
+        try
+        {
+            target = SkillPointLedger.Synchronize(before.Job, before.GrowType, level,
+                learning with { Experience = growth.GetLevelStartExperience(level) }, skills, contractLevels);
+            var free = SkillPointLedger.FreeBaseline(before.Job, before.GrowType, level, skills, contractLevels);
+            foreach (var tree in target.Trees)
+            {
+                foreach (var skill in tree.Skills)
+                {
+                    var resource = skills.Get(before.Job, skill.Id);
+                    if (resource.FixedLevel is not null || skill.Level <= free.GetValueOrDefault(skill.Id)) continue;
+                    int required = resource.GetOrdinaryNextRequiredCharacterLevel(skill.Level - 1);
+                    if (level + (resource.IsFeatureSkill ? 0 : contractLevels) < required)
+                        throw new InvalidDataException($"目标等级{level}低于已学技能{skill.Id} Lv{skill.Level}的需求等级{required}；请先洗点后再降级，或用 grow 重置技能树");
+                }
+                int sp = SkillPointLedger.Spent(tree.Skills, free, before.GrowType, id => skills.Get(before.Job, id));
+                int tp = SkillPointLedger.Spent(tree.Skills, free, before.GrowType, id => skills.Get(before.Job, id), tp: true);
+                if (sp > totalSp || tp > totalTp)
+                    throw new InvalidDataException($"目标等级{level}的点数不足以保留已学技能（树{tree.Context}：SP已用{sp}/总额{totalSp}，TP已用{tp}/总额{totalTp}）；请先洗点后再降级，或用 grow 重置技能树");
+            }
+        }
+        catch (Exception ex) when (ex is NotSupportedException or KeyNotFoundException or ArgumentOutOfRangeException)
+        {
+            throw new InvalidDataException("已学技能无法按新等级核算，拒绝改等级: " + ex.Message);
+        }
+        target.Validate();
+        return new(before, level, before.GrowType, target);
+    }
+
+    CharacterProgressResetPlan PrepareReset(Character before, CharacterProgressEdit request)
     {
         request.Validate();
         if (request.Field is not (CharacterProgressField.Level or CharacterProgressField.Grow) ||

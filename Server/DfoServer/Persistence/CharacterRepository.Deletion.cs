@@ -24,7 +24,7 @@ internal sealed partial class CharacterRepository
         "character_active_main_quests", "character_completed_quests", "character_skill_bindings",
         "character_skill_points", "character_skills", "character_skill_commands", "character_skill_combos",
         "character_skill_point_sources", "character_tp_sources", "character_client_settings", "character_game_settings",
-        "character_fatigue", "character_dungeon_state", "mailbox_sent_gold", "character_teleport_cooldowns",
+        "character_fatigue", "character_dungeon_state", "mailbox_sent_gold", "character_teleport_cooldowns", "character_assault_daily",
         // 公会成员行随角色删除清理（guild_members.character_id 外键到 characters）。
         "guild_members"
     ];
