@@ -35,9 +35,21 @@ internal static class QuestCoverage
 
     public static ImmutableArray<string> Unconfirmed(StoryQuest quest) => quest.Definition?.Fields
         .Where(field => !KnownFields.Contains(field.Name) &&
-            !(field.Name == "searching information" && ExplicitMeetWithoutAutoCheck(quest)))
+            !(field.Name == "searching information" && ExplicitMeetWithoutAutoCheck(quest)) &&
+            !(field.Name is "daily random set" or "next relation quest" && HarlemExpRelationGroup(quest)))
         .Select(field => field.Name).Distinct().Order().ToImmutableArray() ?? [];
 
+    // #256 假设：黑市EXP 6051–6060是一组互为next relation的[side]任务；两声明只描述客户端每日随机/关联分组，
+    // 资源与官方文档均无选取、互斥或重置规则，服务端不猜这些规则，也不把任务改成每日或可重复。
+    // 仅精确形状（空daily random set＋其余九个组员的单个next relation quest）视为已确认，其它任何形状仍保留限制。
+    internal const int HarlemExpFirst = 6051, HarlemExpLast = 6060;
+    static bool HarlemExpRelationGroup(StoryQuest quest) =>
+        quest is { Grade: "[side]", Id: >= HarlemExpFirst and <= HarlemExpLast } && quest.Definition is { } definition &&
+        definition.Fields.Where(field => field.Name == "daily random set").ToArray() is [{ Values.Length: 0, Children.Length: 0 }] &&
+        definition.Fields.Where(field => field.Name == "next relation quest").ToArray() is [{ Children.Length: 0 } relation] &&
+        relation.Values.All(value => value is { Type: 0, Text: null }) &&
+        relation.Values.Select(value => value.Value).SequenceEqual(
+            Enumerable.Range(HarlemExpFirst,HarlemExpLast - HarlemExpFirst + 1).Where(id => id != quest.Id));
     // OR前置只需一组完整引用；废弃冲突任务和隐藏条件仍报告，但不阻断有效入口。
     internal static bool HasRequiredReferences(StoryQuest quest, QuestCatalog catalog)
     {
@@ -238,7 +250,8 @@ internal static class QuestCoverage
                     quest.Rewards is [{ Type: 0, Value: >= 1 and <= 5 }] ||
                     quest.RewardType == "[awakening type]" && quest.Rewards is [{ Type: 0, Value: >= 1 and <= 2 }] &&
                     definition?.JobChange == quest.Rewards[0].Value + 1;
-                bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _);
+                bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _) ||
+                    QuestCharacterReward.TryHellChallenge(quest);
                 if (quest.RewardType != "[item]" && !profession && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest))
                     reasons.Add(RewardRestriction(quest));
                 if (!quest.Attributes.Contains("not give exp quest") && (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))

@@ -65,6 +65,7 @@ internal static class SelfTestRunner
         QuestEligibilityTests.Run();
         QuestCatalogTests.RunCore();
         QuestHuntProgressTests.Run();
+        QuestHarlemExpTests.RunCore();
         QuestStateProgressTests.RunCore();
         QuestDungeonClearProgressTests.RunCore();
         QuestTicketTests.RunCore();
@@ -228,6 +229,7 @@ internal static class SelfTestRunner
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
         await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);
         QuestCatalogTests.Run(pvf);
+        QuestHarlemExpTests.Run(pvf);
         QuestLifecycleTests.Run(towns, itemResources);
         ImageCommunicationTests.RunResources(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestOrdinaryCompletionTests.Run(towns, pvf, characters, itemResources, sharedQuests);

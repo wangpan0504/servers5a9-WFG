@@ -332,14 +332,23 @@ internal sealed record DungeonEntryPlan(
         uint dungeonId, uint questId, byte difficulty)
     {
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
-            quest.Grade != "[side]" || quest.Condition != "[hunt monster]" || quest.SubType != -1 || quest.MainQuest is not null ||
-            quest.Definition is not { Diagnostics.Length: 0 } declared ||
-            !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter == -1) ||
-            !QuestHuntProgress.TryTargets(quest,out var targets) ||
-            targets.Any(target => target.MonsterId <= 0 || target.DungeonId != -1 && target.DungeonId != dungeonId ||
-                target.MinimumDifficulty > difficulty) ||
+            quest.SubType != -1 || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
+            // 一般杀怪任务声明参数-1；觉醒任务的杀怪/收集阶段以同一行参数声明最低难度，且不得低于它。
+            quest.Grade == "[side]" && !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter == -1) ||
+            quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
+                !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
+            quest.Grade is not ("[side]" or "[achievement]") ||
             definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
                 (maze.ConnectionQuestId is not { } connected || connected == questId))) return false;
+        if (quest.Condition == "[hunt monster]")
+        {
+            if (!QuestHuntProgress.TryTargets(quest,out var targets) ||
+                targets.Any(target => target.MonsterId <= 0 || target.DungeonId != -1 && target.DungeonId != dungeonId ||
+                    target.MinimumDifficulty > difficulty)) return false;
+        }
+        // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。
+        else if (quest.Grade != "[achievement]" || quest.Condition != "[seeking]" || !QuestLifecyclePlan.ValidSeeking(quest) ||
+            !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty))) return false;
         var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
         return active.AcceptanceId != Guid.Empty &&
             character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) == 1;

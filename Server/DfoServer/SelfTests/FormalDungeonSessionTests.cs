@@ -389,6 +389,9 @@ internal static class FormalDungeonSessionTests
                 var before = f.Read();
                 Check(f.Session.EnterFormalDungeon(3, 0, 1, catalog, rooms) is null && Same(before, f.Read()),
                     "普通非法难度拒绝不扣疲劳、不预留身份、不改任务资产");
+                // #259: 拒绝进图时必须能取得拒绝原因（写入 formal_dungeon_entry 日志的 RejectReason）。
+                Check(f.Session.LastFormalDungeonRejection is { } rejectReason && rejectReason.StartsWith("entry-plan:", StringComparison.Ordinal),
+                    "#259 拒绝进图时 LastFormalDungeonRejection 带出 DungeonEntryPlan 原因");
                 var entry = f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) ?? throw new InvalidOperationException("普通资源实例未建立");
                 Check(entry.Entry.IsOrdinary && entry.Entry.Maze.SourceOrdinal == 0 && entry.Snapshot.Identity.QuestId == 0 &&
                     entry.Entry.QuestAcceptanceId == Guid.Empty && entry.Entry.StartMap.Id == 58548 && entry.Entry.BossMap.Id == 58553 &&

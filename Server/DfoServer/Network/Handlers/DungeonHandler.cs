@@ -124,7 +124,9 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                 drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
                 classExperience: experience);
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Continuation = continuation,
-            Training = training, ClassExperience = experience, Request = selection, receipt?.Snapshot.Identity });
+            Training = training, ClassExperience = experience, Request = selection, receipt?.Snapshot.Identity,
+            RejectReason = receipt is null && !continuation && !replay ? context.Session.LastFormalDungeonRejection : null,
+            CharacterId = character.Id, CharacterName = character.Name });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);

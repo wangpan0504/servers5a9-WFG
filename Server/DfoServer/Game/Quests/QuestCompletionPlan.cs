@@ -189,7 +189,7 @@ internal sealed class QuestCompletionPlan
             byte? profession = quest.RewardType is "[grow type]" or "[awakening type]"
                 ? QuestProfessionReward.Target(expected, quest, growthCatalog.Learning ?? throw new NotSupportedException("职业变化技能资源未装配")) : null;
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
-            bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0;
+            bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0 || QuestCharacterReward.TryHellChallenge(quest);
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
             bool rental = QuestRentalProgress.Supports(quest);
             if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && QuestStateProgress.Type(quest) is null || quest.RewardType != "[item]" && profession is null && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest) ||

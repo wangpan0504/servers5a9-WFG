@@ -82,6 +82,7 @@ internal static class DungeonEntryPlanTests
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         OrdinaryHuntRoutes(catalog,quests,rooms,character);
+        AwakeningDungeonRoutes(catalog,quests,rooms,character);
         foreach (var scenario in new[] { (Quest:3560,Dungeon:82,Level:(byte)65,Target:92247,Boss:92251),
             (Quest:3753,Dungeon:104,Level:(byte)83,Target:76648,Boss:76649) })
         {
@@ -558,5 +559,31 @@ internal static class DungeonEntryPlanTests
             That(!DungeonEntryPlan.TryCreate(definition,invalid,40,2948,0,out _,out _,quest:letter),"普通猎杀保留活动任务与唯一接取门禁");
         That(!DungeonEntryPlan.TryCreate(definition with { Mazes=definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count != 0).ToArray() },
             pending,40,2948,0,out _,out _,quest:letter),"缺少真实普通迷宫仍拒绝");
+    }
+
+    static void AwakeningDungeonRoutes(DungeonCatalog catalog, QuestCatalog quests, DungeonRoomCatalog rooms, Character basis)
+    {
+        // #258：一次/二次觉醒的疑惑之村杀怪与收集阶段声明“dungeon info 53 2”，没有专用迷宫连接，只能沿普通迷宫进入。
+        var resource = catalog.Get(53);
+        var awakening = quests.All.Where(quest => quest.Grade == "[achievement]" && quest.Definition is { JobChange: 2 or 3 } declared &&
+            declared.Dungeons.Any(row => row.DungeonId == 53 && row.Parameter == 2) &&
+            quest.Condition is "[hunt monster]" or "[seeking]").OrderBy(quest => quest.Id).ToArray();
+        That(awakening.Count(quest => quest.Condition == "[hunt monster]") >= 50 && awakening.Count(quest => quest.Condition == "[seeking]") >= 50,
+            "真实疑惑之村觉醒杀怪与收集任务资源均已读取");
+        foreach (var quest in awakening)
+        {
+            uint scalar = quest.Condition == "[hunt monster]" ? QuestHuntProgress.Initial(quest) : 1;
+            var active = new ActiveMainQuest(3,checked((ushort)quest.Id),scalar) { AcceptanceId = Guid.NewGuid() };
+            var character = basis with { Level = checked((byte)Math.Max(quest.MinimumLevel,resource.MinimumLevel ?? 1)), ActiveMainQuests = [active] };
+            That(DungeonEntryPlan.TryCreate(catalog,character,53,checked((uint)quest.Id),2,out var plan,out var reason,quest:quest,draw:_ => 0,quests:quests) &&
+                plan is { IsOrdinaryHunt:true,IsOrdinary:true,RouteQuestId:0,Difficulty:2 } && plan.QuestId == quest.Id &&
+                plan.ActiveQuestSlot == active.Slot && plan.QuestAcceptanceId == active.AcceptanceId &&
+                plan.QuestAcceptances.SequenceEqual(character.ActiveMainQuests),"觉醒任务请求在勇士难度进入普通迷宫并保留接取身份："+quest.Id+"/"+reason);
+            foreach (byte low in new byte[] { 0,1 })
+                That(!DungeonEntryPlan.TryCreate(catalog,character,53,checked((uint)quest.Id),low,out _,out _,quest:quest,draw:_ => 0,quests:quests),
+                    "低于任务声明难度的觉醒任务请求仍拒绝："+quest.Id+"/"+low);
+            That(DungeonEntryPlan.TryCreate(catalog,character,53,0,2,out var ordinary,out _,draw:_ => 0,quests:quests) &&
+                ordinary is { QuestId:0,IsOrdinaryHunt:false,IsOrdinary:true },"觉醒任务活动时普通0入口保持原模式");
+        }
     }
 }

@@ -40,6 +40,11 @@ internal static class QuestCharacterReward
         return quest.RewardType == "[slot expansion]" && value is >= 0 and <= 2;
     }
 
+    // 深渊派对挑战资格类任务只有参数1的形态已核对：奖励只剩经验/金币，服务端没有资格状态，完成即记入已完成。
+    public static bool TryHellChallenge(StoryQuest quest) =>
+        quest.RewardType == "[hell challenge]" && quest.Rewards is [{ Type: 0, Text: null, Value: 1 }] &&
+        quest.Definition is { SelectRewards.Length: 0 };
+
     public static byte EquipmentSlots(Character expected, StoryQuest quest)
     {
         if (quest.RewardType != "[slot expansion]") return expected.EquipmentSlotFlags;

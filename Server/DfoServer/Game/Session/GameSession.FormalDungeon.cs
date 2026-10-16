@@ -57,10 +57,19 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false)
     {
+        LastFormalDungeonRejection = null;
         var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,
             prepareDrops,tutorials,tutorialScenes,classExperience);
-        return prepared is null ? null : owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
+        if (prepared is null) { LastFormalDungeonRejection ??= "prepare-returned-null"; return null; }
+        var installed = owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
+        if (installed is null) LastFormalDungeonRejection = "state-changed-before-install";
+        return installed;
     }
+
+    /// <summary>#259：最近一次 EnterFormalDungeon 被拒绝的原因（仅用于诊断日志，不影响行为）；成功时为 null。</summary>
+    public string? LastFormalDungeonRejection { get => Volatile.Read(ref lastFormalDungeonRejection); private set => Volatile.Write(ref lastFormalDungeonRejection, value); }
+    string? lastFormalDungeonRejection;
+    PreparedFormalDungeon? RejectFormal(string reason) { LastFormalDungeonRejection = reason; return null; }
 
     PreparedFormalDungeon? PrepareFormalDungeon(uint dungeonId, uint questId, byte difficulty,
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
@@ -71,25 +80,25 @@ internal sealed partial class GameSession
         var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) && CanEnterFormalDungeon(retry) &&
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null)
-            return null;
+            return RejectFormal("session-not-ready-or-no-dungeon-state");
         // #233 强袭：只有 ACK1547 授权过的任务副本可绕过选图地图选项，改以主副本(7300)在当前选图中核对。
         var assault = owner.Execute(() => CurrentAssaultAuthorization(expected, dungeonId, questId));
         if (assault is not null)
         {
-            if (retry is not null || classExperience) return null;
+            if (retry is not null || classExperience) return RejectFormal("assault-retry-or-class-experience");
             DungeonDefinition assaultDefinition;
             try { assaultDefinition = catalog.Get(checked((int)dungeonId)); }
-            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return null; }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return RejectFormal("assault-dungeon-definition-missing"); }
             if (!assaultDefinition.TryGetDesignatedDifficulty(out byte designated) ||
-                difficulty != designated && difficulty != AssaultModeEntryPolicy.ClientAssaultDifficulty) return null;
+                difficulty != designated && difficulty != AssaultModeEntryPolicy.ClientAssaultDifficulty) return RejectFormal("assault-difficulty-mismatch");
             difficulty = designated;
             if (!AssaultModeEntryPolicy.ConsumptionPlan(expected.Inventory, assault.Selection.Requirement, assault.Pieces,
-                DateTimeOffset.UtcNow).Accepted) return null;
+                DateTimeOffset.UtcNow).Accepted) return RejectFormal("assault-consumption-rejected");
         }
         uint optionDungeon = assault?.Selection.Parent ?? dungeonId;
         if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
             selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
-            selection.OriginPosition != expected.Position)) return null;
+            selection.OriginPosition != expected.Position)) return RejectFormal("class-experience-selection-mismatch");
         var done = QuestEligibility.Completed(expected);
         var flow = tutorials?.Get(expected.Job);
         bool training = expected.Tutorial is { Completed: false } pending && pending.DungeonId == dungeonId &&
@@ -102,28 +111,28 @@ internal sealed partial class GameSession
                 (option.QuestId == -1 || (option.InProgress ? expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) :
                     done.Contains(option.QuestId)))) ||
             !area.Map(done).DungeonGates.Any(gate =>
-                gate.Quests.All(done.Contains) && gate.Conditions.Length == 0))) return null;
+                gate.Quests.All(done.Contains) && gate.Conditions.Length == 0))) return RejectFormal("town-selection-or-gate-check-failed");
         StoryQuest? quest = null;
         if (questCatalog is not null && questId != 0)
         {
             if (questId >= 30000 || !questCatalog.TryGet((int)questId, out quest) ||
                 !QuestCoverage.HasOrdinaryDeclarations(quest) ||
                 !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != questId).ToArray() },
-                    quest, questCatalog).Eligible) return null;
+                    quest, questCatalog).Eligible) return RejectFormal("quest-not-eligible-or-undeclared");
         }
         bool allowClearedQuest = questId is > 0 and < 30000 &&
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
-        if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out _, allowClearedQuest, quest,draw,questCatalog,
+        if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out var entryReason, allowClearedQuest, quest,draw,questCatalog,
             allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null))
-            return null;
+            return RejectFormal("entry-plan:" + entryReason);
         if (entry!.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
-            return null;
-        if (entry.IsClassExperience != classExperience) return null;
-        if (entry.IsTutorial && !training) return null;
+            return RejectFormal("quest-acceptance-missing");
+        if (entry.IsClassExperience != classExperience) return RejectFormal("class-experience-mismatch");
+        if (entry.IsTutorial && !training) return RejectFormal("tutorial-entry-not-training");
         if (questId == 0 && entry.RouteQuestId > 0 && questCatalog is not null &&
             expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId) &&
             !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
-                questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return null;
+                questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return RejectFormal("route-quest-not-eligible");
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null,
@@ -142,29 +151,29 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
         Location? tutorialReturn = null, TutorialScenes? tutorialScenes = null)
     {
-        if (expected.DungeonState is not { } state) return null;
+        if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
-        if (entry.UsesFatigue && (expected.Fatigue is null || FatigueForClient(expected).Remaining == 0)) return null;
+        if (entry.UsesFatigue && (expected.Fatigue is null || FatigueForClient(expected).Remaining == 0)) return RejectFormal("fatigue-exhausted");
         var ordinaryReturn = entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
-        if (entry.IsOrdinary && ordinaryReturn is null) return null;
+        if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
         QuestDropResources? questDrops = null;
         if (!entry.IsTutorial && !entry.IsClassExperience && questCatalog is not null && items is not null && pieces is not null)
         {
             try { questDrops = QuestDropResources.Create(expected,entry,questCatalog,items,pieces,contracts?.Growth); }
-            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return null; }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return RejectFormal("quest-drop-resources-unsupported"); }
         }
         if (state.NextObjectKey > ushort.MaxValue || state.LastAttempt == long.MaxValue)
-            return null;
+            return RejectFormal("object-key-or-attempt-overflow");
         var topology = entry!.Maze.StaticTopology;
-        if (!topology.Supported) return null;
+        if (!topology.Supported) return RejectFormal("maze-topology-unsupported");
         var plans = new List<DungeonMonsterPlan>();
         uint next = state.NextObjectKey;
         try
         {
             foreach (var map in entry.Maze.MapSpecification!.Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps))
             {
-                if (next > ushort.MaxValue) return null;
+                if (next > ushort.MaxValue) return RejectFormal("object-key-overflow");
                 var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
                 if (entry.IsTutorial) room = (tutorialScenes ?? throw new InvalidDataException("训练动作目录未装配")).Apply(room);
                 var plan = DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.BasisLevel,
@@ -173,7 +182,7 @@ internal sealed partial class GameSession
                 if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0) next = plan.NextObjectKey;
             }
         }
-        catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException) { return null; }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException) { return RejectFormal("room-data-unsupported"); }
         var pools = new Dictionary<int, DungeonExplicitDropPool>();
         var dropPlans = ImmutableDictionary.CreateBuilder<ushort, DungeonDropGenerationPlan>();
         var groundReservations = new List<DungeonGroundReservation>();
@@ -187,7 +196,7 @@ internal sealed partial class GameSession
                 // 资源准备在owner锁外；每个真实monster保留自己的等级、类型、难度及完整数量规则。
                 DungeonDropGenerationPlan? dropGeneration;
                 try { dropGeneration = prepareDrops?.Invoke(entry, monster); }
-                catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return null; }
+                catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
                 if (prepareDrops is not null && dropGeneration is null)
                     throw new InvalidDataException("掉落规则准备不能以空引用替代未支持的怪物");
                 if (dropGeneration is not null) dropPlans.Add(monster.ObjectKey, dropGeneration);
@@ -199,7 +208,7 @@ internal sealed partial class GameSession
                 for (int ordinal = 0; ordinal < Math.Max(1, dropGeneration?.MaximumObjects ?? 1); ordinal++)
                 {
                     if (next == expected.Id) next++;
-                    if (next > ushort.MaxValue) return null;
+                    if (next > ushort.MaxValue) return RejectFormal("ground-reservation-overflow");
                     groundReservations.Add(new(monster.ObjectKey, next++, plan.Room.Map,
                         unchecked((ushort)monster.Source!.RawValues[3]), unchecked((ushort)monster.Source.RawValues[4]), 0, ordinal));
                 }

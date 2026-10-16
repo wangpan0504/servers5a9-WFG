@@ -235,6 +235,49 @@ internal static class QuestCharacterRewardTests
             .Select(quest => quest.Rewards[0].Value).Distinct().Order().SequenceEqual([0,1,2]),"三个装备槽奖励使用实际标量而非固定任务编号");
         That(catalog.All.Where(quest => quest.RewardType == "[tp]").All(quest => quest.Rewards.Count == 0 &&
             !QuestCharacterReward.TryScalar(quest,out _)),"本版空参数TP奖励不套用不存在的正整数声明，不伪造额外来源");
+        // 深渊派对挑战资格：只精确放行 [hell challenge] 参数1，其余专用奖励类型仍被拒
+        var hell = catalog.All.Where(quest => quest.RewardType == "[hell challenge]").ToArray();
+        That(hell.Length > 0 && hell.All(quest => QuestCharacterReward.TryHellChallenge(quest) == (quest.Rewards is [{ Type: 0, Text: null, Value: 1 }])),
+            "深渊派对挑战资格只在奖励参数为1且无选择奖励时放行");
+        That(catalog.All.Where(quest => quest.RewardType is "[hell legend]" or "[cosmo challenge]" or "[inferno challenge]" or "[operation hope]" or "[tp]" or "[slot expansion]")
+            .All(quest => !QuestCharacterReward.TryHellChallenge(quest)),"其他专用奖励类型不得被深渊资格放行");
+        var hellProbe = hell.First(QuestCharacterReward.TryHellChallenge);
+        That(!QuestCharacterReward.TryHellChallenge(hellProbe with { Rewards = [new(0,2,null)] }) &&
+            !QuestCharacterReward.TryHellChallenge(hellProbe with { Rewards = [new(0,1,null),new(0,0,null)] }) &&
+            !QuestCharacterReward.TryHellChallenge(hellProbe with { RewardType = "[hell legend]" }) &&
+            !QuestCharacterReward.TryHellChallenge(hellProbe with { RewardType = "[cosmo challenge]" }),
+            "参数不是1、带额外参数或换成其他奖励类型都不得放行");
+        var hellCoverage = QuestCoverage.Scan(new(catalog.All.Where(quest => quest.RewardType is "[hell challenge]" or "[hell legend]" or "[cosmo challenge]")
+            .ToDictionary(quest => quest.Id)),items.Items,items.EpicPieces,parameters);
+        const string stateRestriction = "奖励依赖对应挑战或深渊资格";
+        That(hellCoverage.Quests.All(row => QuestCharacterReward.TryHellChallenge(catalog.Get(row.Id)) ?
+            !row.Restrictions.Any(text => text.Contains(stateRestriction) || text.StartsWith("固定奖励需要")) :
+            row.Restrictions.Any(text => text.Contains(stateRestriction))),
+            "只有参数1的深渊资格任务不再被奖励类型/固定奖励解析拒绝，其余仍报专用状态未接入");
+        int hellDone = 0;
+        foreach (var quest in hell.Where(QuestCharacterReward.TryHellChallenge).Where(quest => QuestCoverage.Scan(new(new() { [quest.Id] = quest }),
+            items.Items,items.EpicPieces,parameters).Quests.Single().ImplementedPath).Take(3))
+        {
+            byte level = (byte)Math.Max(quest.MinimumLevel,1);
+            using var f = new QuestOrdinaryCompletionTests.Fixture(towns,characters,skills,growth,parameters,items,quest,
+                materialCount: 0,definitions: [quest],active: [],useCycles: true,configure: candidate =>
+                {
+                    var learning = SkillPointLedger.Synchronize(candidate.Job,candidate.GrowType,level,
+                        candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(level) },skills);
+                    return candidate with { Level = level, CompletedQuests = quest.Prerequisites.ToArray(), InitialLearning = learning,
+                        Skills = learning.Trees[0].Skills.Select(skill => new CharacterSkill(skill.Id,skill.Level)).OrderBy(skill => skill.Id).ToArray() };
+                });
+            That(f.Change((ushort)quest.Id,QuestLifecycleAction.Accept)?.Commit is not null,"深渊资格任务可正常接取 " + quest.Id);
+            var finished = f.Finish(ushort.MaxValue,(ushort)quest.Id);
+            That(finished.Receipt?.Commit is { } commit && commit.Character.CompletedQuests.Contains(quest.Id) &&
+                commit.Character.ActiveMainQuests.Length == 0 && f.Receipts == 1,"深渊资格任务可交付并记入已完成 " + quest.Id);
+            That(f.Finish(ushort.MaxValue,(ushort)quest.Id).Outcome == QuestFinishOutcome.AlreadyCompleted && f.Receipts == 1,"深渊资格任务不可重复交付 " + quest.Id);
+            hellDone++;
+        }
+        That(hellDone > 0,"至少有一个深渊资格任务走完接取到交付");
+        foreach (var other in catalog.All.Where(quest => quest.RewardType is "[hell legend]" or "[cosmo challenge]").Take(2))
+            That(!QuestCoverage.Scan(new(new() { [other.Id] = other }),items.Items,items.EpicPieces,parameters).Quests.Single().ImplementedPath,
+                "传奇/宇宙挑战类专用奖励仍被拒绝 " + other.Id);
         var slotQuests = catalog.All.Where(quest => quest.Attributes.Any(value => value is "slot expansion" or "magic stone")).ToArray();
         That(slotQuests.Select(quest => quest.Id).Order().SequenceEqual([649,650,674,675,676,677,2635,2636,2711]) &&
             slotQuests.All(QuestCoverage.HasOrdinaryDeclarations),"九条真实槽位任务完整保留已确认声明，尾部任务不按固定六项遗漏");
