@@ -52,7 +52,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             adventure?.Prepare(context);
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(options.AdvertisedAddress, login.Channel.Port), "endpoint");
             var roster = session.PrepareRoster();
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "roster",
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "roster",
                 () => session.CanPublishRoster(roster));
             session.MarkRosterPublished(roster);
             while (!connection.Stop.IsCancellationRequested)

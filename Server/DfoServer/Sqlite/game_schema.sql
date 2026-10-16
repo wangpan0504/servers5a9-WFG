@@ -63,7 +63,7 @@ CREATE TABLE accounts(
 CREATE TABLE characters(
     id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(id BETWEEN 1 AND 65535),
     account TEXT NOT NULL,
-    slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 31),
+    slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 61),
     name TEXT NOT NULL COLLATE NOCASE UNIQUE,
     revision INTEGER NOT NULL DEFAULT 0,
     town INTEGER NOT NULL,
@@ -247,6 +247,7 @@ CREATE TABLE inventory_audit_log(
 );
 
 CREATE TABLE account_wallets(
+    character_slots INTEGER NOT NULL DEFAULT 32 CHECK(character_slots BETWEEN 32 AND 62),
     account TEXT PRIMARY KEY,
     revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
     rental_points INTEGER NOT NULL DEFAULT 0 CHECK(rental_points BETWEEN 0 AND 2147483647),

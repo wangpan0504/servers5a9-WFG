@@ -228,6 +228,8 @@ internal sealed class ItemCatalog
             ShopPrice = ItemShopPrice.Parse(text, isEquipment, equipmentSellRate),
             Expiration = ItemExpiration.Parse(text),
             RefinementTicket = isEquipment ? null : RefinementTicketDefinition.Parse(text),
+            CharacterSlotMaximum = name == "角色栏扩展券" &&
+                int.TryParse(Regex.Match(text.Section("explain"), @"总上限为\s*(\d+)").Groups[1].Value, out int maxSlots) ? maxSlots : 0,
             MaximumLevel = maximum,
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = Int("clear avatar", 0) == 1 || text.Section("item category").Contains("clear avatar", StringComparison.OrdinalIgnoreCase),

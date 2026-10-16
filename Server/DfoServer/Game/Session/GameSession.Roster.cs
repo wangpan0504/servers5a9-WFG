@@ -10,7 +10,8 @@ internal sealed partial class GameSession
 
     public CharacterRosterSnapshot PrepareRoster() => owner.Execute(CaptureRoster);
 
-    CharacterRosterSnapshot CaptureRoster() => new(owner.Generation, SelectionEpoch, repository.ListRoster(owner).ToImmutableArray());
+    CharacterRosterSnapshot CaptureRoster() => new(owner.Generation, SelectionEpoch, repository.ListRoster(owner).ToImmutableArray())
+        { Capacity = repository.LoadAccountWallet(owner).CharacterSlotCapacity };
 
     bool MatchesRoster(CharacterRosterSnapshot roster) => roster.Generation == owner.Generation && roster.SelectionEpoch == SelectionEpoch;
 

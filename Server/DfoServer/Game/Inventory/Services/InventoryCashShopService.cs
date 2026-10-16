@@ -44,6 +44,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         var paid = before;
         long total = 0, gold = 0, winPoints = 0;
         long? deadline = null;
+        ushort characterSlots = before.AccountWallet.CharacterSlotCapacity;
         ushort cargoCapacity = before.CargoCapacity;
         foreach (var requested in request.Items)
         {
@@ -73,7 +74,13 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 total += product.CeraPrice;
                 var template = CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
-                if (template is { PersonalCargoUpgradeTarget: > 0 })
+                if (template is { CharacterSlotMaximum: > 0 })
+                {
+                    if (product.Count != 1 || characterSlots >= Math.Min(62, template.CharacterSlotMaximum))
+                        return InventoryResult.Reject(17);
+                    characterSlots++;
+                }
+                else if (template is { PersonalCargoUpgradeTarget: > 0 })
                 {
                     if (product.Count != 1 || template.PersonalCargoUpgradeTarget <= cargoCapacity || template.PersonalCargoUpgradeTarget > 264 ||
                         !template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
@@ -120,8 +127,10 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             overflow = overflow.AddRange(grant.Plan!.OverflowItems);
         }
 
+        var after = grant.Plan!.After;
+        after = after with { AccountWallet = after.AccountWallet with { CharacterSlotCapacity = characterSlots } };
         receipt = new(products.ToImmutableArray(), bonuses);
-        return new(true, 0, new(before, grant.Plan!.After with { CargoCapacity = cargoCapacity }, "cash_shop_buy", new(character, deadline), overflow));
+        return new(true, 0, new(before, after with { CargoCapacity = cargoCapacity }, "cash_shop_buy", new(character, deadline), overflow));
 
         void Deadline(long? value)
         {

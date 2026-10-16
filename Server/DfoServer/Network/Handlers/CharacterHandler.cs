@@ -68,7 +68,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         var receipt = context.Session.CreateCharacterForClient(parsed.Name, characters.Get(parsed.Job), learning, tutorials?.Get(parsed.Job));
         bool CanSend() => context.Session.CanPublishCreation(receipt);
         await context.Reply(CmdPacketType.CREATE_CHARACTER, CharacterPackets.Created(receipt.Created), "create_committed", CanSend);
-        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray()), "created_roster", CanSend);
+        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity), "created_roster", CanSend);
         context.Session.MarkRosterPublished(receipt.Roster);
         return CommandResult.Handled;
     }
@@ -91,7 +91,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
             result.Accepted ? "character_delete_committed" : "character_delete_rejected", CanSend);
         if (result.Receipt is { } receipt)
         {
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray()), "deleted_roster", CanSend);
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity), "deleted_roster", CanSend);
             context.Session.MarkRosterPublished(receipt.Roster);
             // ACK6的消费者随后发空C2S645；新名册已主动下发，后续显式C2S8可以正常刷新。
             context.RosterRequested = true;
@@ -125,7 +125,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         if (context.RosterRequested)
         {
             var roster = context.Session.PrepareRoster();
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray()), "requested_roster",
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "requested_roster",
                 () => context.Session.CanPublishRoster(roster));
             context.Session.MarkRosterPublished(roster);
         }

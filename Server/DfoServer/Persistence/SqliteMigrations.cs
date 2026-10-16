@@ -127,7 +127,47 @@ internal static class SqliteMigrations
                 Execute(db, tx, CharacterRepository.PassiveDropSchema);
         }),
         new(46, "副本列表通关的原生任务完成来源", UpgradeQuestDungeonAlternatives),
+        new(47, "账号角色栏扩展", UpgradeCharacterSlots),
     ];
+
+    static void UpgradeCharacterSlots(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='character_slots'";
+        if ((long)query.ExecuteScalar()! == 0)
+            Execute(db, tx, "ALTER TABLE account_wallets ADD COLUMN character_slots INTEGER NOT NULL DEFAULT 32 CHECK(character_slots BETWEEN 32 AND 62)");
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_wallets'";
+        string sql = (string)query.ExecuteScalar()!;
+        if (!sql.Contains("character_slots INTEGER NOT NULL DEFAULT 32 CHECK(character_slots BETWEEN 32 AND 62)", StringComparison.Ordinal))
+            throw new InvalidDataException("角色栏迁移拒绝未知容量列");
+        ReplaceTableConstraint(db, tx, "characters", "CHECK(slot BETWEEN 0 AND 31)", "CHECK(slot BETWEEN 0 AND 61)");
+    }
+
+    static void ReplaceTableConstraint(SqliteConnection db, SqliteTransaction tx, string table, string oldLimit, string newLimit)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+        query.Parameters.AddWithValue("$table", table);
+        string sql = (string?)query.ExecuteScalar() ?? throw new InvalidDataException("缺少角色表");
+        if (sql.Contains(newLimit, StringComparison.Ordinal)) return;
+        if (sql.Split(oldLimit, StringSplitOptions.None).Length != 2)
+            throw new InvalidDataException("角色栏迁移拒绝未知槽位约束");
+        query.CommandText = "PRAGMA schema_version";
+        long schemaVersion = (long)query.ExecuteScalar()!;
+        // 只放宽已知CHECK，不改行布局、外键、索引或自增高水位；与新增权益列同事务。
+        // SQLite的无数据布局变化迁移流程：https://www.sqlite.org/lang_altertable.html#otheralter
+        Execute(db, tx, "PRAGMA writable_schema=ON");
+        try
+        {
+            query.CommandText = "UPDATE sqlite_schema SET sql=$sql WHERE type='table' AND name=$table";
+            query.Parameters.AddWithValue("$sql", sql.Replace(oldLimit, newLimit, StringComparison.Ordinal));
+            if (query.ExecuteNonQuery() != 1) throw new InvalidDataException("角色栏约束更新失败");
+            Execute(db, tx, $"PRAGMA schema_version={checked(schemaVersion + 1)}");
+        }
+        finally { Execute(db, tx, "PRAGMA writable_schema=OFF"); }
+        Execute(db, tx, $"SELECT * FROM {table} LIMIT 0");
+    }
+
     // 在已发布v18和经验封顶声明上只扩展native19，不改写历史迁移。
     internal static string QuestCompletionSchemaV42 => ExperienceCapSchema.Definition(
         QuestCompletionSchemaV18, "character_quest_completion_receipts").Replace("12,25", "12,19,25", StringComparison.Ordinal);
@@ -1206,7 +1246,7 @@ internal static class SqliteMigrations
         "SELECT [character_id],[context],[sp],[tp] FROM [character_skill_points] LIMIT 0",
         "SELECT [character_id],[context],[slot],[skill_id],[level] FROM [character_skill_bindings] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[list_type],[slot_index],[item_uid_before],[item_uid_after],[item_id_before],[item_id_after],[value_before],[value_after],[item_kind_before],[item_kind_after],[count_before],[count_after],[count_delta],[core_hash_before],[core_hash_after] FROM [inventory_audit_log] LIMIT 0",
-        "SELECT [account],[revision],[rental_points],[seria_luck],[premium_contracts] FROM [account_wallets] LIMIT 0",
+        "SELECT [account],[revision],[rental_points],[seria_luck],[premium_contracts],[character_slots] FROM [account_wallets] LIMIT 0",
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",

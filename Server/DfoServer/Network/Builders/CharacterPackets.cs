@@ -22,13 +22,13 @@ internal static class CharacterPackets
         return stream.ToArray();
     }
 
-    public static byte[] Roster(CharacterRosterEntry[] rows)
+    public static byte[] Roster(CharacterRosterEntry[] rows, ushort capacity = 32)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write(new byte[] { 2, (byte)rows.Length, 5 });
-        writer.Write((ushort)32);
-        writer.Write((ushort)32);
+        writer.Write(capacity);
+        writer.Write(capacity);
         writer.Write((ushort)rows.Length);
         writer.Write(0u);
         writer.Write((ushort)rows.Length);

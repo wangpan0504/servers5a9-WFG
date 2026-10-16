@@ -53,7 +53,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         command.Transaction = transaction;
         command.CommandText = "SELECT slot FROM characters WHERE account=$account ORDER BY slot";
         command.Parameters.AddWithValue("$account", owner.Account);
-        var occupied = new bool[32];
+        var occupied = new bool[ReadAccountWallet(db, owner.Account, transaction).CharacterSlotCapacity];
         using (var reader = command.ExecuteReader())
             while (reader.Read())
                 occupied[reader.GetInt32(0)] = true;

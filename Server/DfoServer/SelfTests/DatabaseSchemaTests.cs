@@ -1789,7 +1789,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                RewindQuestDungeonAlternatives(db);
+                if (oldVersion < 46) RewindQuestDungeonAlternatives(db);
                 if (oldVersion < 45)
                 {
                     RewindPickupUids(db);
