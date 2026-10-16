@@ -190,12 +190,17 @@ internal static class MiddleQuestEntryTests
                     loaded.Monsters.Monsters.Select(Shape).SequenceEqual(fullPlans![0].Monsters.Select(Shape)) &&
                     fixture.Session.EnableFormalDungeonSettlement() is null,
                     "真实起点完成加载并保留全部演员；入场不许可结算："+scenario.Quest);
+                long retreatStarted = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 That(fixture.Session.ReturnFromFormalDungeon() is not null && !fixture.Session.CanPublishFormalDungeon(opened),
                     "未通关返回释放原实例，不能发布旧入场回执："+scenario.Quest);
+                long retreatFinished = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 var after = fixture.Read();
+                That(after.Inventory.StaminaUntil >= retreatStarted+600 && after.Inventory.StaminaUntil <= retreatFinished+600,
+                    "非训练房未清图回城沿正式规则写入十分钟虚弱期限："+scenario.Quest);
                 That(after.ActiveMainQuests.SequenceEqual(before.ActiveMainQuests) &&
                     after.CompletedQuests.SequenceEqual(before.CompletedQuests) &&
-                    JsonSerializer.Serialize(after.Inventory) == JsonSerializer.Serialize(before.Inventory) &&
+                    JsonSerializer.Serialize(after.Inventory) == JsonSerializer.Serialize(
+                        before.Inventory with { StaminaUntil = after.Inventory.StaminaUntil }) &&
                     JsonSerializer.Serialize(after.Learning) == JsonSerializer.Serialize(before.Learning) &&
                     fixture.Repository.LoadQuestClear(fixture.Owner,after,scenario.Quest) is null,
                     "入场/加载/退出不制造猎杀、清图、完成位或奖励："+scenario.Quest);

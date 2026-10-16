@@ -323,6 +323,8 @@ internal static class ClientSettingsStoreTests
         var migrated = new ClientSettingsRepository(f.Path);
         Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.SettingRows() == 0 && f.Assets(includeAcceptance: false) == assets,
             "v5 连续升级当前版本只创建空设置表，原账号角色资产逐行保持");
+        Check(f.Query("SELECT count(*) FROM characters WHERE devil_usage<>'[]' OR stamina_until<>0") is 0L,
+            "v5旧库升级的新服务账本为空、恢复时限为0，不补造历史使用记录");
         Check(migrated.Load(f.Owner, f.First.Id).IsDefault, "升级不继承旧版本默认设置");
         Check(f.Query("SELECT count(*) FROM character_active_main_quests WHERE length(acceptance_id)=32 AND acceptance_id<>'00000000000000000000000000000000'") is 3L &&
             f.Query("SELECT count(*) FROM character_quest_clear_receipts") is 0L,
@@ -362,6 +364,8 @@ internal static class ClientSettingsStoreTests
         Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion && f.ExistingSettings() == existing && f.Assets(includeAcceptance: false) == assets &&
             upgraded.Load(f.Owner, f.First.Id).CharacterGameOptions.IsDefault,
             "v6升级v7保持原两设置表逐字节和全部资产，新角色主设置表为空");
+        Check(f.Query("SELECT count(*) FROM characters WHERE devil_usage<>'[]' OR stamina_until<>0") is 0L,
+            "v6旧库升级保留新服务字段的空默认值，不激活冷却或使用次数");
         Assert(upgraded.Load(f.Owner, f.First.Id), game, character, "v7不把账号设置伪装成角色历史快照");
         Check(upgraded.SaveGameOptions(f.Owner, game, f.First.Id), "升级后账号同值但缺少角色快照仍提交新行");
         Check(Same(new ClientSettingsRepository(f.Path).Load(f.Owner, f.First.Id).CharacterGameOptions, game), "v7角色快照持久化后重开保持");

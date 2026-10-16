@@ -18,6 +18,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     public string Root { get; }
     public string Database => Path.Combine(Options.DataDirectory, "game.db");
     public ServerOptions Options { get; private set; }
+    public DateTimeOffset UtcNow => (clock ?? TimeProvider.System).GetUtcNow();
 
     Process? process;
     Task? output, errors;

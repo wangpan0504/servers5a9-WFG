@@ -742,6 +742,20 @@ internal static partial class FormalDungeonTcpTests
         }
     }
 
+    static bool ExecuteOfflineGm(TcpTestFixture fixture, string command, out string response)
+    {
+        string reply = "";
+        bool delivered = false;
+        // 客户端Dispose不等于服务端已释放owner；仅等待已确认未执行命令的在线保护拒绝。
+        bool settled = SpinWait.SpinUntil(() =>
+        {
+            delivered = DevelopmentGmClient.TryExecute(fixture.Options.GmPort, command, out reply);
+            return !delivered || reply != "ERR 账号正在使用，请重试";
+        }, TimeSpan.FromSeconds(2));
+        response = reply;
+        return settled && delivered;
+    }
+
     static void VerifyOrdinaryRoutes(TcpTestFixture fixture, TcpTestResources resources)
     {
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
@@ -753,8 +767,8 @@ internal static partial class FormalDungeonTcpTests
             string name = "OrdMap" + dungeonId;
             ushort slot = checked((ushort)Convert.ToInt32(fixture.Query("SELECT count(*) FROM characters")[0][0]));
             using (var create = Open(fixture)) create.Create(name);
-            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, $"level {name} {definition.MinimumLevel}", out var reply) && reply.StartsWith("OK "),
-                "独立测试角色经完整成长用例达到对应普通图等级，保留合法初装与两树状态");
+            That(ExecuteOfflineGm(fixture, $"level {name} {definition.MinimumLevel}", out var reply) && reply.StartsWith("OK "),
+                "独立测试角色经完整成长用例达到对应普通图等级，保留合法初装与两树状态：" + reply);
             using var peer = Open(fixture);
             peer.Select(slot);
             EntryTown(peer);

@@ -22,6 +22,22 @@ internal static class DungeonMonsterPlanTests
         That(ordinaryPlan.Monsters.Select(monster => monster.CandidateLevel).SequenceEqual([7, 3]) &&
             ordinaryPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 1, 0 }) &&
             ReferenceEquals(ordinaryPlan.Monsters[0].Source, relative), "本服普通相对和绝对等级分别计算，完整冠军原行和类型保留");
+        var named = relative with { RankKind = "[named]", RankParameterCount = null };
+        var namedPlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [source,named] },99,98,5,playerTeam:0);
+        That(namedPlan.Monsters[1] is { SourceOrdinal:1, ObjectKey:100, CandidateLevel:7, SpawnType:0, ExperienceType:0,
+                IsFriendly:false, IsBlocking:true, CanReportDeath:true, IsBoss:false, IsScriptedBoss:false } &&
+            ReferenceEquals(namedPlan.Monsters[1].Source,named) && named.RankKind == "[named]",
+            "裸named按匹配原生默认类型0规划，保留真实原行、等级、ordinal及跳过角色的独立key");
+        var friendlyNamed = DungeonMonsterPlan.FromRoom(room with { Monsters = [named], MonsterTeams = [7] },99,10,5,playerTeam:7).Monsters.Single();
+        That(friendlyNamed is { SpawnType:0, Team:7, IsFriendly:true, IsBlocking:false, CanReportDeath:false, IsBoss:false },
+            "named仍按本人实际阵营排除同阵营死亡与清房资格");
+        foreach (var invalid in new[]
+        {
+            named with { RankKind="[future]" }, named with { RankKind="[Named]" },
+            named with { RankParameterCount=0 }, named with { NpcParameter=1, Modifiers=["[NPC]"] }
+        })
+            Reject<NotSupportedException>(()=>DungeonMonsterPlan.FromRoom(room with { Monsters=[invalid] },99,10,5),
+                "精确named兼容不放开未知品级、额外计数或未闭合NPC组合");
         var display = source with { RankKind = "[boss]", Modifiers = ["[displayhuntdummy]"] };
         var displayPlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [source, display] },99,10,playerTeam:0);
         That(displayPlan.Monsters[1] is { SourceOrdinal:1, ObjectKey:11, SpawnType:3, Team:100,
@@ -158,6 +174,26 @@ internal static class DungeonMonsterPlanTests
         var maze = definition.Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3
             && candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var dazzlement = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf).Get(7601);
+        var dazzlementMaze = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf)
+            .ResolveOrdinaryMaze(dazzlement,dazzlement.Mazes.Single(),_=>0);
+        That(dazzlementMaze.StaticTopology.Supported && dazzlementMaze.MapSpecification!.Select(map=>map.Id).SequenceEqual([450001,450002]),
+            "7601真实MAP归属和BBEE拓扑选择450001/450002，不猜地图或补造出口");
+        var dazzlementStart = DungeonMonsterPlan.Create(catalog,dazzlementMaze.MapSpecification![0],99,100,dazzlement.BasisLevel,0);
+        That(dazzlementStart.Monsters.Select(actor=>actor.MonsterId).SequenceEqual([107013343,107013344,107013343]) &&
+            dazzlementStart.Monsters.Select(actor=>actor.ObjectKey).SequenceEqual(new ushort[]{100,101,102}) &&
+            dazzlementStart.Monsters.Select(actor=>actor.SourceOrdinal).SequenceEqual([0,1,2]) &&
+            dazzlementStart.Monsters.All(actor=>actor.CandidateLevel==95 && actor.SpawnType==0 && actor.IsBlocking && actor.CanReportDeath && !actor.IsBoss),
+            "眩惑首房保留三个实际模板及原行，named演员按原生类型0规划，不删行冒充空房");
+        That(dazzlementStart.Monsters[1].Source is { RankKind:"[named]", RankParameterCount:null } retainedNamed &&
+            ReferenceEquals(retainedNamed,dazzlementStart.Room.Monsters[1]) &&
+            retainedNamed.RawValues.SequenceEqual([107013344,1,0,878,209,0,1,1]),
+            "450001命名演员保留完整原始八整数和标签，不伪装成normal源资源");
+        var dazzlementBoss = DungeonMonsterPlan.Create(catalog,dazzlementMaze.MapSpecification![1],99,103,dazzlement.BasisLevel,0);
+        That(dazzlementBoss.Monsters.Select(actor=>actor.MonsterId).SequenceEqual([107013343,107013345,107013343]) &&
+            dazzlementBoss.Monsters.Select(actor=>actor.SpawnType).SequenceEqual(new byte[]{0,3,0}) &&
+            dazzlementBoss.Monsters.Single(actor=>actor.IsBoss).MonsterId==107013345,
+            "眩惑末房真实Boss仍为类型3，与首房named类型0独立；不代表专用塔准入或自然通关已验证");
         var apcBoss = catalog.Get(new("boss",new(0,0),53529,"map/Cataclysm/Behemoth/07_2ndBackbone/3213_53529.map"),requirePassiveDefinitions: false);
         var apcPlan = DungeonMonsterPlan.FromRoom(apcBoss,99,200);
         That(apcBoss.Monsters.Count == 0 && apcPlan.Monsters is [{ MonsterId: 2004, SourceOrdinal: 0, CandidateLevel: 32, SpawnType: 8,

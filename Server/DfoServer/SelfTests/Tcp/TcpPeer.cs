@@ -23,6 +23,9 @@ internal sealed class TcpPeer : IDisposable
     ushort sequence;
     bool requestedRoster;
     readonly byte channelNumber;
+    byte? staminaPercent;
+    long lastBarrierCompleted = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    long UnixTime => (fixture?.UtcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
     public byte[] Roster { get; private set; } = [];
     public byte[] LoginEndpoint { get; private set; } = [];
     public byte[] SkillInfo { get; private set; } = [];
@@ -78,6 +81,7 @@ internal sealed class TcpPeer : IDisposable
     {
         var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber);
         peer.fixture = fixture;
+        peer.lastBarrierCompleted = peer.UnixTime;
         try
         {
             peer.Expect(0, 1);
@@ -154,7 +158,9 @@ internal sealed class TcpPeer : IDisposable
             requestedRoster = true;
         if (header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 2 && frame.Length >= 21 && frame[16] is 0 or 1)
             TestCheck.Bytes(frame.AsSpan(19, 2), [2, channelNumber], "本人、同屏和刷新USERINFO均进入接收者当前频道的本地Actor表");
-        return new(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..], protectedFrame);
+        var packet = new WirePacket(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..], protectedFrame);
+        if (packet is { Kind: 0, Opcode: 4, Body.Length: 1 }) staminaPercent = packet.Body[0];
+        return packet;
     }
 
     public WirePacket Expect(byte kind, ushort opcode, byte[]? body = null)
@@ -229,7 +235,32 @@ internal sealed class TcpPeer : IDisposable
     public void Barrier()
     {
         SendBarrier();
-        Expect(1, 1347, [1]);
+        var packet = Read();
+        int staminaUpdates = 0;
+        // 撤退及自然恢复会在命令尾部发布虚弱状态；只接收与本人持久期限吻合的通知。
+        while (packet is { Kind: 0, Opcode: 4 })
+        {
+            TestCheck.That(++staminaUpdates <= 2, "屏障前虚弱通知数量有界");
+            ValidateStamina(packet, Id, lastBarrierCompleted);
+            packet = Read();
+        }
+        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347, "屏障仅允许已校验虚弱通知，不跳过其他包");
+        TestCheck.Bytes(packet.Body, [1], "body (1,1347)");
+        lastBarrierCompleted = UnixTime;
+    }
+
+    void ValidateStamina(WirePacket packet, ushort character, long earliest)
+    {
+        TestCheck.That(packet is { Kind: 0, Opcode: 4, Body.Length: 1 } && fixture is not null,
+            "虚弱通知必须有单字节正文及本人隔离数据库");
+        var saved = fixture!.Query("SELECT stamina_until FROM characters WHERE id=$p0", character);
+        TestCheck.That(saved is [[long]], "虚弱通知必须绑定已选择的本人角色");
+        long until = Convert.ToInt64(saved[0][0]);
+        long finished = UnixTime;
+        long first = Math.Clamp(100 - ((Math.Max(0, until-earliest)+59)/60)*9, 10, 100);
+        long last = Math.Clamp(100 - ((Math.Max(0, until-finished)+59)/60)*9, 10, 100);
+        TestCheck.That(packet.Body[0] >= first && packet.Body[0] <= last && (100-packet.Body[0]) % 9 == 0,
+            "虚弱百分比符合本人落库期限及本版每分钟恢复规则");
     }
 
     public void Closed()
@@ -308,6 +339,7 @@ internal sealed class TcpPeer : IDisposable
     {
         if (!resumeTown && !requestedRoster)
             Send(8, [255, 255, 2]);
+        long selectionStarted = UnixTime;
         Send(4, Build(w => w.Write(slot)));
         var expected = prepared ? PreparedEntry : Entry;
         if (resumeTown)
@@ -398,6 +430,14 @@ internal sealed class TcpPeer : IDisposable
             else
             {
                 tail.Add(Expect(notice.Kind, notice.Opcode));
+                if (notice == ((byte)0, (ushort)24) && fixture is not null)
+                {
+                    ushort character = U16(prefix[0].Body, 9);
+                    var saved = fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0", character);
+                    TestCheck.That(saved is [[long]], "选角场景虚弱状态绑定本人持久角色");
+                    if (Convert.ToInt64(saved[0][0]) > 0 || staminaPercent is < 100)
+                        ValidateStamina(Expect(0, 4), character, selectionStarted);
+                }
                 if (notice == ((byte)0, (ushort)53))
                     ReadCardMembershipState(initialization: true);
             }

@@ -268,14 +268,19 @@ internal static class MetroQuestEntryCoverageTests
                     loaded.Monsters.SpecialObjects.Select(actor => (actor.ObjectKey, actor.Source.SourceOrdinal, actor.Source.ObjectId))
                         .SequenceEqual(openingPlan.SpecialObjects.Select(actor => (actor.ObjectKey, actor.Source.SourceOrdinal, actor.Source.ObjectId))) &&
                     f.Session.EnableFormalDungeonSettlement() is null, "真实起点加载完整演员且不能提前结算：" + row.Quest.Id);
+                long retreatStarted = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 That(f.Session.ReturnFromFormalDungeon() is not null && !f.Session.CanPublishFormalDungeon(opened),
                     "未通关退出释放原实例及发布资格：" + row.Quest.Id);
+                long retreatFinished = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 var after = f.Read();
+                That(after.Inventory.StaminaUntil >= retreatStarted+600 && after.Inventory.StaminaUntil <= retreatFinished+600,
+                    "非训练房未清图回城沿正式规则写入十分钟虚弱期限：" + row.Quest.Id);
                 That(after.ActiveMainQuests.SequenceEqual(before.ActiveMainQuests) && after.CompletedQuests.SequenceEqual(before.CompletedQuests) &&
                     after.AccountCompletedQuests.SequenceEqual(before.AccountCompletedQuests) &&
                     after.QuestAnswers.OrderBy(pair => pair.Key).SequenceEqual(before.QuestAnswers.OrderBy(pair => pair.Key)) &&
                     after.AccountQuestAnswers.OrderBy(pair => pair.Key).SequenceEqual(before.AccountQuestAnswers.OrderBy(pair => pair.Key)) &&
-                    JsonSerializer.Serialize(after.Inventory) == JsonSerializer.Serialize(before.Inventory) &&
+                    JsonSerializer.Serialize(after.Inventory) == JsonSerializer.Serialize(
+                        before.Inventory with { StaminaUntil = after.Inventory.StaminaUntil }) &&
                     JsonSerializer.Serialize(after.Learning) == JsonSerializer.Serialize(before.Learning) &&
                     f.Repository.LoadQuestClear(f.Owner, after, checked((ushort)row.Quest.Id)) is null,
                     "入场/加载/退出不制造任务进度、清图、答案或奖励：" + row.Quest.Id);

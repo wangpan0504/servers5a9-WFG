@@ -94,11 +94,16 @@ internal static class HarlemQuestEntryTests
             That(fixture.Session.EnableFormalDungeonSettlement() is null &&
                 fixture.Repository.LoadQuestClear(fixture.Owner,fixture.Session.Selected!,5934) is null,
                 "未报告死亡的入场及相邻移动没有清图事实或奖励许可");
+            long retreatStarted = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             That(fixture.Session.ReturnFromFormalDungeon() is not null && !fixture.Session.CanPublishFormalDungeon(opened) &&
                 !fixture.Session.CanPublishFormalDungeon(loaded), "未通关退出结束原Run与回执");
+            long retreatFinished = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var after = fixture.Read();
+            That(after.Inventory.StaminaUntil >= retreatStarted+600 && after.Inventory.StaminaUntil <= retreatFinished+600,
+                "非训练房未清图回城沿正式规则写入十分钟虚弱期限");
             That(after.ActiveMainQuests.SequenceEqual(before.ActiveMainQuests) && after.CompletedQuests.SequenceEqual(before.CompletedQuests) &&
-                JsonSerializer.Serialize(after.Inventory) == JsonSerializer.Serialize(before.Inventory) &&
+                JsonSerializer.Serialize(after.Inventory) == JsonSerializer.Serialize(
+                    before.Inventory with { StaminaUntil = after.Inventory.StaminaUntil }) &&
                 JsonSerializer.Serialize(after.Learning) == JsonSerializer.Serialize(before.Learning) &&
                 fixture.Repository.LoadQuestClear(fixture.Owner,after,5934) is null,
                 "真实Session入场、加载、相邻移动及退出不造死亡、清图或任务奖励");

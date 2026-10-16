@@ -53,7 +53,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             var source = room.Monsters[index];
             var raw = source.RawValues;
             if (raw.Count != 8 || raw[0] != source.MonsterId || source.MonsterId < 0
-                || source.PlacementKind != "[fixed]" || source.RankKind is not ("[normal]" or "[champion]" or "[super champion]" or "[boss]") ||
+                || source.PlacementKind != "[fixed]" || source.RankKind is not ("[normal]" or "[named]" or "[champion]" or "[super champion]" or "[boss]") ||
+                source.RankKind == "[named]" && (source.NpcParameter.HasValue || source.Modifiers.Count != 0 || source.RankParameterCount.HasValue) ||
                 !(source.NpcParameter.HasValue ? source.Modifiers is ["[NPC]"] :
                     source.Modifiers.Count == 0 || source.RankKind == "[boss]" && source.Modifiers is ["[dummy]"] || source.IsDisplayHuntDummy)
                 || raw[6] is < 0 or > 255 || raw[7] is < 0 or > 255)
@@ -73,6 +74,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 nextKey++;
             if (nextKey > ushort.MaxValue)
                 throw new InvalidDataException("房间怪物对象 key 超出 ushort 容量");
+            // Full03 0425C88D先置模板+24=0；0425D27B的未匹配rank成功尾部保留0。
+            // 仅兼容真实450001的裸[named]，保留原标记；不放开任意未知品级或附加效果。
             // 资源品级经模板+24进入客户端记录+14：普通0、精英1/2、Boss3。
             // 绝对等级保留完整整数，相对等级使用已核验基准；原始行始终保留。
             int? rawTeam = room.MonsterTeams is { } monsterTeams && index < monsterTeams.Count
@@ -81,7 +84,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             bool friendly = playerTeam is { } actualTeam && team == actualTeam;
             result.Add(new(index, (ushort)nextKey, source.MonsterId, level, source)
             {
-                SpawnType = source.RankKind switch { "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => (byte)0 },
+                SpawnType = source.RankKind switch { "[named]" => 0, "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => (byte)0 },
                 // 02A15E31保留显式team；02C9F43C相对本人比较，不把0或非100统一当作友军。
                 Team = team,
                 IsFriendly = friendly,
