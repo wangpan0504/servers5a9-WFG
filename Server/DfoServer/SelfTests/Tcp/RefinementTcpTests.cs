@@ -13,6 +13,7 @@ internal static class RefinementTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        Inventory.RefinementTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
         var itemResources = resources.ItemResources;
         var characters = resources.Characters;
         var towns = resources.Towns;
@@ -106,6 +107,29 @@ internal static class RefinementTcpTests
             peer.Send(438, [0, 3, 0, 128, 62, 0, 0, 4, 0, 255, 255, 255, 127, 65, 0]);
             peer.Closed();
             That(Snapshot() == committed, "malformed variable-length request cannot mutate assets");
+        }
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var saved = repo.LoadCharacter(owner, 0);
+            var target = saved.Inventory.Find(Bag(3))!;
+            var after = saved.Inventory with { Items = saved.Inventory.Items.Replace(target,
+                target with { Core = target.Core with { GenuineUpgrade = 0 } }).Add(new(0, Bag(4),
+                    InventoryRewardGrantService.Create(itemResources.Items.Get(490705102)) with { ExpireTime = int.MaxValue })) };
+            InventoryService.Commit(repo, owner, saved, new(true, 0, new(saved.Inventory, after, "portable_refinement_seed")));
+        }
+        fixture.Sql("CREATE TRIGGER fail_portable_refinement BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'portable rollback'); END");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); string before = Snapshot(); Send(peer, 0, 3); peer.Closed();
+            That(Snapshot() == before, "便携炉晚期失败时消费、等级与审计同事务回滚");
+        }
+        fixture.Sql("DROP TRIGGER fail_portable_refinement");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); Send(peer, 0, 3); Ack(peer, 0, 0, 3); peer.Expect(0, 14); peer.Barrier();
+            string after = Snapshot();
+            Send(peer, 0, 3); peer.Expect(1, 438, [0, 22, 0]); peer.Barrier();
+            That(Snapshot() == after, "最后一炉消费后重放不再次锻造或扣气息");
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "refinement TCP database integrity");

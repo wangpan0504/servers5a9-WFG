@@ -13,6 +13,7 @@ internal static class RefinementTicketTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        await Inventory.RefinementTicketTests.RunAsync(resources.Towns, resources.Characters, resources.ItemResources);
         var itemResources = resources.ItemResources;
         var characters = resources.Characters;
         var towns = resources.Towns;

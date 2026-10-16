@@ -37,6 +37,9 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public int DisjointValue { get; init; }
     public int PortableDisjointLevel { get; init; } = -1;
     public bool UseForbidden { get; init; }
+    public int MaximumLevel { get; init; } = int.MaxValue;
+    public bool AllowsUse(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
+        job < 16 && (Jobs & (1 << job)) != 0;
     public RefinementTicketDefinition? RefinementTicket { get; init; }
     public AvatarSocketTypes AvatarSockets { get; init; }
     public bool CloneAvatar { get; init; }

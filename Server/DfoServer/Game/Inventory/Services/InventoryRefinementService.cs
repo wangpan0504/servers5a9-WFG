@@ -23,9 +23,11 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
         byte oldLevel = target.Core.GenuineUpgrade;
         var material = before.Find(materialSlot);
         RefinementTicketDefinition? ticket;
+        ItemTemplate? sourceTemplate;
         try
         {
-            ticket = material?.Core.IsStackable == true ? catalog.Get(material.Core.ItemId).RefinementTicket : null;
+            sourceTemplate = material?.Core.IsStackable == true ? catalog.Get(material.Core.ItemId) : null;
+            ticket = sourceTemplate?.RefinementTicket;
         }
         catch (InvalidDataException)
         {
@@ -33,10 +35,9 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
         }
         RefinementCost cost;
         byte desiredLevel;
-        if (ticket is not null)
+        if (ticket is { Available: false }) return InventoryResult.Reject(13);
+        if (ticket is { Portable: false })
         {
-            if (!ticket.Available)
-                return InventoryResult.Reject(13);
             if (!ticket.AllowedItemIds.IsEmpty && !ticket.AllowedItemIds.Contains(target.Core.ItemId))
                 return InventoryResult.Reject(19);
             if (!ticket.TryTargetLevel(oldLevel, refinement.MaximumLevel, out desiredLevel))
@@ -53,6 +54,14 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
             if (!refinement.TryCost(template, oldLevel, out cost))
                 return InventoryResult.Reject(13);
             desiredLevel = checked((byte)(oldLevel + 1));
+            if (ticket is { Portable: true })
+            {
+                if (!sourceTemplate!.AllowsUse(character.Level, character.Job) ||
+                    !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate) ||
+                    template.MinimumLevel < ticket.MinimumItemLevel || template.MinimumLevel > ticket.MaximumItemLevel)
+                    return InventoryResult.Reject(19);
+                cost = new(material!.Core.ItemId, 1, cost.SuccessWeight);
+            }
         }
         // 两种入口都按指定格扣除，不跨堆叠补扣；确认状态不能取代实际材料/券实例。
         if (material is null || !material.Core.IsStackable || material.Core.ItemId != cost.ItemId || material.Core.Count < cost.Count ||

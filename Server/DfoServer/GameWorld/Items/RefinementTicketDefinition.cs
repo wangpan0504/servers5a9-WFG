@@ -8,6 +8,9 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record RefinementTicketDefinition(byte Level, int SuccessWeight, bool Additional, int MaximumSourceLevel,
     ImmutableArray<int> AllowedItemIds, string? PendingRule = null)
 {
+    public bool Portable { get; init; }
+    public int MinimumItemLevel { get; init; }
+    public int MaximumItemLevel { get; init; } = int.MaxValue;
     public bool Available => PendingRule is null;
 
     public bool TryTargetLevel(byte currentLevel, int maximumLevel, out byte targetLevel)
@@ -27,6 +30,14 @@ internal sealed record RefinementTicketDefinition(byte Level, int SuccessWeight,
     }
     public static RefinementTicketDefinition? Parse(PvfDocument script)
     {
+        if (Regex.Match(script.Section("action type"), @"\[([^\]]+)\]").Groups[1].Value == "portable genuine damage upgrade upgrede")
+        {
+            var range = script.Section("check usable itemlevel").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (range.Length != 2 || !int.TryParse(range[0], out int min) || !int.TryParse(range[1], out int max) || min < 0 || max < min)
+                return Pending("便携锻造炉目标等级限制无效");
+            // 每次一炉；概率与最高等级仍走本版普通锻造表，不能当100%增量券。
+            return new(1, 0, true, -1, []) { Portable = true, MinimumItemLevel = min, MaximumItemLevel = max };
+        }
         if (!script.Has("equipment separate reinforcement ticket"))
             return null;
         var match = Regex.Match(script.Section("equipment separate reinforcement ticket"),

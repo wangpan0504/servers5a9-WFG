@@ -189,6 +189,9 @@ internal sealed class ItemCatalog
         }
 
         int minimum = Int("minimum level", isEquipment ? 1 : 0), durability = Int("durability", 0);
+        int maximum = int.MaxValue;
+        if (text.Has("maximum level") && (!text.TryGetInt32("maximum level", out maximum) || maximum < minimum))
+            throw new InvalidDataException("PVF物品最高等级声明无效: " + id);
         int baseValue = Int("value", -1);
         if (baseValue < 0)
             baseValue = Int("price", 0);
@@ -225,6 +228,7 @@ internal sealed class ItemCatalog
             ShopPrice = ItemShopPrice.Parse(text, isEquipment, equipmentSellRate),
             Expiration = ItemExpiration.Parse(text),
             RefinementTicket = isEquipment ? null : RefinementTicketDefinition.Parse(text),
+            MaximumLevel = maximum,
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = Int("clear avatar", 0) == 1 || text.Section("item category").Contains("clear avatar", StringComparison.OrdinalIgnoreCase),
             BorrowAvatarAppearance = kind == ItemKind.Avatar && slot != 9,

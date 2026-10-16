@@ -133,6 +133,28 @@ internal static class RefinementTests
         Denied(poor, request, 22);
         That(poor.Inventory.Find(Bag(5))!.Core.Count > firstCost.Count, "another matching stack is not silently substituted");
 
+        var forgeTemplate = catalog.Get(490705102);
+        That(forgeTemplate.RefinementTicket is { Available: true, Portable: true, MinimumItemLevel: 1, MaximumItemLevel: 95 },
+            "实际PVF便携炉保留1..95装备等级范围");
+        var forge = InventoryRewardGrantService.Create(forgeTemplate, 2, now) with { ExpireTime = int.MaxValue };
+        foreach (int roll in new[] { 4999, 5000 })
+        {
+            random.Value = roll;
+            var role = Role(Bag(3), core with { GenuineUpgrade = 1 }, forge);
+            var result = service.Refine(role, request, out var receipt, now);
+            That(result.Accepted && receipt is { UsedTicket: true, MaterialRemaining: 1 } && receipt.Succeeded == (roll < 5000) &&
+                receipt.NewLevel == (roll < 5000 ? 2 : 1), "便携炉使用普通概率边界，成败均只扣一炉");
+            That(result.Plan!.After.Find(Bag(5)) == role.Inventory.Find(Bag(5)) && result.Plan.After.Gold == role.Inventory.Gold,
+                "便携炉不扣另格气息或金币");
+        }
+        calls = random.Calls;
+        Denied(Role(Bag(3), core with { GenuineUpgrade = 8 }, forge), request, 95);
+        Denied(Role(Bag(3), source: forge with { ExpireTime = 1 }), request, 22);
+        Denied(Role(Bag(3), source: forge with { EquipmentLockId = 1 }), request, 22);
+        foreach (string range in new[] { "", "1", "95 1", "1 95 100" })
+            That(RefinementTicketDefinition.Parse(new PvfLib.PvfDocument("[action type]\n`[portable genuine damage upgrade upgrede]`\n[/action type]\n[check usable itemlevel]\n" + range)) is { Available: false },
+                "便携炉无效目标范围不得退回普通材料");
+
         string root = Path.Combine(Path.GetTempPath(), "s5a9-refinement-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
