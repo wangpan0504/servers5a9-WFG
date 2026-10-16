@@ -23,6 +23,7 @@ jobs:
       run:
         shell: pwsh
     env:
+      TZ: Asia/Shanghai
       VERSION: ${{ inputs.version }}
       SOURCE_COMMIT: ${{ forgejo.sha }}
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
