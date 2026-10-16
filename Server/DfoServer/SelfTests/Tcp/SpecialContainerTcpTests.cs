@@ -105,6 +105,7 @@ internal static class SpecialContainerTcpTests
     static void CreatureActor(byte[] body, uint template, string message)
     {
         const int nameWidth = 10; // SpecialTcp的CP936字节数。
+        That(body[132 + nameWidth] == 0, "城镇宠物Actor保持成员状态0，不混入副本加载状态");
         int offset = 156 + nameWidth + body[133 + nameWidth] * 25;
         That(body[0] == 0 && U32(body, offset) == template && U32(body, offset + 4) == 0 &&
             body[offset + 8] == (template == 0 ? 0 : 1), message + "；同步模板与启用标志");

@@ -95,10 +95,16 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         }
         if (refreshEquipment && changedSlots.Any(slot => slot.List == InventoryListType.Equipment))
         {
-            // 副本及结算沿用当前玩家对象；完整Actor刷新只用于城镇/选图。
-            if (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect)
+            var creatureSlot = new InventorySlot(InventoryListType.Equipment, 26);
+            bool creatureChanged = plan.ChangedSlots.Contains(creatureSlot) &&
+                plan.BeforeIndex.Find(creatureSlot) != receipt.Index.Find(creatureSlot);
+            // 宠物槽实际变化时补充Actor的宠物声明；其他副本换装仍只刷新Player。
+            if (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
+                creatureChanged && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
                 await context.Notify(NotiPacketType.USERINFO,
-                    TownPackets.Actor(current, context.Channel, adventureName: context.Session.ReadAdventureName()), "equipment_actor", CanSend);
+                    TownPackets.Actor(current, context.Channel, adventureName: context.Session.ReadAdventureName(),
+                        sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
+                            ? ActorSceneState.Dungeon : ActorSceneState.Town), "equipment_actor", CanSend);
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {

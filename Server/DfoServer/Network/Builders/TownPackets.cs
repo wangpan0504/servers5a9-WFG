@@ -7,6 +7,9 @@ using DfoServer.GameWorld.Channels;
 using DfoServer.Game.Quests;
 
 namespace DfoServer.Network.Builders;
+
+internal enum ActorSceneState : byte { Town = 0, Dungeon = 1 }
+
 // Client 包体构造。只读取角色快照，不修改会话或访问数据库。
 internal static class TownPackets
 {
@@ -63,7 +66,8 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Actor(Character character, ChannelIdentity channel = default, long? utcSeconds = null, string adventureName = "")
+    public static byte[] Actor(Character character, ChannelIdentity channel = default, long? utcSeconds = null,
+        string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
@@ -86,7 +90,9 @@ internal static class TownPackets
             writer.Write(character.Job);
             writer.Write(character.GrowType);
             writer.Write(character.Level);
-            writer.Write(new byte[3]); // 02676FB0 level, two helper bytes, one direct byte.
+            writer.Write(new byte[2]); // Level后的两个辅助字段。
+            // 0267DF0B读入成员DTO+1C；原生45发送门禁要求副本成员状态非零。
+            writer.Write((byte)sceneState);
             EquipmentProtocolWriter.Appearance(writer, character.Inventory);
             writer.Write(0u);
             writer.Write(new byte[4]);
