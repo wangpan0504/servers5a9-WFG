@@ -531,7 +531,7 @@ internal static partial class FormalDungeonTcpTests
                 revision == completedOrdinaryRevision + 1 + (completedOrdinaryGoldLimit == expectedOrdinaryGoldLimit ? 0 : 1) && limit == expectedOrdinaryGoldLimit,
                 "普通回城重登仅推进出生归一化及必要金币上限初始化的revision，不重放奖励或费用");
         }
-        VerifyQuestBossEntry(fixture,resources,growth);
+        await VerifyQuestBossEntryAsync(source,root,resources,growth);
         VerifyStoryDifficultyEntry(fixture,resources,growth);
         await fixture.StopAsync();
         await VerifyMultipleStoryBlocksAsync(source,root,resources,growth);

@@ -30,6 +30,24 @@ internal static class SinglePlayerDungeonRunTests
         That(run.Snapshot.ConsumedFatigue == 0, "任务专用路线不计入普通房间疲劳");
         var fatigueRoute = new DungeonFixedRoute([WithTeams(Plan(start, 30), 0), WithTeams(Plan(friendly, 31), 0),
             BossPlan(boss, 32)], route.Connections);
+        var acceptedHunt = new DfoServer.Game.Characters.ActiveMainQuest(0,3145,2) { AcceptanceId = Guid.NewGuid() };
+        var huntEntry = entry with { IsOrdinaryHunt=true,RouteQuestId=0,QuestAcceptanceId=acceptedHunt.AcceptanceId,QuestAcceptances=[acceptedHunt] };
+        That(SinglePlayerDungeonRun.TryCreate(huntEntry,2,200,fatigueRoute,authority,out var huntRun,out _) &&
+            huntRun!.Snapshot.Identity.QuestId == huntEntry.QuestId,"普通猎杀Run保留非零原请求任务身份");
+        huntRun!.CompleteLoading(huntRun.Snapshot.Identity,Guid.NewGuid());
+        That(huntRun.Snapshot.ConsumedFatigue == 1,"普通猎杀真实加载同样累计一点疲劳");
+        foreach (var invalid in new[] {
+            huntEntry with { IsOrdinaryHunt=false }, huntEntry with { RouteQuestId=3145 },
+            huntEntry with { QuestId=0,ActiveQuestSlot=byte.MaxValue,QuestAcceptanceId=Guid.Empty },
+            huntEntry with { IsTutorial=true }, huntEntry with { IsQuestReplay=true },
+            huntEntry with { ActiveQuestSlot=30 }, huntEntry with { QuestAcceptanceId=Guid.Empty },
+            huntEntry with { QuestAcceptances=[] }, huntEntry with { QuestAcceptanceId=Guid.NewGuid() },
+            huntEntry with { Maze=maze with { QuestConnectionTokens=[new(0,0),new(0,3145),new(0,-1)] } },
+            huntEntry with { QuestAcceptances=[acceptedHunt,acceptedHunt with { Slot=1 }] },
+            huntEntry with { QuestAcceptances=[acceptedHunt,new(0,3146,1) { AcceptanceId=Guid.NewGuid() }] },
+            huntEntry with { QuestAcceptances=[acceptedHunt,new(1,3146,1) { AcceptanceId=acceptedHunt.AcceptanceId }] } })
+            That(!SinglePlayerDungeonRun.TryCreate(invalid,2,200,fatigueRoute,authority,out _,out _),
+                "普通猎杀模式不能与请求、专用路线、回放或冻结接取身份矛盾");
         That(SinglePlayerDungeonRun.TryCreate(entry with { QuestId = 0, RouteQuestId = 0, ActiveQuestSlot = byte.MaxValue }, 2, 200, fatigueRoute,
             authority, out var fatigueRun, out _) && fatigueRun!.Snapshot.ConsumedFatigue == 0,
             "普通实例在加载成功前不计应耗疲劳");

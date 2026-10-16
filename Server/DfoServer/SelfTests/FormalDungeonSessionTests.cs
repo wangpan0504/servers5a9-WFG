@@ -34,6 +34,7 @@ internal static class FormalDungeonSessionTests
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        OrdinaryHuntLifecycle();
         Lifecycle(0);
         Lifecycle(14);
         OrdinaryJobs();
@@ -200,6 +201,109 @@ internal static class FormalDungeonSessionTests
             scheduled = f.Session.CurrentDungeonDeathReturn()!;
             f.Session.End();
             Check(f.Session.ReturnFromFormalDungeonOnDeath(scheduled) is null, "断线结束使死亡回调失效");
+        }
+
+        void OrdinaryHuntLifecycle()
+        {
+            var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
+            var clears = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
+            var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+            var area = towns.Areas.Values.First(row => row.Level <= 45 && row.DungeonWorldMap is { } world &&
+                towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 40));
+            var done = area.Quests.ToHashSet();
+            if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+            var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+            var position = new Location(area.Town,area.Area,checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+            var candidate = CharacterCreation.Prepare("HuntRoute",characters.Get(0),position,position,learning.Get);
+            candidate = candidate with { Level=45,AcceptedStoryLevel=45,CompletedQuests=done.ToArray(),
+                InitialLearning=SkillPointLedger.Synchronize(0,0,45,candidate.InitialLearning with { Experience=growth.GetLevelStartExperience(45) },learning) };
+            using (var zero = new Fixture("HuntZero",towns,characters,learning,quests,prepared:candidate with { Name="HuntZero" }))
+            {
+                zero.Sql("UPDATE character_fatigue SET remaining=0");
+                zero.Session.Select(zero.Created.Slot,resumeTown:true); zero.Session.MarkReady();
+                Check(zero.Session.ChangeQuest(2948,DfoServer.Game.Quests.QuestLifecycleAction.Accept,quests,itemResources.Items,
+                    itemResources.GoldLimits,itemResources.EpicPieces)?.Commit is not null,"匿名信经生产接取生成原身份");
+                var beforeZero = zero.Read();
+                Check(zero.Session.EnterFormalDungeon(40,2948,0,catalog,rooms,drops,itemResources.Items,_ => 0,itemResources.EpicPieces) is null &&
+                    Same(beforeZero,zero.Read()) && zero.Session.DungeonSnapshot is null,"普通猎杀疲劳零拒绝且不预留attempt、revision或资产");
+            }
+            using var f = new Fixture("HuntRoute",towns,characters,learning,quests,prepared:candidate);
+            f.Session.Select(f.Created.Slot,resumeTown:true); f.Session.MarkReady();
+            Check(f.Session.ChangeQuest(2948,DfoServer.Game.Quests.QuestLifecycleAction.Accept,quests,itemResources.Items,
+                itemResources.GoldLimits,itemResources.EpicPieces)?.Commit is not null,"代表性真实匿名信保留完整生产接取事务");
+            var before = f.Session.Selected!;
+            Guid acceptance = before.ActiveMainQuests.Single().AcceptanceId;
+            Check(before.Position.Town == area.Town && before.Position.Area == area.Area &&
+                towns.SelectionReturn(before.Position,before.CompletedQuests.ToHashSet()) is not null && before.Fatigue is { Remaining:>0 },
+                "匿名信测试使用实际入口城镇及可返回位置，原疲劳余额有效");
+            FormalDungeonReceipt current = f.Session.EnterFormalDungeon(40,2948,0,catalog,rooms,drops,itemResources.Items,_ => 0,itemResources.EpicPieces)
+                ?? throw new InvalidOperationException("真实匿名信Session入口未建立普通猎杀路线");
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                Check(current.Entry is { IsOrdinaryHunt:true,UsesFatigue:true,RouteQuestId:0,QuestId:2948 } &&
+                    current.Entry.QuestAcceptanceId == acceptance && current.Snapshot.Identity.QuestId == 2948 &&
+                    current.Snapshot.Identity.TaskAttempt == attempt,"普通猎杀及再挑战保留原任务和接取，独立预留新attempt");
+                var initialIdentity = current.Snapshot.Identity;
+                var maze = current.Entry.Maze;
+                var target = current.Entry.BossMap.Position;
+                var from = new Dictionary<DungeonPoint,DungeonPoint?> { [current.Entry.StartMap.Position]=null };
+                var queue = new Queue<DungeonPoint>(); queue.Enqueue(current.Entry.StartMap.Position);
+                while (queue.TryDequeue(out var point) && !from.ContainsKey(target))
+                foreach (var link in maze.StaticTopology.Links!)
+                {
+                    DungeonPoint? next = link.First == point ? link.Second : link.Second == point ? link.First : null;
+                    if (next is not { } adjacent || from.ContainsKey(adjacent)) continue;
+                    from.Add(adjacent,point); queue.Enqueue(adjacent);
+                }
+                var path = new Stack<DungeonPoint>();
+                for (var point=target; from[point] is { } parent; point=parent) path.Push(point);
+                while (true)
+                {
+                    current = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("普通猎杀房间不能加载");
+                    Check(f.Session.CompleteFormalDungeonLoading() is null && current.Character.Fatigue!.Used ==
+                        Convert.ToUInt32(f.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts")),"普通猎杀首次加载实际扣点，重复加载不重复扣点");
+                    foreach (var monster in current.Monsters.Monsters.Where(row => row.IsBlocking).OrderBy(row => row.SpawnType == 3).ToArray())
+                    {
+                        uint scalar = f.Session.Selected!.ActiveMainQuests.Single().ConditionState;
+                        var observation = Observation(current,monster);
+                        if (monster.SpawnType == 3) observation = observation with { RewriteFlag=1,Unknown18=9000,Unknown26=30 };
+                        var death = f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
+                        Check(death.Outcome == DungeonRunOutcome.Accepted && death.Receipt is not null &&
+                            f.Session.Selected!.ActiveMainQuests.Single().ConditionState == scalar-(monster.MonsterId == 1014 ? 1u : 0u),
+                            "真实死亡只按目标模板推进原猎杀计数，非目标不以清房代替");
+                        current = death.Receipt!;
+                        Check(f.Session.ObserveFormalDungeonDeath(observation,kills,growth).Outcome == DungeonRunOutcome.Duplicate,
+                            "重复真实死亡不重复推进普通猎杀进度");
+                    }
+                    if (!path.TryPop(out var next)) break;
+                    current = f.Session.MoveFormalDungeon(checked((byte)next.X),checked((byte)next.Y))
+                        ?? throw new InvalidOperationException("普通猎杀资源通路不能过房");
+                }
+                if (attempt == 2)
+                    Check(f.Session.FinishQuest(2948,0,quests,parameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth).Receipt is not null,
+                        "原目标死亡两次后才沿生产领奖，保留职业武器奖励合同");
+                var settled = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[1,2,3,4],catalog,clears,growth);
+                Check(settled.Outcome == DungeonRunOutcome.Accepted && Same(f.Session.Selected!,f.Read()),"普通猎杀原非零实例身份沿生产结算持久提交");
+                Check(f.Session.RetryFormalDungeon(settled.Receipt! with { Entry=settled.Receipt.Entry with { IsOrdinaryHunt=false } },
+                    catalog,rooms,drops,itemResources.Items,itemResources.EpicPieces) is null,"篡改普通猎杀标志的回执不能替换旧结算");
+                if (attempt == 1)
+                {
+                    var committed = f.Session.Selected!;
+                    f.Sql("CREATE TRIGGER hunt_retry_fail AFTER UPDATE ON character_dungeon_state BEGIN SELECT RAISE(ABORT,'hunt retry rollback'); END");
+                    Reject<SqliteException>(() => f.Session.RetryFormalDungeon(settled.Receipt!,catalog,rooms,drops,itemResources.Items,itemResources.EpicPieces),
+                        "普通猎杀重试预留失败保留旧结算");
+                    Check(Same(committed,f.Read()) && f.Session.CanPublishFormalDungeon(settled.Receipt!),"失败预留不改原实例、接取及角色revision");
+                    f.Sql("DROP TRIGGER hunt_retry_fail");
+                }
+                current = f.Session.RetryFormalDungeon(settled.Receipt!,catalog,rooms,drops,itemResources.Items,itemResources.EpicPieces)
+                    ?? throw new InvalidOperationException("普通猎杀不能再挑战");
+                Check(current.Snapshot.Identity.InstanceId != initialIdentity.InstanceId && !f.Session.CanPublishFormalDungeon(settled.Receipt!),
+                    "成功重试建立独立实例并使旧结算回执失效");
+            }
+            Check(current.Entry is { QuestId:0,IsOrdinary:true,IsOrdinaryHunt:false } &&
+                f.Session.CompleteFormalDungeonLoading() is not null && f.Session.ReturnFromFormalDungeon() is not null &&
+                f.Read().Position == towns.SelectionReturn(before.Position,before.CompletedQuests.ToHashSet()),
+                "匿名信已领奖后再挑战恢复普通0身份，实际加载扣点并沿原安全锚点回城");
         }
 
         void OrdinaryRoutes()
@@ -1113,14 +1217,14 @@ internal static class FormalDungeonSessionTests
         public GameSession Session { get; }
         public Character Created { get; }
         public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool secondCharacter = false, byte job = 0,
-            DfoServer.Game.Settings.GameDebugSettings? debugSettings = null)
+            DfoServer.Game.Settings.GameDebugSettings? debugSettings = null, NewCharacter? prepared = null)
         {
             Path = System.IO.Path.Combine(root, "game.db");
             Repository = new(Path, quests);
             Owner = Owners.Acquire("formal-session", () => { });
-            Session = new(Repository, towns, Owner, debugSettings: debugSettings);
+            Session = new(Repository, towns, Owner, questCatalog:prepared is null ? null : quests, debugSettings: debugSettings);
             if (secondCharacter) Session.CreateCharacter("RecordDummy", characters.Get(0), learning);
-            Created = Repository.Create(Owner, CharacterCreation.Prepare(name, characters.Get(job), towns.Room, towns.InitialReturn, learning.Get)
+            Created = Repository.Create(Owner, prepared ?? CharacterCreation.Prepare(name, characters.Get(job), towns.Room, towns.InitialReturn, learning.Get)
                 with { ActiveMainQuests = [new(0,3145,1)] });
         }
         public void SelectEntry()

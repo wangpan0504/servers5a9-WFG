@@ -5,6 +5,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
+using DfoServer.Network.Management;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -12,14 +13,22 @@ namespace DfoServer.Testing;
 
 internal static partial class FormalDungeonTcpTests
 {
-    static void VerifyQuestBossEntry(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
+    static async Task VerifyQuestBossEntryAsync(ServerOptions source,string root,TcpTestResources resources,CharacterGrowthCatalog growth)
     {
+        // 全职业及故事难度已占满原账号；任务入口共用独立测试库，保留原角色槽上限。
+        await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DfoServer.Development.Dungeons.DungeonEntryProbeMode.Disabled },
+            Path.Combine(root,"quest-boss-entry"),gm:true,resources:resources);
+        await fixture.StartAsync();
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out var fatigueMode) &&
+            fatigueMode == "OK {\"infiniteFatigue\":false}","任务入口TCP显式关闭无限疲劳");
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (var scenario in new[] { (Quest:3772,Dungeon:235,Previous:3771,Level:(byte)84), (Quest:3773,Dungeon:227,Previous:3772,Level:(byte)84),
             (Quest:3774,Dungeon:1005,Previous:3773,Level:(byte)84), (Quest:3776,Dungeon:1007,Previous:3775,Level:(byte)84),
-            (Quest:3777,Dungeon:238,Previous:3776,Level:(byte)84), (Quest:3946,Dungeon:310,Previous:3945,Level:(byte)88) })
+            (Quest:3777,Dungeon:238,Previous:3776,Level:(byte)84), (Quest:3946,Dungeon:310,Previous:3945,Level:(byte)88),
+            (Quest:2948,Dungeon:40,Previous:0,Level:(byte)45) })
         {
-            var done = new HashSet<int> { scenario.Previous };
+            var done = new HashSet<int>();
+            if (scenario.Previous != 0) done.Add(scenario.Previous);
             var area = resources.Towns.Areas.Values.First(row => row.Level <= scenario.Level && row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == scenario.Dungeon));
             done.UnionWith(area.Quests);
@@ -48,10 +57,20 @@ internal static partial class FormalDungeonTcpTests
                 var start = maze.MapSpecification!.Single(row => row.Position == maze.Starts.Single());
                 That(U32(map,14) == start.Id && information[8] == maze.Bosses.Single().X && information[9] == maze.Bosses.Single().Y,
                     "真实TCP的任务及普通0请求进入原起点与Boss坐标："+scenario.Quest);
-                Load(peer); peer.Barrier();
+                Load(peer);
+                if (scenario.Quest == 2948)
+                {
+                    int used = checked((int)attempt+1);
+                    peer.Expect(0,36,[checked((byte)used),0,156,0,0,0,checked((byte)(156-used)),0,0,0]);
+                    peer.Send(37,new byte[8]); peer.Barrier();
+                    That(maze.QuestConnectionTokens.Count == 0 && fixture.Query(
+                        "SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[long actualUsed,long remaining]] &&
+                        actualUsed == used && remaining == 156-used,"匿名信显式及普通0请求均用真实普通迷宫，生产疲劳投影与重复加载SQL去重一致");
+                }
+                else peer.Barrier();
                 var active = fixture.Query("SELECT acceptance_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,scenario.Quest).Single();
                 acceptance ??= (string)active[0];
-                That((string)active[0] == acceptance && active[1] is 1L &&
+                That((string)active[0] == acceptance && Convert.ToInt64(active[1]) == (scenario.Quest == 2948 ? 2 : 1) &&
                     fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[long actualAttempt]] && actualAttempt == ++attempt,
                     "两种请求保留同一真实接取，分别只建立一次正式尝试："+scenario.Quest);
                 peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();

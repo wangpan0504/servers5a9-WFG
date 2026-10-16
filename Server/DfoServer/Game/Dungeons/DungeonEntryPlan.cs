@@ -6,7 +6,7 @@ using System.Collections.Immutable;
 
 namespace DfoServer.Game.Dungeons;
 
-// 普通请求的任务字段为0，与任务专用maze分别准入；计划不建立实例或证明客户端加载。
+// 请求任务身份与实际路线分别冻结；计划不建立实例或证明客户端加载。
 // 调用方仍须在有效账号owner下绑定epoch，并在提交时复验原角色快照。
 internal sealed record DungeonEntryPlan(
     ushort CharacterId,
@@ -24,7 +24,8 @@ internal sealed record DungeonEntryPlan(
     public bool IsTutorial { get; init; }
     public bool DisableClearReward { get; init; }
     public Guid QuestAcceptanceId { get; init; }
-    public bool IsOrdinary => !IsTutorial && QuestId == 0 && RouteQuestId == 0;
+    public bool IsOrdinaryHunt { get; init; }
+    public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
     public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
     public bool UsesFatigue => IsOrdinary && !IsTrainingRoom && !IsClassExperience;
@@ -121,6 +122,7 @@ internal sealed record DungeonEntryPlan(
 
         // 仅识别匹配 PVF 已确认的三个整数；未知引用和其他条件形状不能变成默认迷宫。
         uint routeQuest = !isReplay && quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
+        bool ordinaryHunt = false;
         StoryQuest? layoutQuest = quest;
         var candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)));
         if (questId == 0 && quests is not null)
@@ -176,6 +178,20 @@ internal sealed record DungeonEntryPlan(
             quest.Definition is { Diagnostics.Length: 0 } declared && declared.Dungeons.Any(row => row.DungeonId == dungeonId) &&
             definition.Mazes.All(maze => maze.QuestConnectionTokens.Count == 0))
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
+        // 普通猎杀只借用明确归属的普通迷宫；已有本任务连接或未知连接不能降级为普通路线。
+        if (!isReplay && candidates.Length == 0 && questId != 0 && quest is not null &&
+            CanUseOrdinaryHuntRoute(definition,character,quest,dungeonId,questId,difficulty))
+        {
+            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
+            if (candidates.Length > 0)
+            {
+                int index = candidates.Length == 1 ? 0 : (draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32)(candidates.Length);
+                if (index < 0 || index >= candidates.Length) throw new InvalidDataException("迷宫随机索引越界");
+                candidates = [candidates[index]];
+                ordinaryHunt = true;
+                routeQuest = 0;
+            }
+        }
         if (candidates.Length != 1)
         {
             reason = candidates.Length == 0 ? "route-maze-unavailable" : "route-maze-ambiguous";
@@ -299,6 +315,7 @@ internal sealed record DungeonEntryPlan(
             TerminalLayerQuestSlot = terminalQuest?.Slot ?? byte.MaxValue,
             TerminalLayerAcceptanceId = terminalAcceptance,
             RouteQuestId = routeQuest,
+            IsOrdinaryHunt = ordinaryHunt,
             QuestAcceptances = definition.IsClassExperience ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
@@ -309,6 +326,23 @@ internal sealed record DungeonEntryPlan(
         };
         reason = "resource-plan-ready";
         return true;
+    }
+
+    static bool CanUseOrdinaryHuntRoute(DungeonDefinition definition, Character character, StoryQuest quest,
+        uint dungeonId, uint questId, byte difficulty)
+    {
+        if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
+            quest.Grade != "[side]" || quest.Condition != "[hunt monster]" || quest.SubType != -1 || quest.MainQuest is not null ||
+            quest.Definition is not { Diagnostics.Length: 0 } declared ||
+            !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter == -1) ||
+            !QuestHuntProgress.TryTargets(quest,out var targets) ||
+            targets.Any(target => target.MonsterId <= 0 || target.DungeonId != -1 && target.DungeonId != dungeonId ||
+                target.MinimumDifficulty > difficulty) ||
+            definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
+                (maze.ConnectionQuestId is not { } connected || connected == questId))) return false;
+        var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
+        return active.AcceptanceId != Guid.Empty &&
+            character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) == 1;
     }
 
     static StoryQuest? CurrentSequentialChild(Character character, StoryQuest parent, QuestCatalog quests, uint dungeonId, byte difficulty)

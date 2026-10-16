@@ -243,6 +243,20 @@ internal sealed class SinglePlayerDungeonRun
             reason = "invalid: 实例身份或任务尝试无效";
             return false;
         }
+        // 非零请求借普通路线时，模式与原接取三元组必须共同成立，不能删改标志规避疲劳。
+        if ((entry.IsOrdinaryHunt || entry.QuestId != 0 && entry.RouteQuestId == 0) &&
+            (!entry.IsOrdinaryHunt || entry.IsTutorial || entry.IsQuestReplay || entry.IsTrainingRoom || entry.IsClassExperience ||
+                entry.QuestId == 0 || entry.RouteQuestId != 0 || entry.Maze.QuestConnectionTokens.Count != 0 ||
+                entry.ActiveQuestSlot > 29 || entry.QuestAcceptanceId == Guid.Empty ||
+                entry.QuestAcceptances.Count(row => row.QuestId == entry.QuestId) != 1 ||
+                entry.QuestAcceptances.Count(row => row.Slot == entry.ActiveQuestSlot) != 1 ||
+                entry.QuestAcceptances.Count(row => row.AcceptanceId == entry.QuestAcceptanceId) != 1 ||
+                !entry.QuestAcceptances.Any(row => row.QuestId == entry.QuestId && row.Slot == entry.ActiveQuestSlot &&
+                    row.AcceptanceId == entry.QuestAcceptanceId)))
+        {
+            reason = "invalid: 普通猎杀路线与原请求接取身份不一致";
+            return false;
+        }
         if (entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" && !(entry.IsTutorial && entry.BaseBossMap.Kind == "map") ||
             entry.Maze.MapSpecification is not { Count: > 0 } maps ||
             entry.Maze.ConditionalMaps.Any(map => !map.IsConditional || entry.Maze.BossEntrance is null ||

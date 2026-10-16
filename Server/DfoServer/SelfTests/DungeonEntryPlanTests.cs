@@ -3,6 +3,8 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
+using DfoServer.Game.Quests;
+using DfoServer.GameWorld.Quests;
 using PvfLib;
 
 namespace DfoServer;
@@ -79,6 +81,7 @@ internal static class DungeonEntryPlanTests
         var definition = catalog.Get(3);
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        OrdinaryHuntRoutes(catalog,quests,rooms,character);
         foreach (var scenario in new[] { (Quest:3560,Dungeon:82,Level:(byte)65,Target:92247,Boss:92251),
             (Quest:3753,Dungeon:104,Level:(byte)83,Target:76648,Boss:76649) })
         {
@@ -480,5 +483,80 @@ internal static class DungeonEntryPlanTests
             new("story mode",[]),new("difficulty size",[new(0,3)]),new("quest list",[new(0,secondQuest)]),
             new("/quest list",[]),new("/story mode",[])
         ];
+    }
+
+    static void OrdinaryHuntRoutes(DungeonCatalog catalog, QuestCatalog quests, DungeonRoomCatalog rooms, Character basis)
+    {
+        int[] letters = [3921,2948,2967,3919,4894,4876,2958,2973,4915,3793,6114];
+        foreach (int id in letters)
+        {
+            var quest = quests.Get(id);
+            uint dungeonId = checked((uint)quest.Definition!.Dungeons.Single().DungeonId);
+            var active = new ActiveMainQuest(5,checked((ushort)id),QuestHuntProgress.Initial(quest)) { AcceptanceId = Guid.NewGuid() };
+            var character = basis with { Level = checked((byte)quest.MinimumLevel), ActiveMainQuests = [active] };
+            var alternatives = new HashSet<int>();
+            int choices = dungeonId == 40 ? 3 : dungeonId == 162 ? 2 : 1;
+            for (int choice = 0; choice < choices; choice++)
+            {
+                That(DungeonEntryPlan.TryCreate(catalog,character,dungeonId,checked((uint)id),0,out var plan,out var reason,
+                    quest:quest,draw:bound => choice % bound,quests:quests) &&
+                    plan is { IsOrdinaryHunt:true,IsOrdinary:true,UsesFatigue:true,RouteQuestId:0 } && plan.QuestId == id &&
+                    plan.ActiveQuestSlot == active.Slot && plan.QuestAcceptanceId == active.AcceptanceId &&
+                    plan.QuestAcceptances.SequenceEqual(character.ActiveMainQuests),
+                    "真实匿名信显式任务请求保留接取身份并沿普通疲劳路线："+id+"/"+reason);
+                var entry = plan!;
+                alternatives.Add(dungeonId == 40 ? entry.Maze.MapSpecification!.Single(map => map.Position == new DungeonPoint(1,2)).Id :
+                    entry.Maze.SourceOrdinal);
+                var monsters = entry.Maze.MapSpecification!.SelectMany(map => DungeonMonsterPlan.FromRoom(
+                    rooms.Get(map,requirePassiveDefinitions:false),entry.CharacterId,1,entry.BasisLevel,playerTeam:entry.PlayerTeam).Monsters).ToArray();
+                var target = monsters.First(monster => monster.MonsterId == quest.IntData[2] && monster.IsBlocking && monster.CanReportDeath);
+                That(QuestHuntProgress.MonsterDeath([active],entry,quests,target).Single().ConditionState == active.ConditionState-1 &&
+                    QuestHuntProgress.MonsterDeath([active with { AcceptanceId = Guid.NewGuid() }],entry,quests,target).Single().ConditionState == active.ConditionState,
+                    "每个真实有限候选均可由原怪物死亡推进，放弃重接不消费旧实例："+id+"/"+choice);
+            }
+            That(alternatives.Count == choices,"普通随机保留全部有限迷宫或地图候选："+id);
+            That(DungeonEntryPlan.TryCreate(catalog,character,dungeonId,0,0,out var ordinary,out _,draw:_ => 0,quests:quests) &&
+                ordinary is { QuestId:0,RouteQuestId:0,IsOrdinaryHunt:false,IsOrdinary:true },"原匿名信活动快照的普通0入口保持原模式");
+        }
+
+        var letter = quests.Get(2948);
+        var accepted = new ActiveMainQuest(5,2948,QuestHuntProgress.Initial(letter)) { AcceptanceId = Guid.NewGuid() };
+        var pending = basis with { Level=45,ActiveMainQuests=[accepted] };
+        var definition = catalog.Get(40);
+        var normal = definition.Mazes.Single(maze => maze.QuestConnectionTokens.Count == 0);
+        foreach (var sample in new[] { (Level:(byte)93,Count:10),(Level:(byte)95,Count:11) })
+        {
+            var active = letters.Take(sample.Count).Select((id,slot) => new ActiveMainQuest(checked((byte)slot),checked((ushort)id),
+                QuestHuntProgress.Initial(quests.Get(id))) { AcceptanceId=Guid.NewGuid() }).ToArray();
+            That(DungeonEntryPlan.TryCreate(catalog,basis with { Level=sample.Level,ActiveMainQuests=active },40,2948,0,out var multiple,out _,
+                quest:letter,draw:_ => 0,quests:quests) && multiple is { IsOrdinaryHunt:true,RouteQuestId:0 } &&
+                multiple.QuestAcceptances.SequenceEqual(active),"合法等级的10/11活动匿名信分别冻结全部原接取，不混称截图现场");
+        }
+        var twoMazes = quests.Get(4894);
+        var twoActive = new ActiveMainQuest(5,4894,QuestHuntProgress.Initial(twoMazes)) { AcceptanceId=Guid.NewGuid() };
+        foreach (int invalid in new[] {-1,2})
+            Reject<InvalidDataException>(() => DungeonEntryPlan.TryCreate(catalog,basis with { Level=60,ActiveMainQuests=[twoActive] },
+                162,4894,0,out _,out _,quest:twoMazes,draw:_ => invalid,quests:quests),"普通猎杀迷宫随机索引越界仍拒绝");
+        foreach (var invalid in new[] {
+            letter with { MainQuest=100 }, letter with { Grade="[daily]" }, letter with { SubType=1 },
+            letter with { IntData=[-1,-1,-5,2] }, letter with { IntData=[41,-1,1014,2] },
+            letter with { IntData=[40,1,1014,2] }, letter with { IntData=[-1,-1,1014,0] },
+            letter with { Definition=letter.Definition! with { Dungeons=[] } },
+            letter with { Definition=letter.Definition! with { Dungeons=[new(41,-1)] } },
+            letter with { Definition=letter.Definition! with { Dungeons=[new(40,0)] } } })
+            That(!DungeonEntryPlan.TryCreate(definition,pending,40,2948,0,out _,out _,quest:invalid),
+                "普通猎杀只接入已证任务形状、正目标、本图及难度声明");
+        foreach (var connection in new[] {
+            new PvfToken[] {new(0,0),new(0,2948),new(0,1)},
+            [new(0,1),new(0,2948),new(0,-1)], [new(0,2),new(0,100),new(0,-1)],
+            [new(0,0),new(0,100)] })
+            That(!DungeonEntryPlan.TryCreate(definition with { Mazes=[normal,normal with { QuestConnectionTokens=connection }] },
+                pending,40,2948,0,out _,out _,quest:letter),"本任务不满足的连接或未知格式不能触发普通猎杀回退");
+        foreach (var invalid in new[] { pending with { ActiveMainQuests=[] }, pending with { CompletedQuests=[2948] },
+            pending with { ActiveMainQuests=[accepted with { AcceptanceId=Guid.Empty }] },
+            pending with { ActiveMainQuests=[accepted,new(5,100,1) { AcceptanceId=Guid.NewGuid() }] } })
+            That(!DungeonEntryPlan.TryCreate(definition,invalid,40,2948,0,out _,out _,quest:letter),"普通猎杀保留活动任务与唯一接取门禁");
+        That(!DungeonEntryPlan.TryCreate(definition with { Mazes=definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count != 0).ToArray() },
+            pending,40,2948,0,out _,out _,quest:letter),"缺少真实普通迷宫仍拒绝");
     }
 }
