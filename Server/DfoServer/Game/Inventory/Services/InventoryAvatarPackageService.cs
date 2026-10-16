@@ -102,7 +102,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.Value, count).Plan!.After;
         if (!allowOverflowMail)
         {
-            var range = ItemSlotBoundService.Range(ItemKind.Avatar, paid.Expansion);
+            var range = ItemSlotBoundService.Range(ItemKind.Avatar, paid);
             int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Avatar &&
                 item.Position.Index >= range.Start && item.Position.Index <= range.End);
             if (total > range.End - range.Start + 1 - occupied) return InventoryResult.Reject(4);

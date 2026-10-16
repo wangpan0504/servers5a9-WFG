@@ -42,7 +42,7 @@ internal sealed class InventoryPlan
     public ImmutableArray<InventorySlot> ChangedSlots => slots.Value;
     public ImmutableArray<CurrencyKind> ChangedCurrencies => currencies.Value;
     public ImmutableArray<int> ChangedEpicPieces => pieces.Value;
-    public bool Changed => Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
+    public bool Changed => Before.AvatarExpansion != After.AvatarExpansion || Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || !ShopPurchaseCount.Same(Before.ShopPurchases, After.ShopPurchases) ||

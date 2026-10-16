@@ -51,6 +51,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public int AuctionGoldLimit { get; init; } = CurrencyService.BaseAuctionLimit;
     public AccountWallet AccountWallet { get; init; } = AccountWallet.Empty;
     public CubeContractState CubeContract { get; init; } = CubeContractState.Empty;
+    public ushort AvatarExpansion { get; init; } = 105;
     public ushort CargoCapacity { get; init; } = 8;
     public AccountCargoState AccountCargo { get; init; } = new();
     public ImmutableArray<ShopPurchaseCount> ShopPurchases { get; init; } = [];
@@ -58,6 +59,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public InventoryItem? Find(InventorySlot slot) => Items.SingleOrDefault(item => item.Position == slot);
     public void Validate(bool allocating = false)
     {
+        if (AvatarExpansion > 315 || AvatarExpansion % 7 != 0) throw new InvalidDataException("装扮栏扩展值无效");
         AccountWallet.Validate();
         CubeContract.Validate();
         EpicPieces.Validate();

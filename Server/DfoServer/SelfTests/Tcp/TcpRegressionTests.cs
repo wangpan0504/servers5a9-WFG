@@ -179,6 +179,7 @@ internal static class TcpRegressionTests
         ("enchantment", EnchantmentTcpTests.RunAsync),
         ("enhancement", EnhancementTcpTests.RunAsync),
         ("creature-egg", CreatureEggTcpTests.RunAsync),
+        ("avatar-capacity", AvatarCapacityTcpTests.RunAsync),
         ("avatar-package", (options, root, resources) => AvatarPackageTcpTests.RunAsync(options, root, resources, resources.ItemResources.AvatarPackages)),
         ("avatar-dye", AvatarDyeTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),

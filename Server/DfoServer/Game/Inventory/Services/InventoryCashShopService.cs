@@ -42,6 +42,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         var bonuses = new Dictionary<int, IReadOnlyList<CashShopBonus>>();
         var before = character.Inventory;
         var paid = before;
+        ushort avatarExpansion = before.AvatarExpansion;
         long total = 0, gold = 0, winPoints = 0;
         long? deadline = null;
         InventoryItem? nameTag = null;
@@ -80,6 +81,13 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                     if (product.Count != 1 || characterSlots >= Math.Min(62, template.CharacterSlotMaximum))
                         return InventoryResult.Reject(17);
                     characterSlots++;
+                }
+                else if (template is { AvatarExpansionStage: > 0 })
+                {
+                    if (product.Count != 1 || template.AvatarExpansionStage != avatarExpansion / 7 + 1 ||
+                        template.AvatarExpansionStage > 45 || !template.AllowsUse(character.Level, character.Job))
+                        return InventoryResult.Reject(17);
+                    avatarExpansion = checked((ushort)(template.AvatarExpansionStage * 7));
                 }
                 else if (template is { PersonalCargoUpgradeTarget: > 0 })
                 {
@@ -130,6 +138,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             if (!spent.Accepted) return InventoryResult.Reject(10);
             paid = spent.Plan!.After;
         }
+        paid = paid with { AvatarExpansion = avatarExpansion };
         // 主商品和附赠按真实货币归属合计；付费购买不能沿普通发奖的上限截断规则少发奖励。
         if (!CanGrantCurrencies(paid, rewards, new CurrencyService(goldLimits).CarryLimit(character)))
             return InventoryResult.Reject(17);

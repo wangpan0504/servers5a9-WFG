@@ -15,7 +15,7 @@ internal static class InventoryPackets
         writer.Write((byte)list);
         if (list == InventoryListType.Avatar)
             // 028529D2 将该扩展值加105后设置容器容量。
-            writer.Write((ushort)(DfoServer.Game.Inventory.Services.ItemSlotBoundService.AvatarCapacity - 105));
+            writer.Write(inventory.AvatarExpansion);
         writer.Write(checked((ushort)items.Length));
         long now = utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         foreach (var item in items)

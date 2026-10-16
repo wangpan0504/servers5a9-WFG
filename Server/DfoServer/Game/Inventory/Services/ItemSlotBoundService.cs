@@ -26,12 +26,15 @@ internal static class ItemSlotBoundService
 
     public static bool Allows(InventorySnapshot inventory, InventorySlot slot, ItemKind kind) => slot.List switch
     {
+        InventoryListType.Avatar => kind == ItemKind.Avatar && slot.Index >= 0 && slot.Index < 105 + inventory.AvatarExpansion,
         InventoryListType.PersonalCargo => slot.Index >= 0 && slot.Index < inventory.CargoCapacity && CargoKind(kind),
         InventoryListType.AccountCargo => slot.Index >= 0 && slot.Index < inventory.AccountCargo.Capacity && CargoKind(kind),
         _ => Allows(inventory.Expansion, slot, kind)
     };
     static bool CargoKind(ItemKind kind) => kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or
         ItemKind.Profession or ItemKind.GuildMedal or ItemKind.GuardianGem;
+    public static (short Start, short End) Range(ItemKind kind, InventorySnapshot inventory) =>
+        kind == ItemKind.Avatar ? ((short)0, checked((short)(104 + inventory.AvatarExpansion))) : Range(kind, inventory.Expansion);
     public static (short Start, short End) Range(ItemKind kind, ushort expansion)
     {
         if (kind == ItemKind.Avatar) return (0, AvatarCapacity - 1);

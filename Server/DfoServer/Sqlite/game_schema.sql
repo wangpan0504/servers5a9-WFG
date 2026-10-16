@@ -91,6 +91,7 @@ CREATE TABLE characters(
     quest_cycle_day INTEGER NOT NULL DEFAULT 0 CHECK(quest_cycle_day=0 OR quest_cycle_day BETWEEN 19000101 AND 99991231),
     equipment_slot_flags INTEGER NOT NULL DEFAULT 0 CHECK(equipment_slot_flags BETWEEN 0 AND 255),
     emotion INTEGER NOT NULL DEFAULT 0 CHECK(emotion BETWEEN 0 AND 32767),
+    avatar_expansion INTEGER NOT NULL DEFAULT 105 CHECK(avatar_expansion BETWEEN 0 AND 315 AND avatar_expansion%7=0),
     UNIQUE(account,slot)
 );
 
@@ -408,10 +409,10 @@ CREATE TABLE "character_inventory_slots"(
     account TEXT NOT NULL,
     list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38)),
     owner_character_id INTEGER GENERATED ALWAYS AS (COALESCE(character_id,0)) STORED,
-    slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 351),
+    slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419)),
     item_uid INTEGER NOT NULL UNIQUE,
     CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type<>12 AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264))),
-    CHECK(list_type<>1 OR slot_index<210),
+    CHECK(list_type<>1 OR slot_index<420),
     CHECK(list_type<>7 OR slot_index<240),
     CHECK(list_type<>38 OR slot_index<98),
     UNIQUE(character_id,list_type,slot_index),

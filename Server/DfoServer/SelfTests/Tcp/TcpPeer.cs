@@ -304,7 +304,7 @@ internal sealed class TcpPeer : IDisposable
 
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
         (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,
-        byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false)
+        byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false, ushort avatarExpansion = 105)
     {
         if (!resumeTown && !requestedRoster)
             Send(8, [255, 255, 2]);
@@ -339,7 +339,7 @@ internal sealed class TcpPeer : IDisposable
         var avatars = Expect(0, 13);
         var pets = Expect(0, 13);
         var medals = Expect(0, 13);
-        TestCheck.That(avatars.Body[0] == 1 && U16(avatars.Body, 1) == 105 && pets.Body[0] == 7, "special container initialization and avatar capacity");
+        TestCheck.That(avatars.Body[0] == 1 && U16(avatars.Body, 1) == avatarExpansion && pets.Body[0] == 7, "special container initialization and avatar capacity");
         TestCheck.That(medals.Body[0] == 38, "medal container initialization");
         SpecialContainers = [creatures, avatars, pets, medals];
         var tail = new List<WirePacket>();

@@ -232,6 +232,9 @@ internal sealed class ItemCatalog
             CharacterSlotMaximum = name == "角色栏扩展券" &&
                 int.TryParse(Regex.Match(text.Section("explain"), @"总上限为\s*(\d+)").Groups[1].Value, out int maxSlots) ? maxSlots : 0,
             MaximumLevel = maximum,
+            AvatarExpansionStage = name.Contains("装扮栏扩展券", StringComparison.Ordinal) &&
+                Regex.Match(text.Section("explain"), @"扩展到\s*(\d+)\s*阶段") is { Success: true } stageMatch
+                ? int.Parse(stageMatch.Groups[1].Value) : 0,
             QualityBox = isEquipment ? null : EquipmentQualityBox.Parse(id, text),
 
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,

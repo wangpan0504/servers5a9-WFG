@@ -39,6 +39,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool UseForbidden { get; init; }
     public int CharacterSlotMaximum { get; init; }
     public int MaximumLevel { get; init; } = int.MaxValue;
+    public int AvatarExpansionStage { get; init; }
     public bool AllowsUse(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
         job < 16 && (Jobs & (1 << job)) != 0;
     public RefinementTicketDefinition? RefinementTicket { get; init; }

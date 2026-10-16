@@ -22,6 +22,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         if (!CanSend())
             return;
         var current = receipt.Character;
+        if (plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion)
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Avatar), "avatar_capacity_committed", CanSend);
         bool seriaLuckChanged = plan.Before.AccountWallet.SeriaLuck != current.Inventory.AccountWallet.SeriaLuck;
         var changedSlots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
             .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct().ToArray();

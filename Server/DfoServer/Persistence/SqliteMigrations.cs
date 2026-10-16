@@ -128,6 +128,7 @@ internal static class SqliteMigrations
         }),
         new(46, "副本列表通关的原生任务完成来源", UpgradeQuestDungeonAlternatives),
         new(47, "账号角色栏扩展", UpgradeCharacterSlots),
+        new(48, "角色装扮栏扩展", UpgradeAvatarCapacity),
     ];
 
     static void UpgradeCharacterSlots(SqliteConnection db, SqliteTransaction tx)
@@ -141,6 +142,20 @@ internal static class SqliteMigrations
         if (!sql.Contains("character_slots INTEGER NOT NULL DEFAULT 32 CHECK(character_slots BETWEEN 32 AND 62)", StringComparison.Ordinal))
             throw new InvalidDataException("角色栏迁移拒绝未知容量列");
         ReplaceTableConstraint(db, tx, "characters", "CHECK(slot BETWEEN 0 AND 31)", "CHECK(slot BETWEEN 0 AND 61)");
+    }
+
+    static void UpgradeAvatarCapacity(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='avatar_expansion'";
+        if ((long)query.ExecuteScalar()! == 0)
+            Execute(db, tx, "ALTER TABLE characters ADD COLUMN avatar_expansion INTEGER NOT NULL DEFAULT 105 CHECK(avatar_expansion BETWEEN 0 AND 315 AND avatar_expansion%7=0)");
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains("avatar_expansion INTEGER NOT NULL DEFAULT 105 CHECK(avatar_expansion BETWEEN 0 AND 315 AND avatar_expansion%7=0)", StringComparison.Ordinal))
+            throw new InvalidDataException("装扮扩展迁移拒绝未知容量列");
+        ReplaceTableConstraint(db, tx, "character_inventory_slots", "CHECK(list_type<>1 OR slot_index<210)", "CHECK(list_type<>1 OR slot_index<420)");
+        ReplaceTableConstraint(db, tx, "character_inventory_slots", "CHECK(slot_index BETWEEN 0 AND 351)",
+            "CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419))");
     }
 
     static void ReplaceTableConstraint(SqliteConnection db, SqliteTransaction tx, string table, string oldLimit, string newLimit)
@@ -1247,6 +1262,7 @@ internal static class SqliteMigrations
         "SELECT [character_id],[context],[slot],[skill_id],[level] FROM [character_skill_bindings] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[list_type],[slot_index],[item_uid_before],[item_uid_after],[item_id_before],[item_id_after],[value_before],[value_after],[item_kind_before],[item_kind_after],[count_before],[count_after],[count_delta],[core_hash_before],[core_hash_after] FROM [inventory_audit_log] LIMIT 0",
         "SELECT [account],[revision],[rental_points],[seria_luck],[premium_contracts],[character_slots] FROM [account_wallets] LIMIT 0",
+        "SELECT avatar_expansion FROM characters LIMIT 0",
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",

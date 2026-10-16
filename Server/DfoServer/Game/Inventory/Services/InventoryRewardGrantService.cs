@@ -202,7 +202,7 @@ internal static class InventoryRewardGrantService
         public bool TryAdd(ItemTemplate template, ItemCore prototype, int remaining, InventoryItem? instance = null,
             bool usePickupSlotPolicy = false)
         {
-            var range = ItemSlotBoundService.Range(template.Kind, inventory.Expansion);
+            var range = ItemSlotBoundService.Range(template.Kind, inventory);
             var list = ItemSlotBoundService.List(template.Kind);
             bool pickupQuickSlots = usePickupSlotPolicy && ItemSlotBoundService.Allows(inventory,
                 new(InventoryListType.Main, ItemSlotBoundService.QuickSlotStart), template.Kind);

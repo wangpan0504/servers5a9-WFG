@@ -13,7 +13,7 @@ internal static class InventorySortService
         if (!cargo && (!Enum.IsDefined(kind) || ItemSlotBoundService.List(kind) != list) ||
             list == InventoryListType.PersonalCargo && (byte)kind is not (11 or 20))
             return InventoryResult.Reject();
-        var range = !cargo ? ItemSlotBoundService.Range(kind, before.Expansion) :
+        var range = !cargo ? ItemSlotBoundService.Range(kind, before) :
             (Start: (short)0, End: (short)((list == InventoryListType.PersonalCargo ? before.CargoCapacity : before.AccountCargo.Capacity) - 1));
         var planned = before.Items.ToDictionary(item => item.Position);
         // 到期先于排序锁处理；安全锁只保护资产操作，不固定整理位置。

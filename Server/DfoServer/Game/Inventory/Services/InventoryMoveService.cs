@@ -133,7 +133,7 @@ internal static class InventoryMoveService
         PremiumContractCatalog? contracts)
     {
         var inventory = character.Inventory;
-        var range = ItemSlotBoundService.Range(core.Kind, inventory.Expansion);
+        var range = ItemSlotBoundService.Range(core.Kind, inventory);
         if (list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo)
             range = (0, (short)((list == InventoryListType.PersonalCargo ? inventory.CargoCapacity : inventory.AccountCargo.Capacity) - 1));
         else if (list == InventoryListType.Main)
