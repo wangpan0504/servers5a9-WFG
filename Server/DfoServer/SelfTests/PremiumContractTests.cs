@@ -68,9 +68,34 @@ internal static class PremiumContractTests
         Reject<InvalidDataException>(() => devil.SetContractExpiry(58,-1),"账号契约不能保存负期限");
         That(!PremiumContractCatalog.IsConsumableContract(56) && !PremiumContractCatalog.IsConsumableContract(58),
             "56/58显示资格接入不擅自开放未确认的商城或实体服务能力");
-        Reject<InvalidDataException>(() => PremiumPackets.SelectEntries(projectionWallet with
-        { Contracts = projectionWallet.PremiumContracts.Add(580, 1010) }, DateTimeOffset.FromUnixTimeSeconds(1000)),
-            "超出客户端类型边界的活动服务不推测合并成另一种权益");
+        foreach (int type in new[] { -1, 0, 132, 579, 588, int.MaxValue })
+            Reject<InvalidDataException>(() => PremiumPackets.SelectEntries(projectionWallet with
+            { Contracts = projectionWallet.PremiumContracts.Add(type, 1010) }, DateTimeOffset.FromUnixTimeSeconds(1000)),
+                "魔王账本范围以外的未知活动服务仍拒绝，不能截断或猜测映射");
+        foreach (int type in Enumerable.Range(580, 8))
+        {
+            Bytes(PremiumPackets.SelectEntries(projectionWallet with
+            { Contracts = projectionWallet.PremiumContracts.Add(type, 1010) }, DateTimeOffset.FromUnixTimeSeconds(1000)),
+                [3, 27, 10, 0, 0, 0, 0, 0, 0, 0, 58, 10, 0, 0, 0, 0, 0, 0, 0, 131, 1, 0, 0, 0, 0, 0, 0, 0],
+                "八项魔王内部账本分别映射为58概览，1760不发送内部类型且保留其他契约");
+            Reject<InvalidDataException>(() => PremiumPackets.SelectEntries(AccountWallet.Empty,
+                DateTimeOffset.FromUnixTimeSeconds(1000), [type]), "内部账本键不能作为客户端清除类型");
+        }
+        var mixedDevil = projectionWallet with
+        { Contracts = projectionWallet.PremiumContracts.Add(58, 1020).Add(580, 1010).Add(587, 1030) };
+        Bytes(PremiumPackets.SelectEntries(mixedDevil, DateTimeOffset.FromUnixTimeSeconds(1000)),
+            [3, 27, 10, 0, 0, 0, 0, 0, 0, 0, 58, 30, 0, 0, 0, 0, 0, 0, 0, 131, 1, 0, 0, 0, 0, 0, 0, 0],
+            "旧58与多个子服务共存只生成一个最晚期限概览，不重复写入58");
+        That(mixedDevil.ContractExpiry(58) == 1020 && mixedDevil.ContractExpiry(580) == 1010 &&
+            mixedDevil.ContractExpiry(587) == 1030 && DevilContractPolicy.Expiry(mixedDevil, 0) == 1020 &&
+            DevilContractPolicy.Expiry(mixedDevil, 1) == 0 && DevilContractPolicy.Expiry(mixedDevil, 7) == 1030,
+            "概览投影不修改真实期限，也不把最晚期限或旧58扩成八项资格");
+        Bytes(PremiumPackets.SelectEntries(AccountWallet.Empty with
+        { Contracts = projectionWallet.PremiumContracts.Clear().Add(58, 999).Add(580, 999).Add(587, 1000) },
+            DateTimeOffset.FromUnixTimeSeconds(1000)), [0], "已到期及恰好到期的魔王服务不保留活动概览");
+        Bytes(PremiumPackets.SelectEntries(AccountWallet.Empty with
+        { Contracts = projectionWallet.PremiumContracts.Clear().Add(587, 1000) }, DateTimeOffset.FromUnixTimeSeconds(1000), [58]),
+            [1, 58, 0, 0, 0, 0, 0, 0, 0, 0], "到期清除仍只发送合法58零期限");
 
         var position = new InventorySlot(InventoryListType.Main, 65);
         var request = new ConsumableUseRequest(position, 0, 43, 0);

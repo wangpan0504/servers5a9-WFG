@@ -66,6 +66,11 @@ internal static class ClientSettingsStoreTests
         _ = new ClientSettingsRepository(f.Path);
         Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.Query("SELECT count(*) FROM account_hotkey_settings") is 0L &&
             f.ExistingSettings() == existing && f.Assets() == assets, "v26增量只建空键位表，保留称号进度、训练状态、原设置与资产");
+        string legacyAssets = f.Assets(includeAcceptance: false);
+        f.Execute($"UPDATE characters SET stamina_until=1 WHERE id={f.First.Id}");
+        Check(f.Assets() != assets && f.Assets(includeAcceptance: false) != legacyAssets,
+            "普通与旧库快照均检查新增魔王字段，不能因迁移列序变化而忽略字段值");
+        f.Execute($"UPDATE characters SET stamina_until=0 WHERE id={f.First.Id}");
         DatabaseSchemaTests.RemoveAdventureSchema(f.Path);
         f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; PRAGMA user_version=26; CREATE TABLE account_hotkey_settings(collision INTEGER)");
         string rollbackAssets = f.Assets();
@@ -468,10 +473,20 @@ internal static class ClientSettingsStoreTests
                 using var reader = query.ExecuteReader();
                 while (reader.Read())
                 {
-                    object[] values = new object[reader.FieldCount];
-                    reader.GetValues(values);
-                    if (!includeAcceptance)
-                        values = values.Where((_, index) => reader.GetName(index) is not ("quest_cycle_day" or "daily_period" or "answer" or "equipment_slot_flags" or "emotion")).ToArray();
+                    // 增量迁移可能改变物理列序；按列名保留全部原有值，不能把换序误判成资产变化。
+                    var values = new SortedDictionary<string, object>(StringComparer.Ordinal);
+                    for (int index = 0; index < reader.FieldCount; index++)
+                    {
+                        string column = reader.GetName(index);
+                        if (includeAcceptance || column is not ("quest_cycle_day" or "daily_period" or "answer" or "equipment_slot_flags" or "emotion"))
+                            values.Add(column, reader.GetValue(index));
+                    }
+                    if (!includeAcceptance && name == "characters")
+                    {
+                        // v5/v6夹具没有魔王字段：预期升级为空账本和零期限，已有字段的真实值仍完整参与比较。
+                        values.TryAdd("devil_usage", "[]");
+                        values.TryAdd("stamina_until", 0L);
+                    }
                     rows.Add(name + ":" + JsonSerializer.Serialize(values));
                 }
             }

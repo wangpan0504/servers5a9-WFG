@@ -180,6 +180,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("database-schema", (_, _, _) => { DatabaseSchemaTests.Run(); return Task.CompletedTask; }),
+        ("settings-storage", (_, _, _) => { ClientSettingsStoreTests.Run(); return Task.CompletedTask; }),
         ("cera-package", CeraPackageTcpTests.RunAsync),
         ("premium-contract", PremiumContractTcpTests.RunAsync),
         ("growth-cube-contract", GrowthCubeContractTcpTests.RunAsync),
