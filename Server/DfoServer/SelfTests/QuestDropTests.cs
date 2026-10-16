@@ -8,6 +8,7 @@ using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Persistence;
@@ -40,7 +41,57 @@ internal static class QuestDropTests
             errors.Clear(); QuestDropDefinition.Read([field],errors);
             That(errors.Count > 0,"坏掉落声明明确隔离，不能补默认行或截断为普通奖励");
         }
+        PreloadScope();
         Console.WriteLine($"PASS {Count - before} 任务掉落资源行与作用域断言");
+    }
+
+    static void PreloadScope()
+    {
+        var items = new ItemCatalog(null!,null!,null!,0);
+        items.PrefillTemplates(new Dictionary<int,ItemTemplate> { [9001] = new(9001,ItemKind.Equipment,0,1,0,1,0,0,0,"",0,0,"unsupported"),
+            [9002] = new(9002,ItemKind.Quest,0,1,0,99,0,0,0,"",0,0,"quest") });
+        var pieces = new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]");
+        var distant = QuestEligibilityTests.Quest(29990) with
+            { Definition = new([]) { Job = "[all]", Drops = [new(1,1,999,-1,9001,1,100,-1)] } };
+        var local = QuestEligibilityTests.Quest(29991) with
+            { Definition = new([]) { Job = "[all]", Drops = [new(1,1,3,-1,9002,1,100,-1)] } };
+        var catalog = new QuestCatalog(new[] {distant,local}.ToDictionary(quest => quest.Id));
+        var character = new Character(1,0,"Scope",1,new(38,2,450,240),null)
+            { ActiveMainQuests = [new(0,29990,1),new(1,29991,1)] };
+        var entry = new DungeonEntryPlan(1,1,3,0,byte.MaxValue,0,null!,null!,null!);
+        var cancelled = QuestDropResources.Create(character with { ActiveMainQuests = [character.ActiveMainQuests[1]] },entry,catalog,items,pieces);
+        That(cancelled.Items.ContainsKey(9002),"放弃无关任务后本图资源可装载");
+        var loaded = QuestDropResources.Create(character,entry,catalog,items,pieces);
+        That(loaded.Items.ContainsKey(9002) && !loaded.Items.ContainsKey(9001),"异图未支持掉落不污染当前入场预加载");
+        Reject<NotSupportedException>(() => QuestDropResources.Create(character,entry with { DungeonId = 999 },catalog,items,pieces),
+            "本图未支持持有域仍明确拒绝");
+        var mixed = local with { Definition = local.Definition! with { Drops = [.. local.Definition.Drops,
+            new(1,1,999,-1,9001,1,100,-1),new(1,1,3,2,9001,1,100,-1),new(1,2,-1,0,9002,1,100,-1),new(1,3,3,-1,9002,1,100,-1),new(0,0,-1,-1,9002,1,100,-1)] } };
+        var parent = QuestEligibilityTests.Quest(29989) with { Condition = "[quest clear]", SubType = 2, IntData = [29991] };
+        mixed = mixed with { MainQuest = parent.Id };
+        catalog = new QuestCatalog(new[] {distant,mixed,parent}.ToDictionary(quest => quest.Id));
+        character = character with { ActiveMainQuests = [new(0,29989,1),new(1,29990,1)] };
+        That(QuestRelationProgress.SequentialParent(parent,catalog),"预加载夹具包含合法顺序父子定义");
+        loaded = QuestDropResources.Create(character,entry,catalog,items,pieces);
+        That(loaded.Quests.ContainsKey(29991) && loaded.Items.Keys.SequenceEqual(new[] {9002}),
+            "顺序子任务保留本图及通配模板，错难度未支持行被隔离");
+        Reject<NotSupportedException>(() => QuestDropResources.Create(character,entry with { Difficulty = 2 },catalog,items,pieces),
+            "进入声明难度后未支持行仍拒绝");
+        var accepted = new ActiveMainQuest(2,29991,1) { AcceptanceId = Guid.NewGuid() };
+        var advanced = character with { ActiveMainQuests = [.. character.ActiveMainQuests,accepted] };
+        var bound = entry with { QuestAcceptances = [accepted] };
+        var identity = new DungeonRunIdentity(1,0,1,Guid.NewGuid(),1);
+        foreach (int enemyType in new[] {1,2,3})
+        {
+            var reward = QuestDropPlan.Create(advanced,bound,loaded,Guid.NewGuid(),identity,1,1,enemyType,false,_ => 0,DateTimeOffset.UtcNow);
+            That(reward.Outcomes is [{ Granted: 1 }] && reward.Inventory.After.Items.Single().Core.ItemId == 9002,
+                "实例内新接顺序子任务的本图和通配奖励仍实际入包");
+        }
+        var clear = QuestDropPlan.Create(advanced,bound,loaded,Guid.NewGuid(),identity,1,1,1,true,_ => 0,DateTimeOffset.UtcNow);
+        That(clear.Outcomes.Length == 2 && clear.Outcomes.All(row => row.Granted == 1),"通关行及当前怪物行均保留，异图错难度不产生奖励");
+        foreach (var row in mixed.Definition!.Drops.Where(row => row.MatchesEntry(3,0)))
+            That(loaded.Items.ContainsKey(row.ItemId),"怪物、APC、被动物件和通关行的本图模板完整预加载");
+
     }
 
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
@@ -82,7 +133,7 @@ internal static class QuestDropTests
             string saved = JsonSerializer.Serialize(actual);
             That(Observe().Outcome == DungeonRunOutcome.Duplicate && JsonSerializer.Serialize(f.Read()) == saved && draws == 2,
                 "重复死亡不重发任务物品、UID、经验或任务进度");
-            var preloaded = QuestDropResources.Create(previous,catalog,items.Items,items.EpicPieces);
+            var preloaded = QuestDropResources.Create(previous,receipt.Entry,catalog,items.Items,items.EpicPieces);
             var identity = receipt.Snapshot.Identity;
             var bound = receipt.Entry;
             var stale = previous with { ActiveMainQuests = previous.ActiveMainQuests.Select(row => row.QuestId == 29987 ? row with { AcceptanceId = Guid.NewGuid() } : row).ToArray() };

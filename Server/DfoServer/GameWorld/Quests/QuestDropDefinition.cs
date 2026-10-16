@@ -7,9 +7,12 @@ namespace DfoServer.GameWorld.Quests;
 internal sealed record QuestDropDefinition(int TemplateId, int EnemyType, int DungeonId, int Difficulty,
     int ItemId, int Count, int Rate, int MaximumHeld)
 {
+    public bool MatchesEntry(uint dungeon, byte difficulty) =>
+        (DungeonId == -1 || DungeonId == dungeon) && (Difficulty == -1 || Difficulty == difficulty);
+
     public bool Matches(uint dungeon, byte difficulty, int template, int enemyType, bool cleared) =>
         (EnemyType == 0 ? cleared : EnemyType == enemyType && TemplateId == template) &&
-        (DungeonId == -1 || DungeonId == dungeon) && (Difficulty == -1 || Difficulty == difficulty);
+        MatchesEntry(dungeon,difficulty);
 
     public static ImmutableArray<QuestDropDefinition> Read(ImmutableArray<QuestField> fields, ImmutableArray<string>.Builder errors)
     {

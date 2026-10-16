@@ -14,7 +14,7 @@ namespace DfoServer.Game.Quests;
 internal sealed record QuestDropResources(IReadOnlyDictionary<int,StoryQuest> Quests,
     IReadOnlyDictionary<int,ItemTemplate> Items, EpicPieceCatalog Pieces, GrowthContractBenefits? Growth = null)
 {
-    public static QuestDropResources Create(Character character, QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces,
+    public static QuestDropResources Create(Character character, DungeonEntryPlan entry, QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces,
         GrowthContractBenefits? growth = null)
     {
         var ids = character.ActiveMainQuests.Select(row => (int)row.QuestId).ToHashSet();
@@ -22,7 +22,8 @@ internal sealed record QuestDropResources(IReadOnlyDictionary<int,StoryQuest> Qu
             if (catalog.TryGet(id,out var parent) && QuestRelationProgress.SequentialParent(parent,catalog)) ids.UnionWith(parent.IntData);
         var definitions = ids.Where(id => catalog.TryGet(id,out _)).Select(catalog.Get)
             .Where(quest => QuestCoverage.HasOrdinaryDeclarations(quest)).ToDictionary(quest => quest.Id);
-        var templates = definitions.Values.SelectMany(quest => quest.Definition!.Drops).Select(row => row.ItemId).Distinct().ToDictionary(id => id,items.Get);
+        var templates = definitions.Values.SelectMany(quest => quest.Definition!.Drops)
+            .Where(row => row.MatchesEntry(entry.DungeonId,entry.Difficulty)).Select(row => row.ItemId).Distinct().ToDictionary(id => id,items.Get);
         foreach (var template in templates.Values)
             if (template.Kind is not (ItemKind.Quest or ItemKind.Material or ItemKind.Consumable) ||
                 CurrencyWallet.RewardKind(template.Id) is not null || pieces.ByPiece.ContainsKey(template.Id))

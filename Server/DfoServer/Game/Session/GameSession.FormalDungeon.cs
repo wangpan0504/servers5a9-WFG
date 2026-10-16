@@ -133,7 +133,7 @@ internal sealed partial class GameSession
         QuestDropResources? questDrops = null;
         if (!entry.IsTutorial && !entry.IsClassExperience && questCatalog is not null && items is not null && pieces is not null)
         {
-            try { questDrops = QuestDropResources.Create(expected,questCatalog,items,pieces,contracts?.Growth); }
+            try { questDrops = QuestDropResources.Create(expected,entry,questCatalog,items,pieces,contracts?.Growth); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return null; }
         }
         if (state.NextObjectKey > ushort.MaxValue || state.LastAttempt == long.MaxValue)
