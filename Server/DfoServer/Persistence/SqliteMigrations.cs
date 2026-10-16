@@ -126,10 +126,38 @@ internal static class SqliteMigrations
             if (command.ExecuteScalar() is not string)
                 Execute(db, tx, CharacterRepository.PassiveDropSchema);
         }),
+        new(46, "副本列表通关的原生任务完成来源", UpgradeQuestDungeonAlternatives),
     ];
     // 在已发布v18和经验封顶声明上只扩展native19，不改写历史迁移。
     internal static string QuestCompletionSchemaV42 => ExperienceCapSchema.Definition(
         QuestCompletionSchemaV18, "character_quest_completion_receipts").Replace("12,25", "12,19,25", StringComparison.Ordinal);
+
+    internal static string QuestCompletionSchemaV46 => QuestCompletionSchemaV42
+        .Replace("CHECK(condition_type IN(0,1,2,3,4,6,12,19,25,31,39,40,42,44,49,64,65,67,70))",
+            "CHECK(condition_type IN(0,1,2,3,4,6,12,19,25,31,39,40,42,44,45,49,64,65,67,70))", StringComparison.Ordinal)
+        .Replace("condition_type IN(1,3) AND", "condition_type IN(1,3,45) AND (condition_type<>45 OR (clear_acceptance_id IS NOT NULL AND plan_snapshot IS NOT NULL)) AND", StringComparison.Ordinal);
+
+    static void UpgradeQuestDungeonAlternatives(SqliteConnection db, SqliteTransaction tx)
+    {
+        const string table = "character_quest_completion_receipts";
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.Parameters.AddWithValue("$table",table);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+        string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("副本列表任务迁移缺少原领奖账本");
+        if (NormalizeTable(actual,table) == NormalizeTable(QuestCompletionSchemaV46,table)) return;
+        if (NormalizeTable(actual,table) != NormalizeTable(QuestCompletionSchemaV42,table))
+            throw new InvalidDataException("副本列表任务迁移不是已确认的v45领奖结构");
+        query.CommandText = """
+            SELECT count(*) FROM sqlite_schema s JOIN pragma_foreign_key_list(s.name) f
+              WHERE s.type='table' AND f."table"=$table
+            """;
+        if (Convert.ToInt32(query.ExecuteScalar()) != 0)
+            throw new InvalidDataException("副本列表任务迁移发现未知领奖依赖表");
+        RebuildReceipt(db,tx,table,QuestCompletionSchemaV46);
+        query.CommandText = "PRAGMA foreign_key_check";
+        using var failures = query.ExecuteReader();
+        if (failures.Read()) throw new InvalidDataException("副本列表任务迁移破坏原领奖外键");
+    }
 
     internal static string DungeonPickupSchemaV45 => DungeonPickupSchema.Replace(
         "item_uid BETWEEN 1 AND 2147483647", "item_uid>0", StringComparison.Ordinal);
@@ -1090,7 +1118,7 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
-        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV42),
+        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV46),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
             ("character_dungeon_settlement_receipts",DungeonSceneSettlementSchema.SettlementSql),

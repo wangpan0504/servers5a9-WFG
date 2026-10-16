@@ -194,6 +194,7 @@ internal static class DatabaseSchemaTests
             VerifyReleasedMigrations(root);
             VerifyCubeContractMigration(root);
             VerifyQuestRentalCompletionMigration(root);
+            VerifyQuestRentalCompletionMigration(root,45);
             VerifyDungeonSceneSettlementMigration(root);
             VerifyPremiumContractsMigration(root);
             VerifyMasterQuest14Compatibility(root);
@@ -271,7 +272,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
                 Check(Query(db, "SELECT revision FROM characters WHERE name='PassiveOld'") is 7L &&
-                    Query(db, "SELECT count(*) FROM character_dungeon_passive_pickups") is 0L && Query(db, "PRAGMA user_version") is 45L &&
+                    Query(db, "SELECT count(*) FROM character_dungeon_passive_pickups") is 0L && Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
                     Query(db, "SELECT name||':'||address||':'||master_character_id||':'||public_funds||':'||created_at_unix FROM guilds") is "PassiveGuild:passive-guild:1:123:456" &&
                     Query(db, "SELECT guild_id||':'||character_id||':'||contribution||':'||joined_at_unix FROM guild_members") is "1:1:19:456",
                     "v44到v45只新增拾取结构，不发放物品或重写角色、公会及成员");
@@ -360,7 +361,7 @@ internal static class DatabaseSchemaTests
                         Reject<SqliteException>(() => Execute(db, $"UPDATE {table} SET item_uid={value}"),
                             "迁移后仍拒绝无效UID并保留原更新触发器");
                 }
-                Check(Query(db, "PRAGMA user_version") is 45L && Query(db, "PRAGMA integrity_check") is "ok",
+                Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && Query(db, "PRAGMA integrity_check") is "ok",
                     "UID与特殊物品拾取结构在同一连续迁移提交");
             }
             string current = Snapshot(path);
@@ -371,8 +372,19 @@ internal static class DatabaseSchemaTests
 
     static void RewindPickupUids(SqliteConnection db)
     {
+        RewindQuestDungeonAlternatives(db);
         foreach (string table in new[] { "character_dungeon_pickup_receipts", "character_dungeon_drop_pickups" })
             ChangeReceiptDefinition(db, table, sql => sql.Replace("item_uid>0", "item_uid BETWEEN 1 AND 2147483647", StringComparison.Ordinal));
+    }
+
+    static void RewindQuestDungeonAlternatives(SqliteConnection db)
+    {
+        const string table = "character_quest_completion_receipts";
+        if (Query(db,"SELECT sql FROM sqlite_schema WHERE name='"+table+"'") is not string sql ||
+            !sql.Contains("condition_type IN(1,3,45)",StringComparison.Ordinal)) return;
+        if (Query(db,"SELECT count(*) FROM "+table+" WHERE condition_type=45") is not 0L)
+            throw new InvalidOperationException("旧版本夹具不能丢弃真实类型45领奖");
+        ChangeReceiptDefinition(db,table,_ => SqliteMigrations.QuestCompletionSchemaV42);
     }
 
     static void RewindQuestRentalCompletion(SqliteConnection db)
@@ -387,6 +399,7 @@ internal static class DatabaseSchemaTests
     // v42仍是正死亡场景与结算；回退只接受没有v43新事实的夹具，不删除真实来源或奖励。
     internal static void RewindDungeonSceneSettlement(SqliteConnection db)
     {
+        RewindQuestDungeonAlternatives(db);
         DropGuildSchema(db);
         const string settlement = "character_dungeon_settlement_receipts", scene = "character_dungeon_scene_clear_receipts";
         bool hasNewColumns = Query(db, "SELECT count(*) FROM pragma_table_info('" + settlement + "') WHERE name='scene_operation_id'") is 1L;
@@ -540,17 +553,18 @@ internal static class DatabaseSchemaTests
                 Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L, "删角清理来源、结算、清图、完成和翻牌，保留账号钱包且无残留外键");
     }
 
-    private static void VerifyQuestRentalCompletionMigration(string root)
+    private static void VerifyQuestRentalCompletionMigration(string root, int oldVersion = 41)
     {
         const string table = "character_quest_completion_receipts";
-        string path = Path.Combine(root, "rental-v41.db");
+        string path = Path.Combine(root, $"quest-completion-v{oldVersion}.db");
         _ = new CharacterRepository(path);
         new AuthenticationService(new AuthenticationRepository(path)).Create("rental-history", "fixture-password");
         string[] names;
         string originalRows;
         using (var db = Open(path))
         {
-            RewindQuestRentalCompletion(db);
+            if (oldVersion == 45) RewindQuestDungeonAlternatives(db);
+            else RewindQuestRentalCompletion(db);
             Execute(db, """
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
                   VALUES('rental-history',0,'RentalHistory',8,38,1,450,234,0,123);
@@ -565,14 +579,14 @@ internal static class DatabaseSchemaTests
                 CREATE TABLE rental_migration_audit(value INTEGER);
                 CREATE TRIGGER rental_history_insert AFTER INSERT ON character_quest_completion_receipts
                   BEGIN INSERT INTO rental_migration_audit VALUES(1); END;
-                PRAGMA user_version=41;
                 """);
+            Execute(db,$"PRAGMA user_version={oldVersion}");
             names = ColumnNames(db, table);
             originalRows = Rows(db, table, names);
         }
         foreach (string scenario in new[] { "late-failure", "unknown-definition", "unknown-child" })
         {
-            string damaged = Path.Combine(root, "rental-v41-" + scenario + ".db");
+            string damaged = Path.Combine(root, $"quest-completion-v{oldVersion}-" + scenario + ".db");
             using (var source = Open(path))
             using (var target = Open(damaged)) source.BackupDatabase(target);
             using (var db = Open(damaged))
@@ -606,6 +620,13 @@ internal static class DatabaseSchemaTests
                 "native19不允许缺失冻结计划");
             Reject<SqliteException>(() => Execute(db, "UPDATE character_quest_completion_receipts SET event_id='fake',instance_id='fake',task_attempt=1,epoch=1 WHERE condition_type=19"),
                 "native19不能伪装清图来源");
+            if (oldVersion == 45)
+            {
+                Reject<SqliteException>(() => Execute(db,"UPDATE character_quest_completion_receipts SET condition_type=45 WHERE rowid=87"),
+                    "native45不能沿用仅有冻结计划的普通领奖形状");
+                Reject<SqliteException>(() => Execute(db,"UPDATE character_quest_completion_receipts SET condition_type=45,event_id='fixture',instance_id='fixture',task_attempt=1,epoch=1 WHERE rowid=87"),
+                    "native45显式拒绝NULL接取外键，不能借SQLite CHECK的NULL结果绕过清图来源");
+            }
             Check(Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                 "租赁迁移保留领奖外键完整性");
         }
@@ -1698,10 +1719,13 @@ internal static class DatabaseSchemaTests
         Check(Snapshot(broken) == original, "v44拒绝未知公会结构，新增成员表和版本全部回滚");
     }
 
-    static void ChangeCompletionDefinition(SqliteConnection db,Func<string,string> change) =>
+    static void ChangeCompletionDefinition(SqliteConnection db,Func<string,string> change)
+    {
+        RewindQuestDungeonAlternatives(db);
         ChangeReceiptDefinition(db, "character_quest_completion_receipts", sql => change(sql.Replace("12,19,25", "12,25", StringComparison.Ordinal).Replace(
             "CHECK(after_experience>=before_experience AND after_experience<=before_experience+experience_amount)",
             "CHECK(after_experience=before_experience+experience_amount)", StringComparison.Ordinal)));
+    }
 
     // 旧库夹具同时移除后续拍卖和公会结构；成员表先于公会表删除。
     static void DropLaterTables(SqliteConnection db)
@@ -1765,8 +1789,12 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                RewindPickupUids(db);
-                Execute(db, "DROP TABLE character_dungeon_passive_pickups");
+                RewindQuestDungeonAlternatives(db);
+                if (oldVersion < 45)
+                {
+                    RewindPickupUids(db);
+                    Execute(db, "DROP TABLE character_dungeon_passive_pickups");
+                }
                 if (oldVersion < 43) RewindDungeonSceneSettlement(db);
                 if (oldVersion < 42) RewindQuestRentalCompletion(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('migrated',0,'Migrated',7,38,1,450,234,0,2,60,123)");

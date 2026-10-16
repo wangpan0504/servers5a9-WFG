@@ -71,7 +71,7 @@ internal sealed partial class CharacterRepository
         foreach (var before in expected.ActiveMainQuests.Where(row => row.ConditionState > 0 && QuestHuntProgress.Bound(row,entry)))
         {
             if (quests is null || !quests.TryGet(before.QuestId,out var quest) ||
-                !(QuestClearEligibility.IsSingleMap(quest) || QuestDungeonClearProgress.TryTarget(quest,out _))) continue;
+                !(QuestClearEligibility.IsSingleMap(quest) || QuestDungeonClearProgress.Supports(quest))) continue;
             var after = plan.ActiveAfter.Single(row => row.AcceptanceId == before.AcceptanceId);
             if (after.ConditionState == before.ConditionState) continue;
             if (after.ConditionState != before.ConditionState-1)

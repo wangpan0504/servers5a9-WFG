@@ -53,6 +53,9 @@ internal static class QuestProtocolTests
             "租赁任务19保留真实分类、经验及完整19B金币奖励行，不插入材料数组");
         Reject(() => QuestPackets.Finish(8581,19,600,[new(177,1)],40,[]),
             "租赁任务19不能冒充寻物条件消费材料");
+        Check(QuestPackets.Finish(2929,45,17,[],0,[]).SequenceEqual(Convert.FromHexString("01710B2D110000000000")),
+            "列表通关45使用原生分类和完整10B零物品正文，不插入材料数组或计数字段");
+        Reject(() => QuestPackets.Finish(2929,45,17,[new(177,1)],0,[]),"列表通关45不能消费寻物材料");
         Check(QuestPackets.Finish(100, 0, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640000000000000100B100030000000000")),
             "普通寻物先读本次扣除7B行，再读mode0和奖励数，不填剩余库存");
         Check(QuestPackets.Finish(100, 25, 0, [new(177, 3)], 0, []).SequenceEqual(Convert.FromHexString("01640019000000000100B100030000000000")),

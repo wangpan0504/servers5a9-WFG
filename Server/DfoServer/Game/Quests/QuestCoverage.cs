@@ -176,7 +176,7 @@ internal static class QuestCoverage
         "[quest clear]" => QuestRelationProgress.SequentialParent(quest,catalog),
         "[clear multi quest]" => QuestRelationProgress.ThresholdParent(quest,catalog),
         "[clear map]" => QuestClearEligibility.IsSingleMap(quest),
-        "[condition under clear]" => QuestDungeonClearProgress.TryTarget(quest,out _),
+        "[condition under clear]" or "[clear a dungeon]" => QuestDungeonClearProgress.Supports(quest),
         "[reach the range]" => QuestClientSceneProgress.TownRange(quest),
         "[look cinematic]" => QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest),
         "[question]" => QuestQuestionProgress.TryCount(quest,out _),
@@ -223,7 +223,7 @@ internal static class QuestCoverage
                 bool threshold = QuestRelationProgress.ThresholdParent(quest,catalog);
                 bool parent = sequential || threshold;
                 bool range = QuestClientSceneProgress.TownRange(quest);
-                bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
+                bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
                 bool state = QuestStateProgress.Type(quest) is not null;
                 bool rental = QuestRentalProgress.Supports(quest);
                 if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental) reasons.Add("目标子类型尚未接入");
@@ -288,7 +288,7 @@ internal static class QuestCoverage
         "[custom multi condition]" when quest.Path.Contains("/pvp/",StringComparison.Ordinal) => "目标依赖决斗训练场多条件事件；对应场景及条件通道尚未接入",
         "[custom multi condition]" => "本版多条件类型60已确认；实际场景、条件通道和进度保存尚未接入",
         "[clear multi quest]" => "类型70需要已确认的sub4完整子任务引用与有效最小完成数；其他阈值形状尚未接入",
-        "[clear a dungeon]" => "目标要求副本集合与子类型条件；普通清图凭据尚未接入此类型的进度编码",
+        "[clear a dungeon]" => "目标需要sub6及完整的正地下城/最低难度成对列表",
         "[condition under clear]" => "目标要求带条件通关；本版子类型及相应服务端结算统计尚未接入",
         "[play only]" => "接取型目标仅支持本版无参数且无子类型声明；其它目标参数尚未接入",
         "[get score]" => "目标依赖指定场景的真实评分；评分统计尚未接入任务进度",

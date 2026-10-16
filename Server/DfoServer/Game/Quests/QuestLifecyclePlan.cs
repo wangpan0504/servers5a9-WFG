@@ -125,7 +125,7 @@ internal sealed class QuestLifecyclePlan
             "[seeking]" when quest.SubType == -1 && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
             "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u | MaterialState(expected.Inventory, quest, now.ToUnixTimeSeconds()),
             "[clear map]" when QuestClearEligibility.IsSingleMap(quest) => 1,
-            "[condition under clear]" when QuestDungeonClearProgress.TryTarget(quest,out _) => QuestDungeonClearProgress.Initial(quest),
+            "[condition under clear]" or "[clear a dungeon]" when QuestDungeonClearProgress.Supports(quest) => QuestDungeonClearProgress.Initial(quest),
             "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.Initial(quest),
             "[quest clear]" when QuestRelationProgress.SequentialParent(quest,catalog) => QuestRelationProgress.Initial(quest,catalog,expected.CompletedQuests),
             "[clear multi quest]" when QuestRelationProgress.ThresholdParent(quest,catalog) =>

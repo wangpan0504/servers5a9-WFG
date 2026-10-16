@@ -64,7 +64,7 @@ internal sealed partial class GameSession
             return new(QuestFinishOutcome.Unsupported, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.ResourceUnsupported };
         if (QuestEligibility.Completed(expected).Contains(questId))
             return new(QuestFinishOutcome.AlreadyCompleted, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
-        bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out _);
+        bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
         if ((quest.Condition == "[clear map]" || dungeonClear) && captured.Clear is null &&
             QuestRelationProgress.CompletedParentChild(expected,quest,quests) is null)
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };

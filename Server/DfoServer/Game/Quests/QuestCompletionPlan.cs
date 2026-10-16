@@ -34,12 +34,12 @@ internal sealed class QuestCompletionPlan
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
         CompletedParentId = completedParentId;
         AuthoritativeClear = clear;
-        ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
+        ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[clear a dungeon]" => 45, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
             "[custom quest]" when QuestRentalProgress.Supports(quest) => 19,
             "[quest clear]" => 44, "[clear multi quest]" => 70, "[question]" => 42, "[reach the range]" => 64, "[look cinematic]" => 65,
             _ => QuestStateProgress.Type(quest) ?? (byte)4 };
         // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
-        if (completedParentId is not null && ConditionType is 1 or 3) ConditionType = 4;
+        if (completedParentId is not null && ConditionType is 1 or 3 or 45) ConditionType = 4;
         RewardSelector = selector;
         ExperienceReward = experience; Inventory = inventory; GrowthPlan = growth; Rewards = rewards; Consumed = consumed;
         Multiplier = multiplier;
@@ -190,7 +190,7 @@ internal sealed class QuestCompletionPlan
                 ? QuestProfessionReward.Target(expected, quest, growthCatalog.Learning ?? throw new NotSupportedException("职业变化技能资源未装配")) : null;
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
             bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0;
-            bool dungeonClear = QuestDungeonClearProgress.TryTarget(quest,out var dungeonTarget);
+            bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
             bool rental = QuestRentalProgress.Supports(quest);
             if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && QuestStateProgress.Type(quest) is null || quest.RewardType != "[item]" && profession is null && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
                 !QuestCoverage.HasOrdinaryAttributes(quest) ||
@@ -208,7 +208,7 @@ internal sealed class QuestCompletionPlan
             else if (dungeonClear)
             {
                 if (clear is null || !MatchesClearedActiveQuest(expected,clear) || clear.QuestId != quest.Id ||
-                    clear.DungeonId != dungeonTarget.DungeonId || clear.MapId <= 0)
+                    !QuestDungeonClearProgress.ContainsDungeon(quest,clear.DungeonId) || clear.MapId <= 0)
                     throw new InvalidDataException("条件通关交付需要当前接取次数归零及最后达成的权威凭据");
             }
             else if (clear is not null) throw new InvalidDataException("此任务条件不能使用清图凭据");

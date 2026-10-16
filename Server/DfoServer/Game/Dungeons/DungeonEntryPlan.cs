@@ -401,7 +401,7 @@ internal sealed record DungeonEntryPlan(
         // 已达成条件只有持久清图资格才能继续挑战；裸条件值不能伪装正式通关。
         if ((quest is null || QuestClearEligibility.IsSingleMap(quest)) && active[0].ConditionState != 1 &&
             !(allowClearedQuest && active[0].ConditionState == 0) ||
-            quest?.Condition == "[condition under clear]" && (!QuestDungeonClearProgress.ValidScalar(quest,active[0].ConditionState) ||
+            quest?.Condition is "[condition under clear]" or "[clear a dungeon]" && (!QuestDungeonClearProgress.ValidScalar(quest,active[0].ConditionState) ||
                 active[0].ConditionState == 0 && !allowClearedQuest) ||
             quest?.Condition is "[hunt enemy]" or "[hunt monster]" && !QuestHuntProgress.ValidScalar(quest, active[0].ConditionState))
             return "quest-condition-not-pending";
