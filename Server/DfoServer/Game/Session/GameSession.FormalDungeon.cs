@@ -473,7 +473,7 @@ internal sealed partial class GameSession
                 DungeonPickupPlanning.Item(Selected, original.Content, items.Get(original.Core.ItemId), goldLimits, pieces, now);
         else
             plan = original.IsGold ? InventoryResult.Reject() :
-                InventoryRewardGrantService.TryGrantCore(Selected, original.Core, items.Get(original.Core.ItemId), pieces, now, preferEmptyConsumableQuickSlot: true);
+                InventoryRewardGrantService.TryGrantCore(Selected, original.Core, items.Get(original.Core.ItemId), pieces, now, usePickupSlotPolicy: true);
         if (!plan.Accepted)
         {
             dungeon.Ground.CancelPickup(prepared);

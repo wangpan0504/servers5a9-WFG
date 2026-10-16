@@ -121,6 +121,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("dungeon-passive-items", FormalDungeonTcpTests.RunPassiveAsync),
+        ("dungeon-pickup-slots", FormalDungeonTcpTests.RunPickupSlotsAsync),
         ("jobs", TownProtocolTcpTests.JobsAsync),
         ("inventory", InventoryTcpTests.RunAsync),
         ("consumable-use", ConsumableUseTcpTests.RunAsync),

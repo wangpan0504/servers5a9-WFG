@@ -6,6 +6,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal static class ItemSlotBoundService
 {
+    public const short QuickSlotStart = 3;
+    public const short QuickSlotEnd = 8;
     public const ushort AvatarCapacity = 210;
     public const short GuildMedalEquipmentSlot = 32;
     public static InventoryListType List(ItemKind kind) => kind switch
@@ -66,8 +68,8 @@ internal static class ItemSlotBoundService
                 ItemKind.GuildMedal => slot.Index == GuildMedalEquipmentSlot,
                 _ => false
             };
-        if (slot.List == InventoryListType.Main && slot.Index is >= 3 and <= 8)
-            // 快捷栏是真实物品槽；勋章、守护珠也可存放，发放仍选择各自页面。
+        if (slot.List == InventoryListType.Main && slot.Index is >= QuickSlotStart and <= QuickSlotEnd)
+            // 快捷栏是真实物品槽；自动入包顺序由对应发放或拾取策略决定。
             return kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Quest or
                 ItemKind.Profession or ItemKind.GuildMedal or ItemKind.GuardianGem;
         if (!Enum.IsDefined(kind) || slot.List != List(kind))

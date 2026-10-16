@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
@@ -209,9 +210,9 @@ internal sealed partial class CharacterRepository
                 bool same = current.Revision == reader.GetInt64(12);
                 if (reader.IsDBNull(8))
                 {
-                    var slot = new InventorySlot(InventoryListType.Main, checked((short)reader.GetInt32(5)));
                     long uid = reader.GetInt64(6);
                     var core = JsonSerializer.Deserialize<ItemCore>(reader.GetString(7)) ?? throw new InvalidDataException("集合拾取核心损坏");
+                    var slot = PickupSlot(current.Inventory, core, checked((short)reader.GetInt32(5)));
                     return new(current, true, slot, uid, same && current.Inventory.Find(slot) is { } item && item.Uid == uid && item.Core == core,
                         Amount: reader.GetInt32(9));
                 }
@@ -241,7 +242,9 @@ internal sealed partial class CharacterRepository
             destination = plan.ChangedSlots[0];
             var after = plan.AfterIndex.Find(destination) ?? throw new InvalidDataException("集合拾取缺少目的物品");
             var before = plan.BeforeIndex.Find(destination);
-            if (destination.List != InventoryListType.Main || after.Avatar is not null || after.Creature is not null ||
+            if (!ItemSlotBoundService.Allows(plan.After, destination, ground.Core.Kind) ||
+                destination != PickupSlot(plan.After, ground.Core, destination.Index) ||
+                after.Avatar is not null || after.Creature is not null ||
                 (before is null ? after.Uid != 0 || after.Core != ground.Core :
                     !ground.Core.IsStackable || after.Uid != before.Uid ||
                     after.Core != (before.Core with { Value = checked(before.Core.Value + amount) }) ||
@@ -282,5 +285,13 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("拾取回执未保存到原地面对象");
         tx.Commit();
         return new(committed, false, destination, actual?.Uid ?? 0, true, currency, amount);
+    }
+
+    // 回执已有完整Core和槽号；专用容器合法时优先解释，其他合法快捷槽归Main，保持实际列表与重放一致。
+    static InventorySlot PickupSlot(InventorySnapshot inventory, ItemCore core, short index)
+    {
+        var slot = new InventorySlot(ItemSlotBoundService.List(core.Kind), index);
+        return slot.List == InventoryListType.Main || ItemSlotBoundService.Allows(inventory, slot, core.Kind)
+            ? slot : new(InventoryListType.Main, index);
     }
 }

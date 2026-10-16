@@ -28,10 +28,17 @@ internal static partial class DungeonPassiveDropTests
             var fixture = SkillRepositoryTests.Fixture("PassiveLoot", resources.Towns, resources.Characters, resources.Learning) with
             { DungeonState = CharacterDungeonState.NewOrdinary, ActiveMainQuests = [] };
             var created = repository.Create(owner, fixture);
+            var filler = InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(90032), 1, Now);
+            var filled = created.Inventory with { Items = created.Inventory.Items.AddRange(Enumerable.Range(49, 48)
+                .Select(slot => new InventoryItem(0, new(InventoryListType.GuildMedal, (short)slot), filler))) };
+            created = InventoryService.Commit(repository, owner, created,
+                new(true, 0, new(created.Inventory, filled, "pickup-slot-fixture", new(created))));
             var f = Fixture(created.Id, created.Revision + 1, checked((ushort)created.DungeonState!.NextObjectKey));
             DungeonGroundContent[] contents = [new(InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1000), 3, Now)),
                 new(InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(3037), 7, Now)),
-                new(null, 25), new(DungeonDropCreation.Create(resources.ItemResources.Items.Get(101010912), 1, _ => 0, Now))];
+                new(null, 25), new(DungeonDropCreation.Create(resources.ItemResources.Items.Get(101010912), 1, _ => 0, Now)),
+                new(InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(90000), 2, Now)),
+                new(InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(90001), 3, Now))];
             var origin = new DungeonPassiveDropOrigin(1, 0, 0, 0);
             var eventId = Guid.NewGuid();
             var grounds = contents.Select((content, index) => new DungeonGroundObject(eventId, f.Run.Snapshot.Identity,
@@ -70,6 +77,14 @@ internal static partial class DungeonPassiveDropTests
                 That(!committed.Duplicate && replay.Duplicate && replay.ProjectionCurrent &&
                     replay.ItemUid == committed.ItemUid && replay.Character.Revision == committed.Character.Revision &&
                     replay.Character.Revision == old.Revision + 1, "结果丢失只读原回执恢复，每个地面key仅授予一次资产");
+                if (ground.Content.Item?.Kind == ItemKind.GuardianGem)
+                {
+                    var destination = ground.Core.ItemId == 90000
+                        ? new InventorySlot(InventoryListType.GuildMedal, 97) : new(InventoryListType.Main, 4);
+                    That(committed.Destination == destination && replay.Destination == destination &&
+                        committed.Character.Inventory.Find(destination) is { } actual && actual.Uid == committed.ItemUid && actual.Core == ground.Core,
+                        "专用页和满页回退快捷栏使用实际列表、槽号及真实UID，原回执恢复不能强当Main");
+                }
                 if (ground.Content.Item?.Kind == ItemKind.Equipment)
                     That(committed.ItemUid > int.MaxValue && replay.ItemUid == committed.ItemUid,
                         "普通装备的内部64位UID完整保存和恢复，不套用客户端地面key或宠物键限制");
@@ -84,7 +99,7 @@ internal static partial class DungeonPassiveDropTests
                 }
                 current = committed.Character;
             }
-            That(Scalar("SELECT count(*) FROM character_dungeon_passive_pickups") == 4 &&
+            That(Scalar("SELECT count(*) FROM character_dungeon_passive_pickups") == contents.Length &&
                 Scalar("SELECT count(*) FROM character_dungeon_drop_batches") == 0 &&
                 Scalar("SELECT count(*) FROM character_dungeon_growth_receipts") == 0,
                 "特殊来源拾取共享资产事务，但不污染怪物集合或击杀来源");

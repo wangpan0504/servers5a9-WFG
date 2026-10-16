@@ -130,7 +130,7 @@ internal static class InventoryRewardGrantService
 
     // 地面等业务提供已冻结的完整核心；此入口不接存量UID，不确认来源资格或重复拾取。
     public static InventoryResult TryGrantCore(Character character, ItemCore core, ItemTemplate template,
-        EpicPieceCatalog pieces, DateTimeOffset? utcNow = null, bool preferEmptyConsumableQuickSlot = false)
+        EpicPieceCatalog pieces, DateTimeOffset? utcNow = null, bool usePickupSlotPolicy = false)
     {
         ArgumentNullException.ThrowIfNull(character);
         ArgumentNullException.ThrowIfNull(core);
@@ -168,7 +168,7 @@ internal static class InventoryRewardGrantService
         // ItemCore及其附属值均不可变，直接共享完整核心；不重新Create或计算期限。
         var inventory = character.Inventory;
         var placement = new RewardPlacement(inventory, [core.ItemId]);
-        if (!placement.TryAdd(template, core, core.Count, preferEmptyConsumableQuickSlot: preferEmptyConsumableQuickSlot))
+        if (!placement.TryAdd(template, core, core.Count, usePickupSlotPolicy: usePickupSlotPolicy))
             return InventoryResult.Reject(17);
         var after = inventory with { Items = placement.Items() };
         after.Validate(allocating: true);
@@ -200,10 +200,12 @@ internal static class InventoryRewardGrantService
             .ThenBy(item => item.Position.Index).ToImmutableArray();
 
         public bool TryAdd(ItemTemplate template, ItemCore prototype, int remaining, InventoryItem? instance = null,
-            bool preferEmptyConsumableQuickSlot = false)
+            bool usePickupSlotPolicy = false)
         {
             var range = ItemSlotBoundService.Range(template.Kind, inventory.Expansion);
             var list = ItemSlotBoundService.List(template.Kind);
+            bool pickupQuickSlots = usePickupSlotPolicy && ItemSlotBoundService.Allows(inventory,
+                new(InventoryListType.Main, ItemSlotBoundService.QuickSlotStart), template.Kind);
             if (prototype.IsStackable)
             {
                 // 自动发放只向首个兼容堆叠完整入库，不能靠拆成新格绕过该次入库上限。
@@ -227,16 +229,21 @@ internal static class InventoryRewardGrantService
                         slots.Sort();
                 }
                 InventoryItem? item = null;
-                if (stacks.TryGetValue((list, prototype.ItemId), out var candidates))
-                    foreach (short candidate in candidates)
-                    {
-                        var current = planned[new(list, candidate)];
-                        if (InventoryStackRuleService.CanShareStack(prototype, current.Core))
+                int stackLists = pickupQuickSlots && list != InventoryListType.Main ? 2 : 1;
+                for (int pass = 0; item is null && pass < stackLists; pass++)
+                {
+                    var stackList = stackLists == 2 && pass == 0 ? InventoryListType.Main : list;
+                    if (stacks.TryGetValue((stackList, prototype.ItemId), out var candidates))
+                        foreach (short candidate in candidates)
                         {
-                            item = current;
-                            break;
+                            var current = planned[new(stackList, candidate)];
+                            if (InventoryStackRuleService.CanShareStack(prototype, current.Core))
+                            {
+                                item = current;
+                                break;
+                            }
                         }
-                    }
+                }
                 if (item is not null)
                 {
                     if (InventoryStackRuleService.CanMerge(prototype, item.Core, remaining, template.StackLimit))
@@ -255,37 +262,35 @@ internal static class InventoryRewardGrantService
                 }
             }
 
-            // 地面消耗品仅在没有兼容堆时优先空快捷栏；满堆仍按原规则整笔拒绝。
-            if (remaining > 0 && preferEmptyConsumableQuickSlot && template.Kind == ItemKind.Consumable)
-                for (short quickSlot = 3; quickSlot <= 8; quickSlot++)
-                    if (!planned.ContainsKey(new(InventoryListType.Main, quickSlot)))
-                    {
-                        range = (quickSlot, quickSlot);
-                        break;
-                    }
-
-            var page = (list, range.Start, range.End);
-            short slot = freeSlots.GetValueOrDefault(page, range.Start);
-            for (; remaining > 0 && slot <= range.End; slot++)
+            // 先合堆；拾取消耗品先找快捷栏，其他合法类别只在所属分页满后回退快捷栏。
+            for (int pass = 0; remaining > 0 && pass < (pickupQuickSlots ? 2 : 1); pass++)
             {
-                var position = new InventorySlot(list, slot);
-                if (planned.ContainsKey(position))
-                    continue;
-                int count = Math.Min(remaining, template.StackLimit);
-                var core = prototype.IsStackable ? prototype with { Value = count } : prototype;
-                planned.Add(position, instance is null ? CreateItem(template, position, core) : instance with { Position = position, Core = core });
-                if (prototype.IsStackable)
+                bool quick = pickupQuickSlots && (template.Kind == ItemKind.Consumable ? pass == 0 : pass == 1);
+                var targetList = quick ? InventoryListType.Main : list;
+                (short Start, short End) targetRange = quick ? (ItemSlotBoundService.QuickSlotStart, ItemSlotBoundService.QuickSlotEnd) : range;
+                var page = (targetList, targetRange.Start, targetRange.End);
+                short slot = freeSlots.GetValueOrDefault(page, targetRange.Start);
+                for (; remaining > 0 && slot <= targetRange.End; slot++)
                 {
-                    var key = (list, prototype.ItemId);
-                    if (!stacks!.TryGetValue(key, out var candidates))
-                        stacks.Add(key, candidates = []);
-                    int index = candidates.BinarySearch(slot);
-                    candidates.Insert(~index, slot);
+                    var position = new InventorySlot(targetList, slot);
+                    if (planned.ContainsKey(position))
+                        continue;
+                    int count = Math.Min(remaining, template.StackLimit);
+                    var core = prototype.IsStackable ? prototype with { Value = count } : prototype;
+                    planned.Add(position, instance is null ? CreateItem(template, position, core) : instance with { Position = position, Core = core });
+                    if (prototype.IsStackable)
+                    {
+                        var key = (targetList, prototype.ItemId);
+                        if (!stacks!.TryGetValue(key, out var candidates))
+                            stacks.Add(key, candidates = []);
+                        int index = candidates.BinarySearch(slot);
+                        candidates.Insert(~index, slot);
+                    }
+                    remaining -= count;
                 }
-                remaining -= count;
+                // 发放只新增或合并，不产生空格；本次操作内的页面游标可单调前进。
+                freeSlots[page] = slot;
             }
-            // 发放只新增或合并，不产生空格；本次操作内的页面游标可单调前进。
-            freeSlots[page] = slot;
 
             if (remaining != 0 && allowOverflowMail)
             {
