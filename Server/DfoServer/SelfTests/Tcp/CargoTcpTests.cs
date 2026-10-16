@@ -15,6 +15,7 @@ internal static class CargoTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
+        Inventory.CargoTests.RunCore();
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "cargo"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
@@ -69,13 +70,18 @@ internal static class CargoTcpTests
             peer.Send(308, Build(w => w.Write(751)));
             peer.Expect(1, 308, [0, 10, 0]);
             peer.Barrier();
-            Transfer(peer, 0, 9, weaponId, 1, 2, 7, 0, 1);
+            Transfer(peer, 0, 9, weaponId, 1, 2, 7, 7, 1);
             var main = peer.Expect(0, 14).Body;
             That(main[0] == 0 && U32(main, 5) == uint.MaxValue, "personal deposit clears original physical slot");
             var personal = peer.Expect(0, 14).Body;
             That(personal[0] == 2 && U16(personal, 3) == 7 && U32(personal, 5) == weaponId && personal.Length == 126,
                 "personal deposit uses complete 123-byte entry");
-            Transfer(peer, 2, 7, weaponId, 1, 12, 7, 0, 1);
+            SortPersonal(peer, weaponId);
+            peer.Send(20, Convert.FromHexString("06000000100218142000"));
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 2, 16, 0]); peer.Barrier();
+            That(fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[var sortedCore]] && Equals(sortedCore, weaponCore),
+                "个人仓库真实整理与重复整理保持完整物品核心及UID");
+            Transfer(peer, 2, 0, weaponId, 1, 12, 7, 0, 1);
             That(peer.Expect(0, 14).Body[0] == 2 && peer.Expect(0, 14).Body[0] == 12, "cross cargo move clears personal and updates account");
             That(fixture.Query("SELECT character_id,item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[DBNull, var saved]] &&
                 Equals(saved, weaponCore), "account storage changes owner while preserving complete core and UID");
@@ -136,10 +142,37 @@ internal static class CargoTcpTests
             That(U32(entry[4].Body, 376) == weaponId && U16(entry[4].Body, 374) == 3, "reconnect restores sibling equipment in quick bar");
             Cargo(entry[7].Body, 12, 24, 0, 0);
             peer.Barrier();
+            Transfer(peer, 0, 3, weaponId, 1, 2, 7, 7, 1);
+            peer.Expect(0, 14); peer.Expect(0, 14);
+            SortPersonal(peer, weaponId);
+        }
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(1);
+            Cargo(entry[6].Body, 2, 8, 0, 1);
+            That(U16(entry[6].Body, 5) == 0 && U32(entry[6].Body, 7) == weaponId,
+                "重登回放个人仓库整理后的槽0，不恢复旧槽7");
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var restored = repo.LoadCharacter(owner, 1).Inventory.Find(new(InventoryListType.PersonalCargo, 0));
+            That(restored?.Uid == weaponUid && JsonSerializer.Serialize(restored.Core) == weaponCore,
+                "个人仓库整理后重登保持同一UID及完整属性");
+            peer.Barrier();
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "warehouse transactions preserve database integrity");
+    }
+
+    static void SortPersonal(TcpPeer peer, int weaponId)
+    {
+        // 双端实收CMD20，长度前缀6，protobuf字段2=2、3=20、4=0。
+        peer.Send(20, Convert.FromHexString("06000000100218142000"));
+        peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 2, 16, 0]);
+        var sorted = peer.Expect(0, 14).Body;
+        That(sorted[0] == 2 && U16(sorted, 1) == 2 && U16(sorted, 3) == 0 && U32(sorted, 5) == weaponId &&
+            U16(sorted, 126) == 7 && U32(sorted, 128) == uint.MaxValue,
+            "个人仓库整理下发槽0完整物品并清空槽7");
+        peer.Barrier();
     }
 
     static void Transfer(TcpPeer peer, byte source, short sourceSlot, int sourceId, int count, byte target, short targetSlot, int targetId, int moved, short? actualTargetSlot = null)

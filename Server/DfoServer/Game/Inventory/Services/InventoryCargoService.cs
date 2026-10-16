@@ -78,13 +78,17 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         var item = before.Find(new(InventoryListType.Main, slot));
         if (item is null || !item.Core.IsStackable || item.Core.EquipmentLockId != 0 || item.Core.IsExpired(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
             return InventoryResult.Reject(17);
-        ushort target = catalog.Get(item.Core.ItemId).PersonalCargoUpgradeTarget;
+        var template = catalog.Get(item.Core.ItemId);
+        if (!template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+            return InventoryResult.Reject(17);
+        ushort target = template.PersonalCargoUpgradeTarget;
         if (target <= before.CargoCapacity || target > 264)
             return InventoryResult.Reject(19);
         var consumed = InventoryDeleteService.Plan(before, item.Position, item.Core.Value, 1);
         if (!consumed.Accepted)
             return InventoryResult.Reject(17);
         var after = consumed.Plan!.After with { CargoCapacity = target };
-        return new(true, 0, new(before, after, "personal_cargo_upgrade"));
+        return new(true, 0, new(before, after, "personal_cargo_upgrade",
+            new(character, item.ExpireTime > 0 ? item.ExpireTime : null)));
     }
 }

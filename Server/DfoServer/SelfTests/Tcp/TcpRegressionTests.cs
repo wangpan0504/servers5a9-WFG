@@ -167,6 +167,7 @@ internal static class TcpRegressionTests
         ("guild-permit-sequential", GuildPermitSequentialTcpTests.RunAsync),
         ("currency", CurrencyTcpTests.RunAsync),
         ("cargo", CargoTcpTests.RunAsync),
+        ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
         ("cash-shop", CashShopTcpTests.RunAsync),
         ("cera-package", CeraPackageTcpTests.RunAsync),

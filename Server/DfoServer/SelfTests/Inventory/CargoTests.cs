@@ -18,6 +18,62 @@ namespace DfoServer.Testing.Inventory;
 
 internal static class CargoTests
 {
+    public static void RunCore()
+    {
+        var template = new DfoServer.GameWorld.Items.ItemTemplate(50, DfoServer.GameWorld.Items.ItemKind.Consumable,
+            0, 10, 0, 100, 0, 0, 0, "[free]", 1, 0, "仓库资格测试") { MaximumLevel = 20, PersonalCargoUpgradeTarget = 24 };
+        var catalog = new DfoServer.GameWorld.Items.ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = template });
+        var service = new InventoryCargoService(catalog, null!, null!);
+        var source = new InventoryItem(1, new(InventoryListType.Main, 65), new ItemCore(50, template.Kind, 2));
+        var role = new Character(1, 0, "CargoGuard", 0, new(0, 0, 0, 0), null) { Level = 10, Inventory = new([source]) };
+        var captured = InventoryRequests.Move(Convert.FromHexString("007200ED913F1D010000000201000100000000000000FFFFFFFF0000"));
+        That(captured.Source == new InventorySlot(InventoryListType.Main, 114) && captured.SourceItemId == 490705389 &&
+            captured.Count == 1 && captured.Destination == new InventorySlot(InventoryListType.PersonalCargo, 1) && captured.DestinationItemId == 1,
+            "现场存入请求按现行解析器还原字段");
+        var move = new InventoryMoveRequest(source.Position, 50, 1, new(InventoryListType.PersonalCargo, 1), 1, 0, -1, 0, 0);
+        That(InventoryMoveService.Plan(role, move, catalog, 0).Accepted, "空个人金库格接纳当前客户端格号别名");
+        That(InventoryMoveService.Plan(role, move with { DestinationItemId = 0 }, catalog, 0).Accepted, "保留标准空格零值");
+        That(!InventoryMoveService.Plan(role, move with { SourceItemId = 51 }, catalog, 0).Accepted &&
+            !InventoryMoveService.Plan(role, move with { DestinationItemId = 2 }, catalog, 0).Accepted &&
+            !InventoryMoveService.Plan(role, move with { Destination = new(InventoryListType.PersonalCargo, 8), DestinationItemId = 8 }, catalog, 0).Accepted,
+            "目标别名不放宽源模板、错误格号或容量");
+        var occupied = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Add(source with { Uid = 2, Position = move.Destination }) } };
+        That(!InventoryMoveService.Plan(occupied, move, catalog, 0).Accepted, "非空目标仍严格核对物品编号");
+        var sortRequest = InventoryRequests.Sort(Convert.FromHexString("06000000100218142000"));
+        That(sortRequest.List == InventoryListType.PersonalCargo && (byte)sortRequest.Kind == 20 && sortRequest.Condition == 0,
+            "本版实收整理请求为个人仓库category20，非物品模板类别");
+        var gear = new InventoryItem(2, new(InventoryListType.PersonalCargo, 7),
+            new ItemCore(51, GameWorld.Items.ItemKind.Equipment, 1) { Rune = 3, EquipmentLockId = 7 });
+        var pinned = source with { Uid = 3, Position = new(InventoryListType.PersonalCargo, 4), Core = source.Core with { SortLockFlag = 1 } };
+        var expired = source with { Uid = 4, Position = new(InventoryListType.PersonalCargo, 6), Core = source.Core with { ExpireTime = 1, SortLockFlag = 1 } };
+        var beforeSort = role.Inventory with { Items = [source, gear, pinned, expired] };
+        var sorted = InventorySortService.Plan(beforeSort, sortRequest.Kind, 0, catalog, 2, sortRequest.List);
+        That(sorted.Accepted && sorted.Plan!.After.Find(new(InventoryListType.PersonalCargo, 0)) == gear with { Position = new(InventoryListType.PersonalCargo, 0) } &&
+            sorted.Plan.After.Find(pinned.Position) == pinned && sorted.Plan.After.Find(source.Position) == source && sorted.Plan.After.Items.Length == 3,
+            "个人仓库整理保持安全锁装备UID及完整核心、排序锁位置和主背包，先清到期物品");
+        var repeated = InventorySortService.Plan(sorted.Plan!.After, sortRequest.Kind, 0, catalog, 2, sortRequest.List);
+        That(repeated.Accepted && repeated.Plan!.After.Items.SequenceEqual(sorted.Plan.After.Items), "重复整理不复制或移动已排好物品");
+        var legacySort = InventorySortService.Plan(beforeSort, (GameWorld.Items.ItemKind)11, 0, catalog, 2, sortRequest.List);
+        That(legacySort.Accepted && legacySort.Plan!.After.Items.SequenceEqual(sorted.Plan.After.Items), "保留既有个人仓库11入口相同行为");
+        That(!InventorySortService.Plan(beforeSort, (GameWorld.Items.ItemKind)19, 0, catalog, 2, sortRequest.List).Accepted &&
+            !InventorySortService.Plan(beforeSort, sortRequest.Kind, 0, catalog, 2, InventoryListType.Main).Accepted,
+            "个人仓库别名不放开未知类别或主背包范围");
+        That(InventorySortService.Plan(InventorySnapshot.Empty, sortRequest.Kind, 0, catalog, 2, sortRequest.List) is
+            { Accepted: true, Plan.After.Items.Length: 0 }, "空个人仓库整理成功且不生成物品");
+        foreach (var (level, job, allowed) in new (byte, byte, bool)[] { (9, 0, false), (10, 0, true), (20, 0, true), (21, 0, false), (10, 1, false) })
+        {
+            var result = service.PersonalUpgrade(role with { Level = level, Job = job }, 65);
+            That(result.Accepted == allowed && role.Inventory.Find(source.Position) == source &&
+                (!allowed || result.Plan!.After.CargoCapacity == 24 && result.Plan.After.Find(source.Position)!.Core.Count == 1 &&
+                    result.Plan.CharacterPrecondition!.Matches(role with { Level = level, Job = job }) &&
+                    !result.Plan.CharacterPrecondition.Matches(role with { Level = 21 })),
+                "仓库升级校验源工具资格，拒绝不消费，合法边界仍扩容");
+        }
+        catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = template with { UseForbidden = true } });
+        That(!service.PersonalUpgrade(role, 65).Accepted, "仓库工具禁止使用标记不可绕过");
+    }
+
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
         int checks = Count;
@@ -143,8 +199,8 @@ internal static class CargoTests
             That(Snapshot() == beforeFailure, "failed operations leave durable state and all audits identical");
             current = Commit(Move(material.Position, new(InventoryListType.PersonalCargo, 23)));
             That(!Move(new(InventoryListType.PersonalCargo, 23), new(InventoryListType.PersonalCargo, 24)).Accepted, "closed personal slot rejected");
-            current = Commit(items.Sort(current, new(InventoryListType.PersonalCargo, (GameWorld.Items.ItemKind)11, 0)));
-            That(current.Inventory.Find(new(InventoryListType.PersonalCargo, 0))?.Uid == material.Uid, "personal cargo sorts all categories with category 11");
+            current = Commit(items.Sort(current, new(InventoryListType.PersonalCargo, (GameWorld.Items.ItemKind)20, 0)));
+            That(current.Inventory.Find(new(InventoryListType.PersonalCargo, 0))?.Uid == material.Uid, "个人仓库按本版category20整理全部类别");
             var template = itemResources.Items.Get(sharedItem.Core.ItemId);
             That(!InventoryCargoService.AllowsInsert(sharedItem.Core, InventoryListType.PersonalCargo, template with { PersonalCargoForbidden = true }) &&
                 !InventoryCargoService.AllowsInsert(sharedItem.Core, InventoryListType.AccountCargo, template with { AttachType = "[trade]" }), "PVF forbidden and character binding enforced");

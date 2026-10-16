@@ -11,7 +11,7 @@ internal static class InventorySortService
     {
         bool cargo = list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo;
         if (!cargo && (!Enum.IsDefined(kind) || ItemSlotBoundService.List(kind) != list) ||
-            list == InventoryListType.PersonalCargo && (byte)kind != 11)
+            list == InventoryListType.PersonalCargo && (byte)kind is not (11 or 20))
             return InventoryResult.Reject();
         var range = !cargo ? ItemSlotBoundService.Range(kind, before.Expansion) :
             (Start: (short)0, End: (short)((list == InventoryListType.PersonalCargo ? before.CargoCapacity : before.AccountCargo.Capacity) - 1));

@@ -22,8 +22,12 @@ internal static class InventoryMoveService
         var before = character.Inventory;
         var source = before.Find(request.Source);
         var destination = before.Find(request.Destination);
+        // 当前客户端存入空个人金库格时允许把目标格号作为别名，非空格仍核对模板。
+        bool emptyCargoLocator = source is not null && destination is null &&
+            request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.PersonalCargo &&
+            request.Destination.Index >= 0 && request.DestinationItemId == request.Destination.Index;
         if (request.Actor is not (-1 or 0) || request.Flag0 != 0 || request.Flag1 != 0 || request.DestinationCount != 0 ||
-            (source?.Core.ItemId ?? 0) != request.SourceItemId || (destination?.Core.ItemId ?? 0) != request.DestinationItemId)
+            (source?.Core.ItemId ?? 0) != request.SourceItemId || !emptyCargoLocator && (destination?.Core.ItemId ?? 0) != request.DestinationItemId)
             return InventoryResult.Reject(CannotMoveItem);
         // 029DA4CE/029DA611 写入模板编号，空格写0；先按原顺序校验，避免重复穿戴请求被反向解释为卸装。
         var sourceSlot = request.Source;
