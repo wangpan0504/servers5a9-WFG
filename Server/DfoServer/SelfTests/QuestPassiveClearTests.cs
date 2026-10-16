@@ -192,18 +192,20 @@ internal static class QuestPassiveClearTests
         if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)), checked((ushort)(bounds.Y + bounds.Height / 2)));
-        foreach (string mode in new[] { "normal", "rollback", "lost" })
+        foreach (string mode in new[] { "normal", "rollback", "lost", "cinematic-first", "cinematic-last" })
         {
             bool lost = mode == "lost";
+            bool cinematic = mode.StartsWith("cinematic-", StringComparison.Ordinal);
+            bool ordinary = lost || mode == "cinematic-first";
             using var f = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, lost, 86, done.ToArray(),
                 position: position, loseSettlement: lost);
             var accepted = f.Session.ChangeQuest(3858, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces);
             That(accepted?.Commit is not null, "实际3858按Lv86及真实前置接取：" + accepted?.Reason);
             var active = f.Read().ActiveMainQuests.Single(row => row.QuestId == 3858);
             That(active.ConditionState == 1 && active.AcceptanceId != Guid.Empty, "3858沿原接取绑定AcceptanceId并保留未达成scalar1");
-            var opening = f.Session.EnterFormalDungeon(193, lost ? 0u : 3858u, 0, dungeons, rooms)!;
+            var opening = f.Session.EnterFormalDungeon(193, ordinary ? 0u : 3858u, 0, dungeons, rooms)!;
             That(opening is { Entry.BossMap.Id: 70484, Entry.BaseBossMap.Id: 70484, Entry.PassiveClearTerminalMap.Id: 70487 } &&
-                opening.Entry.RouteQuestId == 3858 && opening.Entry.QuestId == (lost ? 0u : 3858u) &&
+                opening.Entry.RouteQuestId == 3858 && opening.Entry.QuestId == (ordinary ? 0u : 3858u) &&
                 opening.Entry.Maze.ClearConditions is [{ Type: "destroy object", TargetId: 69292, Count: 1 }] &&
                 opening.Entry.QuestAcceptances.Single(row => row.QuestId == 3858).AcceptanceId == active.AcceptanceId,
                 "真实D193冻结70487物件末层及原接取，普通0仍保持原Boss70484和请求身份");
@@ -257,6 +259,15 @@ internal static class QuestPassiveClearTests
             That(f.Session.ObserveFormalPassiveDeath(69292, false, fingerprint, rooms) is null &&
                 f.Session.ObserveFormalPassiveDeath(69311, true, fingerprint, rooms) is null &&
                 QuestCompletionRepositoryTests.Same(before, f.Read()), "末层错误摘要和邻接row4物件不能借终点资格推进状态");
+            // 两条独立合成事件覆盖原合同的先后兼容，不声称客户端实际报文顺序。
+            if (mode == "cinematic-first")
+            {
+                CompleteCinematic();
+                That(f.Session.DungeonSnapshot.Identity == identity && f.Session.Phase == SessionPhase.Dungeon &&
+                    f.Session.EnableFormalDungeonSettlement() is null &&
+                    f.Query("SELECT count(*) FROM character_dungeon_scene_clear_receipts") is 0L,
+                    "3858先到终末33只达成原接取，不代替69292创建场景清图或结算许可");
+            }
             if (mode == "rollback")
             {
                 f.Sql("CREATE TRIGGER layered_scene_abort AFTER INSERT ON character_dungeon_scene_clear_receipts BEGIN SELECT RAISE(ABORT,'layered scene rollback'); END");
@@ -292,7 +303,28 @@ internal static class QuestPassiveClearTests
                 Settle().Outcome == DungeonRunOutcome.Duplicate && f.Query("SELECT count(*) FROM character_dungeon_settlement_receipts") is 1L,
                 "末层独立来源通过46保存并复用原receipt，不重复通关奖励");
             saved = f.Read();
-            var finish = f.Session.FinishQuest(3858, ushort.MaxValue, quests, parameters, items.Items, items.GoldLimits, items.EpicPieces, growth);
+            if (cinematic)
+            {
+                if (mode == "cinematic-last") CompleteCinematic();
+                var finished = Finish();
+                That(finished.Receipt?.Commit is { ConditionType: 65, Clear: null } complete &&
+                    complete.AcceptanceId == active.AcceptanceId && f.Read().CompletedQuests.Contains(3858) &&
+                    f.Read().ActiveMainQuests.All(row => row.QuestId != 3858),
+                    "3858演出33及独立物件39后按原34交付type65，不借清图凭据替代演出");
+                saved = f.Read();
+                That(Finish().Outcome == QuestFinishOutcome.AlreadyCompleted && Observe() is null &&
+                    Settle().Outcome == DungeonRunOutcome.Duplicate && QuestCompletionRepositoryTests.Same(saved, f.Read()),
+                    "3858成功交付后34、39及46重放不重复任何奖励或凭据");
+                That(f.Session.ReturnFromFormalDungeon() is not null, "3858真实末层结算和交付后正常回城");
+                f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
+                That(f.Read().CompletedQuests.Contains(3858) && f.Read().ActiveMainQuests.All(row => row.QuestId != 3858) &&
+                    f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id=3858") is 1L &&
+                    f.Query("SELECT count(*) FROM character_dungeon_scene_clear_receipts") is 1L &&
+                    f.Query("SELECT count(*) FROM character_dungeon_settlement_receipts") is 1L,
+                    "3858重选恢复实际完成位及三种独立唯一回执");
+                continue;
+            }
+            var finish = Finish();
             That(finish.Outcome == QuestFinishOutcome.Rejected && finish.Receipt is null &&
                 saved.ActiveMainQuests.Single(row => row.QuestId == 3858).ConditionState == 1 && !saved.CompletedQuests.Contains(3858) &&
                 QuestCompletionRepositoryTests.Same(saved, f.Read()), "物件清图不归零type65，真实3858的34明确拒绝且不发奖");
@@ -302,6 +334,25 @@ internal static class QuestPassiveClearTests
                 !f.Read().CompletedQuests.Contains(3858) && f.Session.ObserveFormalPassiveDeath(69292, true, fingerprint, rooms) is null,
                 "重选恢复未达成3858及原接取，迟到末层物件不能复活实例或完成任务");
             QuestLifecycleReceipt? Observe() => f.Session.ObserveFormalPassiveDeath(69292, true, fingerprint, rooms);
+            QuestFinishResult Finish() => f.Session.FinishQuest(3858, ushort.MaxValue, quests, parameters,
+                items.Items, items.GoldLimits, items.EpicPieces, growth);
+            void CompleteCinematic()
+            {
+                var original = f.Read();
+                var originalIdentity = f.Session.DungeonSnapshot!.Identity;
+                var condition = f.Session.ChangeQuest(3858, QuestLifecycleAction.Condition, quests,
+                    items.Items, items.GoldLimits, items.EpicPieces, new(null, 0, 0));
+                var current = f.Read();
+                That(condition?.Outcome == QuestLifecycleOutcome.Committed && condition.DungeonIdentity == originalIdentity &&
+                    condition.Commit?.Plan.AcceptanceId == active.AcceptanceId &&
+                    current.ActiveMainQuests.Single(row => row.QuestId == 3858).ConditionState == 0 &&
+                    f.Session.DungeonSnapshot.Identity == originalIdentity &&
+                    QuestCompletionRepositoryTests.Same(original with { Revision = current.Revision, ActiveMainQuests = current.ActiveMainQuests }, current),
+                    "3858终末33只保存原接取scalar0，保留原Run和全部资产");
+                That(f.Session.ChangeQuest(3858, QuestLifecycleAction.Condition, quests,
+                        items.Items, items.GoldLimits, items.EpicPieces, new(null, 0, 0))?.Outcome == QuestLifecycleOutcome.Unchanged &&
+                    QuestCompletionRepositoryTests.Same(current, f.Read()), "3858重复演出33不再次写入或领奖");
+            }
             FormalDungeonSettlementResult Settle() => f.Session.SettleFormalDungeon(result!.ActorId, result.RankPoint, result.MaximumRankPoint,
                 report, dungeons, clears, growth);
         }

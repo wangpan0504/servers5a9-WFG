@@ -21,6 +21,124 @@ internal static class QuestPassiveClearTcpTests
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (bool ordinary in new[] { false, true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         VerifyZeroKill(fixture,resources,growth,drain);
+        VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons);
+    }
+
+    // 一个跨层成功代表：真实70201基础Boss、70487末层、独立39/33和34；事件正文仍明确合成。
+    static void VerifyLayeredCinematic(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
+        Action<TcpPeer, Action<WirePacket>?> drain, DungeonCatalog dungeons)
+    {
+        const string account = "layered-movie-3858";
+        var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,resources.Quests.Get(3858),193);
+        Character created;
+        using (var owner = new AccountOwners().Acquire(account,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare("LayerMovie",resources.Characters.Get(0),
+                entrance.Position,entrance.Position,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,86,candidate.InitialLearning with
+                { Experience=growth.GetLevelStartExperience(86) },resources.Learning);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with
+                { Level=86,AcceptedStoryLevel=86,CompletedQuests=entrance.Completed,InitialLearning=learning });
+        }
+        byte[] passive = PassiveDeath(69292,74);
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            That(peer.Id == created.Id,"3858选中本条隔离角色，不借用其他路线活动槽");
+            byte[] information = [];
+            var map = FormalDungeonTcpTests.Enter(peer,3858,193,row => information=row,requestQuestId:0);
+            var maze = dungeons.Get(193).Mazes.Single(row => row.SourceOrdinal == information[7]);
+            var path = QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),new(information[8],information[9]));
+            var acceptance = fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3858",peer.Id)[0][0];
+            int enabled = 0, bossChecks = 0, deaths = 0;
+            var report = DungeonSettlementProtocolTests.Report(peer.Id,99);
+            for (int room = 0; room < path.Length; room++)
+            {
+                FormalDungeonTcpTests.Load(peer); Drain();
+                string before = State();
+                peer.Send(39,passive); Drain();
+                That(State() == before && enabled == 0,"3858基础房不能提前采用末层69292报告");
+                for (int at = 0; at < map[18]; at++)
+                {
+                    int offset = 19+22*at;
+                    if (map[offset+21] != 0) continue;
+                    if (room == path.Length-1 && map[offset+13] == 3)
+                        That(U32(map,offset+8) == 70201,"3858基础Boss保持真实70201而非dummy或物件");
+                    peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12]));
+                    Drain(); deaths++;
+                }
+                That(enabled == 0 && bossChecks == 0,"3858基础Boss死亡仍等待独立末层条件，不提前发115或31");
+                if (room+1 < path.Length) Move(path[room+1],0);
+            }
+            That(U32(map,14) == 70484,"3858沿完整真实拓扑抵达基础70484");
+            foreach (var layer in maze.LayeredMaps.Where(row => row.Position == path[^1]))
+            {
+                Move(layer.Position,1);
+                That(U32(map,14) == layer.Id,"3858原叠层顺序保留实际地图身份");
+                FormalDungeonTcpTests.Load(peer); Drain();
+            }
+            That(U32(map,14) == 70487 && map[18] == 3 && U32(map,27) == 56501 && map[32] == 5 && map[40] == 1 &&
+                U32(map,49) == 68004 && map[54] == 9 && map[62] == 1 &&
+                U32(map,71) == 68004 && map[76] == 9 && map[84] == 1 &&
+                new[] { U16(map,25), U16(map,47), U16(map,69) }.Distinct().Count() == 3 &&
+                enabled == 0 && Scalar() is [[1L]],
+                "真实70487保留友方APC56501及两个独立68004特殊父对象，加载不达成演出或清图");
+            string saved = State();
+            peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == saved,"3858未收到演出终末时34拒绝且不写奖励");
+            peer.Send(39,passive); peer.Expect(0,574); peer.Expect(0,31,[]); enabled++; Drain();
+            That(enabled == 1 && bossChecks == 0 && Scalar() is [[1L]] && fixture.Query(
+                "SELECT source_type,dungeon_id,map_id,template_id,length(death_events)/16,quest_id FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
+                is [["PassiveObject",193L,70487L,69292L,long sceneDeaths,0L]] && sceneDeaths == deaths,
+                "3858普通0绑定唯一末层scene与实际死亡集合，39不代替type65，空31不造115");
+            saved = State(); peer.Send(39,passive); Drain();
+            That(State() == saved && enabled == 1,"3858重复物件39不重复场景或结算许可");
+            peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
+            That(Scalar() is [[0L]] && enabled == 1 && fixture.Query(
+                "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3858",peer.Id)[0][0].Equals(acceptance),
+                "3858终末33沿原AcceptanceId达成演出，已经发布的31不重复");
+            saved = State(); peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
+            That(State() == saved && enabled == 1,"3858重复33不重复保存或发布");
+            peer.Send(46,report); Drain();
+            That(fixture.Query("SELECT map_id,quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id)
+                is [[70487L,0L]],"3858正式46保留实际末层70487与普通0实例身份");
+            peer.Send(34,[34,0,18,15,255,255,1,0,255,255]);
+            var finished = peer.Expect(1,34).Body; Drain();
+            That(finished.Length >= 4 && finished[0] == 1 && U16(finished,1) == 3858 && finished[3] == 65 &&
+                Scalar().Length == 0,"3858真实Handler以type65交付并清理活动槽，不把物件凭据冒充任务目标");
+            saved = State();
+            peer.Send(46,report); Drain(); peer.Send(39,passive); Drain();
+            peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == saved && enabled == 1,"3858已交付的46、39和34重放不重复任何资产或凭据");
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+
+            void Move(DungeonPoint point,byte kind)
+            {
+                var request = new byte[100]; request[0] = checked((byte)point.X); request[1] = checked((byte)point.Y); request[10] = kind;
+                peer.Send(45,request); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+            }
+            void Drain() => drain(peer,packet =>
+            {
+                if (packet.Opcode == 31) { Bytes(packet.Body,[],"3858结算许可保持完整空正文"); enabled++; }
+                if (packet.Opcode == 115) bossChecks++;
+            });
+            object[][] Scalar() => fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3858",peer.Id);
+        }
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(created.Slot,prepared:true); peer.Barrier();
+            That(peer.CompletedQuestHistory[4+3858] == 1 && fixture.Query(
+                "SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3858",peer.Id) is [[1L]] && fixture.Query(
+                "SELECT count(*) FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id) is [[1L]] && fixture.Query(
+                "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
+                "3858回城重连恢复完成位与三类独立唯一回执");
+            string before = State(); peer.Send(39,passive); drain(peer,null);
+            That(State() == before,"3858重连迟到物件报告不能复活旧实例");
+        }
+        string State() => CharacterState(fixture,created.Id)+
+            fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY event_id",created.Id)+
+            fixture.Snapshot("SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind",account);
     }
 
     static void VerifyCase(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
