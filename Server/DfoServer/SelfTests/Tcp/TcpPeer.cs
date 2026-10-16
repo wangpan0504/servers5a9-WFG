@@ -318,7 +318,15 @@ internal sealed class TcpPeer : IDisposable
         var prefix = Batch(expected[..2]);
         var creatures = Expect(0, 105);
         byte[]? initialGameOptions = (settings ?? []).FirstOrDefault(option => option.Opcode == 173).Body;
-        InitialGameOptions = initialGameOptions is null ? [] : Expect(0, 173, initialGameOptions).Body;
+        // 无存档也必须先初始化客户端模型；期望值独立于服务端 Builder。
+        initialGameOptions ??= Build(w =>
+        {
+            w.Write(204u);
+            for (int slotIndex = 0; slotIndex < 102; slotIndex++) w.Write((ushort)0x7FFF);
+            w.Write(0u);
+            w.Write(0u);
+        });
+        InitialGameOptions = Expect(0, 173, initialGameOptions).Body;
         var middle = new List<WirePacket>();
         SkillInfo = [];
         SceneSkillInfo = [];

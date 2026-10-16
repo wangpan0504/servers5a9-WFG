@@ -45,6 +45,12 @@ internal static class SettingsProtocolTests
         Reject<InvalidDataException>(() => SettingsPackets.GameOptions([0]), "损坏主设置不能回放");
         Reject<InvalidDataException>(() => SettingsPackets.CharacterOptions(default), "未保存的角色设置不能构造默认通知");
         Reject<InvalidDataException>(() => SettingsPackets.CharacterOptions([0]), "损坏角色设置不能回放");
+        byte[] unset = SettingsPackets.GameOptionsInitialization();
+        That(unset.Length == 216 && BinaryPrimitives.ReadUInt32LittleEndian(unset) == 204 &&
+            Enumerable.Range(0, 102).All(slot => BinaryPrimitives.ReadUInt16LittleEndian(unset.AsSpan(4 + slot * 2)) == 0x7FFF) &&
+            unset.AsSpan(208).SequenceEqual(new byte[8]), "首次初始化发送完整原生未设置主区和两个空银行");
+        unset[4] = 0;
+        That(SettingsPackets.GameOptionsInitialization()[4] == 0xFF, "初始化包独立分配，不共享可变发送正文");
         SelectionGuard(game, character);
         RoleScopedValues();
         HotkeyProtocol();

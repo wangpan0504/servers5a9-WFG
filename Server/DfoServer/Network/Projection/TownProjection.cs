@@ -30,7 +30,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(c.Inventory), "creature_details_initialize");
         // 首次创建本人UI前先初始化主设置；地区绑定后仍回放完整设置，补齐依赖角色实体的应用。
         if (settings is not null && settingReceipt is not null)
-            await settings.InitializeGameOptionsAsync(context, settingReceipt, "account_settings_before_player");
+            await settings.PreloadGameOptionsAsync(context, settingReceipt);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(c, context.Channel, adventureName: context.Session.ReadAdventureName()), "actor");
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c), context.Channel), "player");

@@ -43,6 +43,16 @@ internal static class SettingsPackets
         return body;
     }
 
+    public static byte[] GameOptionsInitialization()
+    {
+        // 匹配客户端将全部 7FFF 识别为未设置，采用原生默认并完成模型初始化。
+        byte[] body = new byte[216];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, 204);
+        for (int offset = 4; offset < 208; offset += 2)
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(offset), 0x7FFF);
+        return body;
+    }
+
     public static byte[] CharacterOptions(ImmutableArray<byte> options)
     {
         if (options.IsDefault || options.Length != 512)

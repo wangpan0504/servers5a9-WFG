@@ -9,16 +9,17 @@ internal sealed class SettingsProjection(ClientSettingsService settings)
 {
     public ClientSettingsReceipt Capture(GameConnectionContext context) => context.Session.LoadClientSettings(settings);
 
-    public Task InitializeGameOptionsAsync(GameConnectionContext context, ClientSettingsReceipt receipt,
-        string action = "account_settings_initialize") => receipt.Settings.GameOptions.IsDefault ? Task.CompletedTask :
-        context.Notify(NotiPacketType.GAME_OPTION, SettingsPackets.GameOptions(receipt.Settings.GameOptions), action,
-            () => context.Session.CanPublishClientSettings(receipt));
+    public Task PreloadGameOptionsAsync(GameConnectionContext context, ClientSettingsReceipt receipt) =>
+        context.Notify(NotiPacketType.GAME_OPTION, receipt.Settings.GameOptions.IsDefault
+                ? SettingsPackets.GameOptionsInitialization() : SettingsPackets.GameOptions(receipt.Settings.GameOptions),
+            "account_settings_before_player", () => context.Session.CanPublishClientSettings(receipt));
 
     public async Task InitializeAsync(GameConnectionContext context, ClientSettingsReceipt receipt)
     {
         bool CanSend() => context.Session.CanPublishClientSettings(receipt);
-        // 角色实体已建立后再恢复保存值；没有存档时沿用客户端默认。
-        await InitializeGameOptionsAsync(context, receipt);
+        // 后段仅恢复已保存值；无存档的模型已在实体前初始化，不能再次重置。
+        if (!receipt.Settings.GameOptions.IsDefault)
+            await context.Notify(NotiPacketType.GAME_OPTION, SettingsPackets.GameOptions(receipt.Settings.GameOptions), "account_settings_initialize", CanSend);
         if (!receipt.Settings.CharacterOptions.IsDefault)
             await context.Notify(NotiPacketType.CHARACTER_OPTION, SettingsPackets.CharacterOptions(receipt.Settings.CharacterOptions), "character_settings_initialize", CanSend);
         if (!receipt.Settings.Hotkeys.IsDefault)
