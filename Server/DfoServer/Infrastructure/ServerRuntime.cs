@@ -203,7 +203,7 @@ internal static class ServerRuntime
                 debugSettings: debugSettings, contracts: itemResources.Contracts), inventoryProjection,
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
-                contracts: itemResources.Contracts), inventoryProjection),
+                contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),
             new DungeonSelectionHandler(projection, log, tutorials),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new ImageCommunicationHandler(imageCommunication, quests, log),

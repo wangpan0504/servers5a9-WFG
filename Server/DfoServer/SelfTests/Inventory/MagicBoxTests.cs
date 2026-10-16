@@ -2,6 +2,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
+using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Items;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
@@ -199,7 +200,89 @@ internal static class MagicBoxTests
             regularOpened.Plan!.After.Find(new(InventoryListType.Main, 69)) is null &&
             regularOpened.Plan.After.Find(new(InventoryListType.Main, 121)) is null,
             "PVF-defined hammer box converges the captured 100-open request to available stock");
+        CheckEveryReward();
         Console.WriteLine($"PASS {checks} magic-box assertions");
+
+        void CheckEveryReward()
+        {
+            var candidate = character with
+            {
+                Level = 43,
+                Inventory = new([new(0, new(InventoryListType.Main, 70), new(2682272, ItemKind.Consumable, 999))])
+                {
+                    Gold = 364755, ReviveCoins = 129,
+                    AccountWallet = AccountWallet.Empty.Set(CurrencyKind.Cera, 99881120)
+                }
+            };
+            int cases = 0;
+            int datedRewards = 0;
+            var failures = new List<string>();
+            for (int pool = 0; pool < seriaDefinition.Pools.Length; pool++)
+            {
+                long offset = 0;
+                foreach (var row in seriaDefinition.Pools[pool].Rewards)
+                {
+                    if (row.Weight <= 0) continue;
+                    var settings = new GameDebugSettings();
+                    var forced = new PoolRandom(seriaDefinition.Pools.Length, pool, offset);
+                    var targeted = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits,
+                        resources.EpicPieces, forced, resources.Contracts, settings);
+                    try
+                    {
+                        var result = targeted.Open(candidate, noMaterial, out var actual);
+                        if (!result.Accepted || actual is null)
+                            failures.Add($"pool={pool} item={row.ItemId} count={row.Count} error={result.Error}");
+                        else
+                            Check(result.Plan!.After.Find(noMaterial.BoxSlot) is { Core.Count: 989 } &&
+                                actual.OpenCount == 10 && actual.SeriaLuckAfter == 1 && forced.Calls == 30 &&
+                                actual.Rewards.Any(reward => reward.ItemId == row.ItemId && reward.Count >= row.Count * 11),
+                                $"每个正权重候选十连完整交付且包含第九次双倍：pool={pool} item={row.ItemId} count={row.Count}");
+                        if (resources.Items.Get(row.ItemId).Expiration is { Days: 0, AbsoluteTime: > 0 } expiry &&
+                            expiry.AbsoluteTime < DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                        {
+                            datedRewards++;
+                            Check(result.Accepted && result.Plan!.After.Items.Any(item => item.Core.ItemId == row.ItemId &&
+                                item.Core.ExpireTime == int.MaxValue), "开启忽略绝对日期后奖励使用客户端远期期限");
+                            settings.IgnoreCashShopAbsoluteExpiration = false;
+                            Check(targeted.Open(candidate, noMaterial, out var strict) is { Accepted: false, Plan: null } &&
+                                strict is null && candidate.Inventory.Find(noMaterial.BoxSlot) is { Core.Count: 999 },
+                                "关闭忽略日期后按资源拒绝已过期奖励且不扣源或改变幸运值");
+                            if (datedRewards == 1)
+                            {
+                                settings.IgnoreCashShopAbsoluteExpiration = true;
+                                var switching = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits,
+                                    resources.EpicPieces, new PoolRandom(seriaDefinition.Pools.Length, pool, offset,
+                                        () => settings.IgnoreCashShopAbsoluteExpiration = false), resources.Contracts, settings);
+                                Check(switching.Open(candidate, noMaterial, out _) is { Accepted: true },
+                                    "随机期间切换设置不改变本次入口已冻结的期限规则");
+                                settings.IgnoreCashShopAbsoluteExpiration = true;
+                                var expiredSource = candidate with { Inventory = candidate.Inventory with
+                                { Items = [candidate.Inventory.Items[0] with { Core = candidate.Inventory.Items[0].Core with { ExpireTime = 1 } }] } };
+                                Check(targeted.Open(expiredSource, noMaterial, out _) is { Accepted: false, Plan: null },
+                                    "奖励忽略期限不放过已经到期的源盒实例");
+                            }
+                        }
+                    }
+                    catch (Exception error) when (error is InvalidDataException or InvalidOperationException or OverflowException)
+                    { failures.Add($"pool={pool} item={row.ItemId} count={row.Count} exception={error.GetType().Name}: {error.Message}"); }
+                    cases++;
+                    offset += row.Weight;
+                }
+            }
+            Console.WriteLine($"Magic-box full pool audit: cases={cases} datedRewards={datedRewards} failures={failures.Count}");
+            foreach (string failure in failures) Console.WriteLine("Magic-box candidate failure: " + failure);
+            Check(failures.Count == 0, "真实赛丽亚全部正权重候选均有完整十连交付能力");
+        }
+    }
+
+    sealed class PoolRandom(int pools, int selectedPool, long offset, Action? firstDraw = null) : Random
+    {
+        public int Calls { get; private set; }
+        public override long NextInt64(long maxValue)
+        {
+            if (Calls == 0) firstDraw?.Invoke();
+            return Calls++ % pools == selectedPool ? offset : 0;
+        }
     }
 
     sealed class FirstRandom : Random

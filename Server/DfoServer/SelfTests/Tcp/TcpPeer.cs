@@ -36,6 +36,7 @@ internal sealed class TcpPeer : IDisposable
     public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
     public byte[] PremiumInfo { get; private set; } = [];
+    public byte[] SeriaLuckInfo { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] InitialGameOptions { get; private set; } = [];
@@ -441,6 +442,7 @@ internal sealed class TcpPeer : IDisposable
                 }), "独立核对事件2037、最大阶段8及完整尾部，不能跳过新通知");
             }
             var gauge = Expect(0, 412);
+            SeriaLuckInfo = gauge.Body;
             TestCheck.That(!gauge.Protected && gauge.Body.Length == 2 && gauge.Body[0] == gauge.Body[1] &&
                 gauge.Body[0] <= 40 && gauge.Body[0] % 5 == 0, "幸运值初始通知使用普通CRC/序号，两端阶段一致且不超8");
         }

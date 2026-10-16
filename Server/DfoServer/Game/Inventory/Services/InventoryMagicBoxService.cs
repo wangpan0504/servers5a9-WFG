@@ -1,15 +1,18 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCatalog boxes, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    Random? random = null, PremiumContractCatalog? contracts = null)
+    Random? random = null, PremiumContractCatalog? contracts = null, GameDebugSettings? debugSettings = null)
 {
     public InventoryResult Open(Character character, MagicBoxOpenRequest request, out MagicBoxReceipt? receipt, DateTimeOffset? utcNow = null)
     {
         receipt = null;
+        bool ignoreAbsoluteExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
+        bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         if (request.BoxSlot.List != InventoryListType.Main || request.MaterialSlot.List != InventoryListType.Main ||
             request.Count <= 0 || request.Count > ushort.MaxValue)
             return InventoryResult.Reject(19);
@@ -124,7 +127,8 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
         if (!InventoryCashShopService.CanGrantCurrencies(paid, rewards, new Currency.CurrencyService(goldLimits).CarryLimit(character)))
             return InventoryResult.Reject(4);
         var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, rewards, catalog,
-            goldLimits, pieces, now, contracts: contracts, allowOverflowMail: true);
+            goldLimits, pieces, now, shopExpiration: ignoreAbsoluteExpiration, contracts: contracts,
+            allowOverflowMail: true, ignoreUsablePeriod: ignoreUsablePeriod);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
 
