@@ -2,6 +2,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.GameWorld.Channels;
 using DfoServer.Game.Quests;
@@ -167,7 +168,8 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Player(Character character, CharacterStats attributes, ChannelIdentity channel = default)
+    public static byte[] Player(Character character, CharacterStats attributes, ChannelIdentity channel = default,
+        DateTimeOffset? utcNow = null)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
@@ -179,7 +181,8 @@ internal static class TownPackets
             writer.Write(new byte[17]);
             writer.Write(character.Id);
             writer.Write(character.Learning.Experience); // 02678520 的完整u64累计经验。
-            byte[] stats = CharacterStatsPackets.Build(attributes);
+            byte[] stats = CharacterStatsPackets.Build(attributes,
+                StaminaRecoveryService.Percent(character.Inventory, utcNow ?? DateTimeOffset.UtcNow));
             writer.Write(stats.Length);
             writer.Write(stats); // 03BE25C0: u32 length followed by raw bytes.
             writer.Write(character.EquipmentSlotFlags); // Full03 0267D0A9/0267D0CB：装备槽标志写本人容器+1AC。

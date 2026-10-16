@@ -153,7 +153,10 @@ internal static partial class InventoryTcpTests
             peer.Expect(1, 7, [1]);
             peer.Expect(0, 2);
             peer.Create("BagGearTest");
+            long staminaUntil = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 600;
+            fixture.Sql("UPDATE characters SET stamina_until=$p0 WHERE name=$p1", staminaUntil, "BagGearTest");
             var selected = peer.Select(1);
+            That(selected[3].Body[36 + 84] == 10, "已持久化虚弱的选角Player直接携带10%，不先重装100%");
             That(selected[2].Body[133 + NameWidth("BagGearTest")] == 5 && selected[3].Body[126] == 5, "created character actor and player include five PVF equipment items");
             int quality = 999999998;
             ushort characterId = peer.Id;
@@ -162,7 +165,10 @@ internal static partial class InventoryTcpTests
             var quickUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=17", characterId)[0][0];
             peer.Send(19, MoveItem(0, 21, 0, 1, 3, 17, pantsId));
             peer.Expect(1, 19, MoveAck(0, 21, 1, 3, 17));
-            DeltaAndAppearance(peer, 4, reloadMain: true);
+            var weakRefresh = DeltaAndAppearance(peer, 4, reloadMain: true);
+            That(weakRefresh.Player[36 + 84] == 10 &&
+                fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0", characterId) is [[long savedUntil]] && savedUntil == staminaUntil,
+                "同epoch已通知10%后城镇脱装Actor/Player保持虚弱及原期限");
             var quickRequest = Convert.FromHexString("0003000000000000000000001500E047000000000000FFFFFFFF0000");
             peer.Send(19, quickRequest);
             peer.Expect(1, 19, Convert.FromHexString("0100030001000000001500"));
@@ -185,7 +191,10 @@ internal static partial class InventoryTcpTests
                 U32(reselected[4].Body, 376) == 18400, "reselect restores equipment in quick slot through full inventory");
             peer.Send(19, MoveItem(0, 3, pantsId, 1, 3, 17, 0));
             peer.Expect(1, 19, MoveAck(0, 3, 1, 3, 17));
-            DeltaAndAppearance(peer, 5);
+            weakRefresh = DeltaAndAppearance(peer, 5);
+            That(weakRefresh.Player[36 + 84] == 10 &&
+                fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0", characterId) is [[long refreshedUntil]] && refreshedUntil == staminaUntil,
+                "同档反复穿装刷新仍保留10%，不依赖下一NOTI4档位或修改期限");
             peer.Send(19, MoveItem(0, 8, 0, 1, 3, 17, pantsId));
             peer.Expect(1, 19, MoveAck(0, 8, 1, 3, 17));
             DeltaAndAppearance(peer, 4, reloadMain: true);

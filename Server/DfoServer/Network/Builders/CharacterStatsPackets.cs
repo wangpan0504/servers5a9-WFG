@@ -5,7 +5,7 @@ namespace DfoServer.Network.Builders;
 internal static class CharacterStatsPackets
 {
     public const int BodyLength = 89;
-    public static byte[] Build(CharacterStats stats)
+    public static byte[] Build(CharacterStats stats, byte staminaPercent = 100)
     {
         using var stream = new MemoryStream(BodyLength);
         using var writer = new BinaryWriter(stream);
@@ -29,7 +29,7 @@ internal static class CharacterStatsPackets
         writer.Write(stats.HitRecovery);
         writer.Write(stats.JumpPower);
         writer.Write(stats.Weight);
-        writer.Write((byte)100);
+        writer.Write(staminaPercent); // 本人虚弱百分比与NOTI4共用同一客户端字段。
         writer.Write(0f); // 当前合同固定字段，不对应 CHR 的 jump speed。
         if (stream.Length != BodyLength)
             throw new InvalidDataException("Client character stats size changed");

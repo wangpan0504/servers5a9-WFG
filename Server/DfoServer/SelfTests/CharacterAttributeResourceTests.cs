@@ -10,6 +10,40 @@ internal static class CharacterAttributeResourceTests
 {
     public static void RunCore()
     {
+        var weak = OrdinaryCharacter([], 19);
+        weak = weak with { Inventory = weak.Inventory with { StaminaUntil = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 600 } };
+        var baseStats = new CharacterStats(8550, 5150, 123, 45, 67, 89, -10, 20, -30, 40,
+            480000, 525, 800, 100, 100, 6000, 100, 600);
+        byte[] weakPlayer = DfoServer.Network.Builders.TownPackets.Player(weak, baseStats);
+        Check(weakPlayer[36 + 84] == 10,
+            $"全量Player保留真实10%虚弱，实际={weakPlayer[36 + 84]}");
+        var now = DateTimeOffset.FromUnixTimeSeconds(1800000000);
+        byte[] expectedStats = Convert.FromHexString(
+            "662100001E1400007B002D0043005900F6FF1400E2FF28000000000000000000000000000000000000000000000000000000000000000000000000000053070000000D02200300006400640070176400580200006400000000");
+        byte[] normalPlayer = DfoServer.Network.Builders.TownPackets.Player(
+            weak with { Inventory = weak.Inventory with { StaminaUntil = 0 } }, baseStats, utcNow: now);
+        foreach (var (seconds, expected) in new (long, byte)[]
+            { (600, 10), (541, 10), (540, 19), (481, 19), (1, 91), (0, 100), (-1, 100) })
+        {
+            long until = now.ToUnixTimeSeconds() + seconds;
+            var character = weak with { Inventory = weak.Inventory with { StaminaUntil = until } };
+            var originalInventory = character.Inventory;
+            for (int refresh = 0; refresh < 3; refresh++)
+            {
+                byte[] player = DfoServer.Network.Builders.TownPackets.Player(character, baseStats, utcNow: now);
+                Check(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(player.AsSpan(32)) == 89 &&
+                    player[36 + 84] == expected, $"Player完整包89B虚弱边界{seconds}s={expected}，重复刷新{refresh}");
+                expectedStats[84] = expected;
+                Check(player.AsSpan(36, 89).SequenceEqual(expectedStats), "基础HP/MP、能力及保留字段未按虚弱缩放");
+                player[36 + 84] = 100;
+                Check(player.AsSpan().SequenceEqual(normalPlayer), "全量Player只改变已证虚弱字节，其余布局不变");
+                Check(ReferenceEquals(character.Inventory, originalInventory) && character.Inventory.StaminaUntil == until,
+                    "构包和反复刷新不修改原期限或库存快照");
+            }
+        }
+        Check(normalPlayer[36 + 84] == 100, "无期限仍投影100%");
+        Console.WriteLine("PASS Player真实虚弱、同档刷新、到期与89B独立字节回归");
+
         string[] strings = ["[initial value]", "[HP MAX]", "[dark resistance]", "[growtype 1]",
             "[physical attack]", "[growtype 2]", "[awakening 1]", "[skill]", "[/skill]"];
         PvfToken[] tokens =
