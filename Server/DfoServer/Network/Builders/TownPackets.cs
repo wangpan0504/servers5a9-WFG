@@ -90,7 +90,7 @@ internal static class TownPackets
             EquipmentProtocolWriter.Appearance(writer, character.Inventory);
             writer.Write(0u);
             writer.Write(new byte[4]);
-            writer.Write(new byte[8]); // 0267DF38..0267D678.
+            EquipmentProtocolWriter.NameTag(writer, character.Inventory, utcSeconds);
             writer.Write((byte)0);
             writer.Write(character.Guild?.Id ?? 0u);
             writer.Write((byte)0);
@@ -182,7 +182,7 @@ internal static class TownPackets
             writer.Write((byte)0); // 023C3A90: equipment count, scalar, extra list count.
             writer.Write((ushort)0);
             writer.Write((byte)0); // 0267BFA0: empty auxiliary inventory.
-            writer.Write(new byte[8]); // 0267BC60.
+            EquipmentProtocolWriter.NameTag(writer, character.Inventory);
             // 02676C60 -> 02676660: active set, two (u8 count; u16 id/u8 level) skill lists.
             writer.Write(character.Skills.Length == 0 ? (byte)0xff : (byte)0);
             for (int tree = 0; tree < 2; tree++)

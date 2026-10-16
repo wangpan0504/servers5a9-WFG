@@ -170,6 +170,7 @@ internal static class TcpRegressionTests
         ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
         ("cash-shop", CashShopTcpTests.RunAsync),
+        ("name-tag", NameTagTcpTests.RunAsync),
         ("character-slots", CharacterSlotsTcpTests.RunAsync),
         ("database-schema", (_, _, _) => { DatabaseSchemaTests.Run(); return Task.CompletedTask; }),
         ("cera-package", CeraPackageTcpTests.RunAsync),

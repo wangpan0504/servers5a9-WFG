@@ -13,6 +13,9 @@ internal static class InventoryMoveService
     public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds,
         PremiumContractCatalog? contracts = null)
     {
+        if (request.Source == new InventorySlot(InventoryListType.Equipment, 30) ||
+            request.Destination == new InventorySlot(InventoryListType.Equipment, 30))
+            return InventoryResult.Reject(CannotMoveItem);
         if (request.Source.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent ||
             request.Destination.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent)
             return InventoryResult.Reject(CannotMoveItem);

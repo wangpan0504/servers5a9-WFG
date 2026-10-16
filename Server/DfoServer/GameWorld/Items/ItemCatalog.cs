@@ -29,6 +29,7 @@ internal sealed class ItemCatalog
         // Client 的 creature 类型为26；耳环占用25，不能沿用其他版本的宠物部位编号。
         ["creature"] = 26, ["artifact red"] = 27, ["artifact blue"] = 28, ["artifact green"] = 29,
         ["flag"] = 32,
+        ["name tag"] = 30,
         ["weapon"] = 12,
         ["title"] = 13,
         ["title name"] = 13,

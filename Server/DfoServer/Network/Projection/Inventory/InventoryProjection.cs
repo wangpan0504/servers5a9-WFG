@@ -37,7 +37,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 .Concat(CurrencyPackets.VirtualSlots.Select(slot => new InventorySlot(InventoryListType.Main, slot)))
                 .Distinct().ToArray();
         }
-        var slots = changedSlots.Where(slot => acknowledgedSlots?.Contains(slot) != true).ToArray();
+        var slots = changedSlots.Where(slot => acknowledgedSlots?.Contains(slot) != true &&
+            slot != new InventorySlot(InventoryListType.Equipment, 30)).ToArray();
         bool rebuildMain = silentMainMove && changedSlots.Where(slot => slot.List == InventoryListType.Main)
             .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
                 receipt.Index.FindUid(item.Uid)?.Core.Count != item.Core.Count);

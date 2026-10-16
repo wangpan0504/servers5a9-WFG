@@ -11,7 +11,7 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed partial class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
     GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null)
 {
-    static readonly string[] UnsupportedSections = ["visual", "selectable character premium", "charac premium package"];
+    static readonly string[] UnsupportedSections = ["selectable character premium", "charac premium package"];
     readonly GameDebugSettings debug = debugSettings ?? new();
     // 仅当前服务实例的调试开关；每次购买冻结一次状态，不改变其它发奖入口。
     public bool IgnoreAbsoluteExpiration
@@ -44,6 +44,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         var paid = before;
         long total = 0, gold = 0, winPoints = 0;
         long? deadline = null;
+        InventoryItem? nameTag = null;
         ushort characterSlots = before.AccountWallet.CharacterSlotCapacity;
         ushort cargoCapacity = before.CargoCapacity;
         foreach (var requested in request.Items)
@@ -87,6 +88,25 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                         return InventoryResult.Reject(17);
                     cargoCapacity = template.PersonalCargoUpgradeTarget;
                 }
+                else if (product.Section == "visual")
+                {
+                    var visualTemplate = catalog.Get(product.ItemId);
+                    if (nameTag is not null || visualTemplate is not { Kind: ItemKind.Equipment, EquipmentSlot: 30 } ||
+                        product.Count != 1 || product.DurationDays <= 0 || !visualTemplate.AllowsUse(character.Level, character.Job) ||
+                        !InventoryMoveService.RequiredSkillSatisfied(character, visualTemplate))
+                        return InventoryResult.Reject(17);
+                    var position = new InventorySlot(InventoryListType.Equipment, 30);
+                    var old = character.Inventory.Find(position);
+                    // 同款延长期限，换款覆盖；商品期限不受普通过期商品调试开关影响。
+                    long start = old?.Core.ItemId == product.ItemId ? Math.Max(now.ToUnixTimeSeconds(), old.ExpireTime) : now.ToUnixTimeSeconds();
+                    long expires = start + (long)product.DurationDays * 86400;
+                    if (expires > int.MaxValue)
+                        return InventoryResult.Reject(17);
+                    nameTag = old?.Core.ItemId == product.ItemId ? old with { Core = old.Core with { ExpireTime = (int)expires } } :
+                        InventoryRewardGrantService.CreateItem(visualTemplate, position,
+                            InventoryRewardGrantService.Create(visualTemplate, utcNow: now) with { ExpireTime = (int)expires });
+                }
+
                 else rewards.Add(new(product.ItemId, product.Count));
             }
             if (total > int.MaxValue || gold > int.MaxValue || winPoints > int.MaxValue)
@@ -128,6 +148,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         }
 
         var after = grant.Plan!.After;
+        if (nameTag is not null)
+            after = after with { Items = after.Items.Where(item => item.Position != nameTag.Position).Append(nameTag).ToImmutableArray() };
         after = after with { AccountWallet = after.AccountWallet with { CharacterSlotCapacity = characterSlots } };
         receipt = new(products.ToImmutableArray(), bonuses);
         return new(true, 0, new(before, after with { CargoCapacity = cargoCapacity }, "cash_shop_buy", new(character, deadline), overflow));

@@ -5,13 +5,13 @@ namespace DfoServer.Network.Builders.Inventory;
 internal static class EquipmentProtocolWriter
 {
     static InventoryItem[] Worn(InventorySnapshot inventory) => inventory.Items
-        .Where(item => item.Position.List == InventoryListType.Equipment).OrderBy(item => item.Position.Index).ToArray();
+        .Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 30).OrderBy(item => item.Position.Index).ToArray();
 
     public static void Appearance(BinaryWriter writer, InventorySnapshot inventory) => Appearance(writer, inventory.Items);
 
     public static void Appearance(BinaryWriter writer, IEnumerable<InventoryItem> equipment)
     {
-        var items = equipment.Where(item => item.Position.List == InventoryListType.Equipment).OrderBy(item => item.Position.Index).ToArray();
+        var items = equipment.Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 30).OrderBy(item => item.Position.Index).ToArray();
         writer.Write(checked((byte)items.Length));
         foreach (var item in items)
         {
@@ -107,6 +107,16 @@ internal static class EquipmentProtocolWriter
             Raw(writer, extension => { extension.Write(core.Extension114.Value); extension.Write(core.Extension114.Flag); });
             Raw(writer, extension => { extension.Write(core.Extension119); extension.Write(core.Extension120); extension.Write(core.Extension121); });
         }
+    }
+
+    // 当前D95：0267D630/0267BC60各读取8B，绑定名称装饰专用槽30。
+    // 该槽单独投影，不能同时放入普通穿戴列表重复创建客户端对象。
+    public static void NameTag(BinaryWriter writer, InventorySnapshot inventory, long? utcSeconds = null)
+    {
+        var item = inventory.Find(new(InventoryListType.Equipment, 30));
+        bool active = item is not null && !item.IsExpired(utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        writer.Write(active ? item!.Core.ItemId : 0);
+        writer.Write(active ? item!.ExpireTime : 0);
     }
 
     static void Raw(BinaryWriter writer, Action<BinaryWriter> write)
