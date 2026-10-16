@@ -15,7 +15,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     AdventureProjection? adventure = null, DfoServer.Game.Quests.QuestSkipEffects? questEffects=null,
     DfoServer.GameWorld.Items.PremiumContractCatalog? contracts = null, CharacterStatComputer? stats = null,
     DfoServer.Network.Projection.Inventory.InventoryProjection? inventory = null, TimeProvider? time = null,
-    GuildProjection? guild = null) : IConnectionProtocol
+    GuildProjection? guild = null,
+    DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -23,7 +24,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (login is null)
             return;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = Convert.ToHexString(body.Span) }), connection.CaptureSent);
-        var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts);
+        var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
+            passiveDrops: passiveDrops);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         CubeContractConsumptionProjection? cubeConsumption = null;
         if (contracts is not null)

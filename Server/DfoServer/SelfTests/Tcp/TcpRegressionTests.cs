@@ -110,6 +110,7 @@ internal static class TcpRegressionTests
             DungeonDropCollectionRepositoryTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             return Task.CompletedTask;
         }),
+        ("dungeon-passive-items", FormalDungeonTcpTests.RunPassiveAsync),
         ("jobs", TownProtocolTcpTests.JobsAsync),
         ("inventory", InventoryTcpTests.RunAsync),
         ("consumable-use", ConsumableUseTcpTests.RunAsync),

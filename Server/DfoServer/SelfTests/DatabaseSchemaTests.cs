@@ -95,6 +95,8 @@ internal static class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            PassiveItemsUpgrade(root);
+            PickupUidUpgrade(root);
             string path = Path.Combine(root, "game.db");
             var characters = new CharacterRepository(path);
             var accounts = new AuthenticationService(new AuthenticationRepository(path));
@@ -225,6 +227,152 @@ internal static class DatabaseSchemaTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
+    }
+
+    static void PassiveItemsUpgrade(string root)
+    {
+        root = Path.Combine(root, "passive-upgrade");
+        Directory.CreateDirectory(root);
+        foreach (string mode in new[] { "upgrade", "broken", "ddl-failure" })
+        {
+            string path = Path.Combine(root, "passive-" + mode + ".db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('passive-migration',0,'PassiveOld',7,38,1,450,234,0)");
+                Execute(db, """
+                    INSERT INTO guilds(guild_id,name,address,master_character_id,public_funds,created_at_unix)
+                      VALUES(1,'PassiveGuild','passive-guild',1,123,456);
+                    INSERT INTO guild_members(guild_id,character_id,contribution,joined_at_unix)
+                      VALUES(1,1,19,456);
+                    """);
+                RewindPickupUids(db);
+                Execute(db, "DROP TABLE character_dungeon_passive_pickups; PRAGMA user_version=44");
+                if (mode == "broken")
+                    Execute(db, """
+                        CREATE TABLE character_dungeon_passive_pickups(character_id INTEGER,account TEXT,ground_key INTEGER,
+                          instance_id TEXT,task_attempt INTEGER,epoch INTEGER,picked_core TEXT,gold_amount INTEGER,
+                          destination_slot INTEGER,item_uid INTEGER,after_core TEXT,currency_kind INTEGER,amount INTEGER,
+                          after_balance INTEGER,account_revision INTEGER,revision INTEGER)
+                        """);
+                if (mode == "ddl-failure")
+                    Execute(db, "CREATE VIEW character_dungeon_passive_pickups AS SELECT 1 AS character_id");
+            }
+            string old = Snapshot(path);
+            if (mode != "upgrade")
+            {
+                if (mode == "broken")
+                    Reject<InvalidDataException>(() => new CharacterRepository(path), "v45不能接管缺少拾取约束或归属外键的同名表");
+                else
+                    Reject<SqliteException>(() => new CharacterRepository(path), "v45建表冲突拒绝，不能推进版本后留下半结构");
+                Check(Snapshot(path) == old, "v45升级失败保留原角色、公会、结构和版本");
+                continue;
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+                Check(Query(db, "SELECT revision FROM characters WHERE name='PassiveOld'") is 7L &&
+                    Query(db, "SELECT count(*) FROM character_dungeon_passive_pickups") is 0L && Query(db, "PRAGMA user_version") is 45L &&
+                    Query(db, "SELECT name||':'||address||':'||master_character_id||':'||public_funds||':'||created_at_unix FROM guilds") is "PassiveGuild:passive-guild:1:123:456" &&
+                    Query(db, "SELECT guild_id||':'||character_id||':'||contribution||':'||joined_at_unix FROM guild_members") is "1:1:19:456",
+                    "v44到v45只新增拾取结构，不发放物品或重写角色、公会及成员");
+            string upgraded = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == upgraded, "v45重开不重复拾取或改变原存档");
+        }
+    }
+
+    static void PickupUidUpgrade(string root)
+    {
+        root = Path.Combine(root, "pickup-uids");
+        Directory.CreateDirectory(root);
+        string[] tables = ["character_dungeon_pickup_receipts", "character_dungeon_drop_pickups"];
+        foreach (string mode in new[] { "upgrade", "unknown-shape", "dependency", "late-failure" })
+        {
+            string path = Path.Combine(root, mode + ".db");
+            _ = new CharacterRepository(path);
+            string[] rows;
+            string secondary;
+            using (var db = Open(path))
+            {
+                Execute(db, """
+                    INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold)
+                      VALUES('old',0,'UidOld',7,38,1,450,234,0,2,60,123);
+                    INSERT INTO character_dungeon_growth_receipts
+                      VALUES(1,'old','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-source',1,1,2,2,40,60,7);
+                    INSERT INTO character_dungeon_loot_receipts
+                      VALUES(1,'old','legacy','legacy-instance',1,1,76121,123,'legacy-rule','old-source',513,'{}',100,200,0);
+                    INSERT INTO character_dungeon_pickup_receipts
+                      VALUES(1,'old','legacy',513,'legacy-instance',1,1,0,177,1,'{}',8);
+                    """);
+                AddDropDependencyFixture(db);
+                RewindPickupUids(db);
+                for (int i = 0; i < tables.Length; i++)
+                {
+                    string table = tables[i];
+                    Execute(db, $"UPDATE {table} SET rowid={73 + i}");
+                    Execute(db, $"""
+                        CREATE INDEX uid_index_{i} ON {table}(item_uid);
+                        CREATE TRIGGER uid_guard_{i} BEFORE UPDATE ON {table}
+                          WHEN NEW.item_uid=17 BEGIN SELECT RAISE(ABORT,'UID guard'); END;
+                        CREATE TRIGGER uid_no_replay_{i} AFTER INSERT ON {table}
+                          BEGIN UPDATE characters SET revision=revision+99 WHERE id=NEW.character_id; END;
+                        """);
+                    Reject<SqliteException>(() => Execute(db, $"UPDATE {table} SET item_uid=2147483648"),
+                        "旧版真实32位上限拒绝高UID，夹具不只修改版本号");
+                }
+                rows = tables.Select(table => Rows(db, table, ColumnNames(db, table))).ToArray();
+                secondary = (string)Query(db, "SELECT group_concat(sql,'|') FROM (SELECT sql FROM sqlite_schema WHERE name LIKE 'uid_%' ORDER BY name)")!;
+                Execute(db, "DROP TABLE character_dungeon_passive_pickups; PRAGMA user_version=44");
+                if (mode == "unknown-shape")
+                    ChangeReceiptDefinition(db, tables[1], sql => sql.Replace("CHECK(amount>0)", "CHECK(amount>=0)", StringComparison.Ordinal));
+                if (mode == "dependency")
+                    Execute(db, """
+                        CREATE TABLE unknown_pickup_child(character_id INTEGER,ground_key INTEGER,
+                          FOREIGN KEY(character_id,ground_key) REFERENCES character_dungeon_drop_pickups(character_id,ground_key));
+                        """);
+                if (mode == "late-failure")
+                    Execute(db, "CREATE VIEW character_dungeon_passive_pickups AS SELECT 1 AS character_id");
+            }
+            string old = Snapshot(path);
+            if (mode != "upgrade")
+            {
+                if (mode == "late-failure")
+                    Reject<SqliteException>(() => new CharacterRepository(path), "两张UID回执迁移后新增表失败，整个v45回滚");
+                else
+                    Reject<InvalidDataException>(() => new CharacterRepository(path), "未知回执定义或入向依赖拒绝自动重建");
+                Check(Snapshot(path) == old, "迁移拒绝保留原回执、索引、触发器、角色资产及版本");
+                continue;
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Check(tables.Select(table => Rows(db, table, ColumnNames(db, table))).SequenceEqual(rows) &&
+                    Query(db, "SELECT revision||':'||gold FROM characters") is "7:123",
+                    "UID迁移保留两类回执全部列和rowid，不重放历史插入触发器或发放资产");
+                Check(Query(db, "SELECT group_concat(sql,'|') FROM (SELECT sql FROM sqlite_schema WHERE name LIKE 'uid_%' ORDER BY name)") is string actual &&
+                    actual == secondary && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                    "UID迁移完整保留原索引、触发器与来源外键");
+                foreach (string table in tables)
+                {
+                    Execute(db, $"UPDATE {table} SET item_uid=2147483648");
+                    Check(Query(db, $"SELECT item_uid FROM {table}") is 2147483648L, "当前两类回执接受普通库存内部64位UID");
+                    foreach (long value in new long[] { 0, -1, 17 })
+                        Reject<SqliteException>(() => Execute(db, $"UPDATE {table} SET item_uid={value}"),
+                            "迁移后仍拒绝无效UID并保留原更新触发器");
+                }
+                Check(Query(db, "PRAGMA user_version") is 45L && Query(db, "PRAGMA integrity_check") is "ok",
+                    "UID与特殊物品拾取结构在同一连续迁移提交");
+            }
+            string current = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == current, "高UID历史回执重开保持原值，不重复迁移或改写角色");
+        }
+    }
+
+    static void RewindPickupUids(SqliteConnection db)
+    {
+        foreach (string table in new[] { "character_dungeon_pickup_receipts", "character_dungeon_drop_pickups" })
+            ChangeReceiptDefinition(db, table, sql => sql.Replace("item_uid>0", "item_uid BETWEEN 1 AND 2147483647", StringComparison.Ordinal));
     }
 
     static void RewindQuestRentalCompletion(SqliteConnection db)
@@ -1512,7 +1660,9 @@ internal static class DatabaseSchemaTests
         }
         ExecuteOn(upgrade, db =>
         {
-            // 保留主线v43的全部结构，只移除v44新增的两表。
+            // 还原主线v43的实际结构，移除公会及后续拾取结构。
+            RewindPickupUids(db);
+            Execute(db, "DROP TABLE character_dungeon_passive_pickups");
             DropGuildSchema(db);
             Execute(db, "PRAGMA user_version=43");
         });
@@ -1532,12 +1682,14 @@ internal static class DatabaseSchemaTests
         }
         string migrated = Snapshot(upgrade);
         _ = new CharacterRepository(upgrade);
-        Check(Snapshot(upgrade) == migrated, "已到v44的旧库重开不重复执行建表");
+        Check(Snapshot(upgrade) == migrated, "公会升级后的旧库重开不重复执行建表");
 
         string broken = Path.Combine(root, "guild-v43-partial.db");
         _ = new CharacterRepository(broken);
         ExecuteOn(broken, db =>
         {
+            RewindPickupUids(db);
+            Execute(db, "DROP TABLE character_dungeon_passive_pickups");
             DropGuildSchema(db);
             Execute(db, "CREATE TABLE guilds(bad INTEGER); PRAGMA user_version=43");
         });
@@ -1613,6 +1765,8 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RewindPickupUids(db);
+                Execute(db, "DROP TABLE character_dungeon_passive_pickups");
                 if (oldVersion < 43) RewindDungeonSceneSettlement(db);
                 if (oldVersion < 42) RewindQuestRentalCompletion(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('migrated',0,'Migrated',7,38,1,450,234,0,2,60,123)");

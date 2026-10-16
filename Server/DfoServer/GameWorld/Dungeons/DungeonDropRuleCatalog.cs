@@ -48,7 +48,8 @@ internal sealed class DungeonDropRuleCatalog
     public ImmutableArray<DungeonDropItemReference> ItemReferences { get; }
     public ImmutableArray<DungeonDropGoldReference> GoldReferences { get; }
 
-    private DungeonDropRuleCatalog(IReadOnlyList<PvfToken> monster, IReadOnlyList<PvfToken> common, Func<int, string> resolve)
+    private DungeonDropRuleCatalog(IReadOnlyList<PvfToken> monster, IReadOnlyList<PvfToken> common, Func<int, string> resolve,
+        bool objectRules = false)
     {
         int[] declaredCount = Integers(monster, resolve, "drop prob count", 1);
         int[] probabilities = Integers(monster, resolve, "drop prob");
@@ -72,14 +73,14 @@ internal sealed class DungeonDropRuleCatalog
             if (RarityDecision[at] < 0 || column != 0 && RarityDecision[at] < RarityDecision[at - 1])
                 throw new InvalidDataException("掉落稀有度阈值必须按原序非递减");
         }
-        PartyBonus = Numbers(monster, resolve, "party member drop bonusrate", 20);
+        PartyBonus = objectRules ? [] : Numbers(monster, resolve, "party member drop bonusrate", 20);
         DifficultyBonus = Numbers(monster, resolve, "dungeon difficulty drop bonusrate", 25);
         MonsterTypeBonus = Numbers(monster, resolve, "monster type drop bonusrate", 20);
-        ConditionRates = Integers(monster, resolve, "condition rate", 8).ToImmutableArray();
-        FirstBossNamed = Integers(monster, resolve, "first boss/named mob hunting", 2).ToImmutableArray();
-        GoldQuantity = Integers(monster, resolve, "gold quantity", 4).ToImmutableArray();
-        GoldVolume = Integers(monster, resolve, "gold volume", 2).ToImmutableArray();
-        RarityControl = Integers(monster, resolve, "item drop rarity control", 10).ToImmutableArray();
+        ConditionRates = objectRules ? [] : Integers(monster, resolve, "condition rate", 8).ToImmutableArray();
+        FirstBossNamed = objectRules ? [] : Integers(monster, resolve, "first boss/named mob hunting", 2).ToImmutableArray();
+        GoldQuantity = objectRules ? [] : Integers(monster, resolve, "gold quantity", 4).ToImmutableArray();
+        GoldVolume = objectRules ? [] : Integers(monster, resolve, "gold volume", 2).ToImmutableArray();
+        RarityControl = Integers(monster, resolve, "item drop rarity control", objectRules ? 5 : 10).ToImmutableArray();
 
         int[] items = Integers(monster, resolve, "item drop ref table");
         if (items.Length == 0 || items.Length % 3 != 0)
@@ -111,8 +112,11 @@ internal sealed class DungeonDropRuleCatalog
     public static DungeonDropRuleCatalog Load(PvfArchive archive) => Parse(
         archive.ReadTokens(MonsterPath), archive.ReadTokens(CommonPath), archive.ResolveString);
 
+    public static DungeonDropRuleCatalog LoadObjects(PvfArchive archive) => new(
+        archive.ReadTokens("etc/itemdropinfo_object.etc"), archive.ReadTokens(CommonPath), archive.ResolveString, objectRules: true);
+
     internal static DungeonDropRuleCatalog Parse(IReadOnlyList<PvfToken> monster, IReadOnlyList<PvfToken> common,
-        Func<int, string> resolve) => new(monster, common, resolve);
+        Func<int, string> resolve, bool objectRules = false) => new(monster, common, resolve, objectRules);
 
     static PvfToken[] Field(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, string name)
     {

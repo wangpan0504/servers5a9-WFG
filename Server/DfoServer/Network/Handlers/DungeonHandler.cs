@@ -133,7 +133,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(),
                 experience ? "formal_class_experience_scene_transition" : "formal_training_scene_transition", Guard);
         await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry), "formal_dungeon_information", Guard);
-        await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed), "formal_start_map", Guard);
+        await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
+            passiveItems: receipt.PassiveItems), "formal_start_map", Guard);
         return CommandResult.Handled;
 
         async Task<CommandResult> RejectAsync()
@@ -315,7 +316,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "formal_move_ack", Guard);
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
-            receipt.Snapshot.MapOperation,receipt.Snapshot.MapPayload), "formal_next_map", Guard);
+            receipt.Snapshot.MapOperation,receipt.Snapshot.MapPayload, receipt.PassiveItems), "formal_next_map", Guard);
         return CommandResult.Handled;
     }
 

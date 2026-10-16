@@ -204,7 +204,35 @@ internal sealed partial class GameSession
         var committedEntry = entry with { CharacterRevision = checked(expected.Revision + 1) };
         if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out _) ||
             !authority.BindTo(run!)) return null;
-        var ground = new DungeonGroundState(run!, route.Rooms, groundReservations, drops is null ? "" : "monster/monster.lst");
+        var passiveGrounds = new List<DungeonGroundObject>();
+        if (passiveDrops is not null)
+        {
+            try
+            {
+                foreach (var plan in plans)
+                foreach (var prepared in passiveDrops.Prepare(entry, plan, draw ?? RandomNumberGenerator.GetInt32, DateTimeOffset.UtcNow))
+                {
+                    var eventId = Guid.NewGuid();
+                    for (int ordinal = 0; ordinal < prepared.Contents.Length; ordinal++)
+                    {
+                        if (next == expected.Id) next++;
+                        if (next > ushort.MaxValue) return null;
+                        var source = prepared.Parent.Source.RawValues;
+                        passiveGrounds.Add(new(eventId, run!.Snapshot.Identity,
+                            new(prepared.Parent.ObjectKey, next++, prepared.Map, unchecked((ushort)source[1]),
+                                unchecked((ushort)source[2]), 0, ordinal), prepared.Contents[ordinal])
+                        {
+                            PassiveOrigin = prepared.Origin,
+                            ResourceIdentity = prepared.ResourceSource,
+                            UsesCollectionLedger = true
+                        });
+                    }
+                }
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException)
+            { return null; }
+        }
+        var ground = new DungeonGroundState(run!, route.Rooms, groundReservations, drops is null ? "" : "monster/monster.lst", passiveGrounds);
         var dungeon = new FormalDungeon(run!.Entry, route, run, authority, checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue)),
             ground, pools, draw ?? RandomNumberGenerator.GetInt32, prepareDrops, dropPlans.ToImmutable())
             { QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn };
@@ -222,6 +250,7 @@ internal sealed partial class GameSession
             !ReferenceEquals(CurrentDungeonSelection, prepared.ClassExperienceSelection))) return null;
         // 先持久预留key/attempt；通知失败也不回绕key或复用旧身份。
         var committed = repository.ReserveDungeonAttempt(owner,prepared.Character,prepared.NextKey);
+        prepared.Dungeon.Ground.PublishPassiveEntry();
         if (formalDungeon is { } previous)
         {
             if (previous.Run.Return(previous.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted)
@@ -499,6 +528,9 @@ internal sealed partial class GameSession
         var original = dungeon.Route.Rooms.Single(room => room.Room.Map == snapshot.CurrentMap);
         var living = snapshot.LivingMonsters.ToHashSet();
         var monsters = original with { Monsters = Array.AsReadOnly(original.Monsters.Where(monster => living.Contains(monster.ObjectKey)).ToArray()) };
-        return new(Selected!, owner.Generation, SelectionEpoch, dungeon.Entry with { StartMap = snapshot.CurrentMap }, snapshot, monsters, dungeon.MapSeed);
+        return new(Selected!, owner.Generation, SelectionEpoch, dungeon.Entry with { StartMap = snapshot.CurrentMap }, snapshot, monsters, dungeon.MapSeed)
+        {
+            PassiveItems = dungeon.Ground.CurrentPassiveItems()
+        };
     }
 }

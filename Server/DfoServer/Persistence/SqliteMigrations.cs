@@ -117,10 +117,53 @@ internal static class SqliteMigrations
             foreach (string statement in GuildSchema.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                 Execute(db, tx, statement);
         }),
+        new(45, "特殊物品拾取与普通库存UID范围", static (db, tx) =>
+        {
+            UpgradeDungeonPickupUids(db, tx);
+            using var command = db.CreateCommand();
+            command.Transaction = tx;
+            command.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_dungeon_passive_pickups'";
+            if (command.ExecuteScalar() is not string)
+                Execute(db, tx, CharacterRepository.PassiveDropSchema);
+        }),
     ];
     // 在已发布v18和经验封顶声明上只扩展native19，不改写历史迁移。
     internal static string QuestCompletionSchemaV42 => ExperienceCapSchema.Definition(
         QuestCompletionSchemaV18, "character_quest_completion_receipts").Replace("12,25", "12,19,25", StringComparison.Ordinal);
+
+    internal static string DungeonPickupSchemaV45 => DungeonPickupSchema.Replace(
+        "item_uid BETWEEN 1 AND 2147483647", "item_uid>0", StringComparison.Ordinal);
+
+    static void UpgradeDungeonPickupUids(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.Parameters.AddWithValue("$table", "");
+        foreach (var (table, previous, current) in new[]
+        {
+            ("character_dungeon_pickup_receipts", DungeonPickupSchema, DungeonPickupSchemaV45),
+            ("character_dungeon_drop_pickups", DungeonDropCollectionSchema.PreviousPickupDefinition, DungeonDropCollectionSchema.PickupDefinition)
+        })
+        {
+            query.Parameters["$table"].Value = table;
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("UID迁移缺少原拾取回执: " + table);
+            string canonical = NormalizeTable(actual, table);
+            if (canonical == NormalizeTable(current, table)) continue;
+            if (canonical != NormalizeTable(previous, table))
+                throw new InvalidDataException("UID迁移不是已确认的原拾取结构: " + table);
+            query.CommandText = """
+                SELECT count(*) FROM sqlite_schema s JOIN pragma_foreign_key_list(s.name) f
+                  WHERE s.type='table' AND f."table"=$table
+                """;
+            if (Convert.ToInt32(query.ExecuteScalar()) != 0)
+                throw new InvalidDataException("UID迁移发现未知拾取依赖表: " + table);
+            RebuildReceipt(db, tx, table, current);
+        }
+        query.CommandText = "PRAGMA foreign_key_check";
+        using var failures = query.ExecuteReader();
+        if (failures.Read()) throw new InvalidDataException("UID迁移破坏原拾取外键");
+    }
 
     static void UpgradeQuestRentalCompletion(SqliteConnection db, SqliteTransaction tx)
     {
@@ -664,6 +707,8 @@ internal static class SqliteMigrations
         .Replace("\"character_dungeon_scene_clear_receipts\"", "character_dungeon_scene_clear_receipts")
         .Replace("\"character_quest_lifecycle_receipts\"", "character_quest_lifecycle_receipts")
         .Replace("\"character_dungeon_settlement_receipts\"", "character_dungeon_settlement_receipts")
+        .Replace("\"character_dungeon_drop_objects\"", "character_dungeon_drop_objects")
+        .Replace("\"character_dungeon_loot_receipts\"", "character_dungeon_loot_receipts")
         .Replace("\"characters\"", "characters");
 
     private const string QuestCompletionSchemaV18 = """
@@ -1048,7 +1093,10 @@ internal static class SqliteMigrations
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV42),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
-            ("character_dungeon_settlement_receipts",DungeonSceneSettlementSchema.SettlementSql) })
+            ("character_dungeon_settlement_receipts",DungeonSceneSettlementSchema.SettlementSql),
+            ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
+            ("character_dungeon_drop_pickups",DungeonDropCollectionSchema.PickupDefinition),
+            ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
@@ -1069,6 +1117,7 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,account,ground_key,instance_id,task_attempt,epoch,picked_core,gold_amount,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision FROM character_dungeon_passive_pickups LIMIT 0",
         // 拍卖行挂牌表由 v37 建出（`IF NOT EXISTS`），列是否齐全在这里兜底：
         // 缺列或缺表都会在建库/升级阶段直接拒绝启动，而不是等到运行时读挂牌才发现。
         "SELECT listing_id,seller_character_id,seller_name,item_template_id,item_kind,item_count,item_entry,starting_price,buyout_price,current_bid,current_bidder_character_id,state,posted_at_unix,expires_at_unix,settled_at_unix,deposit_gold FROM auction_listings LIMIT 0",

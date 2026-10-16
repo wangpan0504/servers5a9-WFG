@@ -124,6 +124,7 @@ internal static class ServerRuntime
         IGameCommandModule? settlement = null;
         IGameCommandModule? questReplay = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
+        DungeonPassiveDropPolicy? passiveDrops = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
             var dungeonCatalog = DungeonCatalog.Load(pvf);
@@ -135,6 +136,7 @@ internal static class ServerRuntime
             var dropCandidates = itemResources.DungeonDropItems;
             var specialDrops = itemResources.DungeonSpecialDrops;
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get, specialDrops);
+            passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates);
             DungeonDropGenerationPlan PrepareDrops(DungeonEntryPlan entry, DungeonPlannedMonster monster) =>
                 resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.SpawnType, entry.Difficulty, entry.BasisLevel);
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
@@ -227,7 +229,7 @@ internal static class ServerRuntime
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });

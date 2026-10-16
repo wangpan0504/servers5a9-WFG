@@ -6,7 +6,10 @@ using System.Collections.Immutable;
 namespace DfoServer.Game.Dungeons;
 
 internal sealed record FormalDungeonReceipt(Character Character, long Generation, long SelectionEpoch,
-    DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed);
+    DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed)
+{
+    public ImmutableArray<DungeonGroundObject> PassiveItems { get; init; } = [];
+}
 internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,
     DungeonGroundObject? Drop = null, byte? PreviousLevel = null)

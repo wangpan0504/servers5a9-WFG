@@ -627,6 +627,8 @@ internal static class SessionPlanningTests
                 INSERT INTO character_dungeon_drop_batches VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,'test','test',1);
                 INSERT INTO character_dungeon_drop_objects VALUES({{id}},'1234567890abcdef1234567890abcdef',0,2,NULL,1,0,0,0);
                 INSERT INTO character_dungeon_drop_pickups VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',2,'instance',1,1,NULL,NULL,NULL,0,1,1,0,1);
+                INSERT INTO character_dungeon_passive_pickups VALUES({{id}},'planning',3,'1234567890abcdef1234567890abcdef',
+                  1,1,NULL,1,NULL,NULL,NULL,0,1,1,0,1);
                 INSERT INTO character_quest_drop_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',0,1,'{}','[]');
                 INSERT INTO character_quest_clear_receipts(character_id,account,acceptance_id,quest_id,quest_slot,event_id,
                   instance_id,task_attempt,epoch,dungeon_id,map_id,generation,revision,source_type,growth_event_id,scene_operation_id)

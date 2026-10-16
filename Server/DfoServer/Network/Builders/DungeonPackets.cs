@@ -101,7 +101,8 @@ internal static class DungeonPackets
 
     // NOTI29每个已规划monster完整22B；等级和类型由领域确定，不在此解释资源行。
     public static byte[] StartMap(DungeonEntryPlan plan, DungeonMonsterPlan monsters, uint seed,
-        DungeonMapOperation? operation = null, DungeonMapPayload payload = DungeonMapPayload.Build)
+        DungeonMapOperation? operation = null, DungeonMapPayload payload = DungeonMapPayload.Build,
+        IReadOnlyList<DungeonGroundObject>? passiveItems = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(monsters);
@@ -110,6 +111,9 @@ internal static class DungeonPackets
             throw new InvalidDataException("怪物计划与房间不匹配或超过通知数量范围");
         byte[] empty = StartMap(plan, seed, operation, payload);
         if (payload == DungeonMapPayload.Cached) return empty;
+        passiveItems ??= [];
+        if (passiveItems.Count > byte.MaxValue)
+            throw new InvalidDataException("特殊物品列表超过入房通知容量");
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write(empty.AsSpan(0, 18));
@@ -149,7 +153,29 @@ internal static class DungeonPackets
             writer.Write(0u);
             writer.Write((byte)1); // 不参与普通活怪清房扫描。
         }
-        writer.Write(empty.AsSpan(19));
+        writer.Write(checked((byte)passiveItems.Count));
+        var keys = new HashSet<uint>();
+        foreach (var ground in passiveItems)
+        {
+            ground.Content.Validate();
+            if (ground.PassiveOrigin is not { } origin || ground.Reservation.Map != plan.StartMap ||
+                ground.DeathIdentity.CharacterId != plan.CharacterId || !keys.Add(ground.Reservation.GroundKey) ||
+                !monsters.SpecialObjects.Any(parent => parent.ObjectKey == ground.Reservation.MonsterKey &&
+                    parent.Source.SourceOrdinal == origin.ParentOrdinal))
+                throw new InvalidDataException("入房特殊物品缺少原父对象或地面身份重复");
+            // ARAD 0238EE44..0238EEE7固定21B，不使用NOTI38的123B物品RAW。
+            writer.Write(origin.AssociationSlot);
+            writer.Write(ground.Reservation.GroundKey);
+            writer.Write(ground.Content.Item?.ItemId ?? 0);
+            writer.Write(ground.Content.Item?.Value ?? ground.GoldAmount);
+            writer.Write(ground.Content.Item?.Durability ?? (ushort)0);
+            // 两字段沿ARAD的u8/u16读取与共同记录构造器，不混入Attr的强化位。
+            writer.Write(ground.Content.Item?.AmplifyType ?? (byte)0);
+            writer.Write(ground.Content.Item?.AmplifyValue ?? (ushort)0);
+            writer.Write((ushort)0); // 创建可见性过滤为0；不将父序号或坐标塞进该字段。
+            writer.Write((byte)0);
+        }
+        writer.Write(empty.AsSpan(20));
         return stream.ToArray();
     }
 

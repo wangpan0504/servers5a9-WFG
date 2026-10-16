@@ -31,6 +31,7 @@ internal sealed record DungeonGroundObject(Guid DeathEventId, DungeonRunIdentity
     public string ResourceIdentity { get; init; } = "";
     public bool UsesCollectionLedger { get; init; }
     public DungeonInventoryDiscardOrigin? InventoryOrigin { get; init; }
+    public DungeonPassiveDropOrigin? PassiveOrigin { get; init; }
     public bool IsGold => Content.IsGold;
     public int GoldAmount => Content.GoldAmount;
     public ItemCore Core => Content.Item ?? throw new InvalidOperationException("地面金币使用数量模型，不提供虚假物品Core");
@@ -92,7 +93,7 @@ internal sealed class DungeonGroundState
     {
         public DungeonGroundObject Ground { get; } = ground;
         public DeathState? Death { get; } = death;
-        public bool Committed => Death?.Committed ?? (Ground.InventoryOrigin is not null &&
+        public bool Committed => Death?.Committed ?? ((Ground.InventoryOrigin is not null || Ground.PassiveOrigin is not null) &&
             Status is DungeonGroundStatus.Available or DungeonGroundStatus.PickupPending or DungeonGroundStatus.Picked);
         public DungeonGroundStatus Status { get; set; } = DungeonGroundStatus.Frozen;
     }
@@ -105,12 +106,15 @@ internal sealed class DungeonGroundState
     readonly Dictionary<uint, ItemState> groundItems = [];
     readonly HashSet<ushort> failedOrCreating = [];
     readonly HashSet<uint> occupiedKeys = [];
+    readonly Dictionary<DungeonMap, ImmutableArray<DungeonGroundObject>> passiveByMap;
     DungeonGroundPickupPreparation? pendingPickup;
     DungeonGroundObject? pendingInventoryDrop;
+    ImmutableArray<DungeonGroundObject> PassiveGrounds { get; }
 
     // 预留范围是否已持久化、资源准入和RecordSlot合法常量由主调用方证明；这里只检查完整对象身份与碰撞。
     public DungeonGroundState(SinglePlayerDungeonRun run, IReadOnlyList<DungeonMonsterPlan> routePlans,
-        IReadOnlyList<DungeonGroundReservation> reservations, string resourceIdentity = "")
+        IReadOnlyList<DungeonGroundReservation> reservations, string resourceIdentity = "",
+        IReadOnlyList<DungeonGroundObject>? passiveGrounds = null)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(routePlans);
@@ -151,6 +155,48 @@ internal sealed class DungeonGroundState
                 throw new InvalidDataException("单怪地面预留序号必须连续且不超过完整通知容量");
             this.reservations.Add(monster, ordered);
         }
+        PassiveGrounds = (passiveGrounds ?? []).ToImmutableArray();
+        var parents = new Dictionary<ushort, (DungeonPlannedSpecialObject Parent, DungeonMap Map, int Association)>();
+        foreach (var plan in routePlans)
+        {
+            int association = 0;
+            foreach (var parent in plan.SpecialObjects)
+                if (parent.Source.Children.Any(child => child.Kind == "[item]"))
+                    parents.Add(parent.ObjectKey, (parent, plan.Room.Map, association++));
+        }
+        foreach (var ground in PassiveGrounds)
+        {
+            ground.Content.Validate();
+            if (ground.PassiveOrigin is not { } origin || ground.InventoryOrigin is not null || !ground.UsesCollectionLedger ||
+                ground.DeathIdentity != initial.Identity || ground.DeathEventId == Guid.Empty ||
+                !parents.TryGetValue(ground.Reservation.MonsterKey, out var parent) || parent.Map != ground.Reservation.Map ||
+                parent.Parent.Source.SourceOrdinal != origin.ParentOrdinal || parent.Association != origin.AssociationSlot ||
+                !parent.Parent.Source.Children.Any(child => child.SourceOrdinal == origin.ActionOrdinal && child.Kind == "[item]" &&
+                    child.RawValues.Count == 5 && child.RawValues[0] == origin.GroupIndex) ||
+                ground.Reservation.GroundKey is 0 or > ushort.MaxValue || !occupied.Add(ground.Reservation.GroundKey))
+                throw new InvalidDataException("特殊物品必须属于原Run父对象、子规则和独立预留key");
+            groundItems.Add(ground.Reservation.GroundKey, new(ground, null));
+        }
+        passiveByMap = PassiveGrounds.GroupBy(ground => ground.Reservation.Map)
+            .ToDictionary(group => group.Key, group => group.ToImmutableArray());
+    }
+
+    public ImmutableArray<DungeonGroundObject> CurrentPassiveItems()
+    {
+        var current = SynchronizeRoom();
+        return passiveByMap.TryGetValue(current.CurrentMap, out var items)
+            ? items.Where(ground => groundItems[ground.Reservation.GroundKey].Status == DungeonGroundStatus.Available).ToImmutableArray()
+            : [];
+    }
+
+    public void PublishPassiveEntry()
+    {
+        if (PassiveGrounds.Length != 0 && run.Snapshot.Identity != PassiveGrounds[0].DeathIdentity ||
+            run.Phase != SinglePlayerDungeonPhase.Loading || PassiveGrounds.Any(ground =>
+                groundItems[ground.Reservation.GroundKey].Status != DungeonGroundStatus.Frozen))
+            throw new InvalidOperationException("特殊物品入场结果已失效或重复发布");
+        foreach (var ground in PassiveGrounds)
+            groundItems[ground.Reservation.GroundKey].Status = DungeonGroundStatus.Available;
     }
 
     public bool HasReservation(ushort monsterKey) => reservations.ContainsKey(monsterKey);

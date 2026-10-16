@@ -508,7 +508,7 @@ CREATE TABLE character_dungeon_pickup_receipts(
   instance_id TEXT NOT NULL,task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
   epoch INTEGER NOT NULL CHECK(epoch>0),destination_list INTEGER NOT NULL,
   destination_slot INTEGER NOT NULL CHECK(destination_slot BETWEEN 0 AND 351),
-  item_uid INTEGER NOT NULL CHECK(item_uid BETWEEN 1 AND 2147483647),
+  item_uid INTEGER NOT NULL CHECK(item_uid>0),
   after_core TEXT NOT NULL CHECK(json_valid(after_core) AND json_type(after_core)='object'),
   revision INTEGER NOT NULL CHECK(revision>0),
   PRIMARY KEY(character_id,event_id),UNIQUE(character_id,ground_key),
@@ -667,7 +667,7 @@ CREATE TABLE character_dungeon_drop_pickups(
   destination_slot INTEGER,item_uid INTEGER,after_core TEXT,
   currency_kind INTEGER,amount INTEGER NOT NULL CHECK(amount>0),after_balance INTEGER,account_revision INTEGER,
   revision INTEGER NOT NULL CHECK(revision>0),
-  CHECK((destination_slot IS NOT NULL AND item_uid IS NOT NULL AND destination_slot BETWEEN 0 AND 351 AND item_uid BETWEEN 1 AND 2147483647 AND
+  CHECK((destination_slot IS NOT NULL AND item_uid IS NOT NULL AND destination_slot BETWEEN 0 AND 351 AND item_uid>0 AND
     after_core IS NOT NULL AND json_valid(after_core) AND json_type(after_core)='object' AND currency_kind IS NULL AND
     after_balance IS NULL AND account_revision IS NULL) OR
     (destination_slot IS NULL AND item_uid IS NULL AND after_core IS NULL AND currency_kind IS NOT NULL AND currency_kind BETWEEN 0 AND 18 AND
@@ -755,6 +755,25 @@ CREATE TABLE account_hotkey_settings(
   account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),
   hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
   PRIMARY KEY(account,profile));
+CREATE TABLE character_dungeon_passive_pickups(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,
+  ground_key INTEGER NOT NULL CHECK(ground_key BETWEEN 1 AND 65535),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+  picked_core TEXT,gold_amount INTEGER NOT NULL CHECK(gold_amount>=0),
+  destination_slot INTEGER,item_uid INTEGER,after_core TEXT,currency_kind INTEGER,
+  amount INTEGER NOT NULL CHECK(amount>0),after_balance INTEGER,account_revision INTEGER,
+  revision INTEGER NOT NULL CHECK(revision>0),
+  CHECK((picked_core IS NULL AND gold_amount>0) OR
+    (picked_core IS NOT NULL AND json_valid(picked_core) AND json_type(picked_core)='object' AND gold_amount=0)),
+  CHECK((destination_slot IS NOT NULL AND item_uid IS NOT NULL AND destination_slot BETWEEN 0 AND 351
+    AND item_uid>0 AND after_core IS NOT NULL AND json_valid(after_core)
+    AND json_type(after_core)='object' AND currency_kind IS NULL AND after_balance IS NULL AND account_revision IS NULL)
+    OR (destination_slot IS NULL AND item_uid IS NULL AND after_core IS NULL AND currency_kind IS NOT NULL
+    AND currency_kind BETWEEN 0 AND 18 AND after_balance IS NOT NULL AND after_balance>=0
+    AND account_revision IS NOT NULL AND account_revision>=0)),
+  PRIMARY KEY(character_id,ground_key),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
 CREATE TABLE character_quest_effect_receipts(
   character_id INTEGER NOT NULL REFERENCES characters(id),operation_id TEXT NOT NULL CHECK(length(operation_id)=32),
   before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),

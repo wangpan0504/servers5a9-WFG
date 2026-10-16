@@ -50,7 +50,8 @@ internal static class DungeonDropCollectionRepositoryTests
             That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, new([plan], []), authority, out var run, out _),
                 "集合仓储fixture使用原Run与可信事件入口");
             var reservations = Enumerable.Range(0, 4).Select(index => new DungeonGroundReservation(20,
-                checked((uint)(400 + index)), map, 100, 100, 0, index)).ToArray();
+                checked((uint)(400 + index)), map, 100, 100, 0, index))
+                .Append(new DungeonGroundReservation(21, 404, map, 100, 100, 0)).ToArray();
             var ground = new DungeonGroundState(run!, [plan], reservations, "明确合成集合来源");
             run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
             var death = authority.Death(run.Snapshot.Identity, 20);
@@ -156,6 +157,28 @@ internal static class DungeonDropCollectionRepositoryTests
                     Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 4 && SkillRepositoryTests.Equal(upgraded, current),
                     $"真实已到账v{sourceVersion}集合升级保留四件完整Core、UID、金币与账号钱包，不重建或重复授予");
             }
+            var highPreparation = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 21));
+            That(highPreparation.Outcome == DungeonRunOutcome.Accepted && highPreparation.Pending is not null,
+                "第二只怪物使用独立战斗序号及原Run身份取得真实死亡准备");
+            var highPending = highPreparation.Pending!;
+            var highLoot = ground.GetOrFreezeAssets(highPending, () => [contents[3]]);
+            var highGrowth = repository.CommitDungeonGrowth(owner, current, run, highPending, reward, growth, highLoot);
+            run.ConfirmCommittedDeath(highPending);
+            That(ground.PublishCommitted(highPending, highLoot), "第二只真实怪物独立发布原装备，不借用已拾取地面key");
+            Sql("UPDATE sqlite_sequence SET seq=2147483647 WHERE name='character_inventory_items'");
+            var highGround = highLoot.Grounds.Single();
+            var highPickup = ground.PreparePickup(run.Snapshot.Identity, highGround)!;
+            var highPlan = DungeonPickupPlanning.Item(highGrowth.Character, highGround.Content, resources.Items.Get(highGround.Core.ItemId),
+                resources.GoldLimits, resources.EpicPieces, now);
+            That(highPlan.Accepted, "高UID装备继续使用原库存规划");
+            var highResult = repository.CommitDungeonPickup(owner, highGrowth.Character, highPickup, highPlan.Plan!);
+            var highReplay = repository.CommitDungeonPickup(owner, highGrowth.Character, highPickup, highPlan.Plan!);
+            That(highResult.ItemUid > int.MaxValue && highReplay.Duplicate && highReplay.ItemUid == highResult.ItemUid &&
+                highResult.Character.Inventory.Find(highResult.Destination)?.Core == highGround.Core &&
+                Query("SELECT item_uid FROM character_dungeon_drop_pickups WHERE ground_key=404") == highResult.ItemUid,
+                "怪物掉落的64位内部UID原样入库和重放，不写入客户端装备品级或改变完整Core");
+            That(ground.ConfirmPickup(highPickup) && SkillRepositoryTests.Equal(new CharacterRepository(path)
+                .LoadCharacter(owner, highResult.Character.Slot), highResult.Character), "高UID怪物拾取重开恢复完整资产");
         }
         finally
         {
@@ -188,6 +211,7 @@ internal static class DungeonDropCollectionRepositoryTests
 
     sealed class FixtureAuthority : DungeonCombatAuthority
     {
-        public ConfirmedDungeonMonsterDeath Death(DungeonRunIdentity identity, ushort key) => ConfirmDeath(identity, Guid.NewGuid(), key, 1);
+        long sequence;
+        public ConfirmedDungeonMonsterDeath Death(DungeonRunIdentity identity, ushort key) => ConfirmDeath(identity, Guid.NewGuid(), key, ++sequence);
     }
 }

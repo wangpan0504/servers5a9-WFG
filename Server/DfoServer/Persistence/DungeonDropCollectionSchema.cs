@@ -41,6 +41,12 @@ internal static class DungeonDropCollectionSchema
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
         """;
 
+    // 保留v20的已发布DDL；当前拾取回执只放宽内部UID，不改变地面key及来源外键。
+    internal static readonly string PreviousPickupDefinition = Definition[
+        Definition.IndexOf("CREATE TABLE character_dungeon_drop_pickups(", StringComparison.Ordinal)..];
+    internal static readonly string PickupDefinition = PreviousPickupDefinition.Replace(
+        "item_uid BETWEEN 1 AND 2147483647", "item_uid>0", StringComparison.Ordinal);
+
     public static void Upgrade(SqliteConnection db, SqliteTransaction tx)
     {
         if (InstalledTables(db, tx) != 0)

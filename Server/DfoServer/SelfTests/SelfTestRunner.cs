@@ -46,6 +46,7 @@ internal static class SelfTestRunner
         DungeonSelectionReturnTests.RunCore();
         DungeonPickupProtocolTests.Run();
         DungeonPickupPlanningTests.RunCore();
+        DungeonPassiveDropTests.RunCore();
         SkillLearningDisconnectTests.Run();
         GuildParameterTests.RunCore();
         GuildDirectoryTests.RunCore();

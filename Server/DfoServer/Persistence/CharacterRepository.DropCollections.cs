@@ -177,12 +177,21 @@ internal sealed partial class CharacterRepository
         var current = Require(db, tx, dbOwner.Account, expected.Name);
         if (current.Id != expected.Id)
             throw new InvalidOperationException("集合拾取的角色归属变化");
-        VerifyStoredDropObject(db, tx, dbOwner.Account, current.Id, ground);
+        bool passive = ground.PassiveOrigin is not null;
+        if (passive)
+        {
+            if (ground.InventoryOrigin is not null || current.DungeonState is not { } state ||
+                state.LastAttempt != prepared.Identity.TaskAttempt || ground.Reservation.GroundKey is 0 or > ushort.MaxValue ||
+                ground.Reservation.GroundKey >= state.NextObjectKey)
+                throw new InvalidDataException("特殊物品拾取不属于当前已预留实例");
+        }
+        else
+            VerifyStoredDropObject(db, tx, dbOwner.Account, current.Id, ground);
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", current.Id);
         command.Parameters.AddWithValue("$key", ground.Reservation.GroundKey);
-        command.CommandText = """
+        command.CommandText = passive ? PassivePickupSelect : """
             SELECT account,event_id,instance_id,task_attempt,epoch,destination_slot,item_uid,after_core,currency_kind,amount,
               after_balance,account_revision,revision FROM character_dungeon_drop_pickups WHERE character_id=$id AND ground_key=$key
             """;
@@ -190,10 +199,13 @@ internal sealed partial class CharacterRepository
         {
             if (reader.Read())
             {
-                if (reader.GetString(0) != dbOwner.Account || reader.GetString(1) != ground.DeathEventId.ToString("N") ||
+                if (reader.GetString(0) != dbOwner.Account || !passive && reader.GetString(1) != ground.DeathEventId.ToString("N") ||
                     reader.GetString(2) != prepared.Identity.InstanceId.ToString("N") || reader.GetInt64(3) != prepared.Identity.TaskAttempt ||
                     reader.GetInt64(4) != prepared.Identity.Epoch)
                     throw new InvalidDataException("集合重复拾取的原来源变化");
+                if (passive && ((reader.IsDBNull(13) ? null : reader.GetString(13)) != CoreJson(ground) ||
+                    reader.GetInt64(14) != ground.GoldAmount))
+                    throw new InvalidDataException("特殊物品重复拾取的完整内容变化");
                 bool same = current.Revision == reader.GetInt64(12);
                 if (reader.IsDBNull(8))
                 {
@@ -256,7 +268,18 @@ internal sealed partial class CharacterRepository
               destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision)
             VALUES($id,$account,$event,$key,$instance,$attempt,$epoch,$slot,$uid,$core,$currency,$amount,$balance,$wallet,$revision)
             """;
-        command.ExecuteNonQuery();
+        if (passive)
+        {
+            command.CommandText = """
+                INSERT INTO character_dungeon_passive_pickups(character_id,account,ground_key,instance_id,task_attempt,epoch,
+                  picked_core,gold_amount,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision)
+                VALUES($id,$account,$key,$instance,$attempt,$epoch,$picked,$gold,$slot,$uid,$core,$currency,$amount,$balance,$wallet,$revision)
+                """;
+            command.Parameters.AddWithValue("$picked", (object?)CoreJson(ground) ?? DBNull.Value);
+            command.Parameters.AddWithValue("$gold", ground.GoldAmount);
+        }
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException("拾取回执未保存到原地面对象");
         tx.Commit();
         return new(committed, false, destination, actual?.Uid ?? 0, true, currency, amount);
     }
