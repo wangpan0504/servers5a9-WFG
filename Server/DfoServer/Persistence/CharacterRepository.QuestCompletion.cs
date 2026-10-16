@@ -237,7 +237,7 @@ internal sealed partial class CharacterRepository
             new(character, clear, reward, rows, duplicate, projection, expected.Level, expected.Learning) {
                 QuestId = plan.QuestId, AcceptanceId = plan.AcceptanceId, ConditionType = plan.ConditionType,
                 GoldAmount = plan.GoldAmount, MailedGoldAmount = plan.MailedGoldAmount, GoldMailId = goldMailId,
-                GainedExperience = gained, TpAmount = plan.TpAmount, Consumed = plan.Consumed, Currencies = plan.Currencies,
+                GainedExperience = gained, TpAmount = plan.TpAmount, HellChallenge = plan.HellChallenge, Consumed = plan.Consumed, Currencies = plan.Currencies,
                 ChangedSlots = plan.Inventory.ChangedSlots.Concat(plan.Inventory.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
                     .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main,slot!.Value)))
                     .Concat(plan.Consumed.Where(row => row.Uid == 0).Select(row => row.Position)).Distinct().ToImmutableArray(), PreviousQuests = expected.ActiveMainQuests,

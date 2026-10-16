@@ -20,6 +20,7 @@ internal sealed record QuestCompletionCommit(Character Character, QuestClearRece
     public uint? GoldMailId { get; init; }
     public uint GainedExperience { get; init; }
     public ushort TpAmount { get; init; }
+    public bool HellChallenge { get; init; }
     public ImmutableArray<QuestConsumedItem> Consumed { get; init; } = [];
     public ImmutableArray<QuestCurrencyReward> Currencies { get; init; } = [];
     public ImmutableArray<InventorySlot> ChangedSlots { get; init; } = [];

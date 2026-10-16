@@ -52,6 +52,7 @@ internal sealed class QuestCompletionPlan
         AnswersAfter = Answer is { } answer ? expected.QuestAnswers.SetItem(quest.Id,answer) : expected.QuestAnswers;
         AccountAnswersAfter = AccountQuest && Answer is { } accountAnswer ? expected.AccountQuestAnswers.SetItem(quest.Id,accountAnswer) : expected.AccountQuestAnswers;
         ProfessionGrowType = profession; RewardLearning = rewardLearning; TargetEquipmentSlotFlags = equipmentSlots; TpAmount = tpAmount;
+        HellChallenge = QuestCharacterReward.TryHellChallenge(quest);
         ClosedChildren = closedChildren;
         CascadeMarkerQuestId = QuestRelationProgress.CascadeMarker(quest,quests);
         SyncedQuestIds = (CascadeMarkerQuestId is { } synced && QuestRelationProgress.IsAccountSyncMarker(quests.Get(synced))
@@ -130,6 +131,7 @@ internal sealed class QuestCompletionPlan
     public bool UpdatesLearning => GrowthPlan is not null || RewardLearning is not null;
     public byte TargetEquipmentSlotFlags { get; }
     public ushort TpAmount { get; }
+    public bool HellChallenge { get; }
     public ImmutableArray<ActiveMainQuest> ClosedChildren { get; }
     public byte TargetGrowType => ProfessionGrowType ?? Expected.GrowType;
     public CharacterLearningState TargetLearning => RewardLearning ?? GrowthPlan?.Learning ?? Expected.Learning;

@@ -108,14 +108,15 @@ internal static class QuestPackets
 
     public static byte[] Finish(ushort questId, byte conditionType, uint experience,
         IReadOnlyList<QuestConsumedItemProjection> consumed, uint gold, IReadOnlyList<QuestRewardItemProjection> rewards, byte? growType = null,
-        IReadOnlyList<QuestCurrencyRewardProjection>? currencies = null, ushort tpAmount = 0)
+        IReadOnlyList<QuestCurrencyRewardProjection>? currencies = null, ushort tpAmount = 0, bool hellChallenge = false)
     {
         if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 64 or 65 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
             consumed.Count > byte.MaxValue || conditionType is not (0 or 25) && consumed.Count != 0 ||
             rewards.Count + (currencies?.Count ?? 0) + (gold == 0 ? 0 : 1) > byte.MaxValue ||
             growType is { } growth && (growth == 0 || (growth & 15) > 5 || growth >> 4 > 2) ||
             growType is not null && (rewards.Count != 0 || currencies?.Count > 0) ||
-            tpAmount is not (0 or 2) || tpAmount != 0 && (growType is not null || rewards.Count != 0 || currencies?.Count > 0))
+            tpAmount is not (0 or 2) || tpAmount != 0 && (growType is not null || rewards.Count != 0 || currencies?.Count > 0) ||
+            hellChallenge && (growType is not null || tpAmount != 0 || rewards.Count != 0 || currencies?.Count > 0))
             throw new InvalidDataException("普通任务交付投影超出已确认合同");
         byte[] rows = FixedRewardRows(rewards,currencies);
         using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
@@ -141,6 +142,12 @@ internal static class QuestPackets
         {
             // Full03 02377B15..32/48：mode29固定展示2TP，不读取数量或物品数组；真实余额由19发布。
             writer.Write((byte)29);
+            return bytes.ToArray();
+        }
+        if (hellChallenge)
+        {
+            // Full03 0237807B的mode3经ID2D1创建HellPartyReleaseWindow；不读物品count，金币另由14校准。
+            writer.Write((byte)3);
             return bytes.ToArray();
         }
         writer.Write((byte)0); writer.Write((byte)(rewards.Count + (currencies?.Count ?? 0) + (gold == 0 ? 0 : 1)));

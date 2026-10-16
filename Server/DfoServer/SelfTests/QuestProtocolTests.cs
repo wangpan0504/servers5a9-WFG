@@ -148,6 +148,12 @@ internal static class QuestProtocolTests
             "TP模式29固定展示2点，不追加金额、数量或奖励count，金币用绝对持有域通知");
         Reject(() => QuestPackets.Finish(100,4,0,[],0,[],tpAmount: 1),"TP模式不能接受未确认的赠点数量");
         Reject(() => QuestPackets.Finish(100,4,0,[],0,fixedRewards[..1],tpAmount: 2),"TP专用模式不能吞掉真实物品奖励行");
+        Check(QuestPackets.Finish(6080,4,17,[],123,[],hellChallenge: true).SequenceEqual(Convert.FromHexString("01C017041100000003")),
+            "深渊解锁模式3保留实际经验，末尾没有物品count或金币行，金币用14绝对同步");
+        Reject(() => QuestPackets.Finish(6080,4,0,[],0,fixedRewards[..1],hellChallenge: true),"深渊模式不能吞掉普通物品奖励");
+        Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],1,hellChallenge: true),"深渊模式不能混合转职奖励");
+        Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],tpAmount: 2,hellChallenge: true),"深渊模式不能混合TP奖励");
+        Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],currencies: [new(354,3033,1)],hellChallenge: true),"深渊模式不能吞掉钱包材料奖励");
         foreach (byte branch in Enumerable.Range(1,5).Select(value => (byte)value))
             foreach (byte stage in Enumerable.Range(0,3).Select(value => (byte)value))
             {

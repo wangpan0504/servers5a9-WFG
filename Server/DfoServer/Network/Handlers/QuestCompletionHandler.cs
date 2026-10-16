@@ -53,7 +53,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
                 commit.Consumed.Select(row => new QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(), commit.DirectGoldAmount, rewards,
                 commit.ProfessionGrowType,commit.Currencies.Select(row => new QuestCurrencyRewardProjection(
                     ItemSlotBoundService.CurrencySlot(row.Kind) ?? throw new InvalidOperationException("钱包奖励缺少已确认持有域"),
-                    row.Kind == DfoServer.Game.Currency.CurrencyKind.ReviveCoin ? 1 : row.ItemId,row.Count)).ToArray(),commit.TpAmount);
+                    row.Kind == DfoServer.Game.Currency.CurrencyKind.ReviveCoin ? 1 : row.ItemId,row.Count)).ToArray(),commit.TpAmount,commit.HellChallenge);
         // 转职/觉醒先装载已提交技能快照，ACK34会据此重建本地技能；沿S4A21的前置通知顺序。
         bool profession = commit.ProfessionGrowType is not null;
         if (profession)

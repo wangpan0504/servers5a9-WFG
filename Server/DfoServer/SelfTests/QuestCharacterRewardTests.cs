@@ -254,13 +254,22 @@ internal static class QuestCharacterRewardTests
             !row.Restrictions.Any(text => text.Contains(stateRestriction) || text.StartsWith("固定奖励需要")) :
             row.Restrictions.Any(text => text.Contains(stateRestriction))),
             "只有参数1的深渊资格任务不再被奖励类型/固定奖励解析拒绝，其余仍报专用状态未接入");
+        // 原报告六项必须逐项执行，不能被Take筛选或缺少6045前置定义悄悄跳过。
+        int[] reportedHell = [6880,4391,4539,2002,2900,6080];
+        var hellDefinitions = hell.Concat(hell.SelectMany(quest => quest.Prerequisites).Select(catalog.Get)).DistinctBy(quest => quest.Id).ToArray();
+        var exactHellCoverage = QuestCoverage.Scan(new(hellDefinitions.ToDictionary(quest => quest.Id)),items.Items,items.EpicPieces,parameters);
+        That(reportedHell.All(id => exactHellCoverage.Quests.Single(row => row.Id == id).ImplementedPath &&
+            catalog.Get(id) is { Condition: "[meet npc]", SubType: 1, IntData: [45] } && QuestCharacterReward.TryHellChallenge(catalog.Get(id))),
+            "Ep1至Ep6保持完整实际声明，全部具有可执行交付路径");
+        var samples = hell.Where(QuestCharacterReward.TryHellChallenge).Where(quest => QuestCoverage.Scan(new(new() { [quest.Id] = quest }),
+            items.Items,items.EpicPieces,parameters).Quests.Single().ImplementedPath).Take(3);
+        var exercisedHell = samples.Concat(reportedHell.Select(catalog.Get)).DistinctBy(quest => quest.Id).ToArray();
         int hellDone = 0;
-        foreach (var quest in hell.Where(QuestCharacterReward.TryHellChallenge).Where(quest => QuestCoverage.Scan(new(new() { [quest.Id] = quest }),
-            items.Items,items.EpicPieces,parameters).Quests.Single().ImplementedPath).Take(3))
+        foreach (var quest in exercisedHell)
         {
             byte level = (byte)Math.Max(quest.MinimumLevel,1);
             using var f = new QuestOrdinaryCompletionTests.Fixture(towns,characters,skills,growth,parameters,items,quest,
-                materialCount: 0,definitions: [quest],active: [],useCycles: true,configure: candidate =>
+                materialCount: 0,definitions: hellDefinitions,active: [],useCycles: true,configure: candidate =>
                 {
                     var learning = SkillPointLedger.Synchronize(candidate.Job,candidate.GrowType,level,
                         candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(level) },skills);
@@ -269,12 +278,13 @@ internal static class QuestCharacterRewardTests
                 });
             That(f.Change((ushort)quest.Id,QuestLifecycleAction.Accept)?.Commit is not null,"深渊资格任务可正常接取 " + quest.Id);
             var finished = f.Finish(ushort.MaxValue,(ushort)quest.Id);
-            That(finished.Receipt?.Commit is { } commit && commit.Character.CompletedQuests.Contains(quest.Id) &&
+            That(finished.Receipt?.Commit is { HellChallenge: true } commit && commit.Character.CompletedQuests.Contains(quest.Id) &&
                 commit.Character.ActiveMainQuests.Length == 0 && f.Receipts == 1,"深渊资格任务可交付并记入已完成 " + quest.Id);
             That(f.Finish(ushort.MaxValue,(ushort)quest.Id).Outcome == QuestFinishOutcome.AlreadyCompleted && f.Receipts == 1,"深渊资格任务不可重复交付 " + quest.Id);
             hellDone++;
         }
-        That(hellDone > 0,"至少有一个深渊资格任务走完接取到交付");
+        That(hellDone == exercisedHell.Length && reportedHell.All(id => exercisedHell.Any(quest => quest.Id == id)),
+            "原有代表及报告六项全部走完实际接取到交付，没有按覆盖结果跳过失败项");
         foreach (var other in catalog.All.Where(quest => quest.RewardType is "[hell legend]" or "[cosmo challenge]").Take(2))
             That(!QuestCoverage.Scan(new(new() { [other.Id] = other }),items.Items,items.EpicPieces,parameters).Quests.Single().ImplementedPath,
                 "传奇/宇宙挑战类专用奖励仍被拒绝 " + other.Id);
