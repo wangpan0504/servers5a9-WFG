@@ -19,7 +19,7 @@ internal static class RentalPackets
     public static byte[] RentSuccess() => [1, 0, 0, 0, 0];
     public static byte[] RentFailure(byte code = 1) => [0, code, 0, 0, 0];
 
-    // S2C988 使用账号虚拟余额与 Unix 绝对到期时间；幸运星没有实体物品行。
+    // S2C988 使用账号虚拟余额与剩余秒；持久化保留绝对截止，幸运星没有实体物品行。
     public static byte[] State(InventorySnapshot inventory, DateTimeOffset now)
     {
         long utc = now.ToUnixTimeSeconds();
@@ -36,7 +36,7 @@ internal static class RentalPackets
         {
             int offset = 8 + i * 8;
             BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset), checked((uint)active[i].Core.ItemId));
-            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset + 4), checked((uint)active[i].ExpireTime));
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset + 4), checked((uint)active[i].RemainingSeconds(utc)));
         }
         return body;
     }

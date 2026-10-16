@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Builders.Inventory;
 
@@ -46,7 +47,7 @@ internal static class InventoryPackets
         }
         return stream.ToArray();
     }
-    public static byte[] Full(InventorySnapshot inventory)
+    public static byte[] Full(InventorySnapshot inventory, long? utcSeconds = null)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -55,9 +56,16 @@ internal static class InventoryPackets
         writer.Write(inventory.Expansion); // 023BDF17 读扩展格数:u16，023BDF38 右移3位得到0–3档。
         var slots = items.Keys.Concat(CurrencyPackets.VirtualSlots).Order().ToArray();
         writer.Write(checked((ushort)slots.Length));
+        long now = utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         foreach (short slot in slots)
             if (!CurrencyPackets.WriteVirtual(writer, inventory, slot))
-                ItemListProtocolWriter.Write(writer, slot, items[slot].Core);
+            {
+                var item = items[slot];
+                if (item.Core is { IsRental: true, Kind: ItemKind.Equipment })
+                    ItemListProtocolWriter.Write(writer, item.Position, item, now);
+                else
+                    ItemListProtocolWriter.Write(writer, slot, item.Core);
+            }
         return stream.ToArray();
     }
 

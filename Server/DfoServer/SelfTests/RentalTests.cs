@@ -40,12 +40,54 @@ internal static class RentalTests
         byte[] state = RentalPackets.State(inventory, now);
         That(BinaryPrimitives.ReadUInt32LittleEndian(state) == 12 && BinaryPrimitives.ReadUInt32LittleEndian(state.AsSpan(4)) == 1,
             "S2C988 只投影虚拟余额和有效租赁数量");
-        That(BinaryPrimitives.ReadUInt32LittleEndian(state.AsSpan(8)) == 401000039 &&
-            BinaryPrimitives.ReadUInt32LittleEndian(state.AsSpan(12)) == now.AddHours(24).ToUnixTimeSeconds(),
-            "S2C988 租赁期限使用Unix秒");
+        That(state.Length == 16 && BinaryPrimitives.ReadUInt32LittleEndian(state.AsSpan(8)) == 401000039 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(state.AsSpan(12)) == 86400,
+            "S2C988 新租24小时发送剩余86400秒，保留余额和8字节条目布局");
+        foreach (var (elapsed, remaining) in new (int, uint)[] { (1, 86399), (3600, 82800), (86399, 1) })
+            That(BinaryPrimitives.ReadUInt32LittleEndian(RentalPackets.State(inventory, now.AddSeconds(elapsed)).AsSpan(12)) == remaining,
+                "S2C988 随发送时间倒计时，含最后1秒: " + elapsed);
+        var mixed = inventory with { Items = [.. inventory.Items,
+            new(8, new(InventoryListType.Main, 10), inventory.Items[0].Core with { ExpireTime = 1_800_000_060 }),
+            new(9, new(InventoryListType.Main, 11), inventory.Items[0].Core with { ItemId = 401000040, ExpireTime = 1_800_003_600 }),
+            new(10, new(InventoryListType.Main, 12), inventory.Items[0].Core with { ItemId = 401000041, ExpireTime = 1_800_000_000 }),
+            new(11, new(InventoryListType.Main, 13), inventory.Items[0].Core with { ItemId = 401000042, ExpireTime = 1_799_999_999 }),
+            new(12, new(InventoryListType.Main, 14), inventory.Items[0].Core with { ItemId = 401000043, IsRental = false }),
+            new(13, new(InventoryListType.Main, 15), inventory.Items[0].Core with { ItemId = 401000044, Kind = ItemKind.Consumable })
+        ] };
+        byte[] filtered = RentalPackets.State(mixed, now);
+        That(filtered.Length == 24 && BinaryPrimitives.ReadUInt32LittleEndian(filtered) == 12 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(filtered.AsSpan(4)) == 2 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(filtered.AsSpan(8)) == 401000039 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(filtered.AsSpan(12)) == 86400 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(filtered.AsSpan(16)) == 401000040 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(filtered.AsSpan(20)) == 3600,
+            "S2C988 同模板保留最晚期限并排除已到期、过去期限、非租赁和非装备");
+        Bytes(RentalPackets.State(inventory, now.AddDays(1)), [12, 0, 0, 0, 0, 0, 0, 0],
+            "S2C988 到期等号时排除条目，余额仍保留");
+        That(inventory.Items[0].ExpireTime == 1_800_086_400 && mixed.Items[1].ExpireTime == 1_800_000_060,
+            "期限投影不改写持久绝对截止或同模板旧实例");
         byte[] delta = InventoryPackets.Delta(inventory, InventoryListType.Main, [new(InventoryListType.Main, 9)], now.ToUnixTimeSeconds());
         That(BinaryPrimitives.ReadUInt32LittleEndian(delta.AsSpan(3 + 0x38)) is >= 86399 and <= 86400,
             "租赁物品栏期限使用剩余秒而非Unix绝对时间");
+        byte[] full = InventoryPackets.Full(inventory, now.ToUnixTimeSeconds());
+        byte[] advancedFull = InventoryPackets.Full(inventory, now.AddSeconds(1).ToUnixTimeSeconds());
+        const int rentalOffset = 5 + 3 * 123; // Main头后先写0、1、2三个虚拟货币槽，再写租赁槽9。
+        That(BinaryPrimitives.ReadUInt16LittleEndian(full.AsSpan(rentalOffset)) == 9 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(full.AsSpan(rentalOffset + 0x38)) == 86400 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(advancedFull.AsSpan(rentalOffset + 0x38)) == 86399,
+            "Main全表与差量使用相同剩余秒合同，并随发送时间倒计时");
+        byte[] expectedAdvanced = (byte[])full.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(expectedAdvanced.AsSpan(rentalOffset + 0x38), 86399);
+        Bytes(advancedFull, expectedAdvanced, "Main全表时间推进仅改变租赁期限，虚拟货币、槽序和其余字段逐字节保持");
+        var regular = inventory with { Items = [inventory.Items[0] with { Core = inventory.Items[0].Core with { IsRental = false } }] };
+        byte[] regularFull = InventoryPackets.Full(regular, now.ToUnixTimeSeconds());
+        byte[] expectedRental = (byte[])regularFull.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(expectedRental.AsSpan(rentalOffset + 0x38), 86400);
+        Bytes(full, expectedRental, "Main租赁标记仅改变期限投影，非租赁行及虚拟货币布局保持原编码");
+        Bytes(InventoryPackets.Full(regular, now.AddSeconds(1).ToUnixTimeSeconds()), regularFull,
+            "非租赁Main装备保持原始绝对期限编码，不参与租赁剩余秒转换");
+        That(BinaryPrimitives.ReadUInt32LittleEndian(regularFull.AsSpan(rentalOffset + 0x38)) == 1_800_086_400 &&
+            inventory.Items[0].ExpireTime == 1_800_086_400, "Main投影不改写普通行或持久租赁截止");
 
         var valid = RentalRules.ValidateCharge(500, 10_000_000, 41, 410, 100);
         That(valid.Accepted && valid.PointsAfter == 141 && valid.GoldAfter == 9_959_000, "租赁点充值原子计算");

@@ -52,8 +52,10 @@ internal static partial class InventoryTcpTests
                 return repository.CommitInventory(owner,leveled,new(leveled.Inventory,leveled.Inventory with { Gold=chargeGold },"fixture_rental_gold"));
             }
         }
-        await fixture.StartAsync();
+        await fixture.StartAsync(packetCapture: true);
         long rentedUid;
+        long expiresAt;
+        uint initialRemaining;
         using (var peer = Open(fixture))
         {
             var entry = peer.Select();
@@ -72,8 +74,9 @@ internal static partial class InventoryTcpTests
             peer.Expect(1, 1001, [1, 0, 0, 0, 0]);
             var state = peer.Expect(0, 988).Body;
             That(state.Length == 16 && U32(state, 0) == 0 && U32(state, 4) == 1 && U32(state, 8) == 408030023 &&
-                U32(state, 12) >= sentAt + 86400 && U32(state, 12) <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 86400,
-                "1级真实请求租到10级模板，扣3星并发布24小时到期状态");
+                U32(state, 12) is >= 86390 and <= 86400,
+                "1级真实请求租到10级模板，扣3星并发布24小时剩余秒状态");
+            initialRemaining = U32(state, 12);
             var delta = peer.Expect(0, 14).Body;
             That(delta.Length == 126 && U16(delta, 3) == 9 && U32(delta, 5) == 408030023 &&
                 U32(delta, 3 + 0x38) is >= 86390 and <= 86400, "低等级租赁发布原Main单槽完整差量与剩余租期");
@@ -81,6 +84,12 @@ internal static partial class InventoryTcpTests
             That(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id) is [[1L]] &&
                 fixture.Query("SELECT rental_points FROM account_wallets") is [[0L]], "租赁不升级角色，余额已提交");
             rentedUid = (long)fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", peer.Id)[0][0]!;
+            expiresAt = (long)fixture.Query("SELECT json_extract(item_core,'$.ExpireTime') FROM character_inventory_items WHERE item_uid=$p0", rentedUid)[0][0]!;
+            long receivedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            That(expiresAt >= sentAt + 86400 && expiresAt <= receivedAt + 86400 &&
+                initialRemaining >= expiresAt - receivedAt && initialRemaining <= expiresAt - sentAt &&
+                U32(delta, 3 + 0x38) >= expiresAt - receivedAt && U32(delta, 3 + 0x38) <= expiresAt - sentAt,
+                "真实988与Main差量期限均为同一持久截止减发送时间，数据库仍保存绝对截止");
             string committed = Snapshot(fixture);
             peer.Send(1001, request);
             peer.Expect(1, 1001, [0, 1, 0, 0, 0]);
@@ -88,12 +97,26 @@ internal static partial class InventoryTcpTests
             That(Snapshot(fixture) == committed && fixture.Query("SELECT rental_points FROM account_wallets") is [[0L]],
                 "余额不足拒绝不二扣、不新增租赁实例且连接保持");
         }
+        // 跨过至少一整秒后重连，验证真实发送路径会倒计时，而非只改初始化断言。
+        await Task.Delay(1100);
         using (var peer = Open(fixture))
         {
+            long selectAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var entry = peer.Select();
+            long receivedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            uint remaining = U32(entry[5].Body, 12);
+            var main = entry[4].Body;
+            int rentalOffset = Enumerable.Range(0, U16(main, 3)).Select(i => 5 + i * 123)
+                .Single(offset => U16(main, offset) == 9);
             That(U32(entry[5].Body, 0) == 0 && U32(entry[5].Body, 4) == 1 && U32(entry[5].Body, 8) == 408030023 &&
+                remaining < initialRemaining && remaining >= expiresAt - receivedAt && remaining <= expiresAt - selectAt &&
+                U32(main, rentalOffset + 2) == 408030023 &&
+                U32(main, rentalOffset + 0x38) >= expiresAt - receivedAt && U32(main, rentalOffset + 0x38) <= expiresAt - selectAt &&
+                fixture.Query("SELECT json_extract(item_core,'$.ExpireTime') FROM character_inventory_items WHERE item_uid=$p0", rentedUid) is [[var savedExpiry]] &&
+                Equals(savedExpiry, expiresAt) &&
                 fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=9", peer.Id) is [[var uid]] &&
-                Equals(uid, rentedUid), "重连恢复同一低等级租赁实例、余额和期限");
+                Equals(uid, rentedUid), "重连988与Main全表同步倒计时，保留同一租赁实例、余额和持久绝对截止");
+            Console.WriteLine($"PASS rental countdown: uid={rentedUid} expireUnix={expiresAt} initial988={initialRemaining} reconnect988={remaining} reconnectMain={U32(main, rentalOffset + 0x38)}");
         }
         using (var peer = Open(fixture))
         {

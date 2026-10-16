@@ -24,7 +24,7 @@ internal static class ItemListProtocolWriter
         else if (item?.Creature is not null)
             core = core! with { Marker16 = item.RemainingSeconds(utcSeconds) };
         else if (item?.Core.IsRental == true)
-            // 租赁详情消费者读取 +0x38 为剩余秒；数据库和 S2C988 仍保存/发送 Unix 绝对时间。
+            // 租赁详情消费者读取 +0x38 为剩余秒；S2C988 同样投影剩余秒，数据库保留 Unix 绝对截止。
             core = core! with { ExpireTime = item.RemainingSeconds(utcSeconds) };
         Write(writer, slot.Index, core);
         // list=1 的清空条目也消费两个 RAW；穿戴表仅有实际时装时消费。
