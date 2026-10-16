@@ -91,6 +91,26 @@ internal static class QuestDropTests
         That(clear.Outcomes.Length == 2 && clear.Outcomes.All(row => row.Granted == 1),"通关行及当前怪物行均保留，异图错难度不产生奖励");
         foreach (var row in mixed.Definition!.Drops.Where(row => row.MatchesEntry(3,0)))
             That(loaded.Items.ContainsKey(row.ItemId),"怪物、APC、被动物件和通关行的本图模板完整预加载");
+        var now = DateTimeOffset.UtcNow;
+        var boosted = advanced with { Inventory = advanced.Inventory with
+            { AccountWallet = advanced.Inventory.AccountWallet.ActivateContract(582, 86400, now) } };
+        var oneDrop = mixed with { Definition = mixed.Definition! with { Drops = [new(1,1,3,-1,9002,1,100,-1)] } };
+        var selected = loaded with { Quests = new Dictionary<int,StoryQuest> { [oneDrop.Id] = oneDrop } };
+        QuestDropPlan Roll(Character actor, QuestDropResources facts, Func<int,int> random, DateTimeOffset? time = null) =>
+            QuestDropPlan.Create(actor,bound,facts,Guid.NewGuid(),identity,1,1,1,false,random,time ?? now);
+        That(Roll(boosted,selected,_ => 0).Outcomes.Single().Granted == 2 &&
+            Roll(boosted,selected,_ => 1).Outcomes.Single().Granted == 1, "助手任务掉落奇数增量保持50%随机分支");
+        That(Roll(advanced,selected,_ => throw new InvalidOperationException()).Outcomes.Single().Granted == 1 &&
+            Roll(boosted,selected,_ => throw new InvalidOperationException(),now.AddDays(2)).Outcomes.Single().Granted == 1,
+            "无契约及过期契约不增加掉落或抽取额外随机数");
+        var material = selected with { Items = new Dictionary<int,ItemTemplate>
+            { [9002] = selected.Items[9002] with { Kind = ItemKind.Material } } };
+        That(Roll(boosted,material,_ => throw new InvalidOperationException()).Outcomes.Single().Granted == 1,
+            "任务中的普通材料不享受任务栏物品加成");
+        var cappedDrop = oneDrop with { Definition = oneDrop.Definition! with { Drops = [new(1,1,3,-1,9002,1,100,1)] } };
+        That(Roll(boosted,selected with { Quests = new Dictionary<int,StoryQuest> { [cappedDrop.Id] = cappedDrop } },_ => 0)
+            .Outcomes.Single() is { Rolled: 2, Granted: 1 }, "加成仍受资源持有上限约束");
+        Reject<InvalidDataException>(() => Roll(boosted,selected,_ => 2), "非法额外随机值明确拒绝");
 
     }
 

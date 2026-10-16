@@ -495,8 +495,17 @@ internal sealed partial class GameSession
         if (dungeon.Entry.IsTutorial && Selected.Tutorial is { Completed: false })
             Selected = repository.CommitTutorialCheckpoint(owner, TutorialCheckpoint(Selected, "skip", Guid.NewGuid(), 0, 0,
                 dungeon.Run.Snapshot.Identity, dungeon.Run.Snapshot.CurrentMap.Id, true)).Character;
-        else if (dungeon.OrdinaryReturnPosition is { } back && Selected.Position != back)
-            Selected = repository.Save(owner, Selected, back, Selected.Return);
+        else
+        {
+            var before = Selected.Inventory;
+            var after = !dungeon.Entry.IsTutorial && !PreservesTrainingItems && Selected.Level >= 6 &&
+                dungeon.Run.Phase == SinglePlayerDungeonPhase.Dungeon
+                ? before with { StaminaUntil = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 600 } : before;
+            var back = dungeon.OrdinaryReturnPosition ?? Selected.Position;
+            if (Selected.Position != back || after != before)
+                Selected = repository.Save(owner, Selected, back, Selected.Return,
+                    after == before ? null : new InventoryPlan(before, after, "dungeon_retreat_stamina", new(Selected)));
+        }
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRun();
         formalDungeon = null;

@@ -78,17 +78,20 @@ internal static class ServerRuntime
         // 建会认证申请与入城补投：入城序列只依赖窄投递接口（顺序模式：创建者与被邀请方不同时在线）。
         var guildPermits = new Game.Guild.GuildPermitRegistry();
         var guildPermitDelivery = new GuildPermitDelivery(guildPermits);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery);
+        var devil = new DevilContractService(itemResources.DevilContracts, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces);
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
         var guildProjection = new GuildProjection(inventoryProjection, presence);
         var debugSettings = new GameDebugSettings();
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces,
-            debugSettings, itemResources.Contracts, itemResources.AvatarPackages);
+            debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
+        new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
+        new DevilContractHandler(log, clock).Register(commands);
         var auctionProbe = Development.Auction.AuctionProbe.Parse(options.DevelopmentAuctionProbe);
         // 拍卖行挂牌：SQL 在 Persistence/AuctionListingRepository，读用例与种子在 Game/Auction；
         // 条目字节快照的编码入口来自物品模块的 Builder。
@@ -191,7 +194,7 @@ internal static class ServerRuntime
                 new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces),
                 cashShop,
                 inventoryProjection, log),
-            new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection),
+            new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions), inventoryProjection, log),
             new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
@@ -232,7 +235,7 @@ internal static class ServerRuntime
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });

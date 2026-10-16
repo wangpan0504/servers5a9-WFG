@@ -6,6 +6,26 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
+    public void InitializeDevilContract(DevilContractService service, DateTimeOffset now)
+    {
+        var captured = owner.Execute(() =>
+        {
+            if (Selected is null || Ready || Phase != SessionPhase.Unselected)
+                throw new InvalidOperationException("魔王契约初始化必须属于当前选角阶段");
+            return (Character: Selected, Epoch: SelectionEpoch);
+        });
+        // 四项资源读取、奖励分配均在账号锁外；提交只接受原选角快照。
+        var gift = service.DailyGift(captured.Character, now);
+        owner.Execute(() =>
+        {
+            if (Ready || Phase != SessionPhase.Unselected || SelectionEpoch != captured.Epoch ||
+                !ReferenceEquals(Selected, captured.Character))
+                throw new InvalidOperationException("魔王契约初始化的选角快照已变化");
+            CommitInventory(captured.Character, gift);
+            return true;
+        });
+    }
+
     public DfoServer.Game.Currency.AccountWallet AccountWallet() => owner.Execute(() =>
         Selected?.Inventory.AccountWallet ?? repository.LoadAccountWallet(owner));
     public InventoryResult DeleteInventory(InventoryDeleteRequest request, InventoryService inventory) => MutateInventory(
@@ -39,7 +59,9 @@ internal sealed partial class GameSession
         bool requireTown = true, SessionPhase? requiredPhase = null) => PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase);
 
     public InventoryResult RepairEquipment(RepairEquipmentRequest request, InventoryRepairService repair) =>
-        PlanAndCommitInventory(character => repair.Repair(character, request), 19, requireTown: true, allowSettlement: true);
+        // 战斗中的耐久由本版客户端维护；CMD23 mode1触发后仍核对副本实例、契约期限与当日次数。
+        PlanAndCommitInventory(character => repair.Repair(character, request,
+            clientBattleWear: Phase == SessionPhase.Dungeon && formalDungeon is not null), 19, requireTown: request.Mode != 1, allowSettlement: true);
 
     public InventoryResult DisjointEquipment(DisjointRequest request, InventoryDisjointService disjoint, out DisjointReceipt? receipt)
     {

@@ -156,10 +156,11 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             Fatigue = fatigue
         };
     });
-    public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint) => owner.Execute(() =>
+    public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint, InventoryPlan? inventory = null) => owner.Execute(() =>
     {
         using var db = database.Open();
         using var transaction = db.BeginTransaction();
+        if (inventory is not null) expected = CommitInventoryInTransaction(db, transaction, owner, expected, inventory);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """

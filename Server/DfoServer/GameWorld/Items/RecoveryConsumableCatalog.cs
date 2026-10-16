@@ -4,7 +4,7 @@ namespace DfoServer.GameWorld.Items;
 
 internal sealed record RecoveryConsumableTuple(string Operation, int Amount, int Auxiliary, string Target);
 internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel, int CoolTime, int CoolGroup,
-    RecoveryConsumableTuple? HpRecovery, RecoveryConsumableTuple? MpRecovery);
+    RecoveryConsumableTuple? HpRecovery, RecoveryConsumableTuple? MpRecovery, bool SummonsApc = false);
 
 internal sealed class RecoveryConsumableCatalog
 {
@@ -16,8 +16,10 @@ internal sealed class RecoveryConsumableCatalog
     };
     readonly Dictionary<int, RecoveryConsumableDefinition> definitions = [];
 
-    public RecoveryConsumableCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
+    public RecoveryConsumableCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable, DevilContractCatalog? devil = null)
     {
+        if (devil is not null)
+            foreach (var pair in devil.Assistants) definitions.Add(pair.Key, pair.Value);
         foreach (int id in new[] { 1065, 1107, 1108, 1114 })
             if (stackable.TryGetValue(id, out string? path))
             {

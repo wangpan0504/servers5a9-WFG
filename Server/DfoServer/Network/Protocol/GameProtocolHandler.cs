@@ -16,7 +16,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.GameWorld.Items.PremiumContractCatalog? contracts = null, CharacterStatComputer? stats = null,
     DfoServer.Network.Projection.Inventory.InventoryProjection? inventory = null, TimeProvider? time = null,
     GuildProjection? guild = null,
-    DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null) : IConnectionProtocol
+    DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -31,7 +31,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (contracts is not null)
         {
             var cubeService = new DfoServer.Game.Inventory.Services.CubeContractService(contracts);
-            context.Premiums = new(context, cubeService, stats ?? throw new InvalidOperationException("契约缺少属性投影"), time);
+            context.Premiums = new(context, cubeService, stats ?? throw new InvalidOperationException("契约缺少属性投影"), time, devil, inventory);
             cubeConsumption = new(context, cubeService, inventory ?? throw new InvalidOperationException("契约缺少库存投影"), log, time);
         }
         var elevator = new DungeonElevatorProjection(context, log);

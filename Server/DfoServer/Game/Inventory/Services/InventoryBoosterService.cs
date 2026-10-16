@@ -25,11 +25,11 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         var plan = result.Plan!;
         var destinations = plan.After.Items.Where(item => item.Core.ItemId == reward.ItemId &&
             item.Core.Count - PriorCount(item) > 0).ToArray();
-        // ACK27只有一个普通物品记录；在提交前确认本次奖励可完整表达，失败保留源和全部资产。
-        if (destinations.Length != 1 || destinations[0].Position.List != InventoryListType.Main ||
-            destinations[0].Core.Count - PriorCount(destinations[0]) != reward.Count)
+        // ACK27展示首件；全部实例通过既有NOTI14差量同步，双倍装备不能挤进同一个UID。
+        if (destinations.Length == 0 || destinations.Any(item => item.Position.List != InventoryListType.Main) ||
+            destinations.Sum(item => item.Core.Count - PriorCount(item)) != reward.Count)
             return InventoryResult.Reject(4);
-        receipt = new(request.Slot, destinations[0].Position, reward.ItemId, reward.Count);
+        receipt = new(request.Slot, destinations[0].Position, reward.ItemId, destinations[0].Core.Count - PriorCount(destinations[0]));
         return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) };
 
         int PriorCount(InventoryItem item)
@@ -173,6 +173,14 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             return InventoryResult.Reject(4);
         // 标准消耗释放源格后再规划所有奖励；全包、钱包超限等失败均保留整批礼包。
         var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.Value, request.Count).Plan!.After;
+        if (lottery && boosters.AllowsDevilDouble(source.Core.ItemId) &&
+            DevilContractPolicy.TryConsume(paid, 1, DevilContractPolicy.LotteryAllowance(paid, now), now, out var doubled))
+        {
+            // 同一随机结果双倍发放；额度、源物品、全部奖励与UID一起原子提交。
+            try { foreach (int id in totals.Keys.ToArray()) totals[id] = checked(totals[id] * 2); }
+            catch (OverflowException) { return InventoryResult.Reject(4); }
+            paid = doubled;
+        }
         foreach (var rewards in totals.GroupBy(pair => CurrencyWallet.RewardKind(pair.Key)))
         {
             if (rewards.Key is not { } kind)

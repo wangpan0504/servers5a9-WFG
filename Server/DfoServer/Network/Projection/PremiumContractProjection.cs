@@ -10,7 +10,8 @@ namespace DfoServer.Network.Projection;
 
 // 这里只记录已下发视图；账号期限和角色选择始终来自Session的正式快照。
 internal sealed class PremiumContractProjection(GameConnectionContext context, CubeContractService cubes,
-    CharacterStatComputer stats, TimeProvider? time = null)
+    CharacterStatComputer stats, TimeProvider? time = null, DevilContractService? devil = null,
+    Inventory.InventoryProjection? inventory = null)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     ImmutableSortedDictionary<int, long>? announced;
@@ -19,12 +20,13 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
     long epoch = -1;
     (bool Growth, sbyte Cube)? announcedEffects;
     long effectsEpoch = -1;
+    (long Epoch, byte Percent)? announcedStamina;
 
     public async Task ContractsAsync(Character character, DateTimeOffset? frozenAt = null,
         Func<bool>? guard = null, IReadOnlyCollection<int>? resetTypes = null)
     {
         var now = frozenAt ?? clock.GetUtcNow();
-        var active = character.Inventory.AccountWallet.PremiumContracts.Where(row => row.Value > now.ToUnixTimeSeconds()).ToImmutableSortedDictionary();
+        var active = DevilContractPolicy.ClientContracts(character.Inventory.AccountWallet).Where(row => row.Value > now.ToUnixTimeSeconds()).ToImmutableSortedDictionary();
         var previous = announced;
         long currentEpoch = context.Session.SelectionEpoch;
         bool selectionChanged = contractsEpoch != currentEpoch;
@@ -49,11 +51,19 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
 
     public async Task RefreshAsync()
     {
+        var giftCharacter = context.Owner.Execute(() => context.Session.Ready ? context.Session.Selected : null);
+        if (devil is not null && inventory is not null && giftCharacter is not null &&
+            DevilContractService.NeedsGift(giftCharacter.Inventory, clock.GetUtcNow()))
+        {
+            var gift = context.Session.PlanAndCommitInventory(character => devil.DailyGift(character, clock.GetUtcNow()), requireTown: false);
+            await inventory.RefreshAsync(context, gift);
+        }
         var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.Ready, context.Session.SelectionEpoch));
         if (!captured.Ready || captured.Selected is not { } character) return;
         bool Guard() => context.Owner.Execute(() => context.Session.SelectionEpoch == captured.SelectionEpoch &&
             ReferenceEquals(context.Session.Selected, character));
         long now = clock.GetUtcNow().ToUnixTimeSeconds();
+        await StaminaAsync(character, Guard);
         // 56/58及已有玩法继续在各自原包序刷新；不能因任意请求把过期会员通知插入普通副本ACK前后。
         bool changed = announced is null || new[] { 84, 97 }.Any(type =>
             announced.GetValueOrDefault(type) != (character.Inventory.AccountWallet.ContractExpiry(type) > now ?
@@ -61,6 +71,16 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
         if (changed)
             await ContractsAsync(character, guard: Guard);
         else await SelectionAsync(character, now, Guard);
+    }
+
+    public async Task StaminaAsync(Character character, Func<bool>? guard = null)
+    {
+        if (character.Inventory.StaminaUntil <= 0 && announcedStamina is not { Percent: < 100 }) return;
+        var stamina = (context.Session.SelectionEpoch, StaminaRecoveryService.Percent(character.Inventory, clock.GetUtcNow()));
+        if (announcedStamina == stamina) return;
+        bool sent = false;
+        await context.Notify(NotiPacketType.STAMINA, [stamina.Item2], "stamina_natural_recovery", () => sent = guard?.Invoke() ?? true);
+        if (sent) announcedStamina = stamina;
     }
 
     async Task SelectionAsync(Character character, long now, Func<bool>? guard)

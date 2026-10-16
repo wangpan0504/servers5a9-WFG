@@ -92,6 +92,8 @@ CREATE TABLE characters(
     equipment_slot_flags INTEGER NOT NULL DEFAULT 0 CHECK(equipment_slot_flags BETWEEN 0 AND 255),
     emotion INTEGER NOT NULL DEFAULT 0 CHECK(emotion BETWEEN 0 AND 32767),
     avatar_expansion INTEGER NOT NULL DEFAULT 105 CHECK(avatar_expansion BETWEEN 0 AND 315 AND avatar_expansion%7=0),
+    devil_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(devil_usage) AND json_type(devil_usage)='array'),
+    stamina_until INTEGER NOT NULL DEFAULT 0 CHECK(stamina_until>=0),
     UNIQUE(account,slot)
 );
 

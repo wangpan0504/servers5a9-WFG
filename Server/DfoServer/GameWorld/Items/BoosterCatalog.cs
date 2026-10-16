@@ -10,7 +10,8 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record BoosterReward(int ItemId, long Weight, int Count);
 internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewards);
 internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, string? PendingRule = null,
-    BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default, bool Lottery = false)
+    BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default, bool Lottery = false,
+    bool NpcPocketPot = false)
 {
     public bool Available => PendingRule is null && (Pools.Length != 0 || Selection is not null || !PackageRewards.IsDefaultOrEmpty);
 }
@@ -20,6 +21,11 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
     readonly ConcurrentDictionary<int, BoosterDefinition> definitions = new();
     // 契约在获取时生效，需要账号期限事务，不能作为普通消耗品发到背包。
     public FrozenSet<int> DirectActivationItems { get; } = ActivationItems(archive);
+    public bool AllowsDevilDouble(int itemId) => stackable.TryGetValue(itemId, out string? path) &&
+        !path.StartsWith("event/", StringComparison.OrdinalIgnoreCase) &&
+        !path.StartsWith("quest/", StringComparison.OrdinalIgnoreCase) &&
+        !path.StartsWith("ect/event", StringComparison.OrdinalIgnoreCase) &&
+        !path.StartsWith("ect/quest", StringComparison.OrdinalIgnoreCase) && Get(itemId) is { Lottery: true, NpcPocketPot: true };
 
     public BoosterDefinition Get(int itemId) => definitions.GetOrAdd(itemId, id => stackable.TryGetValue(id, out string? path)
         ? Parse(archive.ReadText("stackable/" + path)) : new([], "非礼包物品"));
@@ -59,7 +65,10 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 else
                     rewards.Add(new(id, weight, count));
             return rewards.Sum(row => row.Weight) > 0
-                ? new([new(1, rewards.ToImmutable())], Lottery: true) : new([], "袖珍罐总权重为零");
+                ? new([new(1, rewards.ToImmutable())], Lottery: true,
+                    // 当前PVF没有独立契约资格字段；只认五种NPC系列的完整命名，不把任意罐/礼盒按类型放行。
+                    NpcPocketPot: Regex.IsMatch(PvfScript.Section(text, "name"), @"^\s*`[土火木水金]罐的(?:高级)?袖珍罐(?:\s|\()"))
+                : new([], "袖珍罐总权重为零");
         }
         if (type == "usable cera package")
         {

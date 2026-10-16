@@ -9,9 +9,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 // 商品、扣点券及资源明确声明的契约或实物奖励在同一个库存计划提交。
 internal sealed partial class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null)
+    GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null)
 {
-    static readonly string[] UnsupportedSections = ["selectable character premium", "charac premium package"];
     readonly GameDebugSettings debug = debugSettings ?? new();
     // 仅当前服务实例的调试开关；每次购买冻结一次状态，不改变其它发奖入口。
     public bool IgnoreAbsoluteExpiration
@@ -48,13 +47,33 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         InventoryItem? nameTag = null;
         ushort characterSlots = before.AccountWallet.CharacterSlotCapacity;
         ushort cargoCapacity = before.CargoCapacity;
+        var serviceWallet = before.AccountWallet;
+        var serviceInventory = before;
         foreach (var requested in request.Items)
         {
             var product = shop.Product(requested.CommodityId);
-            if (product is null || product.Count <= 0 || UnsupportedSections.Contains(product.Section) ||
+            if (product is null || product.Count <= 0 ||
                 requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0 || requested.RelatedItemId != 0 || requested.RelatedSlot != 0)
                 return InventoryResult.Reject(17);
-            if (!AllowsReward(product.ItemId)) return InventoryResult.Reject(17);
+            bool devilProduct = product.Section is "selectable character premium" or "charac premium package";
+            if (devilProduct)
+            {
+                int[]? slots = product.Section == "selectable character premium" ? [product.ContractType - 580] :
+                    devil?.Catalog.PackageSlots.GetValueOrDefault(product.ItemId);
+                if (slots is null || slots.Length == 0 || slots.Any(slot => slot is < 0 or > 7) || product.DurationDays <= 0 ||
+                    slots.Contains(2) && devil is null) return InventoryResult.Reject(17);
+                foreach (int slot in slots)
+                {
+                    bool active = DevilContractPolicy.Expiry(serviceWallet, slot) > now.ToUnixTimeSeconds();
+                    if (slot == 1) serviceInventory = DevilContractPolicy.RenewLottery(serviceInventory, now, active);
+                    if (slot == 0 && serviceWallet.ContractExpiry(58) > serviceWallet.ContractExpiry(580))
+                        serviceWallet = serviceWallet with { Contracts = serviceWallet.PremiumContracts.SetItem(580, serviceWallet.ContractExpiry(58)) };
+                    try { serviceWallet = serviceWallet.ActivateContract(580 + slot, (long)product.DurationDays * 86400, now); }
+                    catch (OverflowException) { return InventoryResult.Reject(17); }
+                    if (serviceWallet.ContractExpiry(580 + slot) > int.MaxValue) return InventoryResult.Reject(17);
+                }
+            }
+            else if (!AllowsReward(product.ItemId)) return InventoryResult.Reject(17);
 
             if (product.Section == "avatar")
             {
@@ -74,7 +93,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             {
                 if (requested.PaymentMode != 0 || product.CeraPrice < 0) return InventoryResult.Reject(17);
                 total += product.CeraPrice;
-                var template = CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
+                var template = !devilProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
                 if (template is { CharacterSlotMaximum: > 0 })
                 {
@@ -115,7 +134,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                             InventoryRewardGrantService.Create(visualTemplate, utcNow: now) with { ExpireTime = (int)expires });
                 }
 
-                else rewards.Add(new(product.ItemId, product.Count));
+                else if (!devilProduct) rewards.Add(new(product.ItemId, product.Count));
             }
             if (total > int.MaxValue || gold > int.MaxValue || winPoints > int.MaxValue)
                 return InventoryResult.Reject(17);
@@ -156,7 +175,17 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             overflow = overflow.AddRange(grant.Plan!.OverflowItems);
         }
 
-        var after = grant.Plan!.After;
+        var after = grant.Plan!.After with { DevilUses = serviceInventory.DevilUses };
+        // 只合并本次魔王子项，保留普通商品附赠激活的其他契约。
+        foreach (var contract in serviceWallet.PremiumContracts.Where(pair => DevilContractPolicy.IsService(pair.Key)))
+            after = after with { AccountWallet = after.AccountWallet with { Contracts = after.AccountWallet.PremiumContracts.SetItem(contract.Key, contract.Value) } };
+        if (devil is not null && DevilContractService.NeedsGift(after, now))
+        {
+            var gift = devil.DailyGift(character with { Inventory = after }, now);
+            if (!gift.Accepted) return gift;
+            after = gift.Plan!.After;
+            overflow = overflow.AddRange(gift.Plan.OverflowItems);
+        }
         if (nameTag is not null)
             after = after with { Items = after.Items.Where(item => item.Position != nameTag.Position).Append(nameTag).ToImmutableArray() };
         after = after with { AccountWallet = after.AccountWallet with { CharacterSlotCapacity = characterSlots } };

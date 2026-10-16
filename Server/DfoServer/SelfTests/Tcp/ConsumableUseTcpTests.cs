@@ -92,7 +92,13 @@ internal static class ConsumableUseTcpTests
             peer.Expect(0, 38); peer.Expect(0, 37); peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id) is [[1L]],
                 "药剂成功后当前房间真实死亡事务和完整回应可继续，不借切房重置恢复连接");
-            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+            peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); peer.Expect(0, 21);
+            peer.Expect(0, 4, [10]); peer.Barrier();
+            That(fixture.Query("SELECT stamina_until > 0 FROM characters WHERE id=$p0", peer.Id) is [[1L]], "撤退回城持久化虚弱并同步10%状态");
+            peer.Send(9, [1, 0]); peer.Expect(1, 9, [0, 19, 0]); peer.Barrier();
+            peer.Send(9, [0, 0]); That(peer.Expect(1, 9).Body[0] == 1, "低等级按PVF零金币价格正常恢复");
+            peer.Expect(0, 4, [100]); peer.Barrier();
+            That(fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0", peer.Id) is [[0L]], "CMD9恢复清除持久虚弱，不用免费契约兜底扣费");
         }
 
         string Assets() => fixture.Snapshot() + fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +

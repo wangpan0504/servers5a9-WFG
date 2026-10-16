@@ -83,6 +83,19 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
                         if (value is < 0 or >= 100) throw new InvalidDataException("任务掉落随机值越界");
                         if (value < rate) rolled++;
                     }
+                // 本版契约说明限定任务栏物品；PVF未给倍率，沿用参考逻辑的期望+50%，不改变普通材料掉落。
+                if (rolled > 0 && resources.Items[row.ItemId].Kind == ItemKind.Quest &&
+                    DevilContractPolicy.Expiry(character.Inventory.AccountWallet, 2) > now.ToUnixTimeSeconds())
+                {
+                    int extra = rolled / 2;
+                    if (rolled % 2 != 0)
+                    {
+                        int value = draw(2);
+                        if (value is < 0 or >= 2) throw new InvalidDataException("契约任务掉落随机值越界");
+                        if (value == 0) extra++;
+                    }
+                    rolled = checked(rolled + extra);
+                }
                 int count = checked((int)Math.Min(rolled,limit < 0 ? rolled : Math.Max(0,limit - held)));
                 ushort error = 0;
                 if (count > 0)

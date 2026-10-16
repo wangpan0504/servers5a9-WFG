@@ -221,10 +221,10 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(PremiumServices.ContainsKey(56) && PremiumServices.ContainsKey(58),
             "统一契约列表包含56/58的有效期限或显式清除值，不覆盖22/27");
         TestCheck.That(DevilService0.Length == 77 && DevilService0[0] == 1 && U16(DevilService0, 1) == 1 &&
-            DevilService0.AsSpan(3, 6).IndexOfAnyExcept((byte)0) == -1 && DevilService0[13] <= 10 &&
-            DevilService0.AsSpan(14).IndexOfAnyExcept((byte)0) == -1 &&
-            (U32(DevilService0, 9) > 0) == (PremiumServices[58] > 0),
-            "魔王服务0同步有效期限及真实次数，其他七项服务保持未启用");
+            DevilService0.AsSpan(3, 2).IndexOfAnyExcept((byte)0) == -1 && DevilService0[13] <= 10 &&
+            Enumerable.Range(0, 8).All(slot => DevilService0.AsSpan(5 + slot * 9, 4).IndexOfAnyExcept((byte)0) == -1) &&
+            Enumerable.Range(0, 8).Any(slot => U32(DevilService0, 9 + slot * 9) > 0) == (PremiumServices[58] > 0),
+            "魔王八项期限独立投影，58概览与至少一项有效服务一致，黄金牌次数不超过10");
     }
     public void Barrier()
     {

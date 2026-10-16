@@ -172,6 +172,13 @@ internal static class TcpRegressionTests
         ("cash-shop", CashShopTcpTests.RunAsync),
         ("name-tag", NameTagTcpTests.RunAsync),
         ("character-slots", CharacterSlotsTcpTests.RunAsync),
+        ("devil-contract", DevilContractTcpTests.RunAsync),
+        ("devil-quest", (_, _, resources) =>
+        {
+            QuestDropTests.RunCore();
+            QuestDropTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("database-schema", (_, _, _) => { DatabaseSchemaTests.Run(); return Task.CompletedTask; }),
         ("cera-package", CeraPackageTcpTests.RunAsync),
         ("premium-contract", PremiumContractTcpTests.RunAsync),

@@ -377,8 +377,16 @@ internal static class DatabaseSchemaTests
             ChangeReceiptDefinition(db, table, sql => sql.Replace("item_uid>0", "item_uid BETWEEN 1 AND 2147483647", StringComparison.Ordinal));
     }
 
+    static void RewindDevilServices(SqliteConnection db)
+    {
+        foreach (string column in new[] { "devil_usage", "stamina_until" })
+            if (Query(db, "SELECT count(*) FROM pragma_table_info('characters') WHERE name='" + column + "'") is 1L)
+                Execute(db, "ALTER TABLE characters DROP COLUMN " + column);
+    }
+
     static void RewindQuestDungeonAlternatives(SqliteConnection db)
     {
+        RewindDevilServices(db);
         const string table = "character_quest_completion_receipts";
         if (Query(db,"SELECT sql FROM sqlite_schema WHERE name='"+table+"'") is not string sql ||
             !sql.Contains("condition_type IN(1,3,45)",StringComparison.Ordinal)) return;
@@ -1789,6 +1797,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RewindDevilServices(db);
                 if (oldVersion < 46) RewindQuestDungeonAlternatives(db);
                 if (oldVersion < 45)
                 {

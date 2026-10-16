@@ -24,6 +24,8 @@ internal enum InventoryListType : byte
 
 internal sealed record AccountCargoState(long Revision = 0, ushort Capacity = 0, int Gold = 0);
 
+internal sealed record DevilServiceUsage(byte Slot, int Day, byte Used, Guid InstanceId = default, byte Allowance = 0);
+
 internal readonly record struct InventorySlot(InventoryListType List, short Index);
 internal sealed record InventoryItem(long Uid, InventorySlot Position, ItemCore Core)
 {
@@ -52,6 +54,8 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public AccountWallet AccountWallet { get; init; } = AccountWallet.Empty;
     public CubeContractState CubeContract { get; init; } = CubeContractState.Empty;
     public ushort AvatarExpansion { get; init; } = 105;
+    public ImmutableArray<DevilServiceUsage> DevilUses { get; init; } = [];
+    public long StaminaUntil { get; init; }
     public ushort CargoCapacity { get; init; } = 8;
     public AccountCargoState AccountCargo { get; init; } = new();
     public ImmutableArray<ShopPurchaseCount> ShopPurchases { get; init; } = [];
@@ -62,6 +66,9 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
         if (AvatarExpansion > 315 || AvatarExpansion % 7 != 0) throw new InvalidDataException("装扮栏扩展值无效");
         AccountWallet.Validate();
         CubeContract.Validate();
+        if (StaminaUntil < 0 || DevilUses.IsDefault || DevilUses.Any(row => row.Slot > 7 || row.Day < 0 || row.Allowance > 30) ||
+            DevilUses.Select(row => row.Slot).Distinct().Count() != DevilUses.Length)
+            throw new InvalidDataException("魔王契约次数账本无效");
         EpicPieces.Validate();
         if (ShopPurchases.IsDefault || ShopPurchases.Any(row => row.NpcId < 0 || row.ItemId <= 0 || row.Count <= 0 || row.Day < 0) ||
             ShopPurchases.Select(row => (row.NpcId, row.ItemId, row.AccountWide, row.ResetDaily)).Distinct().Count() != ShopPurchases.Length)

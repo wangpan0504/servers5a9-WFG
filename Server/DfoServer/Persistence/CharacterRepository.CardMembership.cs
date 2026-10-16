@@ -47,8 +47,17 @@ internal sealed partial class CharacterRepository
         query.Parameters.AddWithValue("$day",day);
         query.CommandText = "SELECT used FROM character_gold_card_uses WHERE character_id=$id AND account=$account AND service_day=$day";
         int used = query.ExecuteScalar() is long value ? checked((int)value) : 0;
-        return new(wallet.ContractExpiry(CardMembership.BlackDiamondType), wallet.ContractExpiry(CardMembership.DevilContractType),
-            wallet.Revision,day,used);
+        query.CommandText = "SELECT devil_usage FROM characters WHERE id=$id AND account=$account";
+        var devilUses = System.Text.Json.JsonSerializer.Deserialize<Game.Inventory.Models.DevilServiceUsage[]>((string)query.ExecuteScalar()!);
+        return new(wallet.ContractExpiry(CardMembership.BlackDiamondType), Game.Inventory.Services.DevilContractPolicy.Expiry(wallet, 0),
+            wallet.Revision,day,used)
+        {
+            DevilServiceExpiries = System.Collections.Immutable.ImmutableArray.CreateRange(
+                Enumerable.Range(0, 8).Select(slot => Game.Inventory.Services.DevilContractPolicy.Expiry(wallet, slot))),
+            DevilServiceUsed = System.Collections.Immutable.ImmutableArray.CreateRange(Enumerable.Range(0, 8)
+                .Select(slot => slot == 0 ? checked((byte)used) : Game.Inventory.Services.DevilContractPolicy.ClientUsed(
+                    devilUses!.SingleOrDefault(row => row.Slot == slot && row.Day == day))))
+        };
     }
 
     static void GrantAccountBlackDiamondFatigue(SqliteConnection db, SqliteTransaction tx, string account, ushort? committedCharacter = null)

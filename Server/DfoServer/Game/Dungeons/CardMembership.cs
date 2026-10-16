@@ -13,6 +13,8 @@ internal sealed record CardMembership(long BlackDiamondExpires = 0, long GoldCar
 {
     public const int BlackDiamondType = 56;
     public const int DevilContractType = 58;
+    public ImmutableArray<long> DevilServiceExpiries { get; init; } = [];
+    public ImmutableArray<byte> DevilServiceUsed { get; init; } = [];
     // 仅兼容旧本地冻结回执；不装载或产生回归玩家资格。
     [JsonPropertyName("ReturningPlayerExpires")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]

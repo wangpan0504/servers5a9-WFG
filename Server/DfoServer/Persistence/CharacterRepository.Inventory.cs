@@ -260,7 +260,7 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion
+            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,stamina_until=$stamina
             WHERE id=$id AND account=$account AND revision=$revision;
             """;
         command.Parameters.AddWithValue("$id", expected.Id);
@@ -269,6 +269,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$gold", (long)plan.After.Gold);
         command.Parameters.AddWithValue("$expansion", plan.After.Expansion);
         command.Parameters.AddWithValue("$avatarExpansion", plan.After.AvatarExpansion);
+        command.Parameters.AddWithValue("$devil", System.Text.Json.JsonSerializer.Serialize(plan.After.DevilUses));
+        command.Parameters.AddWithValue("$stamina", plan.After.StaminaUntil);
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("Character revision or owner changed");
         if (plan.Before.CubeContract != plan.After.CubeContract)
@@ -327,7 +329,7 @@ internal sealed partial class CharacterRepository
             return true;
         if (left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
-            !left.AccountWallet.Same(right.AccountWallet) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
+            !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
             left.Items.Length != right.Items.Length)
             return false;
@@ -344,13 +346,15 @@ internal sealed partial class CharacterRepository
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$id", characterId);
         command.CommandText = "SELECT c.inventory_expansion,c.gold,c.revive_coins,c.win_points,c.gold_carry_limit,c.auction_gold_limit,c.account,c.cargo_capacity," +
-            "coalesce(p.selected,0),coalesce(p.cube_type,-1),c.avatar_expansion FROM characters c LEFT JOIN cube_premium p ON p.charac_no=c.id WHERE c.id=$id";
+            "coalesce(p.selected,0),coalesce(p.cube_type,-1),c.avatar_expansion,c.devil_usage,c.stamina_until FROM characters c LEFT JOIN cube_premium p ON p.charac_no=c.id WHERE c.id=$id";
         ushort expansion, capacity;
         uint gold;
         int coins, wins, carry, auction;
         string account;
         CubeContractState cubeContract;
         ushort avatarExpansion;
+        ImmutableArray<DevilServiceUsage> devilUses;
+        long staminaUntil;
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read())
@@ -365,6 +369,8 @@ internal sealed partial class CharacterRepository
             capacity = checked((ushort)reader.GetInt32(7));
             cubeContract = new(checked((byte)reader.GetInt32(8)), checked((sbyte)reader.GetInt32(9)));
             avatarExpansion = checked((ushort)reader.GetInt32(10));
+            devilUses = System.Text.Json.JsonSerializer.Deserialize<ImmutableArray<DevilServiceUsage>>(reader.GetString(11));
+            staminaUntil = reader.GetInt64(12);
         }
 
         shared ??= ReadAccountInventory(db, account, transaction);
@@ -376,7 +382,7 @@ internal sealed partial class CharacterRepository
         var inventory = new InventorySnapshot(items, expansion, gold)
         {
             ReviveCoins = coins, WinPoints = wins, GoldCarryLimit = carry, AuctionGoldLimit = auction,
-            AccountWallet = shared.Wallet, CubeContract = cubeContract, AvatarExpansion = avatarExpansion, CargoCapacity = capacity, AccountCargo = shared.Cargo,
+            AccountWallet = shared.Wallet, CubeContract = cubeContract, AvatarExpansion = avatarExpansion, DevilUses = devilUses, StaminaUntil = staminaUntil, CargoCapacity = capacity, AccountCargo = shared.Cargo,
             ShopPurchases = purchases, EpicPieces = shared.Pieces
         };
         inventory.Validate();

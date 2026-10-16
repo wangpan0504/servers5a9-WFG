@@ -20,7 +20,7 @@ internal sealed class CashShopCatalog
         ("item event second category", 9, 5), ("community item", 9, 5), ("communityitem", 9, 5),
         ("regular item", 9, 5), ("regularitem", 9, 5),
         ("item mod or ext", 9, 5), ("privilege service", 9, 5),
-        ("selectable character premium", 9, 5), ("charac premium package", 9, 5),
+        ("selectable character premium", 9, 5), ("charac premium package", 9, 2),
         ("package", 11, 4), ("regular package", 11, 4), ("community package", 11, 4),
         ("avatar dye", 9, 5), ("visual", 8, 5), ("avatar", 6, 5)
     ];
@@ -68,6 +68,7 @@ internal sealed class CashShopCatalog
                 if (!Number(values[offset + 1], out int item) || item <= 0)
                     continue;
                 int count = Number(values[offset + 2], out int parsedCount) && parsedCount > 0 ? parsedCount : 1;
+                if (section is "selectable character premium" or "charac premium package") count = 1;
                 if (!Number(values[offset + priceOffset], out int price) || price < (section == "avatar" ? -1 : 0))
                 {
                     throw new InvalidDataException($"商城商品价格无效: section={section}, commodity={commodity}");
@@ -78,7 +79,7 @@ internal sealed class CashShopCatalog
                 int durationDays = section == "visual"
                     ? Number(values[offset + 3], out int parsedDays) && parsedDays > 0 ? parsedDays : 30
                     : section == "charac premium package" && Number(values[offset + 7], out parsedDays) && parsedDays > 0 ? parsedDays : 0;
-                int contractType = section == "selectable character premium" && Number(values[offset + 2], out int slot) && slot >= 0
+                int contractType = section == "selectable character premium" && Number(values[offset + 2], out int slot) && slot is >= 0 and < 8
                     ? checked(580 + slot) : 0;
                 if (section == "selectable character premium" && Number(values[offset + 3], out int selectableDays) && selectableDays > 0)
                     durationDays = selectableDays;

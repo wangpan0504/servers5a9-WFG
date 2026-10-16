@@ -28,6 +28,7 @@ internal static class CharacterSlotsTcpTests
             Reject<InvalidDataException>(() => repository.Create(owner, new("Denied33", resources.Towns.Room, resources.Towns.InitialReturn)), "默认32栏不越界建角");
         }
         // 真正恢复v46缺列与旧CHECK；不只修改user_version伪造旧库。
+        fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until");
         fixture.Sql("ALTER TABLE account_wallets DROP COLUMN character_slots");
         fixture.Sql("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql,'CHECK(slot BETWEEN 0 AND 61)','CHECK(slot BETWEEN 0 AND 31)') WHERE name='characters'; PRAGMA writable_schema=OFF; PRAGMA schema_version=9000; PRAGMA user_version=46");
         await fixture.StartAsync();

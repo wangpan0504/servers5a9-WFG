@@ -23,7 +23,7 @@ internal static class PremiumPackets
         long now = (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
-        var active = wallet.PremiumContracts.Where(pair => pair.Value > now)
+        var active = DfoServer.Game.Inventory.Services.DevilContractPolicy.ClientContracts(wallet).Where(pair => pair.Value > now)
             .OrderBy(pair => pair.Key).ToList();
         foreach (int type in resetTypes ?? [])
         {

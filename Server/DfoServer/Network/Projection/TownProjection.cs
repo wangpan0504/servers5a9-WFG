@@ -14,11 +14,12 @@ namespace DfoServer.Network.Projection;
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
-    IGuildPermitDeliverer? guildPermits = null)
+    IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
     {
+        if (devil is not null) context.Session.InitializeDevilContract(devil, timer.GetUtcNow());
         titles?.PrepareInitialization(context);
         adventure?.Prepare(context);
         var settingReceipt = settings?.Capture(context);
@@ -106,6 +107,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.USER_AREA, TownPackets.Position(c, true), "area", canSend);
         if (transition)
             await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c), "transition", canSend);
+        if (context.Premiums is { } premiums) await premiums.StaminaAsync(c, canSend);
         var completed = DfoServer.Game.Quests.QuestEligibility.Completed(c);
         if (towns.IsRoom(c.Position, completed) && (c.Return ?? towns.DefaultReturn(c.Position, completed)) is { } back)
             await context.Notify(NotiPacketType.PREV_VILLAGE, TownPackets.RoomReturnTown(back), "room_return_town", canSend);
@@ -197,6 +199,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // 城镇场景绑定后重新投影当前任务，不依赖重新选角。
         if (quests is not null)
             await quests.RefreshAsync(context, receipt.Character, CanSend);
+        if (context.Premiums is { } premiums) await premiums.StaminaAsync(receipt.Character, CanSend);
         context.Owner.Execute(() =>
         {
             if (CanSend()) Join(context);

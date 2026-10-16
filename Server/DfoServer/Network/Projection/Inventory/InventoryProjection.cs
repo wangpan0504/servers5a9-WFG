@@ -128,6 +128,10 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                         DateTimeOffset.UtcNow.ToUnixTimeSeconds()), "expert_contract_committed", CanSend);
             }
         }
+        if (!plan.Before.DevilUses.SequenceEqual(current.Inventory.DevilUses) ||
+            Enumerable.Range(0, 8).Any(slot => DevilContractPolicy.Expiry(plan.Before.AccountWallet, slot) !=
+                DevilContractPolicy.Expiry(current.Inventory.AccountWallet, slot)))
+            await DungeonCardMembershipProjection.RefreshAsync(context, includeOverview: false);
         if (!plan.OverflowItems.IsEmpty)
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "overflow_mail_committed", CanSend);
         if (plan.Before.CargoCapacity != current.Inventory.CargoCapacity)

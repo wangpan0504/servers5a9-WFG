@@ -7,7 +7,7 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     sealed record UsedConsumable(ConsumableUseRequest Request, long SourceUid, long Timestamp, int DurationMilliseconds);
-    readonly UsedConsumable?[] usedConsumables = new UsedConsumable?[2];
+    readonly Dictionary<int, UsedConsumable> usedConsumables = new();
     InventoryPlan? pendingConsumableUse;
 
     bool CanUseConsumable() => pendingRental is null && !HasPendingTownQuestCommit && Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
@@ -28,13 +28,17 @@ internal sealed partial class GameSession
         ConsumableUseResult Reject(string reason) => new(ConsumableUseOutcome.Rejected, reason, Guard: captured.Guard);
         if (activityBlocked || captured.Character is not { } character) return Reject("invalid-state");
         if (!service.TryDefinition(request.ItemId, out var definition)) return Reject("unsupported-template");
+        if (definition.SummonsApc && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("summon_requires_dungeon");
         var preliminary = service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds());
         return owner.Execute(() =>
         {
             if (ClosedUse(service, request) is { } repeated) return repeated;
             if (!CanPublishConsumable(captured.Guard) || !CanUseConsumable())
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
-            var previous = usedConsumables[definition.CoolGroup];
+            if (definition.SummonsApc && (formalDungeon?.CharacterDead != false ||
+                formalDungeon.Run.Phase != DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon))
+                return Reject("summon_requires_living_dungeon_character");
+            var previous = usedConsumables.GetValueOrDefault(definition.CoolGroup);
             if (previous is not null && service.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(definition.CoolTime))
             {
                 return Reject("cooldown");
@@ -61,7 +65,7 @@ internal sealed partial class GameSession
     {
         if (pendingConsumableUse is not null) return new(ConsumableUseOutcome.CloseConnection, "commit-unknown");
         // 成功token的歧义不因过房、活动门禁或模板变化消失，必须在任何普通拒绝ACK之前核对。
-        foreach (var previous in usedConsumables)
+        foreach (var previous in usedConsumables.Values)
             if (previous is not null && previous.Request == request &&
                 service.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(previous.DurationMilliseconds))
                 return new(ConsumableUseOutcome.CloseConnection, "ambiguous-repeat") { SourceUid = previous.SourceUid };
@@ -70,7 +74,7 @@ internal sealed partial class GameSession
 
     void ClearConsumableUse()
     {
-        Array.Clear(usedConsumables);
+        usedConsumables.Clear();
         pendingConsumableUse = null;
     }
 }

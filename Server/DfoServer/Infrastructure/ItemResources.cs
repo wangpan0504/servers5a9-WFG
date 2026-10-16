@@ -19,6 +19,7 @@ internal sealed class ItemResources
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
     public CashShopCatalog CashShop { get; }
+    public DevilContractCatalog DevilContracts { get; }
     public MagicBoxCatalog MagicBoxes { get; }
     public PremiumContractCatalog Contracts { get; }
     public RecoveryConsumableCatalog RecoveryConsumables { get; }
@@ -49,7 +50,9 @@ internal sealed class ItemResources
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary());
-        RecoveryConsumables = new(archive, stackable);
+        CashShop = CashShopCatalog.Load(archive);
+        DevilContracts = new(archive, stackable, CashShop);
+        RecoveryConsumables = new(archive, stackable, DevilContracts);
         Enchantments = new(archive, stackable);
         Enhancements = new(archive, stackable, equipment);
         CreatureEggs = new(archive, equipment, Items);
@@ -59,7 +62,6 @@ internal sealed class ItemResources
         RandomOptions = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
-        CashShop = CashShopCatalog.Load(archive);
         MagicBoxes = new(archive, stackable);
         Rental = RentalCatalog.Load(archive);
     }

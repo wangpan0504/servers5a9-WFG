@@ -7,7 +7,7 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-internal sealed class RepairHandler(InventoryRepairService repair, InventoryProjection projection) : IGameCommandModule
+internal sealed class RepairHandler(InventoryRepairService repair, InventoryProjection projection, Infrastructure.ServerLog log) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.REPAIR_EQUIPMENT, Handle, nameof(RepairHandler));
 
@@ -17,6 +17,9 @@ internal sealed class RepairHandler(InventoryRepairService repair, InventoryProj
         var original = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
             context.Session.RepairEquipment(request, repair);
+        if (request.Mode == 1)
+            log.Write("devil_auto_repair", new { Connection = context.Id, result.Accepted, result.Error,
+                Revision = result.Receipt?.Character.Revision });
         bool CanSend() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
             context.Session.SelectionEpoch == original.SelectionEpoch && context.Session.Phase == original.Phase &&
             ReferenceEquals(context.Session.Selected, original.Selected));
