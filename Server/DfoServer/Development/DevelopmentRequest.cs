@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using DfoServer.Game.Characters;
 
@@ -26,13 +27,51 @@ internal enum DevelopmentAction
     Event,
     CashShopExpiration,
     InfiniteFatigue,
-    CashShopUsablePeriod
+    CashShopUsablePeriod,
+    Items,
+    ItemInfo,
+    Wallet,
+    Currency,
+    ItemCategories,
+    ItemSearch,
+    Grant,
+    SetGrant,
+    ItemDelete,
+    ItemClear,
+    Mails,
+    MailDelete,
+    QuestSearch,
+    QuestChain,
+    QuestBatch,
+    ItemAmplify
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
 {
     public DevelopmentEventRequest? Event { get; init; }
-    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | event status/on/off/auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量> | cash-shop-expiration [on|off]（忽略绝对日期，默认on） | cash-shop-usable-period [on|off]（忽略相对期限，默认off） | infinite-fatigue [on|off]（显示满疲劳且不扣点，默认on）。调试开关仅在线。其他账号在命令前加 account <账号>。";
+    // 仅 item 使用：普通装备强化 0–31，其他种类须为 0，由统一创建策略复验。
+    public int Upgrade { get; init; }
+    // 扩展命令的其余参数，按命令在执行入口逐项严格解析。
+    public ImmutableArray<string> Args { get; init; } = [];
+    // 扩展命令：是否需要角色名，以及角色名之后参数个数的范围。
+    static readonly Dictionary<string, (DevelopmentAction Action, bool Named, int Min, int Max)> Extended = new()
+    {
+        ["wallet"] = (DevelopmentAction.Wallet, true, 0, 0),
+        ["currency"] = (DevelopmentAction.Currency, true, 3, 3),
+        ["item-categories"] = (DevelopmentAction.ItemCategories, false, 0, 0),
+        ["item-search"] = (DevelopmentAction.ItemSearch, false, 5, 32),
+        ["grant"] = (DevelopmentAction.Grant, true, 5, 6),
+        ["set-grant"] = (DevelopmentAction.SetGrant, true, 4, 5),
+        ["item-amplify"] = (DevelopmentAction.ItemAmplify, true, 3, 3),
+        ["item-delete"] = (DevelopmentAction.ItemDelete, true, 1, 1),
+        ["item-clear"] = (DevelopmentAction.ItemClear, true, 1, 1),
+        ["mails"] = (DevelopmentAction.Mails, true, 0, 0),
+        ["mail-delete"] = (DevelopmentAction.MailDelete, true, 1, 1),
+        ["quest-search"] = (DevelopmentAction.QuestSearch, true, 0, 32),
+        ["quest-chain"] = (DevelopmentAction.QuestChain, true, 1, 1),
+        ["quest-batch"] = (DevelopmentAction.QuestBatch, true, 1, 1)
+    };
+    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95> | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | event status/on/off/auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量> [强化0-31] | item-info <道具ID> | items <角色> | wallet <角色> | currency <角色> <revive|win|cera|token|happy|rental|*-cube|*-soul> <set|add|sub> <数量> | item-categories | item-search <偏移> <最低等级> <最高等级> <稀有度|*> <分类|*> [关键字] | grant <角色> <道具ID> <数量> <强化> <锻造> <mail|direct> [amp:<类型1-4>:<异次元值>] | set-grant <角色> <套装编号> <强化> <锻造> <mail|direct> [amp:<类型>:<值>] | item-amplify <角色> <容器:位置:UID> <amp:<类型0-4>:<值>> <等级0-31> | item-delete <角色> <容器:位置:UID,…> | item-clear <角色> <容器> | mails <角色> | mail-delete <角色> <邮件ID,…|all> | quest-search <角色> [关键字] | quest-chain <角色> <任务> | quest-batch <角色> <任务,…> | cash-shop-expiration [on|off]（忽略绝对日期，默认on） | cash-shop-usable-period [on|off]（忽略相对期限，默认off） | infinite-fatigue [on|off]（显示满疲劳且不扣点，默认on）。调试开关仅在线。其他账号在命令前加 account <账号>。";
     public static DevelopmentRequest Parse(string line, string defaultAccount)
     {
         if (string.IsNullOrWhiteSpace(line) || line.Length > 512)
@@ -56,6 +95,15 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             if (i != 0) throw new InvalidDataException("活动是全服配置，不能使用account前缀");
             return new(DevelopmentAction.Event, account, "", 0, 0)
                 { Event = DevelopmentEventRequest.Parse(tokens[1..]) };
+        }
+        if (Extended.TryGetValue(op, out var extended))
+        {
+            int start = i + 1 + (extended.Named ? 1 : 0);
+            if (tokens.Length < start || tokens.Length - start < extended.Min || tokens.Length - start > extended.Max)
+                throw new InvalidDataException(Usage);
+            var parsed = new DevelopmentRequest(extended.Action, account, extended.Named ? tokens[i + 1] : "", 0, 0) { Args = [.. tokens[start..]] };
+            parsed.Validate();
+            return parsed;
         }
         DevelopmentRequest request = op switch
         {
@@ -86,6 +134,10 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             "quest-del" when tokens.Length == i + 3 => Numbered(DevelopmentAction.QuestRemove, account, tokens[i + 1], tokens[i + 2]),
             "skill" when tokens.Length == i + 4 => Skilled(account, tokens[i + 1], tokens[i + 2], tokens[i + 3]),
             "gold" when tokens.Length == i + 3 => Numbered(DevelopmentAction.Gold, account, tokens[i + 1], tokens[i + 2]),
+            "items" when tokens.Length == i + 2 => Named(DevelopmentAction.Items, account, tokens[i + 1]),
+            "item-info" when tokens.Length == i + 2 => new(DevelopmentAction.ItemInfo, account, "", Integer(tokens[i + 1]), 0),
+            "item" when tokens.Length == i + 5 => new(DevelopmentAction.Item, account, tokens[i + 1], Integer(tokens[i + 2]), Integer(tokens[i + 3]))
+                { Upgrade = Integer(tokens[i + 4]) },
             "item" when tokens.Length == i + 4 => new(DevelopmentAction.Item, account, tokens[i + 1], Integer(tokens[i + 2]), Integer(tokens[i + 3])),
             _ => throw new InvalidDataException(Usage)
         };
@@ -119,6 +171,21 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
                 throw new InvalidDataException("调试开关无效");
             return;
         }
+        if (Action >= DevelopmentAction.Wallet)
+        {
+            if (Args.IsDefault || Args.Any(arg => arg.Length is 0 or > 400) ||
+                Action is not (DevelopmentAction.ItemCategories or DevelopmentAction.ItemSearch) && !CharacterName.IsValid(Name))
+                throw new InvalidDataException("角色名或参数无效");
+            return;
+        }
+        if (Upgrade is < 0 or > 31 || Upgrade != 0 && Action != DevelopmentAction.Item)
+            throw new InvalidDataException("强化范围0–31，且只用于道具发放");
+        if (Action == DevelopmentAction.ItemInfo)
+        {
+            if (Name.Length != 0 || Primary <= 0 || Secondary != 0)
+                throw new InvalidDataException("道具ID无效");
+            return;
+        }
         if (Action == DevelopmentAction.List)
             return;
         if (!CharacterName.IsValid(Name))
@@ -133,6 +200,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
 
     public bool Writes => Action == DevelopmentAction.Event ? Event?.Operation != "status" :
         Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue ? Primary >= 0 :
+        Action is DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify ||
         Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard;
 
     public CharacterProgressEdit ToProgressEdit()

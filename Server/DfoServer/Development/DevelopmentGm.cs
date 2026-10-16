@@ -17,11 +17,11 @@ internal static partial class DevelopmentGm
     public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find,
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
         InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
-        Game.Events.ServerEventService? events = null)
+        Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null)
     {
         try
         {
-            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events);
+            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events, catalog);
         }
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
         {
@@ -32,11 +32,14 @@ internal static partial class DevelopmentGm
     public static string Execute(ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find, DevelopmentRequest request,
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
         InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
-        Game.Events.ServerEventService? events = null)
+        Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null)
     {
         try
         {
             request.Validate();
+            if (request.Action >= DevelopmentAction.Wallet)
+                return ExecuteExtended(repository, owners, find(request.Account), request, mailbox,
+                    catalog ?? throw new InvalidOperationException("开发GM资源目录未装配"));
             if (request.Action == DevelopmentAction.Event)
             {
                 var state = request.Event!.Execute(events ?? throw new InvalidOperationException("活动服务未装配"));
@@ -68,7 +71,16 @@ internal static partial class DevelopmentGm
             if (request.Action == DevelopmentAction.Item)
                 return SendItem(request, mailbox ?? throw new InvalidOperationException("邮件服务未装配"),
                     items ?? throw new InvalidOperationException("物品资源未装配"));
+            if (request.Action == DevelopmentAction.ItemInfo)
+                return DescribeItem(request.Primary, items ?? throw new InvalidOperationException("物品资源未装配"));
             var live = find(request.Account);
+            if (request.Action == DevelopmentAction.Items)
+            {
+                // 只读：在线时经原 owner 读取（当前角色取已提交的 Selected），离线时拒绝接管取得租约。
+                var character = live is not null ? live.InspectCharacter(request.Name) :
+                    WithLease(owners, request.Account, lease => LoadByName(repository, lease, request.Name));
+                return DescribeInventory(character, items);
+            }
             if (request.Action is DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard)
             {
                 var kind = request.Action switch

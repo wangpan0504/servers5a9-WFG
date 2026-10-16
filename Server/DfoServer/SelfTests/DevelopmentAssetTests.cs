@@ -27,6 +27,10 @@ internal static class DevelopmentAssetTests
         TestCheck.That(current.Inventory.Gold == int.MaxValue && current.Inventory.Items.Length == 4 &&
             current.Inventory.Items.Select(item => item.Uid).Order().SequenceEqual(f.Sender.Inventory.Items.Select(item => item.Uid).Order()),
             "设置金币保留完整实例和UID");
+        foreach (string invalid in new[] { "items", "items Sender extra", "item-info 0", "item-info Sender", "item-info 1 2",
+            "item Sender 18400 1 32", "item Sender 18400 1 -1", "item Sender 18400 1 1 extra" })
+            TestCheck.That(Answer(invalid).StartsWith("ERR "), "GM查看与强化参数严格拒绝: " + invalid);
+        TestCheck.That(Answer("items Sender").StartsWith("ERR "), "离线背包查看遇到在线owner时拒绝接管");
         f.Repository.Create(owner, new("Sibling", current.Position, current.Return));
         var point = current.Position;
         var map = new TownMap("synthetic-gm.map", [new(new(0, 0, 1000, 1000), [], [])], [], false, []);
@@ -44,6 +48,14 @@ internal static class DevelopmentAssetTests
             f.Repository.LoadCharacter(owner, 1).Inventory.Gold == 55, "同账号其他角色的金币不覆盖Selected");
         TestCheck.That(Answer("gold Sender 88", _ => session).StartsWith("OK ") && session.Selected!.Inventory.Gold == 88,
             "在线快照在提交后安装实际金币及revision");
+        snapshot = f.Snapshot();
+        string view = Answer("items Sender", _ => session);
+        TestCheck.That(view.StartsWith("OK ") && view.Contains("\"gold\":88", StringComparison.Ordinal) &&
+            view.Split("\"uid\":").Length - 1 == session.Selected!.Inventory.Items.Length && f.Snapshot() == snapshot,
+            "在线背包查看经原owner读取已提交快照，完整列出实例且不写库");
+        TestCheck.That(Answer("items Sibling", _ => session).Contains("\"gold\":55", StringComparison.Ordinal) && session.Selected!.Inventory.Gold == 88,
+            "同账号其他角色查看读取持久状态");
+        TestCheck.That(Answer("items Receiver", _ => session).StartsWith("ERR ") && f.Snapshot() == snapshot, "背包查看不跨账号");
         session.ReturnToRoster();
         session.Select(0);
         TestCheck.That(session.Selected!.Inventory.Gold == 88, "重新选择角色后恢复已写入的金币");
@@ -83,6 +95,20 @@ internal static class DevelopmentAssetTests
         f.Execute("CREATE TRIGGER fail_gm_mail BEFORE INSERT ON mailbox_attachments WHEN NEW.ordinal=1 BEGIN SELECT RAISE(ABORT,'gm-mail-failure'); END;");
         TestCheck.That(Send("item Receiver 18400 3").StartsWith("ERR ") && f.Snapshot() == snapshot,
             "多装备邮件中途SQL失败回滚整封、全部UID及审计，不发成功提示");
+        f.Execute("DROP TRIGGER fail_gm_mail;");
+        string info = Send("item-info 18400");
+        TestCheck.That(info.StartsWith("OK ") && info.Contains("\"id\":18400", StringComparison.Ordinal) &&
+            info.Contains("\"upgradable\":true", StringComparison.Ordinal) && f.Snapshot() == snapshot, "道具信息只读返回真实模板");
+        TestCheck.That(Send("item-info 2147483647").StartsWith("ERR "), "未知道具信息明确拒绝");
+        TestCheck.That(Send("item Receiver 3175 1 1").StartsWith("ERR ") && f.Snapshot() == snapshot, "非装备拒绝强化参数且不写邮箱");
+        TestCheck.That(Send("item Receiver 18400 1 7").StartsWith("OK "), "装备可按指定强化发放");
+        var upgraded = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now).Entries.MaxBy(row => row.Id)!;
+        TestCheck.That(upgraded.Attachments.Length == 1 && upgraded.Attachments[0].Item.Core.ItemId == 18400 &&
+            upgraded.Attachments[0].Item.Core.Attr == 7 && upgraded.Attachments[0].Item.Core.Value == 999999998,
+            "强化写入统一创建策略的Attr低五位，保留正常品级");
+        string bag = DevelopmentGm.Answer("items Receiver", "receiver", f.Repository, f.Owners, _ => session, service, resources.Items);
+        TestCheck.That(bag.StartsWith("OK ") && bag.Contains(System.Text.Json.JsonSerializer.Serialize(resources.Items.Get(18400).Name), StringComparison.Ordinal),
+            "在线背包查看带出真实模板名称");
         f.Integrity();
         Console.WriteLine($"PASS {TestCheck.Count - before} GM道具邮件真实资源、数量、领取与回滚断言");
     }

@@ -60,13 +60,21 @@ internal static class DevelopmentCommands
             using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             var repository = new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"));
             bool reset = request.Action is DevelopmentAction.Level or DevelopmentAction.Grow or DevelopmentAction.GrowOptions;
-            var resources = request.Action == DevelopmentAction.Item || reset ? new ItemResources(pvf) : null;
-            var mailbox = request.Action == DevelopmentAction.Item ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
+            ItemResources? resources = request.Action is DevelopmentAction.Item or DevelopmentAction.ItemInfo or DevelopmentAction.Items || reset ? new ItemResources(pvf) : null;
+            MailboxService? mailbox = request.Action == DevelopmentAction.Item ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
             var learning = reset ? SkillLearningCatalog.Load(pvf, resources!.Contracts.ExpertSkillLevels) : null;
             var progress = reset ? new CharacterProgressReset(CharacterCatalog.Load(pvf, resources!.Items), learning!, CharacterGrowthCatalog.Load(pvf, learning)) : null;
             var events = request.Action == DevelopmentAction.Event ? new Game.Events.ServerEventService(
                 new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db"))) : null;
-            Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items, progress, events: events));
+            bool extended = request.Action >= DevelopmentAction.Wallet;
+            resources ??= extended ? new ItemResources(pvf) : null;
+            mailbox ??= extended ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
+            var catalog = extended ? new DevelopmentCatalog(pvf, resources!, request.Action is DevelopmentAction.QuestSearch or DevelopmentAction.QuestChain
+                ? GameWorld.Quests.QuestCatalog.Load(pvf) : null) : null;
+            // 离线命令是一次性进程，查询前同步等待索引；在线服务仍走后台构建。
+            if (request.Action is DevelopmentAction.ItemSearch or DevelopmentAction.ItemCategories or DevelopmentAction.SetGrant or DevelopmentAction.QuestSearch)
+                catalog!.Warm(request.Action is not DevelopmentAction.QuestSearch, request.Action is DevelopmentAction.QuestSearch, TimeSpan.FromMinutes(10));
+            Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items, progress, events: events, catalog: catalog));
             return 0;
         }
         catch (IOException)

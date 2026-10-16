@@ -186,6 +186,7 @@ internal static class SelfTestRunner
         ConsumableUseSessionTests.Run(towns, characters, pvf);
         await MailboxTests.RunAsync(towns, characters, itemResources, pvf);
         DevelopmentAssetTests.RunResources(towns, itemResources);
+        DevelopmentGmExtendedTests.RunResources(towns, itemResources, pvf, sharedQuests);
         InventoryBatchTests.Run(itemResources);
         InventoryCoreGrantTests.Run(itemResources);
         SpecialContainerTests.Run(towns, characters, itemResources);

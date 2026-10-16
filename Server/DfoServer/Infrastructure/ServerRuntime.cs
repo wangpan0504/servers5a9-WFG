@@ -120,6 +120,7 @@ internal static class ServerRuntime
         }
         DungeonRoomCatalog? questRooms = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
+        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests);
         IGameCommandModule dungeon;
         IGameCommandModule? settlement = null;
         IGameCommandModule? questReplay = null;
@@ -262,7 +263,7 @@ internal static class ServerRuntime
         string DevelopmentCommand(string line)
         {
             string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
-                mailbox, itemResources.Items, progress, cashShop, debugSettings, events);
+                mailbox, itemResources.Items, progress, cashShop, debugSettings, events, developmentCatalog);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });
             return result;
         }

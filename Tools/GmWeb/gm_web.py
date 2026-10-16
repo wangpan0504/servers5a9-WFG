@@ -127,7 +127,7 @@ def self_check():
     cash_shop_debug = True
     usable_period_debug = False
     infinite_fatigue = True
-    commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2", "account 10000 grow-options 测角", "account 10000 grow 测角 1 2", "cash-shop-expiration", "cash-shop-expiration off", "cash-shop-expiration on", "cash-shop-usable-period", "cash-shop-usable-period on", "cash-shop-usable-period off", "infinite-fatigue", "infinite-fatigue off", "infinite-fatigue on")
+    commands = ("account 10000 list", "account 10000 level 测角 50", "account 10000 gold 测角 12345", "account 10000 item 测角 18400 2", "account 10000 grow-options 测角", "account 10000 grow 测角 1 2", "account 10000 items 测角", "account 10000 item-info 18400", "account 10000 item 测角 18400 1 7", "cash-shop-expiration", "cash-shop-expiration off", "cash-shop-expiration on", "cash-shop-usable-period", "cash-shop-usable-period on", "cash-shop-usable-period off", "infinite-fatigue", "infinite-fatigue off", "infinite-fatigue on")
     listener = socket.socket()
     listener.bind((BIND, 0))
     listener.listen(8)
@@ -157,6 +157,12 @@ def self_check():
                 reply = "OK " + json.dumps({"job": 0, "first": 1, "second": 0, "options": {"baseName": "鬼剑士", "growTypes": [{"value": 0, "label": "鬼剑士", "awakenings": []}, {"value": 1, "label": "剑魂", "awakenings": ["剑圣", "剑神"]}]}}, ensure_ascii=False)
             elif line == "account 10000 grow 测角 1 2":
                 reply = "OK 测角 id=1 grow=33 skills=5 sp=5000 tp=7 已写入。双技能树已重建。"
+            elif line == "account 10000 items 测角":
+                reply = "OK " + json.dumps({"name": "测角", "id": 1, "rev": 3, "gold": 12345, "reviveCoins": 0, "winPoints": 0, "expansion": 24, "cargoCapacity": 8, "items": [{"list": 0, "listName": "Main", "slot": 9, "uid": 7, "id": 3175, "name": "材料", "kind": "Material", "count": 5, "upgrade": 0, "isSealed": False, "expire": 0}]}, ensure_ascii=False)
+            elif line == "account 10000 item-info 18400":
+                reply = "OK " + json.dumps({"id": 18400, "name": "短剑", "kind": "Equipment", "minLevel": 1, "rarity": 0, "stackLimit": 1, "stackable": False, "upgradable": True}, ensure_ascii=False)
+            elif line == "account 10000 item 测角 18400 1 7":
+                reply = "OK 测角 id=1 item=18400 count=1 upgrade=7 mail=2 已发送到该角色邮箱。"
             elif line in ("cash-shop-expiration", "cash-shop-expiration on", "cash-shop-expiration off"):
                 if line.endswith(" on"):
                     cash_shop_debug = True
@@ -202,6 +208,8 @@ def self_check():
         assert 'id="cash-shop-expiration"' in page and 'id="cash-shop-status"' in page
         assert 'id="cash-shop-usable-period"' in page and 'id="cash-shop-period-status"' in page
         assert 'id="infinite-fatigue"' in page and 'id="fatigue-status"' in page
+        assert 'id="item-upgrade"' in page and 'id="item-info"' in page and 'id="inventory"' in page
+        assert 'id="sp"' in page and 'id="contract"' in page and 'id="black-diamond"' in page and 'id="event-status"' in page
         for line in commands:
             req = Request(
                 f"http://{BIND}:{web_port}/api/command",
@@ -213,6 +221,8 @@ def self_check():
             assert body["ok"] and body["text"].startswith("OK "), body
             if "grow-options" in line:
                 assert json.loads(body["text"][3:])["options"]["growTypes"][1]["awakenings"] == ["剑圣", "剑神"]
+            if line.endswith(" items 测角"):
+                assert json.loads(body["text"][3:])["items"][0]["count"] == 5
             if line.startswith("cash-shop-expiration"):
                 assert json.loads(body["text"][3:])["ignoreAbsoluteExpiration"] == (not line.endswith(" off"))
             if line.startswith("cash-shop-usable-period"):

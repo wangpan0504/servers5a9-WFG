@@ -154,6 +154,8 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
         return MailboxError.None;
     }
     public MailboxResult Claim(AccountOwners.Lease owner, Character character, MailboxClaimPlan plan) => store.ClaimMail(owner, character, plan);
+    // 只读查看：不触发过期清理，供开发GM在原 owner 内读取。
+    public MailboxPage Inspect(AccountOwners.Lease owner, ushort characterId, DateTimeOffset now) => store.LoadMailbox(owner, characterId, now.ToUnixTimeSeconds());
     public MailboxResult ChangeState(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, ushort state, DateTimeOffset now) =>
         store.ChangeMailState(owner, characterId, ids, state, now.ToUnixTimeSeconds());
     public MailboxResult Deliver(MailboxDelivery delivery)

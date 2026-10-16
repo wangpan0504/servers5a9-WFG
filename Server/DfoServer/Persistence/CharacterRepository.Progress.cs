@@ -57,8 +57,12 @@ internal sealed partial class CharacterRepository
                 break;
             case CharacterProgressField.QuestAdd:
                 cmd.CommandText = "INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($id,$quest)";
-                cmd.Parameters.AddWithValue("$quest", request.Primary);
-                cmd.ExecuteNonQuery();
+                var quest = cmd.Parameters.Add("$quest", SqliteType.Integer);
+                foreach (int id in request.QuestIds)
+                {
+                    quest.Value = id;
+                    cmd.ExecuteNonQuery();
+                }
                 break;
             case CharacterProgressField.QuestRemove:
                 cmd.CommandText = "DELETE FROM character_completed_quests WHERE character_id=$id AND quest_id=$quest";
