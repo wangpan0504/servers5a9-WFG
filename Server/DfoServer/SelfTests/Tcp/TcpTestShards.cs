@@ -120,7 +120,7 @@ internal static class TcpTestShards
             StandardOutputEncoding = System.Text.Encoding.UTF8, StandardErrorEncoding = System.Text.Encoding.UTF8
         };
         if (Path.GetFileNameWithoutExtension(host).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-            start.ArgumentList.Add(typeof(TcpTestShards).Assembly.Location);
+            start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, typeof(TcpTestShards).Assembly.GetName().Name + ".dll"));
         foreach (string argument in arguments[..(action + 1)])
             start.ArgumentList.Add(argument);
         start.ArgumentList.Add(selection);
