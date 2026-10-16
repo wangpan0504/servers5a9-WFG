@@ -7,8 +7,9 @@ on:
 jobs:
   no-pvf-debug:
     name: no-pvf (Debug)
-    runs-on: codeberg-small
-    timeout-minutes: 5
+    # small 的五分钟不足以稳定容纳构建、完整核心自测及收尾；medium 上限十分钟。
+    runs-on: codeberg-medium
+    timeout-minutes: 8
     container:
       image: mcr.microsoft.com/dotnet/sdk:10.0-noble
     defaults:
@@ -29,19 +30,23 @@ jobs:
           git checkout --detach "$PR_COMMIT"
 
       # 检查不依赖PowerShell或PVF；每个配置独立限时，直接DLL入口避免重复SDK项目解析。
-      - name: Debug 无资源构建与核心自测
+      - name: Debug 无资源构建
         run: |
           dotnet build ServerS5A9.sln -c "$CONFIGURATION" --nologo --artifacts-path build/check -m:1 -nr:false
-          variant="${CONFIGURATION,,}"
-          dotnet "build/check/bin/ArchitectureCheck/$variant/ArchitectureCheck.dll"
-          dotnet "build/check/bin/PvfLib.Tests/$variant/PvfLib.Tests.dll"
-          dotnet "build/check/bin/DfoServer/$variant/DfoServer.dll" --selftest-core
-          dotnet "build/check/bin/DfoServer/$variant/DfoServer.dll" --selftest-tcp commands
+      - name: Debug 分层规则检查
+        run: dotnet "build/check/bin/ArchitectureCheck/${CONFIGURATION,,}/ArchitectureCheck.dll"
+      - name: Debug PvfLib 合成检查
+        run: dotnet "build/check/bin/PvfLib.Tests/${CONFIGURATION,,}/PvfLib.Tests.dll"
+      - name: Debug 完整核心自测
+        run: dotnet "build/check/bin/DfoServer/${CONFIGURATION,,}/DfoServer.dll" --selftest-core
+      - name: Debug 命令 TCP 检查
+        run: dotnet "build/check/bin/DfoServer/${CONFIGURATION,,}/DfoServer.dll" --selftest-tcp commands
 
   no-pvf-release:
     name: no-pvf (Release)
-    runs-on: codeberg-small
-    timeout-minutes: 5
+    # 与 Debug 使用同一资源档位和预算，保留独立调度及完整检查。
+    runs-on: codeberg-medium
+    timeout-minutes: 8
     container:
       image: mcr.microsoft.com/dotnet/sdk:10.0-noble
     defaults:
@@ -62,14 +67,17 @@ jobs:
           git checkout --detach "$PR_COMMIT"
 
       # 检查不依赖PowerShell或PVF；每个配置独立限时，直接DLL入口避免重复SDK项目解析。
-      - name: Release 无资源构建与核心自测
+      - name: Release 无资源构建
         run: |
           dotnet build ServerS5A9.sln -c "$CONFIGURATION" --nologo --artifacts-path build/check -m:1 -nr:false
-          variant="${CONFIGURATION,,}"
-          dotnet "build/check/bin/ArchitectureCheck/$variant/ArchitectureCheck.dll"
-          dotnet "build/check/bin/PvfLib.Tests/$variant/PvfLib.Tests.dll"
-          dotnet "build/check/bin/DfoServer/$variant/DfoServer.dll" --selftest-core
-          dotnet "build/check/bin/DfoServer/$variant/DfoServer.dll" --selftest-tcp commands
+      - name: Release 分层规则检查
+        run: dotnet "build/check/bin/ArchitectureCheck/${CONFIGURATION,,}/ArchitectureCheck.dll"
+      - name: Release PvfLib 合成检查
+        run: dotnet "build/check/bin/PvfLib.Tests/${CONFIGURATION,,}/PvfLib.Tests.dll"
+      - name: Release 完整核心自测
+        run: dotnet "build/check/bin/DfoServer/${CONFIGURATION,,}/DfoServer.dll" --selftest-core
+      - name: Release 命令 TCP 检查
+        run: dotnet "build/check/bin/DfoServer/${CONFIGURATION,,}/DfoServer.dll" --selftest-tcp commands
 
   # 保留分支保护使用的原检查名称；两个配置都成功才能通过。
   no-pvf:

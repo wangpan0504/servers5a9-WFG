@@ -25,7 +25,7 @@ internal static class DungeonStoryFlowTests
         }
         foreach (byte[] invalid in new byte[][] { [],[0],[0,0,0],[2,0],[0,3] })
             That(!DungeonRequests.TryParseStoryPause(invalid,out _),"无效暂停正文不转成成功应答");
-        Layers(); LayerBaseRestore(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects();
+        Layers(); LayerBaseRestore(); DungeonCinematicLayerReturnTests.Run(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects();
         Console.WriteLine($"PASS {Count-before} 剧情暂停、层叠、重复坐标阶段和动态任务物件断言（合成）");
     }
 

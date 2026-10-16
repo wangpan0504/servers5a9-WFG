@@ -42,6 +42,7 @@ internal sealed record DungeonRoomDefinition(
     public IReadOnlyList<DungeonRoomNpc> Npcs { get; init; } = [];
     public string? NpcMetadataError { get; init; }
     public IReadOnlyList<DfoServer.GameWorld.Characters.TutorialCinematicEvidence> TutorialCinematics { get; init; } = [];
+    public DungeonCinematicLayerReturn? CinematicLayerReturn { get; init; }
 }
 
 internal sealed class DungeonRoomCatalog
@@ -50,10 +51,14 @@ internal sealed class DungeonRoomCatalog
     private readonly IReadOnlyDictionary<int, string> monsters;
     private readonly IReadOnlyDictionary<int, string> passiveObjects;
     private readonly IReadOnlyDictionary<int, string> aiCharacters;
+    private readonly Lazy<IReadOnlyDictionary<int, string>> cinematics;
 
     private DungeonRoomCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> monsters, IReadOnlyDictionary<int, string> passiveObjects,
         IReadOnlyDictionary<int, string> aiCharacters)
-        => (this.archive, this.monsters, this.passiveObjects, this.aiCharacters) = (archive, monsters, passiveObjects, aiCharacters);
+    {
+        (this.archive, this.monsters, this.passiveObjects, this.aiCharacters) = (archive, monsters, passiveObjects, aiCharacters);
+        cinematics = new(() => DungeonCatalog.ParseDirectory(archive.ReadTokens("cinematic/cinematic.lst"),archive.ResolveString,"cinematic"));
+    }
 
     public static DungeonRoomCatalog Load(PvfArchive pvf)
     {
@@ -90,8 +95,31 @@ internal sealed class DungeonRoomCatalog
         if (map.Id < 0 || !path.StartsWith("map/", StringComparison.Ordinal) || !path.EndsWith(".map", StringComparison.Ordinal)
             || !archive.Contains(path))
             throw new InvalidDataException("房间地图路径或索引无效");
-        return ParseResource(map with { Path = path }, archive.ReadTokens(path), archive.ResolveString, monsters, passiveObjects, archive.Contains,
+        var tokens = archive.ReadTokens(path);
+        var room = ParseResource(map with { Path = path }, tokens, archive.ResolveString, monsters, passiveObjects, archive.Contains,
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
+        return room.Map.Kind == "layered" ? room with { CinematicLayerReturn = ReadCinematicLayerReturn(room.Map,tokens) } : room;
+    }
+
+    DungeonCinematicLayerReturn? ReadCinematicLayerReturn(DungeonMap map, IReadOnlyList<PvfToken> tokens)
+    {
+        try { return Read(); }
+        // 可选演出元数据不支持时保留正常清怪路线；MAP及演员主资源仍在Get中严格校验。
+        catch (InvalidDataException) { return null; }
+
+        DungeonCinematicLayerReturn? Read()
+        {
+        string? action = DungeonCinematicLayerReturnRules.BasicAction(tokens,archive.ResolveString);
+        if (string.IsNullOrEmpty(action)) return null;
+        string path = PvfArchive.NormalizePath(action.StartsWith("map/",StringComparison.OrdinalIgnoreCase) ? action :
+            map.Path[..(map.Path.LastIndexOf('/') + 1)] + action);
+        if (!path.StartsWith("map/",StringComparison.Ordinal) || !archive.Contains(path)) return null;
+        int? id = DungeonCinematicLayerReturnRules.OneShotCinematic(archive.ReadTokens(path),archive.ResolveString);
+        if (id is not { } movie || !archive.Contains("cinematic/cinematic.lst") || !cinematics.Value.TryGetValue(movie,out string? file) ||
+            !archive.Contains(file)) return null;
+        return DungeonCinematicLayerReturnRules.IsNonCombatMapChange(map.Id,archive.ReadTokens(file),archive.ResolveString)
+            ? new(map.Id,map.Path,path,movie,file) : null;
+        }
     }
 
     DungeonRoomAiCharacter ResolveAiCharacter(PvfAiCharacterSpawn row)

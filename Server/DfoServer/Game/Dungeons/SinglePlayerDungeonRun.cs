@@ -413,7 +413,8 @@ internal sealed class SinglePlayerDungeonRun
         }
         else
         {
-            if (current.Plan.Room.Map.Kind != "layered" || !current.Cleared || HasPendingLayer()) return Result(DungeonRunOutcome.Rejected);
+            if (current.Plan.Room.Map.Kind != "layered" || HasPendingLayer() ||
+                !current.Cleared && !(nextLayer && CanReturnFromCinematic(target))) return Result(DungeonRunOutcome.Rejected);
             next = layerSources[target];
             mapOperation = DungeonMapOperation.RestoreBase;
             mapPayload = DungeonMapPayload.Cached;
@@ -430,6 +431,21 @@ internal sealed class SinglePlayerDungeonRun
             current.Plan.Room.Map.Position != target || current.Plan.Room.Map.Kind == "layered") return false;
         pendingLayerBaseAck = null;
         return true;
+    }
+
+    private bool CanReturnFromCinematic(DungeonPoint target)
+    {
+        if (entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay || entry.RouteQuestId is 0 or >= 30000 ||
+            !entry.HasExplicitClearMap || entry.BossMap.Kind == "layered" || entry.BaseBossMap != entry.BossMap ||
+            !layerSources.TryGetValue(target,out var source) || source.Plan.Room.Map != entry.BossMap ||
+            current.Plan.Room.CinematicLayerReturn is not { CinematicId: > 0 } movie || movie.MapId != current.Plan.Room.Map.Id ||
+            movie.MapPath != current.Plan.Room.Map.Path || movie.ActionPath.Length == 0 || movie.CinematicPath.Length == 0) return false;
+        var acceptances = entry.QuestAcceptances.Where(row => row.QuestId == entry.RouteQuestId).ToArray();
+        return acceptances is [{ Slot: <= 29 } accepted] && accepted.AcceptanceId != Guid.Empty &&
+            entry.QuestAcceptances.Count(row => row.Slot == accepted.Slot) == 1 &&
+            entry.QuestAcceptances.Count(row => row.AcceptanceId == accepted.AcceptanceId) == 1 &&
+            (entry.QuestId == 0 || entry.QuestAcceptances.Any(row => row.QuestId == entry.QuestId &&
+                row.Slot == entry.ActiveQuestSlot && row.AcceptanceId == entry.QuestAcceptanceId && row.AcceptanceId != Guid.Empty));
     }
 
     private bool HasPendingLayer()
