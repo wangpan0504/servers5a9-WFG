@@ -20,6 +20,7 @@ internal static class SelfTestRunner
         GrowthCubeContractTests.RunCore();
         EnchantmentTests.RunCore();
         EnhancementTests.RunCore();
+        CreatureSkinTests.RunCore();
         CreatureEggTests.RunCore();
         AvatarPackageTests.RunCore();
         AvatarDyeTests.RunCore();
@@ -181,6 +182,7 @@ internal static class SelfTestRunner
         EnchantmentTests.RunResources(itemResources, itemResources.Enchantments);
         EnhancementTests.RunResources(itemResources, itemResources.Enhancements);
         CreatureEggTests.RunResources(itemResources.CreatureEggs, itemResources.Items);
+        CreatureSkinMoveTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
         MagicBoxTests.Run(towns, itemResources);

@@ -235,6 +235,10 @@ internal sealed partial class CharacterRepository
         if (!SameInventory(expected.Inventory, plan) || plan.CharacterPrecondition?.Matches(expected) == false)
             throw new InvalidOperationException("背包规划不是当前快照");
         plan.After.Validate(allocating: true);
+        if (plan.EquipmentSlotFlagsAfter is { } slots &&
+            (plan.Reason != "open_creature_skin_slot" || plan.CharacterPrecondition is null ||
+                (expected.EquipmentSlotFlags & 32) != 0 || slots != (expected.EquipmentSlotFlags | 32)))
+            throw new InvalidOperationException("库存开栏只能在原资格上增加宠物幻化位");
         if (plan.After.AccountWallet.Revision != plan.Before.AccountWallet.Revision || plan.After.AccountCargo.Revision != plan.Before.AccountCargo.Revision ||
             plan.After.EpicPieces.Revision != plan.Before.EpicPieces.Revision)
             throw new InvalidOperationException("业务不能修改账号资产版本");
@@ -260,8 +264,8 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,stamina_until=$stamina
-            WHERE id=$id AND account=$account AND revision=$revision;
+            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots
+            WHERE id=$id AND account=$account AND revision=$revision AND equipment_slot_flags=$equipmentSlotsBefore;
             """;
         command.Parameters.AddWithValue("$id", expected.Id);
         command.Parameters.AddWithValue("$account", owner.Account);
@@ -271,6 +275,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$avatarExpansion", plan.After.AvatarExpansion);
         command.Parameters.AddWithValue("$devil", System.Text.Json.JsonSerializer.Serialize(plan.After.DevilUses));
         command.Parameters.AddWithValue("$stamina", plan.After.StaminaUntil);
+        command.Parameters.AddWithValue("$equipmentSlots", plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags);
+        command.Parameters.AddWithValue("$equipmentSlotsBefore", current.EquipmentSlotFlags);
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("Character revision or owner changed");
         if (plan.Before.CubeContract != plan.After.CubeContract)
@@ -301,7 +307,8 @@ internal sealed partial class CharacterRepository
             active = refreshed.ToArray();
         }
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
-        return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning };
+        return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning,
+            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags };
     }
 
     static void WriteQuestConditions(SqliteConnection db, SqliteTransaction transaction, ushort characterId,

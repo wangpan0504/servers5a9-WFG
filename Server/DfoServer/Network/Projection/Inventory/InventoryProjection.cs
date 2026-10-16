@@ -93,14 +93,14 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(updateType, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index),
                 result.WholeListRefresh ? "inventory_whole_list_refresh" : "inventory_committed_delta", CanSend);
         }
-        if (refreshEquipment && changedSlots.Any(slot => slot.List == InventoryListType.Equipment))
+        bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment);
+        if (refreshEquipment && (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null))
         {
-            var creatureSlot = new InventorySlot(InventoryListType.Equipment, 26);
-            bool creatureChanged = plan.ChangedSlots.Contains(creatureSlot) &&
-                plan.BeforeIndex.Find(creatureSlot) != receipt.Index.Find(creatureSlot);
-            // 宠物槽实际变化时补充Actor的宠物声明；其他副本换装仍只刷新Player。
-            if (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
-                creatureChanged && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
+            bool creatureChanged = plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&
+                slot.Index is 26 or 33 && plan.BeforeIndex.Find(slot) != receipt.Index.Find(slot));
+            // 真实或幻化宠物槽变化均刷新双实体声明；副本沿用真实场景状态，保留过房流程。
+            if (equipmentChanged && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
+                creatureChanged && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
                 await context.Notify(NotiPacketType.USERINFO,
                     TownPackets.Actor(current, context.Channel, adventureName: context.Session.ReadAdventureName(),
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
@@ -108,7 +108,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
-                if (CanSend() && context.Session.Phase == SessionPhase.Town)
+                if (equipmentChanged && CanSend() && context.Session.Phase == SessionPhase.Town)
                     town.Refresh(context);
                 return true;
             });

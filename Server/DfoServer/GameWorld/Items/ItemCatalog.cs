@@ -159,6 +159,12 @@ internal sealed class ItemCatalog
     internal static int ReadCreatureSubType(PvfDocument document) =>
         document.TryGetInt32("sub type", out int subtype) && subtype is >= 0 and <= byte.MaxValue ? subtype : -1;
 
+    // 仅接入已核对的城镇使用动作；未知地点和发包模式不按同名券推定。
+    internal static bool ReadCreatureSkinTicket(PvfDocument document) =>
+        document.TryGetString("action type", out string action) && action == "[open creature skin slot]" &&
+        document.TryGetString("action usable place", out string place) && place == "[village]" &&
+        document.TryGetInt32("use action packet", out int packet) && packet == 0;
+
     ItemTemplate Load(int id)
     {
         bool isEquipment = equipment.TryGetValue(id, out string? path);
@@ -233,6 +239,7 @@ internal sealed class ItemCatalog
         {
             IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text),
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
+            OpensCreatureSkinSlot = !isEquipment && ReadCreatureSkinTicket(text),
             WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&
                 text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
             CreatureSubType = kind == ItemKind.Creature ? ReadCreatureSubType(text) : -1,

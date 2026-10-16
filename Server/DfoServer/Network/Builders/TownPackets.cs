@@ -81,6 +81,9 @@ internal static class TownPackets
             // 0267DA80读取116B状态；偏移51为17B CP936冒险团昵称，最后一字节保留NUL。
             byte[] state = new byte[116];
             state[7] = 1;
+            // 0267B42E/0267B43F将头部+59h转为独立外观实体；真实宠物仍由尾部声明。
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(state.AsSpan(89),
+                InventoryCreatureSkinService.AppearanceTemplateId(character, utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
             CharacterName.Encoding.GetEncoder().Convert(adventureName.AsSpan(), state.AsSpan(51, 16), true,
                 out _, out _, out _);
             // Actor原始状态末尾u16为心情字段。
@@ -178,7 +181,9 @@ internal static class TownPackets
             writer.Write((ushort)1);
             writer.Write(channel.ServerIndex);
             writer.Write(channel.Number);
-            writer.Write(new byte[17]);
+            writer.Write(new byte[16]);
+            // 0267C914/0267C924会以头部末字节重设幻化bit5，必须与后续装备栏标志一致。
+            writer.Write((byte)((character.EquipmentSlotFlags & 32) == 0 ? 0 : 1));
             writer.Write(character.Id);
             writer.Write(character.Learning.Experience); // 02678520 的完整u64累计经验。
             byte[] stats = CharacterStatsPackets.Build(attributes,

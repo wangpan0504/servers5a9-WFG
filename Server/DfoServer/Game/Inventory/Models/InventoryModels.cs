@@ -108,11 +108,13 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
     readonly byte job = character.Job;
     readonly byte grow = character.GrowType;
     readonly byte level = character.Level;
+    readonly byte equipmentSlots = character.EquipmentSlotFlags;
     readonly ImmutableArray<CharacterSkill> skills = character.Skills.OrderBy(skill => skill.Id).ToImmutableArray();
 
     // 时间资格也在提交前复验，不能凭到期前的规划继续穿戴越级装备。
     public bool Matches(Character value, long? utcSeconds = null) => value.Id == id && value.Revision == revision && value.Job == job &&
-        value.GrowType == grow && value.Level == level && skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) &&
+        value.GrowType == grow && value.Level == level && value.EquipmentSlotFlags == equipmentSlots &&
+        skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) &&
         (qualificationExpiresAt is null || (utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()) < qualificationExpiresAt.Value);
 }
 

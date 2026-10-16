@@ -42,6 +42,16 @@ internal static class InventoryMoveService
         }
         if (source is null || source.IsExpired(utcSeconds) || destination?.IsExpired(utcSeconds) == true)
             return InventoryResult.Reject(CannotMoveItem);
+        bool movesCreatureSkin = IsCreatureSkin(sourceSlot) || IsCreatureSkin(destinationSlot);
+        if (movesCreatureSkin)
+        {
+            if (!ValidCreatureSkinItem(source) || destination is not null && !ValidCreatureSkinItem(destination))
+                return InventoryResult.Reject(CannotMoveItem);
+            // 幻化仍是原宠物实例；正反交换均冻结实际详情期限，不让过期前的计划越期提交。
+            foreach (var item in new[] { source, destination })
+                if (item is { ExpireTime: > 0 })
+                    qualificationExpiresAt = qualificationExpiresAt is null ? item.ExpireTime : Math.Min(qualificationExpiresAt.Value, item.ExpireTime);
+        }
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
         if (count <= 0 || !AllowsAt(destinationSlot, source.Core) ||
             sourceSlot.List != destinationSlot.List && !InventoryCargoService.AllowsInsert(source.Core, destinationSlot.List, catalog.Get(source.Core.ItemId)))
@@ -109,6 +119,20 @@ internal static class InventoryMoveService
 
         InventoryCharacterPrecondition Precondition() => new(character, qualificationExpiresAt);
 
+        bool ValidCreatureSkinItem(InventoryItem item)
+        {
+            if (item.Uid <= 0 || item.Uid > int.MaxValue || item.Core.Value != item.Uid ||
+                !CreatureSkinTemplate(item.Core, catalog.Get(item.Core.ItemId)))
+                return false;
+            try
+            {
+                item.Core.Validate();
+                item.ValidateDetails(allocating: false);
+                return true;
+            }
+            catch (InvalidDataException) { return false; }
+        }
+
         bool AllowsAt(InventorySlot position, ItemCore core)
         {
             if (!Allows(character, position, core, catalog, utcSeconds, contracts))
@@ -155,6 +179,8 @@ internal static class InventoryMoveService
         if (position.List != InventoryListType.Equipment)
             return true;
         var template = catalog.Get(core.ItemId);
+        if (IsCreatureSkin(position))
+            return (character.EquipmentSlotFlags & InventoryCreatureSkinService.UnlockFlag) != 0 && CreatureSkinTemplate(core, template);
         int unlock = position.Index switch { 22 => 1, 23 => 2, 25 => 16, _ => 0 };
         if (unlock != 0 && (character.EquipmentSlotFlags & unlock) == 0) return false;
         // 女鬼剑流浪武士的副武器栏接受普通武器；觉醒位不改变基础转职。
@@ -168,6 +194,12 @@ internal static class InventoryMoveService
             (template.Jobs & (1 << character.Job)) != 0 &&
             RequiredSkillSatisfied(character, template);
     }
+
+    static bool IsCreatureSkin(InventorySlot position) => position.List == InventoryListType.Equipment &&
+        position.Index == InventoryCreatureSkinService.TargetSlot;
+
+    static bool CreatureSkinTemplate(ItemCore core, ItemTemplate template) => core.Kind == ItemKind.Creature && core.SealFlag == 0 &&
+        template.Id == core.ItemId && template is { Kind: ItemKind.Creature, EquipmentSlot: 26, CreatureSubType: 0 };
 
     internal static bool WearLevelSatisfied(Character character, ItemTemplate template, long utcSeconds,
         PremiumContractCatalog? contracts = null) =>

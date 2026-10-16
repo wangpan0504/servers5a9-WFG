@@ -66,7 +66,7 @@ internal static class ItemSlotBoundService
             {
                 ItemKind.Equipment => slot.Index is >= 12 and <= 25 or 30,
                 ItemKind.Avatar => slot.Index is >= 0 and <= 11,
-                ItemKind.Creature => slot.Index == 26,
+                ItemKind.Creature => slot.Index is 26 or 33,
                 ItemKind.CreatureEquipment => slot.Index is >= 27 and <= 29,
                 ItemKind.GuildMedal => slot.Index == GuildMedalEquipmentSlot,
                 _ => false
