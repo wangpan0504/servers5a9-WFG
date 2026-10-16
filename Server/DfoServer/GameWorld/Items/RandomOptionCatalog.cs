@@ -71,7 +71,9 @@ internal sealed partial class RandomOptionCatalog
             if (!rows.Any(row => row.Item2 > 0) || !groups.TryAdd(values[0], rows.ToArray()))
                 throw new InvalidDataException("魔法封印分组重复或无有效权重");
         }
-        var fees = Integers(PvfScript.Block(read(Root + "randomizedoptionoverall2.etc"), "break seal cost"), 4);
+        string overall2 = read(Root + "randomizedoptionoverall2.etc");
+        ReadGradeRules(overall2);
+        var fees = Integers(PvfScript.Block(overall2, "break seal cost"), 4);
         if (fees.Any(row => row[0] is not (2 or 3) || row[1] < 0 || row[2] is < 1 or > 3 || row[3] < 0))
             throw new InvalidDataException("魔法封印解封费用无效");
         costs = fees.Where(row => row[2] == 1).Select(row => (row[0], row[1], (uint)row[3])).ToArray();

@@ -231,6 +231,8 @@ internal sealed class ItemCatalog
             CharacterSlotMaximum = name == "角色栏扩展券" &&
                 int.TryParse(Regex.Match(text.Section("explain"), @"总上限为\s*(\d+)").Groups[1].Value, out int maxSlots) ? maxSlots : 0,
             MaximumLevel = maximum,
+            QualityBox = isEquipment ? null : EquipmentQualityBox.Parse(id, text),
+
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = Int("clear avatar", 0) == 1 || text.Section("item category").Contains("clear avatar", StringComparison.OrdinalIgnoreCase),
             BorrowAvatarAppearance = kind == ItemKind.Avatar && slot != 9,

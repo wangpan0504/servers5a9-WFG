@@ -8,13 +8,15 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-internal sealed class RandomOptionHandler(InventoryRandomOptionService options, InventoryProjection projection,
+internal sealed partial class RandomOptionHandler(InventoryRandomOptionService options, InventoryProjection projection,
     ServerLog log) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.UNSEAL_RANDOM_OPTION, Handle, nameof(RandomOptionHandler));
         commands.Register(CmdPacketType.CHANGE_RANDOM_OPTION, Change, nameof(RandomOptionHandler));
+        commands.Register(CmdPacketType.RESET_ITEM_ATTR, ResetQuality, nameof(RandomOptionHandler));
+        commands.Register(CmdPacketType.RESET_RANDOM_OPTION, ResetQuality, nameof(RandomOptionHandler));
     }
 
     async Task<CommandResult> Change(GameConnectionContext context, Packet packet)

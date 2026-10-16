@@ -184,6 +184,7 @@ internal static class TcpRegressionTests
         ("gm-assets", DevelopmentAssetTcpTests.RunAsync),
         ("repair", RepairTcpTests.RunAsync),
         ("random-option", RandomOptionTcpTests.RunAsync),
+        ("equipment-quality", EquipmentQualityTcpTests.RunAsync),
         ("refinement", RefinementTcpTests.RunAsync),
         ("refinement-tickets", RefinementTicketTcpTests.RunAsync),
         ("disjoint", DisjointTcpTests.RunAsync),

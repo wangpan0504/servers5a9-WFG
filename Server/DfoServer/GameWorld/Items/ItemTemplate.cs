@@ -42,6 +42,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool AllowsUse(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
         job < 16 && (Jobs & (1 << job)) != 0;
     public RefinementTicketDefinition? RefinementTicket { get; init; }
+    public EquipmentQualityBox? QualityBox { get; init; }
     public AvatarSocketTypes AvatarSockets { get; init; }
     public bool CloneAvatar { get; init; }
     public bool BorrowAvatarAppearance { get; init; }
