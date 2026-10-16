@@ -187,7 +187,7 @@ internal sealed record DungeonEntryPlan(
         try { maze = resolveMaze is null ? candidates[0] : resolveMaze(candidates[0]); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
         { reason = "dungeon-resource-unavailable"; return false; }
-        if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0))
+        if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0,maze.ConnectionQuestId))
         { reason = "difficulty-unsupported"; return false; }
         if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 ||
             (maze.StoryStages.Count == 0 ? maze.Bosses.Count != 1 : maze.StoryStages.Count != maze.Bosses.Count)

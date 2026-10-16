@@ -108,7 +108,7 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         return true;
     }
 
-    public bool AllowsDifficulty(byte difficulty, bool story)
+    public bool AllowsDifficulty(byte difficulty, bool story, int? connectionQuestId = null)
     {
         if (difficulty > 4) return false;
         if (story)
@@ -116,6 +116,7 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             var markers = RawSections.Where(section => section.Tag is "story mode" or "/story mode").ToArray();
             if (markers.Length != 0)
             {
+                if (markers.Length > 2) return AllowsQuestStoryDifficulty(difficulty,connectionQuestId);
                 // 故事块有自己的难度范围；块外普通路线的指定难度和难度表不能覆盖它。
                 if (markers is not [{ Tag: "story mode", Tokens.Count: 0 },{ Tag: "/story mode", Tokens.Count: 0 }])
                     return false;
@@ -134,6 +135,42 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         return levels[0].Tokens.Count == 5 && levels[0].Tokens.All(token => token.Type == 0 && token.Value is 0 or 1) &&
             levels.All(section => section.Tokens.SequenceEqual(levels[0].Tokens)) &&
             levels[0].Tokens[difficulty].Value != 0;
+    }
+
+    bool AllowsQuestStoryDifficulty(byte difficulty, int? connectionQuestId)
+    {
+        if (connectionQuestId is not > 0) return false;
+        // 多块仅支持明确的整数任务归属；逐块校验，不以顺序或最大难度合并故事范围。
+        var owners = new HashSet<int>();
+        List<DungeonRawSection>? block = null;
+        int? selectedSize = null;
+        foreach (var section in RawSections)
+        {
+            if (section.Tag == "story mode")
+            {
+                if (block is not null || section.Tokens.Count != 0) return false;
+                block = [];
+            }
+            else if (section.Tag == "/story mode")
+            {
+                if (block is null || section.Tokens.Count != 0) return false;
+                var sizes = block.Where(row => row.Tag == "difficulty size").ToArray();
+                var lists = block.Where(row => row.Tag == "quest list").ToArray();
+                var ends = block.Where(row => row.Tag == "/quest list").ToArray();
+                if (sizes is not [{ Tokens: [{ Type: 0, Value: >= 1 and <= 5 }] }] ||
+                    lists.Length != 1 || lists[0].Tokens.Count == 0 ||
+                    lists[0].Tokens.Any(token => token.Type != 0 || token.Value <= 0) ||
+                    ends is not [{ Tokens.Count: 0 }] || block.IndexOf(ends[0]) != block.IndexOf(lists[0]) + 1) return false;
+                foreach (var token in lists[0].Tokens)
+                {
+                    if (!owners.Add(token.Value)) return false;
+                    if (token.Value == connectionQuestId) selectedSize = sizes[0].Tokens[0].Value;
+                }
+                block = null;
+            }
+            else block?.Add(section);
+        }
+        return block is null && selectedSize.HasValue && difficulty < selectedSize.Value;
     }
 }
 internal sealed class DungeonCatalog

@@ -202,6 +202,34 @@ internal static class DungeonEntryPlanTests
             heartReplay is { IsQuestReplay: true, Difficulty: 0, QuestId: 0, RouteQuestId: 3778, BossMap.Id: 310065 } &&
             !DungeonEntryPlan.TryCreate(catalog,heart,233,3778,2,out _,out _,quest: heartQuest,quests: quests),
             "已完成3778回放保留故事零难度，活动任务不能借普通指定二难度进入");
+        foreach (var sample in new[] { (Quest:6206,Previous:6205),(Quest:6214,Previous:6213) })
+        {
+            var storyQuest = quests.Get(sample.Quest);
+            var pending = character with { Level = 95,CompletedQuests = [sample.Previous],
+                ActiveMainQuests = [new(5,checked((ushort)sample.Quest),1) { AcceptanceId = Guid.NewGuid() }] };
+            foreach (uint requested in new uint[] { checked((uint)sample.Quest),0 })
+            {
+                That(DungeonEntryPlan.TryCreate(catalog,pending,291100373,requested,0,out var storyPlan,out var storyReason,
+                    quest: requested == 0 ? null : storyQuest,quests: quests) && storyPlan is
+                    { Maze.ConnectionQuestId: var connection,StartMap.Id: 292106186,BossMap.Id: 292106190 } && connection == sample.Quest,
+                    "真实多故事块显式及自动请求选择最终任务块：" + sample.Quest + "/" + storyReason);
+                foreach (byte rejected in new byte[] { 1,2,3,4 })
+                    That(!DungeonEntryPlan.TryCreate(catalog,pending,291100373,requested,rejected,out _,out var storyRejectedReason,
+                        quest: requested == 0 ? null : storyQuest,quests: quests) && storyRejectedReason == "difficulty-unsupported",
+                        "真实故事size1不借其他块或普通难度放行");
+                var plans = new List<DungeonMonsterPlan>();
+                ushort nextKey = 100;
+                foreach (var map in storyPlan!.Maze.MapSpecification!)
+                {
+                    var actors = DungeonMonsterPlan.Create(rooms,map,pending.Id,nextKey,storyPlan.BasisLevel,storyPlan.PlayerTeam);
+                    plans.Add(actors);
+                    if (actors.Monsters.Count > 0 || actors.SpecialObjects.Count > 0) nextKey = checked((ushort)actors.NextObjectKey);
+                }
+                That(plans.Count == 5 && plans.Sum(room => room.Monsters.Count) > 0 && plans.All(room =>
+                    room.Room.Monsters.All(source => room.Monsters.Any(actor => actor.Source == source))),
+                    "真实五房保留全部源怪物，不用空房替代任务路线");
+            }
+        }
         var hero = character with { Job = 13, GrowType = 36, Level = 90, ActiveMainQuests = [new(3,3240,1) { AcceptanceId = Guid.NewGuid() }] };
         That(DungeonEntryPlan.TryCreate(catalog,hero,151,3240,0,out var heroPlan,out string heroReason,quest: quests.Get(3240),quests: quests),
             "向暗黑城前进可进入英雄冢：" + heroReason);
@@ -220,6 +248,21 @@ internal static class DungeonEntryPlanTests
         That(DungeonEntryPlan.TryCreate(catalog,noir,239,0,0,out var noirAutomatic,out _,quests: quests) &&
             noirAutomatic is { QuestId: 0, RouteQuestId: 3273, BossMap.Id: 70154, QuestAcceptanceId: var noAcceptance } && noAcceptance == Guid.Empty,
             "普通0请求也能由已接父任务和真实子完成记录选择诺伊佩拉路线，不伪造请求任务身份");
+        var parentStory = catalog.Get(239) with { RawSections = StoryBlocks(5150,3273) };
+        foreach (uint requested in new uint[] { 3273,0 })
+        {
+            That(DungeonEntryPlan.TryCreate(parentStory,noir,239,requested,0,out var connected,out var connectedReason,
+                quest: requested == 0 ? null : quests.Get(3273),quests: quests) && connected is
+                { Maze.ConnectionQuestId: 5150,RouteQuestId: 3273 },
+                "多故事块使用实际子maze连接身份，保留父接取及自动请求身份：" + connectedReason);
+            That(!DungeonEntryPlan.TryCreate(parentStory,noir,239,requested,1,out _,out var rejectedStory,
+                quest: requested == 0 ? null : quests.Get(3273),quests: quests) && rejectedStory == "difficulty-unsupported",
+                "父任务所属另一故事块的较高难度不能泄漏到实际子路线");
+        }
+        var replayStory = heartResource with { RawSections = StoryBlocks(3778,9999) };
+        That(DungeonEntryPlan.TryCreate(replayStory,replayHeart.Expected,233,3778,0,out var storyReplay,out _,
+            quest: heartQuest,isReplay: true) && storyReplay is { IsQuestReplay: true,Maze.ConnectionQuestId: 3778 },
+            "回放同样按最终maze选择故事块");
         That(!DungeonEntryPlan.TryCreate(catalog,noir with { CompletedQuests = [3272], ActiveMainQuests = [noir.ActiveMainQuests[0] with { ConditionState = 2 }] },
             239,3273,0,out _,out _,quest: quests.Get(3273),quests: quests), "5149材料步骤未完成时不跳到5150迷宫");
         var heroDefinition = catalog.Get(151);
@@ -429,5 +472,13 @@ internal static class DungeonEntryPlanTests
         }
 
         void RejectMaze(DungeonMaze input, string expected) => RejectDefinition(definition with { Mazes = [input] }, expected);
+
+        static DungeonRawSection[] StoryBlocks(int firstQuest, int secondQuest) =>
+        [
+            new("story mode",[]),new("difficulty size",[new(0,1)]),new("quest list",[new(0,firstQuest)]),
+            new("/quest list",[]),new("/story mode",[]),
+            new("story mode",[]),new("difficulty size",[new(0,3)]),new("quest list",[new(0,secondQuest)]),
+            new("/quest list",[]),new("/story mode",[])
+        ];
     }
 }

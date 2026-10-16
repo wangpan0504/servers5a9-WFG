@@ -28,6 +28,40 @@ internal static class DungeonCatalogTests
             storyThree.AllowsDifficulty(2,false) && !storyThree.AllowsDifficulty(byte.MaxValue,true),
             "故事范围保留全部声明难度，普通难度表和协议上限仍有效");
         var withoutStory = Definition(designated,levels);
+        var firstQuests = new DungeonRawSection("quest list",[new(0,6206),new(0,6214)]);
+        var secondQuests = new DungeonRawSection("quest list",[new(0,6223)]);
+        var questEnd = new DungeonRawSection("/quest list",[]);
+        var multiple = Definition(start,size,firstQuests,questEnd,end,
+            start,size with { Tokens = [new(0,3)] },secondQuests,questEnd,end,designated,levels);
+        That(Enumerable.Range(0,5).All(value => multiple.AllowsDifficulty((byte)value,true,6206) == (value == 0)) &&
+            Enumerable.Range(0,5).All(value => multiple.AllowsDifficulty((byte)value,true,6214) == (value == 0)) &&
+            Enumerable.Range(0,5).All(value => multiple.AllowsDifficulty((byte)value,true,6223) == (value < 3)),
+            "互斥任务故事块分别使用本块难度，不能泄漏另一块范围");
+        That(!multiple.AllowsDifficulty(0,true) && !multiple.AllowsDifficulty(0,true,9999) &&
+            multiple.AllowsDifficulty(2,false,6206) && !multiple.AllowsDifficulty(0,false,6206),
+            "多故事块必须有唯一连接归属，普通路线仍使用普通难度");
+        foreach (var invalid in new[]
+        {
+            Definition(start,firstQuests,size,questEnd,end,start,size,secondQuests,questEnd,end),
+            Definition(start,size,firstQuests,new("unknown scope",[]),questEnd,end,start,size,secondQuests,questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,secondQuests,size,questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,secondQuests,new("unknown scope",[]),questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,firstQuests,questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,secondQuests with { Tokens = [new(7,6223)] },questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,secondQuests with { Tokens = [] },questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,secondQuests with { Tokens = [new(0,0)] },questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,size,secondQuests,questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size with { Tokens = [new(0,6)] },secondQuests,questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,secondQuests,secondQuests,questEnd,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,secondQuests,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,questEnd,secondQuests,end),
+            Definition(start,size,firstQuests,questEnd,end,start with { Tokens = [new(0,1)] },size,secondQuests,questEnd,end),
+            Definition(start,size,firstQuests,questEnd,start,size,secondQuests,questEnd,end,end),
+            Definition(start,size,firstQuests,questEnd,end,start,size,secondQuests,questEnd)
+        })
+            That(!invalid.AllowsDifficulty(0,true,6206),"任一故事块归属、边界或难度不明确时拒绝，不能只验证已选块");
+        That(Definition(start,size,secondQuests with { Tokens = [new(7,1)] },questEnd,end).AllowsDifficulty(0,true,6206),
+            "单故事块保留既有不解释任务引用token的兼容合同");
         That(Enumerable.Range(0,5).All(value => withoutStory.AllowsDifficulty((byte)value,true) == withoutStory.AllowsDifficulty((byte)value,false)),
             "未声明故事块的任务连接仍沿既有普通难度合同");
         foreach (var invalid in new[] { Definition(start,size),Definition(end),Definition(end,start,size,end),Definition(start,size,end,start,size,end),

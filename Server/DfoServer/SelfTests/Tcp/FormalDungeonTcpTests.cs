@@ -534,6 +534,7 @@ internal static partial class FormalDungeonTcpTests
         VerifyQuestBossEntry(fixture,resources,growth);
         VerifyStoryDifficultyEntry(fixture,resources,growth);
         await fixture.StopAsync();
+        await VerifyMultipleStoryBlocksAsync(source,root,resources,growth);
         Console.WriteLine($"PASS 正式TCP静默拒绝后回城重进、全部职业和转职加载、原生统计合成击杀、六房升级、真实随机拾取{picked}件、重复拒绝及服务重启（非Windows实机；零样本不作拾取覆盖）");
     }
 

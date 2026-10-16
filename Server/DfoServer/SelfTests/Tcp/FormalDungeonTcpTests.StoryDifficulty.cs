@@ -62,4 +62,45 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
         }
     }
+
+    static async Task VerifyMultipleStoryBlocksAsync(ServerOptions source,string root,TcpTestResources resources,CharacterGrowthCatalog growth)
+    {
+        // 全职业用例已占满原测试账号；两条故事分支共用独立测试库和已有只读资源。
+        await using var fixture = new TcpTestFixture(source,Path.Combine(root,"multiple-story-blocks"),resources:resources);
+        await fixture.StartAsync();
+        foreach (var sample in new[] { (Quest:(ushort)6206,Previous:6205),(Quest:(ushort)6214,Previous:6213) })
+        {
+            var done = new HashSet<int> { sample.Previous };
+            var area = resources.Towns.Areas.Values.First(row => row.Level <= 95 && row.DungeonWorldMap is { } world &&
+                resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 291100373));
+            done.UnionWith(area.Quests);
+            if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+            var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+            var position = new Location(area.Town,area.Area,checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+            Character created;
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+            {
+                var candidate = CharacterCreation.Prepare("Story"+sample.Quest,resources.Characters.Get(0),position,position,resources.Learning.Get);
+                var learning = SkillPointLedger.Synchronize(0,0,95,candidate.InitialLearning with
+                    { Experience=growth.GetLevelStartExperience(95) },resources.Learning);
+                created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level=95,AcceptedStoryLevel=95,
+                    CompletedQuests=done.ToArray(),InitialLearning=learning });
+            }
+            using var peer = Open(fixture);
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            foreach (ushort requested in new ushort[] { sample.Quest,0 })
+            {
+                byte[] information=[];
+                var map = Enter(peer,sample.Quest,291100373,row => information=row,requestQuestId:requested);
+                That(U32(map,14) == 292106186 && information[4] == 0,
+                    "真实互斥故事任务由生产接取和Session预热进入原首房，显式及零请求一致");
+                Load(peer); peer.Barrier();
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+                peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            }
+            That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,sample.Quest)
+                is [[1L]] && fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "真实两个主线分支只入场加载，不伪造清图或奖励资格");
+        }
+    }
 }
