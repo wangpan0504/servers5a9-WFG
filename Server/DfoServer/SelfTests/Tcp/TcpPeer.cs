@@ -394,20 +394,16 @@ internal sealed class TcpPeer : IDisposable
         ClientSettings = [];
         foreach (var notice in inventoryNotices ?? [])
             tail.Add(Expect(notice.Kind, notice.Opcode));
-        bool staminaChecked = false;
-        bool ExpectSelectionStamina()
+        void ExpectSelectionStamina()
         {
             ushort character = U16(prefix[0].Body, 9);
             var saved = fixture!.Query("SELECT stamina_until FROM characters WHERE id=$p0", character);
             TestCheck.That(saved is [[long]], "选角场景虚弱状态绑定本人持久角色");
             if (Convert.ToInt64(saved[0][0]) > 0 || staminaPercent is < 100)
                 ValidateStamina(Expect(0, 4), character, selectionStarted);
-            return true;
         }
         foreach (var notice in expected.Skip(afterCargo))
         {
-            // 重连回城（resumeTown）时区域与虚弱投影先于赛丽亚事件下发：在108前核验NOTI4，24处不再重复期待。
-            if (resumeTown && notice == ((byte)0, (ushort)124) && fixture is not null) staminaChecked = ExpectSelectionStamina();
             if (notice == ((byte)0, (ushort)124)) ReadSeriaInitialization();
             // 普通入城在124前恢复；换频道等最终24绑定后恢复。
             if (!resumeTown && notice == ((byte)0, (ushort)124)) ReadSceneInitialization();
@@ -453,7 +449,8 @@ internal sealed class TcpPeer : IDisposable
             else
             {
                 tail.Add(Expect(notice.Kind, notice.Opcode));
-                if (notice == ((byte)0, (ushort)24) && fixture is not null && !staminaChecked)
+                // 恢复城镇时LocationAsync不发24，虚弱通知跟在23后；最终24仅绑定已恢复场景。
+                if ((!resumeTown && notice == ((byte)0, (ushort)24) || resumeTown && notice == ((byte)0, (ushort)23)) && fixture is not null)
                     ExpectSelectionStamina();
                 if (notice == ((byte)0, (ushort)53))
                     ReadCardMembershipState(initialization: true);

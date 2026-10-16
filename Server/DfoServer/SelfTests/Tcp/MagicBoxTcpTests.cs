@@ -1,3 +1,4 @@
+using System.Text;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
@@ -40,9 +41,6 @@ internal static class MagicBoxTcpTests
             That(count > 0 && separator + 4 <= ack.Length && U16(ack, separator) == 0 &&
                 ack.Length == separator + 4 + U16(ack, separator + 2) * 123,
                 "双栏奖励完整使用123字节条目且无截断或额外尾部");
-            foreach (byte list in new byte[] { 0, 2, 12, 1, 7, 38 })
-                That(peer.Expect(0, 13).Body[0] == list, "提交后重建实际物品容器：" + list);
-            ReadEffects(peer);
             using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
             var saved = repository.List(owner).Single();
             committed = saved.Inventory;
@@ -50,10 +48,17 @@ internal static class MagicBoxTcpTests
             That(saved.Inventory.Find(new(InventoryListType.Main, 70)) is { Core.Count: 989 } &&
                 saved.Inventory.AccountWallet.SeriaLuck == 1 && saved.Inventory.Items.All(item => item.Uid > 0),
                 "Lv43空包、999源与已有余额下十连只扣10件，真实UID及幸运值一次保存");
+            // 成功应答前事务已提交；空宠物夹具的实际奖励决定是否先发布105，不能跳过未知通知。
+            if (committed.Items.Any(item => item.Creature is not null))
+                CreatureDetails(peer.Expect(0, 105).Body, committed);
+            foreach (byte list in new byte[] { 0, 2, 12, 1, 7, 38 })
+                That(peer.Expect(0, 13).Body[0] == list, "提交后重建实际物品容器：" + list);
+            ReadEffects(peer);
         }
         using (var peer = Open(fixture))
         {
             byte[] full = peer.Select(expertContract: restoreExpertContract)[4].Body;
+            CreatureDetails(peer.SpecialContainers[0].Body, committed);
             peer.Barrier();
             Bytes(peer.SeriaLuckInfo, [5, 5], "重新选角向客户端恢复已提交的幸运值阶段1");
             var main = committed.Items.Where(item => item.Position.List == InventoryListType.Main).ToArray();
@@ -70,6 +75,30 @@ internal static class MagicBoxTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "随机盒真实TCP后的存档完整性");
 
+    }
+
+    static void CreatureDetails(byte[] body, InventorySnapshot inventory)
+    {
+        using var stream = new MemoryStream(body);
+        using var reader = new BinaryReader(stream);
+        var creatures = inventory.Items.Where(item => item.Creature is not null).OrderBy(item => item.Uid).ToArray();
+        That(reader.ReadByte() == creatures.Length, "宠物明细数量与十连已提交奖励一致");
+        foreach (var item in creatures)
+        {
+            var detail = item.Creature!;
+            That(reader.ReadInt32() == item.Uid && reader.ReadByte() == detail.Satiety &&
+                reader.ReadByte() == detail.Mode && reader.ReadInt32() == detail.Experience,
+                "宠物真实UID、饱食度、模式及经验与落库详情一致");
+            if (detail.Mode == 1)
+                That(reader.ReadByte() == detail.Mode1Field0 && reader.ReadByte() == detail.Mode1Field1,
+                    "宠物模式1的两个单字节字段完整");
+            That(reader.ReadByte() == detail.Level, "宠物等级与落库一致");
+            byte[] name = Encoding.GetEncoding(936).GetBytes(detail.Name);
+            That(reader.ReadInt32() == name.Length, "宠物名称使用四字节CP936字节长度");
+            Bytes(reader.ReadBytes(name.Length), name, "宠物名称与落库一致");
+            That(reader.ReadByte() == detail.TailFlag, "宠物尾标志与落库一致");
+        }
+        That(stream.Position == stream.Length, "宠物明细无截断或额外尾部");
     }
 
     static InventorySnapshot VideoInventory() => new([new(0, new(InventoryListType.Main, 70),

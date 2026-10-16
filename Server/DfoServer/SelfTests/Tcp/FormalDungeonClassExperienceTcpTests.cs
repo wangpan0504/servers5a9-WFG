@@ -19,7 +19,8 @@ internal static partial class FormalDungeonTcpTests
             ushort slot = checked((ushort)Convert.ToInt32(fixture.Query("SELECT count(*) FROM characters")[0][0]));
             using var peer = Open(fixture);
             peer.Create("Experience" + job,job);
-            fixture.Sql("UPDATE characters SET level=16,grow_type=$p1 WHERE id=$p0",peer.Id,grow);
+            long originalStamina = grow == 0 ? 0 : DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 120;
+            fixture.Sql("UPDATE characters SET level=16,grow_type=$p1,stamina_until=$p2 WHERE id=$p0",peer.Id,grow,originalStamina);
             fixture.Sql("UPDATE character_fatigue SET used=maximum-$p1,remaining=$p1 WHERE character_id=$p0",peer.Id,remaining);
             peer.Select(slot);
             string original = Stable();
@@ -60,17 +61,18 @@ internal static partial class FormalDungeonTcpTests
             That(Stable() == original && fixture.Snapshot() == entered && EmptyRewardLedger(),
                 "体验Boss死亡只应答无掉落38，重放和伪造结算不发经验/任务/翻牌，不写普通奖励账本");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
-            That(Stable() == original && fixture.Snapshot() == entered, "体验42恢复原入口位置，不改变原职业技能或资产");
+            That(Stable() == original && fixture.Snapshot() == entered, "体验42恢复原入口位置，不改变原职业技能、资产或既有虚弱期限");
             // 同一账号接管后重新加载，确认临时上下文没有持久化并恢复普通技能编辑。
             using var reconnect = Open(fixture);
-            reconnect.Select(slot);
+            // 已有虚弱角色直接恢复房间，覆盖23后、1379前的通知；另一角色保留普通重选路径。
+            reconnect.Select(slot,resumeTown: originalStamina > 0);
             Bytes(reconnect.SkillInfo,skillInfo,"重连后的完整技能投影仍是体验前正式技能");
             That(Stable() == original, "重登保留原角色职业与完整技能树");
             reconnect.Send(28,[0,0,6,255,255,255,255,0]); reconnect.Expect(1,28,[1,0,0,6]); reconnect.Barrier();
             That(fixture.Query("SELECT count(*) FROM character_skill_bindings WHERE character_id=$p0 AND context=0 AND slot=6",peer.Id) is [[1L]],
                 "结束体验后普通快捷栏调整恢复实际提交，不泄漏体验门禁");
 
-            string Stable() => fixture.Snapshot("SELECT job,grow_type,level,experience,gold FROM characters WHERE id=$p0",peer.Id) +
+            string Stable() => fixture.Snapshot("SELECT job,grow_type,level,experience,gold,stamina_until FROM characters WHERE id=$p0",peer.Id) +
                 string.Concat(new[] { "character_skills", "character_skill_points", "character_skill_bindings", "character_skill_commands",
                     "character_skill_combos", "character_fatigue", "character_active_main_quests", "character_inventory_items", "character_inventory_slots" }
                     .Select(table => fixture.Snapshot($"SELECT * FROM {table} WHERE character_id=$p0 ORDER BY 1,2",peer.Id)));
