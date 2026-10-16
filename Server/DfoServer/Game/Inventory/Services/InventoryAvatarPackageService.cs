@@ -71,8 +71,9 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         out BoosterReceipt? receipt, DateTimeOffset now)
     {
         receipt = null;
+        var selectedIds = rows.Select(row => row.ItemId).ToHashSet();
         if (choices.Any(choice => choice.ItemId <= 0) || choices.Select(choice => choice.ItemId).Distinct().Count() != choices.Length ||
-            !choices.Select(choice => choice.ItemId).Order().SequenceEqual(rows.Select(row => row.ItemId).Distinct().Order()))
+            choices.Any(choice => !selectedIds.Contains(choice.ItemId)))
             return InventoryResult.Reject(19);
         var options = choices.ToDictionary(choice => choice.ItemId, choice => choice.Ability);
         var definitions = new List<(AvatarPackageRow Row, ItemTemplate Template, AvatarPackageType Type, byte Ability)>();
@@ -84,13 +85,17 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             {
                 var template = items.Get(row.ItemId);
                 var avatar = packages.GetAvatar(row.ItemId);
-                byte ability = options[row.ItemId];
-                if (template.Kind != ItemKind.Avatar || avatar.PendingRule is not null || row.Type >= avatar.Types.Length ||
-                    !avatar.Abilities.Contains(ability)) return InventoryResult.Reject(19);
+                // 没有可选属性的光环、武器装扮不发送5B选项；有属性声明的部位仍须显式选择。
+                bool hasChoice = options.TryGetValue(row.ItemId, out byte ability);
+                if (template.Kind != ItemKind.Avatar || avatar.PendingRule is not null ||
+                    !avatar.Types.IsEmpty && row.Type >= avatar.Types.Length ||
+                    !hasChoice && avatar.RequiresAbilityChoice || !avatar.Abilities.Contains(ability)) return InventoryResult.Reject(19);
                 int amount = checked(row.Count * count);
                 totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
                 total = checked(total + amount);
-                definitions.Add((row, template, avatar.Types[row.Type], ability));
+                // 未声明期限表时使用模板期限与默认孔位，不补造7天或30天类型行。
+                var type = avatar.Types.IsEmpty ? new AvatarPackageType(template.Expiration.Days, template.AvatarSockets) : avatar.Types[row.Type];
+                definitions.Add((row, template, type, ability));
             }
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)

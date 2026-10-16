@@ -8,6 +8,7 @@ internal readonly record struct BoosterUpgradeChance(byte Level, int Weight);
 internal sealed record BoosterChoice(int ItemId, int Count, byte Upgrade = 0, byte Refinement = 0)
 {
     public ImmutableArray<BoosterUpgradeChance> UpgradeChances { get; init; } = [];
+    public ItemKind? RequiredKind { get; init; }
 }
 internal sealed record BoosterSelectionCategory(byte Category, byte Subcategory, ImmutableArray<BoosterChoice> Rewards,
     string? PendingRule = null)
@@ -96,7 +97,7 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
                 }
                 continue;
             }
-            if (kind is not ("equipment" or "stackable" or "etc" or "cera"))
+            if (kind is not ("equipment" or "stackable" or "etc" or "cera" or "creature"))
                 return new(category, subcategory, [], kind);
             string closing = "[/" + kind + "]";
             if (!body.AsSpan(at).StartsWith(closing, StringComparison.Ordinal))
@@ -119,7 +120,7 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
                     });
                 }
                 else
-                    rewards.Add(new(id, amount));
+                    rewards.Add(new(id, amount) { RequiredKind = kind == "creature" ? ItemKind.Creature : null });
             }
         }
         return !string.IsNullOrWhiteSpace(body[at..]) ? new(category, subcategory, [], "未识别的分类尾段") :

@@ -51,14 +51,18 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
 
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
     {
-        short sourceSlot = BoosterRequests.ReadSourceSlot(packet.Body);
+        short sourceSlot = -1;
+        int? itemId = null;
+        string? reason = null;
         var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         BoosterReceipt? receipt = null;
         InventoryResult result;
         bool avatarSource = false;
         try
         {
+            sourceSlot = BoosterRequests.ReadSourceSlot(packet.Body);
             var source = capture.Selected?.Inventory.Find(new(InventoryListType.Main, sourceSlot));
+            itemId = source?.Core.ItemId;
             var definition = avatars.Definition(source?.Core.ItemId ?? 0);
             avatarSource = definition.Recognized;
             if (definition.Recognized)
@@ -66,7 +70,10 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
                 var header = AvatarPackageRequests.ReadHeader(packet.Body);
                 var category = definition.Categories.FirstOrDefault(row => row.Category == header.Category && row.Subcategory == header.Subcategory);
                 if (!definition.Available || category is null || category.Rows.IsEmpty)
+                {
+                    reason = "definition_or_category_unavailable";
                     result = InventoryResult.Reject(19);
+                }
                 else
                 {
                     int minimum = definition.SelectionCount == 0 ? category.Rows.Length : 1;
@@ -83,7 +90,10 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
                 !AvatarPackageRequests.IsSelection(packet.Body))
                 return CommandResult.Unhandled;
             else if (source is null)
+            {
+                reason = "source_missing";
                 result = InventoryResult.Reject(19);
+            }
             else
             {
                 // 尚未闭合的其他附加选择段保持未实现，不截断成普通物品选择。
@@ -97,13 +107,15 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
         {
+            reason = error switch { InvalidDataException => "invalid_request_or_resource", KeyNotFoundException => "resource_missing", _ => "numeric_overflow" };
             result = InventoryResult.Reject(19);
         }
         bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) :
             context.Owner.Execute(() => ReferenceEquals(capture.Selected, context.Session.Selected) &&
                 capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);
-        log.Write("booster_open", new { Connection = context.Id, Slot = sourceSlot, Avatar = avatarSource,
-            result.Accepted, Revision = result.Receipt?.Character.Revision });
+        log.Write("booster_open", new { Connection = context.Id, Slot = sourceSlot, ItemId = itemId, Avatar = avatarSource,
+            result.Accepted, result.Error, Reason = reason ?? (result.Accepted ? "accepted" : "operation_rejected"),
+            Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.USE_BOOSTER_ITEM, BoosterPackets.Opened(result, receipt),
             result.Accepted ? "booster_opened" : "booster_open_rejected", Guard);
         await projection.RefreshAsync(context, result);

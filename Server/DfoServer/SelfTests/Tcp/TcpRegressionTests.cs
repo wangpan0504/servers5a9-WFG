@@ -188,6 +188,13 @@ internal static class TcpRegressionTests
         ("enhancement", EnhancementTcpTests.RunAsync),
         ("creature-egg", CreatureEggTcpTests.RunAsync),
         ("avatar-capacity", AvatarCapacityTcpTests.RunAsync),
+        ("gift-selection-tcp", AvatarPackageTcpTests.RunObservedSelectionsAsync),
+        ("gift-selection-resources", (options, root, resources) =>
+        {
+            Inventory.AvatarPackageTests.RunResources(resources.Towns, resources.ItemResources, resources.ItemResources.AvatarPackages);
+            Inventory.BoosterSelectionTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("avatar-package", (options, root, resources) => AvatarPackageTcpTests.RunAsync(options, root, resources, resources.ItemResources.AvatarPackages)),
         ("avatar-dye", AvatarDyeTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),
@@ -223,7 +230,7 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "class-change-rules",
-        "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
+        "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
         "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules"

@@ -18,7 +18,10 @@ internal sealed record AvatarPackageDefinition(int SelectionCount, ImmutableArra
 }
 internal sealed record AvatarPackageType(int Days, AvatarSocketTypes Sockets, int Gold = 0, int WinPoints = 0, int Cera = 0);
 internal sealed record AvatarPackageItemDefinition(ImmutableArray<AvatarPackageType> Types,
-    ImmutableHashSet<byte> Abilities, string? PendingRule = null);
+    ImmutableHashSet<byte> Abilities, string? PendingRule = null)
+{
+    public bool RequiresAbilityChoice { get; init; } = true;
+}
 
 // 礼盒与装扮定义借用同一份PVF，只解析当前请求涉及的物品，不扫描全部STK。
 internal sealed class AvatarPackageCatalog
@@ -104,8 +107,9 @@ internal sealed class AvatarPackageCatalog
         var sizes = ImmutableArray.CreateBuilder<int>();
         foreach (string token in dimensions.Skip(1))
         {
-            if (!int.TryParse(token, out int size) || size is < 1 or > 256) return Reject("装扮分类范围无效");
-            sizes.Add(size);
+            if (!int.TryParse(token, out int size) || size is < 0 or > 256) return Reject("装扮分类范围无效");
+            // 零维度表示不展示分类选择，仍使用唯一的坐标0；不能放宽为任意分类。
+            sizes.Add(Math.Max(1, size));
         }
         if (blocks.Count == 0 || blocks.Count != Fields(text, "booster select category").Count)
             return Reject("装扮分类缺失或未闭合");
@@ -168,10 +172,10 @@ internal sealed class AvatarPackageCatalog
         ImmutableArray<AvatarTypeSelectionRow> rawTypes;
         try { rawTypes = AvatarTypeSelectionFile.Parse(new PvfDocument(text)); }
         catch (InvalidDataException error) { return Reject(error.Message); }
-        if (rawTypes.IsEmpty) return Reject("装扮期限类型缺失");
+        if (rawTypes.IsEmpty && Fields(text, "avatar type select").Count != 0) return Reject("装扮期限类型无效");
         // Client 04135EE0先插入index0的7天无孔类型，再追加PVF显式行；礼盒直接使用该索引。
         var types = ImmutableArray.CreateBuilder<AvatarPackageType>();
-        types.Add(new(7, default));
+        if (!rawTypes.IsEmpty) types.Add(new(7, default));
         foreach (var raw in rawTypes)
         {
             var sockets = new ushort[5];
@@ -200,7 +204,10 @@ internal sealed class AvatarPackageCatalog
                 return Reject("装扮共用属性资源缺失");
         }
         else abilities = [0];
-        return new(types.ToImmutable(), abilities);
+        return new(types.ToImmutable(), abilities)
+        {
+            RequiresAbilityChoice = Fields(text, "avatar select ability").Count != 0 || Fields(text, "ability case index").Count != 0
+        };
     }
 
     internal static ImmutableHashSet<byte> ParseAbilities(string text)

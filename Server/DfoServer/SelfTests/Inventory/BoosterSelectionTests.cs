@@ -32,6 +32,34 @@ internal static class BoosterSelectionTests
         var catalog = itemResources.Items;
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
+        var creatureCategory = Parse("0 0\n[creature]\n400990444 1 400990445 1\n[/creature]").Selection!.Categories.Single();
+        That(creatureCategory.PendingRule is null && creatureCategory.Rewards.All(row => row.RequiredKind == ItemKind.Creature),
+            "宠物自选段保留完整候选并约束实际产物类型");
+        foreach (var rewardId in new[] { 400990444, 400990445 })
+        {
+            var petService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
+                debugSettings: new() { IgnoreCashShopAbsoluteExpiration = true });
+            var source = new InventoryItem(1000, Bag(70), InventoryRewardGrantService.Create(catalog.Get(490705390), shopExpiration: true));
+            Character petCharacter = new(1, 0, "PetBox", 0, towns.Room, towns.InitialReturn) { Inventory = new([source]) };
+            var petResult = petService.Open(petCharacter, Select(70, [rewardId]), out var petReceipt, now);
+            That(petResult.Accepted && petResult.Plan!.After.Items.Single() is { Core.Kind: ItemKind.Creature, Creature: not null, Uid: 0 } pet &&
+                pet.Core.ItemId == rewardId && petReceipt!.Rewards.Single().Count == 1 && petCharacter.Inventory.Items.Single() == source,
+                "真实宠物礼盒两项选择分别生成完整宠物详情，不提前消耗原背包");
+            That(!petService.Open(petCharacter, Select(70, [400990444, 400990445]), out _).Accepted,
+                "宠物礼盒仍拒绝超额选择");
+            var range = ItemSlotBoundService.Range(ItemKind.Creature, petCharacter.Inventory);
+            var pets = Enumerable.Range(range.Start, range.End - range.Start + 1).Select(slot =>
+                InventoryRewardGrantService.CreateItem(catalog.Get(rewardId), new(InventoryListType.Pet, (short)slot),
+                    InventoryRewardGrantService.Create(catalog.Get(rewardId)))).ToArray();
+            var fullPetCharacter = petCharacter with { Inventory = new([source, .. pets]) };
+            That(!petService.Open(fullPetCharacter, Select(70, [rewardId]), out _, now).Accepted &&
+                fullPetCharacter.Inventory.Find(Bag(70)) == source, "宠物页满时拒绝且保留礼包，不能借用Main空格");
+            var lastSlotCharacter = petCharacter with { Inventory = new([source, .. pets[..^1]]) };
+            var lastSlot = petService.Open(lastSlotCharacter, Select(70, [rewardId]), out _, now);
+            That(lastSlot.Accepted && lastSlot.Plan!.After.Items.Length == pets.Length &&
+                lastSlot.Plan.After.Find(new(InventoryListType.Pet, range.End)) is { Creature: not null },
+                "宠物页仅剩一个槽时完整发放，边界槽不能误拒绝");
+        }
         var current = new Character(1, 0, "Selection", 0, towns.Room, towns.InitialReturn) { Job = 15 };
         var grouped = itemResources.Boosters.Get(8403).Selection!;
         That(grouped.SelectionCount == 1 && grouped.Categories.Length == 28 &&

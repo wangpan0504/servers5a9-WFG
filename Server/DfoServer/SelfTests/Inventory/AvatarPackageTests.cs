@@ -31,6 +31,12 @@ internal static class AvatarPackageTests
         That(full.Available && full.Dimensions.SequenceEqual(new[] { 2, 4 }) && full.Categories[0].Rows.SequenceEqual(
             new AvatarPackageRow[] { new(101, 1, 3, 0), new(102, 2, 4, 37) }), "装扮四字段与两个分类坐标完整保留");
         var category = full.Categories[0];
+        string implicitCategory = PackageText("101 1 3 0").Replace("2 2 4", "1 0").Replace("1 3\n[avatar]", "0 0\n[avatar]");
+        var implicitDefinition = AvatarPackageCatalog.Parse(implicitCategory);
+        That(implicitDefinition.Available && implicitDefinition.Dimensions.SequenceEqual(new[] { 1 }) &&
+            implicitDefinition.Categories.Single().Category == 0, "零分类维度只开放隐式坐标0");
+        That(!AvatarPackageCatalog.Parse(implicitCategory.Replace("0 0\n[avatar]", "1 0\n[avatar]")).Available,
+            "零分类不能接受非零分类坐标");
         That(InventoryAvatarPackageService.TrySelect(full, category, [102, 101], out var rows) && rows.SequenceEqual(category.Rows),
             "全领分类按资源顺序生成完整奖励，不依赖客户端回显顺序");
         foreach (int[] ids in new int[][] { [], [101], [101, 101], [101, 103] })
@@ -43,6 +49,12 @@ internal static class AvatarPackageTests
         That(Package("101 1 3 0\n[/avatar]\n[equipment]\n103 1\n[/equipment]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
             "混合未实现奖励段不生成截断的装扮子集");
         var avatar = AvatarPackageCatalog.ParseAvatar(AvatarText("0 `[HP MAX]` `+` 100 37 `[SKILL_LEVEL]` `[swordman]` 5 1"));
+        var implicitType = AvatarPackageCatalog.ParseAvatar("[equipment type]\n`[aurora avatar]` 0");
+        That(implicitType.PendingRule is null && implicitType.Types.IsEmpty && !implicitType.RequiresAbilityChoice,
+            "无期限表和属性声明时保留模板默认入口，不补造类型行");
+        That(AvatarPackageCatalog.ParseAvatar("[avatar type select]\n[/avatar type select]").PendingRule is not null &&
+            AvatarPackageCatalog.ParseAvatar("[avatar type select]\n0 0 0 0 0 0 0").PendingRule is not null,
+            "明确声明的空表及未闭合类型表不能冒充省略类型表");
         That(AvatarPackageCatalog.ParseAvatar(AvatarText("0 `[HP MAX]` `+` 100") + "\n[import script]\n`equipment/base.equ`")
             .PendingRule == "装扮import继承视图尚未闭合" &&
             AvatarPackageCatalog.ParseAvatar("[name]\n`[import script]是名称文字`\n" + AvatarText("0 `[HP MAX]` `+` 100")).PendingRule is null,
@@ -142,6 +154,35 @@ internal static class AvatarPackageTests
                 "518满装扮页将所有完整原型移交邮件，不丢属性、详情或任何奖励");
         }
         PeriodDeadlinePlans(towns, resources);
+        CapturedNoAbilitySelections(towns, resources, packages);
+    }
+
+    static void CapturedNoAbilitySelections(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces,
+            new() { IgnoreCashShopAbsoluteExpiration = true });
+        foreach (var sample in new[] {
+            (Id: 490705389, Body: "450001000000000014C7EF170000"),
+            (Id: 490705389, Body: "450001000000000015C7EF170000"),
+            (Id: 490705413, Body: "4400010000000900A18DC5180000") })
+        {
+            var request = AvatarPackageRequests.Read(Convert.FromHexString(sample.Body), 1, 1);
+            var source = new InventoryItem(1000, new(InventoryListType.Main, request.Slot),
+                InventoryRewardGrantService.Create(resources.Items.Get(sample.Id), shopExpiration: true));
+            Character character = new(1, 0, "NoOption", 0, towns.Room, towns.InitialReturn) { Job = 15, Inventory = new([source]) };
+            var result = service.Open(character, request, out var receipt, now);
+            That(result.Accepted && result.Plan!.After.Items.Single() is { Avatar: not null, Core.Durability: 0 } reward &&
+                reward.Core.ItemId == request.ItemIds.Single() && receipt!.Rewards.Single().Count == 1 &&
+                character.Inventory.Items.Single() == source, $"真实光环及武器装扮请求不携带属性选项，原子规划完整详情且不直接修改原背包 id={sample.Id} accepted={result.Accepted}");
+            if (sample.Id == 490705389)
+                That(result.Plan!.After.Items.Single().Avatar is { Socket0.Type: 239, Socket1.Type: 239 },
+                    "无期限表光环保留模板声明的两个M孔，不虚构期限类型表");
+            That(!packages.GetAvatar(request.ItemIds[0]).RequiresAbilityChoice, "实际产物没有可选属性声明");
+            foreach (var bad in new[] { request with { Choices = [new(request.ItemIds[0], 1)] },
+                request with { Choices = [new(1, 0)] }, request with { Category = 255 } })
+                That(!service.Open(character, bad, out _, now).Accepted, "省略属性兼容不放行伪造属性、外来编号或非法分类");
+        }
     }
 
     static void QualificationAndDeadlines()

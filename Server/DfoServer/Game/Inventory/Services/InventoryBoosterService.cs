@@ -80,6 +80,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         // 随机池预检全部有权重的候选，选择型仅预检实际所选奖励，不过滤候选或改换玩家选择。
         try
         {
+            if (choices is not null && choices.Any(row => row.RequiredKind is { } kind && catalog.Get(row.ItemId).Kind != kind))
+                return InventoryResult.Reject(19);
             var ids = choices is not null ? choices.Select(row => row.ItemId) : ceraPackage
                 ? definition.PackageRewards.Select(row => row.ItemId)
                 : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
@@ -263,7 +265,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             var entries = category.Rewards.Where(row => row.ItemId == id).ToArray();
             if (entries.Length == 0 || entries.Any(row => row.Count != entries[0].Count || row.Upgrade != entries[0].Upgrade ||
-                row.Refinement != entries[0].Refinement || !row.UpgradeChances.SequenceEqual(entries[0].UpgradeChances)))
+                row.Refinement != entries[0].Refinement || row.RequiredKind != entries[0].RequiredKind ||
+                !row.UpgradeChances.SequenceEqual(entries[0].UpgradeChances)))
                 return false;
             selected.Add(entries[0]);
         }

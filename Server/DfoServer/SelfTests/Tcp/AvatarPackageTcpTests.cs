@@ -72,8 +72,100 @@ internal static class AvatarPackageTcpTests
             fixture.Query("SELECT count(*),count(DISTINCT i.item_uid) FROM character_inventory_items i JOIN inventory_avatar_details a USING(item_uid)") is [[18L, 18L]],
             "九件、八件、单件各自保存一份唯一核心与装扮详情");
         await RunMailAsync(source, root, resources, packages);
+        await RunObservedSelectionsAsync(source, root, resources);
 
         ItemCore Core(int id) => InventoryRewardGrantService.Create(items.Get(id), shopExpiration: true);
+    }
+
+    public static async Task RunObservedSelectionsAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "observed-selections"), gm: true, resources: resources);
+        var items = resources.ItemResources.Items;
+        var repository = new CharacterRepository(fixture.Database);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repository.Create(owner, new("ObservedBox", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
+                Inventory = new([new(0, Bag(68), Core(490705413)), new(0, Bag(69), Core(490705389)), new(0, Bag(70), Core(490705390)), new(0, Bag(71), Core(490705389)), new(0, Bag(72), Core(490705390))])
+            });
+        await fixture.StartAsync();
+        BoosterTcpTests.SetExpirationDebug(fixture, true);
+        foreach (var failure in new[] {
+            (Table: "inventory_avatar_details", Body: "450001000000000014C7EF170000"),
+            (Table: "inventory_creature_details", Body: "4600010000000000ECA0E6170000") })
+        {
+            string unchanged;
+            fixture.Sql($"CREATE TRIGGER fail_selected_detail BEFORE INSERT ON {failure.Table} BEGIN SELECT RAISE(ABORT,'selected detail rollback'); END");
+            using (var peer = Open(fixture))
+            {
+                peer.Select(); peer.Barrier();
+                unchanged = State();
+                peer.Send(160, Convert.FromHexString(failure.Body)); peer.Closed();
+            }
+            That(unchanged == State(), "光环或宠物详情写入失败时源、实例、UID、版本和审计全部回滚");
+            fixture.Sql("DROP TRIGGER fail_selected_detail");
+        }
+        byte[] committedPetDetails = [];
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            var packages = resources.ItemResources.AvatarPackages;
+            That(items.Get(415600033).Expiration is { AbsoluteTime: 0, Days: 0 } &&
+                packages.GetAvatar(415600033).Types[4].Days == 0 &&
+                packages.Get(490705413).Categories.Single(row => row.Category == 9 && row.Subcategory == 0)
+                    .Rows.Single(row => row.ItemId == 415600033).Type == 4 &&
+                items.Get(401590036).Expiration is { AbsoluteTime: 0, Days: 0 } &&
+                packages.GetAvatar(401590036).Types.IsEmpty,
+                "武器礼盒选择永久类型4，光环无期限表；礼盒期限不能冒充奖励期限");
+            string before = State();
+            peer.Send(160, [68]); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(before == State(), "截断开包请求明确拒绝且不改变数据库，连接保持可用");
+            foreach (var sample in new[] {
+                (Id: 490705413, Slot: (short)68, Reward: 415600033, Body: "4400010000000900A18DC5180000"),
+                (Id: 490705389, Slot: (short)69, Reward: 401590036, Body: "450001000000000014C7EF170000"),
+                (Id: 490705390, Slot: (short)70, Reward: 400990444, Body: "4600010000000000ECA0E6170000"),
+                (Id: 490705389, Slot: (short)71, Reward: 401590037, Body: "470001000000000015C7EF170000"),
+                (Id: 490705390, Slot: (short)72, Reward: 400990445, Body: "4800010000000000EDA0E6170000") })
+            {
+                byte[] body = Convert.FromHexString(sample.Body);
+                peer.Send(160, body);
+                BoosterTcpTests.ExpectAck(peer, sample.Id, sample.Slot, [(sample.Reward, 1)]);
+                if (sample.Id == 490705390)
+                {
+                    byte[] details = peer.Expect(0, 105).Body;
+                    int expectedCount = committedPetDetails.Length == 0 ? 1 : committedPetDetails[0] + 1;
+                    That(details[0] == expectedCount && (committedPetDetails.Length == 0 ||
+                        details.AsSpan(1, committedPetDetails.Length - 1).SequenceEqual(committedPetDetails.AsSpan(1))),
+                        "宠物奖励先发送全部已提交详情，第二次发放保留第一只宠物原详情");
+                    committedPetDetails = details;
+                }
+                BoosterTcpTests.Entry(peer.Expect(0, 14).Body, sample.Slot, -1, 0);
+                byte[] changed = peer.Expect(0, 14).Body;
+                if (sample.Id != 490705390)
+                    CheckAvatarRows(changed, [new(sample.Reward, 0)]);
+                else
+                    That(changed[0] == 7 && U16(changed, 1) == 1 && changed.Length == 126 && U32(changed, 5) == sample.Reward &&
+                        U32(changed, 9) > 0, "宠物专属页收到完整123B核心和已提交UID");
+                peer.Barrier();
+                before = State();
+                peer.Send(160, body); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+                That(before == State(), "真实请求重放不重复发放、不改详情、版本或审计");
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            CheckAvatarRows(peer.SpecialContainers[1].Body, [new(415600033, 0), new(401590036, 0), new(401590037, 0)], full: true);
+            That(peer.SpecialContainers.Single(packet => packet.Opcode == 105).Body.SequenceEqual(committedPetDetails),
+                "重连仍恢复两个选择各自的完整宠物详情");
+        }
+        await fixture.StopAsync();
+        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[3L]] &&
+            fixture.Query("SELECT count(*) FROM inventory_creature_details") is [[2L]] &&
+            fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[5L, 5L]],
+            "光环与宠物各两项选择及共享武器礼盒保存五个唯一实例，源礼盒均已扣除");
+        ItemCore Core(int id) => InventoryRewardGrantService.Create(items.Get(id), shopExpiration: true);
+        string State() => Snapshot(fixture) + JsonSerializer.Serialize(fixture.Query("SELECT item_uid,detail FROM inventory_creature_details ORDER BY item_uid"));
     }
 
     static async Task RunMailAsync(ServerOptions source, string root, TcpTestResources resources, AvatarPackageCatalog packages)
