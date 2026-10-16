@@ -12,9 +12,9 @@ internal static class DungeonProbeRunTests
     {
         int checks = Count;
 
-        var maze = DungeonCatalog.Load(pvf).Get(3).Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3
+        var maze = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf).Get(3).Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3
             && candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
-        var rooms = DungeonRoomCatalog.Load(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var firstMap = maze.MapSpecification!.Single(map => map.Id == 76121);
         var nextMap = maze.MapSpecification!.Single(map => map.Id == 76122);
         var boss = maze.MapSpecification!.Single(map => map.Kind == "boss");

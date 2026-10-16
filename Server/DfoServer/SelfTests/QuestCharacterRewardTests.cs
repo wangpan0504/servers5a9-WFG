@@ -211,8 +211,8 @@ internal static class QuestCharacterRewardTests
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         int checks = Count;
-        var skills = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf,skills);
-        var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf); var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var empty = QuestEligibilityTests.Quest(100) with { Npc = 2, CompleteNpc = 2, IntData = [2], Attributes = ["not give exp quest"] };
         var range = empty with { Id = 101, Condition = "[reach the range]", SubType = 1, CompleteNpc = 0,
             IntData = [40,2,254,218,100,145] };
@@ -227,7 +227,7 @@ internal static class QuestCharacterRewardTests
             sceneCoverage.Quests.Single(row => row.Id == 104) is { ImplementedPath: false } unsupported &&
             unsupported.Restrictions.Contains("目标子类型尚未接入"),
             "已确认目标不因完成NPC为0而限制交付；未知范围仍按目标形状限制");
-        var catalog = QuestCatalog.Load(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var clearNotifications = catalog.All.Where(quest => quest.Definition?.Has("quest clear noti") == true).ToArray();
         That(clearNotifications.Length > 0 && clearNotifications.All(QuestCoverage.HasOrdinaryDisplay),
             "实际完成提示资源均使用已确认的图标路径、非负序号和文字形状");

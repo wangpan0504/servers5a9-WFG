@@ -14,9 +14,9 @@ internal static class QuestQuickClearTcpTests
 {
     internal static async Task RunAsync(TcpTestFixture fixture, TcpTestResources resources)
     {
-        var quests = QuestCatalog.Load(resources.Archive);
-        var connections = QuestConnectionCatalog.Load(resources.Archive);
-        var growth = CharacterGrowthCatalog.Load(resources.Archive,resources.Learning);
+        var quests = SelfTestCatalogs.Quests(resources.Archive);
+        var connections = SelfTestCatalogs.QuestConnections(resources.Archive);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         var roles = new List<(ushort Slot,int Question,int Marker,byte Answer)>();
         foreach (var unit in connections.Units.Where(row => row.QuickClear is not null && row.QuestionQuestId is not null))
         {

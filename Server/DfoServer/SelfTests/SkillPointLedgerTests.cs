@@ -18,8 +18,8 @@ internal static class SkillPointLedgerTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         int before = TestCheck.Count;
-        var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf, catalog);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, catalog);
         const byte level = 20;
         const int bonus = 137;
         int total = catalog.TotalSp(level) + bonus;

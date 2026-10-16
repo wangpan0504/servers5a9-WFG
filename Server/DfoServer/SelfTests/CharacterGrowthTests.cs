@@ -11,7 +11,7 @@ internal static class CharacterGrowthTests
     public static void Run(TownCatalog towns, PvfArchive pvf)
     {
         int checks = Count;
-        var catalog = CharacterGrowthCatalog.Load(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
         var firstSkills = new List<LearnedSkill> { new(12, 5, 2) };
         var secondSkills = new List<LearnedSkill> { new(7, 8, 3) };
         var trees = new List<CharacterSkillTree> { new(1, 29, 11, secondSkills), new(0, 7, 9, firstSkills) };

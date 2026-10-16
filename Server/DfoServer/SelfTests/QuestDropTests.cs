@@ -46,9 +46,9 @@ internal static class QuestDropTests
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         int before = Count;
-        var original = QuestCatalog.Load(pvf); var skills = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills); var rooms = DungeonRoomCatalog.Load(pvf);
-        var dungeons = DungeonCatalog.Load(pvf); var kills = DungeonKillExperienceCatalog.Load(pvf); var drops = DungeonMonsterDropCatalog.Load(pvf);
+        var original = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf); var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
         var seeking = QuestEligibilityTests.Quest(29987) with { Condition = "[seeking]", IntData = [10165055,2],
             Attributes = ["not give exp quest"], Definition = new([]) { Job = "[all]", Drops = [new(1,1,3,-1,10165055,2,50,5)] } };
         var catalog = new QuestCatalog(original.All.Append(seeking).ToDictionary(quest => quest.Id));

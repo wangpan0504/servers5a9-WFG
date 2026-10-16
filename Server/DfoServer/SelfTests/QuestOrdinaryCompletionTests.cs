@@ -27,8 +27,8 @@ internal static class QuestOrdinaryCompletionTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items, QuestCatalog quests)
     {
         int checks = Count;
-        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf, learning);
-        var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf); var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         QuestGoldMailTests.Run(towns, characters, items, learning, growth, parameters);
         QuestInventoryPendingTests.Run(towns, characters, items, learning, growth, parameters);
         QuestTownMutationPendingTests.Run(towns, characters, items, learning, growth, parameters);
@@ -802,9 +802,9 @@ internal static class QuestOrdinaryCompletionTests
         SkillLearningCatalog learning)
     {
         int checks=Count;
-        var growth=CharacterGrowthCatalog.Load(pvf,learning);
-        var parameters=QuestRewardParameterCatalog.Load(pvf);
-        var actual=QuestCatalog.Load(pvf).Get(3868);
+        var growth=global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
+        var parameters=global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        var actual=global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf).Get(3868);
         // 复用真实三选项，NPC/等级和前置映射到已有合成场景；不将此测试当作Windows对话验收。
         var question=actual with {MinimumLevel=1,Npc=1,IntData=[2],Prerequisites=[],
             Definition=actual.Definition! with {PrerequisiteGroups=[]}};

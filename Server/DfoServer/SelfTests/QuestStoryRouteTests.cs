@@ -22,9 +22,9 @@ internal static class QuestStoryRouteTests
         QuestCatalog? sharedQuests = null, SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
-        var quests = sharedQuests ?? QuestCatalog.Load(pvf); var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
-        var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf); var kills = DungeonKillExperienceCatalog.Load(pvf);
+        var quests = sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
         (ushort Id,byte Level,int[] Completed)[] cases =
         [
             (3147,5,[3145,4873,3146,3157,3054]),

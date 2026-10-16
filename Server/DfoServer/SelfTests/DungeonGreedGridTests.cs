@@ -11,7 +11,7 @@ internal static class DungeonGreedGridTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
-        var dungeon = DungeonCatalog.Load(pvf).Get(3);
+        var dungeon = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf).Get(3);
         var maze = dungeon.Mazes.Single(value => value.SourceOrdinal == 1);
         var grid = maze.GreedGrid;
         That(maze.QuestConnectionTokens.Select(token => token.Value).SequenceEqual(new[] { 0, 3145, -1 }) &&

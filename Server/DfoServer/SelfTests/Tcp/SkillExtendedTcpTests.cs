@@ -16,7 +16,7 @@ internal static class SkillExtendedTcpTests
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "skill-extended"), resources: resources);
         var catalog = resources.Learning;
-        var growth = CharacterGrowthCatalog.Load(resources.Archive, catalog);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, catalog);
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });

@@ -23,7 +23,7 @@ internal static class SkillProtocolTcpTests
         var catalog = resources.Learning;
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
-        var growth = CharacterGrowthCatalog.Load(pvf);
+        var growth = SelfTestCatalogs.Growth(pvf);
         const byte characterLevel = 20;
         ushort initialSp = checked((ushort)SkillCatalog.Load(pvf).GetLevelSpTotal(characterLevel));
         ulong initialExperience = growth.GetLevelStartExperience(characterLevel);

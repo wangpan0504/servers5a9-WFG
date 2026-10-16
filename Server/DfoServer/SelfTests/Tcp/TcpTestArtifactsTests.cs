@@ -80,13 +80,7 @@ internal static class TcpTestArtifactsTests
                     Console.WriteLine("SKIP TCP artifact link boundary: " + exception.GetType().Name);
                 }
             }, false);
-            TestCheck.That(!Directory.Exists(Path.Combine(passed, "group/Data")) &&
-                !Directory.Exists(Path.Combine(passed, "group/runtimes")) &&
-                !File.Exists(Path.Combine(passed, "group/DfoServer.dll")) &&
-                !File.Exists(Path.Combine(passed, "group/DfoServer.exe")) &&
-                !File.Exists(Path.Combine(passed, "group/DfoServer.deps.json")), "passed run removes temporary data and program files");
-            foreach (string path in new[] { "group/Logs/server.jsonl", "group/cli/001.stdout.txt", "group.result.json", "result.json", "evidence.txt" })
-                TestCheck.That(File.ReadAllText(Path.Combine(passed, path)) == "artifact", "passed run retains diagnostic evidence: " + path);
+            TestCheck.That(!Directory.Exists(passed), "passed run is removed entirely after its timings are recorded");
             TestCheck.That(File.Exists(Path.Combine(roots[0], "group/Data/game.db")) &&
                 File.Exists(Path.Combine(roots[1], "group/Data/Pvf/Script.pvf")), "successful rerun does not erase previous failed or cancelled scenes");
             if (linked)
@@ -103,8 +97,53 @@ internal static class TcpTestArtifactsTests
             {
                 if (Path.GetDirectoryName(root) != parent || !Guid.TryParseExact(Path.GetFileName(root), "N", out _))
                     throw new IOException("Unexpected synthetic TCP artifact path");
-                Directory.Delete(root, true);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
             }
+        }
+        RunRetention();
+    }
+
+    // 保留策略：通过的旧轮次删除；失败轮次按数量、天数、体积裁剪且最新一个始终保留；运行中轮次不动。
+    static void RunRetention()
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "dfo-tcp-retention-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(parent);
+        try
+        {
+            DateTime now = DateTime.UtcNow;
+            string Run(int hoursAgo, bool passed, int bytes = 1)
+            {
+                string root = Path.Combine(parent, Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(Path.Combine(root, "group", "Data", "Pvf"));
+                File.WriteAllBytes(Path.Combine(root, "group", "Data", "game.db"), new byte[bytes]);
+                File.WriteAllBytes(Path.Combine(root, "group", "Data", "Pvf", "Script.pvf"), new byte[4096]);
+                if (passed)
+                    File.WriteAllText(Path.Combine(root, "result.json"), "{\"Passed\":true}");
+                Directory.SetLastWriteTimeUtc(root, now.AddHours(-hoursAgo));
+                return root;
+            }
+            string legacyPassed = Run(1, true);
+            string[] failed = Enumerable.Range(0, 7).Select(i => Run(2 + i, false)).ToArray();
+            string stale = Run(24 * 10, false);
+            string running = Run(24 * 20, false);
+            string other = Path.Combine(parent, "not-a-run");
+            Directory.CreateDirectory(other);
+            using (TcpTestRetention.MarkRunning(running))
+                TcpTestRetention.Apply(parent, new TcpTestRetention.Policy(3, TimeSpan.FromDays(3), long.MaxValue), now);
+            // 删除标记会刷新目录时间；还原为原轮次时间，模拟中断后遗留的旧现场。
+            Directory.SetLastWriteTimeUtc(running, now.AddHours(-24 * 20));
+            TestCheck.That(!Directory.Exists(legacyPassed), "retention removes leftover passed runs");
+            TestCheck.That(failed.Take(3).All(Directory.Exists) && !failed.Skip(3).Any(Directory.Exists), "retention keeps only the newest N failed runs");
+            TestCheck.That(!Directory.Exists(stale), "retention removes failed runs older than the age limit");
+            TestCheck.That(Directory.Exists(running) && Directory.Exists(other), "retention skips running runs and non-run directories");
+            TcpTestRetention.Apply(parent, new TcpTestRetention.Policy(5, TimeSpan.FromDays(3), 1), now);
+            TestCheck.That(Directory.Exists(failed[0]) && !failed.Skip(1).Any(Directory.Exists), "size cap prunes older failures but always keeps the newest failed run");
+            TestCheck.That(!Directory.Exists(running), "a released running marker makes an expired run eligible");
+        }
+        finally
+        {
+            Directory.Delete(parent, true);
         }
     }
 }

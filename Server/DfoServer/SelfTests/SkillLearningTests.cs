@@ -186,7 +186,7 @@ internal static class SkillLearningTests
     {
         int checks = Count;
         SkillLearningCommand Request(ushort id = 5) => new(0, 0, [new(id, false, 1)]);
-        var actual = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
+        var actual = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         That(actual.Get(0, 5).GetBasePointCost(0) == 15, "matching resource hardattack base cost independently known");
         SkillLearningResult real = SkillLearning.Plan(0, 0, 1, State(15, []), Request(), actual.Get);
         That(real.Success && real.State!.Trees[0].Sp == 0 && real.Changes.Single().Level == 1, "real PVF ordinary hardattack learning consumes15 SP");

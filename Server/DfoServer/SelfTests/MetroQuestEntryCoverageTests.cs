@@ -22,10 +22,10 @@ internal static class MetroQuestEntryCoverageTests
         QuestCatalog quests, SkillLearningCatalog skills)
     {
         int checks = Count;
-        var growth = CharacterGrowthCatalog.Load(pvf, skills);
-        var parameters = QuestRewardParameterCatalog.Load(pvf);
-        var dungeons = DungeonCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var answeredFactions = new HashSet<int>();
         var connections = Enumerable.Range(310, 5).SelectMany(id => dungeons.Get(id).Mazes
             .Where(maze => maze.QuestConnectionTokens.Count != 0).Select(maze => (Dungeon: (uint)id, Maze: maze))).ToArray();

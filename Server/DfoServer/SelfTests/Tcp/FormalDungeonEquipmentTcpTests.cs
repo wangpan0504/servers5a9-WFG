@@ -31,7 +31,7 @@ internal static partial class FormalDungeonTcpTests
             var repository = new CharacterRepository(fixture.Database);
             var catalog = resources.Learning;
             var learning = SkillLearning.Initialize(0, profile.Skills, catalog).State! with
-            { Experience = CharacterGrowthCatalog.Load(resources.Archive, catalog).GetLevelStartExperience(95) };
+            { Experience = SelfTestCatalogs.Growth(resources.Archive, catalog).GetLevelStartExperience(95) };
             learning = SkillPointLedger.Synchronize(0, 0, 95, learning, catalog);
             character = repository.Create(owner, new("EquipRoomTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             { Level = 95, AcceptedStoryLevel = 1, Skills = profile.Skills, InitialLearning = learning,

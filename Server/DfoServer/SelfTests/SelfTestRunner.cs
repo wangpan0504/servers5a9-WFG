@@ -161,7 +161,7 @@ internal static class SelfTestRunner
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         await RunCoreAsync();
-        var sharedQuests = QuestCatalog.Load(pvf);
+        var sharedQuests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var sharedSkills = SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels);
         PacketCompatibilityTests.Run(characters);
         CharacterBoundaryTests.Run(towns, characters);
@@ -265,7 +265,7 @@ internal static class SelfTestRunner
         DungeonItemDropCatalogTests.RunResources(itemResources.DungeonDropItems);
         DungeonSpecialDropCatalogTests.RunResources(itemResources.DungeonSpecialDrops);
         DungeonPickupPlanningTests.RunResources(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-        DungeonExplicitDropPolicyTests.RunResources(DungeonMonsterDropCatalog.Load(pvf), itemResources.Items);
+        DungeonExplicitDropPolicyTests.RunResources(global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), itemResources.Items);
         DungeonGrowthRepositoryTests.Run(towns, pvf, characters);
         DungeonDropCollectionRepositoryTests.Run(towns, pvf, characters, itemResources);
         await FormalDungeonSessionTests.RunAsync(towns, pvf, characters, itemResources);

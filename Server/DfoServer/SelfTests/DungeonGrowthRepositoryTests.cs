@@ -25,8 +25,8 @@ internal static class DungeonGrowthRepositoryTests
         string path = Path.Combine(root, "game.db");
         try
         {
-            var growth = CharacterGrowthCatalog.Load(pvf);
-            var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
+            var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+            var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("growth-repository", () => { });
@@ -159,7 +159,7 @@ internal static class DungeonGrowthRepositoryTests
             var localCharacter = repository.Create(replacement, localSeed);
             var (localRun, localAuthority) = CreateRun(localCharacter);
             var localPending = localRun.PrepareConfirmedDeath(localAuthority.Death(localRun.Snapshot.Identity, 20, 1)).Pending!;
-            var rewardTable = DungeonKillExperienceCatalog.Load(pvf);
+            var rewardTable = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
             var localReward = DungeonKillExperiencePolicy.Plan(localRun, localPending, rewardTable, localCharacter.Level);
             var localCommit = repository.CommitDungeonGrowth(replacement, localCharacter, localRun, localPending, localReward, growth);
             That(localReward.RuleId == DungeonKillExperienceCatalog.RuleId && localReward.ResourceSource == DungeonKillExperienceCatalog.ResourcePath &&
@@ -222,9 +222,9 @@ internal static class DungeonGrowthRepositoryTests
         int checks = Count;
         try
         {
-            var catalog = CharacterGrowthCatalog.Load(pvf);
-            var rewards = DungeonKillExperienceCatalog.Load(pvf);
-            var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
+            var catalog = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+            var rewards = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+            var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("growth-session", () => { });

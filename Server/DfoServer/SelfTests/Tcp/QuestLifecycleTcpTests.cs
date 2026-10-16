@@ -548,7 +548,7 @@ internal static class QuestLifecycleTcpTests
             void Drain() => DrainNotifications(peer);
         }
         // 复现zz所选的真实转职分支；fixture前置独立准备，不计入全新角色连续推进验收。
-        var growth = CharacterGrowthCatalog.Load(resources.Archive,resources.Learning);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         using (var owner = new AccountOwners().Acquire(extra.Options.DevelopmentAccount,() => { }))
         {
             var candidate = CharacterCreation.Prepare("QuestCareer",resources.Characters.Get(14),resources.Towns.Room,
@@ -574,7 +574,7 @@ internal static class QuestLifecycleTcpTests
             peer.Select(slot: 2,prepared: true); FormalDungeonTcpTests.EntryTown(peer);
             byte[] info = [];
             var map = FormalDungeonTcpTests.Enter(peer,6948,1000,row => info = row); FormalDungeonTcpTests.Load(peer);
-            var dungeons = DungeonCatalog.Load(resources.Archive); var rooms = DungeonRoomCatalog.Load(resources.Archive);
+            var dungeons = SelfTestCatalogs.Dungeons(resources.Archive); var rooms = SelfTestCatalogs.Rooms(resources.Archive);
             var maze = dungeons.Get(1000).Mazes.Single(row => row.SourceOrdinal == info[7]);
             var boss = new DungeonPoint(info[8],info[9]);
             var path = QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),boss);
@@ -1008,7 +1008,7 @@ internal static class QuestLifecycleTcpTests
 
     static void VerifyPassiveTerminalSettlement(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
     {
-        var dungeons = DungeonCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (var scenario in new[] { (Quest:3205,Dungeon:25,Level:28,Previous:3204,Map:53493,Request:3205),
             (Quest:3210,Dungeon:27,Level:29,Previous:3209,Map:53508,Request:3210),
             (Quest:3205,Dungeon:25,Level:28,Previous:3204,Map:53493,Request:0) })
@@ -1166,7 +1166,7 @@ internal static class QuestLifecycleTcpTests
 
     static void VerifyDungeonNpcMeeting(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
     {
-        var dungeons = DungeonCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (int materialCount in new[] { 0,1 })
         {
             var done = new HashSet<int> { 3633 };
@@ -1522,7 +1522,7 @@ internal static class QuestLifecycleTcpTests
         await VerifyNoMainQuestReturnAsync(options,root,resources);
         await using var fixture = new TcpTestFixture(options,Path.Combine(root,"quest-continuation"),resources: resources);
         await fixture.StartAsync();
-        var growth = CharacterGrowthCatalog.Load(resources.Archive,resources.Learning);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
         {
             // 只准备早期前置与已覆盖的对话子任务；本组真实验证一条清图、交付和后继转场。

@@ -102,14 +102,14 @@ internal static class QuestManualSkipTests
         int checks = Count;
         QuestCatalogTests.RunClosingTags();
         VerifyAreaScope();
-        var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         string logRoot = Path.Combine(Path.GetTempPath(),"S5A9-manual-skip-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(logRoot);
         try
         {
             using var log = new ServerLog(logRoot);
-            var realQuests = QuestCatalog.Load(pvf);
+            var realQuests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
             var bell=realQuests.Get(3992);
             var bellCharacter=new Character(1,0,"Bell",0,towns.Room,null) {Level=95,GrowType=0x25};
             That(bell.Definition is {Diagnostics.IsEmpty:true} && bell.Prerequisites.SequenceEqual([3991]) &&

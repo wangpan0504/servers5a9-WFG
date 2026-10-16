@@ -11,10 +11,10 @@ internal static partial class FormalDungeonTcpTests
     public static async Task RunPassiveAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         DungeonPassiveDropTests.RunResources(resources);
-        var dungeons = DungeonCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var maze = dungeons.Get(3).Mazes.Single(row => row.ConnectsQuest(3145));
         var start = maze.MapSpecification!.Single(map => map.Position == maze.Starts.Single());
-        if (!DungeonRoomCatalog.Load(resources.Archive).Get(start).SpecialObjects.Any(parent => parent.Children.Any(child => child.Kind == "[item]")))
+        if (!SelfTestCatalogs.Rooms(resources.Archive).Get(start).SpecialObjects.Any(parent => parent.Children.Any(child => child.Kind == "[item]")))
         {
             Console.WriteLine("SKIP 特殊树TCP：当前PVF的3145入口未声明item测试树；规则及SQLite覆盖已执行");
             return;

@@ -19,8 +19,8 @@ internal static class CharacterProgressResetTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         int start = Count;
-        var skills = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf, skills);
+        var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
         var reset = new CharacterProgressReset(characters, skills, growth);
         var owners = new AccountOwners();
         string root = Path.Combine(Path.GetTempPath(), "S5A9-gm-reset-" + Guid.NewGuid().ToString("N"));

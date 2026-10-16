@@ -22,8 +22,8 @@ internal static class MetroQuestEntryTcpTests
         Action<TcpPeer, Action<WirePacket>?> drain)
     {
         int checks = Count;
-        var dungeons = DungeonCatalog.Load(resources.Archive);
-        var rooms = DungeonRoomCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         VerifyFaction(0, 3868, 3871, 3873);
         VerifyFaction(11, 3869, 3872, 3874);
         VerifySequential(3971, [(3972, 455)], 3973, 310, 88);

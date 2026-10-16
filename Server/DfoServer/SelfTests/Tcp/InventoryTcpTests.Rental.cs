@@ -29,7 +29,7 @@ internal static partial class InventoryTcpTests
             // 共享本服务与资源，保留原1级领取回归，再沿真实Q8581接取/租赁/领奖。
             var quests = resources.Quests;
             That(QuestRentalProgress.Supports(quests.Get(QuestRentalProgress.QuestId)), "真实PVF租赁任务合同与已绑定event17匹配");
-            var growth = CharacterGrowthCatalog.Load(resources.Archive,resources.Learning);
+            var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
             var reset = new CharacterProgressReset(resources.Characters,resources.Learning,growth);
             var role = Prepare("RentQuest");
             questSlot = role.Slot;

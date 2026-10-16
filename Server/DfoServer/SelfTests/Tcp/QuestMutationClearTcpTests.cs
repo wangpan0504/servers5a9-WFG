@@ -36,7 +36,7 @@ internal static class QuestMutationClearTcpTests
             quest.Rewards is [{ Type: 0,Value: 0,Text: null },{ Type: 0,Value: 0,Text: null }] &&
             !quest.Attributes.Contains("not give exp quest"),
             "3348保持真实48级、3347前置、D52清76347及零物品奖励声明，不预写清图条件");
-        var maze = DungeonCatalog.Load(resources.Archive).Get(52).Mazes.Single(row => row.ConnectsQuest(3348));
+        var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(52).Mazes.Single(row => row.ConnectsQuest(3348));
         That(maze.Width == 5 && maze.Height == 4 && maze.Starts.Single() == Route[0].Position && maze.Bosses.Single() == Route[^1].Position &&
             maze.MapSpecification!.Select(row => (row.Id,row.Position)).SequenceEqual(
                 Route.Select((row,index) => (76340+index,row.Position))) &&

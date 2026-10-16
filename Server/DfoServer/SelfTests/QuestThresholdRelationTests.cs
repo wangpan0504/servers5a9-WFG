@@ -127,8 +127,8 @@ internal static class QuestThresholdRelationTests
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         int checks = Count;
-        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf,learning);
-        var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf); var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var parent = Parent(200,[100,101,102,103],2) with { Attributes=["not give exp quest"],Rewards=Rows(2058,2) };
         var first = Child(100,200) with { Rewards=Rows(2058,1) };
         var second = Child(101,200) with { Rewards=Rows(2058,2) };

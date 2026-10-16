@@ -74,10 +74,10 @@ internal static class QuestCompletionPlanTests
     public static void RunResources(PvfArchive archive, ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces)
     {
         var character = CharacterFixture();
-        var quests = QuestCatalog.Load(archive);
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(archive);
         var quest = quests.Get(3145);
-        var parameters = QuestRewardParameterCatalog.Load(archive);
-        var growth = CharacterGrowthCatalog.Load(archive);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(archive);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(archive);
         var clear = ClearFixture(character);
         var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
         QuestCompletionPreparation Prepare(Character expected) => QuestCompletionPlan.Prepare(expected, quest, ushort.MaxValue, quests, parameters,

@@ -157,7 +157,7 @@ internal static class DungeonMapPoolTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
-        var catalog = DungeonCatalog.Load(pvf); var definition = catalog.Get(10);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var definition = catalog.Get(10);
         var actual = definition.Mazes.Single(maze => maze.QuestConnectionTokens.Count == 0);
         That(ReferenceEquals(catalog.ResolveOrdinaryMaze(definition,actual,_ => throw new InvalidOperationException()),actual),
             "实际龙人之塔完整显式普通路线不进入地图池或重新抽图");

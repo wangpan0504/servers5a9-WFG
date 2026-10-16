@@ -23,8 +23,8 @@ internal static class QuestCounterattackEntryTcpTests
             quest.Condition == "[condition under clear]" && quest.SubType == 11 &&
             quest.IntData.SequenceEqual(new[] { 85,-1,-1 }) && quest.Definition!.Dungeons.Any(row => row.DungeonId == 85),
             "大决战3553保持真实等级、前置及D85通关条件，不改成单图目标");
-        var definition = DungeonCatalog.Load(resources.Archive).Get(85);
-        var rooms = DungeonRoomCatalog.Load(resources.Archive);
+        var definition = SelfTestCatalogs.Dungeons(resources.Archive).Get(85);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         var maze = definition.Mazes.Single(row => row.ConnectsQuest(3553));
         var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,quest,85);
         const string account = "counterattack173", name = "Battle173";

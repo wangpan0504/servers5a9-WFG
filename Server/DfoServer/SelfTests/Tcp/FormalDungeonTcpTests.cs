@@ -17,8 +17,8 @@ internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        var growth = CharacterGrowthCatalog.Load(resources.Archive);
-        var kills = DungeonKillExperienceCatalog.Load(resources.Archive);
+        var growth = SelfTestCatalogs.Growth(resources.Archive);
+        var kills = SelfTestCatalogs.KillExperience(resources.Archive);
         await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"), gm: true, resources: resources);
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out var fatigueMode) &&
@@ -198,10 +198,10 @@ internal static partial class FormalDungeonTcpTests
             That(experience == 2868 && projectedLevel == 3 && Experience(fixture, peer.Id) == 2868,
                 "Lv1零经验起步完整六房得到2868经验，升级后逐次调整击杀倍率");
             That(upgradedRoomMoves > 0, "副本升级只发Player后仍能清完当前房间、成功换房并加载下一房");
-            var clearCatalog = DungeonClearExperienceCatalog.Load(resources.Archive);
+            var clearCatalog = SelfTestCatalogs.ClearExperience(resources.Archive);
             RejectDelilahServices(fixture,peer,"Settlement before commit");
             // 修复后击杀XP为2868；最高评分456使首次通关跨过Lv3边界3315。
-            var clearReward = clearCatalog.Calculate(DungeonCatalog.Load(resources.Archive).Get(3), 0, 99);
+            var clearReward = clearCatalog.Calculate(SelfTestCatalogs.Dungeons(resources.Archive).Get(3), 0, 99);
             byte[] reportResult = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99);
             byte[] corruptedResult = (byte[])reportResult.Clone(); corruptedResult[49] ^= 1;
             peer.Send(46, corruptedResult); peer.Barrier();
@@ -452,7 +452,7 @@ internal static partial class FormalDungeonTcpTests
             uint questExperience;
             using (var owner = new DfoServer.Game.Accounts.AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
                 questExperience = QuestExperiencePolicy.Prepare(new DfoServer.Persistence.CharacterRepository(fixture.Database).LoadCharacter(owner, 0),
-                    QuestCatalog.Load(resources.Archive).Get(3145), QuestRewardParameterCatalog.Load(resources.Archive)).Amount;
+                    SelfTestCatalogs.Quests(resources.Archive).Get(3145), SelfTestCatalogs.QuestRewardParameters(resources.Archive)).Amount;
             peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
             byte[] questAck = peer.Expect(1, 34).Body;
             int[] rewards = [10165055, 101010438, 10403, 12403, 14403, 16403, 18403];
@@ -743,9 +743,9 @@ internal static partial class FormalDungeonTcpTests
 
     static void VerifyOrdinaryRoutes(TcpTestFixture fixture, TcpTestResources resources)
     {
-        var dungeons = DungeonCatalog.Load(resources.Archive);
-        var rooms = DungeonRoomCatalog.Load(resources.Archive);
-        var clearRewards = DungeonClearExperienceCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
+        var clearRewards = SelfTestCatalogs.ClearExperience(resources.Archive);
         foreach (int dungeonId in new[] { 5, 6, 7, 8, 9, 1000 })
         {
             var definition = dungeons.Get(dungeonId);
@@ -982,7 +982,7 @@ internal static partial class FormalDungeonTcpTests
         long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]);
         ulong experience = Experience(fixture, peer.Id);
         byte currentLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
-        var clearReward = DungeonClearExperienceCatalog.Load(resources.Archive).Calculate(DungeonCatalog.Load(resources.Archive).Get(3), 0, 90);
+        var clearReward = SelfTestCatalogs.ClearExperience(resources.Archive).Calculate(SelfTestCatalogs.Dungeons(resources.Archive).Get(3), 0, 90);
         byte[] selection = Selection();
         BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16), 0);
         SelectMap(peer);

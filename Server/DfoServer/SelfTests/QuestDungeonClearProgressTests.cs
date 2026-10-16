@@ -46,9 +46,9 @@ internal static class QuestDungeonClearProgressTests
         int checks = Count;
         string root = Path.Combine(Path.GetTempPath(),"S5A9-quest-dungeon-clear-"+Guid.NewGuid().ToString("N"));
         string path = Path.Combine(root,"game.db");
-        var skills = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills);
-        var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var counted = QuestEligibilityTests.Quest(100) with { Condition = "[condition under clear]", SubType = 6,
             IntData = [3,-1,3], CompleteNpc = -1, Attributes = ["not give exp quest"], Rewards = [] };
         var singleMap = counted with { Id = 101, Condition = "[clear map]", SubType = -1, IntData = [76126] };
@@ -146,9 +146,9 @@ internal static class QuestDungeonClearProgressTests
         string root = Path.Combine(Path.GetTempPath(),"S5A9-quest-initialization-"+Guid.NewGuid().ToString("N"));
         string path = Path.Combine(root,"game.db");
         var quests = new QuestCatalog(new[] { threshold,mazeTarget,eight }.ToDictionary(row => row.Id));
-        var skills = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills);
-        var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var owners = new AccountOwners();
         using var owner = owners.Acquire("quest-initialization",() => { });
         try

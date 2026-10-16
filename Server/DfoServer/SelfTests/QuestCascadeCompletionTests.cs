@@ -20,8 +20,8 @@ internal static class QuestCascadeCompletionTests
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         int checks = Count;
-        var actual = QuestCatalog.Load(pvf); var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,learning); var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var actual = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         foreach (var (terminal,markerId) in new[] { (6211,6218),(6308,6315),(6352,6380) })
         {
             That(QuestRelationProgress.CascadeMarker(actual.Get(terminal),actual) == markerId &&

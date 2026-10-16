@@ -12,10 +12,10 @@ internal static class TutorialTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        TutorialTests.RunGrowthBoundaries(CharacterGrowthCatalog.Load(resources.Archive));
+        TutorialTests.RunGrowthBoundaries(SelfTestCatalogs.Growth(resources.Archive));
         var tutorials = resources.Tutorials;
-        var dungeons = DungeonCatalog.Load(resources.Archive);
-        var rooms = DungeonRoomCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         var scenes = resources.TutorialScenes;
         That(tutorials.Flows.Count() == 14 && tutorials.Get(0) is { DungeonId: 7115, IntroAfterTutorial: false, Destination.Town: 38, Destination.Area: 0 } &&
             tutorials.Get(15) is { DungeonId: 7145 } && tutorials.Get(9) is null && tutorials.Get(10) is null && tutorials.Rewards is [{ ItemId: 8474, Count: 1 }],

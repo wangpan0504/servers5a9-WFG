@@ -61,16 +61,26 @@ internal static class TcpRegressionTests
             QuestDungeonClearProgressTests.RunInitialization(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources);
             return Task.CompletedTask;
         }),
-        ("dungeon-story-events", async (_, _, resources) =>
+        // 原 dungeon-story-events 拆为互不共享状态的四段，可并行；旧名保留为别名。
+        ("story-cinematic", (_, _, resources) =>
         {
             QuestCinematicSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            return Task.CompletedTask;
+        }),
+        ("story-scenes", (_, _, resources) =>
+        {
             QuestSceneTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            return Task.CompletedTask;
+        }),
+        ("story-quest-entry", (_, _, resources) =>
+        {
             MiddleQuestEntryTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             MetroQuestEntryCoverageTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             HarlemQuestEntryTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
-            await DungeonStoryEventPublicationTests.RunAsync(resources.Towns,resources.Archive,
-                resources.Characters,resources.ItemResources,resources.Learning);
+            return Task.CompletedTask;
         }),
+        ("story-publication", (_, _, resources) => DungeonStoryEventPublicationTests.RunAsync(resources.Towns,resources.Archive,
+            resources.Characters,resources.ItemResources,resources.Learning)),
         ("quest-core-rewards", async (_, _, resources) =>
         {
             ImageCommunicationTests.RunResources(resources.Towns, resources.Archive, resources.Characters,
@@ -179,40 +189,75 @@ internal static class TcpRegressionTests
         ("presence", TownPresenceTcpTests.RunAsync)
     ];
 
-    public static IEnumerable<string> GroupNames => Groups.Select(group => group.Name);
+    // 拆分后的旧组名作为别名，展开为原有全部内容，保持既有命令可用。
+    static readonly Dictionary<string, string[]> Aliases = new(StringComparer.Ordinal)
+    {
+        ["dungeon-story-events"] = ["story-cinematic", "story-scenes", "story-quest-entry", "story-publication"]
+    };
+
+    public static IEnumerable<string> GroupNames => Groups.Select(group => group.Name).Concat(Aliases.Keys);
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
-    static IEnumerable<string> DefaultGroupNames => GroupNames.Where(name => name is not ("dungeon-entry-plan" or "quest-continuation" or "quest-manual-skip" or "quest-ticket" or "quest-specified-ticket" or "quest-awakening-ticket" or "quest-play-only" or "quest-auto-meet" or "quest-npc-mapping" or "quest-hidden" or "quest-replay" or "quest-initialization" or "dungeon-story-events" or "quest-core-rewards" or "dungeon-settlement" or "dungeon-drop-storage" or "inventory-persistence" or "resource-survey" or "consumable-use-rules"));
+    static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
+    {
+        "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
+        "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
+        "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
+        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules"
+    };
+    static IEnumerable<string> DefaultGroupNames => Groups.Select(group => group.Name).Where(name => !TargetedOnly.Contains(name));
     public static bool IsValidSelection(string selection)
     {
         string[] names = selection.Split(',');
         return names.Distinct(StringComparer.Ordinal).Count() == names.Length && names.All(GroupNames.Contains);
     }
 
+    internal static string[] Expand(IEnumerable<string> names) =>
+        names.SelectMany(name => Aliases.TryGetValue(name, out var members) ? members : [name]).Distinct(StringComparer.Ordinal).ToArray();
+
     public static async Task RunAsync(ServerOptions options, string? selection = null)
     {
         if (selection is not null && !IsValidSelection(selection))
             throw new InvalidDataException("未知或重复的 TCP 测试组");
-        string[] selected = selection?.Split(',') ?? DefaultGroupNames.ToArray();
+        string[] selected = Expand(selection?.Split(',') ?? DefaultGroupNames);
+        // 并行分片子进程：直接写入父轮次分配的目录，由父驱动统一汇总与清理。
+        string? shardRoot = Environment.GetEnvironmentVariable(TcpTestShards.ShardRootVariable);
+        if (!string.IsNullOrEmpty(shardRoot))
+        {
+            Environment.SetEnvironmentVariable(TcpTestShards.ShardRootVariable, null);
+            string root = Path.GetFullPath(shardRoot);
+            Directory.CreateDirectory(root);
+            await RunGroupsAsync(options, root, selected);
+            return;
+        }
+        int parallel = Math.Min(TcpTestShards.Parallelism(), selected.Length);
         await TcpTestArtifacts.RunAsync(async root =>
         {
-            using var resources = new TcpTestResources(options);
-            foreach (var group in Groups.Where(group => selected.Contains(group.Name, StringComparer.Ordinal)))
-            {
-                int before = TestCheck.Count;
-                long allocated = GC.GetTotalAllocatedBytes();
-                var watch = Stopwatch.StartNew();
-                await group.Run(options, root, resources);
-                using var process = Process.GetCurrentProcess();
-                File.WriteAllText(Path.Combine(root, group.Name + ".result.json"), JsonSerializer.Serialize(new
-                {
-                    Passed = true, Assertions = TestCheck.Count - before, ElapsedMs = watch.ElapsedMilliseconds,
-                    DriverPrivateBytes = process.PrivateMemorySize64, DriverWorkingSetBytes = process.WorkingSet64,
-                    AllocatedBytes = GC.GetTotalAllocatedBytes() - allocated, SharedResourcesLoaded = resources.IsLoaded
-                }));
-                Console.WriteLine($"PASS TCP {group.Name}: {TestCheck.Count - before} assertions");
-            }
-            File.WriteAllText(Path.Combine(root, "result.json"), JsonSerializer.Serialize(new { Passed = true, Assertions = TestCheck.Count, Groups = selected, Runtime = Environment.Version.ToString(), OS = Environment.OSVersion.ToString() }));
-            Console.WriteLine($"PASS {TestCheck.Count} C# TCP assertions; {root}");
+            if (parallel > 1)
+                await TcpTestShards.RunAsync(root, selected, parallel, TcpTestTimings.Load(TcpTestArtifacts.Parent));
+            else
+                await RunGroupsAsync(options, root, selected);
         });
+    }
+
+    static async Task RunGroupsAsync(ServerOptions options, string root, string[] selected)
+    {
+        using var resources = new TcpTestResources(options);
+        foreach (var group in Groups.Where(group => selected.Contains(group.Name, StringComparer.Ordinal)))
+        {
+            int before = TestCheck.Count;
+            long allocated = GC.GetTotalAllocatedBytes();
+            var watch = Stopwatch.StartNew();
+            await group.Run(options, root, resources);
+            using var process = Process.GetCurrentProcess();
+            File.WriteAllText(Path.Combine(root, group.Name + ".result.json"), JsonSerializer.Serialize(new
+            {
+                Passed = true, Assertions = TestCheck.Count - before, ElapsedMs = watch.ElapsedMilliseconds,
+                DriverPrivateBytes = process.PrivateMemorySize64, DriverWorkingSetBytes = process.WorkingSet64,
+                AllocatedBytes = GC.GetTotalAllocatedBytes() - allocated, SharedResourcesLoaded = resources.IsLoaded
+            }));
+            Console.WriteLine($"PASS TCP {group.Name}: {TestCheck.Count - before} assertions, {watch.Elapsed.TotalSeconds:F1}s");
+        }
+        File.WriteAllText(Path.Combine(root, "result.json"), JsonSerializer.Serialize(new { Passed = true, Assertions = TestCheck.Count, Groups = selected, Runtime = Environment.Version.ToString(), OS = Environment.OSVersion.ToString() }));
+        Console.WriteLine($"PASS {TestCheck.Count} C# TCP assertions; {root}");
     }
 }

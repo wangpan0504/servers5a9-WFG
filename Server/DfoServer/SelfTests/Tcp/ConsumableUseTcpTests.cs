@@ -21,7 +21,7 @@ internal static class ConsumableUseTcpTests
         {
             var candidate = CharacterCreation.Prepare("UsePotion", resources.Characters.Get(0), resources.Towns.Room,
                 resources.Towns.InitialReturn, resources.Learning.Get);
-            var growth = CharacterGrowthCatalog.Load(resources.Archive, resources.Learning);
+            var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
             var learning = SkillPointLedger.Synchronize(0, 0, 16, candidate.InitialLearning with
             { Experience = growth.GetLevelStartExperience(16) }, resources.Learning);
             var created = repository.Create(owner, candidate with { Level = 16, InitialLearning = learning,

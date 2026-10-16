@@ -14,7 +14,7 @@ internal static partial class FormalDungeonTcpTests
 {
     static void VerifyQuestBossEntry(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
     {
-        var dungeons = DungeonCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (var scenario in new[] { (Quest:3772,Dungeon:235,Previous:3771,Level:(byte)84), (Quest:3773,Dungeon:227,Previous:3772,Level:(byte)84),
             (Quest:3774,Dungeon:1005,Previous:3773,Level:(byte)84), (Quest:3776,Dungeon:1007,Previous:3775,Level:(byte)84),
             (Quest:3777,Dungeon:238,Previous:3776,Level:(byte)84), (Quest:3946,Dungeon:310,Previous:3945,Level:(byte)88) })

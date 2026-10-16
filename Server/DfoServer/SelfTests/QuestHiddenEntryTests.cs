@@ -71,7 +71,7 @@ internal static class QuestHiddenEntryTests
         QuestCatalog actual,SkillLearningCatalog learning)
     {
         int checks = Count;
-        var growth = CharacterGrowthCatalog.Load(pvf,learning); var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var direct = actual.All.Where(quest => QuestHiddenEntry.Direct(quest,actual)).ToArray();
         That(direct.Length > 0 && direct.All(quest => quest.Grade == "[hidden]" && quest.MainQuest is null &&
             QuestCoverage.HasOrdinaryDeclarations(quest) && QuestCoverage.HasSupportedTarget(quest,actual)),

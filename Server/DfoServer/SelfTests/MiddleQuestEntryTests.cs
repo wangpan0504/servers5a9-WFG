@@ -62,9 +62,9 @@ internal static class MiddleQuestEntryTests
         QuestCatalog quests, SkillLearningCatalog skills)
     {
         int checks = Count;
-        var growth = CharacterGrowthCatalog.Load(pvf,skills);
-        var dungeons = DungeonCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         foreach (var (scenario,template,parameter,monsterCount,passiveCount) in new[]
         {
             (NpcScenarios[0],107000195,1020,60,325), (NpcScenarios[1],107000197,1069,55,287)

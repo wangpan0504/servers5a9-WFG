@@ -34,12 +34,12 @@ internal static class FormalDungeonPublicationTests
     {
         int before = TestCheck.Count;
         var computer = new CharacterStatComputer(characters);
-        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf);
-        var kills = DungeonKillExperienceCatalog.Load(pvf);
-        var catalog = DungeonCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
-        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
+        var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+        var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         await EntryRejectionAsync();
         await StorageFailureAsync(false);
         await StorageFailureAsync(true);
@@ -62,7 +62,7 @@ internal static class FormalDungeonPublicationTests
             var commands = new GameCommandRegistry();
             new DungeonHandler(f.Log, catalog, rooms, growth, kills,
                 new TownProjection(towns, computer, presence, items.EpicPieces), new CharacterLevelProjection(computer),
-                DungeonMonsterDropCatalog.Load(pvf), items.Items, items.EpicPieces, items.GoldLimits,
+                global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), items.Items, items.EpicPieces, items.GoldLimits,
                 prepareDrops: prepareDrops).Register(commands);
             if (inventoryActions is not null)
                 new InventoryHandler(inventoryActions, new InventoryProjection(computer,
@@ -548,7 +548,7 @@ internal static class FormalDungeonPublicationTests
         async Task PickupLostResultAsync()
         {
             using var f = new Fixture(towns, characters, learning, quests, true, losePickup: true);
-            var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, DungeonMonsterDropCatalog.Load(pvf), items.Items, bound => 0)!;
+            var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), items.Items, bound => 0)!;
             f.Session.CompleteFormalDungeonLoading();
             var commands = Registry(f);
             using var stop = new CancellationTokenSource();

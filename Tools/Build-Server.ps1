@@ -64,7 +64,11 @@ function Remove-Stage {
     if (-not (Test-Within $resolvedStage $buildRoot) -or $resolvedStage -eq $buildRoot) {
         throw '临时目录边界检查失败，未清理。'
     }
-    Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+    # 保留 artifacts 供下次增量发布，只删除本次输出。
+    foreach ($name in 'publish', 'launcher', 'archive') {
+        $path = Join-Path $resolvedStage $name
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+    }
 }
 
 if (-not $windows -and -not $package) { throw '本机运行目录只能在 Windows 上构建；非 Windows 仅支持 -SingleFile -PackageVersion。' }
@@ -106,20 +110,30 @@ if ($LASTEXITCODE -ne 0 -or -not @($sdks | Where-Object { $_ -match '^10\.' }).C
 
 # 先发布到独立临时目录，编译失败不覆盖现有程序与玩家数据。
 $buildRoot = Join-Path $root 'build'
-$stage = Join-Path $buildRoot ('publish-' + [guid]::NewGuid().ToString('N'))
+# 固定发布目录：保留 artifacts 以便增量编译，只重建 publish/launcher/archive 输出；顺带清理旧版 publish-<GUID> 残留。
+$stage = Join-Path $buildRoot 'publish'
+if (Test-Path -LiteralPath $buildRoot) {
+    Get-ChildItem -LiteralPath $buildRoot -Directory | Where-Object { $_.Name -match '^publish-[0-9a-f]{32}$' } | ForEach-Object {
+        if (Test-Within $_.FullName $buildRoot) { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+    }
+}
+foreach ($leftover in 'publish', 'launcher', 'archive') {
+    $leftoverPath = Join-Path $stage $leftover
+    if (Test-Path -LiteralPath $leftoverPath) { Remove-Item -LiteralPath $leftoverPath -Recurse -Force }
+}
 $payload = Join-Path $stage 'publish'
 Write-Host "发布 Windows x64 Release 自包含程序，运行目录：$output"
 if (-not $SingleFile) {
     Invoke-Dotnet @('publish', (Join-Path $root 'Server/DfoServer/DfoServer.csproj'),
         '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
-        '--artifacts-path', (Join-Path $stage 'artifacts'), '-o', $payload)
+        '--artifacts-path', (Join-Path $stage 'artifacts'), '-o', $payload, '-nr:false')
 }
 $launcherPayload = Join-Path $stage 'launcher'
 $launcherArguments = @('publish', (Join-Path $root 'Tools/ServerLauncher/ServerLauncher.csproj'),
     '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
     '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
     '-p:EnableCompressionInSingleFile=true',
-    '--artifacts-path', (Join-Path $stage 'artifacts'), '-o', $launcherPayload)
+    '--artifacts-path', (Join-Path $stage 'artifacts'), '-o', $launcherPayload, '-nr:false')
 if ($SingleFile) { $launcherArguments += '-p:BundleServer=true' }
 if ($package) { $launcherArguments += @('-p:EnableWindowsTargeting=true', '-m:1') }
 Invoke-Dotnet $launcherArguments

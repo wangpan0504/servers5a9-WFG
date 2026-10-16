@@ -15,7 +15,7 @@ internal static partial class FormalDungeonTcpTests
         {
             peer.Create("Hero111",13);
             // 仅在隔离库准备角色等级、地区和已完成前置，任务由真实31接取。
-            var growth = CharacterGrowthCatalog.Load(resources.Archive);
+            var growth = SelfTestCatalogs.Growth(resources.Archive);
             fixture.Sql("UPDATE characters SET level=90,grow_type=36,experience=$p0,town=41,area=1,x=249,y=83 WHERE id=$p1",
                 growth.GetLevelStartExperience(90),peer.Id);
             fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3223),($p0,3239)",peer.Id);

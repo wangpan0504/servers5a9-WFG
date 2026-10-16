@@ -81,8 +81,8 @@ internal static class QuestTicketTests
         SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
-        var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var definition = items.Items.QuestTicket(TicketId);
         That(definition is { MinimumLevel:0,MaximumLevel:84,Jobs:ushort.MaxValue } && definition.Expiration.AbsoluteTime > 0,
             "匹配10006007真实普通77券，完整保留活动期限元数据和0..84/all范围");

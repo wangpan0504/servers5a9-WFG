@@ -8,7 +8,7 @@ internal static class CharacterGrowthCatalogTests
 {
     public static void Run(PvfArchive pvf)
     {
-        var growth = CharacterGrowthCatalog.Load(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
         That(growth.CumulativeExperience.Count == 100 && growth.CumulativeExperience[0] == 0,
             "99项资源边界使用客户端的零起点索引");
         That(growth.GetLevelStartExperience(1) == 0 && growth.GetCumulativeExperienceBoundary(1) == 1000 &&

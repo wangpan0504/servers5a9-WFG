@@ -19,9 +19,9 @@ internal static class FriendlyAiCharacterDeathTests
         QuestCatalog? sharedQuests = null, SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
-        var quests = sharedQuests ?? QuestCatalog.Load(pvf); var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills); var kills = DungeonKillExperienceCatalog.Load(pvf);
-        var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf);
+        var quests = sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         foreach (byte job in new byte[] { 0,14,15 })
         {
             using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,20,[3155,3156,3161,3162],job: job);

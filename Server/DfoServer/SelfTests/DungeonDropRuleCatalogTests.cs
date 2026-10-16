@@ -125,7 +125,7 @@ internal static class DungeonDropRuleCatalogTests
 
     public static void RunResources(PvfArchive pvf)
     {
-        var rules = DungeonDropRuleCatalog.Load(pvf);
+        var rules = global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf);
         That(rules.ProbabilityRows.Length == 10 && rules.ProbabilityRows[0].MinimumLevel == 1 &&
             rules.ProbabilityRows[0].MaximumLevel == 15 && rules.ProbabilityRows[0].Values.SequenceEqual(new[] { 986, 60, 250, 0, 0 }) &&
             rules.RarityDecision.Length == 28 && rules.ItemReferences.Length == 200 && rules.GoldReferences.Length == 200 &&

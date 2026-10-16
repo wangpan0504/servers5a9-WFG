@@ -33,7 +33,7 @@ internal static class DungeonEntryProbeTests
         Directory.CreateDirectory(root);
         try
         {
-            var catalog = DungeonCatalog.Load(pvf);
+            var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
             var repository = new CharacterRepository(Path.Combine(root, "game.db"));
             var owners = new AccountOwners();
             using var owner = owners.Acquire("dungeon-probe", () => { });
@@ -45,8 +45,8 @@ internal static class DungeonEntryProbeTests
             var context = new GameConnectionContext(new(1, IPAddress.Loopback, bytes, lifetime), owner, session, sender, probe);
             using var log = new ServerLog(Path.Combine(root, "logs"));
             var projection = new TownProjection(towns, computer, null, itemResources.EpicPieces);
-            var formalHandler = new DungeonHandler(log, catalog, DungeonRoomCatalog.Load(pvf),
-                CharacterGrowthCatalog.Load(pvf), DungeonKillExperienceCatalog.Load(pvf), projection, new CharacterLevelProjection(computer));
+            var formalHandler = new DungeonHandler(log, catalog, global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf),
+                global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf), global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf), projection, new CharacterLevelProjection(computer));
             var disabled = Registry(formalHandler);
             var information = Registry(new DungeonProbeModule(log, catalog, DungeonEntryProbeMode.Information));
             var town = Registry(new TownHandler(new TownProjection(towns, computer, null, itemResources.EpicPieces), log));

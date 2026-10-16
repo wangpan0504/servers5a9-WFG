@@ -24,12 +24,12 @@ internal static class QuestCinematicSettlementTests
         QuestCatalog quests, SkillLearningCatalog skills)
     {
         int checks = Count;
-        var growth = CharacterGrowthCatalog.Load(pvf,skills);
-        var kills = DungeonKillExperienceCatalog.Load(pvf);
-        var clears = DungeonClearExperienceCatalog.Load(pvf);
-        var parameters = QuestRewardParameterCatalog.Load(pvf);
-        var connections = QuestConnectionCatalog.Load(pvf);
-        var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        var clears = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        var connections = global::DfoServer.Testing.SelfTestCatalogs.QuestConnections(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var area = towns.Areas.Values.First(row => row.Level <= 74 && row.DungeonWorldMap is { } world &&
             towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 96 &&
                 (option.QuestId == -1 || option.InProgress && option.QuestId == 3599 || !option.InProgress && option.QuestId != 3599)));

@@ -17,7 +17,7 @@ internal static class QuestRoomClearTcpTests
     internal static void Verify(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
-        var dungeons = DungeonCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (bool ordinary in new[] { false,true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
     }
 

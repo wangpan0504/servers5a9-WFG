@@ -28,12 +28,12 @@ internal static class FormalDungeonSessionTests
     public static Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         int before = TestCheck.Count;
-        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf);
-        var kills = DungeonKillExperienceCatalog.Load(pvf);
-        var catalog = DungeonCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
-        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
+        var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+        var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         Lifecycle(0);
         Lifecycle(14);
         OrdinaryJobs();
@@ -204,7 +204,7 @@ internal static class FormalDungeonSessionTests
 
         void OrdinaryRoutes()
         {
-            var clearRewards = DungeonClearExperienceCatalog.Load(pvf);
+            var clearRewards = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
             foreach (int dungeonId in new[] { 5, 6, 7, 8, 9, 1000 })
             {
                 using var f = new Fixture("Map" + dungeonId, towns, characters, learning, quests);
@@ -264,8 +264,8 @@ internal static class FormalDungeonSessionTests
 
         void OrdinaryLifecycle()
         {
-            var clearRewards = DungeonClearExperienceCatalog.Load(pvf);
-            var drops = DungeonMonsterDropCatalog.Load(pvf);
+            var clearRewards = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
+            var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
             foreach (int state in new[] { 0, 1, 2 })
             {
                 using var f = new Fixture("Normal" + state, towns, characters, learning, quests);
@@ -874,7 +874,7 @@ internal static class FormalDungeonSessionTests
             using var f = new Fixture("LootReceipt", towns, characters, learning, quests, job: 14);
             f.SelectEntry();
             f.Session.BeginDungeonSelection();
-            var drops = DungeonMonsterDropCatalog.Load(pvf);
+            var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
             int calls = 0;
             var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
                 bound => { calls++; return 0; }) ?? throw new InvalidOperationException("FAIL 显式池准入失败");
@@ -1017,7 +1017,7 @@ internal static class FormalDungeonSessionTests
         {
             using var f = new Fixture("RuleMonsters", towns, characters, learning, quests);
             f.SelectEntry();
-            var drops = DungeonMonsterDropCatalog.Load(pvf);
+            var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
             var pool = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(itemResources.Items.Get(1000), 50) });
             var ordinary = new DungeonDropGenerationPlan("明示普通怪规则", [new(10000, pool, 3, 3)]);
             var boss = new DungeonDropGenerationPlan("明示Boss规则", [new(10000, null, 2, 2, new(5, 17, 0))]);

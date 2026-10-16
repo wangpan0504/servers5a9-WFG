@@ -40,7 +40,7 @@ internal static class SkillRepositoryTests
         string path = Path.Combine(root, "game.db");
         try
         {
-            var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
+            var catalog = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("skill-repository", () => { });

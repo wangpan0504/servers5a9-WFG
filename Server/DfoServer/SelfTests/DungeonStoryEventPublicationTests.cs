@@ -65,10 +65,10 @@ internal static class DungeonStoryEventPublicationTests
             That(typeof(GameSession).GetMethod("InstallFormalDungeon",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(session,[prepared]) is not null,
                 "合成安装沿原attempt/key预留事务，不绕过在线角色状态");
             using var log = new ServerLog(root);
-            var growth = CharacterGrowthCatalog.Load(pvf,learning); var kills = DungeonKillExperienceCatalog.Load(pvf);
+            var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
             var stats = new CharacterStatComputer(characters);
             var commands = new GameCommandRegistry();
-            new DungeonHandler(log,DungeonCatalog.Load(pvf),DungeonRoomCatalog.Load(pvf),growth,kills,
+            new DungeonHandler(log,global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf),global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf),growth,kills,
                 new TownProjection(towns,stats,null,items.EpicPieces),new CharacterLevelProjection(stats)).Register(commands);
             commands.Seal();
             using var output = new MemoryStream(); using var stop = new CancellationTokenSource();
@@ -154,15 +154,15 @@ internal static class DungeonStoryEventPublicationTests
     static async Task TempleAsync(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items,
         SkillLearningCatalog learning,GameCommandRegistry commands)
     {
-        var quests = QuestCatalog.Load(pvf);
-        var growth = CharacterGrowthCatalog.Load(pvf,learning);
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
         var completed = DfoServer.Development.CharacterPreparation.Load(pvf).MapQuests.Append(3203).Where(id => id != 3204).Distinct().ToArray();
         using var f = new QuestSceneTests.Fixture(towns,characters,learning,growth,quests,false,27,
             completed);
         That(f.Session.ChangeQuest(3204,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
             "隔离Lv27角色合法接取真实3204，不使用现场玩家库");
         f.TravelTo(towns,new(40,4,800,285));
-        var entry = f.Session.EnterFormalDungeon(24,3204,0,DungeonCatalog.Load(pvf),DungeonRoomCatalog.Load(pvf))!;
+        var entry = f.Session.EnterFormalDungeon(24,3204,0,global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf),global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf))!;
         That(entry is not null && entry.Snapshot.CurrentMap.Id == 53480,"真实3204使用53480基础房间入场");
         f.Session.CompleteFormalDungeonLoading();
         var baseKeys = f.Session.DungeonSnapshot!.LivingMonsters.ToArray();

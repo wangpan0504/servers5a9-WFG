@@ -14,7 +14,7 @@ internal static class AdventureCapsuleTcpTests
         AdventureCapsuleTests.RunResources(resources.Archive, resources.Learning, resources.Adventure);
         int checks = Count;
         var catalog = resources.Adventure;
-        var growth = CharacterGrowthCatalog.Load(resources.Archive, resources.Learning);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "adventure-capsules"), resources: resources);
         await fixture.StartAsync();
         byte level = checked((byte)catalog.Capsule.MinimumLevel);

@@ -171,6 +171,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (resources is not null && !isolatedProcess)
         {
             var quests = questCatalog ?? resources.Quests;
+            TcpTestDatabaseTemplate.CopyIfMissing(Database, Path.GetDirectoryName(Root)!);
             hostStop = new();
             var options = Options with { PacketCaptureDirectory = packetCapture ? Options.LogDirectory : null };
             hosted = Task.Run(async () =>

@@ -62,8 +62,8 @@ internal static class QuestTpRewardTests
         QuestCatalog? sharedQuests = null,SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
-        var actual = sharedQuests ?? QuestCatalog.Load(pvf); var learning = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,learning); var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var actual = sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var learning = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var actualTp = actual.All.Where(quest => quest.RewardType == "[tp]").ToArray();
         That(actualTp is [{ Id:2674, Condition:"[custom multi condition]", Difficulty:"W", DeclaredGoldMultiple:50,
             DeclaredIgnoreLevelForExperience:1 }] && QuestCharacterReward.TryTp(actualTp[0],out ushort actualAmount) && actualAmount == 2,

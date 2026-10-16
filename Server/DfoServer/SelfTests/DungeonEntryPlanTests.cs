@@ -13,7 +13,7 @@ internal static class DungeonEntryPlanTests
     {
         int checks = Count;
 
-        var catalog = DungeonCatalog.Load(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var character = new Character(17, 0, "Plan", 42, new Location(38, 2, 100, 200, 0), null)
         {
             Level = 1,
@@ -77,8 +77,8 @@ internal static class DungeonEntryPlanTests
         Reject(character, 3, 3145, byte.MaxValue, "difficulty-unsupported");
 
         var definition = catalog.Get(3);
-        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         foreach (var scenario in new[] { (Quest:3560,Dungeon:82,Level:(byte)65,Target:92247,Boss:92251),
             (Quest:3753,Dungeon:104,Level:(byte)83,Target:76648,Boss:76649) })
         {

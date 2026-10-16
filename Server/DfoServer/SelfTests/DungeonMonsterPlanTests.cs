@@ -137,10 +137,10 @@ internal static class DungeonMonsterPlanTests
             That(rejected, name);
         }
 
-        var definition = DungeonCatalog.Load(pvf).Get(3);
+        var definition = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf).Get(3);
         var maze = definition.Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3
             && candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
-        var catalog = DungeonRoomCatalog.Load(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var apcBoss = catalog.Get(new("boss",new(0,0),53529,"map/Cataclysm/Behemoth/07_2ndBackbone/3213_53529.map"),requirePassiveDefinitions: false);
         var apcPlan = DungeonMonsterPlan.FromRoom(apcBoss,99,200);
         That(apcBoss.Monsters.Count == 0 && apcPlan.Monsters is [{ MonsterId: 2004, SourceOrdinal: 0, CandidateLevel: 32, SpawnType: 8,

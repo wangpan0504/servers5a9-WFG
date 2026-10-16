@@ -33,10 +33,10 @@ internal static class AlbertHuntTcpTests
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
         const string account = "albert-hunt", name = "AlbertHunt";
-        var dungeons = DungeonCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var definition = dungeons.Get(158);
         var maze = definition.Mazes.Single(row => row.ConnectsQuest(3472));
-        var rooms = DungeonRoomCatalog.Load(resources.Archive);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         That(definition.MinimumLevel == 56 && definition.BasisLevel == 59 && maze.SourceOrdinal == 2 &&
             maze.BossEntrance is null && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 && maze.WarpMaps.Count == 0 &&
             maze.MapSpecification!.Select(map => (map.Id,map.Position)).SequenceEqual(

@@ -24,13 +24,13 @@ internal static class DungeonSettlementSessionTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         int before = TestCheck.Count;
-        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf);
-        var kills = DungeonKillExperienceCatalog.Load(pvf);
-        var dungeons = DungeonCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
-        var quests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf);
-        var clear = DungeonClearExperienceCatalog.Load(pvf);
+        var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+        var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var clear = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
         var definition = dungeons.Get(3);
         var maps = definition.Mazes.Single(maze => maze.ConnectsQuest(3145)).MapSpecification!;
         var expectedReward = clear.Calculate(definition, 0, 99);
@@ -76,7 +76,7 @@ internal static class DungeonSettlementSessionTests
             var cleared = Finish();
             Check(draws == frozen && cleared.Options is not null && cleared.Options.UseGoldCard == member &&
                 cleared.Options.Membership.GoldCardActive(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) == member &&
-                cleared.Options.Price == (member ? 0 : DungeonCardPriceCatalog.Load(pvf).Price(definition.BasisLevel!.Value)) &&
+                cleared.Options.Price == (member ? 0 : global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf).Price(definition.BasisLevel!.Value)) &&
                 !cleared.Options.DoublePaidItems && !cleared.Options.LegacyReturningPlayer &&
                 (cleared.BlackDiamond is not null) == member,
                 $"有效58默认免金币单倍，普通账号保留原价；黑钻奖励独立（member={member},draws={draws}/{frozen},price={cleared.Options?.Price},basis={definition.BasisLevel}）");
@@ -200,8 +200,8 @@ internal static class DungeonSettlementSessionTests
                 "新业务日恢复免费双倍牌的10次资格，不删除历史次数或补发旧奖励");
         }
 
-        DungeonCardRewardPolicy PremiumPolicy(Func<int,int> draw) => new(DungeonDropRuleCatalog.Load(pvf),itemResources.DungeonDropItems,
-            itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,draw,DungeonCardPriceCatalog.Load(pvf));
+        DungeonCardRewardPolicy PremiumPolicy(Func<int,int> draw) => new(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),itemResources.DungeonDropItems,
+            itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,draw,global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
 
         void LostPaidResult()
         {
@@ -232,7 +232,7 @@ internal static class DungeonSettlementSessionTests
             f.SelectEntry(); Enter(f); ClearRun(f);
             var previous = f.Session.Selected!;
             int draws = 0;
-            var policy = new DungeonCardRewardPolicy(DungeonDropRuleCatalog.Load(pvf),itemResources.DungeonDropItems,
+            var policy = new DungeonCardRewardPolicy(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),itemResources.DungeonDropItems,
                 itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,_ => {draws++;return 0;});
             Reject<IOException>(() => SettleCard(),"COMMIT后返回结果丢失保留原在线快照及待确认实例");
             int frozenDraws = draws;
@@ -330,7 +330,7 @@ internal static class DungeonSettlementSessionTests
             ClearRun(f);
             var previous = f.Session.Selected!;
             int draws = 0;
-            var policy = new DungeonCardRewardPolicy(DungeonDropRuleCatalog.Load(pvf), itemResources.DungeonDropItems,
+            var policy = new DungeonCardRewardPolicy(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf), itemResources.DungeonDropItems,
                 itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, _ => { draws++; return 0; });
             f.Sql("CREATE TRIGGER card_fail BEFORE INSERT ON character_dungeon_card_rewards BEGIN SELECT RAISE(ABORT,'card rollback'); END");
             Reject<SqliteException>(() => CardSettle(), "免费牌末段失败回滚经验、金币、物品、邮件与回执");
@@ -541,7 +541,7 @@ internal static class DungeonSettlementSessionTests
         {
             using var f = new Fixture("ClearRetry", towns, characters, learning, quests);
             f.SelectEntry();
-            var drops = DungeonMonsterDropCatalog.Load(pvf);
+            var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
             var pool = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(itemResources.Items.Get(1000), 50) });
             // 明示fixture概率和数量只验证规则传递，不改变Runtime资源掉率。
             var generation = new DungeonDropGenerationPlan("明确合成再挑战规则/实际资源模板", [
@@ -580,8 +580,8 @@ internal static class DungeonSettlementSessionTests
                 f.Read().Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
                     before.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp))),
                 "Lv95仅到账剩余2经验，其余怪物仍确认死亡和清图，不额外发SP/TP");
-            var policy = new DungeonCardRewardPolicy(DungeonDropRuleCatalog.Load(pvf),itemResources.DungeonDropItems,itemResources.Items,
-                itemResources.GoldLimits,itemResources.EpicPieces,_ => 0,DungeonCardPriceCatalog.Load(pvf));
+            var policy = new DungeonCardRewardPolicy(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),itemResources.DungeonDropItems,itemResources.Items,
+                itemResources.GoldLimits,itemResources.EpicPieces,_ => 0,global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
             var cleared = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[21,22,23],dungeons,clear,growth,policy);
             Check(cleared.Outcome == DungeonRunOutcome.Accepted && cleared.GainedExperience == 0 &&
                 cleared.Presentation!.MonsterExperience == 2 && cleared.Card is not null && f.Settlements == 1 &&

@@ -20,8 +20,8 @@ internal static class QuestTownSceneTests
         QuestCatalog? sharedQuests = null, SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
-        var quests = sharedQuests ?? QuestCatalog.Load(pvf); var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var quests = sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         using (var f = Make([3155],new(38,3,300,250)))
         {
             That(Change(f,3156,QuestLifecycleAction.Accept)?.Commit is not null,"实际3156城镇范围任务接取");
@@ -233,8 +233,8 @@ internal static class QuestTownSceneTests
             // 真实3599/2406/96全部资源装配；只走基础门墙到76114，不遍历76113叠层演出。
             // 合成终末33与前序敌对击杀只验证进度事务，不代表完整路线、播放或dummy退场结算。
             var quest = quests.Get(3599);
-            var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf);
-            var kills = DungeonKillExperienceCatalog.Load(pvf);
+            var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+            var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
             That(QuestClientSceneProgress.DungeonCinematic(quest) && quest.IntData is [2406] && quest.CinematicMapId == 76114,
                 "紧急会议保持真实地下城演出资源，不改写普通清图目标");
             var area = towns.Areas.Values.First(row => row.Level <= 74 && row.DungeonWorldMap is { } world &&

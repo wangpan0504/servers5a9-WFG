@@ -25,7 +25,7 @@ internal static class SkillPublicationTests
         Directory.CreateDirectory(root);
         try
         {
-            var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
+            var catalog = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
             await CommittedFailureAsync(towns, catalog, characters, root);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: true);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: false);
@@ -47,7 +47,7 @@ internal static class SkillPublicationTests
         Directory.CreateDirectory(root);
         try
         {
-            var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
+            var catalog = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
             await CommittedMoveFailureAsync(towns, catalog, characters, root);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: true, layout: true);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: false, layout: true);

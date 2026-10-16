@@ -16,7 +16,7 @@ internal static class AdventureCapsuleTests
     public static void RunResources(PvfArchive pvf, SkillLearningCatalog learning, AdventureCatalog catalog)
     {
         int checks = Count;
-        var growth = CharacterGrowthCatalog.Load(pvf, learning);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
         var service = new AdventureCapsuleService(catalog, growth);
         var now = DateTimeOffset.UtcNow;
         string root = Path.Combine(Path.GetTempPath(), "s5a9-capsule-" + Guid.NewGuid().ToString("N"));

@@ -60,7 +60,7 @@ internal static class QuestRewardParameterTests
 
     public static void RunResources(PvfArchive archive)
     {
-        var catalog = QuestRewardParameterCatalog.Load(archive);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(archive);
         if (catalog.Difficulty["1"] != 1780 || catalog.Difficulty["10"] != 708 || catalog.Difficulty["G"] != 30 ||
             catalog.Experience.Length != 200 ||
             !catalog.Experience.Take(3).SequenceEqual(new QuestExperienceParameter[] { new(100, -1), new(100, -1), new(126, -1) }) ||

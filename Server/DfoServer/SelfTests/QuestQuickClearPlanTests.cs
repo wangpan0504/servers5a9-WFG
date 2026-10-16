@@ -135,7 +135,7 @@ internal static class QuestQuickClearPlanTests
     public static void Run(PvfArchive pvf,QuestCatalog quests)
     {
         int checks = Count;
-        var connections = QuestConnectionCatalog.Load(pvf);
+        var connections = global::DfoServer.Testing.SelfTestCatalogs.QuestConnections(pvf);
         var titleIds = new List<int>();
         foreach (int key in new[] { 19,21,23 })
         {

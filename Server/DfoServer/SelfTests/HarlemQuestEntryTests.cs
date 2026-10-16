@@ -20,9 +20,9 @@ internal static class HarlemQuestEntryTests
         QuestCatalog quests, SkillLearningCatalog skills)
     {
         int checks = Count;
-        var growth = CharacterGrowthCatalog.Load(pvf,skills);
-        var dungeons = DungeonCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var quest = quests.Get(5934);
         That(QuestClearEligibility.IsSingleMap(quest) && quest.IntData[0] == 292104869 &&
             quest.Definition!.Dungeons.Any(row => row.DungeonId == 291100318),

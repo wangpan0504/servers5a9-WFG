@@ -18,7 +18,7 @@ internal static class QuestPassiveClearTcpTests
     internal static void Verify(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
         Action<TcpPeer, Action<WirePacket>?> drain)
     {
-        var dungeons = DungeonCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (bool ordinary in new[] { false, true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         VerifyZeroKill(fixture,resources,growth,drain);
     }
@@ -255,7 +255,7 @@ internal static class QuestPassiveClearTcpTests
                 "零击杀免费牌实际提交领取及库存差量");
             peer.Send(71,[1,0]); var paid=peer.Expect(1,71).Body; peer.ReadCardMembershipState(); Drain();
             That(paid[0]==1 && fixture.Query("SELECT paid_cost,paid_reward_json IS NOT NULL FROM character_dungeon_card_options WHERE character_id=$p0",peer.Id)
-                is [[long cost,1L]] && cost==DungeonCardPriceCatalog.Load(resources.Archive).Price(57),
+                is [[long cost,1L]] && cost==SelfTestCatalogs.CardPrices(resources.Archive).Price(57),
                 "零击杀原价付费牌沿真实71合法领取并保存费用，不按kill0拒绝");
             peer.Send(34,[34,0,119,13,255,255,1,0,255,255]); var finished=peer.Expect(1,34).Body; Drain();
             That(finished.Length>=4 && finished[0]==1 && U16(finished,1)==3447 && finished[3]==1,

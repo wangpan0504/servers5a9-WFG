@@ -28,8 +28,8 @@ internal static class DungeonDropCollectionRepositoryTests
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("collection-fixture", () => { });
-            var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-            var growth = CharacterGrowthCatalog.Load(pvf);
+            var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+            var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
             var fixture = SkillRepositoryTests.Fixture("DropCollect", towns, characters, learning) with
             {
                 DungeonState = CharacterDungeonState.NewOrdinary,

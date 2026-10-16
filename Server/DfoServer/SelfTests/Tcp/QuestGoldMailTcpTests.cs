@@ -19,7 +19,7 @@ internal static class QuestGoldMailTcpTests
         That(quest.Condition == "[reach the range]" && quest.SubType == 1 && quest.IntData.SequenceEqual(new[] { 38, 3, 445, 115, 400, 300 }) &&
             quest.Rewards.Select(row => row.Value).SequenceEqual(new[] { 0, 0 }) && quest.MinimumLevel == 17,
             "3156真实资源为已达成范围目标与公式金币奖励，不以客户端scalar代替定义");
-        var growth = CharacterGrowthCatalog.Load(resources.Archive, resources.Learning);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         var repository = new CharacterRepository(fixture.Database, resources.Quests);
         ushort id;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))

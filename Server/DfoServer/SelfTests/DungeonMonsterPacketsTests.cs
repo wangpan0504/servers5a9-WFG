@@ -66,8 +66,8 @@ internal static class DungeonMonsterPacketsTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
-        var dungeons = DungeonCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var character = new Character(0x100, 0, "Monster", 7, new Location(38, 2, 100, 249, 0), null)
         {
             ActiveMainQuests = [new(0, 3145, 1)]

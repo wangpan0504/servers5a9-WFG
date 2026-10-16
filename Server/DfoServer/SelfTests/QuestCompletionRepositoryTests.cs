@@ -157,13 +157,13 @@ internal static class QuestCompletionRepositoryTests
     internal sealed class Resources(PvfArchive archive, ItemResources items, QuestCatalog? questCatalog = null)
     {
         public ItemResources Items { get; } = items;
-        public SkillLearningCatalog Learning { get; } = SkillLearningCatalog.Load(archive, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(archive).ExpertSkillLevels);
-        public CharacterGrowthCatalog Growth { get; } = CharacterGrowthCatalog.Load(archive);
-        public DungeonKillExperienceCatalog Kills { get; } = DungeonKillExperienceCatalog.Load(archive);
-        public DungeonCatalog Dungeons { get; } = DungeonCatalog.Load(archive);
-        public DungeonRoomCatalog Rooms { get; } = DungeonRoomCatalog.Load(archive);
-        public QuestCatalog Quests { get; } = questCatalog ?? QuestCatalog.Load(archive);
-        public QuestRewardParameterCatalog Parameters { get; } = QuestRewardParameterCatalog.Load(archive);
+        public SkillLearningCatalog Learning { get; } = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(archive);
+        public CharacterGrowthCatalog Growth { get; } = global::DfoServer.Testing.SelfTestCatalogs.Growth(archive);
+        public DungeonKillExperienceCatalog Kills { get; } = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(archive);
+        public DungeonCatalog Dungeons { get; } = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive);
+        public DungeonRoomCatalog Rooms { get; } = global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive);
+        public QuestCatalog Quests { get; } = questCatalog ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(archive);
+        public QuestRewardParameterCatalog Parameters { get; } = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(archive);
     }
 
     internal sealed class Fixture : IDisposable

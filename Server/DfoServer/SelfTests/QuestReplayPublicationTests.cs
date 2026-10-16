@@ -29,9 +29,9 @@ internal static class QuestReplayPublicationTests
         {
             using var log = new ServerLog(root);
             var computer = new CharacterStatComputer(characters);
-            var growth = CharacterGrowthCatalog.Load(pvf,sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels));
-            var kills = DungeonKillExperienceCatalog.Load(pvf);
-            var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf);
+            var growth = CharacterGrowthCatalog.Load(pvf,sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf));
+            var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+            var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
             await LoadingAsync();
             await UnauthorizedAsync();
             await CancelAsync();

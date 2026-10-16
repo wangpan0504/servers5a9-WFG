@@ -9,7 +9,7 @@ internal static class DungeonMonsterDropCatalogTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
-        var catalog = DungeonMonsterDropCatalog.Load(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
         DungeonMonsterDropEntry[] actual = [new(1000, 50), new(1047, 200), new(1004, 100)];
         var goblin = catalog.Get(1);
         var thrower = catalog.Get(2);

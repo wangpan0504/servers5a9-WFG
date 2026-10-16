@@ -94,7 +94,7 @@ internal static class SkillLearningCatalogTests
 
     public static void Run(PvfArchive pvf)
     {
-        var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         That(catalog.ActiveExpertContractLevels(1001, 1000) == catalog.ExpertContractLevels &&
             catalog.ActiveExpertContractLevels(1000, 1000) == 0 && catalog.ActiveExpertContractLevels(0, 1000) == 0,
             "目录只在契约有效时提供显式装配的资源加成，到期和无契约均为零");

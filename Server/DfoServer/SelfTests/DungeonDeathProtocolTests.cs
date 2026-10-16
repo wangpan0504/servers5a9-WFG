@@ -256,8 +256,8 @@ internal static class DungeonDeathProtocolTests
             var context = new GameConnectionContext(new(1, IPAddress.Loopback, bytes, lifetime), owner, session, sender, probe);
             var commands = new GameCommandRegistry();
             using var log = new ServerLog(Path.Combine(root, "logs"));
-            new DungeonProbeModule(log, DungeonCatalog.Load(pvf),
-                DungeonEntryProbeMode.FinishLoadingMonsters, DungeonRoomCatalog.Load(pvf)).Register(commands);
+            new DungeonProbeModule(log, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf),
+                DungeonEntryProbeMode.FinishLoadingMonsters, global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf)).Register(commands);
             commands.Seal();
             string snapshot = JsonSerializer.Serialize(repository.List(owner).Single());
             That(await commands.DispatchAsync(context, new Packet(1, (ushort)CmdPacketType.SELECT_DUNGEON,

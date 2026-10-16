@@ -72,7 +72,7 @@ internal static class DungeonSettlementTests
         string path = Path.Combine(root, "game.db");
         try
         {
-            var growth = CharacterGrowthCatalog.Load(pvf);
+            var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("settlement", () => { });

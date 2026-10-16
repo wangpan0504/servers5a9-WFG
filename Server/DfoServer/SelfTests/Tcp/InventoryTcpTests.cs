@@ -383,7 +383,7 @@ internal static partial class InventoryTcpTests
                 InitialLearning = SkillLearning.Initialize(3, profile.Skills, learning).State!,
                 Inventory = InventoryRewardGrantService.CreateStarter(profile)
             });
-            var reset = new CharacterProgressReset(characters, learning, CharacterGrowthCatalog.Load(resources.Archive, learning));
+            var reset = new CharacterProgressReset(characters, learning, SelfTestCatalogs.Growth(resources.Archive, learning));
             role = repository.ResetProgress(owner, reset.Prepare(role, new(CharacterProgressField.Level, owner.Account, role.Name, 15, 0)));
             role = repository.ResetProgress(owner, reset.Prepare(role, new(CharacterProgressField.Grow, owner.Account, role.Name, 5, 0)));
             broomSkillCount = role.Learning.Trees.Sum(tree => tree.Skills.Count);

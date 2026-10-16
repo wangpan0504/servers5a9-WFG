@@ -14,7 +14,7 @@ internal static class StoryDigestTcpTests
     public static async Task RunAsync(ServerOptions options,string root,TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(options,Path.Combine(root,"story-digest"),resources: resources);
-        var growth = CharacterGrowthCatalog.Load(resources.Archive,resources.Learning);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         var cases = new (byte Job,byte Level)[] { (0,3),(14,20),(15,95) };
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
             foreach (var (job,level) in cases)

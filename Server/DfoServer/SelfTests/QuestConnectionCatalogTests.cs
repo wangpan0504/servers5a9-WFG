@@ -48,7 +48,7 @@ internal static class QuestConnectionCatalogTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
-        var catalog = QuestConnectionCatalog.Load(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.QuestConnections(pvf);
         var expected = new[]
         {
             (Key: 19, Name: "夜之摩天楼", Question: 6217, Quick: new QuestQuickClearDefinition(6218,2,6200,6211)),

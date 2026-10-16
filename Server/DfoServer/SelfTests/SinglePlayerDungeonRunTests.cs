@@ -477,7 +477,7 @@ internal static class SinglePlayerDungeonRunTests
             "empty formal event identity cannot become an accepted fact");
         That(retry!.Snapshot.LivingMonsters is IList<ushort> readonlyKeys && readonlyKeys.IsReadOnly,
             "published room roster cannot mutate instance ownership");
-        var actualMaze = DungeonCatalog.Load(pvf).Get(3).Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3 && candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
+        var actualMaze = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf).Get(3).Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3 && candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
         var actualMaps = actualMaze.MapSpecification!;
         var actualEntry = new DungeonEntryPlan(99, 17, 3, 3145, 0, 0, actualMaze,
             actualMaps.Single(map => map.Position == actualMaze.Starts.Single()), actualMaps.Single(map => map.Position == actualMaze.Bosses.Single()));

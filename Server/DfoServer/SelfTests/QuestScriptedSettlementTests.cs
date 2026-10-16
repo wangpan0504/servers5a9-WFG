@@ -20,10 +20,10 @@ internal static class QuestScriptedSettlementTests
         QuestCatalog? sharedQuests = null, SkillLearningCatalog? sharedSkills = null)
     {
         int checks = Count;
-        var quests = sharedQuests ?? QuestCatalog.Load(pvf); var skills = sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf,skills); var kills = DungeonKillExperienceCatalog.Load(pvf);
-        var dungeons = DungeonCatalog.Load(pvf); var rooms = DungeonRoomCatalog.Load(pvf);
-        var clears = DungeonClearExperienceCatalog.Load(pvf);
+        var quests = sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var clears = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
         int[] completed = [3145,4873,3146,3157,3054,3147,3148,4875,3149,3150];
         foreach (byte job in new byte[] { 0,14,15 })
         {

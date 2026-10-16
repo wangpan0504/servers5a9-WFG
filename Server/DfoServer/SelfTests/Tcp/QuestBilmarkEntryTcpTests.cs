@@ -37,7 +37,7 @@ internal static class QuestBilmarkEntryTcpTests
             child.Definition!.Dungeons.Any(row => row.DungeonId == 240) && QuestRelationProgress.ZeroRewardChild(child) &&
             seeking.Condition == "[seeking]" && seeking.IntData.SequenceEqual(new[] { 10164767,1 }) && seeking.MainQuest == 3656,
             "3656使用真实79级顺序父任务、3692清图及3693小盒子寻物声明");
-        var maze = DungeonCatalog.Load(resources.Archive).Get(240).Mazes.Single(row => row.ConnectsQuest(3692));
+        var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(240).Mazes.Single(row => row.ConnectsQuest(3692));
         That(maze.Starts.Single() == new DungeonPoint(0,0) && maze.Bosses.Single() == new DungeonPoint(5,0) &&
             maze.MapSpecification!.OrderBy(row => row.Position.X).Select(row => (row.Id,row.Position)).SequenceEqual(
                 Enumerable.Range(0,6).Select(index => (91981+index,new DungeonPoint(index,0)))) &&

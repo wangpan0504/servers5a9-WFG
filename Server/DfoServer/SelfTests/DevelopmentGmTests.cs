@@ -83,8 +83,8 @@ internal static class DevelopmentGmTests
 
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
-        var learning = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var progress = new CharacterProgressReset(characters, learning, CharacterGrowthCatalog.Load(pvf, learning));
+        var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var progress = new CharacterProgressReset(characters, learning, global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning));
         int checks = Count;
 
         void Reject(Action action, string name)

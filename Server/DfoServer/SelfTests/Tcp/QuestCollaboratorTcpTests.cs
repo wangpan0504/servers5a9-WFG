@@ -24,9 +24,9 @@ internal static class QuestCollaboratorTcpTests
             quest.MainQuest is null && quest.Condition == "[clear map]" && quest.SubType == -1 &&
             quest.IntData.SequenceEqual(new[] { 91357 }) && quest.Definition!.Dungeons.Any(row => row.DungeonId == 32) &&
             quest.Definition.AcceptanceRewards.IsEmpty, "3236保持真实等级、前置、D32和91357清图合同");
-        var dungeons = DungeonCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var definition = dungeons.Get(32);
-        var rooms = DungeonRoomCatalog.Load(resources.Archive);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         var maze = definition.Mazes.Single(row => row.ConnectsQuest(3236));
         (int Id, DungeonPoint Position)[] route =
         [

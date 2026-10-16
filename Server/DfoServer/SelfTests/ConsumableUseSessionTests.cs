@@ -120,7 +120,7 @@ internal static class ConsumableUseSessionTests
         }
         using (var f = new Fixture(towns, characters))
         {
-            var catalog = DungeonCatalog.Load(archive); var rooms = DungeonRoomCatalog.Load(archive);
+            var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive);
             f.Select();
             That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "药剂房间guard用例经合法入口旅行");
             f.Session.BeginDungeonSelection();

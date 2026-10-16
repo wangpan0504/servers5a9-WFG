@@ -42,8 +42,8 @@ internal static class SkillExtendedTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         int start = TestCheck.Count;
-        var catalog = SkillLearningCatalog.Load(pvf, PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth = CharacterGrowthCatalog.Load(pvf, catalog);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, catalog);
         Check(catalog.TotalTp(49) == 0 && catalog.TotalTp(50) == 1 && catalog.TotalTp(60) == 11 && catalog.TotalTp(95) == 46,
             "匹配TP表逐等级累计，不能用当前级单项覆盖");
         var original = SkillLearning.Initialize(0, characters.Get(0).Skills, catalog).State! with { BonusSp = 137, BonusTp = 7 };

@@ -137,8 +137,8 @@ internal static class QuestQuickClearRepositoryTests
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         int checks = Count;
-        var quests = QuestCatalog.Load(pvf); var connections = QuestConnectionCatalog.Load(pvf);
-        var skills = SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels); var growth = CharacterGrowthCatalog.Load(pvf,skills);
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var connections = global::DfoServer.Testing.SelfTestCatalogs.QuestConnections(pvf);
+        var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf); var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
         foreach (int key in new[] { 19,21,23 })
         {
             That(connections.TryGet(key,out var unit),"真实quick clear关联单元可读取: " + key);

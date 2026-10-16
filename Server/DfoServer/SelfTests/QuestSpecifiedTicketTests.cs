@@ -94,8 +94,8 @@ internal static class QuestSpecifiedTicketTests
         QuestCatalog? sharedQuests=null,SkillLearningCatalog? sharedSkills=null)
     {
         int checks=Count;
-        var quests=sharedQuests ?? QuestCatalog.Load(pvf); var skills=sharedSkills ?? SkillLearningCatalog.Load(pvf, DfoServer.GameWorld.Items.PremiumContractCatalog.Load(pvf).ExpertSkillLevels);
-        var growth=CharacterGrowthCatalog.Load(pvf,skills); var parameters=QuestRewardParameterCatalog.Load(pvf);
+        var quests=sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills=sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth=global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters=global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         foreach (int template in new[] {10005391,10005390,490000716,10006257})
         {
             var definition=items.Items.QuestTicket(template);

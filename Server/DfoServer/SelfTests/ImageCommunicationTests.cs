@@ -256,7 +256,7 @@ internal static class ImageCommunicationTests
         That(quest is {Condition:"[meet npc]",SubType:-1} && quest.IntData.SequenceEqual([2000]) &&
             towns.Areas[(14,1)].Phases.Prepend(towns.Areas[(14,1)].Default).All(map =>
                 map.Npcs.Any(npc => npc.Id == 78) && map.Npcs.All(npc => npc.Id != 2000)),"真实3734要求临时2000，三个phase均只有源78");
-        var growth = CharacterGrowthCatalog.Load(pvf,skills); var parameters = QuestRewardParameterCatalog.Load(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         byte level = checked((byte)Math.Max(81,quest.MinimumLevel));
         using var f = new QuestOrdinaryCompletionTests.Fixture(towns,characters,skills,growth,parameters,items,quest,
             materialCount:0,definitions:quests.All.ToArray(),configure:character => character with

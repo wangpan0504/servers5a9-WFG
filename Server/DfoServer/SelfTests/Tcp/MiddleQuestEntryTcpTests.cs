@@ -16,8 +16,8 @@ internal static class MiddleQuestEntryTcpTests
     // 借用已启动的正式fixture，不为各条路线新建服务或另装PVF。
     internal static void Verify(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
     {
-        var dungeons = DungeonCatalog.Load(resources.Archive);
-        var rooms = DungeonRoomCatalog.Load(resources.Archive);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         // NPC两条路线只复用入场wire夹具；不制造NPC退场、dummy死亡或sub11结算。
         var scenarios = MiddleQuestEntryTests.NpcScenarios.Concat(MiddleQuestEntryTests.Scenarios);
         foreach (var scenario in scenarios)

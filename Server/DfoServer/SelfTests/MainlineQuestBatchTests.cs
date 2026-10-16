@@ -16,9 +16,9 @@ internal static class MainlineQuestBatchTests
     public static void Run(PvfArchive pvf, ItemResources items)
     {
         int checks = Count;
-        var quests = QuestCatalog.Load(pvf);
-        var dungeons = DungeonCatalog.Load(pvf);
-        var rooms = DungeonRoomCatalog.Load(pvf);
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var forest = quests.Get(3292);
         var watch = quests.Get(3272);
         var guards = quests.Get(3265);

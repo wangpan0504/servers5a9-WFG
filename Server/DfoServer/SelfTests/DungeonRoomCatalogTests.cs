@@ -170,11 +170,11 @@ internal static class DungeonRoomCatalogTests
             That(rejected, name);
         }
 
-        var dungeons = DungeonCatalog.Load(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var maze = dungeons.Get(3).Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3
             && candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
         var first = maze.MapSpecification!.Single(map => map.Position == maze.Starts.Single());
-        var catalog = DungeonRoomCatalog.Load(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var room = catalog.Get(first);
         var storyMap = dungeons.Get(9).Mazes.SelectMany(candidate => candidate.MapSpecification ?? []).Single(map => map.Id == 76155);
         var story = catalog.Get(storyMap);

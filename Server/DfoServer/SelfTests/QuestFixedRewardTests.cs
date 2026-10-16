@@ -82,7 +82,7 @@ internal static class QuestFixedRewardTests
 
     public static void RunResources(PvfArchive pvf)
     {
-        var quest = QuestCatalog.Load(pvf).Get(3145);
+        var quest = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf).Get(3145);
         var definition = QuestFixedRewardDefinition.Parse(quest);
         if (definition.Path != FirstQuestPath || !definition.Tokens.SequenceEqual(quest.Rewards))
             throw new InvalidOperationException("FAIL 3145固定奖励资源身份或原token变化");

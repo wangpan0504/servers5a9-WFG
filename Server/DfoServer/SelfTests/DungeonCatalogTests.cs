@@ -134,7 +134,7 @@ internal static class DungeonCatalogTests
             That(rejected, name);
         }
 
-        var catalog = DungeonCatalog.Load(pvf);
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         That(catalog.DungeonCount == 1372, "matching dungeon index contains 1372 entries");
         Reject(() => catalog.Get(-1), "negative dungeon index rejected");
         Reject(() => catalog.Get(int.MaxValue), "unlisted dungeon index rejected");

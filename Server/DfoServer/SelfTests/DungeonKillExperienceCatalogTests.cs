@@ -42,14 +42,14 @@ internal static class DungeonKillExperienceCatalogTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
-        var table = DungeonKillExperienceCatalog.Load(pvf);
+        var table = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
         That(table.GetExperience(1) == 30 && table.GetExperience(2) == 60 &&
             table.GetExperience(3) == 72 && table.GetExperience(300) == 64906,
             "基础经验直接使用匹配表的等级与经验整数对");
-        var dungeon = DungeonCatalog.Load(pvf).Get(3);
+        var dungeon = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf).Get(3);
         var maze = dungeon.Mazes.Single(candidate => candidate.QuestConnectionTokens.Count == 3 &&
             candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
-        var rooms = DungeonRoomCatalog.Load(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var room25 = rooms.Get(maze.MapSpecification!.Single(map => map.Id == 76125));
         var room26 = rooms.Get(maze.MapSpecification!.Single(map => map.Id == 76126));
         That(room25.Monsters[4].RawValues.Take(3).SequenceEqual([1, 1, 0]) &&
