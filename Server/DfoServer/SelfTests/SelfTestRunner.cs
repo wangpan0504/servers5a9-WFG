@@ -142,6 +142,7 @@ internal static class SelfTestRunner
         DungeonDropGenerationPlanTests.RunCore();
         GrowthPacketsTests.Run();
         SkillRequestTests.Run();
+        ClassChangeTests.RunCore();
         SkillLearningTests.RunCore();
         SkillLearningCatalogTests.RunCore();
         SkillLayoutTests.Run();

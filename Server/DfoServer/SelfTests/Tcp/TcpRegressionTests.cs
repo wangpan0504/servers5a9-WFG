@@ -14,6 +14,12 @@ internal static class TcpRegressionTests
         ("tutorial", TutorialTcpTests.RunAsync),
         ("channel-entry", ChannelEntryTcpTests.RunAsync),
         ("quests", QuestLifecycleTcpTests.RunAsync),
+        ("class-change-rules", (_, _, resources) =>
+        {
+            ClassChangeTests.RunResources(resources);
+            return Task.CompletedTask;
+        }),
+        ("class-change", ClassChangeTcpTests.RunAsync),
         ("titles", TitleTcpTests.RunAsync),
         ("adventure", AdventureCoreTcpTests.RunAsync),
         ("adventure-names", AdventureNameTcpTests.RunAsync),
@@ -200,6 +206,7 @@ internal static class TcpRegressionTests
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
+        "class-change-rules",
         "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",

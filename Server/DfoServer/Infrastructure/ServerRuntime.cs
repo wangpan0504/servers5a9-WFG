@@ -213,6 +213,8 @@ internal static class ServerRuntime
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection),
+            new ClassChangeHandler(new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests,
+                itemResources.EpicPieces), levelProjection, inventoryProjection, questProjection, projection, log, clock),
             dungeon,
             new AgitWarHandler(),
             // 公会：创建窗口的两次查重（CMD 0x9C / 0x9D）、介绍校验（0x2E3）与建会认证链路（0x2E5 / 0x2E6 / 0x2E7）。

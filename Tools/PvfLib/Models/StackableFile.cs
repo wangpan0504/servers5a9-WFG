@@ -19,12 +19,19 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public bool HasUsableJobs { get; init; }
     public IReadOnlyList<string>? DeclaredActionUsablePlaces { get; init; }
     public bool HasActionUsablePlace { get; init; }
+    public IReadOnlyList<string>? DeclaredActionUsableServerTypes { get; init; }
+    public IReadOnlyList<int>? DeclaredNeededMaterials { get; init; }
+    public IReadOnlyList<int>? DeclaredDontChangeGrowTypes { get; init; }
+    public IReadOnlyList<int>? DeclaredUsableFirstGrowTypes { get; init; }
+    public bool ClassChangeGrowTypeCheckOff { get; init; }
 
     public static StackableFile Parse(int templateId, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
         var fields = new PvfTokenFields(tokens, resolve,
             ["stackable type", "stack limit", "price", "sell price", "minimum level", "item group name",
-                "action type", "maximum level", "use action packet", "usable job", "action usable place"]);
+                "action type", "maximum level", "use action packet", "usable job", "action usable place",
+                "action usable server type", "need material", "dont change grow type", "usable first growtype",
+                "class change grow type check off"]);
         StackableTypeDeclaration? type = null;
         if (fields.TryGet("stackable type", out var values))
         {
@@ -78,13 +85,31 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
         }
         bool hasUseAction = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[use action packet]");
         int? maximum = fields.Scalar("maximum level"), useAction = fields.Scalar("use action packet");
+        IReadOnlyList<int>? Integers(string name)
+        {
+            if (!tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[" + name + "]")) return [];
+            if (!fields.TryGet(name, out var data) || data.ToArray().Any(token => token.Type != 0)) return null;
+            return Array.AsReadOnly(data.ToArray().Select(token => token.Value).ToArray());
+        }
+        IReadOnlyList<string>? servers = null;
+        if (tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action usable server type]") &&
+            fields.TryGet("action usable server type", out values) && values.ToArray().All(token => token.Type == 6))
+            servers = Array.AsReadOnly(values.ToArray().Select(token => resolve(token.Value)).ToArray());
+        bool checkOff = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[class change grow type check off]");
+        if (checkOff && (!fields.TryGet("class change grow type check off", out values) || values.Length != 0))
+            fields.Unsupported("class change grow type check off");
         return new(templateId, path, type, limit, price, sellPrice, minimum, group, fields.UnsupportedFields)
         {
             ActionDeclaration = action, DeclaredMaximumLevel = maximum, HasMaximumLevel = hasMaximum,
             DeclaredUseActionPacket = useAction, HasUseActionPacket = hasUseAction, DeclaredUsableJobs = jobs,
             HasUsableJobs = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[usable job]"),
             DeclaredActionUsablePlaces = places,
-            HasActionUsablePlace = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action usable place]")
+            HasActionUsablePlace = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action usable place]"),
+            DeclaredActionUsableServerTypes = servers,
+            DeclaredNeededMaterials = Integers("need material"),
+            DeclaredDontChangeGrowTypes = Integers("dont change grow type"),
+            DeclaredUsableFirstGrowTypes = Integers("usable first growtype"),
+            ClassChangeGrowTypeCheckOff = checkOff
         };
     }
 }

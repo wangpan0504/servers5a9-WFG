@@ -16,6 +16,7 @@ internal sealed class ItemCatalog
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
     readonly ConcurrentDictionary<int, Lazy<ItemTemplate>> pendingTemplates = new();
     readonly ConcurrentDictionary<int, QuestTicketDefinition> questTickets = new();
+    readonly ConcurrentDictionary<int, Lazy<ClassChangeTicketDefinition?>> classChangeTickets = new();
     static readonly string[] JobNames = ["swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief", "at fighter", "at mage", "demonic swordman", "creator mage", "at swordman", "knight", "demonic lancer", "at priest", "gun blader"];
     static readonly Dictionary<string, byte> EquipmentSlots = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -130,6 +131,14 @@ internal sealed class ItemCatalog
         if (!stackable.TryGetValue(id, out var path)) return null;
         var raw = StackableFile.Parse(id, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
         return AdventureNameTicketDefinition.Parse(raw, Get(id));
+    }
+
+    public ClassChangeTicketDefinition? ClassChangeTicket(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return classChangeTickets.GetOrAdd(id, key => new(() =>
+            ClassChangeTicketDefinition.Parse(StackableFile.Parse(key, "stackable/" + path,
+                pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
     }
 
     // 只有唯一、完整的类型声明参与成宠资格；缺项和未知格式不按成宠0补齐。

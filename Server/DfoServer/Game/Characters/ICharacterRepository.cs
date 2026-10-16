@@ -47,6 +47,7 @@ internal interface ICharacterRepository
     Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit);
     Character AdvanceAcceptedStoryLevel(AccountOwners.Lease owner, Character expected);
     Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan);
+    Character CommitClassChange(AccountOwners.Lease owner, ClassChangePlan plan);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
     QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);
     QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan);

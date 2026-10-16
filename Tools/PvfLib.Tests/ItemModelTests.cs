@@ -98,6 +98,24 @@ internal static class ItemModelTests
                 "malformed or duplicate usable place cannot become an absent default");
         }
         Reject<InvalidDataException>(() => PvfItemIndex.Equipment([new(0, 0), new(6, 4)], Resolve, _ => true));
+        string[] classStrings = ["[need material]", "[/need material]", "[dont change grow type]", "[/dont change grow type]",
+            "[usable first growtype]", "[/usable first growtype]", "[action usable server type]", "[general server]",
+            "[/action usable server type]", "[class change grow type check off]"];
+        string ClassResolve(int value) => classStrings[value];
+        var change = StackableFile.Parse(1, "stackable/change.stk",
+            [new(3,0),new(0,1000),new(0,2),new(3,1),new(3,2),new(0,6),new(0,4),new(3,3),
+                new(3,4),new(0,3),new(0,4),new(0,5),new(3,5),new(3,6),new(6,7),new(3,8),new(3,9)], ClassResolve);
+        That(change.DeclaredNeededMaterials!.SequenceEqual(new[] { 1000,2 }) &&
+            change.DeclaredDontChangeGrowTypes!.SequenceEqual(new[] { 6,4 }) &&
+            change.DeclaredUsableFirstGrowTypes!.SequenceEqual(new[] { 3,4,5 }) && change.ClassChangeGrowTypeCheckOff &&
+            change.DeclaredActionUsableServerTypes!.SequenceEqual(new[] { "[general server]" }),
+            "class change raw pairs, source branches, server labels and empty flag are retained");
+        change = StackableFile.Parse(1,"stackable/change.stk",[new(3,0),new(0,1),new(0,-2),new(3,1)],ClassResolve);
+        That(change.DeclaredNeededMaterials!.SequenceEqual(new[] { 1,-2 }), "raw material values are not interpreted as business costs");
+        change = StackableFile.Parse(1,"stackable/change.stk",[new(3,0),new(0,1),new(0,2),new(3,1),new(3,0),new(0,3),new(0,4)],ClassResolve);
+        That(change.DeclaredNeededMaterials is null, "duplicate class change materials are not silently overwritten");
+        change = StackableFile.Parse(1,"stackable/change.stk",[new(3,9),new(0,0)],ClassResolve);
+        That(change.UnsupportedFields.Contains("class change grow type check off"), "class change flag with payload is not a valid empty flag");
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 5)], Resolve, _ => true));
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 4)], Resolve, _ => false));
     }

@@ -18,6 +18,9 @@ internal static class QuestEligibility
         "[at priest]", "[gun blader]"
     ];
 
+    internal static bool MatchesJob(byte job, string? required) => job < Jobs.Length &&
+        (required is null or "[all]" || required == Jobs[job]);
+
     // 两端普通列表的分类合同；本版新增专用分类仍保留定义，等待对应入口确认。
     public static QuestResourceAccess InspectResource(StoryQuest quest)
     {
@@ -91,7 +94,7 @@ internal static class QuestEligibility
         if (quest.MinimumLevel < 1 || quest.MaximumLevel < quest.MinimumLevel ||
             character.Level < quest.MinimumLevel || !allowAboveMaximum && character.Level > quest.MaximumLevel)
             return Reject("等级不符");
-        if (definition.Job is not (null or "[all]") && definition.Job != Jobs[character.Job])
+        if (!MatchesJob(character.Job, definition.Job))
             return Reject("职业不符");
         int grow = character.GrowType & 15, awakening = character.GrowType >> 4;
         if (definition.TargetCharacters.Length != 0 && !definition.TargetCharacters.Any(target =>
