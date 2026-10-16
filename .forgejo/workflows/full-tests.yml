@@ -1,0 +1,43 @@
+name: 完整资源检查
+
+# 完整 --selftest 与完整 TCP 需要真实 PVF；PVF 不入库，只能在已放置资源的自托管 runner 上运行。
+# runner 须带 s5a9-pvf 标签、已安装 .NET 10 SDK 与 PowerShell 7，并在主机环境中设置 S5A9_PVF_PATH。
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  full:
+    name: full-selftest-tcp
+    # Fork PR 的代码会在资源主机上执行，只对本仓库分支的 PR 自动运行。
+    if: ${{ forgejo.event_name != 'pull_request' || forgejo.event.pull_request.head.repo.full_name == forgejo.repository }}
+    runs-on: s5a9-pvf
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - name: 检出本次提交
+        shell: pwsh
+        env:
+          REPOSITORY_URL: ${{ forgejo.server_url }}/${{ forgejo.repository }}.git
+          COMMIT: ${{ forgejo.event.pull_request.head.sha || forgejo.sha }}
+        run: |
+          git init .
+          git remote add origin $env:REPOSITORY_URL
+          git fetch --depth=1 origin $env:COMMIT
+          git checkout --detach $env:COMMIT
+
+      - name: 构建、基础检查与完整 --selftest
+        shell: pwsh
+        run: |
+          if (-not $env:S5A9_PVF_PATH -or -not (Test-Path -LiteralPath $env:S5A9_PVF_PATH -PathType Leaf)) { throw 'runner 未配置 S5A9_PVF_PATH' }
+          ./Tools/Check-Development.ps1 -PvfPath $env:S5A9_PVF_PATH
+
+      - name: 完整 TCP
+        shell: pwsh
+        run: |
+          dotnet build/check/bin/DfoServer/debug/DfoServer.dll --pvf-path $env:S5A9_PVF_PATH --selftest-tcp
+          if ($LASTEXITCODE -ne 0) { throw "TCP 失败（$LASTEXITCODE）" }

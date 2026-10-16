@@ -5,6 +5,8 @@ namespace DfoServer.Testing;
 
 internal static class PacketCaptureTcpTests
 {
+    const string Credential = "e10adc3949ba59abbe56e057f20f883e";
+
     public static async Task RunAsync(ServerOptions source, string root)
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "packet-capture"));
@@ -37,10 +39,15 @@ internal static class PacketCaptureTcpTests
         foreach (string marker in new[] { "protocol=CHANNEL RECV", "protocol=CHANNEL SEND", "SEND kind=0x00 opcode=0x0001 name=CHANNELINFO", "RECV kind=0x01 opcode=0x061A name=LOGIN_PRECHECK", "RECV kind=0x01 opcode=0x0001 name=LOGIN", "SEND kind=0x01 opcode=0x061A", "SEND kind=0x01 opcode=0x0003 name=EXIT", "RECV kind=0x01 opcode=0x0003 name=EXIT len=14 body=(1B) [01]" })
             TestCheck.That(text.Contains(marker), "capture covers " + marker);
         TestCheck.That(text.Split("RECV kind=0x01 opcode=0x0003").Length == 3, "capture includes rejected pre-authentication traffic");
-        string credential = "e10adc3949ba59abbe56e057f20f883e";
+        string credential = Credential;
         TestCheck.That(!text.Contains(credential) && !text.Contains(BitConverter.ToString(Encoding.ASCII.GetBytes(credential)).Replace('-', ' ')), "raw and body omit credential bytes");
         TestCheck.That(text.Contains("[authentication payload redacted]"), "redaction is explicit in capture");
+    }
 
+    // 原 packet-capture 后半段：独立 fixture 与端口，拆为 packet-http 组以便与文件抓包并行。
+    public static async Task RunHttpAsync(ServerOptions source, string root)
+    {
+        string credential = Credential;
         await using var httpFixture = new TcpTestFixture(source, Path.Combine(root, "packet-http"), packetHttp: true);
         await httpFixture.StartAsync();
         using var http = new HttpClient { BaseAddress = new($"http://127.0.0.1:{httpFixture.Options.PacketHttpPort}"), Timeout = TimeSpan.FromSeconds(5) };

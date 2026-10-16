@@ -139,7 +139,8 @@ internal static class BoosterTcpTests
             Entry(delta, 1, 1, 30);
             peer.Barrier();
             peer.Send(160, new byte[5]);
-            peer.Closed();
+            peer.Expect(1, 160, [0, 19, 0]); // master #327: truncated CMD160 now gets a failure reply and keeps the connection
+            peer.Barrier();
         }
         using (var peer = Open(fixture))
         {

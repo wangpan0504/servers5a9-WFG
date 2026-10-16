@@ -139,6 +139,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
 
     public async Task StartAsync(string phase = "initial", bool packetCapture = false, bool isolatedProcess = false)
     {
+        var startup = Stopwatch.StartNew();
         if (process is not null || hosted is not null)
             throw new InvalidOperationException("Fixture already running");
         if (previousPhase is not null && Directory.Exists(Options.LogDirectory))
@@ -239,7 +240,13 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 await FinishProcessAsync(child);
             throw;
         }
+        Interlocked.Add(ref startupMs, startup.ElapsedMilliseconds);
+        Interlocked.Increment(ref starts);
     }
+
+    // 本驱动进程内所有 fixture 启动到 ready 的累计耗时与次数，供各组结果记录启动开销。
+    static long startupMs, starts;
+    internal static (long Milliseconds, long Count) StartupTotals => (Interlocked.Read(ref startupMs), Interlocked.Read(ref starts));
 
     // 每个子进程使用独立的程序目录，按正式固定布局隔离 Data/Logs，不增加测试专用启动参数。
     void PrepareRuntime()

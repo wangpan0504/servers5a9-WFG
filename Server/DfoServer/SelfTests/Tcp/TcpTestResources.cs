@@ -29,28 +29,48 @@ internal sealed class TcpTestResources : IDisposable
     public TutorialCatalog Tutorials => tutorials.Value;
     public TutorialScenes TutorialScenes => tutorialScenes.Value;
     public bool IsLoaded => archive.IsValueCreated;
+    // 共享资源（PVF 及各目录）首次构建的累计耗时；计入触发加载的那一组。
+    public long LoadMs => Interlocked.Read(ref loadMs);
+    long loadMs;
 
     public TcpTestResources(ServerOptions options)
     {
-        archive = new(() =>
+        archive = new(() => Timed(() =>
         {
             var pvf = PvfArchive.Open(options.PvfPath);
 
             Console.WriteLine("TCP 共享 PVF 已加载");
             return pvf;
-        });
-        items = new(() => new ItemResources(Archive));
-        characters = new(() => CharacterCatalog.Load(Archive, ItemResources.Items));
-        towns = new(() => TownCatalog.Load(Archive));
-        learning = new(() => SkillLearningCatalog.Load(Archive, ItemResources.Contracts.ExpertSkillLevels));
-        quests = new(() => SelfTestCatalogs.Quests(Archive));
-        adventure = new(() => new DfoServer.GameWorld.Adventure.AdventureCatalog(Archive));
-        expeditions = new(() => new DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog(Archive));
-        tutorials = new(() => new TutorialCatalog(Archive));
-        tutorialScenes = new(() => new TutorialScenes(Archive, Tutorials, SelfTestCatalogs.Dungeons(Archive)));
+        }));
+        items = new(() => Timed(() => new ItemResources(Archive)));
+        characters = new(() => Timed(() => CharacterCatalog.Load(Archive, ItemResources.Items)));
+        towns = new(() => Timed(() => TownCatalog.Load(Archive)));
+        learning = new(() => Timed(() => SkillLearningCatalog.Load(Archive, ItemResources.Contracts.ExpertSkillLevels)));
+        quests = new(() => Timed(() => SelfTestCatalogs.Quests(Archive)));
+        adventure = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureCatalog(Archive)));
+        expeditions = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog(Archive)));
+        tutorials = new(() => Timed(() => new TutorialCatalog(Archive)));
+        tutorialScenes = new(() => Timed(() => new TutorialScenes(Archive, Tutorials, SelfTestCatalogs.Dungeons(Archive))));
     }
 
-    public void Dispose()
+    // 嵌套加载（目录依赖 PVF）只计外层，避免重复累加。
+    [ThreadStatic] static int depth;
+    T Timed<T>(Func<T> create)
+    {
+        var watch = depth++ == 0 ? System.Diagnostics.Stopwatch.StartNew() : null;
+        try
+        {
+            return create();
+        }
+        finally
+        {
+            depth--;
+            if (watch is not null)
+                Interlocked.Add(ref loadMs, watch.ElapsedMilliseconds);
+        }
+    }
+
+        public void Dispose()
     {
         if (archive.IsValueCreated)
             archive.Value.Dispose();

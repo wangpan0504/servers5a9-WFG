@@ -102,7 +102,9 @@ PR 使用[合入模板](.forgejo/PULL_REQUEST_TEMPLATE.md)，关联 Issue，说�
 
 仓库管理员在 Codeberg 中配置五个状态标签，以及 `master` 的[分支保护](https://forgejo.org/docs/latest/user/repository/protection/)：限制直接推送和强推，仅维护者合入 PR，并要求独立评审。模块标签按实际任务需要增加，不预先建立无人维护的大量分类。平台权限、标签和保护规则须在平台单独设置，文档或模板存在不代表这些设置已经生效。
 
-PR 创建、追加提交和重新打开时，由[无 PVF 检查工作流](.forgejo/workflows/tests.yml)使用 `codeberg-small` 运行自动检查。工作流使用官方 .NET 10 Linux SDK 镜像，按 Debug、Release 分为两个独立配置 job，每个 job 限时 5 分钟；两个配置可以并行调度，任一配置失败不跳过另一个，实际开始时间仍取决于公共 runner 队列。检出本次事件对应的 PR 源提交后，使用单个 MSBuild 节点构建，再从 `build/check/bin/<项目>/<配置小写>/` 直接运行分层正反例、PvfLib 合成测试、服务端 `--selftest-core` 和 `--selftest-tcp commands`，任一步失败均使该配置失败。CI 直接调用上述入口，不执行 `Tools/Check-Development.ps1` 的仓库链接/路径步骤；本地基础检查仍须按上述统一命令执行。检查只使用源码、合成输入和临时 SQLite，Fork PR 无需额外 secrets。CI 不包含真实 PVF 的业务自测、完整业务 TCP、资源普查或客户端验收；本地验证仍按[检查范围](#检查范围)补齐。
+PR 创建、追加提交和重新打开时，由[无 PVF 检查工作流](.forgejo/workflows/tests.yml)使用 `codeberg-small` 运行自动检查。工作流使用官方 .NET 10 Linux SDK 镜像，按 Debug、Release 分为两个独立配置 job，每个 job 限时 5 分钟；两个配置可以并行调度，任一配置失败不跳过另一个，实际开始时间仍取决于公共 runner 队列。检出本次事件对应的 PR 源提交后，使用单个 MSBuild 节点构建，再从 `build/check/bin/<项目>/<配置小写>/` 直接运行分层正反例、PvfLib 合成测试、服务端 `--selftest-core` 和 `--selftest-tcp commands`，任一步失败均使该配置失败。CI 直接调用上述入口，不执行 `Tools/Check-Development.ps1` 的仓库链接/路径步骤；本地基础检查仍须按上述统一命令执行。检查只使用源码、合成输入和临时 SQLite，Fork PR 无需额外 secrets。该工作流不包含真实 PVF 的业务自测、完整业务 TCP、资源普查或客户端验收；本地验证仍按[检查范围](#检查范围)补齐。
+
+[完整资源检查工作流](.forgejo/workflows/full-tests.yml)在推送到 `master`、PR 及手动触发时运行完整 `--selftest` 与完整 TCP。它需要标签为 `s5a9-pvf` 的自托管 runner，并通过 runner 主机上的 `S5A9_PVF_PATH` 环境变量提供 PVF；PVF 不入库，也不能放入公共 runner 或 secrets。没有此 runner 时作业保持排队，不能作为必需检查；Fork PR 的代码会在该主机执行，管理员须先确认信任边界后再启用。
 
 两个配置结束后，`no-pvf` 汇总 job 复用原有检查名称，使用 `codeberg-tiny`、轻量 Alpine 镜像和 `sh`，只在两个配置全部成功时通过；失败、取消、跳过或缺失结果均拒绝，不重复构建和自测。管理员须在仓库设置的 `Units > Overview` 中启用 Actions；工作流文件不会自动修改平台设置或分支保护。必需检查以实际配置为准，未启用或尚未验证可运行的 CI 状态不得作为必需检查阻塞所有 PR。
 
@@ -167,9 +169,9 @@ macOS/Linux 的仓库检查改用 `pwsh -NoProfile -File Tools/Check-Repository.
 
 ### 检查范围
 
-**测试分层。** 开发内循环 = 增量 Debug 构建 + `--selftest-core` + 受影响 TCP 组：`pwsh Tools/Select-AffectedTests.ps1 [-Run -PvfPath <PVF>]` 按与 `master` 的差异选组，公共入口、schema、测试框架或无法映射的代码变化自动回退全量。完整 `--selftest` 与完整 TCP 只在合入前（或下表要求时）各跑一次。同一台机器同时运行测试的工作树不超过 2 个；TCP 并行度按 `DFO_TCP_PARALLEL` 调低。
+**测试分层。** 开发内循环 = 增量 Debug 构建 + `--selftest-core` + 受影响 TCP 组：`pwsh Tools/Select-AffectedTests.ps1 [-Run -PvfPath <PVF>]` 按与 `origin/master`（不存在时为 `master`）的差异选组，并输出按历史耗时估算的串行/并行时间。映射依次使用注册表中的测试类、路径关键词，以及引用该类型的 TCP 测试类；非 TCP 的自测文件只由 `--selftest-core`/完整 `--selftest` 覆盖。公共测试框架或 TCP 入口（`TcpPeer`、`TcpTestFixture`、`TcpTestResources`、`TcpRegressionTests` 等）变化在开发期运行固定冒烟组；迁移或表结构变化运行 `database-schema`、`settings-storage`、`inventory-persistence` 与 `startup`；程序入口、`Application/`、`Infrastructure/`、`Network/Core/`、项目文件、PvfLib、自测入口、引用过广或无法映射的代码变化直接全量。`-Run` 在源码指纹（HEAD、未提交差异与未跟踪文件内容）未变时跳过构建和已通过的 `--selftest-core`，`-NoCache` 关闭复用。合入前用 `-Run -Full` 运行一次完整 TCP，并用 `Tools/Check-Development.ps1 -PvfPath <PVF>` 运行一次完整 `--selftest`；冒烟或定向选择不能代替这两项。同一台机器同时运行测试的工作树不超过 2 个；TCP 并行度按 `DFO_TCP_PARALLEL` 调低。
 
-开发迭代先完成 Debug 构建、基础检查及修改点和受影响链路的定向测试；不因一次局部修改反复运行全量资源与 TCP。最终提交、推送或整项交付前按下表补齐验证；相同代码与输入已通过的检查可复用，后续修改、失败或影响范围不明时按影响补测。公共测试夹具、资源共享或测试入口变化须运行完整 TCP，不能只测一个受益组。服务端构建要求 `0 warning / 0 error`。
+开发迭代先完成 Debug 构建、基础检查及修改点和受影响链路的定向测试；不因一次局部修改反复运行全量资源与 TCP。最终提交、推送或整项交付前按下表补齐验证；相同代码与输入已通过的检查可复用，后续修改、失败或影响范围不明时按影响补测。公共测试夹具、资源共享或测试入口变化在开发期运行冒烟组，交付前须运行完整 TCP，不能只测一个受益组。服务端构建要求 `0 warning / 0 error`。
 
 | 改动范围 | 至少完成的验证 |
 |---|---|
@@ -186,7 +188,7 @@ macOS/Linux 的仓库检查改用 `pwsh -NoProfile -File Tools/Check-Repository.
 
 每轮 TCP 回归生成独立的 `build/tcp-tests/<GUID>`，运行期间以 `.running` 占用标记保护。以下回收属于默认授权，无需另行确认：
 
-- **通过的轮次**：记录各组耗时到 `build/tcp-tests/timings.json`（供并行分片均衡）后整轮删除。需要保留成功现场时设置 `DFO_KEEP_TCP_ARTIFACTS=1`。
+- **通过的轮次**：记录各组耗时到 `build/tcp-tests/timings.json`（供并行分片均衡）后整轮删除；设置 `DFO_TCP_TIMINGS=<文件>` 时同时合并写入该共享文件，多个工作树共用历史耗时。`Tools/Select-AffectedTests.ps1` 默认使用 `%LOCALAPPDATA%/S5A9/tcp-timings.json`（其他平台为 `~/.cache/s5a9/tcp-timings.json`），不写入任何工作树。需要保留成功现场时设置 `DFO_KEEP_TCP_ARTIFACTS=1`。
 - **失败、取消或中断的轮次**：保留现场。每轮 TCP 启动时自动裁剪：只保留最近 `DFO_TCP_KEEP_FAILED`（默认 5）个、`DFO_TCP_KEEP_DAYS`（默认 3）天内、合计不超过 `DFO_TCP_MAX_GB`（默认 5 GB，不计硬链接的 PVF）的失败现场；最新一个失败现场始终保留。旧版本遗留的已通过轮次一并删除。
 - 手动清理用 `Tools/Clean-TestArtifacts.ps1`（`-WhatIf` 预览，`-All` 删除全部非运行中轮次），规则与自动回收一致。
 
@@ -209,7 +211,7 @@ macOS/Linux 的仓库检查改用 `pwsh -NoProfile -File Tools/Check-Repository.
 
 测试结构、资源复用或性能调整须在同配置、同输入、同选组条件下比较总耗时、进程树峰值内存及冷启动次数，同时报告测试有效代码量的增减（排除空行与纯注释）。代码增长应对应新增的独有覆盖或必要夹具支持，不设机械的测试/业务行数比例，也不把某台机器的一次耗时写成固定门槛。覆盖范围变化单独说明，不能当作等量提速。
 
-定向组名以 [TCP 入口](Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs)为准；省略组名执行全部网络集成组。`dungeon-settlement`、`inventory-persistence` 是已有自测的定向入口，`resource-survey` 是全量普查，均需显式指定。每组结果记录断言数及驱动提交量、工作集、期间分配量，内含共享资源和同进程服务；独立进程阶段的 `memory.json` 记录工作集峰值与停服前提交量。这些指标不等价于泄漏证明或进程树硬上限。
+定向组名以 [TCP 入口](Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs)为准；省略组名执行全部网络集成组。原 `quests` 已拆为互不共享数据库的 `quest-lifecycle`、`quest-extras`、`quest-chains`、`quest-chain-settlement`、`quest-metro` 五组，`quests` 仍作为五组的别名；原 `packet-capture` 的 HTTP 只读入口部分拆为 `packet-http`。`dungeon-settlement`、`inventory-persistence` 是已有自测的定向入口，`resource-survey` 是全量普查，均需显式指定。每组结果记录断言数、耗时、本组触发的共享资源加载耗时（`ResourceLoadMs`）、fixture 启动到就绪的次数与耗时（`FixtureStarts`/`FixtureStartMs`）及驱动提交量、工作集、期间分配量，内含共享资源和同进程服务；独立进程阶段的 `memory.json` 记录工作集峰值与停服前提交量。这些指标不等价于泄漏证明或进程树硬上限。
 
 Windows、macOS 和 Linux 共用入口，仅报告实际运行的平台。纯文档修改只检查链接、路径、锚点、内容与 diff，不要求构建、自测或服务重启；缺少匹配资产时说明未执行项。
 

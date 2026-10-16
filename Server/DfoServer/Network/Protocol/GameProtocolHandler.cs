@@ -36,7 +36,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         var elevator = new DungeonElevatorProjection(context, log);
         context.Elevator = elevator;
-        var death = new DungeonDeathProjection(context, projection, log);
+        var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
         if (mailbox is not null)
             session.MailboxArrived = receipt => mailbox.Alarm(context, receipt);

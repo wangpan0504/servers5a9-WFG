@@ -88,25 +88,38 @@ internal sealed class ItemCatalog
     public static byte Slot(string tag) => EquipmentSlots.TryGetValue(tag, out var slot) ? slot : throw new InvalidDataException("未知普通装备类型: " + tag);
 
     // 在资源装配阶段枚举；正creation rate的普通道具完整解析，失败不得静默删除候选。
+    // 逐项解析互不依赖（PVF 按位置读取、缓存与模板表均线程安全），有序并行后结果与串行一致；
+    // 原先串行约占服务启动 4 秒。任一项失败仍以原异常终止装配。
     public IEnumerable<ItemTemplate> DropCandidates()
     {
-        foreach (var (id, path) in equipment.Concat(stackable).OrderBy(row => row.Key))
+        var rows = equipment.Concat(stackable).OrderBy(row => row.Key).ToArray();
+        try
         {
-            if (id <= 2)
-                continue;
-            bool isEquipment = equipment.ContainsKey(id);
-            // 缺失的premium STK是可选声明，不能被掉落预热重新变成启动失败。
-            if (!isEquipment && premiumServiceItems.Contains(id) && !pvf.Contains("stackable/" + path))
-                continue;
-            var document = isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
-                new PvfDocument(pvf.ReadText("stackable/" + path));
-            int rate = CreationRate(document);
-            if (rate == 0)
-                continue;
-            var template = Get(id);
-            if (template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession)
-                yield return template;
+            return rows.AsParallel().AsOrdered().WithDegreeOfParallelism(Math.Clamp(Environment.ProcessorCount / 2, 1, 8))
+                .Select(row => DropCandidate(row.Key, row.Value)).Where(template => template is not null).Select(template => template!).ToArray();
         }
+        catch (AggregateException error) when (error.InnerExceptions.Count >= 1)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+            throw;
+        }
+    }
+
+    ItemTemplate? DropCandidate(int id, string path)
+    {
+        if (id <= 2)
+            return null;
+        bool isEquipment = equipment.ContainsKey(id);
+        // 缺失的premium STK是可选声明，不能被掉落预热重新变成启动失败。
+        if (!isEquipment && premiumServiceItems.Contains(id) && !pvf.Contains("stackable/" + path))
+            return null;
+        var document = isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
+            new PvfDocument(pvf.ReadText("stackable/" + path));
+        int rate = CreationRate(document);
+        if (rate == 0)
+            return null;
+        var template = Get(id);
+        return template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession ? template : null;
     }
 
     internal static int CreationRate(PvfDocument document)

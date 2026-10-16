@@ -10,10 +10,15 @@ internal static class TcpRegressionTests
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
         ("packet-capture", (options, root, _) => PacketCaptureTcpTests.RunAsync(options, root)),
+        ("packet-http", (options, root, _) => PacketCaptureTcpTests.RunHttpAsync(options, root)),
         ("town", TownProtocolTcpTests.RunAsync),
         ("tutorial", TutorialTcpTests.RunAsync),
         ("channel-entry", ChannelEntryTcpTests.RunAsync),
-        ("quests", QuestLifecycleTcpTests.RunAsync),
+        ("quest-lifecycle", QuestLifecycleTcpTests.RunAsync),
+        ("quest-extras", QuestLifecycleTcpTests.RunExtrasAsync),
+        ("quest-chains", QuestLifecycleTcpTests.RunChainsAsync),
+        ("quest-chain-settlement", QuestLifecycleTcpTests.RunChainSettlementAsync),
+        ("quest-metro", QuestLifecycleTcpTests.RunMetroAsync),
         ("class-change-rules", (_, _, resources) =>
         {
             ClassChangeTests.RunResources(resources);
@@ -222,7 +227,8 @@ internal static class TcpRegressionTests
     // 拆分后的旧组名作为别名，展开为原有全部内容，保持既有命令可用。
     static readonly Dictionary<string, string[]> Aliases = new(StringComparer.Ordinal)
     {
-        ["dungeon-story-events"] = ["story-cinematic", "story-scenes", "story-quest-entry", "story-publication"]
+        ["dungeon-story-events"] = ["story-cinematic", "story-scenes", "story-quest-entry", "story-publication"],
+        ["quests"] = ["quest-lifecycle", "quest-extras", "quest-chains", "quest-chain-settlement", "quest-metro"]
     };
 
     public static IEnumerable<string> GroupNames => Groups.Select(group => group.Name).Concat(Aliases.Keys);
@@ -276,6 +282,8 @@ internal static class TcpRegressionTests
         foreach (var group in Groups.Where(group => selected.Contains(group.Name, StringComparer.Ordinal)))
         {
             int before = TestCheck.Count;
+            long loadBefore = resources.LoadMs;
+            var startupBefore = TcpTestFixture.StartupTotals;
             long allocated = GC.GetTotalAllocatedBytes();
             var watch = Stopwatch.StartNew();
             await group.Run(options, root, resources);
@@ -284,9 +292,13 @@ internal static class TcpRegressionTests
             {
                 Passed = true, Assertions = TestCheck.Count - before, ElapsedMs = watch.ElapsedMilliseconds,
                 DriverPrivateBytes = process.PrivateMemorySize64, DriverWorkingSetBytes = process.WorkingSet64,
-                AllocatedBytes = GC.GetTotalAllocatedBytes() - allocated, SharedResourcesLoaded = resources.IsLoaded
+                AllocatedBytes = GC.GetTotalAllocatedBytes() - allocated, SharedResourcesLoaded = resources.IsLoaded,
+                ResourceLoadMs = resources.LoadMs - loadBefore, FixtureStartMs = TcpTestFixture.StartupTotals.Milliseconds - startupBefore.Milliseconds,
+                FixtureStarts = TcpTestFixture.StartupTotals.Count - startupBefore.Count
             }));
-            Console.WriteLine($"PASS TCP {group.Name}: {TestCheck.Count - before} assertions, {watch.Elapsed.TotalSeconds:F1}s");
+            Console.WriteLine($"PASS TCP {group.Name}: {TestCheck.Count - before} assertions, {watch.Elapsed.TotalSeconds:F1}s " +
+                $"(resources {(resources.LoadMs - loadBefore) / 1000.0:F1}s, fixture starts {TcpTestFixture.StartupTotals.Count - startupBefore.Count} " +
+                $"in {(TcpTestFixture.StartupTotals.Milliseconds - startupBefore.Milliseconds) / 1000.0:F1}s)");
         }
         File.WriteAllText(Path.Combine(root, "result.json"), JsonSerializer.Serialize(new { Passed = true, Assertions = TestCheck.Count, Groups = selected, Runtime = Environment.Version.ToString(), OS = Environment.OSVersion.ToString() }));
         Console.WriteLine($"PASS {TestCheck.Count} C# TCP assertions; {root}");

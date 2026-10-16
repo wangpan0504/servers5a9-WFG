@@ -13,7 +13,9 @@ internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunReviveAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "dungeon-revive"), resources: resources);
+        // 服务端定时器按 1/10 缩短，墙钟读数保持真实；原先实际等待死亡期限约 17.5 秒。
+        var timers = new ScaledTimers(ReviveTimeScale);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "dungeon-revive"), resources: resources, clock: timers);
         await fixture.StartAsync();
         using var peer = Open(fixture);
         peer.Create("DeathShopTcp");
@@ -49,7 +51,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(41, key); peer.Expect(1, 41, [1, key[0], key[1], 0]);
         peer.Expect(0, 32, [key[0], key[1], 1, 0]); peer.Expect(0, 14, CoinBalance(0));
         peer.Barrier();
-        await Task.Delay(TimeSpan.FromSeconds(11) - watch.Elapsed);
+        await Task.Delay(Scaled(TimeSpan.FromSeconds(11)) - watch.Elapsed);
         peer.Barrier();
         That(fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0", peer.Id) is [[0L]],
             "购买后正常消费一币复活，超过死亡期限仍在原副本且没有旧24回城通知");
@@ -59,13 +61,26 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(64, purchase); peer.Expect(1, 64, [0, 0, 0]);
         peer.Send(41, key); peer.Expect(1, 41, [0, 1, 0]); peer.Barrier();
         That(Assets() == before, "无点券购买和零币复活失败均不改资产、revision或死亡计时");
-        await Task.Delay(TimeSpan.FromSeconds(6.5));
+        // 等待回城事件本身（读超时 5 秒），不再固定休眠到期限之后。
         peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
-        That(watch.Elapsed >= TimeSpan.FromSeconds(9.5) && watch.Elapsed < TimeSpan.FromSeconds(15) && Assets() == before,
-            "死亡约10秒恢复本人城镇state0，再发布24及任务刷新，无ACK40/42或虚构扣币");
+        That(DfoServer.Network.Projection.DungeonDeathProjection.ReturnDelay == TimeSpan.FromSeconds(10) &&
+            watch.Elapsed >= Scaled(TimeSpan.FromSeconds(9.5)) && watch.Elapsed < TimeSpan.FromSeconds(9.5) && Assets() == before,
+            "死亡期限常量为10秒并按缩放计时恢复本人城镇state0，再发布24及任务刷新，无ACK40/42或虚构扣币");
         peer.Send(41, key); peer.Barrier();
         That(Assets() == before, "自动回城后旧复活请求静默且不能再扣币");
-        Console.WriteLine("PASS 零币死亡现场购买、实际复活取消计时及10秒自动回城TCP（非Windows实机）");
+        Console.WriteLine("PASS 零币死亡现场购买、实际复活取消计时及10秒（缩放计时）自动回城TCP（非Windows实机）");
+    }
+
+    const int ReviveTimeScale = 10;
+    static TimeSpan Scaled(TimeSpan value) => value / ReviveTimeScale;
+
+    // 只缩短服务端定时器（Task.Delay/CreateTimer），GetUtcNow 仍为真实时间，不影响期限与日期判断。
+    sealed class ScaledTimers(int factor) : TimeProvider
+    {
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            base.CreateTimer(callback, state, Scale(dueTime), Scale(period));
+
+        TimeSpan Scale(TimeSpan value) => value == Timeout.InfiniteTimeSpan || value <= TimeSpan.Zero ? value : value / factor;
     }
 
     static byte[] CoinBalance(int remaining)
