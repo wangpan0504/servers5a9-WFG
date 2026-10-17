@@ -3,6 +3,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Mailbox;
 using Microsoft.Data.Sqlite;
 
@@ -215,9 +216,18 @@ internal sealed partial class CharacterRepository
         for (int index = 0; index < plan.Attachments.Length; index++)
         {
             var item = plan.Attachments[index];
-            var source = plan.Inventory.BeforeIndex.Find(item.Position) ?? throw new InvalidDataException("邮件源实例缺失");
+            long sourceUid;
+            if (MailboxService.MaterialCurrency(item.Core.ItemId) is { } currency)
+            {
+                if (item.Uid != 0 || item.Position.List != InventoryListType.Main ||
+                    ItemSlotBoundService.CurrencySlot(currency) != item.Position.Index)
+                    throw new InvalidDataException("邮件钱包来源不合法");
+                sourceUid = 0;
+            }
+            else
+                sourceUid = (plan.Inventory.BeforeIndex.Find(item.Position) ?? throw new InvalidDataException("邮件源实例缺失")).Uid;
             item = HoldMailItem(db, tx, plan.Recipient, item, owner.Account, expected.Id);
-            InsertMailAttachment(db, tx, id, index, source.Uid, item);
+            InsertMailAttachment(db, tx, id, index, sourceUid, item);
             held.Add(item);
         }
         AuditMail(db, tx, id, owner.Account, expected.Id, owner.Generation, "send", plan.Created,
@@ -254,9 +264,12 @@ internal sealed partial class CharacterRepository
             if (command.ExecuteNonQuery() != 1)
                 throw new InvalidOperationException("邮件附件领取失去资格");
         }
+        var successes = plan.Results.Where(change => change.Error == MailboxError.None).ToLookup(change => change.MailId);
         foreach (var group in current.GroupBy(claim => claim.Mail.Id))
         {
             var mail = group.First().Mail;
+            if (!successes.Contains(mail.Id))
+                continue;
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$mail", mail.Id);
             command.Parameters.AddWithValue("$revision", mail.Revision);
@@ -265,25 +278,14 @@ internal sealed partial class CharacterRepository
             if (command.ExecuteNonQuery() != 1)
                 throw new InvalidOperationException("邮件领取版本已变化");
             AuditMail(db, tx, mail.Id, owner.Account, expected.Id, owner.Generation, "claim", plan.Now,
-                new { Claims = group.Select(claim => claim.ClaimId).ToArray(), Gold = plan.GoldMails.Contains(mail.Id) ? mail.Gold : 0,
-                    Items = plan.Items.Where(item => mail.Attachments.Any(attachment => attachment.Item.Uid == item.Uid)).ToArray() });
+                new { Claims = successes[mail.Id].Select(change => change.ClaimId).ToArray(), Gold = plan.GoldMails.Contains(mail.Id) ? mail.Gold : 0,
+                    Items = mail.Attachments.Where(attachment => incoming.ContainsKey(attachment.Item.Uid)).Select(attachment => attachment.Item).ToArray() });
         }
         var retained = character.Inventory.Items.Select(item => item.Uid).ToHashSet();
         foreach (var item in plan.Items.Where(item => !retained.Contains(item.Uid)))
             DeleteHeldItem(db, tx, owner.Account, expected.Id, item.Uid);
-        var claimed = ImmutableArray.CreateBuilder<MailboxClaimChange>();
-        foreach (var claim in current)
-        {
-            if (claim.Attachment is { } attachment)
-                claimed.Add(new(claim.Mail.Id, attachment.ClaimId));
-            else if (claim.Mail.Attachments.IsEmpty)
-                claimed.Add(new(claim.Mail.Id, claim.Mail.Id));
-            else
-                foreach (var item in claim.Mail.Attachments)
-                    claimed.Add(new(claim.Mail.Id, item.ClaimId));
-        }
         tx.Commit();
-        return new(MailboxError.None, character) { Claimed = claimed.ToImmutable() };
+        return new(MailboxError.None, character) { Claimed = plan.Results };
     });
 
     public MailboxResult ChangeMailState(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, ushort state, long now) => owner.Execute(() =>

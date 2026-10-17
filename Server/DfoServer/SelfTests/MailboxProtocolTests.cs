@@ -84,6 +84,20 @@ internal static class MailboxProtocolTests
             TestCheck.That(pending[7].Count == 0 && ackStream.Position == ackStream.Length, "整封的多条领取回执完整更新客户端对象");
         }
         TestCheck.Bytes(MailboxPackets.State([new(1, 2), new(2, 3)]), [1, 2, 0, 0, 0, 1, 0, 0, 0, 2, 0, 2, 0, 0, 0, 3, 0], "ACK134 count/u32 与逐行 u32/u16");
+        pending[7] = [0x40000001, 0x40000002];
+        using (var ackStream = new MemoryStream(MailboxPackets.Extract([new(7, 0x40000001), new(7, 0x40000002, MailboxError.InventoryFull)])))
+        using (var ackReader = new BinaryReader(ackStream))
+        {
+            TestCheck.That(ackReader.ReadByte() == 1 && ackReader.ReadUInt32() == 2, "部分领取保留逐项结果，不伪造整封全部成功");
+            for (int row = 0; row < 2; row++)
+            {
+                uint mailKey = ackReader.ReadUInt32(), summaryKey = ackReader.ReadUInt32(), error = ackReader.ReadUInt32();
+                if (error == 0) pending[mailKey].Remove(summaryKey);
+                else TestCheck.That(error == 4, "容量失败按本版 ACK95 单项错误码返回");
+            }
+            TestCheck.That(pending[7].SetEquals([0x40000002]) && ackStream.Position == ackStream.Length,
+                "原生逐项消费后保留失败附件，不能清空剩余邮件对象");
+        }
         TestCheck.Bytes(MailboxPackets.Result(MailboxResult.Reject(MailboxError.ExpiredItem)), [0, 235, 0], "失败错误码宽度为 u16");
         TestCheck.Bytes(MailboxPackets.Result(MailboxResult.Reject(MailboxError.MailMissing), true), [0, 21, 0], "重复领取明确失败");
         TestCheck.Bytes(MailboxPackets.List(new([], 0), 1000).Single(), new byte[6], "空列表完整两区段与剩余数量");

@@ -55,10 +55,7 @@ internal sealed class MailboxHandler(MailboxService service, MailboxProjection p
             "mail_claim_result", () => MailboxProjection.CanPublish(context, result));
         if (result.Inventory is { } change)
             await inventory.RefreshAsync(context, change);
-        if (result.Accepted && result.Receipt is { } receipt && context.Session.RefreshMailbox(service, receipt) is { } page)
-        {
-            await projection.ListAsync(context, page.Page, page.Receipt);
-        }
+        // ACK95由原生消费者更新当前邮件的附件及逐项错误；清空式97会使打开的窗口失去原对象。
         return CommandResult.Handled;
     }
     async Task<CommandResult> State(GameConnectionContext context, Packet packet)

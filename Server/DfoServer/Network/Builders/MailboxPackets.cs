@@ -16,10 +16,7 @@ internal static class MailboxPackets
     public static byte[] Result(MailboxResult result, bool extracting = false, bool state = false) => result.Accepted ? [1] : Build(writer =>
     {
         writer.Write((byte)0);
-        int error = extracting ? result.Error switch
-        {
-            MailboxError.GoldCarryLimit => 10, MailboxError.InvalidState => 19, MailboxError.MailMissing => 21, _ => 4
-        } : result.Error switch
+        int error = extracting ? ExtractError(result.Error) : result.Error switch
         {
             MailboxError.RecipientMissing => 3, MailboxError.SelfSend => 7, MailboxError.InsufficientGold => 10,
             MailboxError.RecipientGoldLimit => 14, MailboxError.Empty => 22, MailboxError.NotTradable => 23,
@@ -34,8 +31,12 @@ internal static class MailboxPackets
     {
         writer.Write((byte)1);
         writer.Write(changes.Count);
-        foreach (var change in changes) { writer.Write(change.MailId); writer.Write(change.ClaimId); writer.Write(0); }
+        foreach (var change in changes) { writer.Write(change.MailId); writer.Write(change.ClaimId); writer.Write(ExtractError(change.Error)); }
     });
+    static int ExtractError(MailboxError error) => error switch
+    {
+        MailboxError.None => 0, MailboxError.GoldCarryLimit => 10, MailboxError.InvalidState => 19, MailboxError.MailMissing => 21, _ => 4
+    };
     public static byte[] State(IReadOnlyList<MailboxStateChange> changes) => Build(writer =>
     {
         writer.Write((byte)1);

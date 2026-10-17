@@ -1,5 +1,6 @@
 using DfoServer.Development;
 using DfoServer.Game.Mailbox;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
@@ -87,9 +88,15 @@ internal static class DevelopmentAssetTests
         session.Select(0, resources.GoldLimits); session.MarkReady();
         TestCheck.That(session.ClaimMail(service, [mail.Id, stack.Id]).Accepted && session.Selected!.Inventory.Items.Count(item => item.Core.ItemId == 18400) == 3 &&
             session.Selected.Inventory.Items.Single(item => item.Core.ItemId == 3175).Core.Value == 7, "GM邮件领取沿用统一grant，装备与材料正确入包");
+        TestCheck.That(Send("item Receiver 3037 1").StartsWith("OK "), "钱包材料可由原GM单物品命令投递邮件");
+        var crystal = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now).Entries.Single(row =>
+            row.Attachments.Any(attachment => attachment.Item.Core.ItemId == 3037));
+        TestCheck.That(session.ClaimMail(service, [crystal.Id]).Accepted &&
+            session.Selected!.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 1 &&
+            session.Selected.Inventory.Items.All(item => item.Core.ItemId != 3037), "GM晶块领取进入真实账号钱包，不进入普通背包格");
         string snapshot = f.Snapshot();
         foreach (var (command, account) in new[] { ("item Receiver 18400 11", "receiver"), ("item Receiver 18400 1", "sender"),
-            ("item Receiver 2147483647 1", "receiver"), ("item Receiver 3037 1", "receiver"),
+            ("item Receiver 2147483647 1", "receiver"), ("item Receiver 2681762 1", "receiver"),
             ("item Receiver 3175 " + ((long)resources.Items.Get(3175).StackLimit + 1), "receiver") })
             TestCheck.That(Send(command, account).StartsWith("ERR ") && f.Snapshot() == snapshot, "无效GM发放不新增邮箱或UID: " + command);
         f.Execute("CREATE TRIGGER fail_gm_mail BEFORE INSERT ON mailbox_attachments WHEN NEW.ordinal=1 BEGIN SELECT RAISE(ABORT,'gm-mail-failure'); END;");

@@ -41,8 +41,9 @@ internal sealed class MailboxProjection(MailboxService service, OnlineSessionDir
             1 => new InventorySlot(InventoryListType.Avatar, item.Slot),
             3 or 7 => new InventorySlot(InventoryListType.Pet, item.Slot),
             _ => new InventorySlot(InventoryListType.Main, -1)
-        }).Where(slot => slot.Index >= 0 && Enum.GetValues<DfoServer.GameWorld.Items.ItemKind>().Any(kind =>
-            DfoServer.Game.Inventory.Services.ItemSlotBoundService.Allows(character.Inventory, slot, kind)))
+        }).Where(slot => slot.Index >= 0 && (slot.List == InventoryListType.Main && CurrencyPackets.VirtualSlots.Contains(slot.Index) ||
+            Enum.GetValues<DfoServer.GameWorld.Items.ItemKind>().Any(kind =>
+                DfoServer.Game.Inventory.Services.ItemSlotBoundService.Allows(character.Inventory, slot, kind))))
             .Append(new(InventoryListType.Main, 0)).Distinct().ToArray();
         bool CanSend() => CanPublish(context, result) && context.Session.Selected?.Revision == character.Revision;
         foreach (var list in slots.Select(slot => slot.List).Distinct())

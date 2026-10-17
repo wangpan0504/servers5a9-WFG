@@ -82,6 +82,8 @@ internal static class QuestGoldMailTcpTests
             byte[] delta = peer.Expect(0, 14).Body;
             That(U16(delta, 1) == 1 && U16(delta, 3) == 0 && U32(delta, 5) == 0 && U32(delta, 9) == 756,
                 "腾出空间后领取发布真实Main0绝对金币，不创建物品实例");
+            peer.Barrier();
+            peer.Send(96); peer.Expect(1, 96, [1, 0, 0]);
             That(MailboxTcpTests.ReadList(peer.Expect(0, 97).Body).Summaries.Single().Gold == 0 &&
                 fixture.Query("SELECT gold FROM characters WHERE id=$p0", id) is [[756L]] &&
                 fixture.Query("SELECT gold FROM mailbox_messages WHERE mail_id=$p0", mail) is [[0L]],

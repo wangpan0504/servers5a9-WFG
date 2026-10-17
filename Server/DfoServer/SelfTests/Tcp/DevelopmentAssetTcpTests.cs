@@ -37,7 +37,7 @@ internal static class DevelopmentAssetTcpTests
             var delta = peer.Expect(0, 14).Body;
             That(U16(delta, 1) == 3 && new[] { 3, 126, 249 }.All(at => U32(delta, at + 2) == 18400 && U32(delta, at + 6) == 999999998),
                 "真实领取按三件装备进入独立槽；开发超携带上限金币不阻止纯物品领取");
-            _ = MailboxTcpTests.ReadList(peer.Expect(0, 97).Body); peer.Barrier();
+            peer.Barrier();
             That(fixture.Query("SELECT count(DISTINCT i.item_uid) FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE i.character_id=1 AND s.list_type=0 AND s.slot_index BETWEEN 9 AND 11") is [[3L]],
                 "装备领取三个持久UID无堆叠");
             string before = fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id");
@@ -55,7 +55,7 @@ internal static class DevelopmentAssetTcpTests
             peer.Expect(1, 95);
             delta = peer.Expect(0, 14).Body;
             That(U16(delta, 3) == 121 && U32(delta, 5) == 3175 && U32(delta, 9) == 7, "绑定材料系统邮件正常领取进入材料页");
-            _ = MailboxTcpTests.ReadList(peer.Expect(0, 97).Body); peer.Barrier();
+            peer.Barrier();
         }
         await fixture.StopAsync();
         That((await fixture.CliAsync(null, "--gm", "gold", "GmB", "0")).StartsWith("OK ") &&

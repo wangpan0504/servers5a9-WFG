@@ -9,7 +9,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class MailboxTcpTests
+internal static partial class MailboxTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -42,6 +42,7 @@ internal static class MailboxTcpTests
             repository.Create(receiverOwner, new("MailRecv", resources.Towns.Room, resources.Towns.InitialReturn) { Level = 60,
                 AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
                 Inventory = InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)) });
+            PreparePetClaimRole(repository, receiverOwner, resources);
             var service = new MailboxService(repository, items.Items, items.GoldLimits, items.EpicPieces);
             That(service.Deliver(new("tcp-initial", service.FindRecipient("MailRecv")!, "系统", "上线正文", 0, [], DateTimeOffset.UtcNow.ToUnixTimeSeconds())).Accepted,
                 "系统邮件在独立 fixture 启动前持久化");
@@ -83,10 +84,12 @@ internal static class MailboxTcpTests
             ExpectClaim(receiver, [attachment]);
             var claimDelta = receiver.Expect(0, 14).Body;
             CheckItem(claimDelta, 0, 0, 1000); CheckItem(claimDelta, 9, 18400, 999999998);
+            receiver.Barrier();
+            receiver.Send(96); receiver.Expect(1, 96, [1, 0, 0]);
             var afterClaim = ReadList(receiver.Expect(0, 97).Body);
             That(afterClaim.Details.Single(row => row.Id == attachment.MailId) is { State: 2, Text: "装备正文" } &&
                 afterClaim.Summaries.Single(row => row.MailId == attachment.MailId) is { ItemId: 0, Gold: 0 },
-                "领取后的正文与已读状态重新投影，已领资产不再显示");
+                "领取不夹带清空式列表，重新打开才投影已读正文和剩余资产");
             That(fixture.Query("SELECT i.item_uid FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE i.character_id=2 AND s.list_type=0 AND s.slot_index=9") is [[long uid]] && uid == equipmentUid,
                 "TCP 领取保留原装备 UID");
             unchanged = fixture.Snapshot();
@@ -112,8 +115,10 @@ internal static class MailboxTcpTests
             Extract(receiver, [grants[0].MailId]); ExpectClaim(receiver, grants);
             var multiClaim = receiver.Expect(0, 14).Body;
             CheckItem(multiClaim, 10, 10400, 999999998); CheckItem(multiClaim, 121, material.Id, 4);
+            receiver.Barrier();
+            receiver.Send(96); receiver.Expect(1, 96, [1, 0, 0]);
             afterClaim = ReadList(receiver.Expect(0, 97).Body);
-            That(afterClaim.Summaries.All(row => row.ItemId == 0), "整封请求展开两条实际摘要回执，领取后完整重投影");
+            That(afterClaim.Summaries.All(row => row.ItemId == 0), "整封请求收尽两条附件，重开后不存在已领资产");
             receiver.Barrier();
 
             SendMail(sender, false, 0, [], "保留正文"); sender.Expect(1, 94, [1]);
@@ -130,6 +135,8 @@ internal static class MailboxTcpTests
             sender.Barrier();
             That(fixture.Query("SELECT count(*) FROM mailbox_messages WHERE body='特殊'") is [[0L]], "未知寄送子型不伪造成功或写邮件");
         }
+        VerifyPetClaims(fixture, resources);
+        VerifyWalletClaims(fixture, resources);
         await fixture.StopAsync();
         await fixture.StartAsync("restarted");
         using (var receiver = Open(fixture, "20001"))
@@ -187,7 +194,8 @@ internal static class MailboxTcpTests
     }
     internal sealed record Summary(uint ClaimId, uint MailId, int ItemId, uint Gold, byte[] Core, byte[]? Extra = null);
     internal sealed record Detail(uint Id, string Text, ushort State);
-    internal static (Summary[] Summaries, Detail[] Details) ReadList(byte[] body, IReadOnlySet<int>? avatarItems = null)
+    internal static (Summary[] Summaries, Detail[] Details) ReadList(byte[] body, IReadOnlySet<int>? avatarItems = null,
+        IReadOnlySet<int>? creatureItems = null)
     {
         using var stream = new MemoryStream(body);
         using var reader = new BinaryReader(stream);
@@ -198,8 +206,8 @@ internal static class MailboxTcpTests
             uint claim = reader.ReadUInt32(); _ = reader.ReadUInt32(); _ = ReadString(reader);
             uint gold = reader.ReadUInt32(); int item = reader.ReadInt32(); _ = reader.ReadByte();
             _ = reader.ReadBytes(15);
+            byte[]? extra = creatureItems?.Contains(item) == true ? reader.ReadBytes(5) : null;
             var core = reader.ReadBytes(123);
-            byte[]? extra = null;
             if (avatarItems?.Contains(item) == true)
             {
                 long start = stream.Position;

@@ -34,9 +34,9 @@ internal sealed record MailboxSendPlan(MailboxRecipient Recipient, MailboxSendRe
     ImmutableArray<InventoryItem> Attachments, uint Fee, int Day, long Created);
 internal sealed record MailboxClaim(uint ClaimId, MailboxEntry Mail, MailboxAttachment? Attachment);
 internal sealed record MailboxClaimPlan(InventoryPlan Inventory, ImmutableArray<MailboxClaim> Claims,
-    ImmutableArray<InventoryItem> Items, ImmutableArray<uint> GoldMails, long Now);
+    ImmutableArray<InventoryItem> Items, ImmutableArray<uint> GoldMails, long Now, ImmutableArray<MailboxClaimChange> Results);
 internal readonly record struct MailboxStateChange(uint Id, ushort State);
-internal readonly record struct MailboxClaimChange(uint MailId, uint ClaimId);
+internal readonly record struct MailboxClaimChange(uint MailId, uint ClaimId, MailboxError Error = MailboxError.None);
 internal sealed record MailboxDelivery(string Key, MailboxRecipient Recipient, string SenderName, string Text, uint Gold,
     ImmutableArray<InventoryItem> Items, long Created, long? Expires = null);
 

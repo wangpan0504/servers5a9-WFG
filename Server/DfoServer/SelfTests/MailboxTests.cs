@@ -3,6 +3,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Mailbox;
 using DfoServer.Game.Session;
@@ -109,8 +110,8 @@ internal static class MailboxTests
             f.Receiver.Selected.Inventory.Items.Single(item => item.Creature is not null).Creature == specialMail.Attachments.Single(item => item.Item.Creature is not null).Item.Creature,
             "实际时装、宠物模板的邮件领取完整保留详情，不重新创建默认值");
         TestCheck.That(f.Service.Deliver(new("virtual", recipient, "系统", "虚拟", 0,
-            [new(0, stack.Position, new(3037, DfoServer.GameWorld.Items.ItemKind.Material, 1))], now)).Error == MailboxError.InvalidAttachment,
-            "虚拟账号资产不伪装为邮件实体附件");
+            [new(0, stack.Position, new(2681762, DfoServer.GameWorld.Items.ItemKind.Consumable, 1))], now)).Error == MailboxError.InvalidAttachment,
+            "小晶块接入不放行未确认的账号点券附件");
         var overflow = f.Service.Deliver(new("capacity", recipient, "系统", "容量", 0,
             [new(0, source.Position, source.Core)], now));
         var filled = f.Receiver.MutateInventory(character =>
@@ -127,6 +128,28 @@ internal static class MailboxTests
         var gold = f.Service.Deliver(new("gold-limit", recipient, "系统", "金币", (uint)resources.GoldLimits.CarryLimit(60), [], now));
         TestCheck.That(f.Receiver.ClaimMail(f.Service, [gold.MailId]).Error == MailboxError.GoldCarryLimit,
             "领取金币使用当前角色携带上限");
+        var smallGold = f.Service.Deliver(new("gold-prefix", recipient, "系统", "可领取金币前缀", 1, [], now));
+        uint beforeGold = f.Receiver.Selected!.Inventory.Gold;
+        var goldPrefix = f.Receiver.ClaimMail(f.Service, [smallGold.MailId, gold.MailId]);
+        var blockedGold = f.Receiver.OpenMailbox(f.Service).Page.Entries.Single(row => row.Id == gold.MailId);
+        TestCheck.That(goldPrefix.Accepted && f.Receiver.Selected!.Inventory.Gold == beforeGold + 1 &&
+            goldPrefix.Claimed.SequenceEqual(new[] { new MailboxClaimChange(smallGold.MailId, smallGold.MailId),
+                new MailboxClaimChange(gold.MailId, gold.MailId, MailboxError.GoldCarryLimit) }) &&
+            blockedGold is { State: 1, Revision: 0 } && blockedGold.Gold == resources.GoldLimits.CarryLimit(60),
+            "成功前缀按请求顺序提交金币，后续金币上限错误不消耗额度或改写未处理邮件");
+        f.Receiver.MutateInventory(character => new(true, 0, new(character.Inventory,
+            CurrencyWallet.Set(character.Inventory, CurrencyKind.ClearCube, int.MaxValue - 10), "mail_wallet_capacity_fixture")));
+        var cubeCore = InventoryRewardGrantService.Create(resources.Items.Get(3037)) with { Value = 6 };
+        var cubeMail = f.Service.Deliver(new("cube-capacity", recipient, "系统", "晶块容量", 0,
+            [new(0, new(InventoryListType.Main, 358), cubeCore), new(0, new(InventoryListType.Main, 358), cubeCore)], now));
+        var cubeRows = f.Receiver.OpenMailbox(f.Service).Page.Entries.Single(row => row.Id == cubeMail.MailId).Attachments;
+        var cubePrefix = f.Receiver.ClaimMail(f.Service, [cubeMail.MailId]);
+        TestCheck.That(cubePrefix.Accepted && f.Receiver.Selected!.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == int.MaxValue - 4 &&
+            cubePrefix.Claimed.SequenceEqual(new[] { new MailboxClaimChange(cubeMail.MailId, cubeRows[0].ClaimId),
+                new MailboxClaimChange(cubeMail.MailId, cubeRows[1].ClaimId, MailboxError.InventoryFull) }) &&
+            f.Receiver.OpenMailbox(f.Service).Page.Entries.Single(row => row.Id == cubeMail.MailId).Attachments is [{ Item.Core.Count: 6 }] &&
+            f.Receiver.Selected.Inventory.Items.All(item => item.Core.ItemId != 3037),
+            "钱包溢出不能截断后吞附件：只领六个，剩余六个仍在邮件，背包不创建晶块实体");
 
         // 原快照之外的规划允许同账号 GM 修改；同 revision 的新快照同样使旧计划失效。
         using var race = new Fixture(towns, characters, resources, material);

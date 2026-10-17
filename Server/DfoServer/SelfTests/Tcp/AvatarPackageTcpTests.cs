@@ -245,6 +245,8 @@ internal static class AvatarPackageTcpTests
                 foreach (var summary in summaries) { writer.Write(summary.MailId); writer.Write(summary.ClaimId); writer.Write(0); }
             }));
             CheckAvatarRows(peer.Expect(0, 14).Body, choices);
+            peer.Barrier();
+            peer.Send(96); peer.Expect(1, 96, [1, 0, 0]);
             MailboxTcpTests.ReadList(peer.Expect(0, 97).Body, avatarIds);
             peer.Barrier();
         }

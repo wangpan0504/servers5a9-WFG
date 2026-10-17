@@ -363,7 +363,19 @@ internal static class MailboxPersistenceTests
                 group.Any(claim => claim.Attachment is null || claim.Attachment.Id == claim.Mail.Attachments[0].Id))
                 .Select(group => group.First().Mail).ToArray();
             after = after with { Gold = checked(after.Gold + (uint)goldMails.Sum(mail => mail.Gold)) };
-            return new(new(Receiver.Inventory, after, "mail_claim", new(Receiver)), claims, items, goldMails.Select(mail => mail.Id).ToImmutableArray(), Now);
+            var results = ImmutableArray.CreateBuilder<MailboxClaimChange>();
+            foreach (var claim in claims)
+            {
+                if (claim.Attachment is { } attachment)
+                    results.Add(new(claim.Mail.Id, attachment.ClaimId));
+                else if (claim.Mail.Attachments.IsEmpty)
+                    results.Add(new(claim.Mail.Id, claim.Mail.Id));
+                else
+                    foreach (var entry in claim.Mail.Attachments)
+                        results.Add(new(claim.Mail.Id, entry.ClaimId));
+            }
+            return new(new(Receiver.Inventory, after, "mail_claim", new(Receiver)), claims, items,
+                goldMails.Select(mail => mail.Id).ToImmutableArray(), Now, results.ToImmutable());
         }
         public MailboxResult Claim(ImmutableArray<uint> ids)
         {

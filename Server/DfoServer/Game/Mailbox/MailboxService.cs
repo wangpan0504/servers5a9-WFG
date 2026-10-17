@@ -12,6 +12,8 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
 {
     public const int PageSize = 20;
     public const int StorageLimit = 10;
+    public static CurrencyKind? MaterialCurrency(int itemId) => CurrencyWallet.RewardKind(itemId) is { } kind &&
+        kind is >= CurrencyKind.BlackCube and <= CurrencyKind.GoldCube ? kind : null;
     public static long Fee(uint gold, int attachments, long attachmentValue = 0) =>
         checked(100L + attachments * 1000L + gold / 20L + attachmentValue / 20);
     public static long DailyGoldLimit(int level) => 10_000L * Math.Max(1, level) * Math.Max(1, level);
@@ -56,11 +58,28 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             if (list is null || input.Count <= 0)
                 return MailboxError.InvalidAttachment;
             var slot = new InventorySlot(list.Value, input.Slot);
-            var item = after.Find(slot);
-            if (!seen.Add(slot) || item is null || item.Core.ItemId != input.ItemId || input.Count > item.Core.Count ||
-                !item.Core.IsStackable && input.Count != 1 || CurrencyWallet.RewardKind(input.ItemId) is not null || pieces.ByPiece.ContainsKey(input.ItemId))
+            if (!seen.Add(slot))
                 return MailboxError.InvalidAttachment;
-            var template = items.Get(input.ItemId);
+            var currency = MaterialCurrency(input.ItemId);
+            ItemTemplate template;
+            InventoryItem? item;
+            if (currency is { } kind)
+            {
+                template = items.Get(input.ItemId);
+                if (slot.List != InventoryListType.Main || ItemSlotBoundService.CurrencySlot(kind) != slot.Index ||
+                    template.Kind != ItemKind.Material || CurrencyWallet.Get(after, kind) < input.Count)
+                    return MailboxError.InvalidAttachment;
+                // 此对象仅描述待托管的邮件数量，不加入角色物品栏，也不借用一个假库存UID。
+                item = new(0, slot, InventoryRewardGrantService.Create(template, utcNow: now) with { Value = input.Count });
+            }
+            else
+            {
+                item = after.Find(slot);
+                if (item is null || item.Core.ItemId != input.ItemId || input.Count > item.Core.Count ||
+                    !item.Core.IsStackable && input.Count != 1 || CurrencyWallet.RewardKind(input.ItemId) is not null || pieces.ByPiece.ContainsKey(input.ItemId))
+                    return MailboxError.InvalidAttachment;
+                template = items.Get(item.Core.ItemId);
+            }
             var error = TransferError(item, template, account, recipient.Account, now.ToUnixTimeSeconds());
             if (error != MailboxError.None)
                 return error;
@@ -71,9 +90,15 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             // 每次累加即检查余额，避免恶意大数量继续累加溢出；失败没有持久化副作用。
             if (cost > character.Inventory.Gold)
                 return MailboxError.InsufficientGold;
-            if (!InventoryDeleteService.TryDelete(item, item.Core.Value, input.Count, out var remaining))
-                return MailboxError.InvalidAttachment;
-            after = after with { Items = remaining is null ? after.Items.Remove(item) : after.Items.Replace(item, remaining) };
+            InventoryItem? remaining = null;
+            if (currency is { } walletKind)
+                after = CurrencyService.Spend(after, walletKind, input.Count).Plan!.After;
+            else
+            {
+                if (!InventoryDeleteService.TryDelete(item, item.Core.Value, input.Count, out remaining))
+                    return MailboxError.InvalidAttachment;
+                after = after with { Items = remaining is null ? after.Items.Remove(item) : after.Items.Replace(item, remaining) };
+            }
             var core = item.Core.IsStackable ? item.Core with { Value = input.Count } : item.Core;
             if (Normalize(template.AttachType) == "trade limit")
                 core = core with { Attr = (byte)((core.Attr & 31) | (((core.Attr >> 5) - 1) << 5)) };
@@ -117,40 +142,91 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
         var claims = store.LoadMailClaims(owner, character.Id, ids, now.ToUnixTimeSeconds());
         if (claims.Length != ids.Length)
             return MailboxError.MailMissing;
+        var targets = ImmutableArray.CreateBuilder<MailboxClaim>();
+        var seen = new HashSet<long>();
+        foreach (var claim in claims)
+        {
+            var mail = claim.Mail;
+            var attachments = claim.Attachment is null ? mail.Attachments : [claim.Attachment];
+            if (attachments.IsEmpty)
+            {
+                if (mail.Gold == 0)
+                    return MailboxError.MailMissing;
+                targets.Add(new(mail.Id, mail, null));
+            }
+            foreach (var attachment in attachments)
+            {
+                if (!seen.Add(attachment.Item.Uid))
+                    return MailboxError.InvalidRequest;
+                if (attachment.Item.IsExpired(now.ToUnixTimeSeconds()))
+                    return MailboxError.ExpiredItem;
+                targets.Add(new(attachment.ClaimId, mail, attachment));
+            }
+        }
+        var ordered = targets.ToImmutable();
+        var error = PlanClaimPrefix(character, claims, ordered, ordered.Length, now, out plan);
+        if (error == MailboxError.None)
+            return error;
+
+        // 发放不腾空既有槽位、也不扣金币，可领前缀单调；正常整批只规划一次，失败再二分，避免逐件重扫背包。
+        int low = 0, high = ordered.Length;
+        MailboxClaimPlan? accepted = null;
+        while (high - low > 1)
+        {
+            int count = low + (high - low) / 2;
+            var candidateError = PlanClaimPrefix(character, claims, ordered, count, now, out var candidate);
+            if (candidateError == MailboxError.None)
+            {
+                low = count;
+                accepted = candidate;
+            }
+            else
+            {
+                high = count;
+                error = candidateError;
+            }
+        }
+        if (accepted is null)
+            return error;
+        var failed = ordered[low];
+        plan = accepted with { Results = accepted.Results.Add(new(failed.Mail.Id, failed.ClaimId, error)) };
+        return MailboxError.None;
+    }
+
+    MailboxError PlanClaimPrefix(Character character, ImmutableArray<MailboxClaim> claims, ImmutableArray<MailboxClaim> targets,
+        int count, DateTimeOffset now, out MailboxClaimPlan? plan)
+    {
+        plan = null;
         var grants = ImmutableArray.CreateBuilder<InventoryItem>();
         var goldMails = ImmutableArray.CreateBuilder<uint>();
-        var seen = new HashSet<long>();
+        var results = ImmutableArray.CreateBuilder<MailboxClaimChange>();
         long gold = 0;
-        foreach (var group in claims.GroupBy(claim => claim.Mail.Id))
+        for (int index = 0; index < count; index++)
         {
-            var mail = group.First().Mail;
-            if (mail.Gold > 0 && group.Any(claim => claim.Attachment is null || claim.Attachment.Id == mail.Attachments[0].Id))
+            var target = targets[index];
+            var mail = target.Mail;
+            if (mail.Gold > 0 && (target.Attachment is null || target.Attachment.Id == mail.Attachments[0].Id))
             {
                 gold += mail.Gold;
                 goldMails.Add(mail.Id);
             }
-            foreach (var claim in group)
-            {
-                var attachments = claim.Attachment is null ? mail.Attachments : [claim.Attachment];
-                if (mail.Gold == 0 && attachments.Length == 0)
-                    return MailboxError.MailMissing;
-                foreach (var attachment in attachments)
-                {
-                    if (!seen.Add(attachment.Item.Uid))
-                        return MailboxError.InvalidRequest;
-                    if (attachment.Item.IsExpired(now.ToUnixTimeSeconds()))
-                        return MailboxError.ExpiredItem;
-                    grants.Add(attachment.Item);
-                }
-            }
+            if (target.Attachment is { } attachment)
+                grants.Add(attachment.Item);
+            results.Add(new(mail.Id, target.ClaimId));
         }
         if (gold != 0 && gold > new CurrencyService(goldLimits).CarryLimit(character) - (long)character.Inventory.Gold)
             return MailboxError.GoldCarryLimit;
-        var grant = InventoryRewardGrantService.TryGrantItems(character, grants.ToImmutable(), items, goldLimits, pieces, now);
+        var received = grants.ToImmutable();
+        foreach (var group in received.Where(item => MaterialCurrency(item.Core.ItemId).HasValue)
+            .GroupBy(item => MaterialCurrency(item.Core.ItemId)!.Value))
+            if (CurrencyWallet.Get(character.Inventory, group.Key) + group.Sum(item => (long)item.Core.Count) > int.MaxValue)
+                return MailboxError.InventoryFull;
+        var grant = InventoryRewardGrantService.TryGrantItems(character, received, items, goldLimits, pieces, now);
         if (!grant.Accepted)
             return MailboxError.InventoryFull;
         var after = grant.Plan!.After with { Gold = checked((uint)(grant.Plan.After.Gold + gold)) };
-        plan = new(new(character.Inventory, after, "mail_claim", new(character)), claims, grants.ToImmutable(), goldMails.ToImmutable(), now.ToUnixTimeSeconds());
+        plan = new(new(character.Inventory, after, "mail_claim", new(character)), claims, received, goldMails.ToImmutable(),
+            now.ToUnixTimeSeconds(), results.ToImmutable());
         return MailboxError.None;
     }
     public MailboxResult Claim(AccountOwners.Lease owner, Character character, MailboxClaimPlan plan) => store.ClaimMail(owner, character, plan);
@@ -166,11 +242,13 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
         {
             if (item.IsExpired(delivery.Created))
                 return MailboxResult.Reject(MailboxError.ExpiredItem);
-            // 钱包/碎片按真实 owner 分流；当前邮箱只托管普通实体，不新建虚拟资产实例。
-            if (CurrencyWallet.RewardKind(item.Core.ItemId) is not null || pieces.ByPiece.ContainsKey(item.Core.ItemId))
+            var walletMaterial = MaterialCurrency(item.Core.ItemId).HasValue;
+            // 晶块仅在邮件中托管数量，领取回原账号钱包；点券、复活币和碎片不借实体附件放行。
+            if (CurrencyWallet.RewardKind(item.Core.ItemId) is not null && !walletMaterial || pieces.ByPiece.ContainsKey(item.Core.ItemId))
                 return MailboxResult.Reject(MailboxError.InvalidAttachment);
             var template = items.Get(item.Core.ItemId);
-            if (template.Kind != item.Core.Kind || item.Core.Count > template.StackLimit)
+            if (template.Kind != item.Core.Kind || !walletMaterial && item.Core.Count > template.StackLimit ||
+                walletMaterial && (template.Kind != ItemKind.Material || item.ExpireTime != 0))
                 return MailboxResult.Reject(MailboxError.InvalidAttachment);
         }
         return store.DeliverMail(delivery);
