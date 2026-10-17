@@ -148,8 +148,26 @@ internal static class ServerRuntime
             var specialDrops = itemResources.DungeonSpecialDrops;
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get, specialDrops);
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates);
-            DungeonDropGenerationPlan PrepareDrops(DungeonEntryPlan entry, DungeonPlannedMonster monster) =>
-                resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.SpawnType, entry.Difficulty, entry.BasisLevel);
+            int epicPermille = int.TryParse(Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE"), out int configuredPermille) ? Math.Clamp(configuredPermille, 0, 1000) : 0;
+            DungeonItemDropPool? epicPool = null;
+            if (epicPermille > 0)
+            {
+                var fragmentTemplates = new List<DfoServer.GameWorld.Items.ItemTemplate>();
+                foreach (int pieceId in itemResources.EpicPieces.ByPiece.Keys)
+                {
+                    try { var template = itemResources.Items.Get(pieceId); if (DungeonDropCreation.Supports(template.Kind) && template.StackLimit > 0) fragmentTemplates.Add(template); }
+                    catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or FileNotFoundException) { }
+                }
+                epicPool = new DungeonItemDropPool(fragmentTemplates);
+            }
+            var hellRewards = DungeonHellDropRules.TryLoad(pvf) is { } hellDropRules ? new DungeonHellRewardPolicy(hellDropRules, dropCandidates, epicPool, epicPermille) : null;
+            DungeonDropGenerationPlan PrepareDrops(DungeonEntryPlan entry, DungeonPlannedMonster monster)
+            {
+                var plan = resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.SpawnType, entry.Difficulty, entry.BasisLevel);
+                // 实验性：深渊波次末位怪额外的 hellparty 装备骰；奖励规则文件缺失时保持普通掉落。
+                return monster.HellRewardRolls > 0 && hellRewards is not null
+                    ? hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : plan;
+            }
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
                 FifthProbabilityRows = dropRules.ProbabilityRows.Count(row => row.Values[4] != 0),

@@ -165,6 +165,13 @@ internal sealed partial class SinglePlayerDungeonRun
             !current.Plan.HellWaves.Any(wave => wave.ObjectKey == key)) return DungeonRunOutcome.Rejected;
         return current.Dead.Add(key) ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate;
     }
+    // 实验性：key 是否是其波次（同 Order）里最后一只尚存的波次怪（其余都已死亡/被剔除）；参考项目 IsLastGroupMonster 的等价物。
+    internal bool IsLastLivingHellWaveMember(ushort key)
+    {
+        var target = current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key && monster.HellWave is not null);
+        return target is not null && current.Plan.Monsters.Where(monster => monster.HellWave?.Order == target.HellWave!.Order).All(monster =>
+            monster.ObjectKey == key || current.Dead.Contains(monster.ObjectKey) || current.Culled.Contains(monster.ObjectKey));
+    }
     internal bool IsCulledMonster(ushort key) => Phase == SinglePlayerDungeonPhase.Settlement && ClearFact is not null && current.Culled.Contains(key);
     // 友方、非敌对对象退场只更新显示集合，不加入持久击杀或清图事实；未知key不改变实例。
     internal void RetireNonCombatObject(ushort key)
@@ -303,7 +310,13 @@ internal sealed partial class SinglePlayerDungeonRun
                 reason = "unsupported: 房间怪物生成规则未闭合";
                 return false;
             }
-            if (plan.Monsters.Count != resourcePlan.Monsters.Count || plan.Monsters.Zip(resourcePlan.Monsters).Any(pair =>
+            // 实验性：深渊波次怪是入场时追加的真实怪（HellWave 非空），不在 FromRoom 的资源规划里；单独校验它们与 plan.HellWaves 一一对应、阻挡、key 唯一。
+            var baseMonsters = plan.Monsters.Where(monster => monster.HellWave is null).ToArray();
+            var waveMonsters = plan.Monsters.Where(monster => monster.HellWave is not null).ToArray();
+            if (baseMonsters.Length != resourcePlan.Monsters.Count || waveMonsters.Length != plan.HellWaves.Count ||
+                waveMonsters.Any(wave => !wave.IsBlocking || wave.ObjectKey == entry.CharacterId || !keys.Add(wave.ObjectKey) ||
+                    !plan.HellWaves.Any(hell => hell.ObjectKey == wave.ObjectKey && hell.MonsterId == wave.MonsterId)) ||
+                baseMonsters.Zip(resourcePlan.Monsters).Any(pair =>
                 pair.First.SourceOrdinal != pair.Second.SourceOrdinal || pair.First.Source != pair.Second.Source ||
                 pair.First.AiCharacter != pair.Second.AiCharacter || pair.First.MonsterId != pair.Second.MonsterId ||
                 pair.First.CandidateLevel != pair.Second.CandidateLevel || pair.First.SpawnType != pair.Second.SpawnType ||

@@ -143,6 +143,7 @@ internal sealed class DungeonRoomCatalog
 
     // 实验性（未在95客户端实证；依据参考项目 BuildHellPartyWaves/BuildHellPartyMonsterInfos）：给深渊房间计划抽波次并展开成怪物。
     // 怪物/APC 定义缺失的条目跳过（参考项目会硬失败，这里不让入场整体失败）；普通怪等级=副本基准等级，APC 取 AICharacter 等级。
+    public DungeonHellPartyCatalog HellParty => hellParty.Value;
     public IReadOnlyList<DungeonHellWaveMonster> ResolveHellWaves(DungeonRoomDefinition room, byte mode, int? basisLevel, Func<int, int> draw)
     {
         var catalog = hellParty.Value;
@@ -155,15 +156,18 @@ internal sealed class DungeonRoomCatalog
             {
                 byte type = 0;
                 int level = basisLevel.Value;
+                string resourcePath = "";
                 if (entityType == 1)
                 {
                     if (!aiCharacters.TryGetValue(code, out var apcPath) || !archive.Contains(apcPath)) continue;
                     type = 5;
+                    resourcePath = apcPath;
                     var minimum = PvfAiCharacterScript.MinimumInfo(archive.ReadTokens(apcPath), archive.ResolveString);
                     if (minimum.Length >= 6 && minimum[5].Type == 0 && minimum[5].Value is >= 1 and <= 255) level = minimum[5].Value;
                 }
                 else if (!monsters.TryGetValue(code, out var path) || !archive.Contains(path)) continue;
-                result.Add(new(order, group, code, (byte)level, type, 0, 0));
+                else resourcePath = path;
+                result.Add(new(order, group, code, (byte)level, type, 0, 0) { Path = resourcePath });
             }
         return Array.AsReadOnly(result.ToArray());
     }

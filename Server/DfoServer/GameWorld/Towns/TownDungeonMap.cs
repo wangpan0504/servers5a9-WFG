@@ -10,11 +10,20 @@ internal sealed record TownDungeonMap(int Id, string Path, ImmutableArray<TownDu
     // [hell dungeon] 1 与 [hell quest] ... [/hell quest]（依据参考项目 dungeon_hell_party_entry.go；[hell dungeon legend] 等传奇深渊不在此范围）。
     public bool HellDungeon { get; init; }
     public ImmutableArray<int> HellQuests { get; init; } = [];
+    // 实验性：传奇深渊 [hell dungeon legend] 1 与 [hell legend quest]（哈林=6081）；[hell legend item condition] 在 95 里是 -1（无票物品）。
+    public bool HellLegendDungeon { get; init; }
+    public ImmutableArray<int> HellLegendQuests { get; init; } = [];
+    // 实验性：区域 [item condition] 列表 = 深渊派对入场消耗的物品候选（哈林为 3330 深渊派对邀请函；依据参考项目 TryAddHellTicketAlternatives，
+    // 每个候选各自成为一个"可替代"的消耗方案，数量见 DungeonHellPartyRoom.RequiredItemCount/等级公式）。<=0 的值（如传奇深渊的 -1）视为无。
+    public ImmutableArray<int> HellItemConditions { get; init; } = [];
     // 形状不符一律当作"无深渊"，不抛错，不影响既有选图解析。
     static TownDungeonMap WithHell(TownDungeonMap map, IReadOnlyList<PvfToken> tokens, int at, Func<int,string> resolve)
     {
         bool hell = false;
         var quests = ImmutableArray.CreateBuilder<int>();
+        var tickets = ImmutableArray.CreateBuilder<int>();
+        bool legend = false;
+        var legendQuests = ImmutableArray.CreateBuilder<int>();
         for (; at < tokens.Count; at++)
         {
             if (tokens[at].Type != 3) continue;
@@ -23,8 +32,13 @@ internal sealed record TownDungeonMap(int Id, string Path, ImmutableArray<TownDu
             if (tag == "[hell dungeon]" && at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 1 }) hell = true;
             else if (tag == "[hell quest]")
                 for (int i = at + 1; i < tokens.Count && tokens[i].Type == 0; i++) quests.Add(tokens[i].Value);
+            else if (tag == "[hell dungeon legend]" && at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 1 }) legend = true;
+            else if (tag == "[hell legend quest]")
+                for (int i = at + 1; i < tokens.Count && tokens[i].Type == 0; i++) legendQuests.Add(tokens[i].Value);
+            else if (tag == "[item condition]")
+                for (int i = at + 1; i < tokens.Count && tokens[i].Type == 0; i++) if (tokens[i].Value > 0) tickets.Add(tokens[i].Value);
         }
-        return map with { HellDungeon = hell, HellQuests = quests.ToImmutable() };
+        return map with { HellDungeon = hell, HellQuests = quests.ToImmutable(), HellItemConditions = tickets.ToImmutable(), HellLegendDungeon = legend, HellLegendQuests = legendQuests.ToImmutable() };
     }
     // 主选择地图与level acc等extra map分别定义；这里只接普通主选择入口。
     internal static TownDungeonMap Read(int id, string path, IReadOnlyList<PvfToken> tokens, Func<int,string> resolve)

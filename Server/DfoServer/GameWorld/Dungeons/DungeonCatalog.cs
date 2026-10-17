@@ -14,7 +14,16 @@ internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, st
 internal sealed record DungeonRawSection(string Tag, IReadOnlyList<PvfToken> Tokens);
 // 实验性（未在95客户端实证）：深渊派对房间 = maze 内 [hell dungeon] 1 + [seal door map index]（深渊房间地图）+ [seal door pos]（该房间在迷宫内的坐标）。
 // 依据参考项目 dungeon_hell_room.go（对应 A21 FindHellMapRoom/TryBuildSealDoorHellPartyRoom）。
-internal sealed record DungeonHellPartyRoom(int MapId, DungeonPoint Room);
+internal sealed record DungeonHellPartyRoom(int MapId, DungeonPoint Room)
+{
+    // 实验性：[hell party required item count]（95 PVF 里每个深渊 dgn 显式声明的入场票数，黑暗都市=30）；缺省 0 = 声明缺失，按等级公式回退。
+    public int RequiredItemCount { get; init; }
+    // 实验性：[seal door appear rate]（普通入场时密门出现概率声明；仅保留数据，参考项目 90 与已知协议都没有对应的密门运行时，未实现随机出现）。
+    public int AppearRate { get; init; }
+    // 实验性：传奇深渊 [seal door legend map index]（黑暗都市=313169）与 [hell legend party required item count]（=2）；0=无传奇深渊。
+    public int LegendMapId { get; init; }
+    public int LegendRequiredCount { get; init; }
+}
 internal sealed record DungeonMaze(
     int SourceOrdinal,
     int Width,
@@ -29,6 +38,7 @@ internal sealed record DungeonMaze(
     public DungeonHellPartyRoom? HellParty { get; init; }
     // 实验性：深渊房间地图的 PVF 路径（[seal door map index] 对应的 map 文件），用于把 HellParty.Room 处的普通房间换成深渊房间。
     public string? HellPartyPath { get; init; }
+    public string? HellLegendPath { get; init; }
     public IReadOnlyList<DungeonMap> LayeredMaps { get; init; } = Array.Empty<DungeonMap>();
     // 保留覆盖前来源供任务地图池排除；不参与有效路线、候选抽取或演员准备。
     public IReadOnlyList<DungeonMap> OverriddenMaps { get; init; } = Array.Empty<DungeonMap>();
@@ -516,7 +526,8 @@ internal sealed class DungeonCatalog
         }
         var maze = new DungeonMaze(ordinal,width,height,greed,starts,bosses,specification,quest)
             { LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
-                ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve), HellParty = HellParty(), HellPartyPath = HellParty() is { } hellRoom ? mapPaths[hellRoom.MapId] : null };
+                ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve), HellParty = HellParty(), HellPartyPath = HellParty() is { } hellRoom ? mapPaths[hellRoom.MapId] : null,
+            HellLegendPath = HellParty() is { LegendMapId: > 0 } legendRoom ? mapPaths[legendRoom.LegendMapId] : null };
         return maze with { ConditionalMaps = ConditionalMaps(maze) };
         // 实验性：深渊房间解析失败（缺字段/坐标越界/该坐标没有普通房间/深渊地图文件不存在）一律视为该 maze 无深渊派对，不抛错（不影响现有入场）。
         DungeonHellPartyRoom? HellParty()
@@ -531,7 +542,10 @@ internal sealed class DungeonCatalog
             if (room.X < 0 || room.Y < 0 || room.X >= width || room.Y >= height ||
                 !specification.Any(map => map.Position == room && map.Kind == "map") ||
                 !mapPaths.TryGetValue(mapToken.Value, out var hellPath) || !exists(hellPath)) return null;
-            return new(mapToken.Value, room);
+            int Single(string tag) => mazeSections.Where(s => s.Tag == tag).ToArray() is [{ Tokens: [{ Type: 0, Value: >= 0 } value] }] ? value.Value : 0;
+            return new(mapToken.Value, room) { RequiredItemCount = Single("hell party required item count"), AppearRate = Single("seal door appear rate"),
+                LegendMapId = mapPaths.TryGetValue(Single("seal door legend map index"), out var legendPath) && exists(legendPath) ? Single("seal door legend map index") : 0,
+                LegendRequiredCount = Single("hell legend party required item count") };
         }
         IReadOnlyList<PvfToken> Required(string tag) => sections.TryGetValue(tag, out var value) ? value.Tokens : throw new InvalidDataException("maze 缺少字段: " + tag);
         IReadOnlyList<DungeonPoint> Points(IReadOnlyList<PvfToken> values, bool allowRepeated = false)

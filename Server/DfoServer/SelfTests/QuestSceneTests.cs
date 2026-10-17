@@ -562,13 +562,25 @@ internal static class QuestSceneTests
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
             byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
-            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false)
+            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
             var learning = SkillPointLedger.Synchronize(job,0,level,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(level) },skills);
             var created = Repository.Create(Owner,candidate with { Level = level, CompletedQuests = completed ?? [3145,4873], InitialLearning = learning,
                 AcceptedStoryLevel = position is null ? candidate.AcceptedStoryLevel : level });
+            // 实验性：给新建角色在主背包预置物品（深渊入场票测试用）。
+            if (items is { Length: > 0 })
+            {
+                var seeded = created.Inventory.Items;
+                long uid = seeded.Select(row => row.Uid).DefaultIfEmpty(0).Max() + 1;
+                foreach (var (itemId, count) in items)
+                {
+                    short slot = 121; while (seeded.Any(row => row.Position.List == DfoServer.Game.Inventory.Models.InventoryListType.Main && row.Position.Index == slot)) slot++;
+                    seeded = seeded.Add(new(0, new(DfoServer.Game.Inventory.Models.InventoryListType.Main, slot), new(itemId, ItemKind.Material, count)));
+                }
+                created = Repository.CommitInventory(Owner, created, new(created.Inventory, created.Inventory with { Items = seeded }, "test_seed_items"));
+            }
             if (growthContractExpiresAt is { } expiry)
                 Repository.CommitInventory(Owner,created,new(created.Inventory,created.Inventory with
                     { AccountWallet = created.Inventory.AccountWallet.SetContractExpiry(84,expiry) },"test_growth_contract"));

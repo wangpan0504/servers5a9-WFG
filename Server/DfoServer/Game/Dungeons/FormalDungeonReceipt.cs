@@ -11,6 +11,9 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     public ImmutableArray<DungeonGroundObject> PassiveItems { get; init; } = [];
     // #233 强袭入场提交时扣除材料变化的背包格，仅入场回执携带。
     public ImmutableArray<InventorySlot> AssaultConsumedSlots { get; init; } = [];
+    // 实验性：深渊派对入场票在入场提交时扣掉的背包格与票据（日志 + UPDATE_ITEM_LIST 用）。
+    public ImmutableArray<InventorySlot> HellConsumedSlots { get; init; } = [];
+    public HellPartyTicket? HellTicket { get; init; }
     // 演出返回只确认缓存呈现，不重新执行业务装载或授权基础图演员。
     public Guid ScriptedReturnId { get; init; }
     public bool NavigationReplay { get; init; }

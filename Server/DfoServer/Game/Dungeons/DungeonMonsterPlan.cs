@@ -21,6 +21,10 @@ internal sealed record DungeonPlannedMonster(
     public bool IsBoss => CanReportDeath && (Source?.RankKind == "[boss]" || AiCharacter?.RankKind == "[boss]");
     public byte ExperienceType => AiCharacter is null ? SpawnType : checked((byte)(SpawnType - 5));
     public bool IsScriptedBoss => Source?.RankKind == "[boss]" && Source.Modifiers.SequenceEqual(new[] { "[dummy]" });
+    // 实验性：深渊派对波次怪（真实敌对怪：阻挡清房/开门，给经验与掉落）。非空即由 WithHellWaves 产生，START_MAP 里按"隐藏模板行"发，不进普通怪行。
+    public DungeonHellWaveMonster? HellWave { get; init; }
+    // 实验性：该波次怪被击杀时额外投的 hellparty 装备骰次数（每个 Order 的最后一只带；参考项目是"最后一只死的"，这里静态指定）。
+    public int HellRewardRolls { get; init; }
 }
 internal sealed record DungeonPlannedSpecialObject(ushort ObjectKey, DungeonRoomSpecialObject Source);
 
@@ -33,7 +37,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
     // 实验性（未在95客户端实证）：深渊派对房间柱子的波次怪（START_MAP 隐藏模板行 + NOTI 679）。不进 Monsters：不参与清房/开门判定，也不产生经验/掉落。
     public IReadOnlyList<DungeonHellWaveMonster> HellWaves { get; init; } = Array.Empty<DungeonHellWaveMonster>();
     // 给波次怪分配 object key（跳过角色 key）与 START_MAP 行序号（参考项目 running index：普通/APC 分别接着既有行往后排）。
-    public DungeonMonsterPlan WithHellWaves(IReadOnlyList<DungeonHellWaveMonster> waves, ushort characterId)
+    public DungeonMonsterPlan WithHellWaves(IReadOnlyList<DungeonHellWaveMonster> waves, ushort characterId, int rewardRolls = 0)
     {
         int next = (int)NextObjectKey;
         int normalIndex = Monsters.Count(monster => monster.SpawnType < 5);
@@ -45,7 +49,30 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (next > ushort.MaxValue) throw new InvalidDataException("深渊波次 object key 超出 ushort 范围");
             result.Add(wave with { ObjectKey = (ushort)next++, PacketIndex = wave.Type >= 5 ? apcIndex++ : normalIndex++ });
         }
-        return this with { HellWaves = Array.AsReadOnly(result.ToArray()) };
+        // 实验性：同一个 Order（一个波次）里最后一只带 hellparty 奖励骰。
+        // 奖励载体在死亡时动态决定（实际最后死的那只，见 SinglePlayerDungeonRun.IsLastLivingHellWaveMember）；所以每只波次怪都带奖励骰数，
+        // 入场时给它们都预留地面槽位并准备"带奖励"的掉落计划，死亡时只有最后一只用带奖励的计划。
+        var rewardKeys = rewardRolls <= 0 ? [] : result.Select(wave => wave.ObjectKey).ToHashSet();
+        int ordinal = 0;
+        var planned = new List<DungeonPlannedMonster>();
+        foreach (var wave in result)
+        {
+            // 波次怪的场景坐标由客户端模板决定，服务端不知道，落点 x/y 记 0；Source 只为复用掉落/经验流水线。
+            DungeonPlannedMonster monster = wave.Type >= 5
+                ? new(Monsters.Count + planned.Count, wave.ObjectKey, wave.MonsterId, wave.Level, null)
+                {
+                    AiCharacter = new DungeonRoomAiCharacter(wave.MonsterId, [wave.MonsterId, 0, 0, 0, 0, 0], "[monster]", "[normal]", wave.Path, wave.Level),
+                    SpawnType = wave.Type, IsBlocking = true, HellWave = wave
+                }
+                : new(Monsters.Count + planned.Count, wave.ObjectKey, wave.MonsterId, wave.Level,
+                    new DungeonRoomMonster(wave.MonsterId, [wave.MonsterId, 0, wave.Level, 0, 0, 0, 0, 0], "[fixed]", "[normal]", wave.Path))
+                {
+                    SpawnType = 0, IsBlocking = true, HellWave = wave
+                };
+            planned.Add(monster with { HellRewardRolls = rewardKeys.Contains(wave.ObjectKey) ? rewardRolls : 0 });
+            ordinal++;
+        }
+        return this with { HellWaves = Array.AsReadOnly(result.ToArray()), Monsters = Array.AsReadOnly(Monsters.Concat(planned).ToArray()) };
     }
     public int? BasisLevel { get; init; }
     public int? PlayerTeam { get; init; }

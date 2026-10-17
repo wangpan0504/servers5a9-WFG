@@ -164,7 +164,11 @@ internal static class DungeonPackets
         }
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(14), checked((uint)plan.StartMap.Id));
         // 三个空列表及fog字段保留0，FF跳过成员选择；不代替NOTI28的格记录初始化。
-        body[22] = plan.HellParty is not null ? (byte)1 : byte.MaxValue; // 实验性：深渊派对 fog 标志=1（参考项目 HellPartyFogFlag），普通入场保持 FF。
+        // FIX(95 client static analysis, NOTI29 reader 0238EF70): the first trailing byte after the passive-item list ([20]) is the hell-mode flag:
+        // it is stored in globals 062EF5AA/0643C40C/062DC504, and the minimap hell icon (03A095A6) is only drawn when 062EF5AA != 0.
+        // [22] is the party-member selector (FF = none); the previous experimental value 1 there was wrong.
+        if (plan.HellParty is not null) body[20] = 1;
+        body[22] = byte.MaxValue; // 实验性：深渊派对 fog 标志=1（参考项目 HellPartyFogFlag），普通入场保持 FF。
         return body;
     }
 
@@ -175,7 +179,7 @@ internal static class DungeonPackets
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(monsters);
-        int actorCount = checked(monsters.Monsters.Count + monsters.SpecialObjects.Count + monsters.HellWaves.Count);
+        int actorCount = checked(monsters.Monsters.Count(monster => monster.HellWave is null) + monsters.SpecialObjects.Count + monsters.HellWaves.Count);
         if (monsters.Room.Map != plan.StartMap || actorCount > byte.MaxValue)
             throw new InvalidDataException("怪物计划与房间不匹配或超过通知数量范围");
         byte[] empty = StartMap(plan, seed, operation, payload);
@@ -187,7 +191,7 @@ internal static class DungeonPackets
         using var writer = new BinaryWriter(stream);
         writer.Write(empty.AsSpan(0, 18));
         writer.Write(checked((byte)actorCount));
-        foreach (var monster in monsters.Monsters)
+        foreach (var monster in monsters.Monsters.Where(monster => monster.HellWave is null))
         {
             if (monster.CandidateLevel is < 1 or > byte.MaxValue)
                 throw new NotSupportedException("怪物生成等级超出单字节范围");

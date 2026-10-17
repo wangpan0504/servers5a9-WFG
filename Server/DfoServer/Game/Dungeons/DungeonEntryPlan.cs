@@ -23,6 +23,7 @@ internal sealed record DungeonEntryPlan(
     // 并在 DUNGEON_INFO/START_MAP 里带深渊标志；HellPartyMode 取请求标志（参考项目 ResolveHellPartyMode：requestFlag != 0 ? requestFlag : 按难度权重）。
     public DungeonHellPartyRoom? HellParty { get; init; }
     public byte HellPartyMode { get; init; }
+    public bool IsHellLegend { get; init; }
     public int? BasisLevel { get; init; }
     public int? PlayerTeam { get; init; }
     public bool IsTutorial { get; init; }
@@ -73,7 +74,7 @@ internal sealed record DungeonEntryPlan(
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
-        bool hellParty = false)
+        bool hellParty = false, bool hellLegend = false)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -91,16 +92,17 @@ internal sealed record DungeonEntryPlan(
         }
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
-            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest,hellParty:hellParty);
+            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest,hellParty:hellParty,hellLegend:hellLegend);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
-        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false)
+        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
+        if (hellLegend && !hellParty) { reason = "hell-legend-requires-hell-party"; return false; }
         if (hellParty && (questId != 0 || isReplay)) { reason = "hell-party-quest-or-replay-unsupported"; return false; }
         if (reason != "resource-request-ready")
             return false;
@@ -203,7 +205,8 @@ internal sealed record DungeonEntryPlan(
         // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
         if (hellParty)
         {
-            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is not null).ToArray();
+            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is not null &&
+                (!hellLegend || maze.HellParty.LegendMapId > 0 && maze.HellLegendPath is not null)).ToArray();
             ordinaryHunt = false; routeQuest = 0; quest = null; layoutQuest = null;
             if (candidates.Length == 0) { reason = "hell-party-maze-unavailable"; return false; }
             // 同一副本声明了多个带深渊房间的普通 maze（如 291100319 的 313166/313173）：与普通入场一样随机选一个。
@@ -321,7 +324,10 @@ internal sealed record DungeonEntryPlan(
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_room.go / A21 FindHellMapRoom）：深渊房间不是新增房间，而是 [seal door pos] 那个普通房间
         // 在深渊派对模式下改用 [seal door map index] 的深渊地图（柱子 + 波次 + 固定小怪）。起点/Boss/分层/条件/剧情图占用同一坐标时无法替换，按不可用拒绝。
         var planMaze = maze;
-        if (hellParty && maze.HellParty is { } hellRoom && maze.HellPartyPath is { } hellMapPath && maze.MapSpecification is { } hellSpec)
+        // 实验性：传奇深渊把房间换成 [seal door legend map index] 图（黑暗都市 313169），其余同普通深渊。
+        var activeHell = hellParty && maze.HellParty is { } baseRoom && hellLegend ? baseRoom with { MapId = baseRoom.LegendMapId } : maze.HellParty;
+        var activeHellPath = hellLegend ? maze.HellLegendPath : maze.HellPartyPath;
+        if (hellParty && activeHell is { } hellRoom && activeHellPath is { } hellMapPath && maze.MapSpecification is { } hellSpec)
         {
             if (starts[0].Position == hellRoom.Room || bosses.Any(boss => boss.Position == hellRoom.Room) ||
                 maze.LayeredMaps.Concat(maze.ConditionalMaps).Concat(maze.StoryStages).Any(map => map.Position == hellRoom.Room))
@@ -354,7 +360,8 @@ internal sealed record DungeonEntryPlan(
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
-            HellParty = hellParty ? maze.HellParty : null,
+            HellParty = hellParty ? activeHell : null,
+            IsHellLegend = hellParty && hellLegend,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
             InitializationCounterSupported = !definition.IsClassExperience && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
