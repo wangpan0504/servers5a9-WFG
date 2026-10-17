@@ -138,7 +138,8 @@ internal static class InventoryMoveService
             if (!Allows(character, position, core, catalog, utcSeconds, contracts))
                 return false;
             // 只有本次实际穿戴依赖霸王等级加成时冻结期限；卸装、普通移格和原等级合格不受其到期限制。
-            if (position.List == InventoryListType.Equipment && core.Kind is (ItemKind.Equipment or ItemKind.Avatar) &&
+            if (position.List == InventoryListType.Equipment && position.Index != InventoryCreatureSkinService.AuraTargetSlot &&
+                core.Kind is (ItemKind.Equipment or ItemKind.Avatar) &&
                 character.Level < catalog.Get(core.ItemId).MinimumLevel)
                 qualificationExpiresAt = character.Inventory.AccountWallet.ContractExpiry(22);
             return true;
@@ -181,6 +182,9 @@ internal static class InventoryMoveService
         var template = catalog.Get(core.ItemId);
         if (IsCreatureSkin(position))
             return (character.EquipmentSlotFlags & InventoryCreatureSkinService.UnlockFlag) != 0 && CreatureSkinTemplate(core, template);
+        if (position.Index == InventoryCreatureSkinService.AuraTargetSlot)
+            return (character.EquipmentSlotFlags & InventoryCreatureSkinService.AuraUnlockFlag) != 0 &&
+                core.Kind == ItemKind.Avatar && template.Id == core.ItemId && template.EquipmentSlot is 9 or 11;
         int unlock = position.Index switch { 22 => 1, 23 => 2, 25 => 16, _ => 0 };
         if (unlock != 0 && (character.EquipmentSlotFlags & unlock) == 0) return false;
         // 女鬼剑流浪武士的副武器栏接受普通武器；觉醒位不改变基础转职。

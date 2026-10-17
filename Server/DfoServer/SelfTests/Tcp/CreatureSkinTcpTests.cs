@@ -120,9 +120,9 @@ internal static class CreatureSkinTcpTests
                 peer.Expect(1, 865, [0, 0, 0, 33, 0]);
             }
             peer.Send(865, [255, 255, 11, 0]);
-            peer.Expect(1, 865, [0, 0, 0, 11, 0]);
+            peer.Expect(1, 865, [0, 1, 0, 11, 0]);
             peer.Barrier();
-            That(Snapshot() == before, "缺券引导、畸形及未接入的光环目标不写角色或资产，连接继续");
+            That(Snapshot() == before, "宠物与光环缺券引导及畸形请求不写角色或资产，连接继续");
             var buy = new byte[19];
             buy[2] = 1;
             buy[5] = 255;

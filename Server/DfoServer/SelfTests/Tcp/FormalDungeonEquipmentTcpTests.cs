@@ -23,6 +23,8 @@ internal static partial class FormalDungeonTcpTests
             ("武器", InventoryListType.Main, 12, profile.Equipment.Single(item => item.Slot == 12).Template.Id, 101010438),
             ("防具", InventoryListType.Main, 17, profile.Equipment.Single(item => item.Slot == 17).Template.Id, profile.Equipment.Single(item => item.Slot == 17).Template.Id),
             ("装扮", InventoryListType.Avatar, 0, 101550507, 101550507),
+            ("真实光环", InventoryListType.Avatar, 9, 401590036, 401590037),
+            ("光环外观", InventoryListType.Avatar, 11, 401590036, 401590037),
             ("宠物装备", InventoryListType.Pet, 28, 2680000, 2680000),
             ("勋章", InventoryListType.GuildMedal, 32, 100380044, 100380044)
         };
@@ -35,7 +37,7 @@ internal static partial class FormalDungeonTcpTests
             { Experience = SelfTestCatalogs.Growth(resources.Archive, catalog).GetLevelStartExperience(95) };
             learning = SkillPointLedger.Synchronize(0, 0, 95, learning, catalog);
             character = repository.Create(owner, new("EquipRoomTcp", resources.Towns.Room, resources.Towns.InitialReturn)
-            { Level = 95, AcceptedStoryLevel = 1, Skills = profile.Skills, InitialLearning = learning, EquipmentSlotFlags = 32,
+            { Level = 95, AcceptedStoryLevel = 1, Skills = profile.Skills, InitialLearning = learning, EquipmentSlotFlags = 40,
                 DungeonState = CharacterDungeonState.NewOrdinary });
             var items = resources.ItemResources;
             var inventory = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
@@ -160,7 +162,7 @@ internal static partial class FormalDungeonTcpTests
                                 "副本普通穿脱保留图标装载和完整返回装备，关闭获得通知但不重置房间");
                     }
                     byte[] player = peer.Expect(0, 2).Body;
-                    if (family.Worn is 26 or 33)
+                    if (family.Worn is 9 or 11 or 26 or 33)
                     {
                         if (player[0] != 0)
                             missingCreatureDeclarations.Add($"{fromId}/{toId}");
@@ -170,19 +172,43 @@ internal static partial class FormalDungeonTcpTests
                             int nameWidth = checked((int)U32(actor, 123));
                             // 0267DF0B读取Level后第三字节到成员DTO+1C；原生45要求该状态非零。
                             byte memberState = actor[132 + nameWidth];
-                            That(memberState == 1, "副本宠物Actor须保留已加载成员状态1，不能关闭客户端45发送门禁");
-                            int creatureOffset = 156 + nameWidth + actor[133 + nameWidth] * 25;
-                            uint real = family.Worn == 33 ? 63001u : (uint)fromId;
-                            That(U16(actor, 121) == peer.Id && U32(actor, creatureOffset) == real &&
-                                U32(actor, creatureOffset + 4) == 0 && actor[creatureOffset + 8] == (real == 0 ? 0 : 1) &&
-                                U32(actor, 94) == (family.Worn == 33 ? (uint)fromId : 0u),
-                                "副本Actor分别投影真实26与独立幻化；幻化穿脱不覆盖真实宠物模板和启用位");
+                            That(memberState == 1, "副本外观Actor须保留已加载成员状态1，不能关闭客户端45发送门禁");
+                            if (family.Worn is 9 or 11)
+                            {
+                                int count = actor[133 + nameWidth];
+                                int start = 134 + nameWidth;
+                                var auraEntries = Enumerable.Range(0, count)
+                                    .Select(index => (Slot: actor[start + index * 25], Id: U32(actor, start + index * 25 + 1)))
+                                    .ToArray();
+                                That(auraEntries.Where(entry => entry.Slot == family.Worn)
+                                    .Select(entry => entry.Id).SequenceEqual(fromId == 0 ? [] : [(uint)fromId]),
+                                    "副本Actor中9/11仅投影本次实际穿戴模板，卸下清对应外观槽");
+                                if (family.Worn == 11)
+                                {
+                                    uint realAura = Convert.ToUInt32(fixture.Query("""
+                                        SELECT json_extract(i.item_core,'$.ItemId') FROM character_inventory_slots s
+                                        JOIN character_inventory_items i USING(item_uid)
+                                        WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=9
+                                        """, peer.Id).Single()[0]);
+                                    That(auraEntries.Any(entry => entry.Slot == 9 && entry.Id == realAura),
+                                        "11变化保留独立真实9声明，同屏外观不覆盖真光环");
+                                }
+                            }
+                            else
+                            {
+                                int creatureOffset = 156 + nameWidth + actor[133 + nameWidth] * 25;
+                                uint real = family.Worn == 33 ? 63001u : (uint)fromId;
+                                That(U16(actor, 121) == peer.Id && U32(actor, creatureOffset) == real &&
+                                    U32(actor, creatureOffset + 4) == 0 && actor[creatureOffset + 8] == (real == 0 ? 0 : 1) &&
+                                    U32(actor, 94) == (family.Worn == 33 ? (uint)fromId : 0u),
+                                    "副本Actor分别投影真实26与独立幻化；幻化穿脱不覆盖真实宠物模板和启用位");
+                            }
                             player = peer.Expect(0, 2).Body;
                         }
                     }
                     That(player[0] == 1 && U16(player, 22) == peer.Id && player[126] == Convert.ToInt32(fixture.Query(
                         "SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3", peer.Id)[0][0]),
-                        "副本换装保留已提交Player；仅真实26或幻化33变化追加Actor声明");
+                        "副本换装保留已提交Player；真实/外观光环与宠物双槽变化先追加Actor声明");
                     peer.Barrier();
                     That(fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id) == progress,
                         "换装不改副本attempt、怪物key和清房状态");
@@ -198,6 +224,20 @@ internal static partial class FormalDungeonTcpTests
                 if (map.Length > 16) ClearRoom(map);
             }
             That(U32(map, 14) == 58553, "真实普通Boss房清图后进入结算阶段");
+            var auraBags = fixture.Query("""
+                SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND s.list_type=1 AND json_extract(i.item_core,'$.ItemId')=401590036
+                ORDER BY s.slot_index
+                """, peer.Id).Select(row => Convert.ToInt16(row[0])).ToArray();
+            That(auraBags.Length >= 2, "结算9/11具备两件独立光环实例");
+            SettlementAura(9, 102, 0, 401590037);
+            SettlementAura(9, auraBags[0], 401590036, 0);
+            SettlementAura(11, 103, 0, 401590037);
+            SettlementAura(11, auraBags[1], 401590036, 0);
+            SettlementAura(11, auraBags[1], 0, 401590036);
+            SettlementAura(9, auraBags[0], 0, 401590036);
+            SettlementAura(9, 102, 401590037, 0);
+            SettlementAura(11, 103, 401590037, 0);
             SkinChange(138, 0, 63023, 1, 63001);
             CreatureChange(139, 0, 63001, 1);
             SkinChange(138, 63023, 0, 1, 0);
@@ -206,6 +246,47 @@ internal static partial class FormalDungeonTcpTests
             SkinChange(138, 63023, 0, 1, 63001);
             That(Assets() == assets, "结算穿脱保留原UID、核心和详情");
             peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); peer.Expect(0, 21); peer.Barrier();
+
+            void SettlementAura(short wornSlot, short bag, int fromId, int toId)
+            {
+                peer.Send(19, Build(writer =>
+                {
+                    writer.Write((byte)1); writer.Write(bag); writer.Write(fromId); writer.Write(1);
+                    writer.Write((byte)3); writer.Write(wornSlot); writer.Write(toId);
+                    writer.Write(0); writer.Write(-1); writer.Write((ushort)0);
+                }));
+                byte[] ack = peer.Expect(1, 19).Body;
+                byte[] expectedAck = Build(writer =>
+                { writer.Write((byte)1); writer.Write((byte)1); writer.Write(bag); writer.Write(1);
+                    writer.Write((byte)3); writer.Write(wornSlot); });
+                That(ack.SequenceEqual(expectedAck), $"结算光环ACK: {wornSlot}, {fromId}->{toId}, actual={Convert.ToHexString(ack)}, expected={Convert.ToHexString(expectedAck)}");
+                peer.Expect(0, 14);
+                byte[] actor = peer.Expect(0, 2).Body;
+                int nameWidth = checked((int)U32(actor, 123));
+                int count = actor[133 + nameWidth];
+                int start = 134 + nameWidth;
+                var entries = Enumerable.Range(0, count)
+                    .Select(index => (Slot: actor[start + index * 25], Id: U32(actor, start + index * 25 + 1)))
+                    .ToArray();
+                That(actor[0] == 0 && actor[132 + nameWidth] == 1 &&
+                    entries.Where(entry => entry.Slot == wornSlot).Select(entry => entry.Id)
+                        .SequenceEqual(fromId == 0 ? [] : [(uint)fromId]),
+                    "结算9/11穿脱先发布保留成员状态1的Actor及实际槽模板");
+                if (wornSlot == 11)
+                {
+                    var realAura = fixture.Query("""
+                        SELECT json_extract(i.item_core,'$.ItemId') FROM character_inventory_slots s
+                        JOIN character_inventory_items i USING(item_uid)
+                        WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=9
+                        """, peer.Id);
+                    uint expectedReal = realAura.Length == 0 ? 0 : Convert.ToUInt32(realAura.Single()[0]);
+                    That(entries.Where(entry => entry.Slot == 9).Select(entry => entry.Id)
+                        .SequenceEqual(expectedReal == 0 ? [] : [expectedReal]),
+                        "结算11变化不覆盖真实9的Actor声明");
+                }
+                That(peer.Expect(0, 2).Body[0] == 1, "结算光环Actor后才发布Player");
+                peer.Barrier();
+            }
 
             void CreatureChange(short bag, int fromId, int toId, byte sceneState)
             {

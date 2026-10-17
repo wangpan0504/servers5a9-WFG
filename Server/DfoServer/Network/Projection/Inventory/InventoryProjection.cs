@@ -96,11 +96,11 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment);
         if (refreshEquipment && (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null))
         {
-            bool creatureChanged = plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&
-                slot.Index is 26 or 33 && plan.BeforeIndex.Find(slot) != receipt.Index.Find(slot));
-            // 真实或幻化宠物槽变化均刷新双实体声明；副本沿用真实场景状态，保留过房流程。
+            bool appearanceChanged = plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&
+                slot.Index is 9 or 11 or 26 or 33 && plan.BeforeIndex.Find(slot) != receipt.Index.Find(slot));
+            // 光环与宠物真槽/外观槽变化都刷新同屏Actor；副本沿用真实场景状态和既有过房Ready流程。
             if (equipmentChanged && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
-                creatureChanged && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
+                appearanceChanged && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
                 await context.Notify(NotiPacketType.USERINFO,
                     TownPackets.Actor(current, context.Channel, adventureName: context.Session.ReadAdventureName(),
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement

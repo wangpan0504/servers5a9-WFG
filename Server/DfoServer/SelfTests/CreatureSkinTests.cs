@@ -20,6 +20,7 @@ internal static class CreatureSkinTests
     public static void RunCore()
     {
         CreatureSkinMoveTests.RunCore();
+        AuraSkinTests.RunCore();
         That(CreatureSkinRequests.Read([255, 255, 33, 0]) == ((short)-1, (ushort)33) &&
             CreatureSkinRequests.Read([65, 0, 33, 0]) == ((short)65, (ushort)33), "865完整保留Main槽号哨兵与目标栏字段");
         foreach (byte[] body in new byte[][] { [], [255, 255], [255, 255, 33], [255, 255, 33, 0, 0] })

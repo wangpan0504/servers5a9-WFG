@@ -9,6 +9,7 @@ using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network;
+using DfoServer.Network.Handlers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
@@ -95,6 +96,31 @@ internal static class InventoryReceiptTests
             session.UpdateProgress(new(CharacterProgressField.Level, owner.Account, actual.Name, 2, 0));
             TestCheck.That(session.Selected!.Revision == actual.Revision && !ReferenceEquals(session.Selected, actual) &&
                 !session.CanPublishInventory(currentReceipt), "同revision GM替换等级不能让旧穿戴Player属性覆盖新快照");
+            using (var heldStop = new CancellationTokenSource())
+            using (var heldStream = new HeldOutput())
+            {
+                var rejectionSent = new List<string>();
+                await using var heldSender = new GameConnectionSender(owner, heldStream, heldStop, 0,
+                    (_, _, _, _, action) => rejectionSent.Add(action));
+                var heldContext = new GameConnectionContext(new(2, IPAddress.Loopback, heldStream, heldStop),
+                    owner, session, heldSender);
+                Task held = heldSender.Send(1, 0, [], "held_aura_rejection");
+                await heldStream.Started.WaitAsync(TimeSpan.FromSeconds(5));
+                var rejectionGuard = QuestTicketHandler.CaptureAuraRejectionGuard(heldContext);
+                Task rejected = heldContext.Reply(CmdPacketType.USE_STACKABLE_ACTION, [0, 0, 0, 0, 0, 0, 0],
+                    "aura_rejected", rejectionGuard);
+                try
+                {
+                    var previous = session.Selected!;
+                    session.UpdateProgress(new(CharacterProgressField.Level, owner.Account, previous.Name, 3, 0));
+                    TestCheck.That(!ReferenceEquals(session.Selected, previous) && !rejectionGuard(),
+                        "同owner GM替换Selected快照后，旧127拒绝的选择守卫失效");
+                }
+                finally { heldStream.Release(); }
+                await Task.WhenAll(held, rejected).WaitAsync(TimeSpan.FromSeconds(5));
+                TestCheck.That(rejectionSent.SequenceEqual(["held_aura_rejection"]),
+                    "排队中的旧127失败ACK不发送给同owner新快照");
+            }
             using var replacement = owners.Acquire(owner.Account, () => { });
             bool expired = false;
             try { session.CanPublishInventory(next.Receipt!); }

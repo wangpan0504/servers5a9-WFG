@@ -1,3 +1,4 @@
+using System.Data.Common;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Items;
 using DfoServer.Infrastructure;
@@ -10,13 +11,12 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Network.Projection.Inventory;
-using System.Data.Common;
 
 namespace DfoServer.Network.Handlers;
 
 internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,QuestProjection projection,ServerLog log,
     CharacterLevelProjection? levelProjection=null,SkillLearningCatalog? skills=null,
-    InventoryCreatureSkinService? creatureSkin=null,InventoryProjection? inventoryProjection=null) : IGameCommandModule
+    InventoryCreatureSkinService? skinService=null,InventoryProjection? inventoryProjection=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE_ACTION,UseAsync,nameof(QuestTicketHandler));
@@ -27,8 +27,42 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             return CommandResult.Unhandled;
         if (request.Action == CreatureSkinAction)
             return await UseCreatureSkinAsync(context, request);
-        if (context.Activity?.BlocksTownActions == true)
-            return CommandResult.Unhandled;
+        if (request.Action == InventoryCreatureSkinService.AuraAction)
+        {
+            var sameSelection = CaptureAuraRejectionGuard(context);
+            bool validWire = request.Reserved == 0 && request.FirstArgument == 0 && request.SecondArgument == 0 &&
+                request.List == (byte)InventoryListType.Main && request.Slot <= short.MaxValue;
+            InventoryResult result;
+            try
+            {
+                result = !validWire || context.Activity?.BlocksTownActions == true || skinService is null || inventoryProjection is null
+                    ? InventoryResult.Reject(InventoryCreatureSkinService.Rejection)
+                    : context.Session.PlanAndCommitInventory(character => skinService.PlanAuraAction(character,
+                        request.Slot,request.List,request.Action,skinService.Clock.GetUtcNow().ToUnixTimeSeconds()),
+                        InventoryCreatureSkinService.Rejection);
+            }
+            catch (DbException error)
+            {
+                log.Write("aura_skin_action_commit_failed",new { Connection=context.Id,request.Slot,request.List,
+                    request.Action,Error=error.Message });
+                result = InventoryResult.Reject(InventoryCreatureSkinService.Rejection);
+            }
+            bool CanPublish() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : sameSelection();
+            log.Write("aura_skin_action",new { Connection=context.Id,request.Slot,request.List,request.Action,
+                result.Accepted,result.Error,Revision=result.Receipt?.Character.Revision });
+            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+                result.Accepted ? QuestTicketPackets.Used(request) : QuestTicketPackets.Rejected(request),
+                result.Accepted ? "aura_skin_action_committed" : "aura_skin_action_rejected",
+                CanPublish);
+            if (result.Accepted)
+            {
+                // 515成功消费者自行扣一张；抑制源14，随后只用已提交Player同步光环bit3。
+                await inventoryProjection!.RefreshAsync(context,result,
+                    new HashSet<InventorySlot> { new(InventoryListType.Main,(short)request.Slot) });
+            }
+            return CommandResult.Handled;
+        }
+        if (context.Activity?.BlocksTownActions == true) return CommandResult.Unhandled;
         if (request.Reserved != 0 || request.FirstArgument != 0 || request.SecondArgument != 0 ||
             request.Action is not (QuestTicketDefinition.Action or QuestTicketDefinition.SpecifiedAction or
                 QuestTicketDefinition.FirstAwakeningAction or QuestTicketDefinition.SecondAwakeningAction))
@@ -76,9 +110,16 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
         return CommandResult.Handled;
     }
 
+    internal static Func<bool> CaptureAuraRejectionGuard(GameConnectionContext context)
+    {
+        var captured = context.Owner.Execute(() => (context.Session.Selected,context.Session.SelectionEpoch,context.Session.Phase));
+        return () => context.Owner.Execute(() => ReferenceEquals(captured.Selected,context.Session.Selected) &&
+            captured.SelectionEpoch == context.Session.SelectionEpoch && captured.Phase == context.Session.Phase);
+    }
+
     async Task<CommandResult> UseCreatureSkinAsync(GameConnectionContext context, QuestTicketUseRequest request)
     {
-        if (creatureSkin is null || inventoryProjection is null)
+        if (skinService is null || inventoryProjection is null)
             throw new InvalidOperationException("宠物幻化右键缺少库存服务或投影");
         var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         bool SameSelection() => context.Owner.Execute(() => ReferenceEquals(captured.Selected, context.Session.Selected) &&
@@ -89,8 +130,8 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
         try
         {
             result = !validWire || context.BlocksTownActions ? InventoryResult.Reject(InventoryCreatureSkinService.Rejection) :
-                context.Session.PlanAndCommitInventory(character => creatureSkin.PlanUnlock(character, (short)request.Slot,
-                    InventoryCreatureSkinService.TargetSlot, creatureSkin.Clock.GetUtcNow().ToUnixTimeSeconds()),
+            context.Session.PlanAndCommitInventory(character => skinService.PlanUnlock(character, (short)request.Slot,
+                InventoryCreatureSkinService.TargetSlot, skinService.Clock.GetUtcNow().ToUnixTimeSeconds()),
                     InventoryCreatureSkinService.Rejection);
         }
         catch (DbException error)

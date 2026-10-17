@@ -107,6 +107,26 @@ internal static class ClassChangeTests
             repository.Create(owner, fixture);
             Sql("INSERT INTO account_expert_contracts(account,expires_at) VALUES('classchange'," + fixture.InitialLearning.ExpertContractExpiresAt + ")");
             var before = repository.LoadCharacter(owner, 0);
+            const int auraTemplateId = 99133911;
+            var auraTemplate = new ItemTemplate(auraTemplateId, ItemKind.Avatar, 9, 100, 0, 1, 0, 0, 0,
+                "[account]", 0, ushort.MaxValue, "转职外观资格回归");
+            items.Items.PrefillTemplates(new Dictionary<int, ItemTemplate> { [auraTemplateId] = auraTemplate });
+            var auraItem = new InventoryItem(0, new(InventoryListType.Equipment, 11),
+                InventoryRewardGrantService.Create(auraTemplate)) { Avatar = new() };
+            var auraFixture = fixture with { Name = "AuraClass", EquipmentSlotFlags = 8,
+                Inventory = fixture.Inventory with { Items = fixture.Inventory.Items.Add(auraItem) } };
+            var auraBefore = repository.Create(owner, auraFixture);
+            var auraChange = service.Prepare(auraBefore, new(65, 2, false), now);
+            That(auraChange.Plan is not null, "合法11外观模板即使声明目标职业不具备的技能，也不阻转职");
+            var realAura = auraBefore with { Inventory = auraBefore.Inventory with { Items = auraBefore.Inventory.Items
+                .Select(item => item.Position == auraItem.Position ? item with
+                { Position = new(InventoryListType.Equipment, 9) } : item).ToImmutableArray() } };
+            That(service.Prepare(realAura, new(65, 2, false), now).Reason == "class-dependent-equipment",
+                "相同技能要求的真实9仍阻止不满足资格的转职");
+            var auraAfter = repository.CommitClassChange(owner, auraChange.Plan!);
+            That(auraAfter.GrowType == 0x12 && auraAfter.Inventory.Find(auraItem.Position)?.Core.ItemId == auraTemplateId &&
+                repository.LoadCharacter(owner, auraAfter.Slot).Inventory.Find(auraItem.Position)?.Core.ItemId == auraTemplateId,
+                "11外观转职事务提交并重读后仍保持原外观实例");
             That(before.Learning.ExpertContractExpiresAt == fixture.InitialLearning.ExpertContractExpiresAt &&
                 before.Learning.ExpertContractExpiresAt > now.ToUnixTimeSeconds(), "互转使用真实账号契约来源，不只伪造角色镜像");
             foreach (var request in new[] { new ClassChangeRequest(65, 0, false), new(65, 6, false), new(65, 1, false),

@@ -165,6 +165,11 @@ internal sealed class ItemCatalog
         document.TryGetString("action usable place", out string place) && place == "[village]" &&
         document.TryGetInt32("use action packet", out int packet) && packet == 0;
 
+    internal static bool ReadAuraSkinAction(PvfDocument document) =>
+        document.TryGetString("action type", out string action) && action == "[open aura skin slot]" &&
+        document.TryGetString("action usable place", out string place) && place == "[village]" &&
+        document.TryGetInt32("use action packet", out int packet) && packet == 0;
+
     ItemTemplate Load(int id)
     {
         bool isEquipment = equipment.TryGetValue(id, out string? path);
@@ -240,6 +245,7 @@ internal sealed class ItemCatalog
             IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text),
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
             OpensCreatureSkinSlot = !isEquipment && ReadCreatureSkinTicket(text),
+            OpensAuraSkinSlot = !isEquipment && id == 490700411 && kind == ItemKind.Material && ReadAuraSkinAction(text),
             WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&
                 text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
             CreatureSubType = kind == ItemKind.Creature ? ReadCreatureSubType(text) : -1,

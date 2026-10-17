@@ -235,10 +235,18 @@ internal sealed partial class CharacterRepository
         if (!SameInventory(expected.Inventory, plan) || plan.CharacterPrecondition?.Matches(expected) == false)
             throw new InvalidOperationException("背包规划不是当前快照");
         plan.After.Validate(allocating: true);
-        if (plan.EquipmentSlotFlagsAfter is { } slots &&
-            (plan.Reason != "open_creature_skin_slot" || plan.CharacterPrecondition is null ||
-                (expected.EquipmentSlotFlags & 32) != 0 || slots != (expected.EquipmentSlotFlags | 32)))
-            throw new InvalidOperationException("库存开栏只能在原资格上增加宠物幻化位");
+        if (plan.EquipmentSlotFlagsAfter is { } slots)
+        {
+            byte flag = plan.Reason switch
+            {
+                "open_creature_skin_slot" => 32,
+                "open_aura_skin_slot" => 8,
+                _ => 0
+            };
+            if (flag == 0 || plan.CharacterPrecondition is null ||
+                (expected.EquipmentSlotFlags & flag) != 0 || slots != (expected.EquipmentSlotFlags | flag))
+                throw new InvalidOperationException("库存开栏只能在原角色资格上增加对应幻化位");
+        }
         if (plan.After.AccountWallet.Revision != plan.Before.AccountWallet.Revision || plan.After.AccountCargo.Revision != plan.Before.AccountCargo.Revision ||
             plan.After.EpicPieces.Revision != plan.Before.EpicPieces.Revision)
             throw new InvalidOperationException("业务不能修改账号资产版本");

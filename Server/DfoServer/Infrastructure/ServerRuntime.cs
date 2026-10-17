@@ -166,6 +166,7 @@ internal static class ServerRuntime
             dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms, projection);
             createActivity = static session => new DungeonProbeState(session);
         }
+        var skinService = new InventoryCreatureSkinService(itemResources.Items, clock);
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
@@ -202,7 +203,7 @@ internal static class ServerRuntime
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new EnchantmentHandler(new InventoryEnchantmentService(itemResources.Items, itemResources.Enchantments, clock), inventoryProjection, log),
             new EnhancementHandler(new InventoryEnhancementService(itemResources.Items, itemResources.Enhancements, clock: clock), inventoryProjection, log),
-            new CreatureSkinHandler(new InventoryCreatureSkinService(itemResources.Items, clock), inventoryProjection, log),
+            new CreatureSkinHandler(skinService, inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
@@ -217,8 +218,7 @@ internal static class ServerRuntime
             new ImageCommunicationHandler(imageCommunication, quests, log),
             new QuestHiddenHandler(quests,log),
             new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning),
-            new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,
-                new InventoryCreatureSkinService(itemResources.Items, clock),inventoryProjection),
+            new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,skinService,inventoryProjection),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection),

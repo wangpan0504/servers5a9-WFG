@@ -194,6 +194,8 @@ internal static class TcpRegressionTests
         ("enhancement", EnhancementTcpTests.RunAsync),
         ("creature-egg", CreatureEggTcpTests.RunAsync),
         ("creature-skin", CreatureSkinTcpTests.RunAsync),
+        ("aura-skin", AuraSkinTcpTests.RunAsync),
+        ("aura-action", AuraActionTcpTests.RunAsync),
         ("avatar-capacity", AvatarCapacityTcpTests.RunAsync),
         ("gift-selection-tcp", AvatarPackageTcpTests.RunObservedSelectionsAsync),
         ("gift-selection-resources", (options, root, resources) =>

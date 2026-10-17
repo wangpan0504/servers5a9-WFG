@@ -50,7 +50,8 @@ internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog cha
         var candidate = before with { GrowType = target, Learning = learning,
             Skills = learning.Trees.Single(tree => tree.Context == 0).Skills.Select(value => new CharacterSkill(value.Id, value.Level)).ToArray() };
         // 副手武器必须先卸下；只核验转职相关的技能穿戴资格，不借此追查历史等级或契约穿戴。
-        foreach (var equipped in before.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment))
+        foreach (var equipped in before.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment &&
+            item.Position.Index != InventoryCreatureSkinService.AuraTargetSlot))
             if (equipped.Position.Index == 24 ||
                 !InventoryMoveService.RequiredSkillSatisfied(candidate, items.Get(equipped.Core.ItemId)))
                 return Reject(23, "class-dependent-equipment");

@@ -38,6 +38,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public int PortableDisjointLevel { get; init; } = -1;
     public bool UseForbidden { get; init; }
     public bool OpensCreatureSkinSlot { get; init; }
+    public bool OpensAuraSkinSlot { get; init; }
     public int CharacterSlotMaximum { get; init; }
     public int MaximumLevel { get; init; } = int.MaxValue;
     public int AvatarExpansionStage { get; init; }
