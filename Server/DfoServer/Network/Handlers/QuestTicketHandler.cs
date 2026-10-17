@@ -19,7 +19,7 @@ namespace DfoServer.Network.Handlers;
 internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,QuestProjection projection,ServerLog log,
     CharacterLevelProjection? levelProjection=null,SkillLearningCatalog? skills=null,
     InventoryCreatureSkinService? skinService=null,InventoryProjection? inventoryProjection=null,
-    CreatureChangeService? creatureChanges=null) : IGameCommandModule
+    CreatureChangeService? creatureChanges=null,LevelUpTicketHandler? levelUpTickets=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE_ACTION,UseAsync,nameof(QuestTicketHandler));
@@ -28,6 +28,9 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
     {
         if (!QuestTicketRequests.TryUse(packet.Body,out var request))
             return CommandResult.Unhandled;
+        if (request.Action == LevelUpByTableDefinition.JumpingAction)
+            return await (levelUpTickets ?? throw new InvalidOperationException("按表成长动作缺少升级道具处理器"))
+                .UseJumpingAsync(context,request);
         if (request.Action == CreatureSkinAction)
             return await UseCreatureSkinAsync(context, request);
         if (request.Action == InventoryCreatureSkinService.AuraAction)

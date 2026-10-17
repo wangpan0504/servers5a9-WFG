@@ -52,6 +52,11 @@ internal static class TcpRegressionTests
         }),
         ("quest-ticket", (_, _, resources) => QuestTicketTests.RunAsync(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning)),
         ("levelup-ticket", LevelUpTicketTcpTests.RunAsync),
+        ("levelup-table-rules", (_, _, resources) =>
+        {
+            LevelUpByTableTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning,resources.Quests);
+            return Task.CompletedTask;
+        }),
         ("experience-consumable", ExperienceConsumableTcpTests.RunAsync),
         ("experience-consumable-rules", (_, _, resources) =>
         {
@@ -254,6 +259,7 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "class-change-rules",
+        "levelup-table-rules",
         "experience-consumable-rules",
         "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",

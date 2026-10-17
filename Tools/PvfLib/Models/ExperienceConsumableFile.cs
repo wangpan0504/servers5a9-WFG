@@ -14,10 +14,13 @@ public sealed record ExperienceConsumableFile(StackableFile Stackable, Stackable
             errors.Add("重复经验物品字段：" + duplicate.Key);
         var effects = document.Sections.Where(section => section.Name == "increase status type").ToArray();
         StackableTypeDeclaration? effect = null;
-        if (effects is [{ Children.Length: 0, Values.Length: 2 }] && effects[0].Values[0].Type == 6 && effects[0].Values[1].Type == 0)
-            effect = new(resolve(effects[0].Values[0].Value), [effects[0].Values[1].Value]);
+        if (effects is [{ Children.Length: 0, Values.Length: >= 2 }] && effects[0].Values[0].Type == 6 &&
+            effects[0].Values.Skip(1).All(token => token.Type == 0) &&
+            (effects[0].Values.Length == 2 || resolve(effects[0].Values[0].Value) == "[levelUpByTable]" &&
+                (effects[0].Values.Length - 1) % 3 == 0))
+            effect = new(resolve(effects[0].Values[0].Value), effects[0].Values.Skip(1).Select(token => token.Value).ToImmutableArray());
         else if (effects.Length != 0)
-            errors.Add("经验增量声明不是单个字符串和整数");
+            errors.Add("经验增量声明不是单值或完整等级表");
         int? group = null;
         var groups = document.Sections.Where(section => section.Name == "cooltime group").ToArray();
         if (groups is [{ Children.Length: 0, Values.Length: 1 }] && groups[0].Values[0].Type == 0 && groups[0].Values[0].Value >= 0)

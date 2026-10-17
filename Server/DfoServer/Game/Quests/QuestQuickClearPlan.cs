@@ -95,7 +95,8 @@ internal sealed class QuestQuickClearPlan
         Ticket = ticket; LevelUpTicket = levelUpTicket; CutoffLevel = cutoff;
         Inventory=ticket?.Inventory ?? levelUpTicket?.Inventory ?? new(expected.Inventory,expected.Inventory,"quest_skip");
         EquipmentSlotFlagsAfter = equipmentSlots ?? expected.EquipmentSlotFlags;
-        ProfessionGrowType=profession; TargetLearning=learning ?? levelUpTicket?.Growth.Learning ?? expected.Learning;
+        ProfessionGrowType=profession ?? levelUpTicket?.ProfessionGrowType;
+        TargetLearning=learning ?? levelUpTicket?.Learning ?? expected.Learning;
         Interval = scope; ManualAnswers = answers; PendingQuestions = questions;
         ScopeQuestIds = scope.Select(row => row.Id).Distinct().Order().ToImmutableArray();
         var completed = QuestEligibility.Completed(expected);
@@ -115,7 +116,7 @@ internal sealed class QuestQuickClearPlan
         ActiveAfter = QuestStateProgress.Refresh(remaining,expected with
         {
             CompletedQuests = CompletedAfter.ToArray(), AccountCompletedQuests = AccountCompletedAfter.ToArray(), QuestAnswers = AnswersAfter,EquipmentSlotFlags=EquipmentSlotFlagsAfter,
-            GrowType=profession ?? expected.GrowType,Learning=TargetLearning,Level=TargetLevel
+            GrowType=ProfessionGrowType ?? expected.GrowType,Learning=TargetLearning,Level=TargetLevel
         },quests);
         Snapshot = JsonSerializer.Serialize(new
         {
@@ -145,6 +146,7 @@ internal sealed class QuestQuickClearPlan
         if (levelUpTicket is not null)
             Snapshot=JsonSerializer.Serialize(new { State=JsonSerializer.Deserialize<JsonElement>(Snapshot),
                 Kind="LevelUpTicket",Source=levelUpTicket.Item,Definition=levelUpTicket.Definition,levelUpTicket.UtcSeconds,
+                levelUpTicket.ByTable,levelUpTicket.ProfessionGrowType,
                 InventoryAfter=Inventory.After,TargetLevel,TargetLearning });
     }
 
@@ -386,9 +388,11 @@ internal sealed class QuestQuickClearPlan
                 if (!ReferenceEquals(levelUpTicket.Inventory.Before,expected.Inventory) ||
                     expected.Inventory.Find(levelUpTicket.Item.Position) != levelUpTicket.Item ||
                     levelUpTicket.Growth.CharacterId != expected.Id || levelUpTicket.Growth.Revision != expected.Revision ||
-                    levelUpTicket.Growth.PreviousLevel != expected.Level || levelUpTicket.Growth.TargetLevel != expected.Level+1)
+                    !levelUpTicket.Allows(expected) || levelUpTicket.Growth.PreviousLevel != expected.Level ||
+                    levelUpTicket.Growth.TargetLevel != levelUpTicket.TargetLevel(expected.Level))
                     throw new InvalidDataException("升级券需要原角色成长及源实例快照");
-                expected = expected with { Level=levelUpTicket.Growth.TargetLevel,Learning=levelUpTicket.Growth.Learning,
+                expected = expected with { Level=levelUpTicket.Growth.TargetLevel,Learning=levelUpTicket.Learning,
+                    GrowType=levelUpTicket.ProfessionGrowType ?? expected.GrowType,
                     Inventory=levelUpTicket.Inventory.After };
             }
             // external consumable_clear.go:25-29明确普通券包含当前等级的epic/normal；手册只到低一级。

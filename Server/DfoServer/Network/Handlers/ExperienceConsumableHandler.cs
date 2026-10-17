@@ -10,13 +10,15 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class ExperienceConsumableHandler(ExperienceConsumableService service, InventoryProjection inventory,
-    CharacterLevelProjection levels, ServerLog log) : IGameCommandModule
+    CharacterLevelProjection levels, ServerLog log, LevelUpTicketHandler? levelUpTickets = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.INCREASE_STATUS, UseAsync, nameof(ExperienceConsumableHandler));
 
     async Task<CommandResult> UseAsync(GameConnectionContext context, Packet packet)
     {
         var slot = ExperienceConsumableRequests.Read(packet.Body);
+        if (levelUpTickets is not null && await levelUpTickets.TryUseTableAsync(context,slot) is { } tableResult)
+            return tableResult;
         var result = context.Session.UseExperienceConsumable(slot, service, context.Activity?.BlocksTownActions == true);
         if (result.Outcome == ConsumableUseOutcome.CloseConnection) return CommandResult.CloseConnection;
         var guard = result.Guard ?? throw new InvalidOperationException("经验物品缺少原场景身份");

@@ -9,6 +9,14 @@ namespace DfoServer.Network.Projection;
 
 internal sealed class LevelUpTicketProjection(InventoryProjection inventory, CharacterLevelProjection levels)
 {
+    public static CmdPacketType Opcode(LevelUpConsumableKind kind) => kind switch
+    {
+        LevelUpConsumableKind.Ticket => CmdPacketType.REQUEST_EVENT_SERVER_LEVEL_UP,
+        LevelUpConsumableKind.StatusTable => CmdPacketType.INCREASE_STATUS,
+        LevelUpConsumableKind.JumpingTable => CmdPacketType.USE_STACKABLE_ACTION,
+        _ => throw new InvalidDataException("未知升级道具发布入口")
+    };
+
     public async Task PublishAsync(GameConnectionContext context, QuestQuickClearReceipt receipt)
     {
         var commit = receipt.Commit ?? throw new InvalidOperationException("升级券缺少提交结果");
@@ -18,7 +26,7 @@ internal sealed class LevelUpTicketProjection(InventoryProjection inventory, Cha
         bool Guard() => context.Session.CanPublishQuestQuickClear(receipt);
         if (!receipt.TicketAcknowledged)
         {
-            await context.Reply(CmdPacketType.REQUEST_EVENT_SERVER_LEVEL_UP, LevelUpTicketPackets.Used(source), "level_up_ticket_used", Guard);
+            await context.Reply(Opcode(source.Kind), LevelUpTicketPackets.Used(source), "level_up_ticket_used", Guard);
             context.Session.MarkQuestTicketAcknowledged(receipt);
         }
         var inventoryResult = new InventoryResult(true,0,plan.Inventory)
@@ -35,7 +43,8 @@ internal sealed class LevelUpTicketProjection(InventoryProjection inventory, Cha
         if (SkillPackets.BindingsChanged(plan.Expected.Learning,character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "level_up_ticket_skills", Guard);
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),"level_up_ticket_active",Guard);
-        await levels.RefreshAsync(context,character,plan.Expected.Level,"level_up_ticket_level",Guard,restoreCompletedQuests:false);
+        await levels.RefreshAsync(context,character,plan.Expected.Level,"level_up_ticket_level",Guard,
+            previousGrowType:plan.Expected.GrowType,restoreCompletedQuests:false);
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(character),"level_up_ticket_completed",Guard);
     }
 }

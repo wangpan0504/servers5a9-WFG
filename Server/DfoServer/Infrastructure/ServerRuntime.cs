@@ -193,6 +193,9 @@ internal static class ServerRuntime
             createActivity = static session => new DungeonProbeState(session);
         }
         var skinService = new InventoryCreatureSkinService(itemResources.Items, clock);
+        var levelUpItems = new LevelUpTicketHandler(
+            new Game.Characters.LevelUpTicketService(itemResources.Items,growth,itemResources.EpicPieces,clock,characters,learning),
+            quests,levelUpProjection,log);
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
@@ -246,15 +249,14 @@ internal static class ServerRuntime
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new ImageCommunicationHandler(imageCommunication, quests, log),
             new QuestHiddenHandler(quests,log),
-            new LevelUpTicketHandler(new Game.Characters.LevelUpTicketService(itemResources.Items,growth,itemResources.EpicPieces,clock),
-                quests,levelUpProjection,log),
+            levelUpItems,
             new ExperienceConsumableHandler(new Game.Characters.ExperienceConsumableService(itemResources.Items, growth, itemResources.EpicPieces, clock),
-                inventoryProjection, levelProjection, log),
+                inventoryProjection, levelProjection, log, levelUpItems),
             new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning,levelUpProjection),
             new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,skinService,inventoryProjection,
                 new Game.Creatures.CreatureChangeService(itemResources.Items.Get, itemResources.Items.CreatureChange,
                     itemResources.Creatures, itemResources.EpicPieces, clock, groups: itemResources.CreatureGroups,
-                    growthItems: itemResources.Items.CreatureGrowthItem)),
+                    growthItems: itemResources.Items.CreatureGrowthItem),levelUpItems),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection),

@@ -61,7 +61,9 @@ internal sealed class QuestQuickClearHandler(QuestCatalog quests, QuestConnectio
         if (receipt.Prepared is { IsLevelUpTicket:true,PendingQuestions.Length:0 })
         {
             await context.Reply(opcode,QuestPackets.Rejected(0),"level_up_ticket_answer_rejected",Guard);
-            await context.Reply(CmdPacketType.REQUEST_EVENT_SERVER_LEVEL_UP,LevelUpTicketPackets.Rejected(),"level_up_ticket_expired",Guard);
+            var source = receipt.Prepared.LevelUpTicket!;
+            await context.Reply(LevelUpTicketProjection.Opcode(source.Kind),LevelUpTicketPackets.Rejected(source.Kind,source.Item.Position),
+                "level_up_ticket_expired",Guard);
             return CommandResult.Handled;
         }
         // 有问题时1381是预处理应答；不能以成功ACK提前清理未答问题。

@@ -14,6 +14,7 @@ internal static class LevelUpTicketTcpTests
 {
     public static async Task RunAsync(ServerOptions options,string root,TcpTestResources resources)
     {
+        await LevelUpByTableTcpTests.RunAsync(options,root,resources);
         var branch=LevelUpTicketTests.BranchQuests().Select(row=>row with {Id=row.Id+400,
             Definition=row.Id==100 ? row.Definition! with {PrerequisiteGroups=[[900]]} : row.Definition! with
                 {RequiredAnswers=[new(500,row.Id==101 ? 0 : 1)]}}).ToArray();

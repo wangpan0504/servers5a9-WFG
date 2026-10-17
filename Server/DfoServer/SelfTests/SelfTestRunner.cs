@@ -76,6 +76,7 @@ internal static class SelfTestRunner
         QuestDungeonClearProgressTests.RunCore();
         QuestTicketTests.RunCore();
         LevelUpTicketTests.RunCore();
+        LevelUpByTableTests.RunCore();
         ExperienceConsumableTests.RunCore();
         QuestSpecifiedTicketTests.RunCore();
         QuestAwakeningTicketTests.RunCore();
@@ -272,6 +273,7 @@ internal static class SelfTestRunner
         QuestQuickClearPlanTests.Run(pvf, sharedQuests);
         QuestQuickClearRepositoryTests.Run(towns, pvf, characters, itemResources);
         LevelUpTicketTests.Run(towns,pvf,characters,itemResources,sharedSkills);
+        LevelUpByTableTests.Run(towns,pvf,characters,itemResources,sharedSkills,sharedQuests);
         ExperienceConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         QuestCascadeCompletionTests.Run(towns, pvf, characters, itemResources);
         await QuestCompletionPublicationTests.RunAsync(towns, pvf, characters, itemResources);

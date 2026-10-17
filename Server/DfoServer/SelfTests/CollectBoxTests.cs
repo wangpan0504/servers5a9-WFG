@@ -226,7 +226,8 @@ internal static class CollectBoxTests
         {
             DataSource = path,
             Mode = SqliteOpenMode.ReadWrite,
-            ForeignKeys = true
+            ForeignKeys = true,
+            Pooling = false
         }.ToString());
         db.Open();
         return db;

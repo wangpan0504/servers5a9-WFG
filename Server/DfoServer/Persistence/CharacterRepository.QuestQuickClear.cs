@@ -37,7 +37,7 @@ internal sealed partial class CharacterRepository
         foreach(var quest in plan.Interval.Concat(plan.AreaQuests).Where(quest=>plan.NewCompletedQuestIds.Contains(quest.Id)))
             slots=QuestCharacterReward.EquipmentSlots(expected with { EquipmentSlotFlags=slots },quest);
         if(plan.EquipmentSlotFlagsAfter!=slots) throw new InvalidDataException("槽位变化必须来自实际完成任务的合法奖励");
-        if (plan.ProfessionGrowType is { } professionGrow)
+        if (plan.ProfessionGrowType is { } professionGrow && plan.LevelUpTicket?.ProfessionGrowType is null)
         {
             var endpoints=plan.Interval.Concat(plan.AreaQuests).Where(quest=>quest.RewardType=="[awakening type]" &&
                 plan.NewCompletedQuestIds.Contains(quest.Id)).Select(quest=>quest.Rewards[0].Value).ToHashSet();
@@ -62,11 +62,14 @@ internal sealed partial class CharacterRepository
             var growth = levelUp.Growth;
             if (!ReferenceEquals(levelUp.Inventory.Before,expected.Inventory) || expected.Inventory.Find(levelUp.Item.Position)!=levelUp.Item ||
                 levelUp.Item.Uid<=0 || levelUp.Item.Core.Count<1 || levelUp.Item.Core.EquipmentLockId!=0 ||
-                levelUp.Item.Core.ItemId!=levelUp.Definition.TemplateId || !levelUp.Definition.Allows(expected.Level,expected.Job) ||
+                levelUp.Item.Core.ItemId!=levelUp.TemplateId || !levelUp.Allows(expected) ||
                 growth.CharacterId!=expected.Id || growth.Revision!=expected.Revision || growth.Job!=expected.Job || growth.GrowType!=expected.GrowType ||
-                growth.PreviousLevel!=expected.Level || growth.TargetLevel!=expected.Level+1 || growth.TargetLevel>CharacterGrowthCatalog.MaximumSupportedLevel ||
+                growth.PreviousLevel!=expected.Level || growth.TargetLevel!=levelUp.TargetLevel(expected.Level) ||
+                growth.TargetLevel<=expected.Level || growth.TargetLevel>CharacterGrowthCatalog.MaximumSupportedLevel ||
                 growth.GainedExperience==0 || growth.GainedExperience>uint.MaxValue || !SameLearning(growth.Before,expected.Learning) ||
-                !SameLearning(plan.TargetLearning,growth.Learning) || plan.ProfessionGrowType is not null)
+                !SameLearning(plan.TargetLearning,levelUp.Learning) || plan.ProfessionGrowType!=levelUp.ProfessionGrowType ||
+                levelUp.Learning.Experience!=growth.Learning.Experience ||
+                levelUp.Learning.BonusSp!=expected.Learning.BonusSp || levelUp.Learning.BonusTp!=expected.Learning.BonusTp)
                 throw new InvalidDataException("升级券必须绑定原角色的一次成长、两树点数和消费计划");
         }
         using var db = database.Open();
