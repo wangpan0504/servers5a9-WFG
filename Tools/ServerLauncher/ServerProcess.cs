@@ -38,6 +38,14 @@ internal sealed class ServerProcess(string root, Action<string> log) : IAsyncDis
     public bool OwnsGmConnection(TcpClient client) => ready && !HasExited && process is { } owned &&
         LocalConnectionOwner.Matches(client, owned.Id);
 
+    /// <summary>服务端的网络与 GM 参数；启用 GM 时同时传 --gm-web-port，由服务端内嵌 GM 网页（只绑 127.0.0.1）。</summary>
+    internal static string[] GmArguments(LaunchSettings settings)
+    {
+        string[] common = ["--server-ip", settings.ServerIp, "--channel-port", settings.ChannelPort.ToString(),
+            "--game-port", settings.GamePort.ToString(), "--gm-port", settings.ActiveGmPort.ToString()];
+        return settings.GmEnabled ? [.. common, "--gm-web-port", settings.GmWebPort.ToString()] : common;
+    }
+
     public async Task<ReadyInfo> StartAsync(LaunchSettings settings, CancellationToken token)
     {
         settings.Validate();
@@ -84,8 +92,7 @@ internal sealed class ServerProcess(string root, Action<string> log) : IAsyncDis
         };
         if (Program.BundledServer)
             start.ArgumentList.Add("--server");
-        foreach (string argument in new[] { "--server-ip", settings.ServerIp, "--channel-port", settings.ChannelPort.ToString(),
-            "--game-port", settings.GamePort.ToString(), "--gm-port", settings.ActiveGmPort.ToString() })
+        foreach (string argument in GmArguments(settings))
             start.ArgumentList.Add(argument);
         // 默认布局仍可使用已有服务包；自定义路径由新版服务端显式接收。
         if (!pvf.Equals(Path.Combine(root, "Data", "Pvf", "Script.pvf"), StringComparison.OrdinalIgnoreCase))

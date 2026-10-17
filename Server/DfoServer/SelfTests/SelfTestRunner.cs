@@ -165,6 +165,7 @@ internal static class SelfTestRunner
         MailboxProtocolTests.Run();
         MailboxPersistenceTests.Run();
         await MailboxPublicationTests.RunAsync();
+        await GmWebServerTests.RunAsync();
         DevelopmentAssetTests.RunCore();
         RentalTests.Run();
         SkillPacketsTests.Run();
@@ -200,7 +201,7 @@ internal static class SelfTestRunner
         ConsumableUseSessionTests.Run(towns, characters, pvf);
         await MailboxTests.RunAsync(towns, characters, itemResources, pvf);
         DevelopmentAssetTests.RunResources(towns, itemResources);
-        DevelopmentGmExtendedTests.RunResources(towns, itemResources, pvf, sharedQuests);
+        DevelopmentGmExtendedTests.RunResources(towns, itemResources, pvf, sharedQuests, characters);
         InventoryBatchTests.Run(itemResources);
         InventoryCoreGrantTests.Run(itemResources);
         SpecialContainerTests.Run(towns, characters, itemResources);

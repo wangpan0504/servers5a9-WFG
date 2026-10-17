@@ -128,7 +128,9 @@ internal static class ServerRuntime
         }
         DungeonRoomCatalog? questRooms = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
-        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests);
+        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
+        // GM 网页启用时，启动后立即在后台预热物品/任务/词条索引（首次扫描后落盘缓存，之后启动直接读缓存）。
+        if (options.GmWebPort != 0 || options.GmPort != 0) developmentCatalog.StartWarmup();
         IGameCommandModule dungeon;
         IGameCommandModule? settlement = null;
         IGameCommandModule? questReplay = null;
@@ -273,7 +275,19 @@ internal static class ServerRuntime
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
-        Func<CancellationToken, Task>? management = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
+        Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
+        var startedAt = DateTimeOffset.Now;
+        Func<CancellationToken, Task>? gmWeb = options.GmWebPort == 0 ? null : stop => GmWebServer.RunAsync(options.GmWebPort,
+            new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
+                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null), new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl"))), stop);
+        // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
+        Func<CancellationToken, Task>? management = (gmCommands, gmWeb) switch
+        {
+            (null, null) => null,
+            ({ } commands1, null) => commands1,
+            (null, { } web1) => web1,
+            ({ } commands2, { } web2) => async stop => await await Task.WhenAny(commands2(stop), web2(stop))
+        };
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
         return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels);
         OnlineCharacterView[] OnlineCharacters() => online.Snapshot()

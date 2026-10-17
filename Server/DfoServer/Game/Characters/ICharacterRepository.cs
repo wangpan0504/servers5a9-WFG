@@ -6,6 +6,12 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.Game.Quests;
 namespace DfoServer.Game.Characters;
 // 角色用例依赖的持久化边界；SQLite、迁移与离线导入细节不进入 Game。
+// 角色改名：独立接口，避免所有仓库包装类都要实现；只由 GM 使用。
+internal interface ICharacterRenamer
+{
+    Character Rename(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, string newName);
+}
+
 internal interface ICharacterRepository
 {
     string ReadAdventureName(AccountOwners.Lease owner);

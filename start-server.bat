@@ -14,5 +14,10 @@ if "%~1"=="" if exist "DfoLauncher.exe" (
   start "" "DfoLauncher.exe"
   exit /b 0
 )
+if "%~1"=="" (
+  echo GM web ^(embedded, local only^): http://127.0.0.1:23103/
+  "%SERVER_EXE%" --gm-port 23102 --gm-web-port 23103
+  exit /b %ERRORLEVEL%
+)
 "%SERVER_EXE%" %*
 exit /b %ERRORLEVEL%

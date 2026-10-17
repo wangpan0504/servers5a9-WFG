@@ -16,7 +16,7 @@ internal sealed class LauncherForm : Form
     readonly TextBox data = new() { Dock = DockStyle.Fill, AccessibleName = "存档目录" };
     readonly Button choosePvf = Button("选择文件…"), chooseData = Button("选择目录…");
     readonly Button start = Button("启动服务"), stop = Button("停止服务"), copy = Button("复制地址"), logs = Button("打开日志目录");
-    readonly Button openGm = Button("打开 GM 工具");
+    readonly Button openGm = Button("打开 GM 网页");
     readonly Label status = new() { Text = "未启动", AutoSize = true, ForeColor = Color.DimGray, Anchor = AnchorStyles.Right };
     readonly GroupBox settings = new() { Text = "启动设置", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(16) };
     readonly TextBox addresses = new() { Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None,
@@ -27,7 +27,7 @@ internal sealed class LauncherForm : Form
     readonly ConcurrentQueue<string> pendingLogs = new();
     readonly System.Windows.Forms.Timer refresh = new() { Interval = 100 };
     ServerProcess? server;
-    GmWebHost? gmWeb;
+    string? gmWebUrl; // 服务端内嵌 GM 网页地址（启动器不再自己托管网页）
     CancellationTokenSource? starting;
     Task? transition;
     State state;
@@ -89,7 +89,7 @@ internal sealed class LauncherForm : Form
         fields.Controls.Add(gmPort, 1, 5);
         fields.Controls.Add(FieldLabel("网页端口"), 2, 5);
         fields.Controls.Add(gmWebPort, 3, 5);
-        var note = new Label { Text = "空存档目录会新建 game.db。GM 仅供本机管理；勾选后启动服务，再点击“打开 GM 工具”，无需安装 Python。",
+        var note = new Label { Text = "空存档目录会新建 game.db。GM 仅供本机管理；勾选后启动服务，再点击“打开 GM 网页”，GM 网页内嵌在服务端中，无需安装 Python。",
             Dock = DockStyle.Fill, ForeColor = Color.DimGray, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
         fields.Controls.Add(note, 0, 6);
         fields.SetColumnSpan(note, 4);
@@ -150,11 +150,11 @@ internal sealed class LauncherForm : Form
         };
         openGm.Click += (_, _) =>
         {
-            if (state != State.Running || gmWeb is null || closeRequested) return;
+            if (state != State.Running || gmWebUrl is null || closeRequested) return;
             try
             {
-                Process.Start(new ProcessStartInfo(gmWeb.Url) { UseShellExecute = true });
-                WriteLog("GM 工具：" + gmWeb.Url);
+                Process.Start(new ProcessStartInfo(gmWebUrl) { UseShellExecute = true });
+                WriteLog("GM 网页：" + gmWebUrl);
             }
             catch (System.ComponentModel.Win32Exception error) { WriteLog("无法打开浏览器，请使用连接地址中的 GM 网页地址：" + error.Message); }
         };
@@ -199,13 +199,12 @@ internal sealed class LauncherForm : Form
             var ready = await Task.Run(() => ownedServer.StartAsync(options, token));
             if (options.GmEnabled)
             {
-                gmWeb = new GmWebHost(ready.GmPort, options.GmWebPort, WriteLog, () => !ownedServer.HasExited,
-                    ownedServer.OwnsGmConnection);
-                WriteLog("GM 工具已就绪：" + gmWeb.Url);
+                gmWebUrl = $"http://127.0.0.1:{options.GmWebPort}/";
+                WriteLog("GM 网页（服务端内嵌）：" + gmWebUrl);
             }
             string ip = ready.AdvertisedAddress ?? options.ServerIp;
             addresses.Text = $"频道：{ip}:{ready.ChannelPort}\r\n游戏：{ip}:{ready.GamePort}\r\n存档：{ready.DataDirectory ?? Path.GetFullPath(options.DataDirectory, root)}";
-            if (gmWeb is not null) addresses.Text += $"\r\nGM 工具：{gmWeb.Url}";
+            if (gmWebUrl is not null) addresses.Text += $"\r\nGM 网页：{gmWebUrl}";
             try
             {
                 var remembered = options with { PvfPath = PortablePath(options.PvfPath), DataDirectory = PortablePath(options.DataDirectory) };
@@ -248,16 +247,7 @@ internal sealed class LauncherForm : Form
 
     async Task ReleaseServerAsync()
     {
-        if (gmWeb is not null)
-        {
-            var ownedWeb = gmWeb;
-            gmWeb = null;
-            try { await ownedWeb.DisposeAsync(); }
-            catch (Exception error) when (error is IOException or SocketException)
-            {
-                WriteLog("GM 网页关闭时发生错误：" + error.Message);
-            }
-        }
+        gmWebUrl = null;
         if (server is null)
             return;
         try { await server.DisposeAsync(); }
@@ -294,7 +284,7 @@ internal sealed class LauncherForm : Form
         stop.Enabled = value is State.Starting or State.Running && !closeRequested;
         stop.Text = value == State.Starting ? "取消启动" : "停止服务";
         copy.Enabled = value == State.Running;
-        openGm.Enabled = value == State.Running && gmWeb is not null && !closeRequested;
+        openGm.Enabled = value == State.Running && gmWebUrl is not null && !closeRequested;
         status.Text = text ?? value switch { State.Idle => "未启动", State.Starting => "正在启动…", State.Running => "运行中", _ => "正在停止…" };
         status.ForeColor = text == "启动失败" ? Color.Firebrick : value switch
         {

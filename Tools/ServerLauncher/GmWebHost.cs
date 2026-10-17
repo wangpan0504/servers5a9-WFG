@@ -6,6 +6,7 @@ using System.Text.Json;
 namespace ServerLauncher;
 
 // 同一启动器拥有网页监听；只代理本次已就绪服务的本机GM端口，不直接访问玩家库。
+// 已停用：启动器不再托管 GM 网页，GM 网页由服务端内嵌（--gm-web-port）。文件待用户确认后删除；目前仅被 GmWebTests 引用。
 internal sealed class GmWebHost : IAsyncDisposable
 {
     readonly TcpListener listener;

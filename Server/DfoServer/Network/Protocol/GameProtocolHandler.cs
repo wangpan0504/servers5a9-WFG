@@ -41,6 +41,12 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         context.Elevator = elevator;
         var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
+        session.ReturnToSelectionRequested = async () =>
+        {
+            await context.CommandGate.WaitAsync(connection.Stop);
+            try { await projection.ReturnToSelectionAsync(context); }
+            finally { context.CommandGate.Release(); }
+        };
         if (mailbox is not null)
             session.MailboxArrived = receipt => mailbox.Alarm(context, receipt);
         if (guild is not null)

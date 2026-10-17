@@ -237,7 +237,8 @@ internal static class TcpRegressionTests
         ("native-login", NativeLoginTcpTests.RunAsync),
         ("settings", ClientSettingsTcpTests.RunAsync),
         ("emotion", EmotionTcpTests.RunAsync),
-        ("presence", TownPresenceTcpTests.RunAsync)
+        ("presence", TownPresenceTcpTests.RunAsync),
+        ("gm-web-accept", GmWebAcceptTcpTests.RunAsync)
     ];
 
     // 拆分后的旧组名作为别名，展开为原有全部内容，保持既有命令可用。

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Globalization;
 using DfoServer.Game.Characters;
 
@@ -35,6 +35,7 @@ internal enum DevelopmentAction
     Currency,
     ItemCategories,
     ItemSearch,
+    ItemFilter,
     Grant,
     SetGrant,
     ItemDelete,
@@ -44,7 +45,17 @@ internal enum DevelopmentAction
     QuestSearch,
     QuestChain,
     QuestBatch,
-    ItemAmplify
+    ItemAmplify,
+    Points,
+    Rename,
+    CharDelete,
+    TitleList,
+    Stats,
+    TitleComplete,
+    SkillList,
+    ExpTable,
+    ItemStatCounts,
+    IndexStatus
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
@@ -61,7 +72,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["currency"] = (DevelopmentAction.Currency, true, 3, 3),
         ["item-categories"] = (DevelopmentAction.ItemCategories, false, 0, 0),
         ["item-search"] = (DevelopmentAction.ItemSearch, false, 5, 32),
-        ["grant"] = (DevelopmentAction.Grant, true, 5, 6),
+        ["item-filter"] = (DevelopmentAction.ItemFilter, false, 8, 32),
+        ["grant"] = (DevelopmentAction.Grant, true, 5, 7),
         ["set-grant"] = (DevelopmentAction.SetGrant, true, 4, 5),
         ["item-amplify"] = (DevelopmentAction.ItemAmplify, true, 3, 3),
         ["item-delete"] = (DevelopmentAction.ItemDelete, true, 1, 1),
@@ -70,12 +82,22 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["mail-delete"] = (DevelopmentAction.MailDelete, true, 1, 1),
         ["quest-search"] = (DevelopmentAction.QuestSearch, true, 0, 32),
         ["quest-chain"] = (DevelopmentAction.QuestChain, true, 1, 1),
-        ["quest-batch"] = (DevelopmentAction.QuestBatch, true, 1, 1)
+        ["quest-batch"] = (DevelopmentAction.QuestBatch, true, 1, 1),
+        ["points"] = (DevelopmentAction.Points, true, 0, 0),
+        ["rename"] = (DevelopmentAction.Rename, true, 1, 1),
+        ["char-delete"] = (DevelopmentAction.CharDelete, true, 1, 1),
+        ["stats"] = (DevelopmentAction.Stats, true, 0, 0),
+        ["title-list"] = (DevelopmentAction.TitleList, true, 0, 1),
+        ["title-complete"] = (DevelopmentAction.TitleComplete, true, 1, 1),
+        ["skill-list"] = (DevelopmentAction.SkillList, true, 0, 0),
+        ["exp-table"] = (DevelopmentAction.ExpTable, false, 0, 0),
+        ["item-stat-counts"] = (DevelopmentAction.ItemStatCounts, false, 0, 0),
+        ["index-status"] = (DevelopmentAction.IndexStatus, false, 0, 0)
     };
-    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95>（保留技能） | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | tp <角色> <额外TP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | event status/on/off/auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量> [强化0-31] | item-info <道具ID> | items <角色> | wallet <角色> | currency <角色> <revive|win|cera|token|happy|rental|*-cube|*-soul> <set|add|sub> <数量> | item-categories | item-search <偏移> <最低等级> <最高等级> <稀有度|*> <分类|*> [关键字] | grant <角色> <道具ID> <数量> <强化> <锻造> <mail|direct> [amp:<类型1-4>:<异次元值>] | set-grant <角色> <套装编号> <强化> <锻造> <mail|direct> [amp:<类型>:<值>] | item-amplify <角色> <容器:位置:UID> <amp:<类型0-4>:<值>> <等级0-31> | item-delete <角色> <容器:位置:UID,…> | item-clear <角色> <容器> | mails <角色> | mail-delete <角色> <邮件ID,…|all> | quest-search <角色> [关键字] | quest-chain <角色> <任务> | quest-batch <角色> <任务,…> | cash-shop-expiration [on|off]（忽略绝对日期，默认on） | cash-shop-usable-period [on|off]（忽略相对期限，默认off） | infinite-fatigue [on|off]（显示满疲劳且不扣点，默认on）。调试开关仅在线。其他账号在命令前加 account <账号>。";
+    public const string Usage = "用法：list | show <角色> | quests <角色> | skills <角色> | level <角色> <1-95>（保留技能） | story <角色> <0-95> | grow-options <角色> | grow <角色> <分支0-5> <觉醒0-2>（兼容单个grow值0-127） | quest-add <角色> <任务> | quest-del <角色> <任务> | quest-clear <角色> | skill <角色> <技能> <0-255> | sp <角色> <额外SP 0-50000> | tp <角色> <额外TP 0-50000> | contract <角色> <剩余秒数> | black-diamond <角色> <天数0-3650> | gold-card <角色> <天数0-3650> | event status/on/off/auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | gold <角色> <0-2147483647> | item <角色> <道具ID> <数量> [强化0-31] | item-info <道具ID> | items <角色> | wallet <角色> | currency <角色> <revive|win|cera|token|happy|rental|*-cube|*-soul> <set|add|sub> <数量> | item-categories | item-filter <偏移> <最低等级> <最高等级> <稀有度|*> <分类|*> <词条|*> <期限*|none|rel|abs|any> <技能职业*|all|职业> [关键字]（词条键空格用_） | item-search <偏移> <最低等级> <最高等级> <稀有度|*> <分类|*> [关键字] | grant <角色> <道具ID> <数量> <强化> <锻造> <mail|direct> [amp:<类型1-4>:<异次元值>] [seal:open（仅[sealing]封装装备，直接发为已解封）] | set-grant <角色> <套装编号> <强化> <锻造> <mail|direct> [amp:<类型>:<值>] | item-amplify <角色> <容器:位置:UID> <amp:<类型0-4>:<值>> <等级0-31> | item-delete <角色> <容器:位置:UID,…> | item-clear <角色> <容器> | mails <角色> | mail-delete <角色> <邮件ID,…|all> | quest-search <角色> [关键字] | quest-chain <角色> <任务> | quest-batch <角色> <任务,…> | rename <角色> <新名>（角色须在选角界面） | char-delete <角色> <确认角色名>（永久删除，不可恢复，须在选角界面） | title-list <角色> [general|specific|pvp|despair|event|关键字]（称号簿成就，只读） | title-complete <角色> <成就ID,…|all|book|book:分类>（直接完成成就，发称号与奖励；须在选角界面） | stats <角色>（服务端基础属性，只读） | skill-list <角色>（技能名称、等级与SP/TP，只读） | exp-table（等级累计经验表，只读） | points <角色>（额外与当前 SP/TP，只读） | cash-shop-expiration [on|off]（忽略绝对日期，默认on） | cash-shop-usable-period [on|off]（忽略相对期限，默认off） | infinite-fatigue [on|off]（显示满疲劳且不扣点，默认on）。调试开关仅在线。其他账号在命令前加 account <账号>。";
     public static DevelopmentRequest Parse(string line, string defaultAccount)
     {
-        if (string.IsNullOrWhiteSpace(line) || line.Length > 512)
+        if (string.IsNullOrWhiteSpace(line) || line.Length > 32768)
             throw new InvalidDataException(Usage);
         var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         int i = 0;
@@ -176,7 +198,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         if (Action >= DevelopmentAction.Wallet)
         {
             if (Args.IsDefault || Args.Any(arg => arg.Length is 0 or > 400) ||
-                Action is not (DevelopmentAction.ItemCategories or DevelopmentAction.ItemSearch) && !CharacterName.IsValid(Name))
+                Action is not (DevelopmentAction.ItemCategories or DevelopmentAction.ItemSearch or DevelopmentAction.ItemFilter or DevelopmentAction.ExpTable or DevelopmentAction.ItemStatCounts or DevelopmentAction.IndexStatus) && !CharacterName.IsValid(Name))
                 throw new InvalidDataException("角色名或参数无效");
             return;
         }
@@ -202,7 +224,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
 
     public bool Writes => Action == DevelopmentAction.Event ? Event?.Operation != "status" :
         Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue ? Primary >= 0 :
-        Action is DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify ||
+        Action is DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify or DevelopmentAction.Rename or DevelopmentAction.CharDelete or DevelopmentAction.TitleComplete ||
         Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Tp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard;
 
     public CharacterProgressEdit ToProgressEdit()

@@ -262,6 +262,7 @@ try {
         $defaults = [ordered]@{
             ServerIp = '127.0.0.1'; ChannelPort = 23100; GamePort = 23101
             PvfPath = 'Data/Pvf/Script.pvf'; DataDirectory = 'Data'
+            GmEnabled = $true; GmPort = 23102; GmWebPort = 23103
         }
         [IO.File]::WriteAllText($launcherConfig, ($defaults | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
         Write-Host "已生成默认启动配置：$launcherConfig"
@@ -287,6 +288,7 @@ if ($SingleFile) {
     Write-Host "无参数的 start-server.bat 也会打开启动器；带参数时直接运行命令行服务。"
 }
 Write-Host "默认本机连接：127.0.0.1，频道 TCP 23100，游戏 TCP 23101；实际设置读取 launcher.local.json。"
+Write-Host "GM 网页已内嵌在服务端（启动器启用 GM 时自动传 --gm-web-port，只监听 127.0.0.1）：http://127.0.0.1:23103/（端口以 launcher.local.json 的 GmWebPort 为准）。"
 Write-Host "存档：$data\game.db；日志：$output\Logs。后续构建请始终使用同一输出目录。"
 if (-not (Test-Path -LiteralPath $targetPvf -PathType Leaf)) {
     Write-Warning "尚未准备资源，请将匹配客户端的 Script.pvf 放到 $targetPvf 后再启动。"

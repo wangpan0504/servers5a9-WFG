@@ -180,7 +180,7 @@ internal sealed class SkillLearningDefinition
 
 internal sealed class SkillLearningCatalog
 {
-    private static readonly string[] Lists =
+    internal static readonly string[] Lists =
     [
         "swordmanskill.lst", "fighterskill.lst", "gunnerskill.lst", "mageskill.lst", "priestskill.lst",
         "atgunnerskill.lst", "thiefskill.lst", "atfighterskill.lst", "atmageskill.lst", "dsswordmanskill.lst",

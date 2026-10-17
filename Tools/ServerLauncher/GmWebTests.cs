@@ -39,6 +39,11 @@ internal static class GmWebTests
         (old with { GmPort = old.GamePort, GmWebPort = old.GamePort }).Validate();
         Check(true, "关闭GM时不增加无关的端口占用限制");
 
+        Check(ServerProcess.GmArguments(enabled).SequenceEqual(["--server-ip", "127.0.0.1", "--channel-port", "23100",
+            "--game-port", "23101", "--gm-port", "24002", "--gm-web-port", "24003"]), "启用GM时向服务端传入 --gm-web-port");
+        Check(!ServerProcess.GmArguments(old).Contains("--gm-web-port") && ServerProcess.GmArguments(old).Contains("--gm-port"),
+            "关闭GM时不传 --gm-web-port");
+
         var gm = new TcpListener(IPAddress.Loopback, 0);
         gm.Start();
         int gmPort = ((IPEndPoint)gm.LocalEndpoint).Port;

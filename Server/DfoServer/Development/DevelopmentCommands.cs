@@ -69,11 +69,18 @@ internal static class DevelopmentCommands
             bool extended = request.Action >= DevelopmentAction.Wallet;
             resources ??= extended ? new ItemResources(pvf) : null;
             mailbox ??= extended ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
-            var catalog = extended ? new DevelopmentCatalog(pvf, resources!, request.Action is DevelopmentAction.QuestSearch or DevelopmentAction.QuestChain
-                ? GameWorld.Quests.QuestCatalog.Load(pvf) : null) : null;
+            var catalog = extended ? new DevelopmentCatalog(pvf, resources!, request.Action is DevelopmentAction.QuestSearch or DevelopmentAction.QuestChain or DevelopmentAction.TitleList or DevelopmentAction.TitleComplete
+                ? GameWorld.Quests.QuestCatalog.Load(pvf) : null)
+            {
+                Growth = request.Action == DevelopmentAction.ExpTable ? GameWorld.Characters.CharacterGrowthCatalog.Load(pvf) : null,
+                Stats = request.Action == DevelopmentAction.Stats ? new Game.Characters.CharacterStatComputer(GameWorld.Characters.CharacterCatalog.Load(pvf, resources!.Items)) : null
+            } : null;
             // 离线命令是一次性进程，查询前同步等待索引；在线服务仍走后台构建。
-            if (request.Action is DevelopmentAction.ItemSearch or DevelopmentAction.ItemCategories or DevelopmentAction.SetGrant or DevelopmentAction.QuestSearch)
-                catalog!.Warm(request.Action is not DevelopmentAction.QuestSearch, request.Action is DevelopmentAction.QuestSearch, TimeSpan.FromMinutes(10));
+            if (request.Action is DevelopmentAction.ItemSearch or DevelopmentAction.ItemCategories or DevelopmentAction.SetGrant or DevelopmentAction.QuestSearch or DevelopmentAction.TitleList or DevelopmentAction.ItemFilter)
+            {
+                catalog!.Warm(request.Action is not (DevelopmentAction.QuestSearch or DevelopmentAction.TitleList), request.Action is DevelopmentAction.QuestSearch or DevelopmentAction.TitleList, TimeSpan.FromMinutes(10));
+                if (request.Action == DevelopmentAction.ItemFilter) catalog.WarmAttributes(TimeSpan.FromMinutes(10));
+            }
             Console.WriteLine(DevelopmentGm.Execute(repository, new AccountOwners(), _ => null, request, mailbox, resources?.Items, progress, events: events, catalog: catalog));
             return 0;
         }

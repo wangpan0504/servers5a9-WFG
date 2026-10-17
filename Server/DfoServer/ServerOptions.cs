@@ -18,6 +18,8 @@ internal sealed record ServerOptions
     public int ChannelEntryPortBase { get; init; }
     // 0 表示关闭。监听固定在 127.0.0.1，不跟随 ListenAddress。
     public int GmPort { get; init; }
+    // 嵌入服务进程的 GM 网页站点；0 表示关闭。监听固定在 127.0.0.1。
+    public int GmWebPort { get; init; }
     public int PacketHttpPort { get; init; }
     public string PvfPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf");
     public string DataDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data");
@@ -56,6 +58,7 @@ internal sealed record ServerOptions
                     "--game-port" => value with { GamePort = Number(argument, name) },
                     "--channel-entry-port-base" => value with { ChannelEntryPortBase = Number(argument, name) },
                     "--gm-port" => value with { GmPort = Number(argument, name) },
+                    "--gm-web-port" => value with { GmWebPort = Number(argument, name) },
                     "--packet-http-port" => value with { PacketHttpPort = Number(argument, name) },
                     "--pvf-path" => value with { PvfPath = StoragePath(argument, name) },
                     "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
@@ -77,6 +80,10 @@ internal sealed record ServerOptions
             value.PacketHttpPort is < 0 or > 65535 || value.PacketHttpPort != 0 &&
                 new[] { value.ChannelPort, value.GamePort, value.GmPort }.Contains(value.PacketHttpPort))
             throw new InvalidDataException("Invalid endpoint configuration");
+        if (value.GmWebPort is < 0 or > 65535 || value.GmWebPort != 0 &&
+            new[] { value.ChannelPort, value.GamePort, value.GmPort, value.PacketHttpPort }.Contains(value.GmWebPort) ||
+            value.GmWebPort != 0 && value.ChannelEntryPortBase != 0 && value.GmWebPort == value.ChannelEntryPortBase)
+            throw new InvalidDataException("Invalid GM web port configuration");
         // 种子逐条写库并在启动时构造条目快照，必须有上限；0 表示不种子。
         if (value.AuctionSeedCount > 10_000)
             throw new InvalidDataException("--auction-seed 必须在 0..10000 之间");

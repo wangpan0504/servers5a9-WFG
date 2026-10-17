@@ -11,6 +11,16 @@ internal sealed partial class GameSession
     // 只读查看：当前角色返回已提交的在线快照，其他角色经本 owner 读取持久状态。
     public Character InspectCharacter(string name) => owner.Execute(() => DevelopmentTarget(name, false));
 
+    // 选角名册变更（改名/删除）：角色不能在游戏中；提交后推进选角纪元，使客户端已发布的旧名册作废。
+    public T CommitRosterChange<T>(string name, Func<AccountOwners.Lease, Character, T> action) => owner.Execute(() =>
+    {
+        if (Selected is not null)
+            throw new InvalidOperationException("角色正在游戏中，客户端名册不会即时刷新；请先回到选角再执行");
+        var result = action(owner, DevelopmentTarget(name, true));
+        SelectionEpoch++;
+        return result;
+    });
+
     public T WithDevelopmentOwner<T>(string name, bool refuseSelected, Func<AccountOwners.Lease, Character, T> action) =>
         owner.Execute(() => action(owner, DevelopmentTarget(name, refuseSelected)));
 
@@ -32,6 +42,47 @@ internal sealed partial class GameSession
         else if (wallet && Selected is { } other)
             Selected = other with { Inventory = other.Inventory with { AccountWallet = updated.Inventory.AccountWallet } };
         return updated;
+    });
+
+    // 由连接层安装：在该连接的命令闸门内走与客户端“返回选角”相同的投影流程（发 ACK 与角色列表）。
+    public Func<Task>? ReturnToSelectionRequested { private get; set; }
+
+    // GM 强制小退：只对当前正在游戏的角色生效（name 为空则不限角色）；返回是否真的回到了选角。
+    public async Task<bool> ForceReturnToSelectionAsync(string? name = null)
+    {
+        Func<Task>? hook;
+        try
+        {
+            hook = owner.Execute(() => Selected is { } current &&
+                (name is null || string.Equals(current.Name, name, StringComparison.OrdinalIgnoreCase)) ? ReturnToSelectionRequested : null);
+        }
+        catch (InvalidOperationException) when (!owner.IsCurrent) { return false; }
+        if (hook is null) return false;
+        await hook();
+        return true;
+    }
+
+    // GM 断开连接：与同账号重复登录（ReplaceExisting）使用同一条断线回调；连接清理后会话自行出目录。
+    public bool Disconnect()
+    {
+        try { owner.Disconnect(); return true; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    // 称号成就提交：在本会话 owner 内基于最新快照规划并提交；目标是当前在游戏角色时同步内存 Selected（客户端画面等下次选角刷新）。
+    public T CommitDevelopmentTitle<T>(string name, Func<AccountOwners.Lease, Character, (Character After, T Value)> action) => owner.Execute(() =>
+    {
+        var current = DevelopmentTarget(name, false);
+        bool selected = Selected?.Id == current.Id;
+        if (selected && (pendingRental is not null || HasPendingFormalCard || HasPendingTownQuestCommit))
+            throw new InvalidOperationException("当前角色有待确认的业务结果，请先完成或重新选角");
+        var (after, value) = action(owner, current);
+        if (selected)
+        {
+            InvalidateImageCommunication();
+            Selected = after;
+        }
+        return value;
     });
 
     Character DevelopmentTarget(string name, bool refuseSelected)

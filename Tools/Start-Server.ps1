@@ -1,7 +1,7 @@
 param(
  [ValidateSet('Start','Stop','Restart')][string]$Action='Start',
  [string]$ServerIp='127.0.0.1', [string]$ListenIp,
- [int]$ChannelPort=23100, [int]$GamePort=23101, [int]$GmPort=0,
+ [int]$ChannelPort=23100, [int]$GamePort=23101, [int]$GmPort=0, [int]$GmWebPort=0,
  [switch]$PacketCapture, [string]$CaptureDirectory
 )
 $ErrorActionPreference='Stop'
@@ -46,6 +46,7 @@ foreach($name in @('stop.request','ready.json')){
 $run=Join-Path $logs ((Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $run|Out-Null
 $arguments=@('--server-ip',$ServerIp,'--channel-port',"$ChannelPort",'--game-port',"$GamePort",'--gm-port',"$GmPort")
+if($GmPort -gt 0 -and $GmWebPort -gt 0){$arguments+=@('--gm-web-port',"$GmWebPort");Write-Host "GM web (embedded): http://127.0.0.1:$GmWebPort/"}
 if($ListenIp){$arguments+=@('--listen-ip',$ListenIp)}
 if($PacketCapture){$arguments+='--packet-capture';if($CaptureDirectory){$arguments+=[IO.Path]::GetFullPath($CaptureDirectory)}}
 # Start-Process 在 Windows 拼接命令行；保留带空格路径和末尾反斜杠。

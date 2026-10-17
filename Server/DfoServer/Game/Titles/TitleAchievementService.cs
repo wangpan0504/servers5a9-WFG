@@ -33,6 +33,21 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
         return Prepare(character, [(request.QuestId, remaining)], request.QuestId, now);
     }
 
+    // GM：把指定成就直接置为完成，复用同一套奖励/称号簿/邮件规划（不检查玩法条件）。
+    // 整批被拒（如背包无空位、奖励类型不受支持）时逐个试探，只提交可成功的，其余作为 skipped 回报。
+    public (TitleAchievementResult Result, ImmutableArray<int> Skipped) Complete(Character character, IReadOnlyCollection<int> questIds, DateTimeOffset now)
+    {
+        var wanted = questIds.Distinct().Where(id => titles.Quests.ContainsKey(id) &&
+            character.TitleProgress.GetValueOrDefault(id)?.Remaining.Complete != true).Order().ToArray();
+        (int, TitleCounters)[] Rows(IEnumerable<int> ids) => [.. ids.Select(id => (id, default(TitleCounters)))];
+        if (wanted.Length == 0) return (TitleAchievementResult.Reject(0), []);
+        var all = Prepare(character, Rows(wanted), 0, now);
+        if (all.Accepted) return (all, []);
+        var accepted = wanted.Where(id => Prepare(character, Rows([id]), 0, now).Accepted).ToArray();
+        if (accepted.Length == 0) return (all, [.. wanted]);
+        return (Prepare(character, Rows(accepted), 0, now), [.. wanted.Except(accepted)]);
+    }
+
     public TitleAchievementResult Reconcile(Character character, DateTimeOffset now)
     {
         var completed = QuestEligibility.Completed(character);

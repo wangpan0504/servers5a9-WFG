@@ -8,10 +8,12 @@
     <AssemblyName>DfoServer</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../../Tools/ArchitectureCheck/ArchitectureCheck.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Private="false" />
     <ProjectReference Include="../../Tools/PvfLib/PvfLib.csproj" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <EmbeddedResource Include="GmWeb/*.html;GmWeb/*.css;GmWeb/*.js" LogicalName="DfoServer.GmWeb.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/channel.txt" LogicalName="DfoServer.Resources.channel.txt" />
     <EmbeddedResource Include="Sqlite/game_schema.sql" LogicalName="DfoServer.Sqlite.game_schema.sql" />
     <None Update="Resources/**" CopyToOutputDirectory="PreserveNewest" />

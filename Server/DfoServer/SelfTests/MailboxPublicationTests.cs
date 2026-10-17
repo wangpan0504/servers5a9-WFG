@@ -54,9 +54,33 @@ internal static class MailboxPublicationTests
         projection.Arrived(result with { Recipient = result.Recipient! with { Id = fixture.Sender.Id } });
         await sender.Send(1, 1347, [1], "test_barrier");
         TestCheck.That(stream.Frames.Count == 3, "同账号其他角色不收到当前角色邮件提示");
+        // GM 网页的新邮件提醒走真实 GmWebData：账号不符、同账号其他角色、未知角色都不提醒；匹配时经原连接投递一次。
+        string gmTemp = Path.Combine(Path.GetTempPath(), "gm-notify-" + Guid.NewGuid().ToString("N"));
+        var gmData = new DfoServer.Infrastructure.GmWebData(new ServerOptions { DataDirectory = gmTemp }, DateTimeOffset.UtcNow, online,
+            new DfoServer.Persistence.GmAccountDirectory(Path.Combine(gmTemp, "game.db")), _ => "", new MailboxService(fixture.Repository, null!, null!, null!), null!, null!,
+            new DfoServer.Network.Management.GmAudit(Path.Combine(gmTemp, "audit.jsonl")));
+        gmData.NotifyMailArrived("no-such-account", "Receiver");
+        gmData.NotifyMailArrived(fixture.ReceiverOwner.Account, "Sender");
+        gmData.NotifyMailArrived(fixture.ReceiverOwner.Account, "NoSuchCharacter");
+        await sender.Send(1, 1347, [1], "test_barrier");
+        TestCheck.That(stream.Frames.Count == 4, "GM 提醒：账号不符、其他角色、未知角色都不投递");
+        gmData.NotifyMailArrived(fixture.ReceiverOwner.Account, "Receiver");
+        await sender.Send(1, 1347, [1], "test_barrier");
+        TestCheck.That(stream.Frames.Count == 6 && BitConverter.ToUInt16(stream.Frames[4], 1) == 99, "GM 提醒：匹配的在线角色收到一次 MAILBOX_ALARM");
+        // GM 强制小退：无连接钩子、角色名不符、账号不在线都不动会话；匹配时经连接钩子回到选角。
+        var account = fixture.ReceiverOwner.Account;
+        TestCheck.That(!await online.ForceReturnToSelectionAsync(account) && session.Selected is not null, "未安装连接钩子时强制小退不改变会话");
+        int hookCalls = 0;
+        session.ReturnToSelectionRequested = () => { hookCalls++; session.ReturnToRoster(); return Task.CompletedTask; };
+        TestCheck.That(!await online.ForceReturnToSelectionAsync(account, "NoSuchCharacter") && hookCalls == 0 && session.Selected is not null, "角色名不符不触发小退");
+        TestCheck.That(!await online.ForceReturnToSelectionAsync("no-such-account") && hookCalls == 0, "账号不在线不触发小退");
+        TestCheck.That(await online.ForceReturnToSelectionAsync(account, "Receiver".ToUpperInvariant()) && hookCalls == 1 && session.Selected is null &&
+            session.Phase == SessionPhase.Unselected && !session.Ready, "匹配角色强制小退后回到选角（角色名不区分大小写）");
+        TestCheck.That(!await online.ForceReturnToSelectionAsync(account) && hookCalls == 1, "已在选角界面时再次强制小退无效果");
+        session.Select(0); session.MarkReady();
         using var replacement = fixture.Owners.Acquire(fixture.ReceiverOwner.Account, () => { });
         session.NotifyMailbox(fixture.Receiver.Id);
-        TestCheck.That(stream.Frames.Count == 3 && replacement.IsCurrent, "过期目录引用不向新连接投递或释放新 owner");
+        TestCheck.That(stream.Frames.Count == 6 && replacement.IsCurrent, "过期目录引用不向新连接投递或释放新 owner");
         stop.Cancel();
         Console.WriteLine($"PASS {TestCheck.Count - before} 邮件慢接收者隔离、epoch与原连接通知断言");
     }

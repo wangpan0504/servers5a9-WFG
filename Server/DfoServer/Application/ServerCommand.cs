@@ -34,6 +34,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --game-port <端口>         游戏端口，默认 23101
           --channel-entry-port-base <端口> 分类入口连续端口起点，默认 0（自动分配）
           --gm-port <端口>           本机 GM 端口，默认 0（关闭）
+          --gm-web-port <端口>       嵌入服务进程的 GM 网页，仅监听 127.0.0.1，默认 0（关闭）
           --packet-http-port <端口>  本机只读包记录 HTTP 端口，默认 0（关闭）
           --pvf-path <文件>          资源文件，默认 Data/Pvf/Script.pvf
           --data-dir <目录>          存档目录，默认 Data，数据库名为 game.db
@@ -66,7 +67,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
         int index = 0;
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         while (index < args.Length && args[index] is "--server-ip" or "--listen-ip" or
-            "--channel-port" or "--game-port" or "--channel-entry-port-base" or "--gm-port" or "--packet-http-port" or "--session-ttl" or
+            "--channel-port" or "--game-port" or "--channel-entry-port-base" or "--gm-port" or "--gm-web-port" or "--packet-http-port" or "--session-ttl" or
             "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--pvf-path" or "--data-dir")
         {
             string name = args[index++];

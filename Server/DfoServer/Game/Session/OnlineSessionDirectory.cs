@@ -17,6 +17,10 @@ internal sealed class OnlineSessionDirectory
     public GameSession? Find(string account) => sessions.TryGetValue(account, out var session) ? session : null;
     public OnlineCharacterSnapshot[] Snapshot() => sessions.Values.Select(session => session.OnlineCharacter())
         .OfType<OnlineCharacterSnapshot>().OrderBy(character => character.Account, StringComparer.Ordinal).ToArray();
+    // GM 强制小退：账号在线且有角色在游戏中时让其回到选角；没有在线会话或角色不匹配返回 false。
+    public Task<bool> ForceReturnToSelectionAsync(string account, string? characterName = null) =>
+        Find(account) is { } session ? session.ForceReturnToSelectionAsync(characterName) : Task.FromResult(false);
+    public bool Disconnect(string account) => Find(account)?.Disconnect() == true;
     public bool HasReadyCharacter(ushort characterId) => sessions.Values.Any(session => session.IsReadyCharacter(characterId));
     // 比较与移除必须原子完成，旧连接的 finally 不能删掉已接管的新会话。
     public void Remove(string account, GameSession session) => ((ICollection<KeyValuePair<string, GameSession>>)sessions).Remove(new(account, session));

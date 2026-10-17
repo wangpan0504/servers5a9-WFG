@@ -13,6 +13,12 @@ case "$(uname -m)" in
   *) echo 'Unsupported architecture.' >&2; exit 1 ;;
 esac
 
+# 无参数时默认开启本机 GM 和内嵌 GM 网页（只监听 127.0.0.1）。
+if [[ $# -eq 0 ]]; then
+  echo 'GM web (embedded, local only): http://127.0.0.1:23103/'
+  set -- --gm-port 23102 --gm-web-port 23103
+fi
+
 for binary in "$root/DfoServer" "$root/dist/$os-$arch/DfoServer"; do
   if [[ -x "$binary" ]]; then
     cd -- "$(dirname -- "$binary")"

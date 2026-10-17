@@ -44,6 +44,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
                 Channel = channel.LocalEndpoint.ToString(), Game = primary.Listener.LocalEndpoint.ToString(), ChannelEntries = gameChannels.Endpoints,
                 AdvertisedGame = $"{options.AdvertisedAddress}:{options.GamePort}",
                 Gm = options.GmPort == 0 ? "disabled" : $"127.0.0.1:{options.GmPort}",
+                GmWeb = options.GmWebPort == 0 ? "disabled" : $"127.0.0.1:{options.GmWebPort}",
                 PacketHttp = options.PacketHttpPort == 0 ? "disabled" : $"127.0.0.1:{options.PacketHttpPort}",
                 PacketCapture = packetCapture?.IsEnabled == true ? options.PacketCaptureDirectory : "disabled",
                 ServiceLog = Path.Combine(options.LogDirectory, "server.jsonl") });
@@ -52,7 +53,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             log.Flush();
             File.WriteAllText(Path.Combine(options.LogDirectory, "ready.json"), JsonSerializer.Serialize(new
             {
-                options.ChannelPort, options.GamePort, options.GmPort, options.PacketHttpPort, options.AdvertisedAddress, options.ListenAddress,
+                options.ChannelPort, options.GamePort, options.GmPort, options.GmWebPort, options.PacketHttpPort, options.AdvertisedAddress, options.ListenAddress,
                 options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId, ChannelEntries = gameChannels.Endpoints
             }));
             log.Write("server_ready", new { Pid = Environment.ProcessId });
