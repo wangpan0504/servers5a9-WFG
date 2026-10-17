@@ -18,6 +18,81 @@ internal static class CreatureSkinTcpTests
         var product = resources.ItemResources.CashShop.Products[commodity];
         That(product.ItemId == ticket && product.CeraPrice == 3000 && resources.ItemResources.Items.Get(ticket).OpensCreatureSkinSlot,
             "实际商城商品与已证开栏动作资源对应");
+        await using (var rightClick = new TcpTestFixture(options, Path.Combine(root, "creature-skin-right-click"), resources: resources))
+        {
+            var rightClickRepository = new CharacterRepository(rightClick.Database);
+            using (var owner = new AccountOwners().Acquire(rightClick.Options.DevelopmentAccount, () => { }))
+            {
+                var character = rightClickRepository.Create(owner, new("SkinUse", resources.Towns.Room, resources.Towns.InitialReturn)
+                { Level = 60, AcceptedStoryLevel = 1, EquipmentSlotFlags = 17, Skills = resources.Characters.Get(0).Skills });
+                var inventory = new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces);
+                InventoryService.Commit(rightClickRepository, owner, character, inventory.Grant(character, [new(ticket, 2)]));
+            }
+            short rightClickSlot = checked((short)(long)rightClick.Query("SELECT s.slot_index FROM character_inventory_slots s " +
+                "JOIN character_inventory_items i USING(item_uid) WHERE json_extract(i.item_core,'$.ItemId')=$p0", ticket)[0][0]!);
+            await rightClick.StartAsync();
+            using (var peer = Open(rightClick))
+            {
+                peer.Select();
+                string beforeUse = RightClickState();
+                foreach (var (offset, value) in new (int Offset, byte Value)[]
+                { (2, 1), (3, 1), (11, 1), (15, 1) })
+                {
+                    var invalid = UseBody(rightClickSlot);
+                    invalid[offset] = value;
+                    peer.Send(515, invalid);
+                    peer.Expect(1, 515, RejectBody((ushort)rightClickSlot, invalid[2]));
+                }
+                peer.Send(515, UseBody(-1));
+                peer.Expect(1, 515, RejectBody(ushort.MaxValue, 0));
+                peer.Send(515, UseBody(checked((short)(rightClickSlot + 1))));
+                peer.Expect(1, 515, RejectBody((ushort)(rightClickSlot + 1), 0));
+                peer.Barrier();
+                That(RightClickState() == beforeUse, "右键非法容器、长度范围、保留字段及空源均不扣券不开栏");
+                rightClick.Sql("CREATE TRIGGER fail_skin_right_click BEFORE INSERT ON inventory_audit_log " +
+                    "WHEN NEW.action_name='open_creature_skin_slot' BEGIN SELECT RAISE(ABORT,'skin rollback'); END");
+                peer.Send(515, UseBody(rightClickSlot));
+                peer.Expect(1, 515, RejectBody((ushort)rightClickSlot, 0));
+                peer.Barrier();
+                That(RightClickState() == beforeUse, "右键事务末段SQL失败回滚，并以合法515拒绝保持连接");
+                rightClick.Sql("DROP TRIGGER fail_skin_right_click");
+                peer.Send(15, new byte[4]);
+                peer.Expect(1, 15, [1]);
+                peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+                peer.Expect(0, 27, new byte[42]);
+                peer.Send(515, UseBody(rightClickSlot));
+                peer.Expect(1, 515, RejectBody((ushort)rightClickSlot, 0));
+                peer.Barrier();
+                That(RightClickState() == beforeUse, "地图选择阶段右键安全拒绝且不扣券");
+            }
+            using (var peer = Open(rightClick))
+            {
+                peer.Select();
+                peer.Send(515, UseBody(rightClickSlot));
+                peer.Expect(1, 515, Build(writer =>
+                { writer.Write((byte)1); writer.Write((ushort)rightClickSlot); writer.Write((byte)0); writer.Write(224); }));
+                CheckPlayer(peer.Expect(0, 2).Body);
+                peer.Barrier();
+                That(rightClick.Query("SELECT equipment_slot_flags FROM characters") is [[49L]] &&
+                    rightClick.Query("SELECT json_extract(i.item_core,'$.Value') FROM character_inventory_items i") is [[1L]],
+                    "右键成功只扣同一堆叠一张并原子保存开通位");
+                string afterUse = RightClickState();
+                peer.Send(515, UseBody(rightClickSlot));
+                peer.Expect(1, 515, RejectBody((ushort)rightClickSlot, 0));
+                peer.Barrier();
+                That(RightClickState() == afterUse, "重复右键已开通角色不二次扣券");
+            }
+            await rightClick.StopAsync();
+            await rightClick.StartAsync("restart");
+            using (var peer = Open(rightClick))
+            {
+                var selected = peer.Select();
+                CheckPlayer(selected.Single(packet => packet.Kind == 0 && packet.Opcode == 2 && packet.Body[0] == 1).Body);
+            }
+            string RightClickState() => rightClick.Snapshot("SELECT id,revision,equipment_slot_flags FROM characters") +
+                rightClick.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+                rightClick.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id");
+        }
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "creature-skin"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -126,6 +201,10 @@ internal static class CreatureSkinTcpTests
             "重启保留角色独立开通与一笔消费审计，完整性及外键正常");
 
         byte[] OpenBody() => Build(writer => { writer.Write(sourceSlot); writer.Write((ushort)33); });
+        static byte[] UseBody(short slot) => Build(writer =>
+        { writer.Write((ushort)slot); writer.Write((byte)0); writer.Write(0); writer.Write(224); writer.Write(0); writer.Write(0); });
+        static byte[] RejectBody(ushort slot, byte list) => Build(writer =>
+        { writer.Write((byte)0); writer.Write((ushort)0); writer.Write(slot); writer.Write(list); writer.Write((byte)224); });
         string PetAssets() => fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE json_extract(item_core,'$.Kind')=5 ORDER BY item_uid") +
             fixture.Snapshot("SELECT * FROM inventory_creature_details ORDER BY item_uid");
         string Snapshot() => fixture.Snapshot("SELECT id,revision,equipment_slot_flags FROM characters ORDER BY id") +

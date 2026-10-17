@@ -8,17 +8,26 @@ using DfoServer.Network.Protocol;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Characters;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Network.Projection.Inventory;
+using System.Data.Common;
 
 namespace DfoServer.Network.Handlers;
 
 internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,QuestProjection projection,ServerLog log,
-    CharacterLevelProjection? levelProjection=null,SkillLearningCatalog? skills=null) : IGameCommandModule
+    CharacterLevelProjection? levelProjection=null,SkillLearningCatalog? skills=null,
+    InventoryCreatureSkinService? creatureSkin=null,InventoryProjection? inventoryProjection=null) : IGameCommandModule
 {
+    const uint CreatureSkinAction = 224;
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE_ACTION,UseAsync,nameof(QuestTicketHandler));
 
     async Task<CommandResult> UseAsync(GameConnectionContext context,Packet packet)
     {
-        if (!QuestTicketRequests.TryUse(packet.Body,out var request) || context.Activity?.BlocksTownActions == true)
+        if (!QuestTicketRequests.TryUse(packet.Body,out var request))
+            return CommandResult.Unhandled;
+        if (request.Action == CreatureSkinAction)
+            return await UseCreatureSkinAsync(context, request);
+        if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
         if (request.Reserved != 0 || request.FirstArgument != 0 || request.SecondArgument != 0 ||
             request.Action is not (QuestTicketDefinition.Action or QuestTicketDefinition.SpecifiedAction or
@@ -64,6 +73,46 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),"quest_ticket_active",Guard);
         await projection.RefreshAsync(context,receipt.Character,Guard, restoreCompleted: false);
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(receipt.Character),"quest_ticket_completed",Guard);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseCreatureSkinAsync(GameConnectionContext context, QuestTicketUseRequest request)
+    {
+        if (creatureSkin is null || inventoryProjection is null)
+            throw new InvalidOperationException("宠物幻化右键缺少库存服务或投影");
+        var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool SameSelection() => context.Owner.Execute(() => ReferenceEquals(captured.Selected, context.Session.Selected) &&
+            captured.SelectionEpoch == context.Session.SelectionEpoch && captured.Phase == context.Session.Phase);
+        bool validWire = request.Reserved == 0 && request.FirstArgument == 0 && request.SecondArgument == 0 &&
+            request.List == (byte)InventoryListType.Main && request.Slot <= short.MaxValue;
+        InventoryResult result;
+        try
+        {
+            result = !validWire || context.BlocksTownActions ? InventoryResult.Reject(InventoryCreatureSkinService.Rejection) :
+                context.Session.PlanAndCommitInventory(character => creatureSkin.PlanUnlock(character, (short)request.Slot,
+                    InventoryCreatureSkinService.TargetSlot, creatureSkin.Clock.GetUtcNow().ToUnixTimeSeconds()),
+                    InventoryCreatureSkinService.Rejection);
+        }
+        catch (DbException error)
+        {
+            // 库存事务已回滚；用515拒绝结束等待，客户端不会对失败动作扣券。
+            log.Write("creature_skin_ticket_rollback", new { Connection = context.Id, Error = error.Message });
+            result = InventoryResult.Reject(InventoryCreatureSkinService.Rejection);
+        }
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : SameSelection();
+        log.Write("creature_skin_ticket_use", new { Connection = context.Id, request.Slot, request.List, request.Action,
+            result.Accepted, result.Error, Revision = result.Receipt?.Character.Revision });
+        if (!result.Accepted)
+        {
+            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, QuestTicketPackets.Rejected(request),
+                "creature_skin_ticket_rejected", Guard);
+            return CommandResult.Handled;
+        }
+        // 成功ACK515由客户端自行扣一张；随后只恢复权威Player开栏位，不再通知同一源槽。
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, QuestTicketPackets.Used(request),
+            "creature_skin_ticket_used", Guard);
+        await inventoryProjection.RefreshAsync(context, result, acknowledgedSlots: new HashSet<InventorySlot>
+        { new(InventoryListType.Main, (short)request.Slot) });
         return CommandResult.Handled;
     }
 }
