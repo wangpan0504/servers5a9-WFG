@@ -121,7 +121,7 @@ public static class ServerApplication
             {
                 using var output = Console.OpenStandardOutput();
                 var scanItems = new ItemResources(pvf);
-                JsonSerializer.Serialize(output, DfoServer.Game.Quests.QuestCoverage.Scan(DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf),
+                JsonSerializer.Serialize(output, DfoServer.Game.Quests.QuestCoverage.Scan(DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(scanItems.Creatures),
                     scanItems.Items, scanItems.EpicPieces, DfoServer.GameWorld.Quests.QuestRewardParameterCatalog.Load(pvf)));
                 output.WriteByte((byte)'\n');
                 return 0;
@@ -163,7 +163,7 @@ public static class ServerApplication
                 return 0;
             }
 
-            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf));
+            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(itemResources.Creatures));
             var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests));
             log?.Write("startup", new { Stage = "Database schema", State = "complete", Version = SqliteMigrations.CurrentVersion });
             if (command.Kind == ServerCommandKind.ImportCharacters)

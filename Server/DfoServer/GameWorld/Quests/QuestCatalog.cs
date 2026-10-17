@@ -28,8 +28,12 @@ internal sealed class QuestCatalog
     // 既有地图字段回归；不限制任务目录或可接任务。
     static readonly int[] VerifiedMapQuests = [3145, 4873, 3146, 3157, 3054, 3147, 3148, 4875, 3149];
     readonly Dictionary<int, StoryQuest> quests;
+    public GameWorld.Creatures.CreatureCatalog? Creatures { get; }
 
-    internal QuestCatalog(Dictionary<int, StoryQuest> quests) => this.quests = quests;
+    internal QuestCatalog(Dictionary<int, StoryQuest> quests, GameWorld.Creatures.CreatureCatalog? creatures = null)
+    { this.quests = quests; Creatures = creatures; }
+    public QuestCatalog WithCreatures(GameWorld.Creatures.CreatureCatalog creatures) =>
+        ReferenceEquals(Creatures, creatures) ? this : new(quests, creatures);
     public IReadOnlyCollection<StoryQuest> All => quests.Values;
     public bool TryGet(int id, out StoryQuest quest) => quests.TryGetValue(id, out quest!);
 

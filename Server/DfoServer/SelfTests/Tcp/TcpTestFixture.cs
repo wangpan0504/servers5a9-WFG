@@ -173,7 +173,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         }
         if (resources is not null && !isolatedProcess)
         {
-            var quests = questCatalog ?? resources.Quests;
+            var quests = (questCatalog ?? resources.Quests).WithCreatures(resources.ItemResources.Creatures);
             TcpTestDatabaseTemplate.CopyIfMissing(Database, Path.GetDirectoryName(Root)!);
             hostStop = new();
             var options = Options with { PacketCaptureDirectory = packetCapture ? Options.LogDirectory : null };

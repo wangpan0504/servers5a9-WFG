@@ -173,7 +173,7 @@ internal sealed class QuestCompletionPlan
             var completedParent = QuestRelationProgress.CompletedParentChild(expected,quest,quests);
             if (active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
                 QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
-                QuestEligibility.InspectResource(quest).Entry != QuestResourceEntry.Ordinary && !QuestRelationProgress.DialogueChild(quest, quests) &&
+                QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) ||
                 completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests).Eligible)
                 throw new InvalidDataException("任务接取身份、完成位或当前资格不符");
@@ -192,9 +192,10 @@ internal sealed class QuestCompletionPlan
                 ? QuestProfessionReward.Target(expected, quest, growthCatalog.Learning ?? throw new NotSupportedException("职业变化技能资源未装配")) : null;
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
             bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0 || QuestCharacterReward.TryHellChallenge(quest);
+            bool creatureReward = QuestCreatureReward.Evolution(quest);
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
             bool rental = QuestRentalProgress.Supports(quest);
-            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && QuestStateProgress.Type(quest) is null || quest.RewardType != "[item]" && profession is null && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
+            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && QuestStateProgress.Type(quest) is null || quest.RewardType != "[item]" && profession is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
                 !QuestCoverage.HasOrdinaryAttributes(quest) ||
                 quest.Definition!.Has("send postal"))
                 throw new NotSupportedException("任务需要尚未具备的周期、特殊奖励或附属交付规则");
@@ -303,7 +304,7 @@ internal sealed class QuestCompletionPlan
                 }
                 if (consumed.Count > byte.MaxValue) throw new NotSupportedException("任务消耗数组超过本版容量");
             }
-            var definition = QuestFixedRewardDefinition.Parse(profession is not null || characterReward ? quest with { Rewards = [] } : quest, allowGold: true);
+            var definition = QuestFixedRewardDefinition.Parse(profession is not null || characterReward || creatureReward ? quest with { Rewards = [] } : quest, allowGold: true);
             var requested = definition.ForJob(expected.Job,expected.GrowType).ToBuilder();
             var selected = QuestFixedRewardDefinition.Parse(quest with { Rewards = quest.Definition!.SelectRewards }).ForJob(expected.Job,expected.GrowType);
             if (selected.Length == 0 ? selector != ushort.MaxValue : selector >= selected.Length)
@@ -397,8 +398,16 @@ internal sealed class QuestCompletionPlan
             var rewardLearning = profession is { } target ? QuestProfessionReward.Prepare(expected,target,
                 growth?.TargetLevel ?? expected.Level, growth?.Learning ?? expected.Learning, growthCatalog.Learning!, now) : null;
             if (tpAmount != 0) rewardLearning = QuestCharacterReward.AddTp(growth?.Learning ?? expected.Learning,tpAmount);
+            InventoryCharacterPrecondition? creaturePrecondition = null;
+            if (creatureReward)
+            {
+                var evolution = QuestCreatureReward.Evolve(expected with { Inventory = after }, quest, quests, now.ToUnixTimeSeconds());
+                after = evolution.After;
+                int deadline = expected.Inventory.Find(DfoServer.Game.Creatures.CreatureRules.EquippedSlot)!.ExpireTime;
+                creaturePrecondition = new(expected, deadline == 0 ? null : deadline);
+            }
             return new(QuestCompletionOutcome.Accepted, new(expected, active, quest, selector, experience,
-                new(expected.Inventory, after, "quest_complete"), growth, rewards.ToImmutable(), consumed.ToImmutable(),
+                new(expected.Inventory, after, "quest_complete", creaturePrecondition), growth, rewards.ToImmutable(), consumed.ToImmutable(),
                 gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, rewardLearning, multiplier, currencies.ToImmutable(),
                 QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold), "通用领奖计划已冻结");
         }

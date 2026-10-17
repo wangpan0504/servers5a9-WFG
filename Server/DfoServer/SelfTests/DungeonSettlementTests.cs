@@ -12,7 +12,7 @@ using PvfLib;
 
 namespace DfoServer;
 
-internal static class DungeonSettlementTests
+internal static partial class DungeonSettlementTests
 {
     private static readonly Location Location = new(38, 1, 450, 234);
     private static readonly DungeonClearExperienceReward Reward = new(990, 10, 1000, 1, "fixture-clear", "fixture/clear-exp.tbl");

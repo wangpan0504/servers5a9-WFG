@@ -125,6 +125,7 @@ internal static class TownPresenceTests
             var cb = repo.Create(b, new("PresenceB", towns.Room, towns.InitialReturn));
             presence.Join(a, aSend, ca);
             presence.Join(b, bSend, cb);
+            presence.Publish(a, aSend, 119, CreaturePackets.Message(3, ca.Id, "private"), "test_creature_private");
             await bSend.Send(1, 1347, [1], "barrier");
             That(Frames(bStream).All(f => f.Opcode == 1347), "different accounts have private rooms");
             presence.Remove(aSend);
@@ -141,6 +142,8 @@ internal static class TownPresenceTests
             };
             presence.Join(a, aSend, ca, adventureName: "AlphaGroup");
             presence.Join(b, bSend, cb, adventureName: "BetaGroup");
+            byte[] creatureMessage = CreaturePackets.Message(3, cb.Id, "hello");
+            presence.Publish(b, bSend, 119, creatureMessage, "test_creature_public");
             for (int i = 0; i < 1000; i++)
             {
                 cb = cb with
@@ -160,6 +163,8 @@ internal static class TownPresenceTests
             await blocked;
             await aSend.Send(1, 1347, [1], "drain");
             var frames = Frames(aStream);
+            Bytes(frames.Single(frame => frame.Opcode == 119).Body, creatureMessage,
+                "宠物原生通知沿既有同屏队列发布，同频道公共场景收到完整正文");
             var position = frames.Last(f => f.Opcode == 22).Body;
             That(BinaryPrimitives.ReadUInt16LittleEndian(position) == cb.Id && BinaryPrimitives.ReadUInt16LittleEndian(position.AsSpan(2)) == 632, "latest committed position projection survives coalescing");
             That(frames.Count(f => f.Opcode == 2) == 1, "initial peer actor published once");
@@ -185,6 +190,13 @@ internal static class TownPresenceTests
             presence.Remove(bSend);
             await aSend.Send(1, 1347, [1], "duplicate-leave");
             That(Frames(aStream).Count(f => f.Opcode == 6) == 1, "duplicate cleanup does not emit extra deletion");
+            presence.Join(b, bSend, cb, new(0, 1));
+            presence.Publish(b, bSend, 119, creatureMessage, "test_creature_other_channel");
+            presence.Publish(a, aSend, 119, creatureMessage, "test_creature_other_channel_reverse");
+            await aSend.Send(1, 1347, [1], "channel-message-barrier");
+            await bSend.Send(1, 1347, [1], "channel-message-barrier");
+            That(Frames(aStream).Count(frame => frame.Opcode == 119) == 1 && Frames(bStream).All(frame => frame.Opcode != 119),
+                "频道不同的宠物通知双向隔离，不创建第二套可见性索引");
             presence.Join(b, bSend, cb);
             await aSend.Send(1, 1347, [1], "reenter");
             await aSend.ClearScene();
@@ -237,6 +249,7 @@ internal static class TownPresenceTests
             presence.Join(g, gSend, cg);
             presence.Join(d, dSend, cd);
             presence.Move(d, dSend, cd with { Position = cd.Position with { X = 630 } });
+            presence.Publish(d, dSend, 119, CreaturePackets.Message(3, cd.Id, "expired"), "test_creature_expired_source");
             using var newerDelta = owners.Acquire("delta", () =>
             {
             });

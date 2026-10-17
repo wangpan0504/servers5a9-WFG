@@ -16,7 +16,7 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardParameterCatalog parameters,
     ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth,
-    ServerLog log, CharacterLevelProjection levelProjection, QuestProjection? projection = null) : IGameCommandModule
+    ServerLog log, CharacterLevelProjection levelProjection, QuestProjection? projection = null, CreatureProjection? creatures = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) =>
         commands.Register(CmdPacketType.FINISH_QUEST, FinishAsync, nameof(QuestCompletionHandler));
@@ -27,6 +27,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             request is not { Reserved: ushort.MaxValue } ||
             context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
+        var previousInventory = context.Owner.Execute(() => context.Session.Selected?.Inventory);
         var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier);
         log.Write("quest_completion", new { Connection = context.Id, Quest = request.QuestId, result.Outcome,
             Accepted = result.Outcome == QuestFinishOutcome.Committed, Failure = result.Failure.ToString(),
@@ -53,12 +54,15 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
                 commit.Consumed.Select(row => new QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(), commit.DirectGoldAmount, rewards,
                 commit.ProfessionGrowType,commit.Currencies.Select(row => new QuestCurrencyRewardProjection(
                     ItemSlotBoundService.CurrencySlot(row.Kind) ?? throw new InvalidOperationException("钱包奖励缺少已确认持有域"),
-                    row.Kind == DfoServer.Game.Currency.CurrencyKind.ReviveCoin ? 1 : row.ItemId,row.Count)).ToArray(),commit.TpAmount,commit.HellChallenge);
+                    row.Kind == DfoServer.Game.Currency.CurrencyKind.ReviveCoin ? 1 : row.ItemId,row.Count)).ToArray(),commit.TpAmount,commit.HellChallenge,
+                creatureEvolution: QuestCreatureReward.Evolution(quests.Get(commit.QuestId)));
         // 转职/觉醒先装载已提交技能快照，ACK34会据此重建本地技能；沿S4A21的前置通知顺序。
         bool profession = commit.ProfessionGrowType is not null;
         if (profession)
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "quest_profession_skills", Guard);
         await context.Reply(CmdPacketType.FINISH_QUEST, acknowledgement, "quest_completion_committed", Guard);
+        if (creatures is not null && previousInventory is not null && commit.ChangedSlots.Contains(Game.Creatures.CreatureRules.EquippedSlot))
+            await creatures.ChangedAsync(context, previousInventory, character, receipt.Phase, Guard);
         // ACK34先消费真实增量，再投影完整Core及绝对成长；不在最终库存之后重放增量奖励。
         if (commit.ChangedSlots.Length != 0 || commit.DirectGoldAmount != 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(character.Inventory, InventoryListType.Main,

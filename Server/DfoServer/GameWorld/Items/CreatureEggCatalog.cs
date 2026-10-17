@@ -4,7 +4,10 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-internal sealed record CreatureEggDefinition(int EggItemId, int OutputItemId, int Species);
+internal sealed record CreatureEggDefinition(int EggItemId, int OutputItemId, int Species)
+{
+    public byte OutputMode { get; init; }
+}
 
 internal sealed class CreatureEggCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment, ItemCatalog items)
 {
@@ -31,9 +34,9 @@ internal sealed class CreatureEggCatalog(PvfArchive archive, IReadOnlyDictionary
             !source.TryGetInt32("output index", out int outputId) || outputId != output.Id ||
             !source.TryGetInt32("creature species", out int species) || species < 0 ||
             !target.TryGetInt32("sub type", out int targetSubtype) || targetSubtype != 0 ||
-            !target.TryGetInt32("creature species", out int targetSpecies) || targetSpecies != species)
+            !target.TryGetInt32("creature species", out int targetSpecies) || targetSpecies != species || output.CreatureInitialMode > 1)
             return null;
-        return new(egg.Id, output.Id, species);
+        return new(egg.Id, output.Id, species) { OutputMode = output.CreatureInitialMode };
     }
 
     static bool CreatureType(PvfDocument document) => Regex.IsMatch(document.Section("equipment type"),

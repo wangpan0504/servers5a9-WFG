@@ -16,7 +16,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.GameWorld.Items.PremiumContractCatalog? contracts = null, CharacterStatComputer? stats = null,
     DfoServer.Network.Projection.Inventory.InventoryProjection? inventory = null, TimeProvider? time = null,
     GuildProjection? guild = null,
-    DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null) : IConnectionProtocol
+    DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
+    DfoServer.Game.Creatures.CreatureService? creatures = null, CreatureProjection? creatureProjection = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -25,8 +26,10 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             return;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = Convert.ToHexString(body.Span) }), connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
-            passiveDrops: passiveDrops);
+            passiveDrops: passiveDrops, creatures: creatures);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
+        if (creatures is not null && creatureProjection is not null)
+            context.Creatures = new(context, creatures, creatureProjection, log);
         CubeContractConsumptionProjection? cubeConsumption = null;
         if (contracts is not null)
         {
@@ -79,6 +82,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 {
                     if (context.Premiums is { } premiums) await premiums.RefreshAsync();
                     if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
+                    if (context.Creatures is { } creatureClock) await creatureClock.RefreshAsync();
                 }
                 finally { context.CommandGate.Release(); }
                 if (result == CommandResult.Unhandled)
@@ -88,6 +92,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         finally
         {
+            if (context.Creatures is { } creatureClock) await creatureClock.DisposeAsync();
             if (cubeConsumption is not null) await cubeConsumption.DisposeAsync();
             await death.DisposeAsync();
             if (context.Cards is not null) await context.Cards.DisposeAsync();

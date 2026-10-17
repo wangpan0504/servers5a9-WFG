@@ -13,10 +13,13 @@ internal sealed class ItemCatalog
     readonly IReadOnlyDictionary<int, string> stackable;
     readonly IReadOnlySet<int> premiumServiceItems;
     readonly IReadOnlyDictionary<int, PremiumContract> acquisitionContracts;
+    readonly GameWorld.Creatures.CreatureCatalog? creatures;
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
     readonly ConcurrentDictionary<int, Lazy<ItemTemplate>> pendingTemplates = new();
     readonly ConcurrentDictionary<int, QuestTicketDefinition> questTickets = new();
     readonly ConcurrentDictionary<int, Lazy<ClassChangeTicketDefinition?>> classChangeTickets = new();
+    readonly ConcurrentDictionary<int, Lazy<GameWorld.Creatures.CreatureChangeDefinition?>> creatureChanges = new();
+    readonly ConcurrentDictionary<int, Lazy<GameWorld.Creatures.CreatureGrowthItemDefinition?>> creatureGrowthItems = new();
     static readonly string[] JobNames = ["swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief", "at fighter", "at mage", "demonic swordman", "creator mage", "at swordman", "knight", "demonic lancer", "at priest", "gun blader"];
     static readonly Dictionary<string, byte> EquipmentSlots = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -51,7 +54,7 @@ internal sealed class ItemCatalog
 
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
-        IReadOnlyDictionary<int, PremiumContract>? acquisitionContracts = null)
+        IReadOnlyDictionary<int, PremiumContract>? acquisitionContracts = null, GameWorld.Creatures.CreatureCatalog? creatures = null)
     {
         pvf = archive;
         this.equipment = equipment;
@@ -59,6 +62,7 @@ internal sealed class ItemCatalog
         this.premiumServiceItems = premiumServiceItems ?? new HashSet<int>();
         this.acquisitionContracts = acquisitionContracts ?? new Dictionary<int, PremiumContract>();
         this.equipmentSellRate = equipmentSellRate;
+        this.creatures = creatures;
     }
 
     public ItemTemplate Get(int id)
@@ -152,6 +156,22 @@ internal sealed class ItemCatalog
         if (!stackable.TryGetValue(id, out var path)) return null;
         return classChangeTickets.GetOrAdd(id, key => new(() =>
             ClassChangeTicketDefinition.Parse(StackableFile.Parse(key, "stackable/" + path,
+                pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    public GameWorld.Creatures.CreatureChangeDefinition? CreatureChange(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return creatureChanges.GetOrAdd(id, key => new(() =>
+            GameWorld.Creatures.CreatureChangeDefinition.Parse(StackableFile.Parse(key, "stackable/" + path,
+                pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    public GameWorld.Creatures.CreatureGrowthItemDefinition? CreatureGrowthItem(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return creatureGrowthItems.GetOrAdd(id, key => new(() =>
+            GameWorld.Creatures.CreatureGrowthItemDefinition.Parse(StackableFile.Parse(key, "stackable/" + path,
                 pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
     }
 
@@ -249,6 +269,7 @@ internal sealed class ItemCatalog
             WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&
                 text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
             CreatureSubType = kind == ItemKind.Creature ? ReadCreatureSubType(text) : -1,
+            CreatureInitialMode = kind == ItemKind.Creature && creatures?.Get(id) is { Egg: false, UsesExperienceItems: true } ? (byte)1 : (byte)0,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
             AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
             PersonalCargoUpgradeTarget = cargoTarget,

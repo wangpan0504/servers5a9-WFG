@@ -55,8 +55,10 @@ internal static class SpecialContainerTests
                 "one transaction allocates linked detail identity and keeps expiry in details");
             That(Query("SELECT count(*) FROM inventory_avatar_details") is 2L && Query("SELECT count(*) FROM inventory_creature_details") is 2L, "both detail tables populated");
             var shop = new InventoryShopService(catalog, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
-            That(shop.Sell(current, new(new(InventoryListType.Avatar, 0), 1, 0, 0, 0)).Accepted &&
-                shop.Sell(current, new(new(InventoryListType.Pet, 0), 1, 0, 0, 0)).Accepted, "NPC sale accepts special containers through the common deletion plan");
+            That(shop.Sell(current, new(new(InventoryListType.Avatar, 0), 1, 0, 0, 0)) is { Accepted: false, Plan: null },
+                "时装背包拒绝 NPC 出售，不生成删除或金币计划");
+            That(shop.Sell(current, new(new(InventoryListType.Pet, 0), 1, 0, 0, 0)).Accepted,
+                "宠物仍通过统一删除计划出售");
             var a = current.Inventory.Find(new(InventoryListType.Avatar, 0))!;
             var p = current.Inventory.Find(new(InventoryListType.Pet, 0))!;
             That(InventoryMoveService.Allows(current with { Level = 0, Job = 15, Skills = [] }, new(InventoryListType.Equipment, 28),
@@ -81,6 +83,9 @@ internal static class SpecialContainerTests
                 Apply(equip);
                 That(current.Inventory.Find(worn)?.Uid == source.Uid && current.Inventory.Find(worn)?.Avatar == source.Avatar &&
                     current.Inventory.Find(worn)?.Creature == source.Creature, "equip preserves complete linked detail");
+                var sale = shop.Sell(current, new(worn, 1, 0, 0, 0));
+                That(source.Core.Kind == ItemKind.Avatar ? sale is { Accepted: false, Plan: null } : sale.Accepted,
+                    "穿戴栏按物品类别拒绝时装出售，保留宠物与宠物装备出售");
                 Reject(() => repo.CommitInventory(owner, stale, equip.Plan!), "stale character cannot overwrite special items");
                 var wrong = InventoryMoveService.Plan(current, new(worn, source.Core.ItemId, 1, new(InventoryListType.Main, 3), 0, 0, -1, 0, 0), catalog, long.MinValue);
                 That(!wrong.Accepted, "dedicated resource categories cannot enter Main quickbar");

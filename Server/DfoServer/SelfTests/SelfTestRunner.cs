@@ -13,6 +13,9 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        CreatureSystemTests.RunCore();
+        CreatureChangeTests.RunCore();
+        CreatureGroupTests.RunCore();
         CommandLineTests.Run();
         ConnectionAddressTests.Run();
         await Testing.TcpTestArtifactsTests.RunAsync();

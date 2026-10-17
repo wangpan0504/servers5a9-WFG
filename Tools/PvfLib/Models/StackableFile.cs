@@ -24,6 +24,10 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public IReadOnlyList<int>? DeclaredDontChangeGrowTypes { get; init; }
     public IReadOnlyList<int>? DeclaredUsableFirstGrowTypes { get; init; }
     public bool ClassChangeGrowTypeCheckOff { get; init; }
+    public IReadOnlyList<int>? DeclaredActionLimitIndexes { get; init; }
+    public IReadOnlyList<int>? DeclaredActionResultLimitIndexes { get; init; }
+    public int? DeclaredCreatureMinimumLevel { get; init; }
+    public bool HasCreatureMinimumLevel { get; init; }
 
     public static StackableFile Parse(int templateId, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -31,7 +35,8 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             ["stackable type", "stack limit", "price", "sell price", "minimum level", "item group name",
                 "action type", "maximum level", "use action packet", "usable job", "action usable place",
                 "action usable server type", "need material", "dont change grow type", "usable first growtype",
-                "class change grow type check off"]);
+                "class change grow type check off", "stackable action limit indexes",
+                "stackable action result limit indexes", "creature minimum level"]);
         StackableTypeDeclaration? type = null;
         if (fields.TryGet("stackable type", out var values))
         {
@@ -109,7 +114,11 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             DeclaredNeededMaterials = Integers("need material"),
             DeclaredDontChangeGrowTypes = Integers("dont change grow type"),
             DeclaredUsableFirstGrowTypes = Integers("usable first growtype"),
-            ClassChangeGrowTypeCheckOff = checkOff
+            ClassChangeGrowTypeCheckOff = checkOff,
+            DeclaredActionLimitIndexes = Integers("stackable action limit indexes"),
+            DeclaredActionResultLimitIndexes = Integers("stackable action result limit indexes"),
+            DeclaredCreatureMinimumLevel = fields.Scalar("creature minimum level"),
+            HasCreatureMinimumLevel = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[creature minimum level]")
         };
     }
 }

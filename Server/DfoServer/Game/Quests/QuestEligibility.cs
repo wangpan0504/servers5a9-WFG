@@ -59,6 +59,17 @@ internal static class QuestEligibility
             .Select(quest => quest.Id).ToImmutableArray();
     }
 
+    public static bool CreatureCandidatesChanged(Character before, Character after, QuestCatalog catalog)
+    {
+        var previousCompleted = Completed(before);
+        var currentCompleted = Completed(after);
+        var previousActive = before.ActiveMainQuests.Select(row => (int)row.QuestId).ToHashSet();
+        var currentActive = after.ActiveMainQuests.Select(row => (int)row.QuestId).ToHashSet();
+        return catalog.All.Where(quest => quest.Definition?.CreatureKind >= 0).Any(quest =>
+            Evaluate(before, quest, catalog, previousCompleted, previousActive, includeActive: true).Visible !=
+            Evaluate(after, quest, catalog, currentCompleted, currentActive, includeActive: true).Visible);
+    }
+
     // 21同时携带可见任务与等待客户端884的合格隐藏候选；候选本身不生成822或接取槽。
     public static ImmutableArray<int> Candidates(Character character, QuestCatalog catalog)
     {
@@ -82,8 +93,10 @@ internal static class QuestEligibility
     {
         var access = InspectResource(quest);
         if (access.Entry is QuestResourceEntry.Invalid or QuestResourceEntry.OutsideLevels or QuestResourceEntry.Event or
-            QuestResourceEntry.Creature or QuestResourceEntry.Profession)
+            QuestResourceEntry.Profession)
             return Reject(access.Reason);
+        if (access.Entry == QuestResourceEntry.Creature && !QuestCreatureReward.Matches(character, quest, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
+            return Reject("未装备任务要求的宠物，或宠物种类、等级及进化产物不符");
         if (access.Entry == QuestResourceEntry.Hardcore) return Reject(access.Reason);
         var definition = quest.Definition!;
         if (quest.Grade is "[training]" or "[daily random]")
@@ -140,7 +153,9 @@ internal static class QuestEligibility
                 return Reject("尚未到本子任务的资源顺序");
             return new(true, includeActive && active.Contains(quest.Id), "等待父任务对话入口");
         }
-        bool visible = access.Entry == QuestResourceEntry.Ordinary && !definition.HideOnCompletedQuests.Any(completed.Contains);
+        bool visible = (access.Entry == QuestResourceEntry.Ordinary || access.Entry == QuestResourceEntry.Creature &&
+            definition.ExposedByNpc && OrdinaryGrade(quest.Grade)) &&
+            !definition.HideOnCompletedQuests.Any(completed.Contains);
         return new(true, visible, visible ? "资格满足" : "需要专用任务入口");
     }
 

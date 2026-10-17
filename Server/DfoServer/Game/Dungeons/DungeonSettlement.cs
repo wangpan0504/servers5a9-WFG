@@ -18,7 +18,8 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
 
 // 冻结首份报告与经验候选；只有原实例保存的同一对象能取得提交资格。
 internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlySpan<byte> reportBody,
-    DungeonClearExperienceReward reward, int mapId, DungeonCardReward? card = null, DungeonCardOptions? options = null)
+    DungeonClearExperienceReward reward, int mapId, DungeonCardReward? card = null, DungeonCardOptions? options = null,
+    DfoServer.Game.Inventory.Models.InventoryPlan? creatureInventory = null)
 {
     private readonly byte[] report = reportBody.ToArray();
     public Guid EventId { get; } = Guid.NewGuid();
@@ -28,4 +29,5 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     public int MapId { get; } = mapId;
     public DungeonCardReward? Card { get; } = card;
     public DungeonCardOptions? Options { get; } = options;
+    public DfoServer.Game.Inventory.Models.InventoryPlan? CreatureInventory { get; } = creatureInventory;
 }

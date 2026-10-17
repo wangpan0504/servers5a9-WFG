@@ -13,12 +13,37 @@ namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, ServerLog log,
     TutorialCatalog? tutorials = null, ItemCatalog? items = null, InventoryProjection? inventory = null,
-    InventoryPremiumContractUseService? contracts = null) : IGameCommandModule
+    InventoryPremiumContractUseService? contracts = null, Game.Creatures.CreatureService? creatures = null,
+    Projection.CreatureProjection? creatureProjection = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE, Handle, nameof(ConsumableUseHandler));
 
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
     {
+        if (creatures is not null && packet.Body.Length == 15)
+        {
+            var feedRequest = ConsumableUseRequests.Read(packet.Body);
+            var selectedCreatureOwner = context.Owner.Execute(() => context.Session.Selected?.Inventory.Find(feedRequest.Position) is { } source &&
+                source.Core.ItemId == feedRequest.ItemId && source.Core.Kind is ItemKind.CreatureConsumable or ItemKind.Consumable ? context.Session.Selected : null);
+            if (context.Session.RecentCreatureFeed(feedRequest, creatures) || selectedCreatureOwner is not null &&
+                creatures.RecognizesFeed(selectedCreatureOwner, feedRequest.ItemId, creatures.Clock.GetUtcNow().ToUnixTimeSeconds()))
+            {
+                var fed = context.Session.FeedCreature(feedRequest, creatures, context.Activity?.BlocksTownActions == true);
+                if (fed.Outcome == ConsumableUseOutcome.CloseConnection) return CommandResult.CloseConnection;
+                bool Guard() => fed.Guard is { } guard && context.Session.CanPublishConsumable(guard);
+                await context.Reply(CmdPacketType.USE_STACKABLE, ConsumableUsePackets.Ack(feedRequest,
+                    fed.Outcome == ConsumableUseOutcome.Committed), "creature_feed_ack", Guard);
+                if (fed.Inventory is { } committed)
+                {
+                    if (inventory is not null) await inventory.RefreshAsync(context, committed,
+                        acknowledgedSlots: new HashSet<InventorySlot> { feedRequest.Position }, refreshEquipment: false);
+                    else if (creatureProjection is not null) await creatureProjection.ChangedAsync(context, committed);
+                }
+                log.Write("creature_feed", new { Connection = context.Id, feedRequest.ItemId, fed.Outcome, fed.Reason,
+                    Revision = fed.Inventory?.Receipt?.Character.Revision });
+                return CommandResult.Handled;
+            }
+        }
         var tutorialRequest = tutorials is null && contracts is null ? null : StackableUseRequests.Parse(packet.Body);
         if (tutorialRequest is not null && contracts?.Recognizes(tutorialRequest.ItemId) == true)
         {

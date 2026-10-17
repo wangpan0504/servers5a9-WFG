@@ -1737,7 +1737,7 @@ internal static class QuestLifecycleTcpTests
 
     static WirePacket Finished(TcpPeer peer, byte[]? expected = null) => peer.Expect(1,34,expected);
 
-    static void DrainNotifications(TcpPeer peer, Action<WirePacket>? observe = null)
+    internal static void DrainNotifications(TcpPeer peer, Action<WirePacket>? observe = null)
     {
         peer.SendBarrier();
         for (int at = 0; at < 64; at++)

@@ -9,7 +9,8 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection.Inventory;
 
-internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces)
+internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces,
+    CreatureProjection? creatures = null)
 {
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
         IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true, bool silentMainMove = false,
@@ -24,6 +25,12 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         var current = receipt.Character;
         if (plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion)
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Avatar), "avatar_capacity_committed", CanSend);
+        var creatureSlot = DfoServer.Game.Creatures.CreatureRules.EquippedSlot;
+        bool inPlaceCreature = creatures is not null && plan.BeforeIndex.Find(creatureSlot) is { Creature: not null } oldCreature &&
+            receipt.Index.Find(creatureSlot) is { Creature: not null } newCreature && oldCreature.Uid == newCreature.Uid &&
+            oldCreature.Core with { ItemId = newCreature.Core.ItemId, SealFlag = newCreature.Core.SealFlag } == newCreature.Core &&
+            (oldCreature.Creature != newCreature.Creature || oldCreature.Core.ItemId != newCreature.Core.ItemId);
+        if (inPlaceCreature) await creatures!.ChangedAsync(context, result);
         bool seriaLuckChanged = plan.Before.AccountWallet.SeriaLuck != current.Inventory.AccountWallet.SeriaLuck;
         var changedSlots = plan.ChangedSlots.Concat(plan.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).Where(slot => slot.HasValue)
             .Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value))).Distinct().ToArray();
@@ -40,13 +47,13 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 .Distinct().ToArray();
         }
         var slots = changedSlots.Where(slot => acknowledgedSlots?.Contains(slot) != true &&
-            slot != new InventorySlot(InventoryListType.Equipment, 30)).ToArray();
+            slot != new InventorySlot(InventoryListType.Equipment, 30) && !(inPlaceCreature && slot == creatureSlot)).ToArray();
         bool rebuildMain = silentMainMove && changedSlots.Where(slot => slot.List == InventoryListType.Main)
             .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
                 receipt.Index.FindUid(item.Uid)?.Core.Count != item.Core.Count);
-        bool creatureDetailsChanged = changedSlots.Any(slot => receipt.Index.Find(slot)?.Creature is not null);
-        bool hatchCreature = plan.Reason == "hatch_creature_egg";
-        if (creatureDetailsChanged && !hatchCreature)
+        bool creatureDetailsChanged = changedSlots.Any(slot => !(inPlaceCreature && slot == creatureSlot) && receipt.Index.Find(slot)?.Creature is not null);
+        bool reloadCreature = plan.Reason is "hatch_creature_egg" or "creature_change" or "creature_group_convert";
+        if (creatureDetailsChanged && !reloadCreature)
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
         // 开盒确认后客户端会立即读取完整容器。仅发送增量会让结果窗读取到旧槽位，
         // 双倍或十连奖励随后显示为加载中；普通背包操作仍沿用增量协议。
@@ -87,13 +94,13 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE : NotiPacketType.UPDATE_ITEM_LIST;
             if (reloadSlots.Length != 0)
                 await context.Notify(updateType, InventoryPackets.Delta(InventorySnapshot.Empty, list, reloadSlots), "inventory_clear_replaced", CanSend);
-            // 孵化替换先清旧蛋模板，再提交完整详情，最后让新宠物引用已到达的详情。
-            if (hatchCreature && creatureDetailsChanged && list == InventoryListType.Pet)
+            // 孵化和定向转换先清旧模板，再提交完整详情，最后让新宠物引用已到达的详情。
+            if (reloadCreature && creatureDetailsChanged && list == InventoryListType.Pet)
                 await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
             await context.Notify(updateType, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index),
                 result.WholeListRefresh ? "inventory_whole_list_refresh" : "inventory_committed_delta", CanSend);
         }
-        bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment);
+        bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         if (refreshEquipment && (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null))
         {
             bool appearanceChanged = plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&
@@ -152,6 +159,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         }
         if (receipt.PreviousQuests is { } previous && !previous.SequenceEqual(current.ActiveMainQuests))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(current.ActiveMainQuests), "inventory_quest_conditions", CanSend);
+        if (creatures is not null && !inPlaceCreature && receipt.Phase == SessionPhase.Town && changedSlots.Contains(creatureSlot))
+            await creatures.QuestsChangedAsync(context, plan.Before, current, CanSend);
     }
 
     public static async Task RestoreLocksAsync(GameConnectionContext context, InventorySnapshot inventory,

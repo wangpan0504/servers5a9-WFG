@@ -21,5 +21,6 @@ RandomOptionFileTests.Run();
 AvatarTypeSelectionTests.Run();
 TutorialFileTests.Run();
 RecoveryConsumableTests.Run();
+CreatureFileTests.Run();
 Console.WriteLine($"PASS {TestCheck.Count} PvfLib assertions");
 return 0;

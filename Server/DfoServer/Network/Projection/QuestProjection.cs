@@ -15,6 +15,10 @@ namespace DfoServer.Network.Projection;
 internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterCatalog? parameters = null,
     ItemCatalog? items = null, GoldLimitCatalog? goldLimits = null, EpicPieceCatalog? pieces = null, CharacterGrowthCatalog? growth = null)
 {
+    public Task CreatureChangedAsync(GameConnectionContext context, Character before, Character after, Func<bool> canSend) =>
+        QuestEligibility.CreatureCandidatesChanged(before, after, quests)
+            ? RefreshAsync(context, after, canSend) : Task.CompletedTask;
+
     public async Task<bool> CloseReadyChildrenAsync(GameConnectionContext context, bool refreshList = false)
     {
         if (parameters is null || items is null || goldLimits is null || pieces is null || growth is null) return false;

@@ -214,7 +214,7 @@ internal static class QuestCoverage
                 .Concat(definition?.Values("casecade clear").Where(value => value.Type == 0).Select(value => value.Value) ?? []);
             if (quest.Condition is "[quest clear]" or "[clear quest]" or "[clear multi quest]") references = references.Concat(quest.IntData);
             var missing = references.Where(id => id > 0 && !catalog.TryGet(id, out _)).Distinct().Order().ToImmutableArray();
-            if (access.Entry != QuestResourceEntry.Ordinary && !(access.Entry == QuestResourceEntry.Dialogue && QuestRelationProgress.DialogueChild(quest,catalog)) &&
+            if (access.Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !(access.Entry == QuestResourceEntry.Dialogue && QuestRelationProgress.DialogueChild(quest,catalog)) &&
                 !(access.Entry == QuestResourceEntry.Hidden && QuestHiddenEntry.Direct(quest,catalog)))
                 reasons.Add(access.Reason);
             if (definition is null || definition.Diagnostics.Length != 0) reasons.AddRange(definition?.Diagnostics ?? ["缺少完整定义"]);
@@ -252,14 +252,17 @@ internal static class QuestCoverage
                     definition?.JobChange == quest.Rewards[0].Value + 1;
                 bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _) ||
                     QuestCharacterReward.TryHellChallenge(quest);
-                if (quest.RewardType != "[item]" && !profession && !characterReward && !QuestRelationProgress.ZeroRewardChild(quest))
+                bool creatureReward = QuestCreatureReward.Evolution(quest);
+                if (access.Entry == QuestResourceEntry.Creature && catalog.Creatures is null) reasons.Add("宠物目录未装配");
+                if (quest.RewardType != "[item]" && !profession && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest))
                     reasons.Add(RewardRestriction(quest));
-                if (!quest.Attributes.Contains("not give exp quest") && (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))
+                if (!quest.Attributes.Contains("not give exp quest") && !(creatureReward && quest.Difficulty is null) &&
+                    (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))
                     reasons.Add("奖励缺少合法difficulty键");
                 if (!HasOrdinaryAttributes(quest)) reasons.Add("attribute包含未确认的值或声明形状");
                 try
                 {
-                    var rewards = QuestFixedRewardDefinition.Parse(profession || characterReward ? quest with { Rewards = [] } : quest, allowGold: true);
+                    var rewards = QuestFixedRewardDefinition.Parse(profession || characterReward || creatureReward ? quest with { Rewards = [] } : quest, allowGold: true);
                     var selection = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition?.SelectRewards ?? [] });
                     var gifts = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition?.AcceptanceRewards ?? [] });
                     foreach (int id in Enumerable.Range(0, 16).SelectMany(job => Enumerable.Range(0,6).SelectMany(grow =>

@@ -72,6 +72,20 @@ internal sealed partial class CharacterRepository
             tx.Commit();
             return restored;
         }
+        var creatureInventory = prepared.CreatureInventory;
+        if (creatureInventory is not null)
+        {
+            ValidateInventoryPlan(expected, creatureInventory);
+            var slot = Game.Creatures.CreatureRules.EquippedSlot;
+            if (creatureInventory.Reason != "creature_experience" || creatureInventory.ChangedSlots.Any(value => value != slot) ||
+                creatureInventory.ChangedCurrencies.Length != 0 || creatureInventory.AccountCargoChanged ||
+                creatureInventory.BeforeIndex.Find(slot) is not { Creature: not null } source ||
+                creatureInventory.AfterIndex.Find(slot) is not { Creature: not null } target || source.Uid != target.Uid ||
+                target.Creature.Experience < source.Creature.Experience || target.Creature.Level < source.Creature.Level ||
+                !SameInventory(current.Inventory, creatureInventory) || creatureInventory.CharacterPrecondition?.Matches(current) == false)
+                throw new InvalidDataException("宠物通关成长不是同一角色当前装备实例的冻结计划");
+            WriteInventory(db, tx, owner, expected.Id, creatureInventory, creatureInventory.After);
+        }
         var result = CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, catalog);
         if (!result.Success)
             throw new InvalidDataException("通关成长候选被拒绝: " + result.Failure);
@@ -170,7 +184,8 @@ internal sealed partial class CharacterRepository
             LuckyStarGained = luckyStar.Granted,
             LuckyStarTotal = luckyStar.Total,
             Card = prepared.Card, Options = prepared.Options,
-            BlackDiamond = prepared.Options?.BlackDiamond
+            BlackDiamond = prepared.Options?.BlackDiamond,
+            Inventory = creatureInventory is { Changed: true } ? new(expected.Inventory, committed.Inventory, "creature_experience") : null
         };
     });
 

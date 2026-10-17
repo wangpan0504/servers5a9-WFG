@@ -169,7 +169,7 @@ internal sealed partial class GameSession
             if (condition is not { Channel: null, Value: 0, Reserved: 0 } ||
                 capture.Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 quest.Definition is not { Diagnostics.Length: 0 } || quest.SubType != -1 ||
-                QuestEligibility.InspectResource(quest).Entry != QuestResourceEntry.Ordinary && !QuestRelationProgress.DialogueChild(quest, quests) &&
+                QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestHiddenEntry.Direct(quest,quests))
                 throw new InvalidDataException("客户端条件需要已确认类型和当前真实场景");
             uint scalar;

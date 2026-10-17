@@ -46,7 +46,7 @@ internal sealed class TcpTestResources : IDisposable
         characters = new(() => Timed(() => CharacterCatalog.Load(Archive, ItemResources.Items)));
         towns = new(() => Timed(() => TownCatalog.Load(Archive)));
         learning = new(() => Timed(() => SkillLearningCatalog.Load(Archive, ItemResources.Contracts.ExpertSkillLevels)));
-        quests = new(() => Timed(() => SelfTestCatalogs.Quests(Archive)));
+        quests = new(() => Timed(() => SelfTestCatalogs.Quests(Archive).WithCreatures(ItemResources.Creatures)));
         adventure = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureCatalog(Archive)));
         expeditions = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog(Archive)));
         tutorials = new(() => Timed(() => new TutorialCatalog(Archive)));

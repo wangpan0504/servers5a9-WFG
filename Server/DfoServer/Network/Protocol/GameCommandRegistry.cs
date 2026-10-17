@@ -56,8 +56,12 @@ internal sealed class GameCommandRegistry
         try
         {
             context.Owner.Execute(() => true);
-            CommandResult result = commands.TryGetValue(request.Opcode, out var command) && context.Session.CheckState(command.MinimumState)
-                ? await command.Handler(context, request) : CommandResult.Unhandled;
+            CommandResult result = CommandResult.Unhandled;
+            if (commands.TryGetValue(request.Opcode, out var command) && context.Session.CheckState(command.MinimumState))
+            {
+                if (context.Creatures is { } creatures) await creatures.BeforeCommandAsync(request);
+                result = await command.Handler(context, request);
+            }
             // 异步处理结束后仍须属于当前账号；旧连接不能继续下一条业务。
             context.Owner.Execute(() => true);
             return result;

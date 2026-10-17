@@ -21,6 +21,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public DfoServer.Network.Projection.DungeonDeathProjection? Death { get; set; }
     public DfoServer.Network.Projection.DungeonCardProjection? Cards { get; set; }
     public DfoServer.Network.Projection.PremiumContractProjection? Premiums { get; set; }
+    public DfoServer.Network.Projection.CreatureRuntimeProjection? Creatures { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。
     public bool RosterRequested { get; set; }
     // 返回选角时服务端已主动推送名册；用于吞掉客户端随后重复的 C2S8，避免双重名册刷新。

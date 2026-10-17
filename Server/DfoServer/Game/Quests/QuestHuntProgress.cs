@@ -19,7 +19,7 @@ internal static class QuestHuntProgress
         bool monsterOnly = quest.Condition == "[hunt monster]";
         int stride = monsterOnly ? 4 : 5;
         if (quest.Condition is not ("[hunt enemy]" or "[hunt monster]") || quest.SubType != -1 || !QuestCoverage.HasOrdinaryDeclarations(quest) ||
-            quest.Grade == "[training]" || QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Hidden) ||
+            quest.Grade == "[training]" || QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Hidden or QuestResourceEntry.Creature) ||
             quest.Definition is not { Diagnostics.Length: 0 } ||
             quest.IntData.Count < stride || quest.IntData.Count > stride*3 || quest.IntData.Count % stride != 0) return false;
         var rows = ImmutableArray.CreateBuilder<QuestHuntTarget>();

@@ -204,6 +204,10 @@ internal static class TcpRegressionTests
             Inventory.BoosterSelectionTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
             return Task.CompletedTask;
         }),
+        ("creature-system", CreatureSystemTcpTests.RunAsync),
+        ("creature-change", CreatureChangeTcpTests.RunAsync),
+        ("creature-group", CreatureGroupTcpTests.RunAsync),
+        ("creature-dungeon", FormalDungeonTcpTests.RunCreatureAsync),
         ("avatar-package", (options, root, resources) => AvatarPackageTcpTests.RunAsync(options, root, resources, resources.ItemResources.AvatarPackages)),
         ("avatar-dye", AvatarDyeTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),

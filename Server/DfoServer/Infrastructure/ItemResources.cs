@@ -26,6 +26,8 @@ internal sealed class ItemResources
     public EnchantmentCatalog Enchantments { get; }
     public EnhancementCatalog Enhancements { get; }
     public CreatureEggCatalog CreatureEggs { get; }
+    public GameWorld.Creatures.CreatureCatalog Creatures { get; }
+    public GameWorld.Creatures.CreatureGroupCatalog CreatureGroups { get; }
     public AvatarPackageCatalog AvatarPackages { get; }
     public AvatarDyeCatalog AvatarDyes { get; }
     public TeleportCatalog Teleports { get; }
@@ -45,11 +47,13 @@ internal sealed class ItemResources
         EpicPieces = new(archive);
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
+        Creatures = new(archive, equipment, stackable);
+        CreatureGroups = new(archive);
         Contracts = PremiumContractCatalog.Load(archive, equipment, stackable);
         Boosters = new(archive, stackable);
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
-            Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary());
+            Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures);
         CashShop = CashShopCatalog.Load(archive);
         DevilContracts = new(archive, stackable, CashShop);
         RecoveryConsumables = new(archive, stackable, DevilContracts);

@@ -107,10 +107,25 @@ internal sealed partial class GameSession
     public FormalDungeonSettlementResult SettleFormalDungeon(ushort actorId, byte rankPoint, byte maximumRankPoint,
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth,
         DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0,
-        Events.ServerEventState? goldCardEvent = null) => owner.Execute(() =>
+        Events.ServerEventState? goldCardEvent = null)
+    {
+        var capture = owner.Execute(() => (Character: Ready && Phase == SessionPhase.Settlement ? Selected : null,
+            Dungeon: formalDungeon, Points: formalDungeon?.Run.CreatureExperiencePoints ?? 0,
+            Prepared: formalDungeon?.Settlement is not null));
+        // 宠物资源与纯成长规划在账号锁外完成；结算事务只保存冻结结果，不重新读CRE或抽取进化目标。
+        InventoryPlan? creatureInventory = null;
+        if (!capture.Prepared && capture.Character is { } character && capture.Points > 0 && creatures is not null &&
+            capture.Dungeon?.Entry.IsTutorial != true && maximumRankPoint == rankPoint)
+        {
+            var grown = creatures.Experience(character, capture.Points, creatures.Clock.GetUtcNow().ToUnixTimeSeconds());
+            if (grown.Plan is { Changed: true } changed) creatureInventory = changed;
+        }
+        return owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
             dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
+            return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
+        if (!capture.Prepared && (!ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(dungeon, capture.Dungeon)))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         // 这一演出类别须先成功发布空31；其后34清槽不撤销许可，SQL结果不明仍按原冻结结算恢复。
         if (dungeon.Settlement is null && !dungeon.SettlementEnabled && NonCombatCinematicTerminal(dungeon) is not null)
@@ -137,7 +152,7 @@ internal sealed partial class GameSession
             options = cards.PrepareOptions(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),dungeon.Entry.Difficulty,
                 fact.ConfirmedDeathEvents.Count,membership,now,goldCardEvent);
         }
-        var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options);
+        var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory);
         if (prepared.Pending is null || prepared.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
@@ -205,7 +220,8 @@ internal sealed partial class GameSession
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
                 Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond };
-    });
+        });
+    }
 
     public FormalDungeonReceipt? AdvanceFormalDungeonCards(bool showCards) => owner.Execute(() =>
     {

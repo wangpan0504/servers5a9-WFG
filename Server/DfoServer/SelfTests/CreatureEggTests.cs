@@ -48,6 +48,10 @@ internal static class CreatureEggTests
             "完整名字、经验、等级、饱食、UID、排序锁及原实例期限均保留，不从无期限目标重置永久");
         That(result.Plan.CharacterPrecondition!.Matches(character, 1999) && !result.Plan.CharacterPrecondition.Matches(character, 2000),
             "提交时间复验绑定detail实际截止，不因Core期限0漏掉跨到期的旧规划");
+        var growingDefinition = CreatureEggCatalog.Read(new(eggText), new(outputText), egg, output with { CreatureInitialMode = 1 });
+        var growing = InventoryCreatureEggService.Plan(character, position, 1000, growingDefinition!, egg).Plan!.After.Find(position)!;
+        That(growing.Creature == detail with { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5 } && growing.Uid == hatched.Uid && growing.Core == hatched.Core,
+            "道具成长产物在孵化时即初始化模式和亲密度，保留其它详情，不等穿戴后再修正");
         That(!InventoryCreatureEggService.Plan(character with { Inventory = result.Plan.After }, position, 1000, definition!, egg).Accepted,
             "相同请求再次检查真实源；已孵化目标不能作为蛋重复转换");
         foreach (var invalid in new[] { character with { Inventory = InventorySnapshot.Empty },

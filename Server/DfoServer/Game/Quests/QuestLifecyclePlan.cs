@@ -77,7 +77,7 @@ internal sealed class QuestLifecyclePlan
                 quests.TryGet(row.QuestId,out var quest) && QuestCoverage.HasOrdinaryDeclarations(quest) &&
                 (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 && quest.IntData[0] == clear.ClearMap!.Id &&
                     (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
-                 QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue &&
+                 QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Creature &&
                     QuestDungeonClearProgress.Matches(quest,entry,run) && QuestDungeonClearProgress.ValidScalar(quest,row.ConditionState))
                 ? row with { ConditionState = row.ConditionState - 1 } : row).ToImmutableArray();
         }

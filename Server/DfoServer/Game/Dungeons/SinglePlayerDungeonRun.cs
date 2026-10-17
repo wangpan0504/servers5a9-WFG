@@ -168,6 +168,9 @@ internal sealed class SinglePlayerDungeonRun
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
     public DungeonClearFact? ClearFact { get; private set; }
     public bool HasPendingSettlement => pendingSettlement is not null;
+    // 剧情入场不扣持久疲劳；宠物仍按真实首次加载的房间成长，回访不重复计点。
+    public int CreatureExperiencePoints => entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay
+        ? 0 : allRooms.Count(room => room.Loaded);
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
             !current.Culled.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()))
@@ -577,7 +580,8 @@ internal sealed class SinglePlayerDungeonRun
     }
 
     public DungeonSettlementPreparation PrepareSettlement(DungeonClearFact fact, ReadOnlySpan<byte> reportBody,
-        DungeonClearExperienceReward reward, DungeonCardReward? card = null, DungeonCardOptions? options = null)
+        DungeonClearExperienceReward reward, DungeonCardReward? card = null, DungeonCardOptions? options = null,
+        DfoServer.Game.Inventory.Models.InventoryPlan? creatureInventory = null)
     {
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
@@ -592,7 +596,7 @@ internal sealed class SinglePlayerDungeonRun
                 ? new(committedSettlement is null ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate, frozen)
                 : new(DungeonRunOutcome.Rejected);
         card?.Validate();
-        pendingSettlement = new(fact, reportBody, reward, current.Plan.Room.Map.Id, card, options);
+        pendingSettlement = new(fact, reportBody, reward, current.Plan.Room.Map.Id, card, options, creatureInventory);
         return new(DungeonRunOutcome.Accepted, pendingSettlement);
     }
 

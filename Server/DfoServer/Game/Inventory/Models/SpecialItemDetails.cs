@@ -37,9 +37,16 @@ internal sealed record CreatureDetail
     public int Experience { get; init; }
     public byte Level { get; init; } = 1;
     public byte TailFlag { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public int SatietyFraction { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public long FeedEffectExpiresAt { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public int FeedSkillRecoveryRate { get; init; }
     public void Validate()
     {
-        if (ExpireTime < 0 || Experience < 0 || Name is null || Name.Contains('\0'))
+        if (ExpireTime < 0 || Experience < 0 || Name is null || Name.Contains('\0') ||
+            SatietyFraction is < 0 or >= 36000 || FeedEffectExpiresAt < 0)
             throw new InvalidDataException("无效宠物详情");
         try
         {

@@ -116,6 +116,29 @@ internal static class ItemModelTests
         That(change.DeclaredNeededMaterials is null, "duplicate class change materials are not silently overwritten");
         change = StackableFile.Parse(1,"stackable/change.stk",[new(3,9),new(0,0)],ClassResolve);
         That(change.UnsupportedFields.Contains("class change grow type check off"), "class change flag with payload is not a valid empty flag");
+        string[] creatureStrings = ["[stackable action limit indexes]", "[/stackable action limit indexes]",
+            "[stackable action result limit indexes]", "[/stackable action result limit indexes]", "[creature minimum level]"];
+        string CreatureResolve(int value) => creatureStrings[value];
+        var creature = StackableFile.Parse(1, "stackable/change.stk",
+            [new(3,0),new(0,7001),new(3,1),new(3,2),new(0,0),new(0,7002),new(0,10000),
+                new(0,0),new(0,7002),new(0,2),new(3,3),new(3,4),new(0,16)], CreatureResolve);
+        That(creature.DeclaredActionLimitIndexes!.SequenceEqual(new[] { 7001 }) &&
+            creature.DeclaredActionResultLimitIndexes!.SequenceEqual(new[] { 0,7002,10000,0,7002,2 }) &&
+            creature.HasCreatureMinimumLevel && creature.DeclaredCreatureMinimumLevel == 16,
+            "creature conversion retains raw triples, order, duplicate candidates and independent minimum level");
+        foreach (var tokens in new PvfToken[][]
+        {
+            [new(3,0),new(6,1)],
+            [new(3,0),new(0,7001),new(3,1),new(3,0),new(0,7002)]
+        })
+            That(StackableFile.Parse(1, "stackable/change.stk", tokens, CreatureResolve).DeclaredActionLimitIndexes is null,
+                "malformed or duplicate creature source restrictions cannot become an absent whitelist");
+        creature = StackableFile.Parse(1, "stackable/change.stk", [], CreatureResolve);
+        That(creature.DeclaredActionLimitIndexes is { Count: 0 } && creature.DeclaredActionResultLimitIndexes is { Count: 0 } &&
+            !creature.HasCreatureMinimumLevel, "absent conversion declarations remain distinct from invalid declarations");
+        creature = StackableFile.Parse(1, "stackable/change.stk", [new(3,4),new(0,16),new(0,17)], CreatureResolve);
+        That(creature.HasCreatureMinimumLevel && creature.DeclaredCreatureMinimumLevel is null,
+            "malformed creature minimum level cannot use the missing-field default");
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 5)], Resolve, _ => true));
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 4)], Resolve, _ => false));
     }

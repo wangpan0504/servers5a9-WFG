@@ -114,7 +114,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
     public InventoryResult Sell(Character character, SellItemRequest request)
     {
         var before = character.Inventory;
-        if (request.Position.List is not (InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.PersonalCargo or InventoryListType.Equipment))
+        if (request.Position.List is not (InventoryListType.Main or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.PersonalCargo or InventoryListType.Equipment))
             return InventoryResult.Reject();
         var source = before.Find(request.Position);
         if (source is null || source.Core.EquipmentLockId != 0)
@@ -123,6 +123,9 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             return InventoryResult.Reject();
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
         var template = catalog.Get(source.Core.ItemId);
+        // 时装穿戴后位于 Equipment，不能只靠容器排除；宠物蛋和成宠仍按原事务出售。
+        if (template.Kind == ItemKind.Avatar)
+            return InventoryResult.Reject();
         int price = template.ShopPrice.GetSellGold(source.Core.Durability, template.Durability);
         long gold = (long)before.Gold + (long)price * count;
         if (gold > int.MaxValue || gold > new CurrencyService(goldLimits).CarryLimit(character))

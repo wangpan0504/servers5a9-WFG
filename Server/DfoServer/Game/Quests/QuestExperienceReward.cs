@@ -16,8 +16,12 @@ internal static class QuestExperiencePolicy
     {
         if (character.Job > 15 || character.Level is < 1 or > 95)
             throw new InvalidDataException("任务奖励角色等级或职业无效");
+        string difficulty = quest.Difficulty ?? "";
+        int weight = 100;
+        // ARAD 04333710与旧端getRewardWeight均以100作为未声明权重；当前仅接入已确认的宠物进化入口。
         if (quest.MinimumLevel is < 1 or > 95 || quest.DeclaredIgnoreLevelForExperience is not (null or 0 or 1) ||
-            quest.Difficulty is null || !parameters.Difficulty.TryGetValue(quest.Difficulty, out int weight) || weight < 0)
+            (quest.Difficulty is not null || !QuestCreatureReward.Evolution(quest)) &&
+                (!parameters.Difficulty.TryGetValue(difficulty, out weight) || weight < 0))
             throw new NotSupportedException("本服通用任务经验需要完整原始difficulty和等级声明");
         bool ignore = quest.DeclaredIgnoreLevelForExperience == 1;
         int index = ignore ? character.Level : quest.MinimumLevel;
@@ -31,7 +35,7 @@ internal static class QuestExperiencePolicy
         amount = checked(amount * (ulong)penalty) / 100;
         if (amount > int.MaxValue) throw new InvalidDataException("本服任务EXP超出显示范围");
         return new(QuestRewardParameterCatalog.ResourcePath, quest.Path, index,
-            row.Base, row.RawAdditionalPercent, quest.Difficulty, weight, (uint)amount);
+            row.Base, row.RawAdditionalPercent, difficulty, weight, (uint)amount);
     }
 
     internal static int LevelPenalty(int difference, bool epic, bool ignore, QuestRewardParameterCatalog parameters)

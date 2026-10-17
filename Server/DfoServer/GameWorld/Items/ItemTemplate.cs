@@ -24,6 +24,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
 {
     public int WeaponSubType { get; init; } = -1;
     public int CreatureSubType { get; init; } = -1;
+    public byte CreatureInitialMode { get; init; }
     public bool IsPremiumService { get; init; }
     public PremiumContract? AcquisitionContract { get; init; }
     public bool PersonalCargoForbidden { get; init; }

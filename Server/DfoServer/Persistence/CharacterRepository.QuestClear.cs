@@ -101,7 +101,7 @@ internal sealed partial class CharacterRepository
             quests is not null && quests.TryGet(row.QuestId, out var quest) && QuestCoverage.HasOrdinaryDeclarations(quest) &&
             (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 && quest.IntData[0] == clearMap?.Id &&
                 (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
-             clear is not null && QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue &&
+             clear is not null && QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Creature &&
                 QuestDungeonClearProgress.Matches(quest,entry,run) && QuestDungeonClearProgress.ValidScalar(quest,row.ConditionState))).ToArray();
         if (targets.Length == 0 && saved.Count == 0) return;
         if (!(roomClear is null ? QuestClearEligibility.TryValidate(entry, prepared) : QuestClearEligibility.TryValidateRoom(run,prepared)))

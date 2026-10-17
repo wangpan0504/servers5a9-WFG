@@ -11,12 +11,15 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Network.Projection.Inventory;
+using DfoServer.Game.Creatures;
+using DfoServer.GameWorld.Creatures;
 
 namespace DfoServer.Network.Handlers;
 
 internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,QuestProjection projection,ServerLog log,
     CharacterLevelProjection? levelProjection=null,SkillLearningCatalog? skills=null,
-    InventoryCreatureSkinService? skinService=null,InventoryProjection? inventoryProjection=null) : IGameCommandModule
+    InventoryCreatureSkinService? skinService=null,InventoryProjection? inventoryProjection=null,
+    CreatureChangeService? creatureChanges=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE_ACTION,UseAsync,nameof(QuestTicketHandler));
@@ -62,6 +65,8 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             }
             return CommandResult.Handled;
         }
+        if (request.Action is CreatureChangeDefinition.Action or CreatureGrowthItemDefinition.Action)
+            return await ChangeCreatureAsync(context, request);
         if (context.Activity?.BlocksTownActions == true) return CommandResult.Unhandled;
         if (request.Reserved != 0 || request.FirstArgument != 0 || request.SecondArgument != 0 ||
             request.Action is not (QuestTicketDefinition.Action or QuestTicketDefinition.SpecifiedAction or
@@ -154,6 +159,38 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             "creature_skin_ticket_used", Guard);
         await inventoryProjection.RefreshAsync(context, result, acknowledgedSlots: new HashSet<InventorySlot>
         { new(InventoryListType.Main, (short)request.Slot) });
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ChangeCreatureAsync(GameConnectionContext context, QuestTicketUseRequest request)
+    {
+        var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool grouped = request.Action == CreatureGrowthItemDefinition.Action;
+        uint targetIndex = grouped ? request.FirstArgument : request.SecondArgument;
+        var result = context.Activity?.BlocksTownActions == true || request.Reserved != 0 || request.Slot > short.MaxValue || request.List != 0 ||
+            !grouped && request.FirstArgument != (uint)InventoryListType.Pet || targetIndex > short.MaxValue ||
+            creatureChanges is null || inventoryProjection is null ? InventoryResult.Reject(0) :
+            context.Session.PlanAndCommitInventory(character => grouped
+                ? creatureChanges.PlanGroup(character, new(InventoryListType.Main, (short)request.Slot),
+                    new(InventoryListType.Pet, (short)targetIndex), request.SecondArgument, capture.Phase == Game.Session.SessionPhase.Town)
+                : creatureChanges.Plan(character, new(InventoryListType.Main, (short)request.Slot), new(InventoryListType.Pet, (short)targetIndex)),
+                0, requireTown: !grouped, requiredPhase: capture.Phase);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
+            context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, capture.Selected) &&
+                context.Session.SelectionEpoch == capture.SelectionEpoch && context.Session.Phase == capture.Phase);
+        log.Write("creature_change", new { Connection = context.Id, request.Slot, request.List,
+            request.Action, TargetSlot = targetIndex, Choice = grouped ? request.SecondArgument : 0, result.Accepted,
+            Revision = result.Receipt?.Character.Revision });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? QuestTicketPackets.Used(request) : QuestTicketPackets.Rejected(request), "creature_change_ack", Guard);
+        if (result.Accepted)
+        {
+            var source = new InventorySlot(InventoryListType.Main, (short)request.Slot);
+            // ACK先消费一本；同槽另被材料消费时仍需在ACK之后同步绝对剩余量。
+            var acknowledged = !grouped && result.Plan!.BeforeIndex.Find(source)!.Core.Count -
+                (result.Receipt!.Index.Find(source)?.Core.Count ?? 0) == 1;
+            await inventoryProjection!.RefreshAsync(context, result, acknowledged ? new HashSet<InventorySlot> { source } : null);
+        }
         return CommandResult.Handled;
     }
 }

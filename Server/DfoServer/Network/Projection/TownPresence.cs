@@ -114,7 +114,8 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         }
     });
     // 当前场景换装更新快照并投递Actor，不通过离场/重入改变成员身份。
-    public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character, string? adventureName = null) => owner.Execute(() =>
+    public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character, string? adventureName = null,
+        bool broadcast = true) => owner.Execute(() =>
     {
         lock (gate)
         {
@@ -122,6 +123,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
                 throw new InvalidOperationException("外观刷新缺少当前场景成员");
             source.Character = character;
             if (adventureName is not null) source.AdventureName = adventureName;
+            if (!broadcast) return true;
             var peers = Peers(source);
             if (peers.Length == 0)
                 return true;
@@ -138,6 +140,18 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             RemoveCore(sender);
     }
     public int Count { get { lock (gate) return members.Count; } }
+
+    // 原生宠物通知直接更新既有实体；复用同一场景及发送队列，不为此重发Actor或创建另一套在线目录。
+    public void Publish(AccountOwners.Lease owner, GameConnectionSender sender, ushort opcode, byte[] body, string action) => owner.Execute(() =>
+    {
+        lock (gate)
+        {
+            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner)) return false;
+            foreach (var target in Peers(source))
+                target.Sender.Post(0, opcode, body, action, () => Visible(source, target));
+            return true;
+        }
+    });
 
     // 只读取既有成员快照，不取目标账号锁；房间成员不能作为别人传送的落点。
     public TeleportTarget? TeleportTarget(ChannelIdentity channel, string? name = null, int characterId = -1)

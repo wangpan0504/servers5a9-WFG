@@ -23,6 +23,7 @@ internal static class ShopTcpTests
         var cubeShop = itemResources.Shops.Shops.First(pair => pair.Value.Items.Contains(3033));
         var limitedShop = itemResources.Shops.Shops.First(pair => pair.Value.Items.Contains(10099885));
         var starter = InventoryRewardGrantService.CreateStarter(characters.Get(0));
+        ushort specialRoleId;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.Create(owner, new("ShopTcp", towns.Room, towns.InitialReturn)
@@ -42,6 +43,15 @@ internal static class ShopTcpTests
             });
             InventoryService.Commit(repo, owner, current, new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces).Grant(current, [new(3037, 100)]));
             repo.Create(owner, new("ShopSibling", towns.Room, towns.InitialReturn) { Level = 60, AcceptedStoryLevel = 1, Inventory = InventorySnapshot.Empty with { Gold = 1_000_000 } });
+            specialRoleId = repo.Create(owner, new("ShopSpecial", towns.Room, towns.InitialReturn)
+            {
+                Level = 60, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                Inventory = new([
+                    SpecialItem(101550507, InventoryListType.Avatar, 0),
+                    SpecialItem(101550507, InventoryListType.Equipment, 0),
+                    SpecialItem(63022, InventoryListType.Pet, 0),
+                    SpecialItem(63023, InventoryListType.Pet, 1)], Gold: 1000)
+            }).Id;
         }
         int gold = 1_000_000;
         long uid;
@@ -210,6 +220,60 @@ internal static class ShopTcpTests
             peer.Send(21, new byte[15]);
             peer.Closed();
         }
+        string avatars = fixture.Snapshot("SELECT * FROM inventory_avatar_details ORDER BY item_uid");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            string before = Snapshot();
+            foreach (byte list in new byte[] { 1, 3 })
+            {
+                Sell(peer, list, 0, 1);
+                peer.Expect(1, 22, [0, 1, 0]);
+                peer.Barrier();
+                That(Snapshot() == before, "背包与穿戴时装均拒绝出售，不改变金币、实例、详情或审计");
+            }
+            fixture.Sql("CREATE TRIGGER fail_tcp_pet_sale BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'pet sale failure'); END");
+            Sell(peer, 7, 0, 1);
+            peer.Closed();
+            That(Snapshot() == before, "宠物出售晚期提交失败不发送成功，金币、实例、详情与槽位全部回滚");
+            fixture.Sql("DROP TRIGGER fail_tcp_pet_sale");
+        }
+        int specialGold = 1000;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            foreach (var (slot, itemId) in new (short, int)[] { (0, 63022), (1, 63023) })
+            {
+                long petUid = (long)fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=7 AND slot_index=$p1",
+                    specialRoleId, slot)[0][0];
+                var template = itemResources.Items.Get(itemId);
+                int received = template.ShopPrice.GetSellGold(template.Durability, template.Durability);
+                specialGold += received;
+                Sell(peer, 7, slot, 1);
+                peer.Expect(1, 22, Build(w => { w.Write((byte)1); w.Write(specialGold); w.Write((byte)7); w.Write(slot); w.Write(1); }));
+                if (received != 0)
+                    Entry(peer.Expect(0, 14).Body, 0, 0, specialGold);
+                var delta = peer.Expect(0, 14).Body;
+                That(delta[0] == 7, "宠物出售在成功 ACK 后清除 Pet 容器的实际源槽");
+                Entry(delta, slot, -1, 0);
+                peer.Barrier();
+                That(fixture.Query("SELECT gold FROM characters WHERE id=$p0", specialRoleId) is [[long savedGold]] && savedGold == specialGold,
+                    "宠物蛋和成宠按各自 PVF 价格出售，回执与余额一致");
+                That(fixture.Query("SELECT item_uid FROM character_inventory_items WHERE item_uid=$p0", petUid).Length == 0 &&
+                    fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE item_uid=$p0", petUid).Length == 0 &&
+                    fixture.Query("SELECT item_uid FROM inventory_creature_details WHERE item_uid=$p0", petUid).Length == 0,
+                    "宠物出售原子删除核心、槽位及完整详情，不遗留可复用的实例");
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=7", specialRoleId) is [[0L]] &&
+                fixture.Query("SELECT gold FROM characters WHERE id=$p0", specialRoleId) is [[long savedGold]] && savedGold == specialGold &&
+                fixture.Snapshot("SELECT * FROM inventory_avatar_details ORDER BY item_uid") == avatars,
+                "重连后保留宠物出售结果与原时装详情，不恢复已售实例");
+        }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "shop TCP database integrity");
 
@@ -220,8 +284,18 @@ internal static class ShopTcpTests
         }
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters ORDER BY id")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM inventory_avatar_details ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM inventory_creature_details ORDER BY item_uid") +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM shop_purchase_counts ORDER BY item_id")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log"));
+
+        InventoryItem SpecialItem(int itemId, InventoryListType list, short slot)
+        {
+            var template = itemResources.Items.Get(itemId);
+            return InventoryRewardGrantService.CreateItem(template, new(list, slot),
+                InventoryRewardGrantService.Create(template) with { ExpireTime = 0 });
+        }
     }
 
     static void Buy(TcpPeer peer, int item, int count, int shop, int npc) => peer.Send(21, Build(w => { w.Write(item); w.Write(count); w.Write(shop); w.Write(npc); }));
