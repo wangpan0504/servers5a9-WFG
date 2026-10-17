@@ -55,11 +55,12 @@ internal sealed partial class GameSession
         Func<int, int>? draw = null, EpicPieceCatalog? pieces = null, Character? requiredCharacter = null,
         FormalDungeonReceipt? retry = null,
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
-        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false)
+        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false,
+        bool hellParty = false)
     {
         LastFormalDungeonRejection = null;
         var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,
-            prepareDrops,tutorials,tutorialScenes,classExperience);
+            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty);
         if (prepared is null) { LastFormalDungeonRejection ??= "prepare-returned-null"; return null; }
         var installed = owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
         if (installed is null) LastFormalDungeonRejection = "state-changed-before-install";
@@ -75,7 +76,7 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         Func<int, int>? draw, EpicPieceCatalog? pieces, Character? requiredCharacter, FormalDungeonReceipt? retry,
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
-        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false)
+        TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false, bool hellParty = false)
     {
         var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) && CanEnterFormalDungeon(retry) &&
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
@@ -112,6 +113,19 @@ internal sealed partial class GameSession
                     done.Contains(option.QuestId)))) ||
             !area.Map(done).DungeonGates.Any(gate =>
                 gate.Quests.All(done.Contains) && gate.Conditions.Length == 0))) return RejectFormal("town-selection-or-gate-check-failed");
+        // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：深渊派对入场条件 = 所在选图区域 [hell dungeon] 为真
+        // 且该区域 [hell quest] 列表全部已完成（列表为空视为满足）。拒绝原因以 "hell-party-" 前缀写入 LastFormalDungeonRejection，由 handler 回拒绝包。
+        // 未实现：[item condition]（深渊邀请函）消耗、难度/队伍规则。
+        if (hellParty)
+        {
+            if (retry is not null || training || trainingRoom || classExperience || assault is not null || questId != 0)
+                return RejectFormal("hell-party-mode-unsupported");
+            if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var hellArea) || hellArea.DungeonWorldMap is not { } hellWorld ||
+                !towns.DungeonMaps.TryGetValue(hellWorld, out var hellMap) || hellMap.Error is not null || !hellMap.HellDungeon)
+                return RejectFormal("hell-party-area-unavailable");
+            var missingHellQuests = hellMap.HellQuests.Where(id => !done.Contains(id)).ToArray();
+            if (missingHellQuests.Length > 0) return RejectFormal("hell-party-quest-required:" + missingHellQuests[0]);
+        }
         StoryQuest? quest = null;
         if (questCatalog is not null && questId != 0)
         {
@@ -123,8 +137,9 @@ internal sealed partial class GameSession
         bool allowClearedQuest = questId is > 0 and < 30000 &&
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
         if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out var entryReason, allowClearedQuest, quest,draw,questCatalog,
-            allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null))
-            return RejectFormal("entry-plan:" + entryReason);
+            allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null,hellParty: hellParty))
+            return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
+        if (hellParty && entry!.HellParty is null) return RejectFormal("hell-party-room-unavailable");
         if (entry!.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
             return RejectFormal("quest-acceptance-missing");
         if (entry.IsClassExperience != classExperience) return RejectFormal("class-experience-mismatch");
@@ -169,6 +184,7 @@ internal sealed partial class GameSession
         if (!topology.Supported) return RejectFormal("maze-topology-unsupported");
         var plans = new List<DungeonMonsterPlan>();
         uint next = state.NextObjectKey;
+        uint mapSeed = checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue));
         try
         {
             foreach (var map in entry.Maze.MapSpecification!.Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps))
@@ -176,10 +192,17 @@ internal sealed partial class GameSession
                 if (next > ushort.MaxValue) return RejectFormal("object-key-overflow");
                 var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
                 if (entry.IsTutorial) room = (tutorialScenes ?? throw new InvalidDataException("训练动作目录未装配")).Apply(room);
-                var plan = DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.BasisLevel,
-                    includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam);
+                // 实验性（#259）：比赛副本在唯一比赛图上追加四轮对手（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
+                var plan = entry.IsTournament && entry.BasisLevel is { } tournamentLevel
+                    ? DungeonTournamentPlan.CreateRoomPlan(rooms,room,rooms.ReadTournamentSource(map),mapSeed,expected.Id,checked((ushort)next),
+                        tournamentLevel,entry.PlayerTeam)
+                    : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.BasisLevel,
+                        includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam);
+                // 实验性（未在95客户端实证）：深渊派对房间（[seal door pos] 处换成 [seal door map index] 深渊图）抽波次。
+                if (entry.HellParty is { } hellRoom && map.Position == hellRoom.Room && map.Id == hellRoom.MapId)
+                    plan = plan.WithHellWaves(rooms.ResolveHellWaves(room, entry.HellPartyMode, entry.BasisLevel, RandomNumberGenerator.GetInt32), expected.Id);
                 plans.Add(plan);
-                if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0) next = plan.NextObjectKey;
+                if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0 || plan.HellWaves.Count > 0) next = plan.NextObjectKey;
             }
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException) { return RejectFormal("room-data-unsupported"); }
@@ -187,7 +210,8 @@ internal sealed partial class GameSession
         var dropPlans = ImmutableDictionary.CreateBuilder<ushort, DungeonDropGenerationPlan>();
         var groundReservations = new List<DungeonGroundReservation>();
         if ((drops is null) != (items is null)) throw new InvalidDataException("掉落资源依赖必须同时提供");
-        if (drops is not null && items is not null && !entry.IsClassExperience)
+        // 比赛副本 [disable drop item]，不准备掉落。
+        if (drops is not null && items is not null && !entry.IsClassExperience && !entry.IsTournament)
         {
             foreach (var plan in plans)
             foreach (var monster in plan.Monsters.Where(monster => monster.IsBlocking && monster.Source is not null &&
@@ -214,7 +238,7 @@ internal sealed partial class GameSession
                 }
             }
         }
-        else if (prepareDrops is not null && !entry.IsClassExperience)
+        else if (prepareDrops is not null && !entry.IsClassExperience && !entry.IsTournament)
             throw new InvalidDataException("集合掉落生成计划必须同时装配实际物品依赖");
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
@@ -260,7 +284,7 @@ internal sealed partial class GameSession
             { return null; }
         }
         var ground = new DungeonGroundState(run!, route.Rooms, groundReservations, drops is null ? "" : "monster/monster.lst", passiveGrounds);
-        var dungeon = new FormalDungeon(run!.Entry, route, run, authority, checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue)),
+        var dungeon = new FormalDungeon(run!.Entry, route, run, authority, mapSeed,
             ground, pools, draw ?? RandomNumberGenerator.GetInt32, prepareDrops, dropPlans.ToImmutable())
             { QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn };
         return new(expected,epoch,dungeon,next);
@@ -441,8 +465,17 @@ internal sealed partial class GameSession
         if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || dungeon.Run.HasPendingPassiveClear || HasPendingQuestScene)
             return new FormalDungeonDeathResult(DungeonRunOutcome.Rejected);
         uint objectKey = normal?.MonsterKey ?? scripted!.MonsterKey;
-        var target = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Run.Snapshot.CurrentMap)
-            .Monsters.SingleOrDefault(monster => monster.ObjectKey == objectKey);
+        var currentRoom = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Run.Snapshot.CurrentMap);
+        var target = currentRoom.Monsters.SingleOrDefault(monster => monster.ObjectKey == objectKey);
+        if (target is null && objectKey <= ushort.MaxValue && currentRoom.HellWaves.Any(wave => wave.ObjectKey == objectKey))
+        {
+            // 实验性：深渊波次怪死亡只登记（回 DIE_MONSTER，无经验/掉落/清房影响）。
+            var waveOutcome = dungeon.Run.RetireHellWave((ushort)objectKey);
+            return waveOutcome is DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate
+                ? new FormalDungeonDeathResult(waveOutcome, waveOutcome == DungeonRunOutcome.Accepted ? FormalReceipt() : null, (ushort)objectKey)
+                    { SpecialChildRetired = waveOutcome == DungeonRunOutcome.Accepted }
+                : new FormalDungeonDeathResult(waveOutcome);
+        }
         var issued = normal is not null ? dungeon.Authority.ValidateAndIssue(dungeon.Run,dungeon.Run.Snapshot.Identity,normal) :
             dungeon.Authority.ValidateAndIssueScripted(dungeon.Run,dungeon.Run.Snapshot.Identity,scripted!);
         if (issued.Death is null)

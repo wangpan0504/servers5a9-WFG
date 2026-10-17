@@ -19,6 +19,10 @@ internal sealed record DungeonEntryPlan(
     DungeonMap StartMap,
     DungeonMap BossMap)
 {
+    // 实验性（未在95客户端实证）：深渊派对入场（op16 请求 [7]=1）。非空表示本次入场走 maze 的 [hell dungeon] 深渊房间，
+    // 并在 DUNGEON_INFO/START_MAP 里带深渊标志；HellPartyMode 取请求标志（参考项目 ResolveHellPartyMode：requestFlag != 0 ? requestFlag : 按难度权重）。
+    public DungeonHellPartyRoom? HellParty { get; init; }
+    public byte HellPartyMode { get; init; }
     public int? BasisLevel { get; init; }
     public int? PlayerTeam { get; init; }
     public bool IsTutorial { get; init; }
@@ -28,7 +32,9 @@ internal sealed record DungeonEntryPlan(
     public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
     public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
-    public bool UsesFatigue => IsOrdinary && !IsTrainingRoom && !IsClassExperience;
+    // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
+    public bool IsTournament => Maze.IsTournament;
+    public bool UsesFatigue => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament;
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public bool HasExplicitClearMap { get; init; }
@@ -66,7 +72,8 @@ internal sealed record DungeonEntryPlan(
 
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
-        Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null)
+        Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
+        bool hellParty = false)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -84,16 +91,17 @@ internal sealed record DungeonEntryPlan(
         }
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
-            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest);
+            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest,hellParty:hellParty);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
-        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null)
+        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
+        if (hellParty && (questId != 0 || isReplay)) { reason = "hell-party-quest-or-replay-unsupported"; return false; }
         if (reason != "resource-request-ready")
             return false;
         if (definition.Id != dungeonId)
@@ -190,6 +198,20 @@ internal sealed record DungeonEntryPlan(
                 candidates = [candidates[index]];
                 ordinaryHunt = true;
                 routeQuest = 0;
+            }
+        }
+        // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
+        if (hellParty)
+        {
+            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is not null).ToArray();
+            ordinaryHunt = false; routeQuest = 0; quest = null; layoutQuest = null;
+            if (candidates.Length == 0) { reason = "hell-party-maze-unavailable"; return false; }
+            // 同一副本声明了多个带深渊房间的普通 maze（如 291100319 的 313166/313173）：与普通入场一样随机选一个。
+            if (candidates.Length > 1)
+            {
+                int hellIndex = (draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32)(candidates.Length);
+                if (hellIndex < 0 || hellIndex >= candidates.Length) throw new InvalidDataException("深渊 maze 抽签越界");
+                candidates = [candidates[hellIndex]];
             }
         }
         if (candidates.Length != 1)
@@ -296,8 +318,19 @@ internal sealed record DungeonEntryPlan(
         }
 
         // SourceOrdinal 仅保留资源顺序，不能直接作为 NOTI28 的 wire 枚举。
+        // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_room.go / A21 FindHellMapRoom）：深渊房间不是新增房间，而是 [seal door pos] 那个普通房间
+        // 在深渊派对模式下改用 [seal door map index] 的深渊地图（柱子 + 波次 + 固定小怪）。起点/Boss/分层/条件/剧情图占用同一坐标时无法替换，按不可用拒绝。
+        var planMaze = maze;
+        if (hellParty && maze.HellParty is { } hellRoom && maze.HellPartyPath is { } hellMapPath && maze.MapSpecification is { } hellSpec)
+        {
+            if (starts[0].Position == hellRoom.Room || bosses.Any(boss => boss.Position == hellRoom.Room) ||
+                maze.LayeredMaps.Concat(maze.ConditionalMaps).Concat(maze.StoryStages).Any(map => map.Position == hellRoom.Room))
+            { reason = "hell-party-room-conflict"; return false; }
+            planMaze = maze with { MapSpecification = hellSpec.Select(map => map.Position == hellRoom.Room && map.Kind == "map"
+                ? map with { Id = hellRoom.MapId, Path = hellMapPath, CandidateIds = Array.Empty<int>() } : map).ToArray() };
+        }
         var active = questId == 0 || isReplay ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
-        plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, maze, starts[0], terminal)
+        plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
             BasisLevel = definition.BasisLevel,
             // 本入口只规划原生普通单人PVE；构造初始team0，START_MAP普通分支保持该值。
@@ -321,6 +354,8 @@ internal sealed record DungeonEntryPlan(
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
+            HellParty = hellParty ? maze.HellParty : null,
+            HellPartyMode = hellParty ? (byte)1 : (byte)0,
             InitializationCounterSupported = !definition.IsClassExperience && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
@@ -332,7 +367,7 @@ internal sealed record DungeonEntryPlan(
         uint dungeonId, uint questId, byte difficulty)
     {
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
-            quest.SubType != -1 || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
+            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
             // 一般杀怪任务声明参数-1；觉醒任务的杀怪/收集阶段以同一行参数声明最低难度，且不得低于它。
             quest.Grade == "[side]" && !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter == -1) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
@@ -343,11 +378,13 @@ internal sealed record DungeonEntryPlan(
         if (quest.Condition == "[hunt monster]")
         {
             if (!QuestHuntProgress.TryTargets(quest,out var targets) ||
-                targets.Any(target => target.MonsterId <= 0 || target.DungeonId != -1 && target.DungeonId != dungeonId ||
+                targets.Any(target => target.MonsterId <= 0 && target.MonsterId != QuestHuntProgress.EliteMonsterSelector && target.MonsterId != -3 || target.DungeonId != -1 && target.DungeonId != dungeonId ||
                     target.MinimumDifficulty > difficulty)) return false;
         }
         // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。
-        else if (quest.Grade != "[achievement]" || quest.Condition != "[seeking]" || !QuestLifecyclePlan.ValidSeeking(quest) ||
+        // #256黑市EXP的6053/6056/6059（seeking sub type 0）同样只借用普通路线，材料来自任务声明的本图怪物掉落。
+        else if (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
+                QuestLifecyclePlan.HarlemSeeking(quest)) ||
             !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty))) return false;
         var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
         return active.AcceptanceId != Guid.Empty &&

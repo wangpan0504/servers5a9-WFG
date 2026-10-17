@@ -30,7 +30,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         var previousInventory = context.Owner.Execute(() => context.Session.Selected?.Inventory);
         var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier);
         log.Write("quest_completion", new { Connection = context.Id, Quest = request.QuestId, result.Outcome,
-            Accepted = result.Outcome == QuestFinishOutcome.Committed, Failure = result.Failure.ToString(),
+            Accepted = result.Outcome == QuestFinishOutcome.Committed, Failure = result.Failure.ToString(), RejectReason = result.Reason,
             result.Receipt?.Commit.AcceptanceId, result.Receipt?.Commit.Clear?.InstanceId,
             result.Receipt?.Commit.ExperienceReward, result.Receipt?.Commit.GainedExperience, result.Receipt?.Commit.Duplicate,
             result.Receipt?.Commit.DirectGoldAmount, result.Receipt?.Commit.MailedGoldAmount, result.Receipt?.Commit.GoldMailId });

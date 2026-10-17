@@ -80,6 +80,16 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             if (training.Length != 1) return maze;
             return maze with { IsTrainingRoom = true, MapSpecification = [new("boss",start,training[0].Id,training[0].Path)] };
         }
+        // 实验性（#259，依据来自 Go 项目反汇编，未经 V31 客户端验证）：比赛副本是 1x1 单图，起点与 Boss 同为 (0,0)，
+        // 地图取 PVF 地图反向 [dungeon] 声明的唯一 [boss] 型比赛图（BB BB，布局位 1）。
+        if (definition.IsTournament && maze.Width == 1 && maze.Height == 1 && maze.Starts.Count == 1 && maze.Bosses.Count == 1 &&
+            start == new DungeonPoint(0,0) && boss == start && maps.Count == 0 && maze.GreedGrid.Cells is [{ Index: 1 }])
+        {
+            var tournament = pool.Where(row => row.Kind == "[boss]" && (row.Layouts & 2) != 0 &&
+                row.Path.StartsWith("map/tournament/",StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (tournament.Length != 1) return maze;
+            return maze with { IsTournament = true, MapSpecification = [new("boss",start,tournament[0].Id,tournament[0].Path)] };
+        }
         if (maps.Values.Any(row => row.Kind == "boss" && row.Position != boss)) return maze;
         foreach (var cell in maze.GreedGrid.Cells!)
         {

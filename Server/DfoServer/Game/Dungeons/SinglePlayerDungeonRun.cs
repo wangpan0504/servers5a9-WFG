@@ -158,6 +158,13 @@ internal sealed partial class SinglePlayerDungeonRun
         !current.Dead.Contains(key) && !current.Culled.Contains(key)
             ? current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key && (monster.CanReportDeath || monster.IsSpecialChild ||
                 entry.IsTutorial && (monster.IsScriptedRetirement || monster.AiCharacter?.Faction is "[character]" or "[neutral]"))) : null;
+    // 实验性（未在95客户端实证）：深渊派对波次怪不在 Monsters 里，客户端上报其死亡时只登记，不参与清房/经验/掉落。
+    internal DungeonRunOutcome RetireHellWave(ushort key)
+    {
+        if (Phase != SinglePlayerDungeonPhase.Dungeon || pendingSettlement is not null || HasPendingDeath || pendingPassiveClear is not null ||
+            !current.Plan.HellWaves.Any(wave => wave.ObjectKey == key)) return DungeonRunOutcome.Rejected;
+        return current.Dead.Add(key) ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate;
+    }
     internal bool IsCulledMonster(ushort key) => Phase == SinglePlayerDungeonPhase.Settlement && ClearFact is not null && current.Culled.Contains(key);
     // 友方、非敌对对象退场只更新显示集合，不加入持久击杀或清图事实；未知key不改变实例。
     internal void RetireNonCombatObject(ushort key)

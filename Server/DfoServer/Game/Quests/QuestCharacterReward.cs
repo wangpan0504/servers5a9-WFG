@@ -41,9 +41,19 @@ internal static class QuestCharacterReward
     }
 
     // 深渊派对挑战资格类任务只有参数1的形态已核对：奖励只剩经验/金币，服务端没有资格状态，完成即记入已完成。
+    // [inferno challenge]（7527/7530/7533/7539/7542）与 [cosmo challenge]（如10112“[超·星空裂缝]”值7191）同理：单个 Type0 Text null 且 Value>0 的奖励，行为与 hell challenge 相同（无资格状态，仅发经验/金币）。
+    // 假设：任务6081“[星空裂缝]天空中出现的裂缝”奖励 [hell legend] 值291100268，无原服依据、值含义未知，仅限6081精确放行（形状：单个 Type0 Text null、无选择奖励），行为同深渊资格：只发经验/金币并记为已完成，不写资格状态。Refs #256
     public static bool TryHellChallenge(StoryQuest quest) =>
-        quest.RewardType == "[hell challenge]" && quest.Rewards is [{ Type: 0, Text: null, Value: 1 }] &&
+        (quest.RewardType == "[hell challenge]" && quest.Rewards is [{ Type: 0, Text: null, Value: 1 }] ||
+            quest.RewardType is "[inferno challenge]" or "[cosmo challenge]" && quest.Rewards is [{ Type: 0, Text: null, Value: > 0 }] ||
+            quest.Id == 6081 && quest.RewardType == "[hell legend]" && quest.Rewards is [{ Type: 0, Text: null, Value: 291100268 }]) &&
         quest.Definition is { SelectRewards.Length: 0 };
+
+    // 假设（无原服依据，Refs #256）：深渊派对入口资格 = 角色已完成任一确认形态的 [hell challenge] 资格任务。
+    // 服务端没有单独的资格表，完成态已随 CompletedQuests 持久化；客户端入口 UI 如何判定、深渊入场请求的包形状均未逆向确认，
+    // 因此此函数只供将来的入场校验使用，目前不参与任何入场拒绝。
+    public static bool HasHellPartyQualification(Character character, QuestCatalog quests) =>
+        character.CompletedQuests.Any(id => quests.TryGet(id,out var quest) && quest.RewardType == "[hell challenge]" && TryHellChallenge(quest));
 
     public static byte EquipmentSlots(Character expected, StoryQuest quest)
     {

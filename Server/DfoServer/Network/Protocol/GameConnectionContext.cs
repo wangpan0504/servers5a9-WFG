@@ -20,6 +20,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public ChannelIdentity Channel => Session.ChannelEntry?.Identity ?? channel;
     public DfoServer.Network.Projection.DungeonDeathProjection? Death { get; set; }
     public DfoServer.Network.Projection.DungeonCardProjection? Cards { get; set; }
+    // 大会副本宝箱每行已选卡序号（255=未选），仅在发出 NOTI388 后使用。
+    public byte[] TournamentRewardSelection { get; } = [255, 255];
     public DfoServer.Network.Projection.PremiumContractProjection? Premiums { get; set; }
     public DfoServer.Network.Projection.CreatureRuntimeProjection? Creatures { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。

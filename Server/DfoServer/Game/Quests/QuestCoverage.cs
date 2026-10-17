@@ -183,7 +183,7 @@ internal static class QuestCoverage
     {
         "[custom quest]" => QuestRentalProgress.Supports(quest),
         "[meet npc]" => QuestStateProgress.Type(quest) is not null || quest.SubType == -1 && quest.IntData is [> 0],
-        "[seeking]" or "[seek n meet npc]" => quest.SubType == -1 && QuestLifecyclePlan.ValidSeeking(quest),
+        "[seeking]" or "[seek n meet npc]" => QuestLifecyclePlan.SeekingSubtype(quest) && QuestLifecyclePlan.ValidSeeking(quest),
         "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.TryTargets(quest,out _),
         "[quest clear]" => QuestRelationProgress.SequentialParent(quest,catalog),
         "[clear multi quest]" => QuestRelationProgress.ThresholdParent(quest,catalog),
@@ -238,7 +238,7 @@ internal static class QuestCoverage
                 bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
                 bool state = QuestStateProgress.Type(quest) is not null;
                 bool rental = QuestRentalProgress.Supports(quest);
-                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental) reasons.Add("目标子类型尚未接入");
+                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental && !QuestLifecyclePlan.SeekingSubtype(quest)) reasons.Add("目标子类型尚未接入");
                 if (quest.MainQuest is not null && !QuestRelationProgress.DialogueChild(quest,catalog))
                     reasons.Add("隐藏子任务的实际对话及交付入口未接入");
                 bool target = HasSupportedTarget(quest,catalog);
@@ -328,7 +328,7 @@ internal static class QuestCoverage
         "[creature evolution]" => "奖励依赖宠物进化状态；宠物领域尚未接入",
         "[expert job]" => "奖励依赖副职业状态；副职业领域尚未接入",
         "[ridable]" => "奖励依赖坐骑状态；坐骑领域尚未接入",
-        "[cosmo challenge]" or "[hell challenge]" or "[hell legend]" or "[inferno challenge]" => "奖励依赖对应挑战或深渊资格；专用领域状态及通知尚未接入",
+        "[hell legend]" => "奖励依赖对应挑战或深渊资格；专用领域状态及通知尚未接入",
         "[operation hope]" => "奖励依赖代号希望玩法状态；对应领域尚未接入",
         "[grow type]" or "[awakening type]" => "职业奖励声明不属于已接入的合法正常转职或觉醒组合",
         "[slot expansion]" => "装备槽奖励需要本版0/1/2合法索引及无选择奖励的声明",

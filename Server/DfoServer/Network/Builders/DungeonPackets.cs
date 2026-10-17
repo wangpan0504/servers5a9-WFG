@@ -54,7 +54,8 @@ internal static class DungeonPackets
 
     // ACK16 失败读取 success:u8、error:u16 和 memberSlot:u8；错误9静默恢复选图等待。
     public static byte[] SelectionRejected() => [0, 9, 0, 0];
-
+    // 实验性（未在95客户端实证）：深渊派对拒绝包，code 0xAD=缺前置任务、0x01=区域/房间不可用（参考项目 A21 DungeonAdmissionRejectBuilder）。
+    public static byte[] HellPartyRejected(byte code) => [0, code, 0, 0];
     // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。
     public static byte[] Information(DungeonEntryPlan plan)
     {
@@ -69,9 +70,74 @@ internal static class DungeonPackets
         body[11] = byte.MaxValue;
         // 未解释字段保持匹配形状：offset16的u16为0，offset20的FFFFFFFF选择跳过分支。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(20), uint.MaxValue);
+        // 实验性（未在95客户端实证；依据参考项目 dungeon_info.go / dungeon_hell_room.go / A21 DungeonEntryHandler:1323-1335）：
+        // 深渊派对入场时 [10,11]=深渊房间迷宫坐标X/Y，[14..15] u16 hellPartyEnabled=1，[18] Value2=0x0B；[20..23] seed 与普通入场一致（FFFFFFFF）。
+        if (plan.HellParty is { } hell)
+        {
+            body[10] = checked((byte)hell.Room.X);
+            body[11] = checked((byte)hell.Room.Y);
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(14), 1);
+            body[18] = 0x0B;
+        }
         return body;
     }
 
+    // 实验性（#259，布局来自 Go 项目 dungeon_tournament.go 对 DNF.exe 的反汇编注释，未经 V31 客户端验证）：
+    // NOTI386 TOURNAMENT_INFO = dungeonId(u32)、难度(u8)、组队人数(u8)，4 组对阵表（轮次u8、队伍数u8、每队位置u8+成员 code u32/战力 u16），
+    // 4 组对手（轮次u8，每名对手 objectKey u16、code u32、level u8、type u8）。
+    public static byte[] TournamentInfo(DungeonEntryPlan plan, DungeonTournamentPlan tournament)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(tournament);
+        if (tournament.Rounds.Count != DungeonTournamentPlan.RoundCount ||
+            tournament.Opponents.Count != DungeonTournamentPlan.RoundCount * tournament.PartyCount)
+            throw new InvalidDataException("比赛对阵表与对手数量不一致");
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(checked((uint)plan.DungeonId));
+        writer.Write(plan.Difficulty);
+        writer.Write(checked((byte)tournament.PartyCount));
+        for (int round = 0; round < tournament.Rounds.Count; round++)
+        {
+            var bracket = tournament.Rounds[round];
+            writer.Write(checked((byte)(round + 1)));
+            writer.Write(checked((byte)bracket.Count));
+            for (int position = 0; position < bracket.Count; position++)
+            {
+                writer.Write(checked((byte)position));
+                foreach (var member in bracket[position].Members)
+                {
+                    writer.Write(checked((uint)member.Code));
+                    writer.Write(checked((ushort)member.Strength));
+                }
+            }
+        }
+        for (int round = 1; round <= DungeonTournamentPlan.RoundCount; round++)
+        {
+            writer.Write((byte)round);
+            foreach (var opponent in tournament.Opponents.Where(row => row.Round == round))
+            {
+                writer.Write(opponent.ObjectKey);
+                writer.Write(checked((uint)opponent.Code));
+                writer.Write(opponent.Level);
+                writer.Write(opponent.Type);
+            }
+        }
+        return stream.ToArray();
+    }
+
+    // NOTI387 TOURNAMENT_MAP_INFO（替代比赛副本的 NOTI29）：x、y(u8)，seed(u32)，0，1，地图 id(u32)，三个 0。共 15B。
+    public static byte[] TournamentMapInfo(DungeonEntryPlan plan, uint seed)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        byte[] body = new byte[15];
+        body[0] = checked((byte)plan.StartMap.Position.X);
+        body[1] = checked((byte)plan.StartMap.Position.Y);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(2), seed);
+        body[7] = 1;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8), checked((uint)plan.StartMap.Id));
+        return body;
+    }
     // NOTI29空名单为23B；seed由调用方显式提供，不能在Builder推导资源或实例随机规则。
     public static byte[] StartMap(DungeonEntryPlan plan, uint seed, DungeonMapOperation? operation = null,
         DungeonMapPayload payload = DungeonMapPayload.Build)
@@ -86,6 +152,9 @@ internal static class DungeonPackets
         body[2] = (byte)mode;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(3), seed);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), 1);
+        // 实验性（未在95客户端实证；依据参考项目 dungeon_start_map.go / A21 DungeonNotificationBuilder.BuildStartMap）：
+        // 深渊派对时 [7]=深渊模式（取请求标志，默认1）。
+        if (plan.HellParty is not null) body[7] = plan.HellPartyMode;
         body[13] = (byte)payload;
         if (payload == DungeonMapPayload.Cached)
         {
@@ -95,7 +164,7 @@ internal static class DungeonPackets
         }
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(14), checked((uint)plan.StartMap.Id));
         // 三个空列表及fog字段保留0，FF跳过成员选择；不代替NOTI28的格记录初始化。
-        body[22] = byte.MaxValue;
+        body[22] = plan.HellParty is not null ? (byte)1 : byte.MaxValue; // 实验性：深渊派对 fog 标志=1（参考项目 HellPartyFogFlag），普通入场保持 FF。
         return body;
     }
 
@@ -106,7 +175,7 @@ internal static class DungeonPackets
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(monsters);
-        int actorCount = checked(monsters.Monsters.Count + monsters.SpecialObjects.Count);
+        int actorCount = checked(monsters.Monsters.Count + monsters.SpecialObjects.Count + monsters.HellWaves.Count);
         if (monsters.Room.Map != plan.StartMap || actorCount > byte.MaxValue)
             throw new InvalidDataException("怪物计划与房间不匹配或超过通知数量范围");
         byte[] empty = StartMap(plan, seed, operation, payload);
@@ -153,6 +222,22 @@ internal static class DungeonPackets
             writer.Write(0u);
             writer.Write((byte)1); // 不参与普通活怪清房扫描。
         }
+        // 实验性（未在95客户端实证；依据参考项目 AppendHellPartyTemplateRows）：深渊波次怪作为隐藏模板行追加：TemplateOrder=波次号，
+        // Flag0=1(HellPartyHiddenTemplateFlag)，Flag1=0xFF(HellPartyAttachAllWavesSelector)，其余字段同普通行。
+        foreach (var wave in monsters.HellWaves)
+        {
+            writer.Write(checked((ushort)wave.Order));
+            writer.Write(checked((uint)wave.PacketIndex));
+            writer.Write(wave.ObjectKey);
+            writer.Write(checked((uint)wave.MonsterId));
+            writer.Write(wave.Level);
+            writer.Write(wave.Type);
+            writer.Write((byte)1);
+            writer.Write(byte.MaxValue);
+            writer.Write(byte.MaxValue);
+            writer.Write(0u);
+            writer.Write((byte)0);
+        }
         writer.Write(checked((byte)passiveItems.Count));
         var keys = new HashSet<uint>();
         foreach (var ground in passiveItems)
@@ -177,6 +262,24 @@ internal static class DungeonPackets
         }
         writer.Write(empty.AsSpan(20));
         return stream.ToArray();
+    }
+
+    // 实验性（未在95客户端实证；依据参考项目 BuildHellPartyMonsterInfo / NOTI 679）：int32 count + count×(int32 code, int32 level)，按出现顺序去重 code，等级取 max(1,level)。
+    // 没有波次怪时返回 null（不发包）。
+    public static byte[]? HellPartyMonsterInfo(DungeonMonsterPlan monsters)
+    {
+        var entries = new List<(int Code, int Level)>();
+        foreach (var wave in monsters.HellWaves)
+            if (wave.MonsterId > 0 && entries.All(entry => entry.Code != wave.MonsterId)) entries.Add((wave.MonsterId, Math.Max(1, (int)wave.Level)));
+        if (entries.Count == 0) return null;
+        var body = new byte[4 + entries.Count * 8];
+        BinaryPrimitives.WriteInt32LittleEndian(body, entries.Count);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(4 + i * 8), entries[i].Code);
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(8 + i * 8), entries[i].Level);
+        }
+        return body;
     }
 
     // NOTI30 在 023842FC/0238434A 读取 u32 和 u8。当前普通路径是五个 0。

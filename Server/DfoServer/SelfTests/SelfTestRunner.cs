@@ -234,12 +234,15 @@ internal static class SelfTestRunner
         DungeonDropPacketsTests.Run();
         await DungeonDeathProtocolTests.RunAsync(towns, pvf);
         DungeonEntryPlanTests.Run(pvf);
+        TournamentSettlementTests.Run();
         MainlineQuestBatchTests.Run(pvf, itemResources);
         DungeonMapPoolTests.Run(pvf);
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
         await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);
         QuestCatalogTests.Run(pvf);
         QuestHarlemExpTests.Run(pvf);
+        QuestHarlemExpTests.RunSeeking(pvf, itemResources);
+        QuestHarlemExpTests.RunElite(pvf, itemResources);
         QuestLifecycleTests.Run(towns, itemResources);
         ImageCommunicationTests.RunResources(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestOrdinaryCompletionTests.Run(towns, pvf, characters, itemResources, sharedQuests);
@@ -251,6 +254,7 @@ internal static class SelfTestRunner
         MiddleQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        HellPartyEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         StadiumQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestScriptedSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         FriendlyAiCharacterDeathTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);

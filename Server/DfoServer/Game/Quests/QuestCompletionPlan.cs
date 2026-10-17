@@ -52,7 +52,8 @@ internal sealed class QuestCompletionPlan
         AnswersAfter = Answer is { } answer ? expected.QuestAnswers.SetItem(quest.Id,answer) : expected.QuestAnswers;
         AccountAnswersAfter = AccountQuest && Answer is { } accountAnswer ? expected.AccountQuestAnswers.SetItem(quest.Id,accountAnswer) : expected.AccountQuestAnswers;
         ProfessionGrowType = profession; RewardLearning = rewardLearning; TargetEquipmentSlotFlags = equipmentSlots; TpAmount = tpAmount;
-        HellChallenge = QuestCharacterReward.TryHellChallenge(quest);
+        // mode3 解锁提示只对已逆向确认的 [hell challenge] 成立；inferno/cosmo/6081 为假设性放行，仍走普通 mode0（Refs #256）。
+        HellChallenge = quest.RewardType == "[hell challenge]" && QuestCharacterReward.TryHellChallenge(quest);
         ClosedChildren = closedChildren;
         CascadeMarkerQuestId = QuestRelationProgress.CascadeMarker(quest,quests);
         SyncedQuestIds = (CascadeMarkerQuestId is { } synced && QuestRelationProgress.IsAccountSyncMarker(quests.Get(synced))
@@ -195,7 +196,7 @@ internal sealed class QuestCompletionPlan
             bool creatureReward = QuestCreatureReward.Evolution(quest);
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
             bool rental = QuestRentalProgress.Supports(quest);
-            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && QuestStateProgress.Type(quest) is null || quest.RewardType != "[item]" && profession is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
+            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) || quest.RewardType != "[item]" && profession is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
                 !QuestCoverage.HasOrdinaryAttributes(quest) ||
                 quest.Definition!.Has("send postal"))
                 throw new NotSupportedException("任务需要尚未具备的周期、特殊奖励或附属交付规则");
@@ -413,6 +414,7 @@ internal sealed class QuestCompletionPlan
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException or ArgumentOutOfRangeException)
         {
+            // 把真实原因写进拒绝结果（服务端日志可见），对客户端的返回不变。
             return new(QuestCompletionOutcome.Rejected, null, error.Message) { Failure = QuestCompletionFailure.ResourceUnsupported };
         }
     }

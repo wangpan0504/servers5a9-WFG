@@ -15,7 +15,7 @@ internal static class QuestInventoryProgress
         foreach (var row in active)
         {
             if (row.AcceptanceId == Guid.Empty || !quests.TryGet(row.QuestId, out var quest) || quest.Condition is not ("[seeking]" or "[seek n meet npc]") ||
-                quest.SubType != -1 || quest.Definition is not { Diagnostics.Length: 0 } || !QuestLifecyclePlan.ValidSeeking(quest) ||
+                !QuestLifecyclePlan.SeekingSubtype(quest) || quest.Definition is not { Diagnostics.Length: 0 } || !QuestLifecyclePlan.ValidSeeking(quest) ||
                 QuestCoverage.Unconfirmed(quest).Length != 0)
             { result.Add(row); continue; }
             uint material = QuestLifecyclePlan.MaterialState(inventory, quest, utcSeconds);

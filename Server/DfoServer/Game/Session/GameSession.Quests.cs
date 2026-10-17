@@ -90,7 +90,7 @@ internal sealed partial class GameSession
             if (preparation.Outcome != QuestCompletionOutcome.Accepted || preparation.Plan is null)
                 return new QuestFinishResult(preparation.Outcome == QuestCompletionOutcome.InsufficientSpace &&
                     preparation.Failure == QuestCompletionFailure.InventoryCapacity
-                    ? QuestFinishOutcome.InsufficientSpace : QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = preparation.Failure };
+                    ? QuestFinishOutcome.InsufficientSpace : QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = preparation.Failure, Reason = preparation.Reason };
             var plan = preparation.Plan;
             // 不明提交结果保留这份冻结计划；精确查询同接取receipt，不生成新的领奖身份。
             pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity);

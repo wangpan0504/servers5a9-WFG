@@ -29,9 +29,28 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
 {
     public IReadOnlyList<DungeonPlannedSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonPlannedSpecialObject>();
     public uint NextObjectKey => (uint)Monsters.Select(monster => (int)monster.ObjectKey)
-        .Concat(SpecialObjects.Select(actor => (int)actor.ObjectKey)).DefaultIfEmpty(0).Max() + 1;
+        .Concat(SpecialObjects.Select(actor => (int)actor.ObjectKey)).Concat(HellWaves.Select(wave => (int)wave.ObjectKey)).DefaultIfEmpty(0).Max() + 1;
+    // 实验性（未在95客户端实证）：深渊派对房间柱子的波次怪（START_MAP 隐藏模板行 + NOTI 679）。不进 Monsters：不参与清房/开门判定，也不产生经验/掉落。
+    public IReadOnlyList<DungeonHellWaveMonster> HellWaves { get; init; } = Array.Empty<DungeonHellWaveMonster>();
+    // 给波次怪分配 object key（跳过角色 key）与 START_MAP 行序号（参考项目 running index：普通/APC 分别接着既有行往后排）。
+    public DungeonMonsterPlan WithHellWaves(IReadOnlyList<DungeonHellWaveMonster> waves, ushort characterId)
+    {
+        int next = (int)NextObjectKey;
+        int normalIndex = Monsters.Count(monster => monster.SpawnType < 5);
+        int apcIndex = Monsters.Count(monster => monster.SpawnType >= 5) + SpecialObjects.Count;
+        var result = new List<DungeonHellWaveMonster>();
+        foreach (var wave in waves)
+        {
+            if (next == characterId) next++;
+            if (next > ushort.MaxValue) throw new InvalidDataException("深渊波次 object key 超出 ushort 范围");
+            result.Add(wave with { ObjectKey = (ushort)next++, PacketIndex = wave.Type >= 5 ? apcIndex++ : normalIndex++ });
+        }
+        return this with { HellWaves = Array.AsReadOnly(result.ToArray()) };
+    }
     public int? BasisLevel { get; init; }
     public int? PlayerTeam { get; init; }
+    // 实验性（#259）：比赛副本的对阵表与对手；非比赛房间为 null。
+    public DungeonTournamentPlan? Tournament { get; init; }
 
     public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey,
         int? basisLevel = null, int? playerTeam = null)

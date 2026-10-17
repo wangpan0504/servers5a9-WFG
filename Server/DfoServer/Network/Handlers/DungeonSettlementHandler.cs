@@ -28,6 +28,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         commands.Register(CmdPacketType.CARD_SELECT_RIGHT_STATE, CardsAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.SELECT_CARD, SelectCardAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.EPLP_COMMAND, ResultCommandAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.TOURNAMENT_REWARD_SELECT_STATE, TournamentStateAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.TOURNAMENT_REWARD_SELECT, TournamentSelectAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
     }
 
     async Task<CommandResult> BossAsync(GameConnectionContext context, Packet request)
@@ -59,7 +61,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(reward.TotalExperience - reward.GrowthContractExperience,
             reward.GrowthContractExperience, result.GainedExperience) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
-        await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
+        // 大会副本没有普通结算页：不发 34/35，改发 NOTI388（见 TournamentReward 注释）。
+        bool tournament = receipt.Entry.IsTournament;
+        if (!tournament)
+            await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
         if (!previous.ActiveMainQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
@@ -70,6 +75,13 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard);
         if (!receipt.Entry.IsTutorial)
             await DungeonCardMembershipProjection.RefreshAsync(context);
+        if (tournament)
+        {
+            context.TournamentRewardSelection[0] = context.TournamentRewardSelection[1] = DungeonSettlementPackets.TournamentUnselected;
+            await context.Notify(NotiPacketType.TOURNAMENT_CLEAR_REWARD,
+                DungeonSettlementPackets.TournamentReward(DungeonTournamentPlan.RoundCount, result.GainedExperience), "formal_tournament_clear_reward", Guard);
+        }
+        else
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(reward.Applied(result.GainedExperience),
             result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond,
             result.Presentation.MonsterGrowthContractExperience), "formal_clear_reward", Guard);
@@ -89,6 +101,29 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "assault_mode_daily_info", Guard);
         }
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> TournamentStateAsync(GameConnectionContext context, Packet request)
+    {
+        if (request.Body.Length != 0 || context.Session.FormalDungeonResultFocus() is not { Entry.IsTournament: true } current)
+            return CommandResult.Unhandled;
+        await context.Reply(CmdPacketType.TOURNAMENT_REWARD_SELECT_STATE, DungeonSettlementPackets.TournamentSelectState(0),
+            "formal_tournament_reward_state", () => context.Session.CanPublishDungeonSettlement(current));
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> TournamentSelectAsync(GameConnectionContext context, Packet request)
+    {
+        if (request.Body.Length != 2 || request.Body[0] >= DungeonSettlementPackets.TournamentCardRows ||
+            request.Body[1] >= DungeonSettlementPackets.TournamentCardsPerRow ||
+            context.Session.FormalDungeonResultFocus() is not { Entry.IsTournament: true } current)
+            return CommandResult.Unhandled;
+        var selected = context.TournamentRewardSelection;
+        // 每行只能选一张；重复选同一张按幂等回显，选另一张忽略。卡均为空卡，不发放物品。
+        if (selected[request.Body[0]] == DungeonSettlementPackets.TournamentUnselected) selected[request.Body[0]] = request.Body[1];
+        await context.Reply(CmdPacketType.TOURNAMENT_REWARD_SELECT, DungeonSettlementPackets.TournamentSelection(0, selected),
+            "formal_tournament_reward_selected", () => context.Session.CanPublishDungeonSettlement(current));
         return CommandResult.Handled;
     }
 

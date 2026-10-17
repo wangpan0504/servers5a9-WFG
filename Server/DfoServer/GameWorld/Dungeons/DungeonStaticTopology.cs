@@ -19,7 +19,8 @@ internal sealed record DungeonStaticTopology(
         if (maze.MapSpecification is null)
             return Unsupported("未提供显式地图，不能生成静态连接");
         // 专用单房间保留修炼场BB或体验AA；实际无邻接，不补出口，也不放宽普通地图。
-        if ((maze.IsTrainingRoom && grid.Cells is [{ Index: 1 }] || maze.IsClassExperience && grid.Cells is [{ Index: 0 }]) &&
+        if ((maze.IsTrainingRoom && grid.Cells is [{ Index: 1 }] || maze.IsClassExperience && grid.Cells is [{ Index: 0 }] ||
+            maze.IsTournament && grid.Cells is [{ Index: 1 }]) &&
             maze.Width == 1 && maze.Height == 1 && maze.MapSpecification is [var training] &&
             training.Kind == "boss" && training.Id >= 0 && !string.IsNullOrWhiteSpace(training.Path) &&
             training.Position == new DungeonPoint(0,0) && maze.Starts.SequenceEqual([training.Position]) &&

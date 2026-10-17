@@ -122,7 +122,7 @@ internal sealed class QuestLifecyclePlan
             "[reach the range]" when QuestClientSceneProgress.TownRange(quest) => 1,
             "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest) => 1,
             "[question]" when QuestQuestionProgress.TryCount(quest,out _) => QuestQuestionProgress.Unanswered,
-            "[seeking]" when quest.SubType == -1 && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
+            "[seeking]" when SeekingSubtype(quest) && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
             "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u | MaterialState(expected.Inventory, quest, now.ToUnixTimeSeconds()),
             "[clear map]" when QuestClearEligibility.IsSingleMap(quest) => 1,
             "[condition under clear]" or "[clear a dungeon]" when QuestDungeonClearProgress.Supports(quest) => QuestDungeonClearProgress.Initial(quest),
@@ -290,6 +290,19 @@ internal sealed class QuestLifecyclePlan
     }
 
     internal static int MaterialLength(StoryQuest quest) => quest.IntData.Count - (quest.Condition == "[seek n meet npc]" ? 1 : 0);
+
+    // #256：黑市EXP的6053/6056/6059声明`seeking / sub type 0`。服务端的寻物完全由int data物品/数量对与库存推导，
+    // 参考实现(go-server finishDefinitionSeekingRules/itemPairRulesFromInts)同样不读取sub type；资源形状与已支持的sub type -1寻物一致
+    // （单个物品/数量对+怪物掉落行只产出该物品）。因此只对这三个任务的精确形状按sub type -1处理，不放行其它sub type 0寻物。
+    internal static readonly int[] HarlemSeekingIds = [6053, 6056, 6059];
+
+    internal static bool SeekingSubtype(StoryQuest quest) => quest.SubType == -1 || quest.SubType == 0 && HarlemSeeking(quest);
+
+    internal static bool HarlemSeeking(StoryQuest quest) => quest is { Condition: "[seeking]", SubType: 0, Grade: "[side]", RewardType: "[item]" } &&
+        HarlemSeekingIds.Contains(quest.Id) && quest.MainQuest is null && quest.IntData.Count == 2 && quest.IntData[1] == 3 && ValidSeeking(quest) &&
+        quest.Definition is { Diagnostics.Length: 0, Drops.Length: > 0 } definition &&
+        definition.Drops.All(row => row.EnemyType == 1 && row.ItemId == quest.IntData[0] && row.DungeonId == 7322 && row.Difficulty == -1 &&
+            row.Rate == 100 && row.Count > 0);
 
     internal static bool ValidSeeking(StoryQuest quest)
     {

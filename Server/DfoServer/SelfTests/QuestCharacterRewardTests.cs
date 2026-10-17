@@ -239,14 +239,38 @@ internal static class QuestCharacterRewardTests
         var hell = catalog.All.Where(quest => quest.RewardType == "[hell challenge]").ToArray();
         That(hell.Length > 0 && hell.All(quest => QuestCharacterReward.TryHellChallenge(quest) == (quest.Rewards is [{ Type: 0, Text: null, Value: 1 }])),
             "深渊派对挑战资格只在奖励参数为1且无选择奖励时放行");
-        That(catalog.All.Where(quest => quest.RewardType is "[hell legend]" or "[cosmo challenge]" or "[inferno challenge]" or "[operation hope]" or "[tp]" or "[slot expansion]")
+        That(catalog.All.Where(quest => quest.Id != 6081 && quest.RewardType is "[hell legend]" or "[operation hope]" or "[tp]" or "[slot expansion]")
             .All(quest => !QuestCharacterReward.TryHellChallenge(quest)),"其他专用奖励类型不得被深渊资格放行");
         var hellProbe = hell.First(QuestCharacterReward.TryHellChallenge);
         That(!QuestCharacterReward.TryHellChallenge(hellProbe with { Rewards = [new(0,2,null)] }) &&
             !QuestCharacterReward.TryHellChallenge(hellProbe with { Rewards = [new(0,1,null),new(0,0,null)] }) &&
-            !QuestCharacterReward.TryHellChallenge(hellProbe with { RewardType = "[hell legend]" }) &&
-            !QuestCharacterReward.TryHellChallenge(hellProbe with { RewardType = "[cosmo challenge]" }),
+            !QuestCharacterReward.TryHellChallenge(hellProbe with { RewardType = "[hell legend]" }),
             "参数不是1、带额外参数或换成其他奖励类型都不得放行");
+        // [inferno challenge]：7527/7530/7533/7539/7542 单个 Type0 Text null Value>0 奖励，行为同 hell challenge。
+        // 注意：7527/7530/7533/7539/7542 是 reward int data 的值，不是任务号（如 5783→7542、10106→7530）。
+        var infernos = catalog.All.Where(quest => quest.RewardType == "[inferno challenge]").ToArray();
+        That(infernos.Length > 0 && new[] { 7527, 7530, 7533, 7539, 7542 }.All(value => infernos.Any(quest => quest.Rewards is [{ Value: var v }] && v == value)),
+            "真实资源含奖励值 7527/7530/7533/7539/7542 的 inferno 任务");
+        foreach (var inferno in infernos)
+        {
+            That(QuestCharacterReward.TryHellChallenge(inferno) == (inferno.Rewards is [{ Type: 0, Text: null, Value: > 0 }] && inferno.Definition is { SelectRewards.Length: 0 }),
+                "inferno 任务按形状放行：" + inferno.Id);
+            if (!QuestCharacterReward.TryHellChallenge(inferno)) continue;
+            var infernoRow = QuestCoverage.Scan(new(new() { [inferno.Id] = inferno }),items.Items,items.EpicPieces,parameters).Quests.Single();
+            That(!infernoRow.Restrictions.Any(text => text.Contains("奖励依赖对应挑战或深渊资格") || text.StartsWith("固定奖励需要")),
+                "inferno 任务覆盖报告不再提示奖励未实现：" + inferno.Id + " " + string.Join("|",infernoRow.Restrictions));
+        }
+        That(new[] { 5783, 10106 }.All(id => QuestCharacterReward.TryHellChallenge(catalog.Get(id))),"5783/10106 inferno 放行");
+        var infernoProbe = catalog.Get(10106);
+        That(!QuestCharacterReward.TryHellChallenge(infernoProbe with { Rewards = [new(0,0,null)] }) &&
+            !QuestCharacterReward.TryHellChallenge(infernoProbe with { Rewards = [new(0,1,null),new(0,1,null)] }) &&
+            !QuestCharacterReward.TryHellChallenge(infernoProbe with { Rewards = [new(1,1,null)] }) &&
+            !QuestCharacterReward.TryHellChallenge(infernoProbe with { Definition = infernoProbe.Definition! with { SelectRewards = [new(0,1,null)] } }) &&
+            !QuestCharacterReward.TryHellChallenge(infernoProbe with { RewardType = "[hell legend]" }) &&
+            QuestCharacterReward.TryHellChallenge(infernoProbe with { RewardType = "[cosmo challenge]" }) &&
+            !QuestCharacterReward.TryHellChallenge(infernoProbe with { RewardType = "[cosmo challenge]", Rewards = [new(0,0,null)] }) &&
+            !QuestCharacterReward.TryHellChallenge(hellProbe with { Rewards = [new(0,0,null)] }),
+            "inferno 负例：值为0、多奖励行、非Type0、带选择奖励、hell legend/cosmo challenge 仍拒绝，hell challenge 仍要求值为1");
         var hellCoverage = QuestCoverage.Scan(new(catalog.All.Where(quest => quest.RewardType is "[hell challenge]" or "[hell legend]" or "[cosmo challenge]")
             .ToDictionary(quest => quest.Id)),items.Items,items.EpicPieces,parameters);
         const string stateRestriction = "奖励依赖对应挑战或深渊资格";
@@ -285,9 +309,38 @@ internal static class QuestCharacterRewardTests
         }
         That(hellDone == exercisedHell.Length && reportedHell.All(id => exercisedHell.Any(quest => quest.Id == id)),
             "原有代表及报告六项全部走完实际接取到交付，没有按覆盖结果跳过失败项");
-        foreach (var other in catalog.All.Where(quest => quest.RewardType is "[hell legend]" or "[cosmo challenge]").Take(2))
+
+        // 深渊派对入口资格（假设：完成任一确认形态的 [hell challenge] 任务即具备；无原服依据，Refs #256）。
+        var qualifier = hell.First(QuestCharacterReward.TryHellChallenge);
+        var qualBase = new Character(1,0,"Hell",1,towns.Room,null);
+        That(!QuestCharacterReward.HasHellPartyQualification(qualBase,catalog) &&
+            !QuestCharacterReward.HasHellPartyQualification(qualBase with { CompletedQuests = [999999] },catalog) &&
+            QuestCharacterReward.HasHellPartyQualification(qualBase with { CompletedQuests = [999999,qualifier.Id] },catalog),
+            "无完成记录或只有未知任务不具备深渊资格，完成资格任务后具备");
+        That(!QuestCharacterReward.HasHellPartyQualification(qualBase with { CompletedQuests = [6081] },catalog) &&
+            catalog.All.Where(quest => quest.RewardType is "[inferno challenge]" or "[cosmo challenge]").Take(3)
+                .All(quest => !QuestCharacterReward.HasHellPartyQualification(qualBase with { CompletedQuests = [quest.Id] },catalog)),
+            "6081/inferno/cosmo 的假设性放行不授予深渊派对资格");
+        // [cosmo challenge]（含10112）同 inferno 规则放行；真实资源中全部满足形状的都应放行。
+        That(catalog.Get(10112) is { RewardType: "[cosmo challenge]" } cosmo && cosmo.Rewards is [{ Value: 7191 }] && QuestCharacterReward.TryHellChallenge(cosmo) &&
+            QuestCoverage.Scan(new(new() { [10112] = cosmo }),items.Items,items.EpicPieces,parameters).Quests.Single() is { } cosmoRow &&
+            !cosmoRow.Restrictions.Any(text => text.Contains("奖励依赖对应挑战或深渊资格")),"10112 [cosmo challenge] 7191 放行且覆盖提示已去除 " + string.Join("|",QuestCoverage.Scan(new(new() { [10112] = catalog.Get(10112) }),items.Items,items.EpicPieces,parameters).Quests.Single().Restrictions));
+        // 6081 [hell legend] 291100268：假设性放行，仅限6081（无原服依据，Refs #256）；其他 hell legend、值不同、带选择奖励、多奖励行仍拒绝。
+        var legend = catalog.All.Where(quest => quest.RewardType == "[hell legend]").ToArray();
+        That(legend.Select(quest => quest.Id).SequenceEqual([6081]) && catalog.Get(6081) is { Rewards: [{ Type: 0, Text: null, Value: 291100268 }] } q6081 &&
+            QuestCharacterReward.TryHellChallenge(q6081),"6081 hell legend 放行");
+        var q6081Probe = catalog.Get(6081);
+        That(!QuestCharacterReward.TryHellChallenge(q6081Probe with { Id = 6082 }) &&
+            !QuestCharacterReward.TryHellChallenge(q6081Probe with { Rewards = [new(0,291100267,null)] }) &&
+            !QuestCharacterReward.TryHellChallenge(q6081Probe with { Rewards = [new(0,291100268,null),new(0,291100268,null)] }) &&
+            !QuestCharacterReward.TryHellChallenge(q6081Probe with { Rewards = [new(0,291100268,"x")] }) &&
+            !QuestCharacterReward.TryHellChallenge(q6081Probe with { Definition = q6081Probe.Definition! with { SelectRewards = [new(0,1,null)] } }),
+            "6081 负例：其他任务号、值不同、多奖励行、带文本、带选择奖励仍拒绝");
+        That(catalog.Get(10112).Prerequisites.Contains(6081),"10112 前置链指向 6081");
+        That(!QuestCoverage.Scan(new(new() { [6081] = q6081Probe }),items.Items,items.EpicPieces,parameters).Quests.Single().Restrictions.Any(text => text.Contains("奖励依赖对应挑战或深渊资格")),"6081 覆盖缺口提示已去除");
+        foreach (var other in legend.Where(quest => quest.Id != 6081).Take(2))
             That(!QuestCoverage.Scan(new(new() { [other.Id] = other }),items.Items,items.EpicPieces,parameters).Quests.Single().ImplementedPath,
-                "传奇/宇宙挑战类专用奖励仍被拒绝 " + other.Id);
+                "传奇类专用奖励仍被拒绝 " + other.Id);
         var slotQuests = catalog.All.Where(quest => quest.Attributes.Any(value => value is "slot expansion" or "magic stone")).ToArray();
         That(slotQuests.Select(quest => quest.Id).Order().SequenceEqual([649,650,674,675,676,677,2635,2636,2711]) &&
             slotQuests.All(QuestCoverage.HasOrdinaryDeclarations),"九条真实槽位任务完整保留已确认声明，尾部任务不按固定六项遗漏");

@@ -83,6 +83,8 @@ internal static class DungeonEntryPlanTests
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         OrdinaryHuntRoutes(catalog,quests,rooms,character);
         AwakeningDungeonRoutes(catalog,quests,rooms,character);
+        TournamentEntry(catalog,character,rooms);
+        HarlemSeekingRoutes(catalog,quests,character);
         foreach (var scenario in new[] { (Quest:3560,Dungeon:82,Level:(byte)65,Target:92247,Boss:92251),
             (Quest:3753,Dungeon:104,Level:(byte)83,Target:76648,Boss:76649) })
         {
@@ -561,6 +563,49 @@ internal static class DungeonEntryPlanTests
             pending,40,2948,0,out _,out _,quest:letter),"缺少真实普通迷宫仍拒绝");
     }
 
+    static void HarlemSeekingRoutes(DungeonCatalog catalog, QuestCatalog quests, Character basis)
+    {
+        // #256：黑市EXP 6053/6056/6059（seeking sub type 0）沿普通路线进入断头谷7322；6060的-2猎杀目标仍无法入场。
+        foreach (int id in new[] { 6053, 6056, 6059 })
+        {
+            var quest = quests.Get(id);
+            var accepted = basis with { Level = 93, CompletedQuests = [6050],
+                ActiveMainQuests = [new(5,checked((ushort)id),1) { AcceptanceId = Guid.NewGuid() }] };
+            That(DungeonEntryPlan.TryCreate(catalog,accepted,7322,checked((uint)id),0,out var plan,out var reason,quest: quest,quests: quests) &&
+                plan is { IsOrdinaryHunt: true,RouteQuestId: 0 } && plan.QuestAcceptances.Single().QuestId == id,
+                "黑市寻物任务沿普通路线入场断头谷：" + id + "/" + reason);
+            That(!DungeonEntryPlan.TryCreate(catalog,accepted,7322,checked((uint)id),0,out _,out _,
+                quest: quest with { IntData = [quest.IntData[0],4] },quests: quests),"形状被改动的寻物任务不借用该路线：" + id);
+            That(!DungeonEntryPlan.TryCreate(catalog,accepted,3,checked((uint)id),0,out _,out _,quest: quest,quests: quests),
+                "未声明本图的寻物任务不能进入其它地下城：" + id);
+        }
+        var negative = basis with { Level = 93, CompletedQuests = [6050],
+            ActiveMainQuests = [new(5,6060,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(catalog,negative,7322,6060,0,out var elitePlan,out var eliteReason,quest: quests.Get(6060),quests: quests) &&
+            elitePlan is { IsOrdinaryHunt: true },"6060按“-2=精英怪”假设走普通路线进断头谷：" + eliteReason);
+
+        // #256 系统排查：6051-6060 每个任务按其 PVF 声明的目标副本逐个走入场规划（已接取、等级达标）。
+        // 6054 等 [hunt monster] 的 -3（普通 Boss）目标曾被入场规划误拒为 quest-maze-unavailable。
+        var swept = new List<string>();
+        foreach (int id in Enumerable.Range(6051,10))
+        {
+            var quest = quests.Get(id);
+            foreach (var row in quest.Definition!.Dungeons)
+            {
+                var resource = catalog.Get(row.DungeonId);
+                uint scalar = quest.Condition == "[hunt monster]" ? QuestHuntProgress.Initial(quest) : 1;
+                var character = basis with { Level = checked((byte)Math.Max(quest.MinimumLevel,resource.MinimumLevel ?? 1)),
+                    CompletedQuests = [6050], ActiveMainQuests = [new(5,checked((ushort)id),scalar) { AcceptanceId = Guid.NewGuid() }] };
+                byte difficulty = checked((byte)Math.Max(row.Parameter,0));
+                bool clearType = quest.Condition == "[condition under clear]"; // 通关类任务无任务号入场（普通入场，由通关进度计数）
+                bool ok = DungeonEntryPlan.TryCreate(catalog,character,checked((uint)row.DungeonId),clearType ? 0u : checked((uint)id),difficulty,
+                    out var plan,out var why,quest:clearType ? null : quest,quests:quests);
+                swept.Add($"{id}|{quest.Condition}|dungeon {row.DungeonId}|{(ok ? "OK" : why)}");
+                That(ok && (clearType ? plan is { IsOrdinary: true } : plan is { IsOrdinaryHunt: true }),"EXP 任务按声明副本可入场：" + id + "/" + row.DungeonId + "/" + why);
+            }
+        }
+        Console.WriteLine("SWEEP-HARLEM-EXP " + string.Join(" ; ",swept));
+    }
     static void AwakeningDungeonRoutes(DungeonCatalog catalog, QuestCatalog quests, DungeonRoomCatalog rooms, Character basis)
     {
         // #258：一次/二次觉醒的疑惑之村杀怪与收集阶段声明“dungeon info 53 2”，没有专用迷宫连接，只能沿普通迷宫进入。
@@ -586,4 +631,57 @@ internal static class DungeonEntryPlanTests
                 ordinary is { QuestId:0,IsOrdinaryHunt:false,IsOrdinary:true },"觉醒任务活动时普通0入口保持原模式");
         }
     }
-}
+
+    // 实验性（#259，依据来自 Go 项目反汇编，未经 V31 客户端验证）：比赛副本放行指定难度，起点/Boss 取地图反向声明的唯一比赛图。
+    sealed class SequenceComparer : IEqualityComparer<int[]>
+    {
+        public bool Equals(int[]? x,int[]? y) => x is not null && y is not null && x.SequenceEqual(y);
+        public int GetHashCode(int[] value) => value.Length;
+    }
+
+    static void TournamentEntry(DungeonCatalog catalog,Character character,DungeonRoomCatalog rooms)
+    {
+        foreach (var scenario in new[] { (Dungeon:123,Map:95265),(Dungeon:124,Map:95266) })
+        {
+            var resource = catalog.Get(scenario.Dungeon);
+            var eligible = character with { Level = 75, ActiveMainQuests = [], CompletedQuests = [] };
+            That(resource.IsTournament && resource.TryGetDesignatedDifficulty(out var designated) && designated == 2 &&
+                resource.AllowsDifficulty(2,false) && !resource.AllowsDifficulty(0,false) && !resource.AllowsDifficulty(1,false),
+                "比赛副本只放行指定难度：" + scenario.Dungeon);
+            bool created = DungeonEntryPlan.TryCreate(catalog,eligible,checked((uint)scenario.Dungeon),0,2,out var plan,out var reason);
+            That(created && plan is { Difficulty: 2 } && plan.StartMap.Id == scenario.Map && plan.BossMap.Id == scenario.Map,
+                "比赛副本按反向声明确定唯一比赛图：" + scenario.Dungeon + "/" + reason);
+            // 单图房间 + 四轮对手：对阵表/对手一致，能创建 Run，并能编出 NOTI386/387 包体。
+            var declared = plan!;
+            var room = rooms.Get(declared.StartMap,requirePassiveDefinitions: false,allowUnresolvedSpecialMetadata: false);
+            var source = rooms.ReadTournamentSource(declared.StartMap);
+            var roomPlan = DungeonTournamentPlan.CreateRoomPlan(rooms,room,source,12345,eligible.Id,100,declared.BasisLevel!.Value,declared.PlayerTeam);
+            var route = new DungeonFixedRoute([roomPlan],[]);
+            var tournament = roomPlan.Tournament!;
+            That(source.PartyCount == 1 && source.Enemies.Count >= 15 && source.HasStartArea && tournament.Rounds.Count == 4 &&
+                tournament.Rounds.Select(round => round.Count).SequenceEqual([16,8,4,2]) && tournament.Rounds.All(round => round.Count(team => team.Player) == 1) &&
+                tournament.Opponents.Count == 4 && tournament.Opponents.Select(row => row.Round).SequenceEqual([1,2,3,4]) &&
+                tournament.Opponents.Select(row => row.ObjectKey).Distinct().Count() == 4 &&
+                tournament.Opponents.Take(3).All(row => row.Type == 0) && tournament.Opponents[3].Type == 3 &&
+                tournament.Opponents.All(row => row.Level == declared.BasisLevel) &&
+                roomPlan.Monsters.Count(monster => monster.IsBlocking) == 4 &&
+                tournament.Rounds[0].Single(team => team.Player) is not null,
+                "比赛对阵表与四轮对手：" + scenario.Dungeon);
+            That(declared.Maze.StaticTopology.Supported && !declared.UsesFatigue && declared.IsTournament &&
+                SinglePlayerDungeonRun.TryCreate(declared,1,100,route,new NativeDungeonCombatAuthority(),out _,out _),
+                "比赛单图可装载房间并创建 Run：" + scenario.Dungeon);
+            var info = DfoServer.Network.Builders.DungeonPackets.TournamentInfo(declared,tournament);
+            // 头 6B + 四轮对阵（每轮 2B + 队数 * 7B，16+8+4+2 队，玩家队成员 code/战力为 0）+ 四轮对手（每轮 1B + 8B）
+            That(info.Length == 6 + 4 * 2 + 30 * 7 + 4 * (1 + 8) &&
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(info) == (uint)scenario.Dungeon && info[4] == 2 && info[5] == 1 &&
+                DfoServer.Network.Builders.DungeonPackets.TournamentMapInfo(declared,12345) is { Length: 15 } mapInfo &&
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(mapInfo.AsSpan(8)) == (uint)scenario.Map && mapInfo[7] == 1,
+                "NOTI386/387 包体长度与字段：" + scenario.Dungeon);
+            // 同一 seed 对阵表可重现，不同 seed 通常不同。
+            That(DungeonTournamentPlan.PlanBracket(source,7).Select(round => round.Select(team => team.Members.Sum(row => row.Code)).ToArray())
+                .SequenceEqual(DungeonTournamentPlan.PlanBracket(source,7).Select(round => round.Select(team => team.Members.Sum(row => row.Code)).ToArray()),
+                    new SequenceComparer()),"对阵表按 seed 可重现");            That(!DungeonEntryPlan.TryCreate(catalog,eligible,checked((uint)scenario.Dungeon),0,0,out _,out var rejected) && rejected == "difficulty-unsupported",
+                "比赛副本非指定难度被拒绝：" + scenario.Dungeon);
+        }
+        That(!catalog.Get(3).IsTournament && !catalog.Get(3).AllowsDifficulty(2,false),"非比赛副本的难度规则不变");
+    }}

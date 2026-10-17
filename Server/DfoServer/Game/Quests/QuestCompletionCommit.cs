@@ -45,4 +45,6 @@ internal sealed record QuestFinishResult(QuestFinishOutcome Outcome, QuestComple
     QuestRefusalReceipt? RejectionReceipt = null)
 {
     public QuestCompletionFailure Failure { get; init; }
+    // 仅供服务端日志；不进入发给客户端的包。
+    public string? Reason { get; init; }
 }

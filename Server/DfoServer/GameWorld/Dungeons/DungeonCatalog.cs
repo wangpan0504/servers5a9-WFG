@@ -12,6 +12,9 @@ internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, st
     public IReadOnlyList<int> CandidateIds { get; init; } = Array.Empty<int>();
 }
 internal sealed record DungeonRawSection(string Tag, IReadOnlyList<PvfToken> Tokens);
+// 实验性（未在95客户端实证）：深渊派对房间 = maze 内 [hell dungeon] 1 + [seal door map index]（深渊房间地图）+ [seal door pos]（该房间在迷宫内的坐标）。
+// 依据参考项目 dungeon_hell_room.go（对应 A21 FindHellMapRoom/TryBuildSealDoorHellPartyRoom）。
+internal sealed record DungeonHellPartyRoom(int MapId, DungeonPoint Room);
 internal sealed record DungeonMaze(
     int SourceOrdinal,
     int Width,
@@ -22,6 +25,10 @@ internal sealed record DungeonMaze(
     IReadOnlyList<DungeonMap>? MapSpecification,
     IReadOnlyList<PvfToken> QuestConnectionTokens)
 {
+    // 实验性：只有普通（非任务连接）maze 带 [hell dungeon] 时才非空；任务 maze 带 [escape hell]，不属于深渊派对。
+    public DungeonHellPartyRoom? HellParty { get; init; }
+    // 实验性：深渊房间地图的 PVF 路径（[seal door map index] 对应的 map 文件），用于把 HellParty.Room 处的普通房间换成深渊房间。
+    public string? HellPartyPath { get; init; }
     public IReadOnlyList<DungeonMap> LayeredMaps { get; init; } = Array.Empty<DungeonMap>();
     // 保留覆盖前来源供任务地图池排除；不参与有效路线、候选抽取或演员准备。
     public IReadOnlyList<DungeonMap> OverriddenMaps { get; init; } = Array.Empty<DungeonMap>();
@@ -33,6 +40,8 @@ internal sealed record DungeonMaze(
     public string? ResourceError { get; init; }
     public bool IsTrainingRoom { get; init; }
     public bool IsClassExperience { get; init; }
+    // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
+    public bool IsTournament { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
     public bool ConnectsQuest(uint questId, byte difficulty = 0, int state = 0) => QuestConnectionTokens.Count == 3 &&
         QuestConnectionTokens.All(token => token.Type == 0) &&
@@ -83,6 +92,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
 {
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
+    // [tournament dungeon] 1：魂·黄龙/青龙大会等比赛副本（实验性，依据来自 Go 项目反汇编）。
+    public bool IsTournament => RawSections.Where(row => row.Tag == "tournament dungeon").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
     // 强袭任务副本均带 [disable black diamond card reward]（无值标记）：通关翻牌不提供黑钻额外卡。
     public bool DisableBlackDiamondCardReward => RawSections.Any(row => row.Tag == "disable black diamond card reward" && row.Tokens.Count == 0);
@@ -132,7 +143,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         if (designated.Length > 1 || designated.Length == 1 && (designated[0].Tokens is not [{ Type: 0, Value: >= -1 and <= 4 }] ||
             designated[0].Tokens[0].Value >= 0 && designated[0].Tokens[0].Value != difficulty)) return false;
         var levels = RawSections.Where(section => section.Tag == "difficulty level").ToArray();
-        if (levels.Length == 0) return difficulty == 0;
+        // 实验性（#259）：比赛副本声明唯一指定难度且无难度表时，放行该指定难度；其他副本仍只放行难度 0。
+        if (levels.Length == 0) return IsTournament && designated.Length == 1 || difficulty == 0;
         // 部分副本重复声明同一难度表；内容相同不构成冲突，未知或不一致声明仍拒绝。
         return levels[0].Tokens.Count == 5 && levels[0].Tokens.All(token => token.Type == 0 && token.Value is 0 or 1) &&
             levels.All(section => section.Tokens.SequenceEqual(levels[0].Tokens)) &&
@@ -504,8 +516,23 @@ internal sealed class DungeonCatalog
         }
         var maze = new DungeonMaze(ordinal,width,height,greed,starts,bosses,specification,quest)
             { LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
-                ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve) };
+                ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve), HellParty = HellParty(), HellPartyPath = HellParty() is { } hellRoom ? mapPaths[hellRoom.MapId] : null };
         return maze with { ConditionalMaps = ConditionalMaps(maze) };
+        // 实验性：深渊房间解析失败（缺字段/坐标越界/该坐标没有普通房间/深渊地图文件不存在）一律视为该 maze 无深渊派对，不抛错（不影响现有入场）。
+        DungeonHellPartyRoom? HellParty()
+        {
+            var flags = mazeSections.Where(s => s.Tag == "hell dungeon").ToArray();
+            var maps = mazeSections.Where(s => s.Tag == "seal door map index").ToArray();
+            var positions = mazeSections.Where(s => s.Tag == "seal door pos").ToArray();
+            if (quest.Count != 0 || specification is null || flags.Length != 1 || maps.Length != 1 || positions.Length != 1 ||
+                flags[0].Tokens is not [{ Type: 0, Value: 1 }] || maps[0].Tokens is not [{ Type: 0, Value: > 0 } mapToken] ||
+                positions[0].Tokens is not [{ Type: 0 } x, { Type: 0 } y]) return null;
+            var room = new DungeonPoint(x.Value, y.Value);
+            if (room.X < 0 || room.Y < 0 || room.X >= width || room.Y >= height ||
+                !specification.Any(map => map.Position == room && map.Kind == "map") ||
+                !mapPaths.TryGetValue(mapToken.Value, out var hellPath) || !exists(hellPath)) return null;
+            return new(mapToken.Value, room);
+        }
         IReadOnlyList<PvfToken> Required(string tag) => sections.TryGetValue(tag, out var value) ? value.Tokens : throw new InvalidDataException("maze 缺少字段: " + tag);
         IReadOnlyList<DungeonPoint> Points(IReadOnlyList<PvfToken> values, bool allowRepeated = false)
         {

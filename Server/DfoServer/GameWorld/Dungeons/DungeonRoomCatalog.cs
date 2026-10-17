@@ -26,6 +26,8 @@ internal sealed record DungeonRoomSpecialChild(int SourceOrdinal, string Kind, I
 internal sealed record DungeonRoomSpecialObject(int SourceOrdinal, int ObjectId, IReadOnlyList<int> RawValues,
     string? Path, IReadOnlyList<DungeonRoomSpecialChild> Children);
 internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level);
+internal sealed record TournamentEnemy(int PartyCount, int Code, int Strength);
+internal sealed record TournamentSource(int PartyCount, IReadOnlyList<TournamentEnemy> Enemies, int OpponentX, int OpponentY, bool HasStartArea);
 internal sealed record DungeonRoomNpc(int Id, string Direction, int X, int Y, int Z);
 internal sealed record DungeonRoomDefinition(
     DungeonMap Map,
@@ -53,12 +55,14 @@ internal sealed class DungeonRoomCatalog
     private readonly IReadOnlyDictionary<int, string> passiveObjects;
     private readonly IReadOnlyDictionary<int, string> aiCharacters;
     private readonly Lazy<IReadOnlyDictionary<int, string>> cinematics;
+    private readonly Lazy<DungeonHellPartyCatalog> hellParty;
 
     private DungeonRoomCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> monsters, IReadOnlyDictionary<int, string> passiveObjects,
         IReadOnlyDictionary<int, string> aiCharacters)
     {
         (this.archive, this.monsters, this.passiveObjects, this.aiCharacters) = (archive, monsters, passiveObjects, aiCharacters);
         cinematics = new(() => DungeonCatalog.ParseDirectory(archive.ReadTokens("cinematic/cinematic.lst"),archive.ResolveString,"cinematic"));
+        hellParty = new(() => DungeonHellPartyCatalog.Load(archive));
     }
 
     public static DungeonRoomCatalog Load(PvfArchive pvf)
@@ -137,6 +141,33 @@ internal sealed class DungeonRoomCatalog
         }
     }
 
+    // 实验性（未在95客户端实证；依据参考项目 BuildHellPartyWaves/BuildHellPartyMonsterInfos）：给深渊房间计划抽波次并展开成怪物。
+    // 怪物/APC 定义缺失的条目跳过（参考项目会硬失败，这里不让入场整体失败）；普通怪等级=副本基准等级，APC 取 AICharacter 等级。
+    public IReadOnlyList<DungeonHellWaveMonster> ResolveHellWaves(DungeonRoomDefinition room, byte mode, int? basisLevel, Func<int, int> draw)
+    {
+        var catalog = hellParty.Value;
+        var tables = room.SpecialObjects.SelectMany(parent => parent.Children).Where(child => child.Kind == "[hellparty]").Select(child => child.RawValues).ToArray();
+        if (tables.Length == 0 || basisLevel is not (>= 1 and <= 255)) return [];
+        char key = DungeonHellPartyCatalog.DifficultyKey(mode);
+        var result = new List<DungeonHellWaveMonster>();
+        foreach (var (order, group) in catalog.PickWaves(tables, mode, draw))
+            foreach (var (code, entityType) in catalog.Entries(group, key))
+            {
+                byte type = 0;
+                int level = basisLevel.Value;
+                if (entityType == 1)
+                {
+                    if (!aiCharacters.TryGetValue(code, out var apcPath) || !archive.Contains(apcPath)) continue;
+                    type = 5;
+                    var minimum = PvfAiCharacterScript.MinimumInfo(archive.ReadTokens(apcPath), archive.ResolveString);
+                    if (minimum.Length >= 6 && minimum[5].Type == 0 && minimum[5].Value is >= 1 and <= 255) level = minimum[5].Value;
+                }
+                else if (!monsters.TryGetValue(code, out var path) || !archive.Contains(path)) continue;
+                result.Add(new(order, group, code, (byte)level, type, 0, 0));
+            }
+        return Array.AsReadOnly(result.ToArray());
+    }
+
     DungeonCinematicLayerReturn? ReadCinematicLayerReturn(DungeonMap map, IReadOnlyList<PvfToken> tokens)
     {
         try { return Read(); }
@@ -156,6 +187,61 @@ internal sealed class DungeonRoomCatalog
         return DungeonCinematicLayerReturnRules.IsNonCombatMapChange(map.Id,archive.ReadTokens(file),archive.ResolveString)
             ? new(map.Id,map.Path,path,movie,file) : null;
         }
+    }
+
+    // 实验性（#259，依据来自 Go 项目反汇编，未经 V31 客户端验证）：读取比赛图的 [tournament enemies] 与对手侧 [tournament start area]。
+    public TournamentSource ReadTournamentSource(DungeonMap map)
+    {
+        string path = PvfArchive.NormalizePath(map.Path);
+        if (!path.StartsWith("map/tournament/",StringComparison.Ordinal) || !path.EndsWith(".map",StringComparison.Ordinal) || !archive.Contains(path))
+            throw new InvalidDataException("比赛地图路径无效");
+        return ParseTournamentSource(archive.ReadTokens(path),archive.ResolveString,monsters,archive.Contains);
+    }
+
+    internal static TournamentSource ParseTournamentSource(IReadOnlyList<PvfToken> tokens,Func<int,string> resolve,
+        IReadOnlyDictionary<int,string> monsterPaths,Func<string,bool> exists)
+    {
+        var enemies = new List<TournamentEnemy>();
+        int? partyCount = null; int x = 760, y = 270; bool area = false;
+        for (int at = 0; at < tokens.Count; at++)
+        {
+            if (tokens[at].Type != 3) continue;
+            string tag = resolve(tokens[at].Value);
+            var body = tokens.Skip(at + 1).TakeWhile(token => token.Type != 3).ToArray();
+            if (tag == "[tournament enemies]")
+            {
+                if (partyCount is not null) throw new InvalidDataException("重复 tournament enemies");
+                if (body.Length < 5 || body[0].Type != 0 || body[0].Value is < 1 or > 2 || body[1].Type != 6 || (body.Length - 2) % 3 != 0)
+                    throw new InvalidDataException("tournament enemies 头部或记录格式无效");
+                string kind = resolve(body[1].Value);
+                // 123/124 的对手表全部为 [monster]；[apc] 对手（Go 项目有支持）本实现不做，直接拒绝。
+                if (kind != "[monster]") throw new NotSupportedException("unsupported: tournament enemies kind " + kind);
+                partyCount = body[0].Value;
+                for (int i = 2; i < body.Length; i += 3)
+                {
+                    if (body[i].Type != 0 || body[i + 1].Type != 0 || body[i].Value <= 0 || body[i + 1].Value is < 0 or > ushort.MaxValue ||
+                        !monsterPaths.TryGetValue(body[i].Value,out var monsterPath) || !exists(monsterPath))
+                        throw new InvalidDataException("tournament enemy 记录无效");
+                    enemies.Add(new(body[0].Value,body[i].Value,body[i + 1].Value));
+                }
+            }
+            else if (tag == "[tournament start area]" && body is [{ Type: 0, Value: var count },{ Type: 0, Value: var px },{ Type: 0, Value: var py },{ Type: 0, Value: 2 }]
+                && count == (partyCount ?? count))
+            {
+                (x, y, area) = (px, py, true);
+            }
+        }
+        if (partyCount is null || enemies.Select(enemy => enemy.Code).Distinct().Count() != enemies.Count)
+            throw new InvalidDataException("tournament enemies 缺失或重复");
+        return new(partyCount.Value,enemies,x,y,area);
+    }
+
+    // 为比赛对手构造 monster 房间行（[fixed]，相对基准等级偏移 0）；路径取 monster.lst，缺失则拒绝。
+    public DungeonRoomMonster TournamentMonster(int code,int x,int y,bool boss)
+    {
+        if (!monsters.TryGetValue(code,out var path) || path.Length == 0 || !archive.Contains(path))
+            throw new InvalidDataException("比赛对手怪物资源不存在: " + code);
+        return new(code,[code,1,0,x,y,0,0,0],"[fixed]",boss ? "[boss]" : "[normal]",path);
     }
 
     DungeonRoomAiCharacter ResolveAiCharacter(PvfAiCharacterSpawn row)

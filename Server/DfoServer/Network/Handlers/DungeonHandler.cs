@@ -35,6 +35,17 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        // 实验性：深渊派对开始（客户端 op235，与分解请求共用同一 opcode；参考项目 HandleHellPartyStart 不回包）。只记录，不回包。
+        commands.Register(CmdPacketType.REQUEST_DISJOINT_ITEM, HellPartyStartAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+    }
+
+    Task<CommandResult> HellPartyStartAsync(GameConnectionContext context, Packet request)
+    {
+        var receipt = context.Session.CurrentFormalDungeonScene();
+        if (receipt?.Entry.HellParty is null) return Task.FromResult(CommandResult.Unhandled);
+        log.Write("formal_hell_party_start_observed", new { Connection = context.Id, receipt.Entry.DungeonId, Length = request.Body.Length,
+            Body = Convert.ToHexString(request.Body), Experimental = true });
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> CharacterDeathAsync(GameConnectionContext context, Packet request)
@@ -109,22 +120,26 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool direct = training || experience;
         bool replay = selection.Unknown8 == 1 && !direct;
         bool continuation = context.Session.HasDungeonContinuationRequest();
+        // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：op16 请求体 [7]=1（HellPartyRequestFlag）且 [8]=0 表示"挑战深渊派对"。
+        // 实机样本：94D6591104000001 00FFFF 0000000000 E2170000 00 00000000（副本号 291100308=哈林 [dungeon] 列表里的黑暗都市）。
+        // [16:20]（任务号 6114）深渊入场时不参与路线，按 questId=0 的普通入场处理。
+        bool hell = selection.Unknown7 == 1 && selection.Unknown8 == 0 && !direct && !continuation;
         if (continuation && (direct || replay)) return await RejectAsync();
         // 两种直入与剧情回放共享offset8=1；副本、难度、token及完整模式字段共同判别。
         if (selection.DungeonIndex == 5000 && (!training || selection.Parameter != 0)) return await RejectAsync();
         if (selection.DungeonIndex == 7142 && (!experience || selection.Parameter != 0)) return await RejectAsync();
         // 回放由1459的完成事实/显式路线授权；附加Scene flags只保留审计，不套普通选图常量。
         if (selection.Unknown5 != 0 || selection.Unknown11 != 0 || !replay &&
-            (selection.Unknown7 != 0 || selection.Unknown8 != (direct ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
+            (selection.Unknown7 != (hell ? 1 : 0) || selection.Unknown8 != (direct ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
              selection.Unknown15 != 0 || selection.Unknown20 != 0 || selection.Unknown21 != 0))
             return await RejectAsync();
         var receipt = continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
             replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
-            context.Session.EnterFormalDungeon(selection.DungeonIndex, selection.Unknown16, selection.Parameter, dungeons, rooms,
+            context.Session.EnterFormalDungeon(selection.DungeonIndex, hell ? 0u : selection.Unknown16, selection.Parameter, dungeons, rooms,
                 drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
-                classExperience: experience);
+                classExperience: experience, hellParty: hell);
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Continuation = continuation,
-            Training = training, ClassExperience = experience, Request = selection, receipt?.Snapshot.Identity,
+            Training = training, ClassExperience = experience, HellParty = hell, Request = selection, receipt?.Snapshot.Identity,
             RejectReason = receipt is null && !continuation && !replay ? context.Session.LastFormalDungeonRejection : null,
             CharacterId = character.Id, CharacterName = character.Name });
         if (receipt is null) return await RejectAsync();
@@ -135,8 +150,19 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(),
                 experience ? "formal_class_experience_scene_transition" : "formal_training_scene_transition", Guard);
         await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry), "formal_dungeon_information", Guard);
+        // 实验性（#259）：比赛副本先发 NOTI386 对阵/对手，再以 NOTI387 替代 NOTI29（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
+        if (receipt.Entry.IsTournament && receipt.Monsters.Tournament is { } tournament)
+        {
+            await context.Notify(NotiPacketType.TOURNAMENT_INFO, DungeonPackets.TournamentInfo(receipt.Entry, tournament),
+                "formal_tournament_info", Guard);
+            await context.Notify(NotiPacketType.TOURNAMENT_MAP_INFO, DungeonPackets.TournamentMapInfo(receipt.Entry, receipt.MapSeed),
+                "formal_tournament_map_info", Guard);
+        }
+        else
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
             passiveItems: receipt.PassiveItems), "formal_start_map", Guard);
+        if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo)
+            await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
         if (!receipt.AssaultConsumedSlots.IsDefaultOrEmpty)
         {
             log.Write("assault_mode_entry_committed", new { Connection = context.Id, receipt.Entry.DungeonId,
@@ -151,7 +177,12 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
                 before.Phase, before.CurrentDungeonSelection);
             // 只结束本次入场等待，保留原选图和回城锚点；不发送成功、弹窗或自动回城通知。
-            await context.Reply(CmdPacketType.SELECT_DUNGEON, DungeonPackets.SelectionRejected(), "formal_dungeon_rejected", CanSend);
+            // 实验性：深渊派对拒绝包（参考项目：缺任务 MissingPermission=0xAD，区域/房间不可用 DungeonUnavailable=0x01；保持本服既有 4 字节拒绝包形状 [0,code,0,0]）。
+            string? hellReason = hell ? context.Session.LastFormalDungeonRejection : null;
+            byte[] rejection = hellReason is { } why && why.StartsWith("hell-party-", StringComparison.Ordinal)
+                ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required", StringComparison.Ordinal) ? (byte)0xAD : (byte)0x01)
+                : DungeonPackets.SelectionRejected();
+            await context.Reply(CmdPacketType.SELECT_DUNGEON, rejection, hell ? "formal_hell_party_rejected" : "formal_dungeon_rejected", CanSend);
             return CommandResult.Handled;
         }
     }
@@ -335,6 +366,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "formal_move_ack", Guard);
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
             receipt.Snapshot.MapOperation,receipt.Snapshot.MapPayload, receipt.PassiveItems), "formal_next_map", Guard);
+        if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo && receipt.Snapshot.MapPayload != DungeonMapPayload.Cached)
+            await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
         if (published && receipt.ScriptedReturnId != Guid.Empty) context.Session.ConfirmScriptedReturnPresentation(receipt);
         return CommandResult.Handled;
     }

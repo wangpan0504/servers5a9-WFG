@@ -13,6 +13,13 @@ internal readonly record struct QuestHuntTarget(int DungeonId, int MinimumDiffic
 // Full03分类2/6分别读取四/五元组，怪物、APC与被动物件消费服务端绑定的独立事件。
 internal static class QuestHuntProgress
 {
+    // #256 假设（无原服依据）：猎杀目标怪物编号 -2 视为“精英怪”（副本 [named monster] 段登记的怪物）。
+    // 全 PVF 仅 6060“除掉战争的元凶”(7322 -1 -2 9)使用 -2，无其它样本、参考实现与客户端取证；因此只对 6060 放行，不泛化到其它任务。
+    internal const int EliteMonsterSelector = -2, EliteQuestId = 6060;
+
+    internal static bool EliteSelectorAllowed(StoryQuest quest, int dungeon, int monster) =>
+        monster == EliteMonsterSelector && quest is { Id: EliteQuestId, Condition: "[hunt monster]", Grade: "[side]" } && dungeon == 7322;
+
     public static bool TryTargets(StoryQuest quest, out ImmutableArray<QuestHuntTarget> targets)
     {
         targets = [];
@@ -27,7 +34,7 @@ internal static class QuestHuntProgress
         {
             int dungeon = quest.IntData[at], difficulty = quest.IntData[at + 1], monster = quest.IntData[at + 2], count = quest.IntData[at + stride - 1];
             int enemyType = monsterOnly ? 1 : quest.IntData[at + 3];
-            if (dungeon < -1 || difficulty is < -1 or > 3 || monster <= 0 && !(monsterOnly && monster is -5 or -3) ||
+            if (dungeon < -1 || difficulty is < -1 or > 3 || monster <= 0 && !(monsterOnly && (monster is -5 or -3 || EliteSelectorAllowed(quest,dungeon,monster))) ||
                 enemyType is not (1 or 2 or 3) || count is < 1 or > 511)
                 return false;
             rows.Add(new(dungeon,difficulty,monster,count) { EnemyType = enemyType });
@@ -51,7 +58,7 @@ internal static class QuestHuntProgress
 
     public static ImmutableArray<ActiveMainQuest> MonsterDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
         QuestCatalog quests, DungeonPlannedMonster monster) => monster.AiCharacter is null
-        ? Death(active,entry,quests,monster.MonsterId,1,monster.SpawnType == 3)
+        ? Death(active,entry,quests,monster.MonsterId,1,monster.SpawnType == 3,entry.NamedMonsters.Contains(monster.MonsterId))
         : active.ToImmutableArray();
 
     public static ImmutableArray<ActiveMainQuest> AiCharacterDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
@@ -88,7 +95,7 @@ internal static class QuestHuntProgress
     }
 
     private static ImmutableArray<ActiveMainQuest> Death(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
-        QuestCatalog quests, int templateId, int enemyType, bool ordinaryBoss = false) => active.Select(row =>
+        QuestCatalog quests, int templateId, int enemyType, bool ordinaryBoss = false, bool elite = false) => active.Select(row =>
     {
         if (!Bound(row,entry) || !quests.TryGet(row.QuestId,out var quest) || !TryTargets(quest,out var targets) ||
             !ValidScalar(quest,row.ConditionState)) return row;
@@ -98,7 +105,7 @@ internal static class QuestHuntProgress
             var target = targets[at]; uint count = scalar >> (at * 9) & 511;
             // Full03 type2的-3只接已确认普通SpawnType3；APC的rank8来源未闭合，不能并入。
             if (count != 0 && target.EnemyType == enemyType && (target.MonsterId > 0 && target.MonsterId == templateId || target.MonsterId == -5 ||
-                target.MonsterId == -3 && ordinaryBoss) &&
+                target.MonsterId == -3 && ordinaryBoss || target.MonsterId == EliteMonsterSelector && elite) &&
                 (target.DungeonId == -1 || target.DungeonId == entry.DungeonId) &&
                 (target.MinimumDifficulty == -1 || entry.Difficulty >= target.MinimumDifficulty)) scalar -= 1u << (at * 9);
         }
