@@ -50,6 +50,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("quest-ticket", (_, _, resources) => QuestTicketTests.RunAsync(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning)),
+        ("levelup-ticket", LevelUpTicketTcpTests.RunAsync),
         ("quest-specified-ticket", (_, _, resources) => QuestSpecifiedTicketTests.RunAsync(resources.Towns,resources.Archive,
             resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
         ("quest-awakening-ticket", (_, _, resources) => QuestAwakeningTicketTests.RunAsync(resources.Towns,resources.Archive,

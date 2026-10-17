@@ -88,12 +88,14 @@ internal sealed class QuestQuickClearPlan
 
     QuestQuickClearPlan(Character expected, Guid operationId, int cutoff, ImmutableArray<StoryQuest> scope,
         ImmutableDictionary<int,byte> answers, ImmutableArray<int> questions, QuestCatalog quests,QuestTicketSource? ticket = null,
-        byte? equipmentSlots = null,byte? profession = null,CharacterLearningState? learning = null)
+        byte? equipmentSlots = null,byte? profession = null,CharacterLearningState? learning = null,
+        LevelUpTicketSource? levelUpTicket = null)
     {
-        Expected = expected; OperationId = operationId; IsManual = ticket is null; Ticket = ticket; CutoffLevel = cutoff;
-        Inventory=ticket?.Inventory ?? new(expected.Inventory,expected.Inventory,"quest_skip");
+        Expected = expected; OperationId = operationId; IsManual = ticket is null && levelUpTicket is null;
+        Ticket = ticket; LevelUpTicket = levelUpTicket; CutoffLevel = cutoff;
+        Inventory=ticket?.Inventory ?? levelUpTicket?.Inventory ?? new(expected.Inventory,expected.Inventory,"quest_skip");
         EquipmentSlotFlagsAfter = equipmentSlots ?? expected.EquipmentSlotFlags;
-        ProfessionGrowType=profession; TargetLearning=learning ?? expected.Learning;
+        ProfessionGrowType=profession; TargetLearning=learning ?? levelUpTicket?.Growth.Learning ?? expected.Learning;
         Interval = scope; ManualAnswers = answers; PendingQuestions = questions;
         ScopeQuestIds = scope.Select(row => row.Id).Distinct().Order().ToImmutableArray();
         var completed = QuestEligibility.Completed(expected);
@@ -107,12 +109,13 @@ internal sealed class QuestQuickClearPlan
         RemovedActive = expected.ActiveMainQuests.Where(row => ScopeQuestIds.Contains(row.QuestId)).ToImmutableArray();
         var retained = expected.ActiveMainQuests.Where(row => !ScopeQuestIds.Contains(row.QuestId)).ToArray();
         if (ticket is not null) retained = QuestInventoryProgress.Refresh(retained,ticket.Inventory.After,quests,ticket.UtcSeconds).ToArray();
+        if (levelUpTicket is not null) retained = QuestInventoryProgress.Refresh(retained,Inventory.After,quests,levelUpTicket.UtcSeconds).ToArray();
         var remaining = QuestRelationProgress.Refresh(retained,
             CompletedAfter.Concat(AccountCompletedAfter).ToArray(),quests);
         ActiveAfter = QuestStateProgress.Refresh(remaining,expected with
         {
             CompletedQuests = CompletedAfter.ToArray(), AccountCompletedQuests = AccountCompletedAfter.ToArray(), QuestAnswers = AnswersAfter,EquipmentSlotFlags=EquipmentSlotFlagsAfter,
-            GrowType=profession ?? expected.GrowType,Learning=TargetLearning
+            GrowType=profession ?? expected.GrowType,Learning=TargetLearning,Level=TargetLevel
         },quests);
         Snapshot = JsonSerializer.Serialize(new
         {
@@ -139,6 +142,10 @@ internal sealed class QuestQuickClearPlan
         if (profession is not null)
             Snapshot=JsonSerializer.Serialize(new { State=JsonSerializer.Deserialize<JsonElement>(Snapshot),
                 Action=ticket!.Definition.ActionIndex,ticket.Definition.VillageOnly,ProfessionGrowType,TargetLearning });
+        if (levelUpTicket is not null)
+            Snapshot=JsonSerializer.Serialize(new { State=JsonSerializer.Deserialize<JsonElement>(Snapshot),
+                Kind="LevelUpTicket",Source=levelUpTicket.Item,Definition=levelUpTicket.Definition,levelUpTicket.UtcSeconds,
+                InventoryAfter=Inventory.After,TargetLevel,TargetLearning });
     }
 
     public Character Expected { get; }
@@ -157,9 +164,12 @@ internal sealed class QuestQuickClearPlan
     public int MarkerQuestId => MarkerDefinition.Id;
     public bool IsManual { get; }
     public QuestTicketSource? Ticket { get; }
+    public LevelUpTicketSource? LevelUpTicket { get; }
+    public byte TargetLevel => LevelUpTicket?.Growth.TargetLevel ?? Expected.Level;
+    public bool IsLevelUpTicket => LevelUpTicket is not null;
     public bool IsTicket => Ticket is not null;
-    public bool IsPreparedSkip => IsManual || IsTicket;
-    public string OperationKind => IsTicket ? "Ticket" : IsManual ? "Manual" : "QuickClear";
+    public bool IsPreparedSkip => IsManual || IsTicket || IsLevelUpTicket;
+    public string OperationKind => IsTicket || IsLevelUpTicket ? "Ticket" : IsManual ? "Manual" : "QuickClear";
     public Guid OperationId { get; }
     public int? ParentKey => unit?.ParentKey;
     public int? QuestionQuestId => question?.Id;
@@ -182,17 +192,17 @@ internal sealed class QuestQuickClearPlan
     // 仅在锁外构建阶段附加效果；pending保存后始终复用这份冻结计划。
     public void PrepareEffects(QuestSkipEffects? effects,QuestCatalog quests)
     {
-        Inventory = Ticket?.Inventory ?? new(Expected.Inventory,Expected.Inventory,"quest_skip");
+        Inventory = Ticket?.Inventory ?? LevelUpTicket?.Inventory ?? new(Expected.Inventory,Expected.Inventory,"quest_skip");
         if (effects is null) return;
         var ordered=IsPreparedSkip ? Interval : Interval.Prepend(Question).Concat(AreaQuests).Append(quests.Get(MarkerQuestId)).ToImmutableArray();
-        Effects = effects.Prepare(Expected,ordered.Where(quest=>NewCompletedQuestIds.Contains(quest.Id)),Inventory,EquipmentSlotFlagsAfter,
+        Effects = effects.Prepare(Expected with { Level=TargetLevel },ordered.Where(quest=>NewCompletedQuestIds.Contains(quest.Id)),Inventory,EquipmentSlotFlagsAfter,
             ProfessionGrowType ?? Expected.GrowType,TargetLearning,
             characterState:Ticket?.Definition.ActionIndex is QuestTicketDefinition.SpecifiedAction or QuestTicketDefinition.FirstAwakeningAction or QuestTicketDefinition.SecondAwakeningAction);
         Inventory=Effects.Inventory; EquipmentSlotFlagsAfter=Effects.EquipmentSlots;
         ProfessionGrowType=Effects.GrowType==Expected.GrowType ? ProfessionGrowType : Effects.GrowType;
         TargetLearning=Effects.Learning;
         var current = Expected with { Inventory=Inventory.After,GrowType=Effects.GrowType,EquipmentSlotFlags=EquipmentSlotFlagsAfter,
-            Learning=TargetLearning,CompletedQuests=CompletedAfter.ToArray(),AccountCompletedQuests=AccountCompletedAfter.ToArray(),QuestAnswers=AnswersAfter };
+            Learning=TargetLearning,Level=TargetLevel,CompletedQuests=CompletedAfter.ToArray(),AccountCompletedQuests=AccountCompletedAfter.ToArray(),QuestAnswers=AnswersAfter };
         ActiveAfter=QuestStateProgress.Refresh(QuestInventoryProgress.Refresh(ActiveAfter.ToArray(),Inventory.After,quests,
             DateTimeOffset.UtcNow.ToUnixTimeSeconds()),current,quests);
         if (Effects.Changed)
@@ -206,6 +216,10 @@ internal sealed class QuestQuickClearPlan
     public static bool TryCreateManual(Character expected, Guid operationId, QuestCatalog quests,
         ImmutableDictionary<int,byte> answers, out QuestQuickClearPlan? plan, out string reason, TownCatalog? towns = null)
         => TryCreateRange(expected,operationId,quests,answers,null,out plan,out reason,towns);
+
+    public static bool TryCreateLevelUpTicket(Character expected, Guid operationId, QuestCatalog quests, LevelUpTicketSource source,
+        ImmutableDictionary<int,byte> answers, out QuestQuickClearPlan? plan, out string reason, TownCatalog? towns = null)
+        => TryCreateRange(expected,operationId,quests,answers,null,out plan,out reason,towns,source);
 
     public static bool TryCreateTicket(Character expected,Guid operationId,QuestCatalog quests,QuestTicketSource ticket,
         ImmutableDictionary<int,byte> answers,out QuestQuickClearPlan? plan,out string reason,SkillLearningCatalog? skills=null,TownCatalog? towns=null)
@@ -360,11 +374,23 @@ internal sealed class QuestQuickClearPlan
     }
 
     static bool TryCreateRange(Character expected, Guid operationId, QuestCatalog quests,
-        ImmutableDictionary<int,byte> answers,QuestTicketSource? ticket,out QuestQuickClearPlan? plan,out string reason,TownCatalog? towns)
+        ImmutableDictionary<int,byte> answers,QuestTicketSource? ticket,out QuestQuickClearPlan? plan,out string reason,TownCatalog? towns,
+        LevelUpTicketSource? levelUpTicket = null)
     {
         plan = null;
         try
         {
+            var original = expected;
+            if (levelUpTicket is not null)
+            {
+                if (!ReferenceEquals(levelUpTicket.Inventory.Before,expected.Inventory) ||
+                    expected.Inventory.Find(levelUpTicket.Item.Position) != levelUpTicket.Item ||
+                    levelUpTicket.Growth.CharacterId != expected.Id || levelUpTicket.Growth.Revision != expected.Revision ||
+                    levelUpTicket.Growth.PreviousLevel != expected.Level || levelUpTicket.Growth.TargetLevel != expected.Level+1)
+                    throw new InvalidDataException("升级券需要原角色成长及源实例快照");
+                expected = expected with { Level=levelUpTicket.Growth.TargetLevel,Learning=levelUpTicket.Growth.Learning,
+                    Inventory=levelUpTicket.Inventory.After };
+            }
             // external consumable_clear.go:25-29明确普通券包含当前等级的epic/normal；手册只到低一级。
             int cutoff = ticket is null ? ManualCutoff(expected.Level) : expected.Level;
             if (expected.Id == 0 || operationId == Guid.Empty || expected.Job >= 16 || expected.Level is < 1 or > 95 ||
@@ -414,8 +440,9 @@ internal sealed class QuestQuickClearPlan
             } while (progressed);
             if (remainingAnswers.Count != 0) throw new InvalidDataException("手册回答不属于当前可达问题");
             if (questions.Count > byte.MaxValue) throw new NotSupportedException("手册本批问题超过1381数量范围");
-            if (scope.Count == 0 && questions.Count == 0) throw new InvalidDataException("截止等级内没有可用手册主线");
-            plan = new(expected,operationId,cutoff,scope.ToImmutableArray(),answers,questions.ToImmutableArray(),quests,ticket);
+            if (scope.Count == 0 && questions.Count == 0 && levelUpTicket is null) throw new InvalidDataException("截止等级内没有可用手册主线");
+            plan = new(original,operationId,cutoff,scope.ToImmutableArray(),answers,questions.ToImmutableArray(),quests,ticket,
+                levelUpTicket:levelUpTicket);
             reason = questions.Count == 0 ? "手册范围及回答已冻结" : "手册等待真实问题回答";
             return true;
 

@@ -75,6 +75,7 @@ internal sealed partial class GameSession
     void ClearConsumableUse()
     {
         usedConsumables.Clear();
+        levelUpCooldowns.Clear();
         pendingConsumableUse = null;
     }
 }

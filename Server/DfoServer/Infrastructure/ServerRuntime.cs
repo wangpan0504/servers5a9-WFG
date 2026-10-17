@@ -92,6 +92,7 @@ internal static class ServerRuntime
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
+        var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
@@ -222,7 +223,9 @@ internal static class ServerRuntime
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new ImageCommunicationHandler(imageCommunication, quests, log),
             new QuestHiddenHandler(quests,log),
-            new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning),
+            new LevelUpTicketHandler(new Game.Characters.LevelUpTicketService(itemResources.Items,growth,itemResources.EpicPieces,clock),
+                quests,levelUpProjection,log),
+            new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning,levelUpProjection),
             new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,skinService,inventoryProjection,
                 new Game.Creatures.CreatureChangeService(itemResources.Items.Get, itemResources.Items.CreatureChange,
                     itemResources.Creatures, itemResources.EpicPieces, clock, groups: itemResources.CreatureGroups,

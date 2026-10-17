@@ -218,7 +218,8 @@ internal sealed partial class GameSession
 
     public void MarkQuestTicketAcknowledged(QuestQuickClearReceipt receipt) => owner.Execute(() =>
     {
-        if (CanPublishQuestQuickClear(receipt) && pendingQuestQuickClear is { Plan.IsTicket: true, Committed: not null } pending &&
+        if (CanPublishQuestQuickClear(receipt) && pendingQuestQuickClear is { Committed: not null } pending &&
+            (pending.Plan.IsTicket || pending.Plan.IsLevelUpTicket) &&
             pending.Plan.OperationId == receipt.Commit?.Plan.OperationId)
             pendingQuestQuickClear = pending with { TicketAcknowledged = true };
         return true;
@@ -250,9 +251,13 @@ internal sealed partial class GameSession
                 return receipt with { Reason = "本次手册零基回答越界" };
             choices = choices.SetItem(checked((int)row.QuestId),checked((byte)row.Answer));
         }
-        bool created = pending.Plan.Ticket is { } ticket
-            ? QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,ticket,choices,out var plan,out string reason,towns:towns)
-            : QuestQuickClearPlan.TryCreateManual(expected,pending.Plan.OperationId,quests,choices,out plan,out reason,towns);
+        QuestQuickClearPlan? plan;
+        string reason;
+        bool created = pending.Plan.LevelUpTicket is { } levelUp
+            ? QuestQuickClearPlan.TryCreateLevelUpTicket(expected,pending.Plan.OperationId,quests,levelUp,choices,out plan,out reason,towns)
+            : pending.Plan.Ticket is { } ticket
+                ? QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,ticket,choices,out plan,out reason,towns:towns)
+                : QuestQuickClearPlan.TryCreateManual(expected,pending.Plan.OperationId,quests,choices,out plan,out reason,towns);
         if (!created)
             return receipt with { Reason = reason };
         if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
@@ -287,12 +292,20 @@ internal sealed partial class GameSession
     QuestQuickClearReceipt CommitManualQuestSkip(PendingQuestQuickClear pending,QuestQuickClearReceipt receipt,bool retainAnswered)
     {
         if (pending.Committed is { } installed)
-            return receipt with { Character = installed.Character, Commit = installed with { Duplicate = true }, Reason = "重复最终回答恢复同一手册提交" };
+            return receipt with { Character = installed.Character, Commit = installed with { Duplicate = true },
+                TicketAcknowledged=pending.TicketAcknowledged, Reason = "重复最终回答恢复同一手册提交" };
         // 只有进入仓储提交才占用恢复状态；异常保留最终答案和原操作身份，不能重抽范围。
         pendingQuestQuickClear = pending with { CommitStarted = true };
-        var commit = repository.CommitQuestQuickClear(owner,pending.Plan);
+        QuestQuickClearCommit commit;
+        try { commit = repository.CommitQuestQuickClear(owner,pending.Plan); }
+        catch (QuestTicketExpiredException error)
+        {
+            pendingQuestQuickClear = null;
+            return receipt with { Reason=error.Message,Prepared=pending.Plan };
+        }
         if (!commit.ProjectionCurrent) throw new InvalidOperationException("手册已提交但原角色已变化，需要重连恢复");
         Selected = commit.Character; completed = QuestEligibility.Completed(Selected);
+        if (pending.Plan.LevelUpTicket is { } levelUpSource) RecordLevelUpCooldown(levelUpSource);
         // ACK1431发送丢失后可恢复同一结果；已安装提交不再阻止切日。
         pendingQuestQuickClear = retainAnswered ? pending with { Committed = commit, CommitStarted = false } : null;
         return receipt with { Character = commit.Character, Commit = commit, Reason = "手册无奖励完成已提交" };

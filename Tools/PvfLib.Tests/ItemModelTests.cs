@@ -139,6 +139,15 @@ internal static class ItemModelTests
         creature = StackableFile.Parse(1, "stackable/change.stk", [new(3,4),new(0,16),new(0,17)], CreatureResolve);
         That(creature.HasCreatureMinimumLevel && creature.DeclaredCreatureMinimumLevel is null,
             "malformed creature minimum level cannot use the missing-field default");
+        string LevelResolve(int value) => value == 0 ? "[levelup range]" : "[booster info]";
+        var level = StackableFile.Parse(1,"stackable/level.stk",[new(3,0),new(0,1)],LevelResolve);
+        That(level.DeclaredLevelUpRange == 1 && !level.HasBoosterInfo,"level ticket preserves its explicit increment");
+        foreach (var tokens in new PvfToken[][] { [],[new(3,0),new(0,-1)],[new(3,0),new(0,1),new(0,2)],
+            [new(3,0),new(0,1),new(3,0),new(0,1)] })
+            That(StackableFile.Parse(1,"stackable/level.stk",tokens,LevelResolve).DeclaredLevelUpRange is null,
+                "missing, negative, compound and duplicate increments never default to one");
+        That(StackableFile.Parse(1,"stackable/level.stk",[new(3,1)],LevelResolve).HasBoosterInfo,
+            "random booster declaration remains distinguishable from a fixed ticket");
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 5)], Resolve, _ => true));
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 4)], Resolve, _ => false));
     }

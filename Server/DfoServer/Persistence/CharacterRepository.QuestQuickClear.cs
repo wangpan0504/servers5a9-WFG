@@ -16,7 +16,7 @@ internal sealed partial class CharacterRepository
         var newCompleted = scope.Except(QuestEligibility.Completed(expected)).Order().ToArray();
         bool validIdentity = plan.IsPreparedSkip
             ? plan.OperationId != Guid.Empty && plan.AcceptanceId == Guid.Empty && plan.ParentKey is null && plan.QuestionQuestId is null &&
-                plan.PendingQuestions.Length == 0 && plan.CutoffLevel == (plan.IsTicket ? expected.Level : QuestQuickClearPlan.ManualCutoff(expected.Level)) &&
+                plan.PendingQuestions.Length == 0 && plan.CutoffLevel == (plan.IsTicket ? expected.Level : QuestQuickClearPlan.ManualCutoff(plan.TargetLevel)) &&
                 plan.ManualAnswers.Keys.All(scope.Contains)
             : plan.OperationId == plan.AcceptanceId && plan.AcceptanceId != Guid.Empty && plan.Unit.ParentKey >= 0 &&
                 expected.ActiveMainQuests.Contains(plan.ActiveQuestion) && plan.ActiveQuestion.QuestId == plan.Question.Id &&
@@ -57,6 +57,18 @@ internal sealed partial class CharacterRepository
             if (verified.Item != ticket.Item || !SameInventory(ticket.Inventory.After,new(verified.Inventory.After,verified.Inventory.After,"quest_ticket_comparison")))
                 throw new InvalidDataException("任务券只能消费原实例的一张且保留其他资产");
         }
+        if (plan.LevelUpTicket is { } levelUp)
+        {
+            var growth = levelUp.Growth;
+            if (!ReferenceEquals(levelUp.Inventory.Before,expected.Inventory) || expected.Inventory.Find(levelUp.Item.Position)!=levelUp.Item ||
+                levelUp.Item.Uid<=0 || levelUp.Item.Core.Count<1 || levelUp.Item.Core.EquipmentLockId!=0 ||
+                levelUp.Item.Core.ItemId!=levelUp.Definition.TemplateId || !levelUp.Definition.Allows(expected.Level,expected.Job) ||
+                growth.CharacterId!=expected.Id || growth.Revision!=expected.Revision || growth.Job!=expected.Job || growth.GrowType!=expected.GrowType ||
+                growth.PreviousLevel!=expected.Level || growth.TargetLevel!=expected.Level+1 || growth.TargetLevel>CharacterGrowthCatalog.MaximumSupportedLevel ||
+                growth.GainedExperience==0 || growth.GainedExperience>uint.MaxValue || !SameLearning(growth.Before,expected.Learning) ||
+                !SameLearning(plan.TargetLearning,growth.Learning) || plan.ProfessionGrowType is not null)
+                throw new InvalidDataException("升级券必须绑定原角色的一次成长、两树点数和消费计划");
+        }
         using var db = database.Open();
         using var tx = db.BeginTransaction(deferred: true);
         var current = Require(db,tx,owner.Account,expected.Name);
@@ -88,6 +100,12 @@ internal sealed partial class CharacterRepository
             if (!source.Definition.Allows(current.Level,current.Job))
                 throw new InvalidOperationException("任务券在提交前资格变化");
         }
+        if (plan.LevelUpTicket is { } levelSource)
+        {
+            long now=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (levelSource.Inventory.ChangedSlots.Any(slot=>levelSource.Inventory.Before.Find(slot) is { } item && item.IsExpired(now)))
+                throw new QuestTicketExpiredException();
+        }
         command.Parameters.AddWithValue("$before",expected.Revision);
         if (inventory.Changed)
             persistedInventory=CommitInventoryInTransaction(db,tx,owner,expected,inventory).Inventory;
@@ -95,6 +113,14 @@ internal sealed partial class CharacterRepository
         {
             command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$before";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("跳过revision已变化");
+        }
+        if (plan.IsLevelUpTicket)
+        {
+            command.Parameters.AddWithValue("$level",plan.TargetLevel);
+            command.Parameters.AddWithValue("$experience",checked((long)plan.TargetLearning.Experience));
+            command.CommandText="UPDATE characters SET level=$level,experience=$experience WHERE id=$id AND account=$account AND revision=$before+1";
+            if (command.ExecuteNonQuery()!=1) throw new InvalidOperationException("升级券角色版本已变化");
+            command.Parameters.RemoveAt("$level"); command.Parameters.RemoveAt("$experience");
         }
         if (plan.EquipmentSlotFlagsAfter != expected.EquipmentSlotFlags)
         {
@@ -159,7 +185,7 @@ internal sealed partial class CharacterRepository
         Character After() => expected with { Revision = checked(expected.Revision+1), ActiveMainQuests = plan.ActiveAfter.ToArray(),
             CompletedQuests = plan.CompletedAfter.ToArray(), AccountCompletedQuests = plan.AccountCompletedAfter.ToArray(), QuestAnswers = plan.AnswersAfter, Inventory = persistedInventory,
             EquipmentSlotFlags=plan.EquipmentSlotFlagsAfter,GrowType=plan.ProfessionGrowType ?? expected.GrowType,
-            Learning=plan.TargetLearning,Skills=SameLearning(plan.TargetLearning,expected.Learning) ? expected.Skills :
+            Level=plan.TargetLevel,Learning=plan.TargetLearning,Skills=SameLearning(plan.TargetLearning,expected.Learning) ? expected.Skills :
                 plan.TargetLearning.Trees.Single(row=>row.Context==0).Skills.Select(row=>new CharacterSkill(row.Id,row.Level)).OrderBy(row=>row.Id).ToArray() };
 
         bool Matches(Character actual,Character target) => actual.Id == target.Id && actual.Slot == target.Slot &&

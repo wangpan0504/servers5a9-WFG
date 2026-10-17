@@ -57,15 +57,16 @@ internal static class StackableCatalogTests
             new(3, 3), new(0, 10), new(3, 4), new(0, 1), new(3, 5), new(6, 7)
         ];
         var fixture = Parse(valid);
-        string[] missingActionFields = ["action type", "maximum level", "use action packet", "usable job", "action usable place"];
+        string[] missingActionFields = ["action type", "maximum level", "use action packet", "usable job", "action usable place",
+            "levelup range", "cool time"];
         That(fixture.TypeDeclaration!.Label == "[material]" && fixture.DeclaredStackLimit == 1000 && fixture.DeclaredPrice == 100 &&
             fixture.DeclaredSellPrice == 10 && fixture.DeclaredMinimumLevel == 1 && fixture.DeclaredItemGroupName == "material group" &&
             fixture.UnsupportedFields.ToHashSet(StringComparer.Ordinal).SetEquals(missingActionFields),
-            "固定token基础声明完整读取，缺失的五项使用字段仍保留未知");
+            "固定token基础声明完整读取，缺失的七项使用字段仍保留未知");
         var absent = Parse([]);
         That(absent.DeclaredStackLimit is null && absent.UnsupportedFields.ToHashSet(StringComparer.Ordinal).SetEquals(
             ["stackable type", "stack limit", "price", "sell price", "minimum level", "item group name", .. missingActionFields]),
-            "缺失的全部十一项字段明确保留未知，不能遗漏新增使用字段");
+            "缺失的全部十三项字段明确保留未知，不能遗漏新增使用字段");
         That(Parse([new(3, 0), new(6, 6), new(0, 1), new(0, 2), new(0, 3), new(0, 4)])
             .TypeDeclaration!.Parameters.SequenceEqual(new[] { 1, 2, 3, 4 }), "保留四个原始类型参数");
         That(Parse([new(3, 0), new(6, 6), new(0, 1), new(0, 2), new(0, 3)]).TypeDeclaration is null,

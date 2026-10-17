@@ -14,7 +14,8 @@ using DfoServer.Game.Inventory.Models;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class QuestQuickClearHandler(QuestCatalog quests, QuestConnectionCatalog connections, QuestProjection projection,
-    ServerLog log,ItemCatalog? items = null,SkillLearningCatalog? skills = null) : IGameCommandModule
+    ServerLog log,ItemCatalog? items = null,SkillLearningCatalog? skills = null,
+    LevelUpTicketProjection? levelUpTickets = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -57,6 +58,12 @@ internal sealed class QuestQuickClearHandler(QuestCatalog quests, QuestConnectio
         bool Guard() => context.Session.CanPublishQuestQuickClear(receipt);
         log.Write("quest_manual_prepare",new { Connection = context.Id, Opcode = (ushort)opcode, receipt.Reason,
             receipt.Prepared?.OperationId, receipt.Prepared?.CutoffLevel, receipt.Prepared?.PendingQuestions });
+        if (receipt.Prepared is { IsLevelUpTicket:true,PendingQuestions.Length:0 })
+        {
+            await context.Reply(opcode,QuestPackets.Rejected(0),"level_up_ticket_answer_rejected",Guard);
+            await context.Reply(CmdPacketType.REQUEST_EVENT_SERVER_LEVEL_UP,LevelUpTicketPackets.Rejected(),"level_up_ticket_expired",Guard);
+            return CommandResult.Handled;
+        }
         // 有问题时1381是预处理应答；不能以成功ACK提前清理未答问题。
         if (receipt.Prepared is { PendingQuestions.Length: > 0 } plan)
             await context.Notify(NotiPacketType.SELECT_BRANCH_QUEST,QuestSkipPackets.Questions(plan.PendingQuestions),"quest_manual_questions",Guard);
@@ -97,6 +104,11 @@ internal sealed class QuestQuickClearHandler(QuestCatalog quests, QuestConnectio
     async Task PublishCompletedAsync(GameConnectionContext context,QuestQuickClearReceipt receipt,Func<bool> guard,string action)
     {
         var plan=receipt.Commit!.Plan;
+        if (plan.IsLevelUpTicket)
+        {
+            await (levelUpTickets ?? throw new InvalidOperationException("升级券主线回答缺少成长投影")).PublishAsync(context,receipt);
+            return;
+        }
         var added=plan.Inventory.ChangedSlots.Where(slot=>plan.Inventory.Before.Find(slot)?.Core.Kind==ItemKind.Quest ||
             receipt.Character.Inventory.Find(slot)?.Core.Kind==ItemKind.Quest).ToArray();
         if(added.Length>0)

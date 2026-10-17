@@ -13,6 +13,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public StackableTypeDeclaration? ActionDeclaration { get; init; }
     public int? DeclaredMaximumLevel { get; init; }
     public bool HasMaximumLevel { get; init; }
+    public bool HasMinimumLevel { get; init; }
     public int? DeclaredUseActionPacket { get; init; }
     public bool HasUseActionPacket { get; init; }
     public IReadOnlyList<string>? DeclaredUsableJobs { get; init; }
@@ -28,6 +29,10 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public IReadOnlyList<int>? DeclaredActionResultLimitIndexes { get; init; }
     public int? DeclaredCreatureMinimumLevel { get; init; }
     public bool HasCreatureMinimumLevel { get; init; }
+    public int? DeclaredLevelUpRange { get; init; }
+    public int? DeclaredCoolTime { get; init; }
+    public bool HasCoolTime { get; init; }
+    public bool HasBoosterInfo { get; init; }
 
     public static StackableFile Parse(int templateId, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -36,7 +41,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
                 "action type", "maximum level", "use action packet", "usable job", "action usable place",
                 "action usable server type", "need material", "dont change grow type", "usable first growtype",
                 "class change grow type check off", "stackable action limit indexes",
-                "stackable action result limit indexes", "creature minimum level"]);
+                "stackable action result limit indexes", "creature minimum level", "levelup range", "cool time"]);
         StackableTypeDeclaration? type = null;
         if (fields.TryGet("stackable type", out var values))
         {
@@ -103,9 +108,11 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
         bool checkOff = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[class change grow type check off]");
         if (checkOff && (!fields.TryGet("class change grow type check off", out values) || values.Length != 0))
             fields.Unsupported("class change grow type check off");
+        int? levelUpRange=fields.Scalar("levelup range"), coolTime=fields.Scalar("cool time");
         return new(templateId, path, type, limit, price, sellPrice, minimum, group, fields.UnsupportedFields)
         {
             ActionDeclaration = action, DeclaredMaximumLevel = maximum, HasMaximumLevel = hasMaximum,
+            HasMinimumLevel = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[minimum level]"),
             DeclaredUseActionPacket = useAction, HasUseActionPacket = hasUseAction, DeclaredUsableJobs = jobs,
             HasUsableJobs = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[usable job]"),
             DeclaredActionUsablePlaces = places,
@@ -118,7 +125,11 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             DeclaredActionLimitIndexes = Integers("stackable action limit indexes"),
             DeclaredActionResultLimitIndexes = Integers("stackable action result limit indexes"),
             DeclaredCreatureMinimumLevel = fields.Scalar("creature minimum level"),
-            HasCreatureMinimumLevel = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[creature minimum level]")
+            HasCreatureMinimumLevel = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[creature minimum level]"),
+            DeclaredLevelUpRange = levelUpRange,
+            DeclaredCoolTime = coolTime,
+            HasCoolTime = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[cool time]"),
+            HasBoosterInfo = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[booster info]")
         };
     }
 }
