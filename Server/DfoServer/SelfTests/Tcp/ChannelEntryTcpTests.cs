@@ -12,6 +12,7 @@ internal static class ChannelEntryTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         VerifyListenerRollback();
+        await VerifyConnectionAddressesAsync(source, root, resources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "channel-entry"), resources: resources);
         await fixture.StartAsync();
         ChannelTcpTests.Run(fixture);
@@ -122,6 +123,25 @@ internal static class ChannelEntryTcpTests
         That(gatePackets[^2] is { Kind: 0, Opcode: 124 } && gatePackets[^1] is { Kind: 0, Opcode: 24 } &&
             fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", id) == gateLocation,
             "gate换频道沿用合法1379与124/24边界，不回归为强制坐标重置");
+    }
+
+    static async Task VerifyConnectionAddressesAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "channel-address"), resources: resources, connectionAddress: true);
+        await fixture.StartAsync();
+        foreach (string address in new[] { "127.0.0.2", "127.0.0.1" })
+            ChannelTcpTests.Run(fixture, address);
+        var endpoints = ChannelTcpTests.Endpoints(fixture);
+        using var alpha = Open(fixture, "addressa", gamePort: endpoints[11], channelNumber: 11, serverAddress: "127.0.0.2");
+        using var beta = Open(fixture, "addressb", gamePort: endpoints[12], channelNumber: 12);
+        foreach (var (peer, address, port) in new[] { (alpha, "127.0.0.2", endpoints[11]), (beta, "127.0.0.1", endpoints[12]) })
+        {
+            int length = checked((int)U32(peer.LoginEndpoint, 9));
+            That(System.Text.Encoding.ASCII.GetString(peer.LoginEndpoint, 13, length) == address &&
+                U32(peer.LoginEndpoint, 13 + length) == port,
+                "并发原生登录返回各自连接抵达的服务端IP和所选频道端口，不污染其他连接");
+        }
+        That(fixture.Options.AdvertisedAddress == "connection", "目录与登录端点不改写共享地址策略");
     }
 
     static void VerifyListenerRollback()

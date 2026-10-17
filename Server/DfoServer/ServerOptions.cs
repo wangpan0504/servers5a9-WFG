@@ -43,7 +43,8 @@ internal sealed record ServerOptions
             if (arguments.TryGetValue("--server-ip", out string? address))
             {
                 address = ResolveServerIp(address);
-                value = value with { AdvertisedAddress = address, ListenAddress = IPAddress.IsLoopback(IPAddress.Parse(address)) ? address : "0.0.0.0" };
+                value = value with { AdvertisedAddress = address,
+                    ListenAddress = address == "connection" || !IPAddress.IsLoopback(IPAddress.Parse(address)) ? "0.0.0.0" : address };
             }
             foreach (var (name, argument) in arguments)
             {
@@ -108,6 +109,8 @@ internal sealed record ServerOptions
 
     static string ResolveServerIp(string argument)
     {
+        if (argument == "connection")
+            return argument;
         if (argument == "auto")
         {
             argument = NetworkInterface.GetAllNetworkInterfaces()
@@ -119,7 +122,7 @@ internal sealed record ServerOptions
                 ?? throw new InvalidDataException("无法检测本机 LAN IPv4，请显式指定 --server-ip");
         }
         if (!IPAddress.TryParse(argument, out var parsed) || parsed.AddressFamily != AddressFamily.InterNetwork || parsed.Equals(IPAddress.Any) || parsed.Equals(IPAddress.Broadcast))
-            throw new InvalidDataException("--server-ip 必须为可达的 IPv4 或 auto");
+            throw new InvalidDataException("--server-ip 必须为可达的 IPv4、auto 或 connection");
         return parsed.ToString();
     }
 }

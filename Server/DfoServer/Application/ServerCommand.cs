@@ -28,7 +28,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
 
     public const string Usage = """
         用法：DfoServer [运行参数] [命令及参数]
-          --server-ip <IPv4|auto>    返回给客户端的服务端地址，默认 127.0.0.1
+          --server-ip <IPv4|auto|connection> 返回服务端地址；connection 按连接选址，默认 127.0.0.1
           --listen-ip <IPv4>         监听地址；指定非回环 server-ip 时默认 0.0.0.0
           --channel-port <端口>      频道端口，默认 23100
           --game-port <端口>         游戏端口，默认 23101

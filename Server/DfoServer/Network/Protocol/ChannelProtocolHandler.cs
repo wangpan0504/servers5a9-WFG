@@ -42,7 +42,7 @@ internal sealed class ChannelProtocolHandler(ServerOptions options, GameChannelL
             }
             else if (b[1] == 17 && b.Length == 35 && hello)
             {
-                reply = ChannelPackets.Directory(options.AdvertisedAddress, gameChannels.Endpoints);
+                reply = ChannelPackets.Directory(connection.ServerAddress(options), gameChannels.Endpoints);
             }
             else
                 throw new InvalidDataException("Channel handshake order");

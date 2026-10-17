@@ -50,7 +50,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         {
             online.Register(login.Owner, session);
             adventure?.Prepare(context);
-            await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(options.AdvertisedAddress, login.Channel.Port), "endpoint");
+            await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options), login.Channel.Port), "endpoint");
             var roster = session.PrepareRoster();
             await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "roster",
                 () => session.CanPublishRoster(roster));

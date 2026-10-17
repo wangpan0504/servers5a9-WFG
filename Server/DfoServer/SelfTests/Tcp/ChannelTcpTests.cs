@@ -11,7 +11,7 @@ namespace DfoServer.Testing;
 
 internal static class ChannelTcpTests
 {
-    public static void Run(TcpTestFixture fixture)
+    public static void Run(TcpTestFixture fixture, string serverAddress = "127.0.0.1")
     {
         var endpoints = Endpoints(fixture);
         using (var client = Connect())
@@ -58,7 +58,7 @@ internal static class ChannelTcpTests
                 int number = i == 0 ? 1 : i + 9;
                 That(Encoding.ASCII.GetString(directory, at, 20).TrimEnd('\0') == "#ch." + number, "目录保留独立分类号 " + number);
                 That(BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(at + 60)) == endpoints[(byte)number] &&
-                    Encoding.ASCII.GetString(directory, at + 28, 32).TrimEnd('\0') == "127.0.0.1", "分类入口端口独立，地址及服务进程共享");
+                    Encoding.ASCII.GetString(directory, at + 28, 32).TrimEnd('\0') == serverAddress, "分类入口端口独立，同一目录使用本连接的服务端地址");
             }
             That(stream.ReadByte() == -1, "channel closes after complete handshake");
         }
@@ -91,7 +91,7 @@ internal static class ChannelTcpTests
             var client = new TcpClient();
             try
             {
-                client.ConnectAsync("127.0.0.1", fixture.Options.ChannelPort).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                client.ConnectAsync(serverAddress, fixture.Options.ChannelPort).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
                 client.GetStream().ReadTimeout = 5000;
                 return client;
             }

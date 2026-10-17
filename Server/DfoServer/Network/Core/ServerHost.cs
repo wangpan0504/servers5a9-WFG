@@ -134,9 +134,11 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         try
         {
             capture?.Register(id, channel, peer);
-            log.Write("connected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME", Peer = client.Client.RemoteEndPoint?.ToString() });
+            log.Write("connected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME", Peer = client.Client.RemoteEndPoint?.ToString(),
+                Local = client.Client.LocalEndPoint?.ToString() });
             client.NoDelay = true;
-            await protocol.RunAsync(new(id, peer.Address, client.GetStream(), lifetime, channel, capture, endpoint));
+            await protocol.RunAsync(new(id, peer.Address, client.GetStream(), lifetime, channel, capture, endpoint,
+                localAddress: (client.Client.LocalEndPoint as IPEndPoint)?.Address));
         }
         catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException or InvalidDataException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
         {

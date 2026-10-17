@@ -31,7 +31,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly string pvfSource;
     string? previousPhase;
     public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null,
-        DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null, bool packetHttp = false)
+        DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null, bool packetHttp = false,
+        bool connectionAddress = false)
     {
         this.resources = resources;
         this.questCatalog = questCatalog;
@@ -47,8 +48,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             int[] ports = reservations.Select(l => ((IPEndPoint)l.LocalEndpoint).Port).ToArray();
             Options = source with
             {
-                ListenAddress = "127.0.0.1",
-                AdvertisedAddress = "127.0.0.1",
+                ListenAddress = connectionAddress ? "0.0.0.0" : "127.0.0.1",
+                AdvertisedAddress = connectionAddress ? "connection" : "127.0.0.1",
                 ChannelPort = ports[0],
                 GamePort = ports[1],
                 GmPort = gm ? ports[2] : 0,

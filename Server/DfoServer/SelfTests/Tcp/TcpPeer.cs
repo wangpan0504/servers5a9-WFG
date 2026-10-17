@@ -59,14 +59,14 @@ internal sealed class TcpPeer : IDisposable
         names = Encoding.GetEncoding(936, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
     }
 
-    public TcpPeer(int port, string? localAddress = null, byte channelNumber = 10)
+    public TcpPeer(int port, string? localAddress = null, byte channelNumber = 10, string serverAddress = "127.0.0.1")
     {
         this.channelNumber = channelNumber;
         try
         {
             if (localAddress is not null)
                 client.Client.Bind(new IPEndPoint(IPAddress.Parse(localAddress), 0));
-            client.ConnectAsync("127.0.0.1", port).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            client.ConnectAsync(serverAddress, port).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
             stream = client.GetStream();
             stream.ReadTimeout = 5000;
             stream.WriteTimeout = 5000;
@@ -78,9 +78,10 @@ internal sealed class TcpPeer : IDisposable
         }
     }
 
-    public static TcpPeer Open(TcpTestFixture fixture, string account = "10000", string? digest = null, int? gamePort = null, byte channelNumber = 10)
+    public static TcpPeer Open(TcpTestFixture fixture, string account = "10000", string? digest = null, int? gamePort = null, byte channelNumber = 10,
+        string serverAddress = "127.0.0.1")
     {
-        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber);
+        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber, serverAddress: serverAddress);
         peer.fixture = fixture;
         peer.lastBarrierCompleted = peer.UnixTime;
         try

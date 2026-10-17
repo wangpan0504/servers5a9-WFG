@@ -96,6 +96,11 @@ internal static class CommandLineTests
         That(custom.ListenAddress == "127.0.0.1" && custom.AdvertisedAddress == "192.168.0.1", "explicit listener wins independent of option order");
         That(custom.ChannelPort == 25000 && custom.GamePort == 25001 && custom.PacketHttpPort == 25002 && custom.SessionTtlSeconds == 600, "supported launch overrides");
         That(ServerOptions.Load(ServerCommand.Parse(["--server-ip", "192.168.0.1"]).Options).ListenAddress == "0.0.0.0", "LAN address enables external listener");
+        var connection = ServerOptions.Load(ServerCommand.Parse(["--server-ip", "connection"]).Options);
+        That(connection.AdvertisedAddress == "connection" && connection.ListenAddress == "0.0.0.0",
+            "按连接选址模式保留运行策略，默认监听所有 IPv4 接口");
+        That(ServerOptions.Load(ServerCommand.Parse(["--listen-ip", "127.0.0.1", "--server-ip", "connection"]).Options).ListenAddress == "127.0.0.1",
+            "按连接选址仍尊重显式监听地址");
         string root = Path.Combine(Path.GetTempPath(), "S5A9-command-options-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string workingDirectory = Environment.CurrentDirectory;
