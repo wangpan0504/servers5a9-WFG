@@ -23,15 +23,35 @@ if (-not $Repository -or -not $env:FORGEJO_TOKEN) { throw '缺少仓库名称或
 $endpoint = $ApiUrl.AbsoluteUri.TrimEnd('/') + '/repos/' + $Repository
 $headers = @{ Authorization = 'token ' + $env:FORGEJO_TOKEN }
 
+function Write-ApiFailure([string]$Method, [string]$Uri, $Status, $Headers, $Content) {
+    # 仅输出诊断信息，不改变失败即抛错的语义；不输出请求头（含 token）。
+    Write-Host "Forgejo API 失败诊断：$Method $Uri -> HTTP $Status"
+    $keep = '^(Content-Length|Content-Type|Server|Via|Retry-After|Date|Location|X-.*)$'
+    $lines = @()
+    if ($null -ne $Headers) {
+        foreach ($entry in $Headers.GetEnumerator()) {
+            if ($entry.Key -match $keep) { $lines += ('  {0}: {1}' -f $entry.Key, (@($entry.Value) -join ', ')) }
+        }
+    }
+    if ($lines.Count -gt 0) { Write-Host '响应头：'; $lines | ForEach-Object { Write-Host $_ } }
+    else { Write-Host '响应头：（无可输出的相关头）' }
+    $text = if ($null -eq $Content) { '' } elseif ($Content -is [string]) { $Content } else { try { $Content | ConvertTo-Json -Depth 5 -Compress } catch { [string]$Content } }
+    if ($env:FORGEJO_TOKEN) { $text = $text.Replace($env:FORGEJO_TOKEN, '***') }
+    $total = $text.Length
+    if ($total -gt 2000) { $text = $text.Substring(0, 2000) + "...（已截断，共 $total 字符）" }
+    Write-Host "响应体（前 2000 字符）：$text"
+}
+
 function Invoke-Api([string]$Method, [string]$Path, $Body = $null, $Form = $null, [switch]$AllowMissing) {
     $arguments = @{
         Uri = $endpoint + $Path; Method = $Method; Headers = $headers
-        SkipHttpErrorCheck = $true; StatusCodeVariable = 'status'; TimeoutSec = 120
+        SkipHttpErrorCheck = $true; StatusCodeVariable = 'status'; ResponseHeadersVariable = 'responseHeaders'; TimeoutSec = 120
     }
     if ($null -ne $Body) { $arguments.Body = $Body | ConvertTo-Json; $arguments.ContentType = 'application/json; charset=utf-8' }
     if ($null -ne $Form) { $arguments.Form = $Form }
     $response = Invoke-RestMethod @arguments
     if ($status -eq 404 -and $AllowMissing) { return $null }
+    if ($status -lt 200 -or $status -ge 300) { Write-ApiFailure $Method $arguments.Uri $status $responseHeaders $response }
     if ($status -lt 200 -or $status -ge 300) { throw "Forgejo API $Method $Path 失败（HTTP $status）；未覆盖已有版本。" }
     return $response
 }
@@ -110,7 +130,9 @@ if (-not $release.id -or -not $release.draft) { throw '创建草稿的返回状�
 try {
     foreach ($file in @($archive, $checksum)) {
         $item = Get-Item -LiteralPath $file
-        $asset = Invoke-Api 'Post' "/releases/$($release.id)/assets?name=$($item.Name)" -Form @{ attachment = $item }
+        $assetPath = "/releases/$($release.id)/assets?name=$($item.Name)"
+        Write-Host ("上传附件：{0}，大小 {1} 字节（{2:N2} MiB），目标 {3}" -f $item.Name, $item.Length, ($item.Length / 1MB), ($endpoint + $assetPath))
+        $asset = Invoke-Api 'Post' $assetPath -Form @{ attachment = $item }
         if ($asset.name -cne $item.Name -or $asset.size -ne $item.Length) { throw '附件返回的文件名或长度不符。' }
     }
     $assets = @(Invoke-Api 'Get' "/releases/$($release.id)/assets")
