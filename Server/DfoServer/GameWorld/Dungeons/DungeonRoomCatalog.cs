@@ -43,6 +43,7 @@ internal sealed record DungeonRoomDefinition(
     public string? NpcMetadataError { get; init; }
     public IReadOnlyList<DfoServer.GameWorld.Characters.TutorialCinematicEvidence> TutorialCinematics { get; init; } = [];
     public DungeonCinematicLayerReturn? CinematicLayerReturn { get; init; }
+    public DungeonScriptedLayerReturn? ScriptedLayerReturn { get; init; }
 }
 
 internal sealed class DungeonRoomCatalog
@@ -98,7 +99,42 @@ internal sealed class DungeonRoomCatalog
         var tokens = archive.ReadTokens(path);
         var room = ParseResource(map with { Path = path }, tokens, archive.ResolveString, monsters, passiveObjects, archive.Contains,
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
-        return room.Map.Kind == "layered" ? room with { CinematicLayerReturn = ReadCinematicLayerReturn(room.Map,tokens) } : room;
+        return room.Map.Kind == "layered" ? room with
+        {
+            CinematicLayerReturn = ReadCinematicLayerReturn(room.Map,tokens),
+            ScriptedLayerReturn = ReadScriptedLayerReturn(room)
+        } : room;
+    }
+
+    DungeonScriptedLayerReturn? ReadScriptedLayerReturn(DungeonRoomDefinition room)
+    {
+        try { return Read(); }
+        // 附加ACT仅授予呈现返回；格式不支持时保留已严格校验的原MAP与清怪路线。
+        catch (InvalidDataException) { return null; }
+
+        DungeonScriptedLayerReturn? Read()
+        {
+        DungeonScriptedLayerReturn? evidence = null;
+        for (int ordinal = 0; ordinal < room.PassiveObjects.Count; ordinal++)
+        {
+            var source = room.PassiveObjects[ordinal];
+            if (source.Path is not { Length: > 0 } objectPath || !archive.Contains(objectPath)) continue;
+            var actions = DungeonScriptedLayerReturnRules.OtherActions(archive.ReadTokens(objectPath),archive.ResolveString);
+            if (actions is null) continue;
+            for (int index = 0; index < actions.Count; index++)
+            {
+                string path = PvfArchive.NormalizePath(objectPath[..(objectPath.LastIndexOf('/') + 1)] + actions[index]);
+                if (!path.StartsWith("passiveobject/",StringComparison.Ordinal) || !path.EndsWith(".act",StringComparison.Ordinal) ||
+                    !archive.Contains(path)) continue;
+                var move = DungeonScriptedLayerReturnRules.ReturnMove(archive.ReadTokens(path),archive.ResolveString);
+                if (move is not { } target || target.X != room.Map.Position.X || target.Y != room.Map.Position.Y) continue;
+                if (evidence is not null) return null;
+                evidence = new(room.Map.Id,room.Map.Path,ordinal,source.ObjectId,objectPath,index,path,
+                    target.X,target.Y,target.PlayerX,target.PlayerY,target.SceneFlag);
+            }
+        }
+        return evidence;
+        }
     }
 
     DungeonCinematicLayerReturn? ReadCinematicLayerReturn(DungeonMap map, IReadOnlyList<PvfToken> tokens)

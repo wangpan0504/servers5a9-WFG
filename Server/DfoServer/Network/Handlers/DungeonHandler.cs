@@ -161,10 +161,17 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (request.Body.Length != 8 || request.Body.Any(value => value != 0)) return CommandResult.Unhandled;
         var receipt = context.Session.CompleteFormalDungeonLoading();
         if (receipt is null) return CommandResult.Unhandled;
-        bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        if (receipt.NavigationReplay) return CommandResult.Handled;
+        bool published = false;
+        bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.FINISH_LOADING, [1], "formal_loading_ack", Guard);
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
+        if (receipt.ScriptedReturnId != Guid.Empty)
+        {
+            if (published) context.Session.ConfirmScriptedReturnLoading(receipt);
+            return CommandResult.Handled;
+        }
         if (receipt.Entry.UsesFatigue)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
@@ -322,10 +329,13 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         log.Write("formal_dungeon_move",new { Connection = context.Id, Accepted = receipt is not null,
             move.X, move.Y, Kind = move.Unknown10, receipt?.Snapshot.CurrentMap, receipt?.Snapshot.MapOperation, receipt?.Snapshot.MapPayload });
         if (receipt is null) return CommandResult.Unhandled;
-        bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        if (receipt.NavigationReplay) return CommandResult.Handled;
+        bool published = false;
+        bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "formal_move_ack", Guard);
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
             receipt.Snapshot.MapOperation,receipt.Snapshot.MapPayload, receipt.PassiveItems), "formal_next_map", Guard);
+        if (published && receipt.ScriptedReturnId != Guid.Empty) context.Session.ConfirmScriptedReturnPresentation(receipt);
         return CommandResult.Handled;
     }
 

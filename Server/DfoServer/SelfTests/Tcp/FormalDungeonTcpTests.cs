@@ -15,11 +15,18 @@ namespace DfoServer.Testing;
 
 internal static partial class FormalDungeonTcpTests
 {
+    // 本组验证穿脱、奖励与冷启动，经过时间由宠物专用用例推进；UTC仍用真实时间，保留期限与日期判断。
+    sealed class FixedElapsedClock : TimeProvider
+    {
+        public override long GetTimestamp() => 0;
+    }
+
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var growth = SelfTestCatalogs.Growth(resources.Archive);
         var kills = SelfTestCatalogs.KillExperience(resources.Archive);
-        await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"), gm: true, resources: resources);
+        await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"), gm: true, resources: resources,
+            clock: new FixedElapsedClock());
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out var fatigueMode) &&
             fatigueMode == "OK {\"infiniteFatigue\":false}", "正式副本扣点回归显式关闭无限疲劳");

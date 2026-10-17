@@ -323,6 +323,19 @@ internal sealed partial class GameSession
 
     public FormalDungeonReceipt? CompleteFormalDungeonLoading()
     {
+        var presentation = owner.Execute(() =>
+        {
+            if (formalDungeon is not { } dungeon || !dungeon.Run.HasScriptedReturn)
+                return (Handled: false,Receipt: (FormalDungeonReceipt?)null);
+            if (!CanUseScriptedReturn(dungeon)) return (Handled: true,Receipt: (FormalDungeonReceipt?)null);
+            var result = dungeon.Run.CompleteScriptedReturn(dungeon.Run.Snapshot.Identity);
+            return (Handled: true,Receipt: result == DungeonRunOutcome.Rejected ? null : FormalReceipt() with
+            {
+                ScriptedReturnId = dungeon.Run.ScriptedReturnId,
+                NavigationReplay = result == DungeonRunOutcome.Duplicate
+            });
+        });
+        if (presentation.Handled) return presentation.Receipt;
         var (expected,dungeon,epoch,identity,entry) = owner.Execute(() =>
             (Ready && Phase == SessionPhase.Loading ? Selected : null, formalDungeon, SelectionEpoch,
                 formalDungeon?.Run.Snapshot.Identity,formalDungeon?.Run.Entry));
@@ -351,16 +364,52 @@ internal sealed partial class GameSession
     }
 
     public bool ConfirmFormalDungeonLayerBase(byte x, byte y) => owner.Execute(() =>
-        Ready && Selected is not null && formalDungeon is { } dungeon &&
-        Phase is SessionPhase.Loading or SessionPhase.Dungeon && !HasPendingQuestScene &&
-        dungeon.Run.ConfirmLayerBase(dungeon.Run.Snapshot.Identity,new(x,y)));
+    {
+        if (formalDungeon is not { } dungeon) return false;
+        if (dungeon.Run.HasScriptedReturn)
+            return CanUseScriptedReturn(dungeon) && dungeon.Run.ConfirmScriptedReturnBase(dungeon.Run.Snapshot.Identity,new(x,y));
+        return Ready && Selected is not null && Phase is SessionPhase.Loading or SessionPhase.Dungeon &&
+            !HasPendingQuestScene && dungeon.Run.ConfirmLayerBase(dungeon.Run.Snapshot.Identity,new(x,y));
+    });
+
+    bool CanUseScriptedReturn(FormalDungeon dungeon) => Ready && Selected is not null &&
+        Phase is SessionPhase.Dungeon or SessionPhase.Settlement && !dungeon.CharacterDead &&
+        !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null && !HasPendingQuestScene &&
+        !dungeon.HasPendingFatigue && !HasPendingTownQuestCommit && !HasPendingFormalCard &&
+        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement;
+
+    public void ConfirmScriptedReturnLoading(FormalDungeonReceipt receipt) => owner.Execute(() =>
+    {
+        if (receipt.ScriptedReturnId != Guid.Empty && CanPublishFormalDungeon(receipt))
+            formalDungeon!.Run.ConfirmScriptedReturnLoading(receipt.Snapshot.Identity,receipt.ScriptedReturnId);
+        return true;
+    });
+
+    public void ConfirmScriptedReturnPresentation(FormalDungeonReceipt receipt) => owner.Execute(() =>
+    {
+        if (receipt.ScriptedReturnId != Guid.Empty && CanPublishFormalDungeon(receipt))
+            formalDungeon!.Run.ConfirmScriptedReturnPresentation(receipt.Snapshot.Identity,receipt.ScriptedReturnId);
+        return true;
+    });
 
     public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
-        if (!Ready || Selected is null || Phase != SessionPhase.Dungeon || formalDungeon is not { } dungeon || dungeon.CharacterDead ||
+        if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.CharacterDead ||
             dungeon.Ground.HasPendingOperation || dungeon.PendingTutorialClear is not null || HasPendingQuestScene) return null;
         if (moveKind > 1) return null;
         var target = new DungeonPoint(x,y);
+        if (dungeon.Run.HasScriptedReturn || dungeon.Run.CanPresentScriptedBase(target))
+        {
+            if (!CanUseScriptedReturn(dungeon) ||
+                dungeon.Run.BeginScriptedReturn(dungeon.Run.Snapshot.Identity,target,moveKind) is not { } presentation) return null;
+            return presentation.Outcome == DungeonRunOutcome.Rejected ? null : FormalReceipt() with
+            {
+                Snapshot = presentation.Snapshot,
+                ScriptedReturnId = dungeon.Run.ScriptedReturnId,
+                NavigationReplay = presentation.Outcome == DungeonRunOutcome.Duplicate
+            };
+        }
+        if (Phase != SessionPhase.Dungeon) return null;
         var result = moveKind == 1 || target == dungeon.Run.Snapshot.CurrentMap.Position && dungeon.Run.Snapshot.CurrentMap.Kind == "layered"
             ? dungeon.Run.MoveLayer(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target,moveKind == 1)
             : dungeon.Run.Move(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target);
@@ -562,7 +611,8 @@ internal sealed partial class GameSession
 
     public bool CanPublishFormalDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>
         Ready && owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch &&
-        ReferenceEquals(Selected, receipt.Character) && formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity);
+        ReferenceEquals(Selected, receipt.Character) && formalDungeon is { } dungeon && dungeon.Run.Snapshot.Identity == receipt.Snapshot.Identity &&
+        (receipt.ScriptedReturnId == Guid.Empty || CanUseScriptedReturn(dungeon) && dungeon.Run.MatchesScriptedReturn(receipt.ScriptedReturnId)));
 
     public bool CanPublishFormalDungeonRejection(Character character, long epoch, SessionPhase phase,
         DungeonSelectionContext? selection) => owner.Execute(() =>

@@ -15,6 +15,7 @@ internal static class QuestStolenEggTcpTests
     internal static void Verify(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
+        foreach (bool naturalEntry in new[] { false,true })
         foreach (bool ordinary in new[] { false,true })
         {
             var area = resources.Towns.Areas.Values.First(row => row.Level <= 92 && row.DungeonWorldMap is { } world &&
@@ -29,7 +30,7 @@ internal static class QuestStolenEggTcpTests
             Character created;
             using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
             {
-                var candidate = CharacterCreation.Prepare(ordinary ? "EggZero" : "EggQuest",resources.Characters.Get(0),
+                var candidate = CharacterCreation.Prepare((ordinary ? "Egg0" : "EggQ")+(naturalEntry ? "Layer" : "Base"),resources.Characters.Get(0),
                     position,position,resources.Learning.Get);
                 var learning = SkillPointLedger.Synchronize(0,0,92,candidate.InitialLearning with
                     { Experience=growth.GetLevelStartExperience(92) },resources.Learning);
@@ -46,29 +47,35 @@ internal static class QuestStolenEggTcpTests
                     requestQuestId:ordinary ? (ushort)0 : (ushort)6032);
                 string acceptance = (string)fixture.Query(
                     "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=6032",peer.Id)[0][0];
-                int enabled = 0,bossChecks = 0,deaths = 0;
+                int enabled = 0,bossChecks = 0,deaths = 0,navigationPackets = 0;
                 Load(59911);
-                foreach (var step in new (byte X,uint Map)[] { (1,59912),(2,59913),(3,59914) })
+                foreach (var step in new (byte X,uint Map)[] { (1,59912),(2,59913) })
                 {
                     Clear();
                     Move(step.X,0); Load(step.Map);
                 }
-                VerifyActors(3);
-                ushort baseKey = U16(map,25);
-                Clear();
-                That(enabled == 0 && bossChecks == 0 && fixture.Query(
-                    "SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0 AND quest_id=6032",peer.Id) is [[0L]],
-                    "基础同ID dummy死亡不能形成末层任务清图或结算许可");
-                RejectPrematureFinish();
-                Move(2,0); Load(59913,cached:true);
+                ushort baseKey = 0;
+                if (!naturalEntry)
+                {
+                    Clear(); Move(3,0); Load(59914); VerifyActors(3);
+                    baseKey = U16(map,25);
+                    Clear();
+                    That(enabled == 0 && bossChecks == 0 && fixture.Query(
+                        "SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0 AND quest_id=6032",peer.Id) is [[0L]],
+                        "基础同ID dummy死亡不能形成末层任务清图或结算许可");
+                    RejectPrematureFinish();
+                    Move(2,0); Load(59913,cached:true);
+                }
                 Move(2,1); Load(59914);
                 VerifyActors(2);
-                That(U16(map,25) != baseKey,"实际末层同模板70215持有不同于基础房的独立演员key");
+                ushort terminalKey = U16(map,25);
+                That(terminalKey != baseKey,"实际末层同模板70215持有独立演员key");
                 string before = State();
-                peer.Send(39,ScriptDeath(baseKey,peer.Id)); Drain();
+                peer.Send(39,ScriptDeath(naturalEntry ? ushort.MaxValue : baseKey,peer.Id)); Drain();
                 That(State() == before && enabled == 0,"6032基础房旧key不能替代实际末层70215终末");
                 RejectPrematureFinish();
-                lastDeath = ScriptDeath(U16(map,25),peer.Id);
+                if (naturalEntry) PresentBase(load:!ordinary);
+                lastDeath = ScriptDeath(terminalKey,peer.Id);
                 peer.Send(39,lastDeath); Drain(); deaths++;
                 That(enabled == 1 && bossChecks == 1 && fixture.Query(
                     "SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=6032",peer.Id)
@@ -79,11 +86,14 @@ internal static class QuestStolenEggTcpTests
                     "仅实际末层可信合成死亡提交原接取清图、成长及唯一115/31");
                 before = State(); peer.Send(39,lastDeath); Drain();
                 That(State() == before && enabled == 1,"6032重复末层39不重复成长或结算许可");
+                if (naturalEntry && ordinary) ConfirmPresentationLoad();
+                if (!naturalEntry && !ordinary) PresentBase(load:true);
                 if (!ordinary) Finish();
                 peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();
                 That(fixture.Query("SELECT quest_id,map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id)
                     is [[long request,59914L]] && request == (ordinary ? 0 : 6032),
                     "6032实际末层46沿原显式或普通0实例写入唯一结算");
+                if (!naturalEntry && ordinary) PresentBase(load:true);
                 before = State(); peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();
                 That(State() == before,"6032重复46不重复奖励");
                 if (ordinary) Finish();
@@ -110,6 +120,26 @@ internal static class QuestStolenEggTcpTests
                     var body = new byte[100]; body[0]=x; body[10]=kind;
                     peer.Send(45,body); peer.Expect(1,45,[1]); map=peer.Expect(0,29).Body;
                 }
+                void PresentBase(bool load)
+                {
+                    string saved = State();
+                    Move(2,0);
+                    That(map.Length == 16 && map[0] == 2 && map[1] == 0 && map[2] == 2 && map[13] == 0 && map[15] == 255,
+                        "真实ACT kind0返回使用operation2/Cached，不重发末层演员");
+                    That(State() == saved,"呈现返回不提交死亡、任务或资产变化");
+                    if (load) ConfirmPresentationLoad();
+                }
+                void ConfirmPresentationLoad()
+                {
+                    string saved = State(); int oldEnabled = enabled,oldBoss = bossChecks;
+                    FormalDungeonTcpTests.Load(peer); Drain();
+                    var ack = new byte[100]; ack[0]=2; ack[10]=1;
+                    peer.Send(45,ack); Drain();
+                    int seen = navigationPackets;
+                    ack[10]=0; peer.Send(45,ack); peer.Send(37,new byte[8]); ack[10]=1; peer.Send(45,ack); Drain();
+                    That(navigationPackets == seen && State() == saved && enabled == oldEnabled && bossChecks == oldBoss,
+                        "呈现37和kind1及其重放不发第二地图、加载、疲劳、结算或奖励");
+                }
                 void Clear()
                 {
                     foreach (int at in Enumerable.Range(0,map[18]).Where(at => map[40+22*at] == 0))
@@ -119,6 +149,7 @@ internal static class QuestStolenEggTcpTests
                 }
                 void Drain() => drain(peer,packet =>
                 {
+                    if (packet.Opcode is 29 or 30 or 3 or 36 or 37 or 45) navigationPackets++;
                     if (packet.Opcode == 31) { Bytes(packet.Body,[],"6032结算许可31为空正文"); enabled++; }
                     if (packet.Opcode == 115) bossChecks++;
                 });

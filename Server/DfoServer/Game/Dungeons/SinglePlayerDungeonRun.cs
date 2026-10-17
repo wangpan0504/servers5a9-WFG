@@ -76,7 +76,7 @@ internal sealed record DungeonFixedRoute(IReadOnlyList<DungeonMonsterPlan> Rooms
     public int? PassiveClearTarget { get; init; }
 }
 
-internal sealed class SinglePlayerDungeonRun
+internal sealed partial class SinglePlayerDungeonRun
 {
     private sealed class Room(DungeonMonsterPlan plan)
     {
@@ -371,6 +371,7 @@ internal sealed class SinglePlayerDungeonRun
 
     public DungeonRunResult Move(DungeonRunIdentity expected, Guid actionId, DungeonPoint target)
     {
+        if (scriptedReturn is not null) return Result(DungeonRunOutcome.Rejected);
         if (Replay(expected, actionId, "move", target) is { } replay)
             return replay;
         if (HasPendingDeath)
@@ -396,6 +397,7 @@ internal sealed class SinglePlayerDungeonRun
 
     public DungeonRunResult MoveLayer(DungeonRunIdentity expected, Guid actionId, DungeonPoint target, bool nextLayer)
     {
+        if (scriptedReturn is not null) return Result(DungeonRunOutcome.Rejected);
         string kind = nextLayer ? "layer" : "base";
         if (Replay(expected,actionId,kind,target) is { } replay) return replay;
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||

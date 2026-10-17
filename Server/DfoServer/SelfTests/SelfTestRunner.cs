@@ -133,6 +133,8 @@ internal static class SelfTestRunner
         DungeonRoomCatalogTests.RunCore();
         DungeonElevatorTests.Run();
         DungeonStoryFlowTests.Run();
+        DungeonScriptedLayerReturnTests.Run();
+        DungeonScriptedReturnSessionTests.RunCore();
         WarpMazeConditionsTests.Run();
         DungeonClearConditionTests.Run();
         DungeonMapPoolTests.RunCore();
