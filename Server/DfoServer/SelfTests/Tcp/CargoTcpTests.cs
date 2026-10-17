@@ -87,7 +87,10 @@ internal static class CargoTcpTests
                 Equals(saved, weaponCore), "account storage changes owner while preserving complete core and UID");
             peer.Send(20, Build(w => { w.Write(8); w.Write(new byte[] { 8, 20, 16, 12, 24, 0, 32, 0 }); }));
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 12, 16, 0]);
-            var sorted = peer.Expect(0, 14).Body;
+            var clearSorted = peer.Expect(0, 1681).Body;
+            That(clearSorted[0] == 12 && U16(clearSorted, 1) == 1 && U16(clearSorted, 3) == 0 && U32(clearSorted, 5) == uint.MaxValue,
+                "账号仓库整理先用1681清除将重新载入的目标槽");
+            var sorted = peer.Expect(0, 1681).Body;
             That(sorted[0] == 12 && U16(sorted, 1) == 2 && U16(sorted, 3) == 0 && U32(sorted, 5) == weaponId && U32(sorted, 128) == uint.MaxValue,
                 "account sorting publishes new slot and clears previous slot");
             Transfer(peer, 0, 121, 3299, 17, 12, 1, 0, 17);
@@ -168,7 +171,10 @@ internal static class CargoTcpTests
         // 双端实收CMD20，长度前缀6，protobuf字段2=2、3=20、4=0。
         peer.Send(20, Convert.FromHexString("06000000100218142000"));
         peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 2, 16, 0]);
-        var sorted = peer.Expect(0, 14).Body;
+        var clearSorted = peer.Expect(0, 1681).Body;
+        That(clearSorted[0] == 2 && U16(clearSorted, 1) == 1 && U16(clearSorted, 3) == 0 && U32(clearSorted, 5) == uint.MaxValue,
+            "个人仓库整理先用1681清除将重新载入的目标槽");
+        var sorted = peer.Expect(0, 1681).Body;
         That(sorted[0] == 2 && U16(sorted, 1) == 2 && U16(sorted, 3) == 0 && U32(sorted, 5) == weaponId &&
             U16(sorted, 126) == 7 && U32(sorted, 128) == uint.MaxValue,
             "个人仓库整理下发槽0完整物品并清空槽7");

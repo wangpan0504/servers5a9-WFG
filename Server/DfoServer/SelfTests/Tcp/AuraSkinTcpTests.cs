@@ -37,7 +37,7 @@ internal static class AuraSkinTcpTests
                 new CurrencyService(resources.ItemResources.GoldLimits).Grant(role, CurrencyKind.Cera, 3000));
             var inventory = new InventoryService(items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces);
             InventoryService.Commit(repository, owner, role, inventory.Grant(role,
-                [new(firstAura, 1), new(secondAura, 1)]));
+                [new(secondAura, 1), new(firstAura, 1)]));
             repository.Create(owner, new("AuraOther", resources.Towns.Room, resources.Towns.InitialReturn)
             { Job = 15, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills });
         }
@@ -46,6 +46,25 @@ internal static class AuraSkinTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
+            string auraAssets = AuraAssets();
+            byte[] sortAuras = [6, 0, 0, 0, 16, 1, 24, 8, 32, 0];
+            peer.Send(20, sortAuras);
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 1, 16, 0]);
+            var clearedAuras = peer.Expect(0, 1681).Body;
+            var sortedAuras = peer.Expect(0, 1681).Body;
+            That(clearedAuras.Length == 333 && clearedAuras[0] == 1 && U16(clearedAuras, 1) == 2 &&
+                U32(clearedAuras, 5) == uint.MaxValue && U32(clearedAuras, 170) == uint.MaxValue,
+                "光环整理沿Avatar完整条目清槽，使用1681而非获得播报或全量载入");
+            That(sortedAuras.Length == 333 && sortedAuras[0] == 1 && U16(sortedAuras, 1) == 2 &&
+                U16(sortedAuras, 3) == 0 && U32(sortedAuras, 5) == firstAura &&
+                U16(sortedAuras, 168) == 1 && U32(sortedAuras, 170) == secondAura && AuraAssets() == auraAssets,
+                "光环整理重新载入图标effect，UID、完整核心和Avatar详情保持原样");
+            peer.Barrier();
+            string sortedState = State();
+            peer.Send(20, sortAuras);
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 1, 16, 0]);
+            peer.Barrier();
+            That(State() == sortedState, "重复整理零变化仅ACK，不播报、不重建图标、不推进revision");
             string before = State();
             peer.Send(865, [255, 255, 11, 0]); peer.Expect(1, 865, [0, 1, 0, 11, 0]);
             peer.Send(865, [255, 255, 33, 0]); peer.Expect(1, 865, [0, 1, 0, 33, 0]);

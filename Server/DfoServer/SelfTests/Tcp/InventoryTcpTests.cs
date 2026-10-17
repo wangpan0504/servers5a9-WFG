@@ -247,12 +247,14 @@ internal static partial class InventoryTcpTests
             peer.Send(19, MoveItem(0, 10, 0, 1, 3, 17, pantsId));
             peer.Expect(1, 19, MoveAck(0, 10, 1, 3, 17));
             DeltaAndAppearance(peer, 3, reloadMain: true);
-            peer.Send(20, Convert.FromHexString("080000000814100018012000"));
+            peer.Send(20, Convert.FromHexString("06000000100018012000"));
             peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
-            var cleared = peer.Expect(0, 14).Body;
-            var sorted = peer.Expect(0, 14).Body;
-            That(cleared.Length == 249 && U32(cleared, 5) == uint.MaxValue && U32(cleared, 128) == uint.MaxValue, "sorting clears replaced resource objects first");
-            That(U32(sorted, 5) == 18400 && U32(sorted, 128) == 101010912, "sorting follows item IDs and retains complete objects");
+            var cleared = peer.Expect(0, 1681).Body;
+            var sorted = peer.Expect(0, 1681).Body;
+            That(cleared.Length == 249 && U32(cleared, 5) == uint.MaxValue && U32(cleared, 128) == uint.MaxValue,
+                "整理先用无播报差量清槽，后续重新载入仍可标记获得图标effect");
+            That(U32(sorted, 5) == 18400 && U32(sorted, 128) == 101010912,
+                "装备整理使用1681保持完整对象和排序，不走获得播报或13全量载入");
             byte[] discard = DeleteItem(9, quality);
             peer.Send(18, discard);
             peer.Expect(1, 18, Convert.FromHexString("010C000000080012060809100118001800"));
@@ -341,7 +343,10 @@ internal static partial class InventoryTcpTests
             peer.Expect(0, 251, [1, 0, 0, 20, 0, 1]);
             peer.Send(20, Convert.FromHexString("0900000008141000180120FF01"));
             peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
-            var sorted = peer.Expect(0, 14).Body;
+            var clearSorted = peer.Expect(0, 1681).Body;
+            That(clearSorted.Length == 126 && U16(clearSorted, 3) == 9 && U32(clearSorted, 5) == uint.MaxValue,
+                "整理迁入原空槽的装备也先清客户端槽对象，保留重新载入effect");
+            var sorted = peer.Expect(0, 1681).Body;
             That(U16(sorted, 1) == 2 && U16(sorted, 3) == 9 && sorted[99] == 7 && U32(sorted, 128) == uint.MaxValue,
                 "fallback sort moves equipment safety lock without reviving expired item");
             peer.Expect(0, 251, [1, 0, 0, 9, 0, 1]);

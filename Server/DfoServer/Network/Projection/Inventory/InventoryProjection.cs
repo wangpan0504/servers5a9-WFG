@@ -86,11 +86,12 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 await context.Notify(NotiPacketType.TITLE_BOOK_LIST, TitlePackets.Book(current.Inventory, (byte)list - 18), "title_book_committed", CanSend);
                 continue;
             }
-            // ACK19已将卸下或交换的装备放入Main；同模板增量只更新属性，须先清槽才能重新装载图标effect。
+            bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main;
+            // 整理和ACK19回填后的同模板增量只更新属性；先清槽再以1681载入，保留图标effect而不播报获得。
             var reloadSlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is { } now &&
-                (suppressMainNotice && list == InventoryListType.Main ||
+                (suppressNotice ||
                     plan.BeforeIndex.Find(slot) is { } old && old.Core.ItemId != now.Core.ItemId)).ToArray();
-            var updateType = suppressMainNotice && list == InventoryListType.Main ?
+            var updateType = suppressNotice ?
                 NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE : NotiPacketType.UPDATE_ITEM_LIST;
             if (reloadSlots.Length != 0)
                 await context.Notify(updateType, InventoryPackets.Delta(InventorySnapshot.Empty, list, reloadSlots), "inventory_clear_replaced", CanSend);
