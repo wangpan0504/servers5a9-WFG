@@ -73,6 +73,20 @@ internal static class CharacterProgressResetTests
                 after.CompletedQuests.SequenceEqual(before.CompletedQuests), "改等级保留已学技能、槽位、指令，以及剧情、位置、任务和资产");
             Reject(() => reset.Prepare(after, new(CharacterProgressField.Level, owner.Account, after.Name, 1, 0)), "降到低于已学技能需求等级整笔拒绝");
             That(Same(after, repository.LoadCharacter(owner, after.Slot)), "拒绝降级不改存档");
+            // 升级不做技能等级门限校验：存量里已学技能高于角色等级时，不能把升级一并锁死。
+            var overLeveled = after with
+            {
+                Learning = after.Learning with
+                {
+                    Trees = Array.AsReadOnly(after.Learning.Trees.Select(tree => tree.Context != 0 ? tree
+                        : tree with { Skills = Array.AsReadOnly(tree.Skills.Select(skill =>
+                            skill.Id == ghost.Id ? skill with { Level = 20 } : skill).ToArray()) }).ToArray())
+                }
+            };
+            var raised = reset.Prepare(overLeveled, new(CharacterProgressField.Level, owner.Account, overLeveled.Name, 60, 0));
+            That(raised.Level == 60 && raised.Learning.Trees.Single(tree => tree.Context == 0).Skills
+                .Single(skill => skill.Id == ghost.Id).Level == 20,
+                "升级不受已学技能等级门限限制且保留技能等级");
             Reject(() => repository.ResetProgress(owner, plan50), "旧重置规划不能重复提交");
             var changed = repository.ResetProgress(owner, reset.Prepare(after, new(CharacterProgressField.Grow, owner.Account, after.Name, 33, 0)));
             That(changed.GrowType == 33 && changed.Level == 50 && changed.Learning.Experience == after.Learning.Experience &&

@@ -15,12 +15,15 @@ internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillL
 
     // GM改等级：保留已学技能、槽位（快捷栏）、指令与连招，只按新等级的总来源（含额外SP/TP）减已学费用派生余额。
     // 降级后已学技能超出新等级门槛或费用超过新总额时整笔拒绝，不截断技能、不把负余额钳为0；额外来源未接管的旧状态同样拒绝。
+    // 升级不做技能等级门槛校验：升级不会让已学技能变得更高，若仍按绝对值比较，会把既有存档里
+    // 技能高于角色等级的存量状态永远锁死，既不能降也不能升。降级仍严格校验，避免落到非法组合。
     CharacterProgressResetPlan PrepareLevel(Character before, CharacterProgressEdit request)
     {
         request.Validate();
         if (request.Field != CharacterProgressField.Level || !string.Equals(request.Name, before.Name, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("等级调整目标不一致");
         byte level = checked((byte)request.Primary);
+        bool downgrade = level < before.Level;
         var learning = before.Learning;
         // 尚未初始化技能树（新建且未进入过的角色）没有可保留的学习记录，按免费基线建树与重置等价。
         if (!learning.Initialized) return PrepareReset(before, request);
@@ -44,7 +47,7 @@ internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillL
                     var resource = skills.Get(before.Job, skill.Id);
                     if (resource.FixedLevel is not null || skill.Level <= free.GetValueOrDefault(skill.Id)) continue;
                     int required = resource.GetOrdinaryNextRequiredCharacterLevel(skill.Level - 1);
-                    if (level + (resource.IsFeatureSkill ? 0 : contractLevels) < required)
+                    if (downgrade && level + (resource.IsFeatureSkill ? 0 : contractLevels) < required)
                         throw new InvalidDataException($"目标等级{level}低于已学技能{skill.Id} Lv{skill.Level}的需求等级{required}；请先洗点后再降级，或用 grow 重置技能树");
                 }
                 int sp = SkillPointLedger.Spent(tree.Skills, free, before.GrowType, id => skills.Get(before.Job, id));

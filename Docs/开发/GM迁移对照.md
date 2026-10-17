@@ -102,7 +102,7 @@ headless Edge（CDP）读取 computed style：系统浅色、系统深色、已�
 | 经验与等级联动 | 已完成 | `exp-table` + `GET /api/exp-table`（Lv1..95 起始累计经验与升级所需经验，来自 `CharacterGrowthCatalog`，type9 高/低 DWORD 已由 Catalog 组合，u64 不截断）；`POST /api/exp` 按累计经验换算等级后走 `level`（等级内经验归零，与 `level` 命令一致）；抽屉「等级调整」显示该级起始经验与距下一级。 |
 | 索引构建期自动重试 | 已完成 | 前端 `api.js`：GET 遇到“后台构建”指数退避重试（0.5s 起、最长 8s、最多 8 次）并在顶部显示进度条；GET 遇到“账号正在使用”(409) 短重试 3 次。 |
 | 在线角色 SP/TP、任务、称号 | 已完成 | SP/TP、任务、等级早已走 `GameSession.UpdateProgress/ResetProgress`（提交后同步内存 Selected 与已完成任务集合）。本轮把称号成就改为在线可直接完成：`GameSession.CommitDevelopmentTitle` 在本会话 owner 内基于最新快照规划并提交，同步 Selected，有待确认的业务结果时拒绝；其余在线拒绝规则不变。客户端称号簿画面不推送，重新选角后刷新（与等级/任务一致，未发明未取证的推送包）。UI 在「操作」页标明“在线可直接改/需先小退”。 |
-| 技能等级直写（单技能/整树/重置） | 部分 | 重置：转职面板即 `grow` 重建双技能树并恢复完整 SP/TP（在线可用）。单技能与整树直写**未做**：现有 `skill` 命令只改 `character_skills`/绑定表，不经 `SkillLearning` 账本，绕过费用、前置与 SP/TP 扣点；正确做法是新增基于 `SkillLearning.Plan` 的学习编辑器，并取证 NOTI19/NOTI20 的客户端刷新，当前没有这份证据，故不做。 |
+| 技能等级直写（单技能/整树/重置） | 部分 | 重置：转职面板即 `grow` 重建双技能树并恢复完整 SP/TP（在线可用）。改等级走 `level`，保留已学技能、槽位、指令与连招并按新等级重算余额，仅降级校验技能门限与点数总额（在线可用）。单技能与整树直写**未做**：现有 `skill` 命令只改 `character_skills`/绑定表，不经 `SkillLearning` 账本，绕过费用、前置与 SP/TP 扣点；正确做法是新增基于 `SkillLearning.Plan` 的学习编辑器，并取证 NOTI19/NOTI20 的客户端刷新，当前没有这份证据，故不做。 |
 | 审计页导出/筛选/撤销提示 | 已完成 | `GET /api/audit` 支持 `account/action/from/to/ok/limit`（最多 5000）与 `format=csv`（含 BOM，防公式注入前缀）；审计页提供筛选、JSON/CSV 导出，详情抽屉按操作给出反向命令提示（只提示，不自动执行）。 |
 | 在线列表踢人 | 已完成 | 已有“强制小退”；新增 `POST /api/disconnect`（二次确认+审计 `disconnect`）：调用该账号会话的断线回调，即重复登录 `ReplaceExisting` 顶号所用的同一路径，账号所有在线角色掉线。 |
 | 广播公告 | 不做 | 仓库协议文档与代码里只有 `NOTI SERVER_BROADCAST(86)` 等枚举名，没有正文布局、客户端消费者或抓包取证；公会公告板也标注“字节合同尚未取证”。无证据不发包，避免客户端解析错位。 |
