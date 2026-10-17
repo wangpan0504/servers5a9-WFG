@@ -27,6 +27,7 @@ internal static class TcpRegressionTests
         ("class-change", ClassChangeTcpTests.RunAsync),
         ("stadium-quest", MetroQuestEntryTcpTests.RunStadiumAsync),
         ("titles", TitleTcpTests.RunAsync),
+        ("collectbox", CollectBoxTcpTests.RunAsync),
         ("adventure", AdventureCoreTcpTests.RunAsync),
         ("adventure-names", AdventureNameTcpTests.RunAsync),
         ("adventure-representatives", AdventureRepresentativeTcpTests.RunAsync),

@@ -70,6 +70,7 @@ internal interface ICharacterRepository
         DungeonGroundPickupPreparation prepared, InventoryPlan plan);
     Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
+    Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan);
     Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan);
     InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId);
     DfoServer.Game.Dungeons.AssaultDailyCounts LoadAssaultDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);

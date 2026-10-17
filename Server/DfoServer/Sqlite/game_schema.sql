@@ -718,6 +718,30 @@ CREATE TABLE character_title_sections(
     PRIMARY KEY(character_id,section_key),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
+CREATE TABLE character_collectbox_state(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    selected_box INTEGER NOT NULL CHECK(selected_box BETWEEN 0 AND 255),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+CREATE TABLE character_collectbox_slots(
+    character_id INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    box_index INTEGER NOT NULL CHECK(box_index BETWEEN 1 AND 255),
+    slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 65535),
+    item_id INTEGER NOT NULL CHECK(item_id BETWEEN 1 AND 2147483647),
+    PRIMARY KEY(character_id,box_index,slot_index),
+    UNIQUE(character_id,box_index,item_id),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+CREATE TABLE character_collectbox_expirations(
+    character_id INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    box_index INTEGER NOT NULL CHECK(box_index BETWEEN 1 AND 255),
+    expires_at INTEGER NOT NULL CHECK(expires_at>0),
+    PRIMARY KEY(character_id,box_index),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TRIGGER title_book_exclusive_insert BEFORE INSERT ON character_title_book_slots
 WHEN EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=NEW.item_uid) OR
      EXISTS(SELECT 1 FROM mailbox_attachments WHERE item_uid=NEW.item_uid)

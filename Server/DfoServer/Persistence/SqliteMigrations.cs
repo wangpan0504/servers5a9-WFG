@@ -135,7 +135,33 @@ internal static class SqliteMigrations
             Execute(db, tx, "ALTER TABLE characters ADD COLUMN stamina_until INTEGER NOT NULL DEFAULT 0 CHECK(stamina_until>=0)");
         }),
         new(50, "强袭模式每日通关次数", static (db, tx) => Execute(db, tx, AssaultDailySchema)),
+        new(51, "角色宝珠收集箱选择与模板槽", UpgradeCollectBoxState),
+        new(52, "角色宝珠收集箱期限", UpgradeCollectBoxExpiration),
     ];
+
+    static void UpgradeCollectBoxState(SqliteConnection db, SqliteTransaction tx)
+    {
+        if (KnownTable(db, tx, "character_collectbox_state", CollectBoxStateTableSchema) &&
+            KnownTable(db, tx, "character_collectbox_slots", CollectBoxSlotsTableSchema))
+            return;
+        Execute(db, tx, CollectBoxStateSchema);
+    }
+
+    static void UpgradeCollectBoxExpiration(SqliteConnection db, SqliteTransaction tx)
+    {
+        if (KnownTable(db, tx, "character_collectbox_expirations", CollectBoxExpirationSchema))
+            return;
+        Execute(db, tx, CollectBoxExpirationSchema);
+    }
+
+    static bool KnownTable(SqliteConnection db, SqliteTransaction tx, string table, string expected)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$name";
+        query.Parameters.AddWithValue("$name", table);
+        return query.ExecuteScalar() is string actual && NormalizeTable(actual, table) == NormalizeTable(expected, table);
+    }
 
     internal static bool IsAcceptanceAssaultV47(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1205,13 +1231,16 @@ internal static class SqliteMigrations
             ("character_dungeon_settlement_receipts",DungeonSceneSettlementSchema.SettlementSql),
             ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
             ("character_dungeon_drop_pickups",DungeonDropCollectionSchema.PickupDefinition),
-            ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema) })
+            ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema),
+            ("character_collectbox_state",CollectBoxStateTableSchema),
+            ("character_collectbox_slots",CollectBoxSlotsTableSchema),
+            ("character_collectbox_expirations",CollectBoxExpirationSchema) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
             query.Parameters.AddWithValue("$table",table);
             if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(expected,table))
-                throw new InvalidDataException("任务清图来源的约束或外键不是已确认结构: " + table);
+                throw new InvalidDataException("关键表的约束或外键不是已确认结构: " + table);
         }
         using var constraints = db.CreateCommand();
         constraints.Transaction = tx;
@@ -1249,6 +1278,9 @@ internal static class SqliteMigrations
         "SELECT character_id,account,list_type,slot_index,item_uid FROM character_title_book_slots LIMIT 0",
         "SELECT character_id,account,quest_id,remaining1,remaining2,remaining3,completed_revision FROM character_title_progress LIMIT 0",
         "SELECT character_id,account,section_key,revision FROM character_title_sections LIMIT 0",
+        "SELECT character_id,account,selected_box FROM character_collectbox_state LIMIT 0",
+        "SELECT character_id,account,box_index,slot_index,item_id FROM character_collectbox_slots LIMIT 0",
+        "SELECT character_id,account,box_index,expires_at FROM character_collectbox_expirations LIMIT 0",
         "SELECT account,black_diamond_expires,gold_card_expires,revision FROM account_card_memberships LIMIT 0",
         "SELECT character_id,account,service_day,used FROM character_gold_card_uses LIMIT 0",
         "SELECT character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id,paid_reward_json,paid_mail_id,paid_cost,paid_revision,paid_day FROM character_dungeon_card_options LIMIT 0",
@@ -1307,6 +1339,41 @@ internal static class SqliteMigrations
         "SELECT [character_id],[day],[amount] FROM [mailbox_sent_gold] LIMIT 0",
         "SELECT [audit_id],[mail_id],[account],[character_id],[generation],[action_name],[created_at],[assets] FROM [mailbox_audit_log] LIMIT 0",
     ];
+
+    internal const string CollectBoxStateTableSchema = """
+        CREATE TABLE character_collectbox_state(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            selected_box INTEGER NOT NULL CHECK(selected_box BETWEEN 0 AND 255),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string CollectBoxSlotsTableSchema = """
+        CREATE TABLE character_collectbox_slots(
+            character_id INTEGER NOT NULL,
+            account TEXT NOT NULL,
+            box_index INTEGER NOT NULL CHECK(box_index BETWEEN 1 AND 255),
+            slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 65535),
+            item_id INTEGER NOT NULL CHECK(item_id BETWEEN 1 AND 2147483647),
+            PRIMARY KEY(character_id,box_index,slot_index),
+            UNIQUE(character_id,box_index,item_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string CollectBoxStateSchema = CollectBoxStateTableSchema + CollectBoxSlotsTableSchema;
+
+    internal const string CollectBoxExpirationSchema = """
+        CREATE TABLE character_collectbox_expirations(
+            character_id INTEGER NOT NULL,
+            account TEXT NOT NULL,
+            box_index INTEGER NOT NULL CHECK(box_index BETWEEN 1 AND 255),
+            expires_at INTEGER NOT NULL CHECK(expires_at>0),
+            PRIMARY KEY(character_id,box_index),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
 
     // 设置按账号与角色分别保存原始字节；缺省不建行，不改角色资产与 revision。
     internal const string ClientSettingsSchema = """

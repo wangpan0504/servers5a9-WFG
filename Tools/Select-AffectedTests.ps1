@@ -89,6 +89,7 @@ $keywordGroups = [ordered]@{
     'Tutorial'   = 'tutorial'
     'Channel'    = 'channel-entry'
     'Title'      = 'titles'
+    'CollectBox' = 'collectbox'
     'Gm|Development' = 'gm-assets','gm-progress','gm-debug'
     'Job'        = 'jobs'
     'Character'  = 'gm-progress','jobs','startup'

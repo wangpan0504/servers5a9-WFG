@@ -37,6 +37,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[][] Mailbox { get; private set; } = [];
     public byte[] TitleProgress { get; private set; } = [];
     public byte[] AssaultDailyInfo { get; private set; } = [];
+    public WirePacket[] CollectBoxes { get; private set; } = [];
     public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
     public byte[] PremiumInfo { get; private set; } = [];
@@ -371,6 +372,7 @@ internal sealed class TcpPeer : IDisposable
         SkillInfo = [];
         SceneSkillInfo = [];
         CompletedQuestHistory = [];
+        CollectBoxes = [];
         for (int index = 2; index < afterCargo; index++)
         {
             var packet = Read();
@@ -411,7 +413,22 @@ internal sealed class TcpPeer : IDisposable
             if (notice == ((byte)0, (ushort)3))
             {
                 var packet = Read();
-                // #233 史诗之书后、邮件前下发 NOTI1536 强袭每日信息(5B)。
+                var collectBoxes = new List<WirePacket>();
+                while (packet.Kind == 0 && packet.Opcode == 1030)
+                {
+                    TestCheck.That(packet.Body.Length >= 8 && packet.Body[0] != 0 && packet.Body[1] is 0 or 1 &&
+                        packet.Body[6] is 0 or 1 && packet.Body.Length == 8 + packet.Body[7] * 4 &&
+                        (packet.Body[6] == 0 || U32(packet.Body, 2) == 0),
+                        "宝珠收集箱初始化使用完整固定头与u8物品计数");
+                    collectBoxes.Add(packet);
+                    packet = Read();
+                }
+                TestCheck.That(collectBoxes.Count > 0 &&
+                    collectBoxes.Select(row => row.Body[0]).Distinct().Count() == collectBoxes.Count &&
+                    collectBoxes.Count(row => row.Body[1] == 1) == 1,
+                    "宝珠收集箱逐箱初始化且仅一个箱被选中");
+                CollectBoxes = collectBoxes.ToArray();
+                // 史诗之书后先逐箱恢复1030，再下发 #233 的1536强袭每日信息。
                 TestCheck.That(packet.Kind == 0 && packet.Opcode == 1536 && packet.Body.Length == 5, "强袭每日信息在邮件前初始化");
                 AssaultDailyInfo = packet.Body;
                 packet = Read();

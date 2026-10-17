@@ -31,6 +31,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public ActiveMainQuest[] ActiveMainQuests { get; init; } = [];
     public CharacterLearningState Learning { get; init; } = CharacterLearningState.Uninitialized;
     public InventorySnapshot Inventory { get; init; } = InventorySnapshot.Empty;
+    public DfoServer.Game.CollectBox.CollectBoxState CollectBox { get; init; } = DfoServer.Game.CollectBox.CollectBoxState.Empty;
     public CharacterDungeonState? DungeonState { get; init; }
     public CharacterFatigueState? Fatigue { get; init; }
     public DfoServer.Game.Town.TeleportCooldowns TeleportCooldowns { get; init; } = new();

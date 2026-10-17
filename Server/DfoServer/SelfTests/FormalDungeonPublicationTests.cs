@@ -787,6 +787,8 @@ internal static class FormalDungeonPublicationTests
             return result;
         }
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);
+        public Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan) =>
+            inner.CommitCollectBox(owner, plan);
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
             DungeonGroundPickupPreparation prepared, InventoryPlan plan)
         {

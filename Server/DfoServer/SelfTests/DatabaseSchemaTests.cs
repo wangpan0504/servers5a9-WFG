@@ -152,6 +152,8 @@ internal static class DatabaseSchemaTests
                 "DROP TABLE character_dungeon_pickup_receipts", "DROP TABLE character_quest_lifecycle_receipts; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_settlement_receipts",
                 "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN report_body",
                 "DROP TABLE character_title_progress", "DROP TABLE character_title_book_slots", "DROP TRIGGER inventory_not_title_insert",
+                "DROP TABLE character_collectbox_state", "DROP TABLE character_collectbox_slots",
+                "DROP TABLE character_collectbox_expirations",
                 "DROP INDEX auction_listings_expiry; DROP INDEX auction_listings_seller; DROP INDEX auction_listings_template; DROP TABLE auction_listings"
             })
             {
@@ -213,6 +215,7 @@ internal static class DatabaseSchemaTests
             VerifyDropCollectionSchema(root);
             VerifyTutorialSchema(root);
             VerifyTitleMigration(root);
+            VerifyCollectBoxMigrations(root);
             VerifyExperienceCapMigration(root);
             VerifyAccountQuestSourceMigration(root);
             VerifyFutureMigrations(path);
@@ -1736,12 +1739,16 @@ internal static class DatabaseSchemaTests
             "CHECK(after_experience=before_experience+experience_amount)", StringComparison.Ordinal)));
     }
 
-    // 旧库夹具同时移除后续拍卖和公会结构；成员表先于公会表删除。
+    // 旧库夹具同时移除后续拍卖、公会和收集箱结构；子表先于所属表删除。
     static void DropLaterTables(SqliteConnection db)
     {
+        DropCollectBoxSchema(db);
         DropAuctionSchema(db);
         DropGuildSchema(db);
     }
+
+    static void DropCollectBoxSchema(SqliteConnection db) =>
+        Execute(db, "DROP TABLE IF EXISTS character_collectbox_expirations; DROP TABLE IF EXISTS character_collectbox_slots; DROP TABLE IF EXISTS character_collectbox_state");
 
     static void DropAuctionSchema(SqliteConnection db) =>
         Execute(db, "DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings");
@@ -2248,6 +2255,97 @@ internal static class DatabaseSchemaTests
                 Check(Snapshot(path) == upgraded, "重开库不再执行称号增量");
             }
         }
+    }
+
+    private static void VerifyCollectBoxMigrations(string root)
+    {
+        string v50 = Path.Combine(root, "collectbox-v50.db");
+        _ = new CharacterRepository(v50);
+        using (var db = Open(v50))
+        {
+            Execute(db, """
+                INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold)
+                VALUES(1,'collect-v50',0,'CollectV50',7,38,1,450,234,0,321);
+                DROP TABLE character_collectbox_expirations;
+                DROP TABLE character_collectbox_slots;
+                DROP TABLE character_collectbox_state;
+                PRAGMA user_version=50;
+                """);
+        }
+        _ = new CharacterRepository(v50);
+        using (var db = Open(v50))
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                Query(db, "SELECT revision||':'||gold FROM characters WHERE id=1") is "7:321" &&
+                Query(db, "SELECT count(*) FROM character_collectbox_state") is 0L &&
+                Query(db, "SELECT count(*) FROM character_collectbox_expirations") is 0L,
+                "v50升级只新增v51选择/槽位与v52期限空表，保留旧角色资产");
+
+        string v51 = Path.Combine(root, "collectbox-v51.db");
+        _ = new CharacterRepository(v51);
+        using (var db = Open(v51))
+        {
+            Execute(db, """
+                INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
+                VALUES(1,'collect-v51',0,'CollectV51',9,38,1,450,234,0);
+                INSERT INTO character_collectbox_state VALUES(1,'collect-v51',2);
+                INSERT INTO character_collectbox_slots VALUES(1,'collect-v51',2,3,104);
+                DROP TABLE character_collectbox_expirations;
+                PRAGMA user_version=51;
+                """);
+        }
+        _ = new CharacterRepository(v51);
+        using (var db = Open(v51))
+        {
+            Check(Query(db, "SELECT selected_box FROM character_collectbox_state WHERE character_id=1") is 2L &&
+                Query(db, "SELECT box_index||':'||slot_index||':'||item_id FROM character_collectbox_slots") is "2:3:104" &&
+                Query(db, "SELECT count(*) FROM character_collectbox_expirations") is 0L,
+                "v52追加期限表不重写v51选择与物理模板槽");
+            Execute(db, "DELETE FROM characters WHERE id=1");
+            Check(Query(db, "SELECT count(*) FROM character_collectbox_state") is 0L &&
+                Query(db, "SELECT count(*) FROM character_collectbox_slots") is 0L &&
+                Query(db, "SELECT count(*) FROM character_collectbox_expirations") is 0L,
+                "角色删除由新表ON DELETE CASCADE清理全部收集箱状态");
+        }
+
+        string v50Failure = Path.Combine(root, "collectbox-v50-failure.db");
+        _ = new CharacterRepository(v50Failure);
+        using (var db = Open(v50Failure))
+        {
+            Execute(db, """
+                INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
+                VALUES(1,'collect-fail',0,'CollectFail',11,38,1,450,234,0);
+                DROP TABLE character_collectbox_expirations;
+                DROP TABLE character_collectbox_slots;
+                DROP TABLE character_collectbox_state;
+                CREATE VIEW character_collectbox_slots AS SELECT id AS character_id FROM characters;
+                PRAGMA user_version=50;
+                """);
+        }
+        string before = Snapshot(v50Failure);
+        Reject<SqliteException>(() => new CharacterRepository(v50Failure), "v51第二张表撞名");
+        using (var db = Open(v50Failure))
+            Check(Snapshot(v50Failure) == before && Query(db, "PRAGMA user_version") is 50L &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_collectbox_state'") is 0L &&
+                Query(db, "SELECT revision FROM characters WHERE id=1") is 11L,
+                "v51迁移失败回滚前置DDL并保留旧角色与版本");
+
+        string v51Failure = Path.Combine(root, "collectbox-v51-failure.db");
+        _ = new CharacterRepository(v51Failure);
+        using (var db = Open(v51Failure))
+        {
+            Execute(db, """
+                INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
+                VALUES(1,'expiry-fail',0,'ExpiryFail',13,38,1,450,234,0);
+                INSERT INTO character_collectbox_state VALUES(1,'expiry-fail',2);
+                INSERT INTO character_collectbox_slots VALUES(1,'expiry-fail',2,3,104);
+                DROP TABLE character_collectbox_expirations;
+                CREATE VIEW character_collectbox_expirations AS SELECT id AS character_id FROM characters;
+                PRAGMA user_version=51;
+                """);
+        }
+        before = Snapshot(v51Failure);
+        Reject<SqliteException>(() => new CharacterRepository(v51Failure), "v52期限表撞名");
+        Check(Snapshot(v51Failure) == before, "v52迁移失败保留v51选择、模板槽、角色数据和版本");
     }
 
     private static void VerifyFutureMigrations(string path)

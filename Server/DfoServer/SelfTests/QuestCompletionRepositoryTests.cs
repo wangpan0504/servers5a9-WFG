@@ -384,5 +384,7 @@ internal static class QuestCompletionRepositoryTests
             if (LoseInventoryResult && ++inventoryCalls == 1) throw new IOException("合成库存已提交但返回结果丢失");
             return result;
         }
+        public Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan) =>
+            inner.CommitCollectBox(owner, plan);
     }
 }

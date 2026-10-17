@@ -14,7 +14,8 @@ namespace DfoServer.Network.Projection;
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
-    IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null)
+    IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
+    CollectBoxProjection? collectBoxes = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
@@ -58,6 +59,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(c.Inventory.AccountWallet), "account_cera_initialize");
         await DungeonCardMembershipProjection.RefreshAsync(context);
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
+        if (collectBoxes is not null)
+            await collectBoxes.InitializeAsync(context);
         // #233 实验：下发今日强袭模式索引，避免客户端以默认0xFF判定“今天无法入场”。
         await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(timer, context.Session.AssaultDailyCounts(timer.GetLocalNow())), "assault_mode_daily_info");
         if (mailbox is not null)

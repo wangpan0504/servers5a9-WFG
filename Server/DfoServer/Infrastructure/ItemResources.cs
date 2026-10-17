@@ -26,6 +26,7 @@ internal sealed class ItemResources
     public EnchantmentCatalog Enchantments { get; }
     public EnhancementCatalog Enhancements { get; }
     public CreatureEggCatalog CreatureEggs { get; }
+    public CollectBoxCatalog CollectBoxes { get; }
     public GameWorld.Creatures.CreatureCatalog Creatures { get; }
     public GameWorld.Creatures.CreatureGroupCatalog CreatureGroups { get; }
     public AvatarPackageCatalog AvatarPackages { get; }
@@ -54,6 +55,7 @@ internal sealed class ItemResources
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures);
+        CollectBoxes = new(archive, Items);
         CashShop = CashShopCatalog.Load(archive);
         DevilContracts = new(archive, stackable, CashShop);
         RecoveryConsumables = new(archive, stackable, Items);
