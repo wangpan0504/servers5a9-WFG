@@ -225,6 +225,8 @@ internal static class ServerRuntime
             new QuestHiddenHandler(quests,log),
             new LevelUpTicketHandler(new Game.Characters.LevelUpTicketService(itemResources.Items,growth,itemResources.EpicPieces,clock),
                 quests,levelUpProjection,log),
+            new ExperienceConsumableHandler(new Game.Characters.ExperienceConsumableService(itemResources.Items, growth, itemResources.EpicPieces, clock),
+                inventoryProjection, levelProjection, log),
             new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning,levelUpProjection),
             new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,skinService,inventoryProjection,
                 new Game.Creatures.CreatureChangeService(itemResources.Items.Get, itemResources.Items.CreatureChange,

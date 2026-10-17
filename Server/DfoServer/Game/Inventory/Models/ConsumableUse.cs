@@ -9,4 +9,5 @@ internal sealed record ConsumableUseResult(ConsumableUseOutcome Outcome, string 
 {
     public long? SourceUid { get; init; }
     public bool PreserveSource { get; init; }
+    public DfoServer.Game.Characters.ExperienceConsumablePlan? Experience { get; init; }
 }

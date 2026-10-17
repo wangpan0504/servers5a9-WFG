@@ -149,6 +149,16 @@ internal static class ItemModelTests
         That(StackableFile.Parse(1,"stackable/level.stk",[new(3,1)],LevelResolve).HasBoosterInfo,
             "random booster declaration remains distinguishable from a fixed ticket");
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 5)], Resolve, _ => true));
+        string[] experienceStrings = ["[increase status type]", "[expPercentUp]", "[/increase status type]", "[expUp]"];
+        string ExperienceResolve(int index) => experienceStrings[index];
+        PvfToken[] capsule = [new(3, 0), new(6, 1), new(0, 10), new(3, 2)];
+        var experience = ExperienceConsumableFile.Parse(1, "stackable/capsule.stk", capsule, ExperienceResolve);
+        That(experience.Effect is { Label: "[expPercentUp]", Parameters: [10] } && experience.Diagnostics.IsEmpty,
+            "经验胶囊保留百分比标签和原始整数，不在资源库内计算角色经验");
+        foreach (PvfToken[] invalid in new[] { capsule.Concat(capsule).ToArray(), capsule[..^2].Append(new PvfToken(3, 2)).ToArray(),
+            capsule.Take(3).Append(new PvfToken(0, 20)).Append(new PvfToken(3, 2)).ToArray() })
+            That(!ExperienceConsumableFile.Parse(1, "stackable/capsule.stk", invalid, ExperienceResolve).Diagnostics.IsEmpty,
+                "重复、缺参数和多参数经验声明不能降级为单次增量");
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 4)], Resolve, _ => false));
     }
 }

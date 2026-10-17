@@ -51,6 +51,12 @@ internal static class TcpRegressionTests
         }),
         ("quest-ticket", (_, _, resources) => QuestTicketTests.RunAsync(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning)),
         ("levelup-ticket", LevelUpTicketTcpTests.RunAsync),
+        ("experience-consumable", ExperienceConsumableTcpTests.RunAsync),
+        ("experience-consumable-rules", (_, _, resources) =>
+        {
+            ExperienceConsumableTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Learning);
+            return Task.CompletedTask;
+        }),
         ("quest-specified-ticket", (_, _, resources) => QuestSpecifiedTicketTests.RunAsync(resources.Towns,resources.Archive,
             resources.Characters,resources.ItemResources,resources.Quests,resources.Learning)),
         ("quest-awakening-ticket", (_, _, resources) => QuestAwakeningTicketTests.RunAsync(resources.Towns,resources.Archive,
@@ -245,6 +251,7 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "class-change-rules",
+        "experience-consumable-rules",
         "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",

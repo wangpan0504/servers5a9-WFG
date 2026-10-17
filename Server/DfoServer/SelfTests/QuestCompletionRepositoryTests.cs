@@ -266,6 +266,13 @@ internal static class QuestCompletionRepositoryTests
     // 真实提交结果丢失，仅在第一次返回之后注入；保存原计划引用用于精确重试检查。
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
+        public bool LoseExperienceResult { get; set; }
+        public Character CommitExperienceConsumable(AccountOwners.Lease owner, ExperienceConsumablePlan plan, DateTimeOffset now)
+        {
+            var result = inner.CommitExperienceConsumable(owner, plan, now);
+            if (LoseExperienceResult) throw new IOException("合成经验物品已提交但返回结果丢失");
+            return result;
+        }
         public string ReadAdventureName(AccountOwners.Lease owner) => inner.ReadAdventureName(owner);
         public bool AdventureNameExists(AccountOwners.Lease owner, string name) => inner.AdventureNameExists(owner, name);
         public DfoServer.Game.Adventure.AdventureNameCommit CommitAdventureName(AccountOwners.Lease owner,

@@ -6,7 +6,7 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    sealed record UsedConsumable(ConsumableUseRequest Request, long SourceUid, long Timestamp, int DurationMilliseconds);
+    sealed record UsedConsumable(ConsumableUseRequest? Request, long SourceUid, long Timestamp, int DurationMilliseconds, TimeProvider Clock);
     readonly Dictionary<int, UsedConsumable> usedConsumables = new();
     InventoryPlan? pendingConsumableUse;
 
@@ -39,7 +39,7 @@ internal sealed partial class GameSession
                 formalDungeon.Run.Phase != DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon))
                 return Reject("summon_requires_living_dungeon_character");
             var previous = usedConsumables.GetValueOrDefault(definition.CoolGroup);
-            if (previous is not null && service.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(definition.CoolTime))
+            if (previous is not null && previous.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(definition.CoolTime))
             {
                 return Reject("cooldown");
             }
@@ -55,7 +55,7 @@ internal sealed partial class GameSession
             var result = CommitInventory(character, actual);
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
-            usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime);
+            usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock);
             return new ConsumableUseResult(ConsumableUseOutcome.Committed, preserve ? "training-preserved" : "committed", result, UseGuard())
                 { SourceUid = source.Uid, PreserveSource = preserve };
         });
@@ -67,7 +67,7 @@ internal sealed partial class GameSession
         // 成功token的歧义不因过房、活动门禁或模板变化消失，必须在任何普通拒绝ACK之前核对。
         foreach (var previous in usedConsumables.Values)
             if (previous is not null && previous.Request == request &&
-                service.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(previous.DurationMilliseconds))
+                previous.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(previous.DurationMilliseconds))
                 return new(ConsumableUseOutcome.CloseConnection, "ambiguous-repeat") { SourceUid = previous.SourceUid };
         return null;
     }

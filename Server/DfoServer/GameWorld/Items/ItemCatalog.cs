@@ -18,6 +18,7 @@ internal sealed class ItemCatalog
     readonly ConcurrentDictionary<int, Lazy<ItemTemplate>> pendingTemplates = new();
     readonly ConcurrentDictionary<int, QuestTicketDefinition> questTickets = new();
     readonly ConcurrentDictionary<int, Lazy<LevelUpTicketDefinition?>> levelUpTickets = new();
+    readonly ConcurrentDictionary<int, Lazy<ExperienceConsumableDefinition?>> experienceConsumables = new();
     readonly ConcurrentDictionary<int, Lazy<ClassChangeTicketDefinition?>> classChangeTickets = new();
     readonly ConcurrentDictionary<int, Lazy<GameWorld.Creatures.CreatureChangeDefinition?>> creatureChanges = new();
     readonly ConcurrentDictionary<int, Lazy<GameWorld.Creatures.CreatureGrowthItemDefinition?>> creatureGrowthItems = new();
@@ -157,6 +158,15 @@ internal sealed class ItemCatalog
         if (!stackable.TryGetValue(id, out var path)) return null;
         return levelUpTickets.GetOrAdd(id, key => new(() => LevelUpTicketDefinition.Parse(
             StackableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    internal static string JobTag(byte job) => job < JobNames.Length ? "[" + JobNames[job] + "]" : throw new InvalidDataException("未知物品使用职业");
+
+    public ExperienceConsumableDefinition? ExperienceConsumable(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return experienceConsumables.GetOrAdd(id, key => new(() => ExperienceConsumableDefinition.Parse(
+            ExperienceConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
     }
 
     public ClassChangeTicketDefinition? ClassChangeTicket(int id)
