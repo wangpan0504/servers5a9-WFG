@@ -78,7 +78,9 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::OpenRead($archive)
 try {
     $names = @($zip.Entries | ForEach-Object FullName | Sort-Object)
-    $expectedNames = @('README.txt', 'S5A9Server.exe', 'build-info.json') | Sort-Object
+    $expectedNames = @('README.txt', 'S5A9Server.exe', 'build-info.json', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'THIRD-PARTY.md',
+        'LICENSES/Apache-2.0.txt', 'LICENSES/BSL-1.0.txt', 'LICENSES/ServerS4A21-MIT.txt',
+        'LICENSES/dotnet-MIT.txt', 'LICENSES/dotnet-THIRD-PARTY-NOTICES.txt', 'LICENSES/aspnetcore-THIRD-PARTY-NOTICES.txt') | Sort-Object
     if (($names -join '|') -cne ($expectedNames -join '|')) { throw 'ZIP 文件清单不符，拒绝上传。' }
     $reader = [IO.StreamReader]::new($zip.GetEntry('build-info.json').Open())
     try { $metadata = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
@@ -93,6 +95,8 @@ $body = @"
 Windows x64 自包含单 EXE 包，解压后双击 S5A9Server.exe；无需另装 .NET。
 
 源码提交：$Commit
+对应源码：$($repo.html_url)/archive/$Commit.zip
+软件许可：AGPL-3.0-only；完整正文与第三方声明随包附带。
 Windows 检查：$startup
 本版本为预发布，自动检查不代替客户端验收。
 自行准备匹配客户端的 PVF；不包含客户端、PVF、玩家数据库、日志或本机配置。

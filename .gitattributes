@@ -6,3 +6,6 @@
 *.cmd text eol=crlf
 *.sh text eol=lf
 Server/DfoServer/Resources/channel.txt -text whitespace=-blank-at-eol
+
+# 第三方原始声明保留上游空白格式。
+LICENSES/*-THIRD-PARTY-NOTICES.txt -whitespace

@@ -6,11 +6,23 @@
 
 PVF 读取由独立的 [PvfLib](Tools/PvfLib/README.md) 提供，游戏资源定义和业务查询位于服务端 GameWorld。
 
+## 许可证
+
+Copyright (C) 2026 deadbeef7799 and contributors.
+
+除另有声明的第三方材料外，本仓库的源码、工具和文档采用 **GNU Affero General Public License version 3 only（`AGPL-3.0-only`）**，完整条款见 [LICENSE](LICENSE)。第三方组件继续遵循各自许可，版权、来源和许可正文见[第三方声明](THIRD-PARTY-NOTICES.md)。
+
+- 分发程序或修改版时，须按 AGPLv3 提供完整对应源码，包括修改及生成、安装程序所需的脚本，并保留版权和许可声明。
+- 运行修改版并允许用户通过网络与其交互时，须显著向这些用户提供免费获取该版本完整对应源码的方式，具体见 LICENSE 第 13 条。仅提供未包含实际修改的上游仓库地址不能替代对应源码。
+- 本许可允许商业使用。客户端、PVF、商标等第三方材料的权利仍归各自权利人，本许可不授予这些材料的使用权。
+
+分发包须附带 `LICENSE`、`THIRD-PARTY-NOTICES.md`、`THIRD-PARTY.md` 和 `LICENSES/`。本仓库构建脚本会复制这些文件；直接使用 `dotnet publish` 时，分发前须从仓库根复制到发布目录，并按 AGPLv3 提供与所发程序对应的源码。贡献要求见[贡献许可](CONTRIBUTING.md#贡献许可)。
+
 ## 免责声明
 
 本项目为非官方的技术研究项目，与任何游戏开发商、发行商或运营商无关联，亦未获得其背书。相关名称、商标及第三方资源的权利归各自权利人所有。
 
-仓库仅提供自有模拟器源码、开发工具和技术文档，不提供游戏客户端、PVF、原版服务端或玩家数据。使用者应自行确保所使用的第三方资源及使用方式具有合法授权，请勿用于商业运营、未经授权的公开服务或其他侵犯第三方权益的活动。
+仓库仅提供自有模拟器源码、开发工具和技术文档，不提供游戏客户端、PVF、原版服务端或玩家数据。使用者应自行确保所使用的第三方资源及使用方式具有合法授权，不得侵犯第三方权益。
 
 项目仍处于研究和完善阶段，存在未实现功能及已知或未知问题，不保证完整性、稳定性或适用性。使用前请自行评估，并妥善备份数据。
 
@@ -71,7 +83,7 @@ chmod +x dist/linux-x64/DfoServer
 
 RID 选择的是**运行程序的机器**，不是游戏客户端的架构。跨平台发布后，帮助命令和实际启动需在目标系统验证；其他系统条件见 [.NET RID 说明](https://learn.microsoft.com/zh-cn/dotnet/core/rid-catalog)。
 
-上面的直接 `dotnet publish` 命令输出为[自包含目录部署](https://learn.microsoft.com/zh-cn/dotnet/core/deploying/)，已带 .NET 运行时，目标机器无需另装 .NET，但仍需满足目标系统的原生依赖要求。目录模式需复制 `dist/<RID>/` **整个目录**，保留依赖库、Resources、Sqlite 和启动脚本；Windows 单文件模式只需复制 `S5A9Server.exe`。公开分发不包含 PVF、玩家数据库或日志；若源码目录已有 PVF，直接目录发布会复制它，打包前需排除，单文件模式不将 PVF 打入 EXE。
+上面的直接 `dotnet publish` 命令输出为[自包含目录部署](https://learn.microsoft.com/zh-cn/dotnet/core/deploying/)，已带 .NET 运行时，目标机器无需另装 .NET，但仍需满足目标系统的原生依赖要求。目录模式需复制 `dist/<RID>/` **整个目录**，保留依赖库、Resources、Sqlite 和启动脚本；Windows 单文件模式分发 `S5A9Server.exe` 及上述许可文件。公开分发不包含 PVF、玩家数据库或日志；若源码目录已有 PVF，直接目录发布会复制它，打包前需排除，单文件模式不将 PVF 打入 EXE。
 
 ### 3. 放入资源并启动
 
@@ -156,6 +168,8 @@ dotnet run --project Server/DfoServer -c Debug --no-build -- --packet-capture
 | [Docs/README.md](Docs/README.md) | 按模块查找业务、协议、资源和开发文档 |
 | [AGENTS.md](AGENTS.md) | agent 阅读顺序、修改边界与交付要求 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 开发准备、源码导航、验证及协作流程 |
+| [LICENSE](LICENSE) | AGPLv3 完整条款 |
+| [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) | 第三方组件、版权与许可正文 |
 
 ## 常见问题
 

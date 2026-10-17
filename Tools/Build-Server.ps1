@@ -29,6 +29,7 @@ if ($SingleFile -and -not $PSBoundParameters.ContainsKey('OutputDirectory')) {
     $OutputDirectory = if ($package) { 'dist/releases' } else { 'dist/win-x64-single' }
 }
 $program = if ($SingleFile) { 'S5A9Server.exe' } else { 'DfoServer.exe' }
+$licensePaths = @('LICENSE', 'THIRD-PARTY-NOTICES.md', 'THIRD-PARTY.md', 'LICENSES')
 
 function Get-FullPath([string]$Path) {
     if (-not [IO.Path]::IsPathRooted($Path)) { $Path = Join-Path $root $Path }
@@ -139,6 +140,9 @@ if ($package) { $launcherArguments += @('-p:EnableWindowsTargeting=true', '-m:1'
 Invoke-Dotnet $launcherArguments
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $launcherPayload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -Destination $payload
+foreach ($name in $licensePaths) {
+    Copy-Item -LiteralPath (Join-Path $root $name) -Destination $payload -Recurse -Force
+}
 $requiredFiles = if ($SingleFile) { @($program) } else {
     @('DfoServer.exe', 'DfoServer.dll', 'Resources/channel.txt', 'Sqlite/game_schema.sql', 'start-server.bat', 'DfoLauncher.exe')
 }
@@ -172,6 +176,9 @@ if ($package) {
     $archiveRoot = Join-Path $stage 'archive'
     New-Item -ItemType Directory -Path $archiveRoot | Out-Null
     Copy-Item -LiteralPath (Join-Path $payload $program) -Destination $archiveRoot
+    foreach ($name in $licensePaths) {
+        Copy-Item -LiteralPath (Join-Path $payload $name) -Destination $archiveRoot -Recurse
+    }
     $metadata = [ordered]@{
         version = $PackageVersion; commit = $revision; modified = [bool]$changes
         runtime = 'win-x64'; configuration = 'Release'; windowsStartupChecked = $windows
@@ -183,15 +190,18 @@ S5A9Server $PackageVersion (Windows x64)
 解压到独立目录，双击 S5A9Server.exe 打开启动器，无需另装 .NET。
 自行准备匹配客户端的 Script.pvf，并在启动器中选择资源和存档目录。
 本包不包含客户端、PVF、玩家数据库、日志及本机配置。
-更新前正常停服并关闭启动器，只替换 EXE，保留原 Data、Logs 和配置。
+更新前正常停服并关闭启动器，更新 EXE 及许可文件，保留原 Data、Logs 和配置。
 命令行帮助：S5A9Server.exe --server --help
+本软件采用 AGPL-3.0-only；分发时保留 LICENSE、THIRD-PARTY-NOTICES.md、THIRD-PARTY.md 和 LICENSES 目录。
+上游源码基线：https://codeberg.org/deadbeef7799/ServerS5A9/archive/$revision.zip
+本地修改包须另行提供包含实际改动的完整对应源码。
 源码提交与 Windows 启动检查状态见 build-info.json；自动检查不代替客户端验收。
 "@
     [IO.File]::WriteAllText((Join-Path $archiveRoot 'README.txt'), $instructions, [Text.UTF8Encoding]::new($true))
     New-Item -ItemType Directory -Path $output -Force | Out-Null
     $archive = Join-Path $output "S5A9Server-$PackageVersion-win-x64.zip"
-    Compress-Archive -LiteralPath @((Join-Path $archiveRoot $program),
-        (Join-Path $archiveRoot 'README.txt'), (Join-Path $archiveRoot 'build-info.json')) -DestinationPath $archive
+    $archivePaths = @($program, 'README.txt', 'build-info.json') + $licensePaths
+    Compress-Archive -LiteralPath @($archivePaths | ForEach-Object { Join-Path $archiveRoot $_ }) -DestinationPath $archive
     $stream = [IO.File]::OpenRead($archive)
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try { $hash = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
@@ -282,7 +292,7 @@ try {
 Remove-Stage
 if ($SingleFile) {
     Write-Host "构建完成。单程序：$output\$program"
-    Write-Host '分发程序只需复制这个 EXE，无需附带 DLL、Resources、Sqlite 或启动脚本。PVF 和存档仍由启动界面选择。'
+    Write-Host '分发时复制 EXE、LICENSE、THIRD-PARTY-NOTICES.md、THIRD-PARTY.md 和 LICENSES 目录；无需附带 DLL、Resources、Sqlite 或启动脚本。PVF 和存档仍由启动界面选择。'
 } else {
     Write-Host "构建完成。双击启动器：$output\DfoLauncher.exe"
     Write-Host "无参数的 start-server.bat 也会打开启动器；带参数时直接运行命令行服务。"
