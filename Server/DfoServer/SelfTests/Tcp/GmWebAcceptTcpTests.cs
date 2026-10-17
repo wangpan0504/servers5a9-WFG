@@ -244,6 +244,12 @@ internal static class GmWebAcceptTcpTests
 
         // ---------- 技能名、经验表、在线称号、断开连接 ----------
         var skillList = Data(await Get($"/api/characters/{Account}/AccA/skill-list"));
+        // 紧接在小退/踢线之后，账号租约世代可能短暂变化（“账号世代已变化，请重试”），按提示重试几次。
+        for (int retry = 0; retry < 8 && skillList.ToString().Contains("账号世代", StringComparison.Ordinal); retry++)
+        {
+            await Task.Delay(250);
+            skillList = Data(await Get($"/api/characters/{Account}/AccA/skill-list"));
+        }
         Check("技能名", "skill-list：返回技能 id/名称/等级，至少一个技能有 PVF 名称", skillList.TryGetProperty("skills", out var skills) && skills.ValueKind == JsonValueKind.Array && skills.GetArrayLength() > 0 &&
             skills.EnumerateArray().Any(sk => sk.TryGetProperty("name", out var nm) && nm.GetString() is { } n && !n.StartsWith("技能 ", StringComparison.Ordinal)), skillList.ToString().Length > 300 ? skillList.ToString()[..300] : skillList.ToString());
         Check("技能名", "skill-list：返回 SP/TP", skillList.TryGetProperty("initialized", out var ini) && ini.ValueKind == JsonValueKind.True && skillList.TryGetProperty("sp", out var spv) && spv.ValueKind == JsonValueKind.Number, skillList.ToString().Length > 200 ? skillList.ToString()[..200] : skillList.ToString());

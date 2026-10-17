@@ -361,9 +361,15 @@ internal sealed class LauncherForm : Form
         int removed = 0;
         if (output.TextLength > 64000)
         {
-            removed = output.TextLength - 48000;
-            output.Select(0, removed);
-            output.SelectedText = "";
+            // 不碰 ReadOnly、不对只读框赋 SelectedText（会被拒绝并 MessageBeep）：
+            // 保留尾部（对齐到整行）后用 Text 整体替换（WM_SETTEXT 对只读框合法且无提示音）。
+            int before = output.TextLength;
+            string text = output.Text;
+            int cut = Math.Max(0, text.Length - 48000);
+            int lineStart = text.IndexOf('\n', cut);
+            if (lineStart >= 0 && lineStart + 1 < text.Length) cut = lineStart + 1;
+            output.Text = text[cut..];
+            removed = Math.Max(0, before - output.TextLength);
         }
         if (follow)
         {
