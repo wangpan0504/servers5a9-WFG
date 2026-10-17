@@ -16,7 +16,7 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
     public IReadOnlyList<DungeonPassiveDropPreparation> Prepare(DungeonEntryPlan entry, DungeonMonsterPlan room,
         Func<int, int> draw, DateTimeOffset now)
     {
-        if (entry.IsTutorial || entry.IsClassExperience || entry.IsTrainingRoom)
+        if (entry.IsTutorial || entry.IsClassExperience || entry.IsTrainingRoom || entry.IsPractice)
             return [];
         var definition = resolveDungeon(checked((int)entry.DungeonId));
         if (definition.RawSections.Any(section => section.Tag == "disable drop item" && section.Tokens.Count == 0))

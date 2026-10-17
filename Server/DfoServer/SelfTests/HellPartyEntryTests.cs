@@ -70,6 +70,12 @@ internal static class HellPartyEntryTests
             That(blocked.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms, hellParty: true) is null &&
                 blocked.Session.LastFormalDungeonRejection == "hell-party-quest-required:6080" && blocked.Read().Revision == before.Revision,
                 "未完成区域 [hell quest] 时拒绝深渊派对入场（原因 hell-party-quest-required:6080）");
+            foreach (var flags in new[] { (Hell: true,Legend: false,Door: false), (Hell: true,Legend: true,Door: false),
+                (Hell: true,Legend: false,Door: true), (Hell: false,Legend: false,Door: true) })
+                That(blocked.Session.EnterFormalDungeon(291100308,0,4,dungeons,rooms,practice: true,
+                    hellParty: flags.Hell,hellLegend: flags.Legend,sealDoor: flags.Door) is null &&
+                    blocked.Session.LastFormalDungeonRejection == "practice-mode-conflict" && blocked.Read().Revision == before.Revision,
+                    "会话拒绝练习混合普通/传奇深渊或密门，不规划扣票、费用或次数");
         }
 
         // 已完成 6080：放行。

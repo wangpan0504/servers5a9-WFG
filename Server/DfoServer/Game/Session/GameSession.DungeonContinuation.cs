@@ -40,6 +40,7 @@ internal sealed partial class GameSession
         reason = "settlement-changed";
         var original = owner.Execute(() => Ready && CanEnterFormalDungeon(current) ? formalDungeon : null);
         if (original is null || questCatalog is null) return null;
+        if (current.Entry.IsPractice) { reason = "no-accepted-successor"; return null; }
         var character = current.Character;
         bool taskRoute = current.Entry.RouteQuestId > 0;
         DungeonQuestContinuation? next = null;

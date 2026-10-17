@@ -68,6 +68,8 @@ internal static class DungeonPackets
         body[9] = checked((byte)plan.BossMap.Position.Y);
         body[10] = byte.MaxValue;
         body[11] = byte.MaxValue;
+        // 0238ABCC读取并经03BB1510安装练习模式；不可只改变服务端奖励策略。
+        body[12] = plan.IsPractice ? (byte)1 : (byte)0;
         // 未解释字段保持匹配形状：offset16的u16为0，offset20的FFFFFFFF选择跳过分支。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(20), uint.MaxValue);
         // 实验性（未在95客户端实证；依据参考项目 dungeon_info.go / dungeon_hell_room.go / A21 DungeonEntryHandler:1323-1335）：

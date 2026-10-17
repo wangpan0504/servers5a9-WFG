@@ -183,7 +183,7 @@ internal sealed partial class SinglePlayerDungeonRun
     public DungeonClearFact? ClearFact { get; private set; }
     public bool HasPendingSettlement => pendingSettlement is not null;
     // 剧情入场不扣持久疲劳；宠物仍按真实首次加载的房间成长，回访不重复计点。
-    public int CreatureExperiencePoints => entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay
+    public int CreatureExperiencePoints => entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay || entry.IsPractice
         ? 0 : allRooms.Count(room => room.Loaded);
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
@@ -607,7 +607,7 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
-        if (!ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
+        if (entry.IsPractice || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
             HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial ||
             (ulong)reward.BaseExperience + reward.RankExperience + reward.GrowthContractExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||

@@ -122,7 +122,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
     {
-        if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
+        if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice ||
             dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         if (!capture.Prepared && (!ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(dungeon, capture.Dungeon)))
@@ -357,6 +357,8 @@ internal sealed partial class GameSession
     });
 
     bool HasPendingFormalCard => formalDungeon?.Settlement?.Claim is not null;
+    static bool HasFinishedDungeon(FormalDungeon? dungeon) => dungeon is not null &&
+        (dungeon.Settlement is { Committed: true } || dungeon.Entry.IsPractice && dungeon.SettlementEnabled && dungeon.Run.ClearFact is not null);
 
     bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
         dungeon.Settlement is { Committed: true } && dungeon.Run.ClearFact is not null &&
@@ -372,18 +374,20 @@ internal sealed partial class GameSession
     });
 
     public FormalDungeonReceipt? FormalDungeonResultFocus() => owner.Execute(() =>
-        Ready && !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon?.Settlement is { Committed: true } ? FormalReceipt() : null);
+        Ready && !HasPendingFormalCard && Phase == SessionPhase.Settlement && HasFinishedDungeon(formalDungeon) ? FormalReceipt() : null);
 
     public FormalDungeonReceipt? BeginFormalDungeonOtherSelection() => owner.Execute(() =>
     {
-        if (!Ready || HasPendingFormalCard || Phase != SessionPhase.Settlement || formalDungeon?.Settlement is not { Committed: true } settlement)
+        if (!Ready || HasPendingFormalCard || Phase != SessionPhase.Settlement || !HasFinishedDungeon(formalDungeon))
             return null;
-        settlement.OtherSelectionRequested = true;
+        if (formalDungeon!.Settlement is { } settlement) settlement.OtherSelectionRequested = true;
+        else formalDungeon.PracticeOtherSelectionRequested = true;
         return FormalReceipt();
     });
 
     public TownTravelReceipt? ConfirmFormalDungeonOtherSelection() => owner.Execute(() =>
-        formalDungeon?.Settlement is { Committed: true, OtherSelectionRequested: true } ? ReturnFromFormalDungeon() : null);
+        HasFinishedDungeon(formalDungeon) && (formalDungeon?.Settlement?.OtherSelectionRequested == true ||
+            formalDungeon?.PracticeOtherSelectionRequested == true) ? ReturnFromFormalDungeon() : null);
 
     public FormalDungeonReceipt? RetryFormalDungeon(FormalDungeonReceipt expected, DungeonCatalog dungeons,
         DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces = null)
@@ -395,6 +399,6 @@ internal sealed partial class GameSession
         // 复用不可变生成规则和随机源；新Run独立冻结结果，不继承旧地面对象。
         return EnterFormalDungeon(expected.Entry.DungeonId,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,
             draw: original.Draw, pieces: pieces, requiredCharacter: expected.Character,retry: expected,
-            prepareDrops: original.PrepareDrops);
+            prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice);
     }
 }

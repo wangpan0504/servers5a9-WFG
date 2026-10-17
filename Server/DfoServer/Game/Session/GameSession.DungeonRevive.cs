@@ -30,7 +30,7 @@ internal sealed partial class GameSession
     public InventoryResult? ReviveFormalCharacter(ushort targetKey) => owner.Execute(() =>
     {
         if (!CanChangeDungeonLife() || !formalDungeon!.CharacterDead || Selected!.Id != targetKey) return null;
-        var result = CommitInventory(Selected, DungeonRevive.Plan(Selected,PreservesTrainingItems));
+        var result = CommitInventory(Selected, DungeonRevive.Plan(Selected,PreservesDungeonConsumables));
         if (result.Accepted) formalDungeon.CharacterDead = false;
         return result;
     });

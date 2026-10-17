@@ -32,7 +32,7 @@ internal sealed partial class GameSession
             var room = instance is not null && formalDungeon is { } dungeon
                 ? dungeon.Route.Rooms.Single(row => row.Room.Map == dungeon.Run.Snapshot.CurrentMap).Room : null;
             // 加载事实记录的是Advance前epoch；当前phase和完整Map确认已加载，提交再复验当前RunIdentity。
-            bool loaded = instance is not null && formalDungeon is { Entry.IsClassExperience: false } current &&
+            bool loaded = instance is not null && formalDungeon is { Entry.IsClassExperience: false, Entry.IsPractice: false } current &&
                 current.Run.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
                 current.Run.LastLoadingFact is { } loading && loading.Map == current.Run.Snapshot.CurrentMap;
             return (Character: character, SelectionEpoch, Phase, Identity: instance, Entry: formalDungeon?.Entry,
@@ -106,6 +106,7 @@ internal sealed partial class GameSession
 
         QuestLifecyclePlan ConditionPlan()
         {
+            if (capture.Entry?.IsPractice == true) throw new InvalidDataException("练习场景不推进任务条件");
             QuestCoverage.RequireOrdinaryDeclarations(quest);
             if (QuestRentalProgress.Supports(quest) && condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { AcceptanceId: var rentalAcceptance, ConditionState: 0 } &&

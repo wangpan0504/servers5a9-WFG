@@ -42,7 +42,7 @@ internal sealed partial class GameSession
         {
             var dungeon = formalDungeon;
             var character = Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement && dungeon is not null &&
-                !dungeon.Entry.IsClassExperience &&
+                !dungeon.Entry.IsClassExperience && !dungeon.Entry.IsPractice &&
                 !dungeon.Ground.HasPendingOperation && (!dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingPassiveClear &&
                     dungeon.QuestSceneEvents.TryGetValue((dungeon.Run.Snapshot.CurrentMap,(int)templateId),out var retry) && !retry.Committed) &&
                 !dungeon.Run.HasPendingSettlement && pendingQuestCompletion is null

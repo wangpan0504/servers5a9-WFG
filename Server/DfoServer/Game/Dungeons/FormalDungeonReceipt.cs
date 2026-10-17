@@ -17,6 +17,7 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     // 演出返回只确认缓存呈现，不重新执行业务装载或授权基础图演员。
     public Guid ScriptedReturnId { get; init; }
     public bool NavigationReplay { get; init; }
+    public uint ClearTimeMilliseconds { get; init; }
 }
 internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,

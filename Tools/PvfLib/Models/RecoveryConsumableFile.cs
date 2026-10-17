@@ -9,6 +9,8 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     int? CoolTime, int? CoolGroup, RecoveryDeclaration? HpRecovery, RecoveryDeclaration? MpRecovery,
     ImmutableArray<string> DeclaredFields, ImmutableArray<string> Diagnostics)
 {
+    public int? SubType { get; init; }
+
     public static RecoveryConsumableFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
         var document = new PvfTokenDocument(tokens, resolve);
@@ -38,9 +40,9 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
             errors.Add("恢复物品四元组不完整：" + name);
             return null;
         }
-        int? coolTime = Scalar("cool time"), group = Scalar("cooltime group");
+        int? coolTime = Scalar("cool time"), group = Scalar("cooltime group"), subType = Scalar("sub type");
         var hp = Recovery("hp recovery"); var mp = Recovery("mp recovery");
         return new(id, path, StackableFile.Parse(id, path, tokens, resolve), coolTime, group, hp, mp,
-            document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray());
+            document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray()) { SubType = subType };
     }
 }

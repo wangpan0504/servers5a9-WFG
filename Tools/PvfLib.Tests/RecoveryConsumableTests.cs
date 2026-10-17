@@ -6,7 +6,7 @@ internal static class RecoveryConsumableTests
 {
     public static void Run()
     {
-        string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]"];
+        string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]"];
         string Resolve(int at) => strings[at];
         PvfToken[] valid = [new(3, 0), new(0, 10000), new(3, 1), new(0, 0), new(3, 2),
             new(6, 3), new(0, 410), new(0, 1000), new(6, 4)];
@@ -21,5 +21,15 @@ internal static class RecoveryConsumableTests
         That(result.HpRecovery is null && result.Diagnostics.Length != 0, "恢复四元组缺尾不能取得药剂资格");
         result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid.Select((token, at) => at == 7 ? new PvfToken(6, 3) : token).ToArray(), Resolve);
         That(result.HpRecovery is null && result.Diagnostics.Length != 0, "恢复整数位置不接受字符串或未知格式");
+        That(RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid, Resolve).SubType is null,
+            "未声明子类型保持缺失，不由解析库决定应答时机");
+        result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", [..valid,new(3,6),new(0,2)], Resolve);
+        That(result.SubType == 2 && result.DeclaredFields.Contains("sub type"), "子类型独立于stackable type的整数参数读取");
+        foreach (PvfToken[] tail in new PvfToken[][] { [new(3,6),new(6,3)], [new(3,6)],
+            [new(3,6),new(0,2),new(0,0)], [new(3,6),new(0,2),new(3,6),new(0,0)] })
+        {
+            result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", [..valid,..tail], Resolve);
+            That(result.SubType is null && !result.Diagnostics.IsEmpty, "错误或重复子类型保留诊断，不降级成即时效果");
+        }
     }
 }

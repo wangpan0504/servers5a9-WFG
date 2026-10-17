@@ -10,7 +10,7 @@ internal sealed partial class GameSession
     public CubeContractTick? PrepareCubeContractTick(CubeContractService service, long now, long timestamp, long frequency) => owner.Execute(() =>
     {
         if (!Ready || Selected is not { } character || Phase is not (SessionPhase.Loading or SessionPhase.Dungeon) ||
-            formalDungeon is not { CharacterDead: false } dungeon || service.Consumption(character.Inventory, now) is not { } option)
+            formalDungeon is not { CharacterDead: false } dungeon || dungeon.Entry.HasFreeCombatConsumption || service.Consumption(character.Inventory, now) is not { } option)
             return cubeContractTick = null;
         Guid instance = dungeon.Run.Snapshot.Identity.InstanceId;
         sbyte type = character.Inventory.CubeContract.CubeType;

@@ -94,16 +94,21 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
         bool accepted = result.Outcome == ConsumableUseOutcome.Committed;
         log.Write("consumable_use", new { Connection = context.Id, Item = request.ItemId, Slot = request.Position.Index,
             List = request.Position.List, Accepted = accepted, result.Reason, Character = result.Guard?.Character?.Id,
-            Revision = result.Guard?.Character?.Revision, result.SourceUid });
+            Revision = result.Guard?.Character?.Revision, result.SourceUid, result.NativeNoConsumption });
         if (result.Outcome == ConsumableUseOutcome.CloseConnection) return CommandResult.CloseConnection;
         var guard = result.Guard ?? throw new InvalidOperationException("道具使用缺少原状态发布身份");
         bool CanSend() => context.Session.CanPublishConsumable(guard);
-        await context.Reply(CmdPacketType.USE_STACKABLE, ConsumableUsePackets.Ack(request, accepted),
+        await context.Reply(CmdPacketType.USE_STACKABLE, ConsumableUsePackets.Ack(request, accepted, result.NativeNoConsumption),
             accepted ? "consumable_use_committed" : "consumable_use_rejected", CanSend);
-        // ACK44仍执行原生药效与pending收尾；1681沿同一条目解析静默还原数量，不触发获得提示。
-        if (accepted && result.PreserveSource)
-            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE, InventoryPackets.Delta(guard.Character!.Inventory,
-                request.Position.List,[request.Position]), "training_consumable_source_preserved", CanSend);
+        // 子类型2在成功ACK后才执行效果；13完整载入关闭新图标标记，不能用1681删后补回。
+        if (accepted && result.PreserveSource && !result.NativeNoConsumption)
+        {
+            var current = guard.Character!.Inventory;
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current), "dungeon_consumable_source_preserved", CanSend);
+            await InventoryProjection.RestoreLocksAsync(context, current,
+                current.Items.Where(item => item.Position.List == InventoryListType.Main).Select(item => item.Position),
+                canSend: CanSend, currentIndex: result.Inventory?.Receipt?.Index);
+        }
         // 保留实际库存事务更新的寻物任务条件；修炼场无库存变更，不虚构任务进度。
         if (result.Inventory?.Receipt is { } receipt && receipt.PreviousQuests is { } old &&
             !old.SequenceEqual(receipt.Character.ActiveMainQuests))

@@ -6,6 +6,14 @@ namespace DfoServer.Network.Builders;
 
 internal static class DungeonSettlementPackets
 {
+    // NOTI255在023802F1/0238031F读u32和u8；时间由客户端除10，尾标志不触发附加奖励。
+    public static byte[] PracticeCleared(uint elapsedMilliseconds)
+    {
+        byte[] body = new byte[5];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, elapsedMilliseconds);
+        return body;
+    }
+
     public static byte[] BossAccepted(ushort bossKey) => [1, 1, (byte)bossKey, (byte)(bossKey >> 8)];
 
     public static byte[] PlayResult(ushort actorId, DungeonSettlementPresentation presentation)

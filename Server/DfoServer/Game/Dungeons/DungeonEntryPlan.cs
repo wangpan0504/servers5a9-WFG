@@ -33,9 +33,11 @@ internal sealed record DungeonEntryPlan(
     public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
     public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
+    public bool IsPractice { get; init; }
+    public bool HasFreeCombatConsumption => IsPractice || IsTrainingRoom || IsClassExperience;
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
-    public bool UsesFatigue => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament;
+    public bool UsesFatigue => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice;
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public bool HasExplicitClearMap { get; init; }
@@ -74,7 +76,7 @@ internal sealed record DungeonEntryPlan(
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
-        bool hellParty = false, bool hellLegend = false)
+        bool hellParty = false, bool hellLegend = false, bool practice = false)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -92,13 +94,14 @@ internal sealed record DungeonEntryPlan(
         }
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
-            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest,hellParty:hellParty,hellLegend:hellLegend);
+            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest,
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
-        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false)
+        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -111,6 +114,8 @@ internal sealed record DungeonEntryPlan(
             reason = "dungeon-resource-mismatch";
             return false;
         }
+        if (practice && (!definition.AllowsPractice || questId != 0 || isReplay || hellParty || hellLegend || quest is not null))
+        { reason = "practice-mode-or-resource-unsupported"; return false; }
 
         if (dungeonId == 7142 && (!definition.IsClassExperience || questId != 0 || difficulty != 0 || isReplay))
         {
@@ -135,7 +140,18 @@ internal sealed record DungeonEntryPlan(
         bool ordinaryHunt = false;
         StoryQuest? layoutQuest = quest;
         var candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)));
-        if (questId == 0 && quests is not null)
+        if (practice)
+        {
+            // 练习不借用当前主线的剧情迷宫，也不冻结任何正式任务接取。
+            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
+            if (candidates.Length > 1)
+            {
+                int index = (draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32)(candidates.Length);
+                if (index < 0 || index >= candidates.Length) throw new InvalidDataException("练习迷宫随机索引越界");
+                candidates = [candidates[index]];
+            }
+        }
+        else if (questId == 0 && quests is not null)
         {
             candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active => maze.ConnectsQuest(active.QuestId,difficulty))));
             var sequences = new List<(StoryQuest Parent, StoryQuest Child)>();
@@ -355,15 +371,16 @@ internal sealed record DungeonEntryPlan(
             TerminalLayerAcceptanceId = terminalAcceptance,
             RouteQuestId = routeQuest,
             IsOrdinaryHunt = ordinaryHunt,
-            QuestAcceptances = definition.IsClassExperience ? [] : character.ActiveMainQuests.ToImmutableArray(),
+            QuestAcceptances = definition.IsClassExperience || practice ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
+            IsPractice = practice,
             HellParty = hellParty ? activeHell : null,
             IsHellLegend = hellParty && hellLegend,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
-            InitializationCounterSupported = !definition.IsClassExperience && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
+            InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
         reason = "resource-plan-ready";

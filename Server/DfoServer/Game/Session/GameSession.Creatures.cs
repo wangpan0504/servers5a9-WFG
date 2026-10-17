@@ -55,7 +55,7 @@ internal sealed partial class GameSession
                 clock.Timestamp = seconds > 36000 ? now : checked(clock.Timestamp + seconds * frequency);
             }
             // 首次进图加载沿用城镇休息，过房加载沿用战斗；不在冻结的加载阶段写入角色资产。
-            if (Phase != SessionPhase.Loading) clock.Fighting = Phase == SessionPhase.Dungeon;
+            if (Phase != SessionPhase.Loading) clock.Fighting = Phase == SessionPhase.Dungeon && formalDungeon?.Entry.HasFreeCombatConsumption != true;
             clock.FoodRate = foodRate;
             bool revive = Phase == SessionPhase.Town && clock.BaseAmount + clock.Units < 36000;
             return new CreatureClockTicket(clock.CycleId, clock.CharacterId, clock.Epoch, clock.Uid, clock.DueTimestamp, clock.Units, revive);

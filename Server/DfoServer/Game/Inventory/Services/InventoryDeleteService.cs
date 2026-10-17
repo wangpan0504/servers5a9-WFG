@@ -4,7 +4,7 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal static class InventoryDeleteService
 {
-    public static InventoryResult PlanBatch(InventorySnapshot before, InventoryDeleteRequest request, bool preserveClearCube = false)
+    public static InventoryResult PlanBatch(InventorySnapshot before, InventoryDeleteRequest request, bool preserveMaterials = false)
     {
         if (!Allows(request.List) || request.Flag != 0 || request.Items.Length is < 1 or > 352 ||
             request.Items.Any(item => item.Type is not (0 or 1 or 2 or 3)) || request.Items.Select(item => item.Slot).Distinct().Count() != request.Items.Length)
@@ -34,13 +34,13 @@ internal static class InventoryDeleteService
             else result = Plan(after, new(request.List, item.Slot), item.Value, item.Count);
             if (!result.Accepted)
                 return result;
-            if (!(preserveClearCube && item.Type == 2 && item.Slot == 358 && item.Value == 3037))
+            if (!(preserveMaterials && item.Type is 2 or 3))
                 after = result.Plan!.After;
         }
         string reason = request.Items.Any(item => item.Type == 3) ? "delete_equipment_material" :
             request.Items.Any(item => item.Type == 2) ? "delete_skill_material" : "delete_item";
         return new(true, 0, new InventoryPlan(before, after, reason)
-            { PreserveClearCube = preserveClearCube });
+            { PreserveMaterials = preserveMaterials });
     }
     public static InventoryResult Plan(InventorySnapshot before, InventorySlot position, int value, int count)
     {

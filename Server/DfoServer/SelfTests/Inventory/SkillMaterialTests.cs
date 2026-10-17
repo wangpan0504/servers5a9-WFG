@@ -30,7 +30,7 @@ internal static class SkillMaterialTests
             spent.Plan.After.Items.IsEmpty && inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 20, "无色足额扣钱包，不建立实体、不污染原快照");
         Bytes(InventoryPackets.Delete(request, spent),
             Convert.FromHexString("010D0000000800120708E602100518021800"), "ACK18返回本次消耗5，不能把剩余15再次扣除");
-        var preserved = InventoryDeleteService.PlanBatch(inventory,request,preserveClearCube: true);
+        var preserved = InventoryDeleteService.PlanBatch(inventory,request,preserveMaterials: true);
         That(preserved.Accepted && ReferenceEquals(preserved.Plan!.Before,preserved.Plan.After) && !preserved.Plan.Changed,
             "修炼场足额无色保持原钱包快照，不生成写入");
         Bytes(InventoryPackets.Delete(request,preserved),Convert.FromHexString("010D0000000800120708E602100018021800"),
@@ -53,36 +53,42 @@ internal static class SkillMaterialTests
             var kind = CurrencyWallet.RewardKind(cubeIds[index])!.Value;
             var before = inventory with { AccountWallet = inventory.AccountWallet.Set(kind, 2) };
             var scripted = request with { Items = [new(3, (short)(354 + index), cubeIds[index], 1)] };
-            var result = InventoryDeleteService.PlanBatch(before, scripted, preserveClearCube: true);
+            var result = InventoryDeleteService.PlanBatch(before, scripted);
             That(result.Accepted && result.Plan!.Reason == "delete_equipment_material" &&
                 result.Plan.After.AccountWallet.Get(kind) == 1 && before.AccountWallet.Get(kind) == 2,
-                "六种晶块的装备脚本材料消费沿账号钱包，只减一，不借修炼场技能豁免");
+                "普通模式六种晶块的装备脚本材料消费沿账号钱包，只减一");
             var response = InventoryPackets.Delete(scripted, result);
             That(response[^3] == 3 && response[13] == 1, "装备脚本ACK保留type3和本次消耗量，不写余额");
             That(!InventoryDeleteService.PlanBatch(before, scripted with { Items = [scripted.Items[0] with { Count = 3 }] }).Accepted,
                 "装备脚本材料不足拒绝，不能按整堆归一少扣");
+            var free = InventoryDeleteService.PlanBatch(before,scripted,preserveMaterials: true);
+            That(free.Accepted && !free.Plan!.Changed && free.Plan.After.AccountWallet.Get(kind) == 2 &&
+                InventoryPackets.Delete(scripted,free)[13] == 0,"免耗玩法的六种装备脚本晶块均回删除量0，原钱包不变");
         }
         var material = new InventoryItem(1, new(InventoryListType.Main, 121), new(50000, ItemKind.Material, 3));
         var mixed = inventory with { Items = [material] };
         var entityRequest = request with { Items = [new(2,121,3,1)] };
-        var entitySpent = InventoryDeleteService.PlanBatch(mixed,entityRequest,preserveClearCube: true);
+        var entitySpent = InventoryDeleteService.PlanBatch(mixed,entityRequest);
         That(entitySpent.Accepted && entitySpent.Plan!.After.Items[0].Core.Count == 2,
-            "修炼场实体技能材料正常消耗，仅无色豁免");
+            "普通模式实体技能材料正常消耗");
         Bytes(InventoryPackets.Delete(entityRequest,entitySpent),Convert.FromHexString("010C000000080012060879100118021800"),
-            "修炼场实体材料ACK18仍回真实删除1");
+            "普通模式实体材料ACK18回真实删除1");
+        var entityKept = InventoryDeleteService.PlanBatch(mixed,entityRequest,preserveMaterials: true);
+        That(entityKept.Accepted && !entityKept.Plan!.Changed && entityKept.Plan.After.Items[0].Core.Count == 3,
+            "免耗玩法实体技能材料同样保持原数量");
         var colored = inventory with { AccountWallet = inventory.AccountWallet.Set(CurrencyKind.BlueCube,8) };
         var coloredRequest = request with { Items = [new(2,357,3036,5)] };
-        var coloredSpent = InventoryDeleteService.PlanBatch(colored,coloredRequest,preserveClearCube: true);
-        That(coloredSpent.Accepted && coloredSpent.Plan!.After.AccountWallet.Get(CurrencyKind.BlueCube) == 3 &&
+        var coloredSpent = InventoryDeleteService.PlanBatch(colored,coloredRequest,preserveMaterials: true);
+        That(coloredSpent.Accepted && coloredSpent.Plan!.After.AccountWallet.Get(CurrencyKind.BlueCube) == 8 &&
             coloredSpent.Plan.After.AccountWallet.Get(CurrencyKind.ClearCube) == 20,
-            "修炼场蓝色晶体照常扣5，不扩大无色范围");
-        Bytes(InventoryPackets.Delete(coloredRequest,coloredSpent),Convert.FromHexString("010D0000000800120708E502100518021800"),
-            "修炼场有色晶体ACK18仍回真实删除5");
+            "免耗玩法无色与有色晶体均保留，不再仅豁免无色");
+        Bytes(InventoryPackets.Delete(coloredRequest,coloredSpent),Convert.FromHexString("010D0000000800120708E502100018021800"),
+            "免耗玩法有色晶体ACK18回删除量0");
         var mixedRequest = request with { Items = [request.Items[0],new(0,121,3,1)] };
-        var mixedPreserved = InventoryDeleteService.PlanBatch(mixed,mixedRequest,preserveClearCube: true);
+        var mixedPreserved = InventoryDeleteService.PlanBatch(mixed,mixedRequest,preserveMaterials: true);
         That(mixedPreserved.Accepted && mixedPreserved.Plan!.After.AccountWallet.Get(CurrencyKind.ClearCube) == 20 &&
             mixedPreserved.Plan.After.Items[0].Core.Count == 2,
-            "修炼场混合包只豁免无色施法消耗，真实丢弃仍扣原实体");
+            "免耗玩法混合包只豁免脚本材料，真实丢弃仍扣原实体");
         That(!InventoryDeleteService.PlanBatch(mixed, request with { Items = [request.Items[0], new(2, 121, 3, 4)] }).Accepted &&
             mixed.AccountWallet.Get(CurrencyKind.ClearCube) == 20 && mixed.Items[0] == material, "后一项不足整批拒绝，不部分扣钱包");
         var ordinary = InventoryRequests.Delete(Convert.FromHexString("10000000081210001A0808001041181420032000"));

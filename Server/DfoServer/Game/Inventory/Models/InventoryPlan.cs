@@ -12,7 +12,7 @@ internal sealed class InventoryPlan
     public string Reason { get; }
     public InventoryCharacterPrecondition? CharacterPrecondition { get; }
     public ImmutableArray<InventoryItem> OverflowItems { get; }
-    public bool PreserveClearCube { get; init; }
+    public bool PreserveMaterials { get; init; }
     public byte? EquipmentSlotFlagsAfter { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;

@@ -22,7 +22,7 @@ internal static class SkillMaterialTcpTests
                 var role = repo.LoadCharacter(owner, 0);
                 var items = resources.ItemResources;
                 var inventory = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-                InventoryService.Commit(repo, owner, role, inventory.Grant(role, [new(3037, 20), new(1000, 6)]));
+                InventoryService.Commit(repo, owner, role, inventory.Grant(role, [new(3037, 20), new(3036,10), new(1000, 6)]));
             }
             peer.Create("MaterialTwin");
             peer.Select();
@@ -48,6 +48,10 @@ internal static class SkillMaterialTcpTests
             FormalDungeonTcpTests.Load(peer);
             peer.Expect(0,36);
             Spend(peer, 10);
+            peer.Send(18,Convert.FromHexString("1000000010001A0A080210E50218DC172005200001"));
+            peer.Expect(1,18,Convert.FromHexString("010D0000000800120708E502100518021800")); peer.Barrier();
+            That(fixture.Query("SELECT balance FROM account_currency_balances WHERE currency_kind=6") is [[5L]],
+                "普通副本有色技能晶块同样实际扣5，免耗玩法的策略不泄漏到普通Run");
             peer.Send(38, Convert.FromHexString("004C007017096C00150053FDD425")); peer.Barrier();
             That(Progress() == skills, "城镇和地下城扣无色不修改等级、经验或双技能树");
             string before = WalletState();
@@ -75,8 +79,8 @@ internal static class SkillMaterialTcpTests
             int cube = Enumerable.Range(0, U16(main, 3)).Select(index => 5 + index * 123).Single(offset => U16(main, offset) == 358);
             That(Balance() == 0 && U32(main, cube + 2) == 3037 && U32(main, cube + 6) == 0,
                 "账号第二角色和服务重启读取同一钱包，无色耗尽没有实体占槽");
-            That(fixture.Query("SELECT count(*) FROM currency_audit_log WHERE action_name='delete_skill_material'") is [[4L]],
-                "只有四次成功消费记入审计，拒绝和异常不记入");
+            That(fixture.Query("SELECT count(*) FROM currency_audit_log WHERE action_name='delete_skill_material'") is [[5L]],
+                "四次无色及一次蓝色成功消费记入审计，拒绝和异常不记入");
         }
         await fixture.StopAsync();
         Console.WriteLine("PASS C# TCP 无色及实体材料无获得通知、混合丢弃、战斗连续请求、失败回滚和账号重登/重启；非Windows实机");

@@ -29,7 +29,7 @@ internal sealed partial class GameSession
     public DfoServer.Game.Currency.AccountWallet AccountWallet() => owner.Execute(() =>
         Selected?.Inventory.AccountWallet ?? repository.LoadAccountWallet(owner));
     public InventoryResult DeleteInventory(InventoryDeleteRequest request, InventoryService inventory) => MutateInventory(
-        character => inventory.Delete(character,request,PreservesTrainingItems),
+        character => inventory.Delete(character,request,preserveMaterials: PreservesDungeonConsumables),
         requireTown: request.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo);
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>

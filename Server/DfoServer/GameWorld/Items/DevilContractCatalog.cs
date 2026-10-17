@@ -42,7 +42,7 @@ internal sealed class DevilContractCatalog
                 !Regex.IsMatch(PvfScript.Section(text, "stackable type"), @"\[waste\]`\s+0"))
                 throw new InvalidDataException("任务助手召唤道具声明无效: " + path);
             assistants.Add(id, new(id, Number(text, "minimum level"), Number(text, "cool time"),
-                Number(text, "cooltime group"), null, null, SummonsApc: true));
+                Number(text, "cooltime group"), SummonsApc: true));
         }
         Assistants = assistants.ToFrozenDictionary();
         string parameters = archive.ReadText(archive.Contains("etc/(r)serverparameter.etc") ? "etc/(r)serverparameter.etc" : "etc/serverparameter.etc");

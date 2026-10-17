@@ -56,7 +56,7 @@ internal sealed class ItemResources
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures);
         CashShop = CashShopCatalog.Load(archive);
         DevilContracts = new(archive, stackable, CashShop);
-        RecoveryConsumables = new(archive, stackable, DevilContracts);
+        RecoveryConsumables = new(archive, stackable, Items);
         Enchantments = new(archive, stackable);
         Enhancements = new(archive, stackable, equipment);
         CreatureEggs = new(archive, equipment, Items);

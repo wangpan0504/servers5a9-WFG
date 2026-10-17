@@ -290,7 +290,7 @@ internal static partial class DevelopmentGm
         // 新建实例在提交时才分配UID，规划阶段按分配中快照校验。
         after.Validate(allocating: true);
         var plan = result.Plan;
-        return result with { Plan = new InventoryPlan(plan.Before, after, plan.Reason, plan.CharacterPrecondition, plan.OverflowItems) { PreserveClearCube = plan.PreserveClearCube } };
+        return result with { Plan = new InventoryPlan(plan.Before, after, plan.Reason, plan.CharacterPrecondition, plan.OverflowItems) { PreserveMaterials = plan.PreserveMaterials } };
     }
 
     static InventorySlot FirstSlot(ItemTemplate template) => new(ItemSlotBoundService.List(template.Kind), ItemSlotBoundService.Range(template.Kind, 0).Start);

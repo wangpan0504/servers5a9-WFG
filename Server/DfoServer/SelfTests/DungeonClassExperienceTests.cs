@@ -36,7 +36,7 @@ internal static class DungeonClassExperienceTests
         var character = new Character(17,0,"Experience",0,new Location(38,1,450,234),null)
             { Level = 16, Job = 3, ActiveMainQuests = [new(0,3145,1) { AcceptanceId = Guid.NewGuid() }] };
         That(DungeonEntryPlan.TryCreate(definition,character,7142,0,0,out var entry,out _,resolveMaze: _ => resolved) &&
-            entry is { IsClassExperience: true, UsesFatigue: false, DisableClearReward: true, QuestAcceptances.IsEmpty: true,
+            entry is { IsClassExperience: true, UsesFatigue: false, HasFreeCombatConsumption: true, DisableClearReward: true, QuestAcceptances.IsEmpty: true,
                 InitializationCounterSupported: false }, "体验计划冻结免费/禁奖励策略，不绑定正式任务或初始化计数");
         That(!DungeonEntryPlan.TryCreate(definition,character,7142,3145,0,out _,out _,resolveMaze: _ => resolved) &&
             !DungeonEntryPlan.TryCreate(definition,character,7142,0,1,out _,out _,resolveMaze: _ => resolved),

@@ -29,15 +29,16 @@ internal sealed partial class GameSession
         if (activityBlocked || captured.Character is not { } character) return Reject("invalid-state");
         if (!service.TryDefinition(request.ItemId, out var definition)) return Reject("unsupported-template");
         if (definition.SummonsApc && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("summon_requires_dungeon");
+        if (definition.RequiresDungeon && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("projectile_requires_dungeon");
         var preliminary = service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds());
         return owner.Execute(() =>
         {
             if (ClosedUse(service, request) is { } repeated) return repeated;
             if (!CanPublishConsumable(captured.Guard) || !CanUseConsumable())
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
-            if (definition.SummonsApc && (formalDungeon?.CharacterDead != false ||
+            if ((definition.SummonsApc || definition.RequiresDungeon) && (formalDungeon?.CharacterDead != false ||
                 formalDungeon.Run.Phase != DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon))
-                return Reject("summon_requires_living_dungeon_character");
+                return Reject(definition.SummonsApc ? "summon_requires_living_dungeon_character" : "projectile_requires_living_dungeon_character");
             var previous = usedConsumables.GetValueOrDefault(definition.CoolGroup);
             if (previous is not null && previous.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(definition.CoolTime))
             {
@@ -48,16 +49,17 @@ internal sealed partial class GameSession
             var source = character.Inventory.Find(request.Position)!;
             if (source.Core.IsExpired(service.Clock.GetUtcNow().ToUnixTimeSeconds()))
                 return Reject("source-expired");
-            bool preserve = PreservesTrainingItems;
+            bool preserve = PreservesDungeonConsumables;
             var actual = preserve ? new InventoryResult(true,0,new(character.Inventory,character.Inventory,
-                "training_use_recovery_consumable",new(character))) : preliminary;
+                "free_dungeon_use_consumable",new(character))) : preliminary;
             pendingConsumableUse = actual.Plan;
             var result = CommitInventory(character, actual);
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
             usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock);
-            return new ConsumableUseResult(ConsumableUseOutcome.Committed, preserve ? "training-preserved" : "committed", result, UseGuard())
-                { SourceUid = source.Uid, PreserveSource = preserve };
+            return new ConsumableUseResult(ConsumableUseOutcome.Committed, preserve ? "dungeon-preserved" : "committed", result, UseGuard())
+                { SourceUid = source.Uid, PreserveSource = preserve,
+                    NativeNoConsumption = preserve && !definition.EffectsAfterAcknowledgement };
         });
     }
 

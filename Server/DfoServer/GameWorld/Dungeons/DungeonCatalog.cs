@@ -105,6 +105,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     // [tournament dungeon] 1：魂·黄龙/青龙大会等比赛副本（实验性，依据来自 Go 项目反汇编）。
     public bool IsTournament => RawSections.Where(row => row.Tag == "tournament dungeon").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
+    public bool AllowsPractice => !IsTutorial && !IsClassExperience && !IsTournament && Id != 5000 &&
+        RawSections.Where(row => row.Tag == "prohibit practice").All(row => row.Tokens is [{ Type: 0, Value: 0 }]);
     // 强袭任务副本均带 [disable black diamond card reward]（无值标记）：通关翻牌不提供黑钻额外卡。
     public bool DisableBlackDiamondCardReward => RawSections.Any(row => row.Tag == "disable black diamond card reward" && row.Tokens.Count == 0);
     public bool IsClassExperience => Id == 7142 &&
