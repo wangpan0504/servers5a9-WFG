@@ -742,6 +742,22 @@ CREATE TABLE character_collectbox_expirations(
     PRIMARY KEY(character_id,box_index),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_skill_switch_inventory(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    skill_id INTEGER NOT NULL CHECK(skill_id BETWEEN 0 AND 65534),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+CREATE TABLE character_skill_switch_inventory_items(
+    character_id INTEGER NOT NULL,
+    equipment_part INTEGER NOT NULL CHECK(equipment_part BETWEEN 0 AND 35),
+    item_uid INTEGER NOT NULL CHECK(item_uid>0),
+    item_id INTEGER NOT NULL CHECK(item_id>0),
+    PRIMARY KEY(character_id,equipment_part),
+    UNIQUE(character_id,item_uid),
+    FOREIGN KEY(character_id) REFERENCES character_skill_switch_inventory(character_id) ON DELETE CASCADE,
+    FOREIGN KEY(item_uid) REFERENCES character_inventory_items(item_uid) ON DELETE CASCADE
+);
 CREATE TRIGGER title_book_exclusive_insert BEFORE INSERT ON character_title_book_slots
 WHEN EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=NEW.item_uid) OR
      EXISTS(SELECT 1 FROM mailbox_attachments WHERE item_uid=NEW.item_uid)

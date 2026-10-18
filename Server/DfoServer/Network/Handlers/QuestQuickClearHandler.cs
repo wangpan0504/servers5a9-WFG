@@ -7,6 +7,7 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
+using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Game.Inventory.Models;
@@ -115,6 +116,13 @@ internal sealed class QuestQuickClearHandler(QuestCatalog quests, QuestConnectio
             receipt.Character.Inventory.Find(slot)?.Core.Kind==ItemKind.Quest).ToArray();
         if(added.Length>0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,InventoryListType.Main,added),action+"_items",guard);
+        await SkillSwitchInventoryProjection.RefreshStateAsync(
+            context,
+            plan.Expected.SkillSwitchInventory,
+            plan.Expected.Inventory,
+            receipt.Character,
+            guard,
+            action+"_skill_switch_inventory");
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),action+"_active",guard);
         await projection.RefreshAsync(context,receipt.Character,guard, restoreCompleted: false);
         // 完成表放在完整活动/可接投影之后，恢复答案和本角色级联标记。

@@ -10,6 +10,7 @@ using DfoServer.Game.Quests;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Session;
+using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
@@ -788,6 +789,8 @@ internal static class FormalDungeonPublicationTests
             return result;
         }
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);
+        public Character CommitSkillSwitchInventory(AccountOwners.Lease owner, SkillSwitchInventoryPlan plan) =>
+            inner.CommitSkillSwitchInventory(owner, plan);
         public Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan) =>
             inner.CommitCollectBox(owner, plan);
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,

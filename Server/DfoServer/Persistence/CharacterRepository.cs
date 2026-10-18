@@ -281,6 +281,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             ActiveMainQuests = active.ToArray(),
             Learning = ReadLearning(db, character.Id, transaction),
             Inventory = ReadInventory(db, character.Id, transaction, shared),
+            SkillSwitchInventory = ReadSkillSwitchInventory(db, character.Id, transaction),
             DungeonState = ReadDungeonState(db, character.Id, transaction),
             Tutorial = ReadTutorial(db, character.Id, transaction),
             Fatigue = ReadFatigue(db, character.Id, transaction),

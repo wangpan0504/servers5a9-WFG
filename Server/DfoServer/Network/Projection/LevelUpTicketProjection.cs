@@ -32,7 +32,11 @@ internal sealed class LevelUpTicketProjection(InventoryProjection inventory, Cha
         var inventoryResult = new InventoryResult(true,0,plan.Inventory)
         {
             Receipt=new(character,receipt.Generation,receipt.SelectionEpoch)
-                { Phase=receipt.Phase,DungeonIdentity=receipt.Identity }
+            {
+                Phase=receipt.Phase,
+                DungeonIdentity=receipt.Identity,
+                PreviousSkillSwitchInventory=plan.Expected.SkillSwitchInventory
+            }
         };
         await inventory.RefreshAsync(context, inventoryResult, new HashSet<InventorySlot> { source.Item.Position }, refreshEquipment:false);
         var state = character.DungeonState ?? throw new InvalidOperationException("升级券缺少成长附属状态");

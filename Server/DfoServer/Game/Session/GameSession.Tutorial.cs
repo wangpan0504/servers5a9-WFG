@@ -49,7 +49,12 @@ internal sealed partial class GameSession
             var commit = repository.CommitTutorialCheckpoint(owner, checkpoint);
             Selected = commit.Character;
             var receipt = new InventoryCommitReceipt(Selected, owner.Generation, SelectionEpoch)
-                { Phase = Phase, DungeonIdentity = capture.Identity, PreviousQuests = expected.ActiveMainQuests };
+            {
+                Phase = Phase,
+                DungeonIdentity = capture.Identity,
+                PreviousQuests = expected.ActiveMainQuests,
+                PreviousSkillSwitchInventory = expected.SkillSwitchInventory
+            };
             var rows = TutorialRewards.Rows(inventoryPlan, receipt.Index);
             return new TutorialFlagResult(0, Selected, owner.Generation, SelectionEpoch, rows,
                 grant with { Receipt = receipt })

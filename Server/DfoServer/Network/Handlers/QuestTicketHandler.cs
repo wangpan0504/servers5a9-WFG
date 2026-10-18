@@ -101,6 +101,13 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             receipt.Character.Inventory.Find(slot)?.Core.Kind==ItemKind.Quest).ToArray();
         if(added.Length>0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,InventoryListType.Main,added),"quest_ticket_special_items",Guard);
+        await SkillSwitchInventoryProjection.RefreshStateAsync(
+            context,
+            receipt.Commit.Plan.Expected.SkillSwitchInventory,
+            receipt.Commit.Plan.Expected.Inventory,
+            receipt.Character,
+            Guard,
+            "quest_ticket_skill_switch_inventory");
         if (receipt.Character.EquipmentSlotFlags!=receipt.Commit.Plan.Expected.EquipmentSlotFlags)
             await (levelProjection ?? throw new InvalidOperationException("指定券槽位发布缺少角色投影"))
                 .PlayerAsync(context,receipt.Character,"quest_ticket_slots",Guard);

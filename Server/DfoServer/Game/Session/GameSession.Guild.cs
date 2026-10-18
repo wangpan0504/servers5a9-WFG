@@ -51,7 +51,8 @@ internal sealed partial class GameSession
         var receipt = new InventoryCommitReceipt(Selected, owner.Generation, SelectionEpoch)
         {
             Phase = Phase,
-            PreviousQuests = previous
+            PreviousQuests = previous,
+            PreviousSkillSwitchInventory = expected.SkillSwitchInventory
         };
         var change = new InventoryResult(true, 0, plan.Inventory) { Receipt = receipt };
         return (result, change);

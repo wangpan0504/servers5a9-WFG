@@ -3,6 +3,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
+using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
@@ -27,6 +28,13 @@ internal sealed class AdventureCapsuleHandler(AdventureCapsuleService service, C
                 new(0, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0)), "adventure_capsule_experience", Guard);
             if (SkillPackets.BindingsChanged(previous.Learning, character.Learning))
                 await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "adventure_capsule_skills", Guard);
+            await SkillSwitchInventoryProjection.RefreshStateAsync(
+                context,
+                previous.SkillSwitchInventory,
+                previous.Inventory,
+                character,
+                Guard,
+                "adventure_capsule_skill_switch_inventory");
             await levels.RefreshAsync(context, character, previous.Level, "adventure_capsule_level", Guard);
             await context.Notify(NotiPacketType.ADVENTURE_INFO, AdventurePackets.Information(character.Id, snapshot, service.Catalog,
                 snapshot.Representatives(service.Catalog), context.Channel.ServerIndex), "adventure_capsule_information", Guard);

@@ -42,7 +42,11 @@ internal sealed class ClassChangeHandler(ClassChangeService service, CharacterLe
         var changed = new InventoryResult(true, 0, plan.Inventory)
         {
             Receipt = new(character, result.Generation, result.Epoch)
-                { Phase = result.Phase, PreviousQuests = plan.Expected.ActiveMainQuests }
+            {
+                Phase = result.Phase,
+                PreviousQuests = plan.Expected.ActiveMainQuests,
+                PreviousSkillSwitchInventory = plan.Expected.SkillSwitchInventory
+            }
         };
         await inventory.RefreshAsync(context, changed, suppressMainNotice: true);
         if (!plan.Expected.ActiveMainQuests.SequenceEqual(character.ActiveMainQuests))

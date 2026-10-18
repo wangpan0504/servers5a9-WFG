@@ -3,6 +3,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
@@ -37,6 +38,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
         await context.Reply(opcode, [1], "skill_commands_committed", Guard);
         await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning,
             id => catalog.Get(receipt.Character.Job, id).DefaultCommand), "skill_commands_info", Guard);
+        await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
 
@@ -49,6 +51,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing combo receipt");
         await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(receipt.Character.Learning, refresh: true),
             "skill_combo_committed", () => context.Session.CanPublishLearning(receipt));
+        await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
 
@@ -64,6 +67,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
         if (result.RequiresSynchronization)
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "skill_combo_slots_info", Guard);
         await context.Reply(CmdPacketType.COMBO_SKILL_EXTENSION_QUICK_SLOT_RESET, [1], "skill_combo_slots_committed", Guard);
+        await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
 
@@ -82,6 +86,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
         await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "skill_reset_info", Guard);
         if (receipt.Character.Job == 9)
             await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(receipt.Character.Learning, refresh: true), "skill_reset_combo", Guard);
+        await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
 
@@ -131,6 +136,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
             if (receipt.Character.Job == 9)
                 await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(receipt.Character.Learning, refresh: true),
                     "skill_purchase_combo", () => context.Session.CanPublishLearning(receipt));
+            await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
             return CommandResult.Handled;
         }
 

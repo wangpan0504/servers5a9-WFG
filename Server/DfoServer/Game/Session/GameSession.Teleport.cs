@@ -37,7 +37,11 @@ internal sealed partial class GameSession
             InvalidateImageCommunication();
             var inventory = new InventoryResult(true, 0, plan.Inventory)
             {
-                Receipt = new(Selected, owner.Generation, SelectionEpoch) { PreviousQuests = character.ActiveMainQuests }
+                Receipt = new(Selected, owner.Generation, SelectionEpoch)
+                {
+                    PreviousQuests = character.ActiveMainQuests,
+                    PreviousSkillSwitchInventory = character.SkillSwitchInventory
+                }
             };
             return new TeleportResult("committed", new(new(Selected, owner.Generation, SelectionEpoch), inventory));
         });

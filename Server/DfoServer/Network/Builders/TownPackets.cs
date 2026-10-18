@@ -194,8 +194,12 @@ internal static class TownPackets
             EquipmentProtocolWriter.Player(writer, character.Inventory);
             writer.Write(0u);
             writer.Write((byte)0); // 023C3A90: equipment count, scalar, extra list count.
-            writer.Write((ushort)0);
-            writer.Write((byte)0); // 0267BFA0: empty auxiliary inventory.
+            // 0267BFA0：指定技能及登记项；每项的完整物品块由同一背包条目编码器生成。
+            SkillSwitchInventoryPackets.WriteUserInfo(
+                writer,
+                character.SkillSwitchInventory,
+                character.Inventory,
+                (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds());
             EquipmentProtocolWriter.NameTag(writer, character.Inventory);
             // 02676C60 -> 02676660: active set, two (u8 count; u16 id/u8 level) skill lists.
             writer.Write(character.Skills.Length == 0 ? (byte)0xff : (byte)0);

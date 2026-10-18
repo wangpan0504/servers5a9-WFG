@@ -9,6 +9,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Mailbox;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Currency;
+using DfoServer.Game.Skills;
 
 namespace DfoServer.Persistence;
 
@@ -307,6 +308,9 @@ internal sealed partial class CharacterRepository
         WriteShopPurchases(db, transaction, owner.Account, expected.Id, plan.Before, inventory);
         inventory = WriteEpicPieces(db, transaction, owner, expected.Id, plan.Before, inventory, plan.Reason);
         WriteOverflowMail(db, transaction, owner, current, plan);
+        SkillSwitchInventoryState skillSwitch = current.SkillSwitchInventory.Reconcile(inventory, current.Skills);
+        if (!skillSwitch.Same(current.SkillSwitchInventory))
+            WriteSkillSwitchInventory(db, transaction, current.Id, owner.Account, skillSwitch);
         var active = current.ActiveMainQuests;
         if (quests is not null && !plan.Reason.StartsWith("quest_", StringComparison.Ordinal))
         {
@@ -316,7 +320,7 @@ internal sealed partial class CharacterRepository
         }
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
         return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning,
-            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags };
+            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags, SkillSwitchInventory = skillSwitch };
     }
 
     static void WriteQuestConditions(SqliteConnection db, SqliteTransaction transaction, ushort characterId,

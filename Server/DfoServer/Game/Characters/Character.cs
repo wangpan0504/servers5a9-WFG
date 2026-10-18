@@ -1,6 +1,7 @@
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Skills;
 using System.Collections.Immutable;
 namespace DfoServer.Game.Characters;
 
@@ -31,6 +32,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public ActiveMainQuest[] ActiveMainQuests { get; init; } = [];
     public CharacterLearningState Learning { get; init; } = CharacterLearningState.Uninitialized;
     public InventorySnapshot Inventory { get; init; } = InventorySnapshot.Empty;
+    public SkillSwitchInventoryState SkillSwitchInventory { get; init; } = SkillSwitchInventoryState.Empty;
     public DfoServer.Game.CollectBox.CollectBoxState CollectBox { get; init; } = DfoServer.Game.CollectBox.CollectBoxState.Empty;
     public CharacterDungeonState? DungeonState { get; init; }
     public CharacterFatigueState? Fatigue { get; init; }

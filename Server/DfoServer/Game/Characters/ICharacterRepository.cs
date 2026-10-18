@@ -4,6 +4,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Skills;
 namespace DfoServer.Game.Characters;
 // 角色用例依赖的持久化边界；SQLite、迁移与离线导入细节不进入 Game。
 // 角色改名：独立接口，避免所有仓库包装类都要实现；只由 GM 使用。
@@ -71,6 +72,7 @@ internal interface ICharacterRepository
         DungeonGroundPickupPreparation prepared, InventoryPlan plan);
     Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
+    Character CommitSkillSwitchInventory(AccountOwners.Lease owner, SkillSwitchInventoryPlan plan);
     Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan);
     Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan);
     InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId);

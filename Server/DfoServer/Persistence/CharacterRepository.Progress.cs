@@ -129,6 +129,7 @@ internal sealed partial class CharacterRepository
                 throw new InvalidDataException("不是写入命令");
         }
 
+        ReconcileSkillSwitchSkill(db, tx, current.Id);
         var updated = Require(db, tx, owner.Account, request.Name);
         if (updated.Level != current.Level || updated.GrowType != current.GrowType ||
             updated.AcceptedStoryLevel != current.AcceptedStoryLevel || !updated.CompletedQuests.SequenceEqual(current.CompletedQuests))
