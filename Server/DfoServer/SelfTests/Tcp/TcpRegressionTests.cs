@@ -257,6 +257,7 @@ internal static class TcpRegressionTests
         ("booster-equipment", BoosterEquipmentTcpTests.RunAsync),
         ("authentication", AuthenticationTcpTests.RunAsync),
         ("native-login", NativeLoginTcpTests.RunAsync),
+        ("native-channel", NativeChannelTcpTests.RunAsync),
         ("settings", ClientSettingsTcpTests.RunAsync),
         ("emotion", EmotionTcpTests.RunAsync),
         ("presence", TownPresenceTcpTests.RunAsync),

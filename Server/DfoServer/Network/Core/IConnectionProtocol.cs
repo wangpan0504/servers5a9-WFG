@@ -38,6 +38,7 @@ internal sealed class ConnectionContext(int id, IPAddress peer, Stream stream, C
     }
 
     public void CaptureSent(byte[] frame) => capture?.Write(Id, channel, true, frame);
+    public void CaptureNative(int wireLength, int bodyLength) => capture?.WriteNative(Id, wireLength, bodyLength);
 
     public void Disconnect()
     {

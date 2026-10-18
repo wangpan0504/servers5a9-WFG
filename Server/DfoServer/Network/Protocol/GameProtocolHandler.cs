@@ -18,14 +18,15 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     GuildProjection? guild = null,
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     DfoServer.Game.Creatures.CreatureService? creatures = null, CreatureProjection? creatureProjection = null,
-    DfoServer.GameWorld.Quests.QuestStageGraph? stageGraph = null, DfoServer.GameWorld.Items.BoosterCatalog? boosters = null) : IConnectionProtocol
+    DfoServer.GameWorld.Quests.QuestStageGraph? stageGraph = null, DfoServer.GameWorld.Items.BoosterCatalog? boosters = null,
+    NativeChannel? native = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
         using var login = await loginHandler.AuthenticateAsync(connection);
         if (login is null)
             return;
-        await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = Convert.ToHexString(body.Span) }), connection.CaptureSent);
+        await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsAuthentication(opcode) ? "[login-redacted]" : Convert.ToHexString(body.Span) }), connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
             passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
@@ -57,11 +58,14 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             session.GuildPermitNoticeArrived = notice => guild.Notice(context, notice);
             session.GuildPermitResolved = outcome => guild.ResolvedAsync(context, outcome);
         }
+        NativeChannel.Registration? nativeRegistration = null;
         try
         {
             online.Register(login.Owner, session);
+            nativeRegistration = native?.Register(context);
             adventure?.Prepare(context);
-            await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options), login.Channel.Port), "endpoint");
+            await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options),
+                native?.Port ?? login.Channel.Port, nativeRegistration?.Token ?? 0), "endpoint");
             var roster = session.PrepareRoster();
             await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "roster",
                 () => session.CanPublishRoster(roster));
@@ -101,6 +105,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         finally
         {
+            nativeRegistration?.Dispose();
             if (context.BoosterUses is { } boosterUses) await boosterUses.DisposeAsync();
             if (context.Creatures is { } creatureClock) await creatureClock.DisposeAsync();
             if (cubeConsumption is not null) await cubeConsumption.DisposeAsync();

@@ -30,6 +30,14 @@ internal static class CommandLineTests
         That(launch.PacketCapture && launch.Options["--server-ip"] == "auto" && launch.Options["--packet-http-port"] == "18081" &&
             launch.Arguments.SequenceEqual(["capture files"]), "runtime options and capture path remain separate");
         That(ServerCommand.Parse(["--packet-capture"]).Arguments.Length == 0, "capture defaults to fixed log directory");
+        That(ServerOptions.Load().NativePort == 0 &&
+            ServerOptions.Load(ServerCommand.Parse(["--native-port", "25003"]).Options).NativePort == 25003,
+            "Native 默认由系统分配独立端口，也接受显式端口");
+        foreach (string port in new[] { "-1", "65536", "23100", "23101" }) Reject(["--native-port", port]);
+        Reject(["--native-port", "25003", "--gm-port", "25003"]);
+        Reject(["--native-port", "25003", "--gm-web-port", "25003"]);
+        Reject(["--native-port", "25003", "--packet-http-port", "25003"]);
+        Reject(["--native-port", "25003", "--channel-entry-port-base", "25003"]);
         That(ServerOptions.Load(ServerCommand.Parse(["--channel-entry-port-base", "23103"]).Options).ChannelEntryPortBase == 23103,
             "分类入口端口范围使用正式CLI配置，启动脚本无需修改");
         (string[] Arguments, ServerCommandKind Kind)[] supported =

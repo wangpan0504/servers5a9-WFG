@@ -52,6 +52,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 AdvertisedAddress = connectionAddress ? "connection" : "127.0.0.1",
                 ChannelPort = ports[0],
                 GamePort = ports[1],
+                NativePort = 0,
                 GmPort = gm ? ports[2] : 0,
                 PacketHttpPort = packetHttp ? ports[gm ? 3 : 2] : 0,
                 DataDirectory = Path.Combine(Root, "Data"),

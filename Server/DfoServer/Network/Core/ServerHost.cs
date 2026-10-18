@@ -9,7 +9,8 @@ using DfoServer.Network.Management;
 namespace DfoServer.Network;
 
 internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol,
-    Func<CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels)
+    Func<CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels,
+    Protocol.NativeChannel? native = null)
 {
     readonly ConcurrentDictionary<int, Task> active = new();
     int counter;
@@ -39,10 +40,13 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             if (http.IsFaulted) await http;
             starting = "Game listeners";
             gameChannels.Start();
+            starting = "Native listener";
+            native?.Start();
             var primary = gameChannels.Bound.Single(row => row.Endpoint.Entry.Identity.Number == GameWorld.Channels.ChannelCatalog.PrimaryChannelNumber);
             log.Write("listening", new { ChannelName = "#ch." + primary.Endpoint.Entry.Identity.Number,
                 Channel = channel.LocalEndpoint.ToString(), Game = primary.Listener.LocalEndpoint.ToString(), ChannelEntries = gameChannels.Endpoints,
                 AdvertisedGame = $"{options.AdvertisedAddress}:{options.GamePort}",
+                Native = native is null ? "disabled" : native.Listener.LocalEndpoint.ToString(),
                 Gm = options.GmPort == 0 ? "disabled" : $"127.0.0.1:{options.GmPort}",
                 GmWeb = options.GmWebPort == 0 ? "disabled" : $"127.0.0.1:{options.GmWebPort}",
                 PacketHttp = options.PacketHttpPort == 0 ? "disabled" : $"127.0.0.1:{options.PacketHttpPort}",
@@ -54,12 +58,14 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             File.WriteAllText(Path.Combine(options.LogDirectory, "ready.json"), JsonSerializer.Serialize(new
             {
                 options.ChannelPort, options.GamePort, options.GmPort, options.GmWebPort, options.PacketHttpPort, options.AdvertisedAddress, options.ListenAddress,
-                options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId, ChannelEntries = gameChannels.Endpoints
+                options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId, ChannelEntries = gameChannels.Endpoints,
+                NativePort = native?.Port ?? 0
             }));
             log.Write("server_ready", new { Pid = Environment.ProcessId });
             starting = "Running listeners";
             listeners = [Accept(channel, channelProtocol, true, lifetime.Token),
-                .. gameChannels.Bound.Select(entry => Accept(entry.Listener, gameProtocol, false, lifetime.Token, entry.Endpoint))];
+                .. gameChannels.Bound.Select(entry => Accept(entry.Listener, gameProtocol, false, lifetime.Token, entry.Endpoint)),
+                .. (native is null ? Array.Empty<Task>() : [Accept(native.Listener, native, false, lifetime.Token)])];
             // 某个监听失败时取消整个实例，避免 Task.WhenAll 永久等待另一个监听。
             Task[] workers = [.. listeners];
             if (runManagement is not null)
@@ -81,6 +87,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             lifetime.Cancel();
             channel.Stop();
             gameChannels.Stop();
+            native?.Stop();
             try
             {
                 await Task.WhenAll([.. listeners, gm, http]);
@@ -134,8 +141,9 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
         try
         {
-            capture?.Register(id, channel, peer);
-            log.Write("connected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME", Peer = client.Client.RemoteEndPoint?.ToString(),
+            bool isNative = protocol is Protocol.NativeChannel;
+            capture?.Register(id, channel, peer, native: isNative);
+            log.Write("connected", new { Connection = id, Protocol = isNative ? "NATIVE" : channel ? "CHANNEL" : "GAME", Peer = client.Client.RemoteEndPoint?.ToString(),
                 Local = client.Client.LocalEndPoint?.ToString() });
             client.NoDelay = true;
             await protocol.RunAsync(new(id, peer.Address, client.GetStream(), lifetime, channel, capture, endpoint,
@@ -148,7 +156,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         finally
         {
             capture?.Remove(id);
-            log.Write("disconnected", new { Connection = id, Protocol = channel ? "CHANNEL" : "GAME" });
+            log.Write("disconnected", new { Connection = id, Protocol = protocol is Protocol.NativeChannel ? "NATIVE" : channel ? "CHANNEL" : "GAME" });
             connections.Release();
         }
     }

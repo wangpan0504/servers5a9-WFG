@@ -16,7 +16,7 @@ internal sealed class GameChannelListeners(ServerOptions options, ChannelCatalog
         if (bound.Count != 0) throw new InvalidOperationException("分类入口已启动");
         int count = catalog.Channels.Count - 1;
         int first = options.ChannelEntryPortBase;
-        int[] reserved = [options.ChannelPort, options.GamePort, options.GmPort, options.PacketHttpPort];
+        int[] reserved = [options.ChannelPort, options.GamePort, options.NativePort, options.GmPort, options.PacketHttpPort];
         if (first != 0 && (first + count - 1 > 65535 ||
             reserved.Any(port => port != 0 && port >= first && port < first + count)))
             throw new InvalidDataException("分类入口端口范围越界或与主监听重复");

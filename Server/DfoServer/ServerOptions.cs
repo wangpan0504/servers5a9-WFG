@@ -15,6 +15,8 @@ internal sealed record ServerOptions
     public string AdvertisedAddress { get; init; } = "127.0.0.1";
     public int ChannelPort { get; init; } = 23100;
     public int GamePort { get; init; } = 23101;
+    // Native 独立传输监听；0 由系统分配，实际端口通过 LOGIN 端点返回。
+    public int NativePort { get; init; }
     public int ChannelEntryPortBase { get; init; }
     // 0 表示关闭。监听固定在 127.0.0.1，不跟随 ListenAddress。
     public int GmPort { get; init; }
@@ -56,6 +58,7 @@ internal sealed record ServerOptions
                     "--listen-ip" => value with { ListenAddress = argument },
                     "--channel-port" => value with { ChannelPort = Number(argument, name) },
                     "--game-port" => value with { GamePort = Number(argument, name) },
+                    "--native-port" => value with { NativePort = Number(argument, name) },
                     "--channel-entry-port-base" => value with { ChannelEntryPortBase = Number(argument, name) },
                     "--gm-port" => value with { GmPort = Number(argument, name) },
                     "--gm-web-port" => value with { GmWebPort = Number(argument, name) },
@@ -84,6 +87,10 @@ internal sealed record ServerOptions
             new[] { value.ChannelPort, value.GamePort, value.GmPort, value.PacketHttpPort }.Contains(value.GmWebPort) ||
             value.GmWebPort != 0 && value.ChannelEntryPortBase != 0 && value.GmWebPort == value.ChannelEntryPortBase)
             throw new InvalidDataException("Invalid GM web port configuration");
+        if (value.NativePort is < 0 or > 65535 || value.NativePort != 0 &&
+            (new[] { value.ChannelPort, value.GamePort, value.GmPort, value.GmWebPort, value.PacketHttpPort }.Contains(value.NativePort) ||
+             value.ChannelEntryPortBase != 0 && value.NativePort == value.ChannelEntryPortBase))
+            throw new InvalidDataException("Invalid native port configuration");
         // 种子逐条写库并在启动时构造条目快照，必须有上限；0 表示不种子。
         if (value.AuctionSeedCount > 10_000)
             throw new InvalidDataException("--auction-seed 必须在 0..10000 之间");

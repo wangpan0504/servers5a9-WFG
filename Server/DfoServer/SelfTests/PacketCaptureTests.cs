@@ -107,6 +107,19 @@ internal static class PacketCaptureTests
             failedHistory.Write(1, false, true, sent);
             TestCheck.That(!failedHistory.IsEnabled && failedHistory.Recent().Length == 1,
                 "文件抓包失败不关闭独立的HTTP内存记录");
+            using var native = new PacketCapture(Path.Combine(root, "native"), retainRecent: true);
+            native.Register(7, false, new(IPAddress.Loopback, 12007), native: true);
+            native.Write(8, false, true, GameFrame.Build(1, 1, 2, secret));
+            native.Write(8, false, true, GameFrame.Build(0, 1, 0, [0xab, 0xcd]));
+            native.WriteNative(7, 32, 19);
+            native.Flush();
+            TestCheck.That(native.Recent() is [{ Redacted: true, BodyHex: "" }, { Redacted: false, BodyHex: "ABCD" },
+                { Protocol: "NATIVE", BodyLength: 19, TotalLength: 32, Redacted: true, BodyHex: "" }],
+                "LOGIN关联正文脱敏，NOTI1握手仍保留，Native仅留长度");
+            TestCheck.That(native.Sessions() is [{ Protocol: "NATIVE", ReceivedPackets: 1 }], "Native传输使用独立协议摘要");
+            string nativeText = ReadCapture(Path.Combine(root, "native", "packet_log.txt"));
+            TestCheck.That(!nativeText.Contains(BitConverter.ToString(secret).Replace('-', ' ')) &&
+                nativeText.Contains("native association and payload redacted"), "文件不输出LOGIN关联值或Native原始帧");
         }
         finally
         {

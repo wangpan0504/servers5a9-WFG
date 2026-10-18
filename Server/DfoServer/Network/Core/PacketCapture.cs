@@ -15,7 +15,7 @@ internal sealed record PacketSessionSnapshot(int ConnectionId, string Protocol, 
 // 只记录完整应用层帧；关闭时不创建实例或文件，写入失败不终止游戏连接。
 internal sealed class PacketCapture : IDisposable
 {
-    sealed class PacketSession(int connection, bool channel, IPEndPoint peer)
+    sealed class PacketSession(int connection, string protocol, IPEndPoint peer)
     {
         readonly DateTimeOffset connectedAt = DateTimeOffset.Now;
         long received;
@@ -36,7 +36,7 @@ internal sealed class PacketCapture : IDisposable
         public PacketSessionSnapshot Snapshot()
         {
             int opcode = Volatile.Read(ref lastOpcode);
-            return new(connection, channel ? "CHANNEL" : "GAME", peer.ToString(), connectedAt,
+            return new(connection, protocol, peer.ToString(), connectedAt,
                 Interlocked.Read(ref received), Interlocked.Read(ref sent), opcode < 0 ? null : (ushort)opcode);
         }
     }
@@ -71,9 +71,9 @@ internal sealed class PacketCapture : IDisposable
         }
     }
 
-    public void Register(int connection, bool channel, IPEndPoint peer)
+    public void Register(int connection, bool channel, IPEndPoint peer, bool native = false)
     {
-        if (Volatile.Read(ref disposed) == 0 && sessions?.TryAdd(connection, new(connection, channel, peer)) == true)
+        if (Volatile.Read(ref disposed) == 0 && sessions?.TryAdd(connection, new(connection, native ? "NATIVE" : channel ? "CHANNEL" : "GAME", peer)) == true)
             Interlocked.Increment(ref totalConnections);
     }
 
@@ -97,7 +97,7 @@ internal sealed class PacketCapture : IDisposable
         if (sessions?.TryGetValue(connection, out var session) == true)
             session.Count(send, opcode);
         // 连同畸形认证包一起脱敏；旧扩展包也可能含凭据，不输出 body 或 raw。
-        bool redact = !channel && !send && IsAuthentication(opcode);
+        bool redact = !channel && (!send || frame[0] == 1) && IsAuthentication(opcode);
         ReadOnlySpan<byte> body = frame[Math.Min(header, frame.Length)..];
         if (recent is not null)
         {
@@ -137,6 +137,27 @@ internal sealed class PacketCapture : IDisposable
         lock (recentGate)
             snapshot = recent?.ToArray() ?? [];
         return connectionId is { } id ? snapshot.Where(packet => packet.ConnectionId == id).ToArray() : snapshot;
+    }
+
+    // Native 每帧携带连接关联材料。尚未解释的内部载荷也只记录长度，不输出 raw 或关联值。
+    public void WriteNative(int connection, int wireLength, int bodyLength)
+    {
+        if (Volatile.Read(ref disposed) != 0) return;
+        var timestamp = DateTimeOffset.Now;
+        Interlocked.Increment(ref totalReceived);
+        if (sessions?.TryGetValue(connection, out var session) == true) session.Count(false, 0);
+        if (recent is not null)
+        {
+            var snapshot = new PacketTraceSnapshot(timestamp, connection, "NATIVE", "RECV", 1, 0,
+                "NATIVE", wireLength, bodyLength, "", false, true);
+            lock (recentGate)
+            {
+                if (Volatile.Read(ref disposed) != 0) return;
+                if (recent.Count == MaximumRecentPackets) recent.Dequeue();
+                recent.Enqueue(snapshot);
+            }
+        }
+        Append($"{timestamp:O} connection={connection} protocol=NATIVE RECV len={wireLength} body=({bodyLength}B) [native association and payload redacted]\n");
     }
 
     internal static bool IsAuthentication(ushort opcode) => opcode is

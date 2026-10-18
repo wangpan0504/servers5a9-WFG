@@ -38,6 +38,8 @@ internal static class SelfTestRunner
         DisjointSpecialTests.RunCore();
         SkillSwitchInventoryTests.RunCore();
         FrameCrcTests.Run();
+        await NativeFrameTests.RunAsync();
+        await NativeChannelTests.RunAsync();
         CreatureProjectionTests.RunCore();
         await BufferedLogTests.RunAsync();
         await ServerLogTests.RunAsync();

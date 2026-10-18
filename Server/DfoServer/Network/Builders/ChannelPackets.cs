@@ -64,12 +64,12 @@ internal static class ChannelPackets
         return output.ToArray();
     }
 
-    public static byte[] Endpoint(string address, int port)
+    public static byte[] Endpoint(string address, int port, uint association = 0)
     {
         using var s = new MemoryStream();
         using var w = new BinaryWriter(s);
         w.Write(new byte[] { 1, 1, 1, 0, 1 });
-        w.Write(0u);
+        w.Write(association);
         byte[] ip = Encoding.ASCII.GetBytes(address);
         w.Write(ip.Length);
         w.Write(ip);

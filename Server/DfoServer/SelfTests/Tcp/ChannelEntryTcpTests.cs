@@ -29,9 +29,11 @@ internal static class ChannelEntryTcpTests
 
         using var alpha = Open(fixture, "entrya", gamePort: endpoints[11], channelNumber: 11);
         using var isolated = Open(fixture, "entryb", gamePort: endpoints[12], channelNumber: 12);
-        That(U32(alpha.LoginEndpoint, 13 + checked((int)U32(alpha.LoginEndpoint, 9))) == endpoints[11] &&
-            U32(isolated.LoginEndpoint, 13 + checked((int)U32(isolated.LoginEndpoint, 9))) == endpoints[12],
-            "LOGIN端点与本连接NOTI1和实际入口相同，不把分类重新指向主端口");
+        int nativePort = NativePort(fixture);
+        That(U32(alpha.LoginEndpoint, 13 + checked((int)U32(alpha.LoginEndpoint, 9))) == nativePort &&
+            U32(isolated.LoginEndpoint, 13 + checked((int)U32(isolated.LoginEndpoint, 9))) == nativePort &&
+            !endpoints.Values.Contains(nativePort) && U32(alpha.LoginEndpoint, 5) != 0 && U32(isolated.LoginEndpoint, 5) != 0,
+            "LOGIN返回独立Native端口及关联值，NOTI1和后续Actor仍使用所选频道身份");
         alpha.Create("EntryA"); isolated.Create("EntryB");
         alpha.Select(); isolated.Select(); alpha.Barrier(); isolated.Barrier();
         alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24), (1, 1347));
@@ -134,14 +136,20 @@ internal static class ChannelEntryTcpTests
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         using var alpha = Open(fixture, "addressa", gamePort: endpoints[11], channelNumber: 11, serverAddress: "127.0.0.2");
         using var beta = Open(fixture, "addressb", gamePort: endpoints[12], channelNumber: 12);
-        foreach (var (peer, address, port) in new[] { (alpha, "127.0.0.2", endpoints[11]), (beta, "127.0.0.1", endpoints[12]) })
+        foreach (var (peer, address) in new[] { (alpha, "127.0.0.2"), (beta, "127.0.0.1") })
         {
             int length = checked((int)U32(peer.LoginEndpoint, 9));
             That(System.Text.Encoding.ASCII.GetString(peer.LoginEndpoint, 13, length) == address &&
-                U32(peer.LoginEndpoint, 13 + length) == port,
-                "并发原生登录返回各自连接抵达的服务端IP和所选频道端口，不污染其他连接");
+                U32(peer.LoginEndpoint, 13 + length) == NativePort(fixture),
+                "并发原生登录返回各自连接抵达的服务端IP和同实例Native端口，不污染其他连接");
         }
         That(fixture.Options.AdvertisedAddress == "connection", "目录与登录端点不改写共享地址策略");
+    }
+
+    static int NativePort(TcpTestFixture fixture)
+    {
+        using var ready = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Options.LogDirectory, "ready.json")));
+        return ready.RootElement.GetProperty("NativePort").GetInt32();
     }
 
     static void VerifyListenerRollback()
