@@ -8,6 +8,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog shops, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces)
 {
+    static readonly int[] CubeItemIds = [3033, 3034, 3035, 3036, 3037, 3262];
+
     public InventoryResult Buy(Character character, BuyItemRequest request, out ShopPurchaseReceipt? receipt, DateTimeOffset? utcNow = null)
     {
         receipt = null;
@@ -116,9 +118,16 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         var before = character.Inventory;
         if (request.Position.List is not (InventoryListType.Main or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.PersonalCargo or InventoryListType.Equipment))
             return InventoryResult.Reject();
+        // 晶块槽是账号钱包的投影，没有可供删除或解锁的实体 UID。
+        if (request.Position.List == InventoryListType.Main)
+            foreach (int itemId in CubeItemIds)
+                if (CurrencyWallet.RewardKind(itemId) is { } kind && ItemSlotBoundService.CurrencySlot(kind) == request.Position.Index)
+                    return SellWalletCube(character, request, kind, itemId);
         var source = before.Find(request.Position);
         if (source is null || source.Core.EquipmentLockId != 0)
             return InventoryResult.Reject(0xd6);
+        if (!shops.CanSell(source.Core.ItemId))
+            return InventoryResult.Reject();
         if (source.IsExpired(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
             return InventoryResult.Reject();
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
@@ -134,5 +143,24 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         if (!deletion.Accepted)
             return deletion;
         return new(true, 0, new(before, deletion.Plan!.After with { Gold = checked((uint)gold) }, "npc_shop_sell"), count);
+    }
+
+    InventoryResult SellWalletCube(Character character, SellItemRequest request, CurrencyKind kind, int itemId)
+    {
+        var before = character.Inventory;
+        // 钱包与邮件相同，必须明确出售正数且足额；畸形数量不能扩大成整笔余额。
+        if (request.Count <= 0 || request.Count > CurrencyWallet.Get(before, kind))
+            return InventoryResult.Reject();
+        var template = catalog.Get(itemId);
+        if (template.Kind != ItemKind.Material || !shops.CanSell(itemId))
+            return InventoryResult.Reject();
+        int price = template.ShopPrice.GetSellGold(0, template.Durability);
+        long gold = (long)before.Gold + (long)price * request.Count;
+        if (gold > int.MaxValue || gold > new CurrencyService(goldLimits).CarryLimit(character))
+            return InventoryResult.Reject(22);
+        var spent = CurrencyService.Spend(before, kind, request.Count);
+        if (!spent.Accepted)
+            return spent;
+        return new(true, 0, new(before, spent.Plan!.After with { Gold = checked((uint)gold) }, "npc_shop_sell"), request.Count);
     }
 }

@@ -33,6 +33,7 @@ internal static class ShopTcpTests
                 {
                     Gold = 1_000_000,
                     Items = [.. starter.Items,
+                        new(0, new(InventoryListType.Main, 177), InventoryRewardGrantService.Create(itemResources.Items.Get(4237), 2)),
                         new(0, new(InventoryListType.Main, 36), InventoryRewardGrantService.Create(itemResources.Items.Get(18400))),
                         new(0, new(InventoryListType.Main, 27), InventoryRewardGrantService.Create(itemResources.Items.Get(16400))),
                         new(0, new(InventoryListType.Main, 4), InventoryRewardGrantService.Create(itemResources.Items.Get(10400)) with { Durability = 16 }),
@@ -64,6 +65,11 @@ internal static class ShopTcpTests
             peer.Send(715, Build(w => w.Write(1)));
             peer.Expect(1, 715, [0, 17, 0]);
             peer.Select();
+            string beforeForbiddenSale = Snapshot();
+            Sell(peer, 0, 177, 1);
+            peer.Expect(1, 22, [0, 1, 0]);
+            peer.Barrier();
+            That(Snapshot() == beforeForbiddenSale, "resource-forbidden sale preserves inventory, wallet and audit while the connection stays usable");
             // 前两笔对应现场满耐久拖鞋/腰带；期望值来自客户端原码，不从服务端计价函数反推。
             foreach (var (list, slot, received) in new (byte, short, int)[] { (0, 36, 25), (0, 27, 25), (0, 4, 30), (2, 0, 0) })
             {
@@ -171,6 +177,28 @@ internal static class ShopTcpTests
             delta = peer.Expect(0, 14).Body;
             Entry(delta, 354, 3033, 2);
             Entry(delta, 358, 3037, 90);
+            Sell(peer, 0, 358, 1);
+            gold += 20;
+            peer.Expect(1, 22, Build(w => { w.Write((byte)1); w.Write(gold); w.Write((byte)0); w.Write((short)358); w.Write(1); }));
+            delta = peer.Expect(0, 14).Body;
+            Entry(delta, 0, 0, gold);
+            Entry(delta, 358, 3037, 89);
+            string rejectedCubeSale = Snapshot();
+            foreach (int count in new[] { 0, 90 })
+            {
+                Sell(peer, 0, 358, count);
+                peer.Expect(1, 22, [0, 1, 0]);
+            }
+            Sell(peer, 2, 358, 1);
+            peer.Expect(1, 22, [0, 0xd6, 0]);
+            peer.Barrier();
+            That(Snapshot() == rejectedCubeSale, "rejected wallet sales preserve gold, cubes, revisions and audit");
+            Sell(peer, 0, 358, 2);
+            gold += 40;
+            peer.Expect(1, 22, Build(w => { w.Write((byte)1); w.Write(gold); w.Write((byte)0); w.Write((short)358); w.Write(2); }));
+            delta = peer.Expect(0, 14).Body;
+            Entry(delta, 0, 0, gold);
+            Entry(delta, 358, 3037, 87);
             Buy(peer, 10099885, 3, limitedShop.Key, limitedShop.Value.NpcId);
             gold -= 90_000;
             ack = peer.Expect(1, 21).Body;
@@ -193,7 +221,7 @@ internal static class ShopTcpTests
         {
             var entry = peer.Select();
             byte[] full = entry.Single(packet => packet.Kind == 0 && packet.Opcode == 13 && packet.Body[0] == 0).Body;
-            foreach (var (slot, item, value) in new (short, int, int)[] { (5, 1106, 1000), (65, 1106, 997), (9, 27800, 999_999_998) })
+            foreach (var (slot, item, value) in new (short, int, int)[] { (5, 1106, 1000), (65, 1106, 997), (9, 27800, 999_999_998), (358, 3037, 87) })
             {
                 int offset = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(offset => U16(full, offset) == slot);
                 That(U32(full, offset + 2) == item && U32(full, offset + 6) == value, "complete purchased item survives reconnect at slot " + slot);
@@ -213,6 +241,22 @@ internal static class ShopTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
+            string beforeCubeFailure = Snapshot();
+            fixture.Sql("CREATE TRIGGER fail_tcp_cube_sale BEFORE INSERT ON currency_audit_log WHEN NEW.action_name='npc_shop_sell' AND NEW.currency_kind=7 BEGIN SELECT RAISE(ABORT,'cube sale failure'); END");
+            Sell(peer, 0, 358, 1);
+            peer.Closed();
+            That(Snapshot() == beforeCubeFailure, "late cube sale failure closes without ACK and rolls back gold, wallet and both audits");
+            fixture.Sql("DROP TRIGGER fail_tcp_cube_sale");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            Sell(peer, 0, 358, 1);
+            gold += 20;
+            peer.Expect(1, 22, Build(w => { w.Write((byte)1); w.Write(gold); w.Write((byte)0); w.Write((short)358); w.Write(1); }));
+            var delta = peer.Expect(0, 14).Body;
+            Entry(delta, 0, 0, gold);
+            Entry(delta, 358, 3037, 86);
             Buy(peer, 3175, 1, 2, 1);
             That(U32(peer.Expect(1, 21).Body, 23) == 1, "reconnect can buy normally after rollback");
             Entry(peer.Expect(0, 14).Body, 3, 3175, 10);
@@ -283,6 +327,9 @@ internal static class ShopTcpTests
             peer.Expect(1, 715, Build(w => { w.Write((byte)1); w.Write(1); w.Write(10099885); w.Write(3); w.Write(new byte[12]); }));
         }
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters ORDER BY id")) +
+            fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account") +
+            fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") +
+            fixture.Snapshot("SELECT * FROM currency_audit_log ORDER BY audit_id") +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +
             fixture.Snapshot("SELECT * FROM inventory_avatar_details ORDER BY item_uid") +
