@@ -2450,11 +2450,13 @@ internal static class DatabaseSchemaTests
                 VALUES(12345,1,'skill-switch-v53','{"ItemId":1001,"Kind":1,"Value":1}');
                 INSERT INTO character_skill_switch_inventory_items(character_id,equipment_part,item_uid,item_id)
                 VALUES(1,4,12345,1001);
+                UPDATE character_inventory_items SET character_id=NULL WHERE item_uid=12345;
                 DELETE FROM characters WHERE id=1;
                 """);
             Check(Query(db, "SELECT count(*) FROM character_skill_switch_inventory") is 0L &&
-                Query(db, "SELECT count(*) FROM character_skill_switch_inventory_items") is 0L,
-                "删除角色级联清理Buff强化指定技能与全部绑定");
+                Query(db, "SELECT count(*) FROM character_skill_switch_inventory_items") is 0L &&
+                Query(db, "SELECT count(*) FROM character_inventory_items WHERE item_uid=12345 AND character_id IS NULL") is 1L,
+                "删除角色级联清理Buff强化指定技能与全部绑定，保留账号实例");
         }
 
         string failure = Path.Combine(root, "skill-switch-v53-failure.db");
