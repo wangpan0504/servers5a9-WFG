@@ -12,6 +12,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
         => OpenCore(character, request, out receipt, utcNow, ceraPackage: false);
 
+    public (int Total, int Matching) CountMatchingPools(Character character, int itemId)
+    {
+        var definition = boosters.Get(itemId);
+        return (definition.Pools.Length, definition.Pools.Count(pool => pool.Matches(character.Job, character.GrowType, character.Level)));
+    }
+
     public InventoryResult OpenLottery(Character character, LotteryOpenRequest request, out LotteryReceipt? receipt,
         DateTimeOffset? utcNow = null)
     {
@@ -77,14 +83,18 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             return InventoryResult.Reject(19);
         }
 
-        // 随机池预检全部有权重的候选，选择型仅预检实际所选奖励，不过滤候选或改换玩家选择。
+        var pools = definition.Pools.Where(pool => pool.Matches(character.Job, character.GrowType, character.Level)).ToArray();
+        if (pools.Length == 0 && definition.Pools.Length != 0)
+            return InventoryResult.Reject(19) with { RejectReason = "unmatched_grow_type_pool" };
+
+        // 随机池预检匹配池的有权候选，选择型仅预检实际所选奖励；转职池不预检其他职业行。
         try
         {
             if (choices is not null && choices.Any(row => row.RequiredKind is { } kind && catalog.Get(row.ItemId).Kind != kind))
                 return InventoryResult.Reject(19);
             var ids = choices is not null ? choices.Select(row => row.ItemId) : ceraPackage
                 ? definition.PackageRewards.Select(row => row.ItemId)
-                : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
+                : pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
             foreach (int id in ids.Distinct())
             {
                 if (lottery && (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
@@ -122,7 +132,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             if (choices is not null)
                 foreach (var choice in choices)
                     Add(choice.ItemId, choice.Count, request.Count);
-            foreach (var pool in definition.Pools)
+            foreach (var pool in pools)
             {
                 var candidates = pool.Rewards.Where(row => row.Weight > 0).ToArray();
                 long draws = (long)pool.Draws * request.Count;

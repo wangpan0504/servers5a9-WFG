@@ -2,6 +2,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using DfoServer.Network.Management;
 using static DfoServer.Testing.TcpPeer;
@@ -26,7 +27,12 @@ internal static class BoosterTcpTests
                 Job = 15, AcceptedStoryLevel = 1, Skills = characters.Get(15).Skills,
                 Inventory = new([new(0, Bag(3), Core(2660291, 2)), new(0, Bag(4), Core(2683799)),
                     new(0, Bag(5), Core(10160255)), new(0, Bag(6), Core(2058)), new(0, Bag(7), Core(2058, int.MaxValue)),
-                    new(0, Bag(65), Core(7542, 2))], Gold: 12345)
+                    new(0, Bag(65), Core(7542, 2)), new(0, Bag(79), Core(490704570))], Gold: 12345)
+            });
+            repo.Create(owner, new("SoulBox", towns.Room, towns.InitialReturn)
+            {
+                Job = 0, GrowType = 1, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(65), Core(490704570))], Gold: 12345)
             });
         }
         await fixture.StartAsync();
@@ -37,6 +43,8 @@ internal static class BoosterTcpTests
             peer.Expect(1, 160, [0, 19, 0]);
             peer.Select();
             string before = Snapshot();
+            SendOpen(peer, 79, 1);
+            peer.Expect(1, 160, [0, 19, 0]);
             foreach (int count in new[] { 0, -1, 3, int.MaxValue })
             {
                 SendOpen(peer, 65, count);
@@ -44,7 +52,7 @@ internal static class BoosterTcpTests
             }
             peer.Send(160, new byte[9]);
             peer.Barrier();
-            That(before == Snapshot(), "invalid count and pending selection packet do not consume or fabricate success");
+            That(before == Snapshot(), "invalid count, pending selection and unmatched grow-type box do not consume or fabricate success");
             for (int i = 1; i <= 2; i++)
             {
                 SendOpen(peer, 65, 1);
@@ -67,9 +75,9 @@ internal static class BoosterTcpTests
             Entry(coinDelta, 3, -1, 0);
             Entry(coinDelta, 1, 1, 20);
             SendOpen(peer, 4, 1);
-            ExpectAck(peer, 2683799, 4, [(2681762, 10000)]);
+            ExpectAck(peer, 2683799, 4, [(2681762, 720)]);
             Entry(peer.Expect(0, 14).Body, 4, -1, 0);
-            peer.Expect(0, 53, Build(writer => { writer.Write((byte)1); writer.Write(0); writer.Write(10000); writer.Write(0); }));
+            peer.Expect(0, 53, Build(writer => { writer.Write((byte)1); writer.Write(0); writer.Write(720); writer.Write(0); }));
             SendOpen(peer, 5, 1);
             ExpectAck(peer, 10160255, 5, [(10158124, 1)]);
             byte[] soulDelta = peer.Expect(0, 14).Body;
@@ -112,7 +120,7 @@ internal static class BoosterTcpTests
         }
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
-            var current = repo.List(owner).Single();
+            var current = repo.List(owner).Single(role => role.Name == "BoxTcp");
             InventoryService.Commit(repo, owner, current, InventoryRewardGrantService.TryGrantBatch(current, [new(2660291, 1)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces));
         }
         using (var peer = Open(fixture))
@@ -144,11 +152,40 @@ internal static class BoosterTcpTests
         }
         using (var peer = Open(fixture))
         {
-            Entry(peer.Select()[4].Body, 1, 1, 30, true);
+            byte[] restored = peer.Select()[4].Body;
+            Entry(restored, 1, 1, 30, true);
+            Entry(restored, 79, 490704570, 1, true);
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1);
+            SendOpen(peer, 65, 1);
+            byte[] ack = peer.Expect(1, 160).Body;
+            That(ack.Length == 26 && ack[0] == 1 && ack[1] == 0 && U32(ack, 2) == 490704570 && U16(ack, 6) == 65 &&
+                U16(ack, 16) == 1 && U32(ack, 22) == 1, "灵魂武器礼盒成功ACK保留普通18B头和单件奖励");
+            int reward = (int)U32(ack, 18);
+            That(itemResources.Items.Get(reward).Kind == ItemKind.Equipment, "转职池发放实际装备而不是钱包或残缺实例");
+            byte[] delta = peer.Expect(0, 14).Body;
+            Entry(delta, 65, -1, 0);
+            That(Enumerable.Range(0, U16(delta, 1)).Select(index => 3 + index * 123)
+                    .Any(at => U32(delta, at + 2) == reward && U32(delta, at + 6) == InventoryRewardGrantService.InitialQuality),
+                "装备差量出现在ACK之后且保留完整品质字段");
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(1)[4].Body;
+            That(Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).All(at => U16(full, at) != 65 ||
+                    U32(full, at + 2) == 0), "重登后源礼盒已扣除");
+            That(Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Any(at =>
+                    itemResources.Boosters.Get(490704570).Pools.Any(pool =>
+                        pool.Rewards.Any(row => row.ItemId == (int)U32(full, at + 2)))),
+                "重登恢复灵魂武器装备");
             peer.Barrier();
         }
         await fixture.StopAsync();
-        That(fixture.Query("SELECT gold FROM characters") is [[12345L]], "ordinary boxes never infer an extra gold fee");
+        That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "booster database integrity");
 
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(itemResources.Items.Get(id), count);

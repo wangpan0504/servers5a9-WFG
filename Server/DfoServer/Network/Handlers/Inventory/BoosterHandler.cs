@@ -113,8 +113,14 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
         bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) :
             context.Owner.Execute(() => ReferenceEquals(capture.Selected, context.Session.Selected) &&
                 capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);
+        int? matchingPools = null, totalPools = null;
+        if (!avatarSource && capture.Selected is { } role && itemId is int openedId and > 0)
+            (totalPools, matchingPools) = booster.CountMatchingPools(role, openedId);
         log.Write("booster_open", new { Connection = context.Id, Slot = sourceSlot, ItemId = itemId, Avatar = avatarSource,
-            result.Accepted, result.Error, Reason = reason ?? (result.Accepted ? "accepted" : "operation_rejected"),
+            Job = capture.Selected?.Job, GrowType = capture.Selected?.GrowType, Level = capture.Selected?.Level,
+            MatchingPools = matchingPools, TotalPools = totalPools,
+            result.Accepted, result.Error,
+            Reason = reason ?? result.RejectReason ?? (result.Accepted ? "accepted" : "operation_rejected"),
             Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.USE_BOOSTER_ITEM, BoosterPackets.Opened(result, receipt),
             result.Accepted ? "booster_opened" : "booster_open_rejected", Guard);

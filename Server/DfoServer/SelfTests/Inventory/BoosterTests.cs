@@ -34,6 +34,7 @@ internal static class BoosterTests
         }
         var catalog = itemResources.Items;
         BoosterBatchRandomTests.Run(That);
+        BoosterGrowTypeTests.Run(towns, itemResources);
         var random = new EdgeRandom();
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces, random);
         var now = DateTimeOffset.UtcNow;
@@ -50,8 +51,10 @@ internal static class BoosterTests
             "[etc]\n1 1106 1\n[/etc]", "[etc]\n1 1106 1 1\n[/etc]\n99", "[etc]\n1 1106 1 1\n[/etc]\n[avatar]\n1 1 1 1 1 1\n[/avatar]" })
             That(!Parse(bad).Available, "malformed or unsupported reward pool rejects whole definition");
         That(Parse("[etc]\n1\n[/etc]\n[etc]\n1 1106 100 1\n[/etc]").Pools.Length == 1, "empty PVF placeholder is not a fake reward");
-        That(!itemResources.Boosters.Get(10162064).Available && !itemResources.Boosters.Get(490704415).Available && !itemResources.Boosters.Get(1106).Available,
-            "quota, advancement pools and ordinary consumables are not silently treated as simple boxes");
+        That(!itemResources.Boosters.Get(10162064).Available && !itemResources.Boosters.Get(1106).Available,
+            "quota and ordinary consumables are not silently treated as simple boxes");
+        That(itemResources.Boosters.Get(490704415).Available && itemResources.Boosters.Get(490704415).Pools.All(pool => pool.JobTag is not null),
+            "转职奖池已解析，不能当成无过滤普通盒抽取");
         var package = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[/stackable type]\n[package data]\n1106 2 1112 1\n[/package data]");
         That(package.Available && package.PackageRewards.SequenceEqual(new BoosterReward[] { new(1106, 1, 2), new(1112, 1, 1) }),
             "fixed CERA packages expose every PVF package reward without dropping rows");
@@ -72,7 +75,6 @@ internal static class BoosterTests
         var packageService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
             itemResources.EpicPieces, debugSettings: new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true },
             contracts: itemResources.Contracts);
-        LegacyExpiryFixture.Restore(catalog, (490705385, "2020-04-09 06:00:00"), (490705386, "2020-04-09 06:00:00"), (490705483, "2020-04-09 06:00:00"));
         foreach (int id in new[] { 490705385, 490705386, 490705483 })
         {
             var expected = itemResources.Boosters.Get(id).PackageRewards.GroupBy(row => row.ItemId)
@@ -266,7 +268,7 @@ internal static class BoosterTests
         That(result.Accepted && current.Level == 1 && current.Job == 15 && output.Core == InventoryRewardGrantService.Create(catalog.Get(receipt!.Rewards[0].ItemId)),
             "equipment reward keeps full core, seal and durability without output job or wear-level restrictions");
 
-        foreach (var (box, reward, count) in new[] { (2660291, 1, 10), (10160255, 10158124, 1), (2683799, 2681762, 10000) })
+        foreach (var (box, reward, count) in new[] { (2660291, 1, 10), (10160255, 10158124, 1), (2683799, 2681762, 720) })
         {
             current = current with { Inventory = new([new(1, Bag(3), Core(box))]) };
             result = service.Open(current, new(3, 1), out receipt);

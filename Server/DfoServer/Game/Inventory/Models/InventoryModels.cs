@@ -122,6 +122,7 @@ internal sealed record InventoryResult(bool Accepted, ushort Error, InventoryPla
     InventorySlot? MoveSource = null, InventorySlot? MoveDestination = null)
 {
     public InventoryCommitReceipt? Receipt { get; init; }
+    public string? RejectReason { get; init; }
 
     /// <summary>
     /// 要求投影把**整个容器**重发一遍（而不是只发变化槽的差量）。

@@ -8,7 +8,17 @@ using PvfLib;
 namespace DfoServer.GameWorld.Items;
 
 internal sealed record BoosterReward(int ItemId, long Weight, int Count);
-internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewards);
+internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewards)
+{
+    public string? JobTag { get; init; }
+    public int MinimumLevel { get; init; }
+    public int MaximumLevel { get; init; } = int.MaxValue;
+    public int GrowType { get; init; } = -1;
+
+    public bool Matches(byte job, byte growType, byte level) => JobTag is null ||
+        (string.Equals(JobTag, ItemCatalog.JobTag(job), StringComparison.OrdinalIgnoreCase) &&
+            (growType & 15) == GrowType && level >= MinimumLevel && level <= MaximumLevel);
+}
 internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, string? PendingRule = null,
     BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default, bool Lottery = false,
     bool NpcPocketPot = false)
@@ -100,8 +110,19 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             if (!string.IsNullOrWhiteSpace(body[at..match.Index]))
                 return new([], "未识别的奖池字段");
             at = match.Index + match.Length;
-            if (match.Groups["kind"].Value is not ("etc" or "cera" or "equipment" or "stackable" or "booster" or "emblem"))
-                return new([], match.Groups["kind"].Value);
+            string kind = match.Groups["kind"].Value;
+            if (kind == "hide booster info")
+                continue;
+            if (kind == "grow type")
+            {
+                if (!BoosterGrowTypePools.TryParse(match.Groups["data"].Value, out var growPool, out string? pending))
+                    return new([], pending ?? "转职奖池无效");
+                if (growPool is not null)
+                    pools.Add(growPool);
+                continue;
+            }
+            if (kind is not ("etc" or "cera" or "equipment" or "stackable" or "booster" or "emblem"))
+                return new([], kind);
             string[] tokens = match.Groups["data"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             if (tokens.Length == 0 || (tokens.Length - 1) % 3 != 0 || !int.TryParse(tokens[0], out int draws) || draws <= 0)
                 return new([], "奖池抽取次数或行宽无效");
@@ -131,7 +152,10 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 return new([], "奖池权重溢出");
             }
         }
-        return !string.IsNullOrWhiteSpace(body[at..]) ? new([], "未识别的奖池尾段") : new(pools.ToImmutable());
+        string tail = body[at..];
+        return !string.IsNullOrWhiteSpace(tail) &&
+            !Regex.IsMatch(tail, @"^(?:\s*\[hide booster info\](?:\s*\[/hide booster info\])?)+\s*$")
+            ? new([], "未识别的奖池尾段") : new(pools.ToImmutable());
     }
 
     static FrozenSet<int> ActivationItems(PvfArchive archive)
