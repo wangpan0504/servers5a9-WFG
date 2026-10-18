@@ -8,7 +8,8 @@ internal static class AdventureExpeditionTcpTests
 {
     sealed class Clock : TimeProvider
     {
-        public DateTimeOffset Now = DateTimeOffset.UtcNow;
+        // 只验证六小时远征，固定在UTC日零点，避免偶然跨越UTC+8六点日界。
+        public DateTimeOffset Now = new(DateTime.UtcNow.Date, TimeSpan.Zero);
         public override DateTimeOffset GetUtcNow() => Now;
     }
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)

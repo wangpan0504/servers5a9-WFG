@@ -10,6 +10,8 @@ internal sealed record AvatarDetail
 {
     public int ExpireTime { get; init; }
     public int ClearAvatarId { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public long ClearAvatarSourceUid { get; init; }
     public AvatarSocket Socket0 { get; init; }
     public AvatarSocket Socket1 { get; init; }
     public AvatarSocket Socket2 { get; init; }
@@ -19,7 +21,7 @@ internal sealed record AvatarDetail
     public ushort Color2 { get; init; }
     public void Validate()
     {
-        if (ExpireTime < 0 || ClearAvatarId < 0 ||
+        if (ExpireTime < 0 || ClearAvatarId < 0 || ClearAvatarSourceUid < 0 ||
             new[] { Socket0, Socket1, Socket2, Socket3, Socket4 }.Any(socket => socket.EmblemId < -1))
             throw new InvalidDataException("无效时装详情");
     }

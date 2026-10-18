@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Collections.Immutable;
 using PvfLib;
 using DfoServer.GameWorld.Items;
 using static PvfLib.PvfScript;
@@ -93,6 +94,7 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
             var profile = new CharacterProfile(job, stats, skills)
             {
                 Equipment = starter.OrderBy(item => item.Slot).ToArray(),
+                DefaultAvatarEquipment = ReadDefaultAvatars(pvf, itemCatalog, path),
                 GrowthOptions = ParseGrowthOptions(text, job)
             };
             profile.Validate();
@@ -116,6 +118,24 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
         }
 
         return catalog;
+    }
+
+    static ImmutableDictionary<byte, int> ReadDefaultAvatars(PvfArchive pvf, ItemCatalog items, string characterPath)
+    {
+        string path = "character/characteretc/" + Path.GetFileNameWithoutExtension(characterPath) + ".etc";
+        if (!pvf.Contains(path)) path = "character/characteretc/default.etc";
+        if (!pvf.Contains(path)) return ImmutableDictionary<byte, int>.Empty;
+        var result = ImmutableDictionary.CreateBuilder<byte, int>();
+        foreach (int id in CharacterEquipmentFile.ReadDefaultEquipment(pvf.ReadTokens(path), pvf.ResolveString))
+        {
+            if (id <= 0 || !items.ContainsEquipment(id)) continue;
+            var template = items.Get(id);
+            if (template.Kind == ItemKind.Avatar && template.EquipmentSlot <= 10)
+                result[template.EquipmentSlot] = id;
+            else if (template.Kind == ItemKind.Equipment && template.EquipmentSlot == 12)
+                result[10] = id;
+        }
+        return result.ToImmutable();
     }
 
     internal static CharacterGrowthOptions ParseGrowthOptions(string text, byte job)

@@ -38,8 +38,12 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
             request.Destination is { List: InventoryListType.Equipment, Index: >= 12 and <= 25 } ||
             request.Destination.List == InventoryListType.Main &&
             request.Source is { List: InventoryListType.Equipment, Index: >= 12 and <= 25 };
+        bool suppressAvatarNotice = request.Source.List == InventoryListType.Avatar &&
+            request.Destination is { List: InventoryListType.Equipment, Index: >= 0 and <= 11 } ||
+            request.Destination.List == InventoryListType.Avatar &&
+            request.Source is { List: InventoryListType.Equipment, Index: >= 0 and <= 11 };
         await projection.RefreshAsync(context, result, acknowledgedSlots, silentMainMove: silentMainMove,
-            suppressMainNotice: suppressMainNotice);
+            suppressMainNotice: suppressMainNotice, suppressAvatarNotice: suppressAvatarNotice);
         return CommandResult.Handled;
     }
 

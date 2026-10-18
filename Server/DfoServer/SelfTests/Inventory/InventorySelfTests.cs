@@ -306,7 +306,9 @@ internal static class InventorySelfTests
                 {
                     var core = item.Core;
                     valid &= reader.ReadByte() == item.Position.Index && reader.ReadInt32() == core.ItemId && reader.ReadInt32() == core.Value;
-                    stream.Position += 17; // 023C3BA1..023C3C97 的普通前缀共26B。
+                    stream.Position += 3;
+                    valid &= reader.ReadUInt16() == core.Extension121;
+                    stream.Position += 12; // 023C3BA1..023C3C97 的普通前缀共26B。
                     byte chronicles = reader.ReadByte();
                     stream.Position += chronicles * 8;
                     valid &= reader.ReadInt32() == core.ExpireTime;
@@ -327,15 +329,12 @@ internal static class InventorySelfTests
                             valid &= reader.ReadByte() == core.RandomChangeState && reader.ReadByte() == core.RandomChange.Type && reader.ReadByte() == core.RandomChange.Value1 && reader.ReadByte() == core.RandomChange.Value2;
                     }
                     stream.Position += 10; // 023C3F9C..023C404A。
-                    foreach (int size in new[] { 4, 8, 4, 5, 4 })
-                    {
-                        uint length = reader.ReadUInt32();
-                        if (length != size || length > stream.Length - stream.Position)
-                            throw new InvalidDataException("Player扩展块偏移或长度与客户端不符");
-                        stream.Position += length;
-                        if (size == 8)
-                            valid &= reader.ReadByte() == core.Extension109;
-                    }
+                    valid &= reader.ReadUInt32() == 4 && reader.ReadUInt32() == core.Extension97;
+                    valid &= reader.ReadUInt32() == 8 && reader.ReadUInt64() == core.GuardianGemKeys;
+                    valid &= reader.ReadByte() == core.Extension109;
+                    valid &= reader.ReadUInt32() == 5 && reader.ReadUInt32() == core.Extension114.Value && reader.ReadByte() == core.Extension114.Flag;
+                    valid &= reader.ReadUInt32() == 1 && reader.ReadByte() == core.Extension119;
+                    valid &= reader.ReadUInt32() == 4 && reader.ReadInt32() == core.Extension120;
                 }
                 That(valid && stream.Position == stream.Length, message);
             }

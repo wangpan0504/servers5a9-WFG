@@ -98,6 +98,8 @@ internal sealed class ItemCatalog
     }
     public static byte Slot(string tag) => EquipmentSlots.TryGetValue(tag, out var slot) ? slot : throw new InvalidDataException("未知普通装备类型: " + tag);
 
+    public bool ContainsEquipment(int id) => equipment.ContainsKey(id);
+
     // 在资源装配阶段枚举；正creation rate的普通道具完整解析，失败不得静默删除候选。
     // 逐项解析互不依赖（PVF 按位置读取、缓存与模板表均线程安全），有序并行后结果与串行一致；
     // 原先串行约占服务启动 4 秒。任一项失败仍以原异常终止装配。
@@ -325,8 +327,8 @@ internal sealed class ItemCatalog
             QualityBox = isEquipment ? null : EquipmentQualityBox.Parse(id, text),
 
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
-            CloneAvatar = Int("clear avatar", 0) == 1 || text.Section("item category").Contains("clear avatar", StringComparison.OrdinalIgnoreCase),
-            BorrowAvatarAppearance = kind == ItemKind.Avatar && slot != 9,
+            CloneAvatar = kind == ItemKind.Avatar && (Int("clear avatar", 0) == 1 || text.ContainsString("item category", "clear avatar")),
+            BorrowAvatarAppearance = kind == ItemKind.Avatar,
             AvatarGiftType = isEquipment ? null : AvatarTypeSelectionFile.GiftType(text),
             EmblemTargetSockets = kind == ItemKind.Emblem ? ReadEmblemTargetSockets(text) : (ushort)0,
             GuardianGemEffects = kind == ItemKind.GuardianGem ? ReadGuardianGemEffects(text) : [],

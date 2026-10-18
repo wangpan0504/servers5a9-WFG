@@ -53,8 +53,8 @@ internal static class AssetWireChecks
             wire.Native(4);
             wire.Native(8);
             wire.Zero(1);
-            wire.Native(4);
             wire.Native(5);
+            wire.Native(1);
             wire.Native(4);
             rows.Add(new(slot, template, data, durability));
         }

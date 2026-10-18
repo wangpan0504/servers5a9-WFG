@@ -24,6 +24,13 @@ internal static class ItemModelTests
             }
         }
         var parent = new PvfDocument("[name]\n`parent`\n[price]\n20\n[items]\n1\n[/items]");
+        var categories = new PvfDocument("[item category]\n`random clear avatar`\n[/item category]\n[item category]\n`clear avatar`\n[/item category]");
+        That(categories.ContainsString("item category", "clear avatar") &&
+            !new PvfDocument("[item category]\n`random clear avatar`").ContainsString("item category", "clear avatar"),
+            "分类精确匹配并保留重复声明，随机属性装扮不是透明克隆");
+        That(!new PvfDocument("[item category]\n", categories).ContainsString("item category", "clear avatar") &&
+            new PvfDocument("[name]\n`child`", categories).ContainsString("item category", "clear avatar"),
+            "分类沿有效导入层查询，显式空声明不继承父分类");
         var child = new PvfDocument("[name]\n\n[price]\n0\n[items]\n[/items]", parent);
         That(child.Has("items") && child.Section("name") == "" && child.Section("price") == "0", "local empty and zero override parent");
         That(child.Block("items").Trim() == "" && parent.Block("items").Trim() == "1", "empty block shadows without mutating parent");
@@ -150,6 +157,20 @@ internal static class ItemModelTests
             "random booster declaration remains distinguishable from a fixed ticket");
         Reject<InvalidDataException>(() => PvfItemIndex.Stackable([new(0, 1), new(6, 5)], Resolve, _ => true));
         string[] experienceStrings = ["[increase status type]", "[expPercentUp]", "[/increase status type]", "[expUp]", "[levelUpByTable]"];
+        string[] etcStrings = ["[equipment index]", "[/equipment index]", "defaultEquipment", "[key value index]", "[/key value index]", "other"];
+        string EtcResolve(int index) => etcStrings[index];
+        That(CharacterEquipmentFile.ReadDefaultEquipment([new(3,0),new(6,2),new(0,-1),new(0,101),new(0,102),new(3,1),
+            new(3,0),new(6,5),new(0,999),new(3,1)],EtcResolve).SequenceEqual(new[] { -1,101,102 }),
+            "默认装备旧顺序表保留整数与空外观，不混入其它命名表");
+        That(CharacterEquipmentFile.ReadDefaultEquipment([new(3,3),new(6,2),new(0,-1),new(0,0),new(0,-1),
+            new(0,1),new(0,101),new(0,11),new(0,300),new(3,4)],EtcResolve).SequenceEqual(new[] { -1,101,300 }),
+            "默认装备键值表只返回EQU值，缺省值及键不充当装备编号");
+        foreach (var invalid in new PvfToken[][]
+        {
+            [new(3,0),new(6,2),new(6,5),new(3,1)],
+            [new(3,3),new(6,2),new(0,-1),new(0,0),new(3,4)],
+            [new(3,3),new(6,2),new(0,-1),new(0,1),new(0,101),new(0,1),new(0,102),new(3,4)]
+        }) Reject<InvalidDataException>(()=>CharacterEquipmentFile.ReadDefaultEquipment(invalid,EtcResolve));
         string ExperienceResolve(int index) => experienceStrings[index];
         PvfToken[] capsule = [new(3, 0), new(6, 1), new(0, 10), new(3, 2)];
         var experience = ExperienceConsumableFile.Parse(1, "stackable/capsule.stk", capsule, ExperienceResolve);

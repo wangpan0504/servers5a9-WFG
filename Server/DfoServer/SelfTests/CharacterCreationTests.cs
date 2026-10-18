@@ -72,7 +72,7 @@ internal static class CharacterCreationTests
                 var created = new GameSession(repo, towns, owner).CreateCharacter(parsed.Name, profile);
                 That(created.Slot == job && created.Job == job && created.Level == 1 && created.GrowType == 0 && created.AcceptedStoryLevel == 1 && created.CompletedQuests.Length == 0 && created.ActiveMainQuests.Length == 0 && created.Revision == 0 && created.Skills.Length == skillCounts[job], "携带分支展示信息的职业 " + job + " 仍按 Lv1 未转职和基础技能创建");
                 byte[] select = TownPackets.Select(created), actor = TownPackets.Actor(created), player = TownPackets.Player(created, computer.Compute(created));
-                That(select.Length == 235 && select[222] == 38 && BinaryPrimitives.ReadUInt16LittleEndian(select.AsSpan(22)) == ushort.MaxValue && BinaryPrimitives.ReadUInt32LittleEndian(select.AsSpan(24)) == 0 && actor[127 + name.Length] == job && player.Length == 622 + 6 * skillCounts[job] && player.AsSpan(36, 89).SequenceEqual(CharacterStatsPackets.Build(profile.InitialStats)), "job " + job + " selects initial town 38 and retains actor identity, quest and equipment");
+                That(select.Length == 235 && select[222] == 38 && BinaryPrimitives.ReadUInt16LittleEndian(select.AsSpan(22)) == ushort.MaxValue && BinaryPrimitives.ReadUInt32LittleEndian(select.AsSpan(24)) == 0 && actor[127 + name.Length] == job && player.Length == 607 + 6 * skillCounts[job] && player.AsSpan(36, 89).SequenceEqual(CharacterStatsPackets.Build(profile.InitialStats)), "job " + job + " selects initial town 38 and retains actor identity, quest and equipment");
             }
 
             var reopened = new CharacterRepository(path);

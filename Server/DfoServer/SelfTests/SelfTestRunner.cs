@@ -71,6 +71,7 @@ internal static class SelfTestRunner
         QuestFixedRewardTests.Run();
         QuestProtocolTests.Run();
         CollectBoxTests.RunCore();
+        ClearAvatarTests.RunCore();
         TitleTests.RunCore();
         AdventureCoreTests.RunCore();
         AdventureNameTests.RunCore();
@@ -195,6 +196,7 @@ internal static class SelfTestRunner
         TeleportTests.RunResources(towns, itemResources);
         CharacterPreparationTests.Run(towns, pvf, characters);
         CharacterCreationTests.Run(towns, characters);
+        ClearAvatarTests.RunResources(characters, itemResources.Items);
         CharacterAttributeResourceTests.RunResources(characters);
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);

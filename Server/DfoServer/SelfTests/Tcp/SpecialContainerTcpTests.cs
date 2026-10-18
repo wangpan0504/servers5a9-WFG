@@ -38,7 +38,7 @@ internal static class SpecialContainerTcpTests
             wornAvatar = peer.SpecialContainers[1].Body.AsSpan(5, 165).ToArray();
             peer.Send(19, Move(1, 0, 101550507, 3, 0, 0));
             peer.Expect(1, 19, Ack(1, 0, 3, 0));
-            var clear = peer.Expect(0, 14).Body;
+            var clear = peer.Expect(0, 1681).Body;
             That(clear.Length == 168 && clear[0] == 1 && U32(clear, 5) == uint.MaxValue && U32(clear, 126) == 30, "avatar unequipped-list clear keeps RAW suffix");
             peer.Expect(0, 2);
             That(peer.Expect(0, 2).Body[126] == 1, "avatar ACK followed by Player carries worn avatar without generic Equipment delta");
@@ -67,7 +67,8 @@ internal static class SpecialContainerTcpTests
             That(packets[3].Body[126] == 3, "reconnect Player includes avatar, pet and pet equipment together");
             peer.Send(19, Move(1, 2, 0, 3, 0, 101550507));
             peer.Expect(1, 19, Ack(1, 2, 3, 0));
-            var avatar = peer.Expect(0, 14).Body;
+            That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue, "时装卸下先无播报清除ACK图标，随后重新装载图标effect");
+            var avatar = peer.Expect(0, 1681).Body;
             Bytes(avatar.AsSpan(5), wornAvatar!.AsSpan(2), "reverse unequip keeps avatar extra data");
             CreatureActor(peer.Expect(0, 2).Body, 63000, "时装脱下不会清空仍穿戴的宠物");
             peer.Expect(0, 2);

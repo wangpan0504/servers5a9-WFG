@@ -34,6 +34,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] CompletedQuestHistory { get; private set; } = [];
     public ushort Id { get; private set; }
     public WirePacket[] SpecialContainers { get; private set; } = [];
+    public byte[] CloneAvatarSources { get; private set; } = [];
     public byte[][] Mailbox { get; private set; } = [];
     public byte[] TitleProgress { get; private set; } = [];
     public byte[] AssaultDailyInfo { get; private set; } = [];
@@ -475,6 +476,10 @@ internal sealed class TcpPeer : IDisposable
             middle.Add(packet);
         }
         var avatars = Expect(0, 13);
+        CloneAvatarSources = Expect(0, 1449).Body;
+        TestCheck.That(CloneAvatarSources.Length == 56 && CloneAvatarSources[0] == 11 &&
+            Enumerable.Range(0, 11).All(index => CloneAvatarSources[1 + index * 5] == index),
+            "装扮包裹初始化后完整恢复十一槽来源表，清除上一角色的关联状态");
         var pets = Expect(0, 13);
         var medals = Expect(0, 13);
         TestCheck.That(avatars.Body[0] == 1 && U16(avatars.Body, 1) == avatarExpansion && pets.Body[0] == 7, "special container initialization and avatar capacity");

@@ -14,7 +14,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
 {
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
         IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true, bool silentMainMove = false,
-        bool suppressMainNotice = false)
+        bool suppressMainNotice = false, bool suppressAvatarNotice = false)
     {
         if (!result.Accepted || result.Plan is not { Changed: true } plan)
             return;
@@ -86,7 +86,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 await context.Notify(NotiPacketType.TITLE_BOOK_LIST, TitlePackets.Book(current.Inventory, (byte)list - 18), "title_book_committed", CanSend);
                 continue;
             }
-            bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main;
+            bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main ||
+                suppressAvatarNotice && list == InventoryListType.Avatar;
             // 整理和ACK19回填后的同模板增量只更新属性；先清槽再以1681载入，保留图标effect而不播报获得。
             var reloadSlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is { } now &&
                 (suppressNotice ||
@@ -103,6 +104,13 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         }
         if (!DailyBoosterUsage.Same(plan.Before.DailyBoosterUses, current.Inventory.DailyBoosterUses) && context.BoosterUses is { } boosterUses)
             await boosterUses.CommittedAsync(receipt);
+        if (changedSlots.Any(slot => slot.List == InventoryListType.Avatar ||
+                slot is { List: InventoryListType.Equipment, Index: >= 0 and <= 10 }))
+        {
+            var sources = ClearAvatarPackets.Sources(current.Inventory, receipt.Index);
+            if (!ClearAvatarPackets.Sources(plan.Before, plan.BeforeIndex).AsSpan().SequenceEqual(sources))
+                await context.Notify(NotiPacketType.SRC_AVATAR_INFO_OF_CLONE, sources, "clear_avatar_sources_committed", CanSend);
+        }
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         if (refreshEquipment && (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null))
         {

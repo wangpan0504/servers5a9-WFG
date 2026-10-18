@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Items;
+using System.Collections.Immutable;
 
 namespace DfoServer.GameWorld.Characters;
 
@@ -10,6 +11,7 @@ internal sealed record CharacterGrowthOptions(string BaseName, IReadOnlyList<Cha
 internal sealed record CharacterProfile(byte Job, CharacterStats InitialStats, CharacterSkill[] Skills)
 {
     public StarterEquipment[] Equipment { get; init; } = [];
+    public ImmutableDictionary<byte, int> DefaultAvatarEquipment { get; init; } = ImmutableDictionary<byte, int>.Empty;
     public CharacterGrowthOptions GrowthOptions { get; init; } = new("", Array.Empty<CharacterGrowthOption>());
     public void Validate()
     {

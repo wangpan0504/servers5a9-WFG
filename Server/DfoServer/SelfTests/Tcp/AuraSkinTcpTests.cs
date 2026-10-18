@@ -164,7 +164,13 @@ internal static class AuraSkinTcpTests
         if (!accepted) { peer.Expect(1, 19, [0, 23, 0, 1, 3]); peer.Barrier(); return; }
         peer.Expect(1, 19, Build(writer =>
         { writer.Write((byte)1); writer.Write((byte)1); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write(worn); }));
-        That(peer.Expect(0, 14).Body[0] == 1, "装扮页差量沿原完整实例投影");
+        var delta = peer.Expect(0, 1681).Body;
+        if (fromId == 0 || toId != 0)
+        {
+            That(U32(delta, 5) == uint.MaxValue, "卸装或互换先无播报清除ACK留下的包裹图标");
+            delta = peer.Expect(0, 1681).Body;
+        }
+        That(delta[0] == 1, "装扮穿脱保留完整差量和图标effect，不走获得播报");
         That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1,
             "城镇光环装卸按Actor再Player刷新外观和真实槽");
         peer.Barrier();

@@ -212,13 +212,13 @@ internal static class SpecialContainerTests
         {
             That(reader.ReadByte() == 3 && reader.ReadByte() == 0, "mixed Player count and first avatar slot");
             reader.ReadBytes(25);
-            Sockets(reader); reader.ReadBytes(8); reader.ReadBytes(65);
+            Sockets(reader); reader.ReadBytes(8); reader.ReadBytes(62);
             That(reader.ReadByte() == 12, "following ordinary Player starts at exact offset after avatar");
-            reader.ReadBytes(90);
+            reader.ReadBytes(87);
             That(reader.ReadByte() == 26, "pet Player follows unchanged ordinary entry");
             reader.ReadBytes(25);
             That(reader.ReadInt32() == 900, "pet Player consumes extra remaining time");
-            reader.ReadBytes(65);
+            reader.ReadBytes(62);
             That(reader.BaseStream.Position == player.Length, "mixed Player parser consumes complete payload");
         }
         var appearance = TcpPeer.Build(writer => EquipmentProtocolWriter.Appearance(writer, inventory));

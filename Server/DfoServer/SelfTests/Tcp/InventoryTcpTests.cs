@@ -550,7 +550,7 @@ internal static partial class InventoryTcpTests
                 "脱到背包或快捷栏空格先静默清除ACK对象，再完整装载以触发图标effect");
         var actor = peer.Expect(0, 2).Body;
         var player = peer.Expect(0, 2).Body;
-        That(actor[133 + NameWidth(name)] == count && player[126] == count && player.Length == 167 + count * 91 + totalSkills * 3 + extraEquipmentBytes,
+        That(actor[133 + NameWidth(name)] == count && player[126] == count && player.Length == 167 + count * 88 + totalSkills * 3 + extraEquipmentBytes,
             "appearance and complete player skill tail agree after wear change");
         return (main, actor, player);
     }

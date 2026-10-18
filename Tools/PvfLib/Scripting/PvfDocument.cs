@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace PvfLib;
 
 /// <summary>按行首标签索引的只读脚本视图；显式空字段和零值覆盖父脚本。</summary>
@@ -123,6 +125,19 @@ public sealed class PvfDocument
         }
         if (stack.Count != 0 || !result.HasValue) throw new InvalidDataException("PVF根整数声明结构无效");
         return result;
+    }
+
+    // 分类可分多次声明；按完整字符串匹配，不能把 random clear avatar 认作 clear avatar。
+    public bool ContainsString(string tag, string value)
+    {
+        if (!fields.ContainsKey(tag))
+            return parent?.ContainsString(tag, value) == true;
+        foreach (Match field in Regex.Matches(text, @"^\[" + Regex.Escape(tag) + @"\](.*?)(?=\r?\n\[|\z)",
+            RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.IgnoreCase))
+            foreach (Match token in Regex.Matches(field.Groups[1].Value, "`([^`]*)`"))
+                if (string.Equals(token.Groups[1].Value, value, StringComparison.OrdinalIgnoreCase))
+                    return true;
+        return false;
     }
 
     public string Section(string tag) => fields.TryGetValue(tag, out var field)

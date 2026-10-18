@@ -44,9 +44,8 @@ internal static class EquipmentProtocolWriter
             writer.Write(item.Avatar is null ? core.Value : item.RemainingSeconds(now));
             writer.Write(core.Attr);
             writer.Write(core.Durability);
-            writer.Write((byte)0);
-            writer.Write((byte)0); // 023C3BFA/023C3C08 的两项资源属性尚未命名。
-            writer.Write(item.Avatar is { ClearAvatarId: > 0 } avatar ? avatar.ClearAvatarId : (int)core.SealFlag);
+            writer.Write(core.Extension121); // 023C3BFA/023C3C08合并为u16，进入普通核心+195。
+            writer.Write(item.Avatar is { } avatar ? avatar.ClearAvatarId : (int)core.SealFlag);
             if (item.Position.Index == 9 && item.Avatar is { ClearAvatarId: > 0 })
                 ItemListProtocolWriter.WriteAvatarSockets(writer, item.Avatar);
             writer.Write(core.EnchantCardId);
@@ -103,9 +102,10 @@ internal static class EquipmentProtocolWriter
             Raw(writer, extension => extension.Write(core.Extension97));
             Raw(writer, extension => extension.Write(core.GuardianGemKeys));
             writer.Write(core.Extension109);
-            Raw(writer, extension => extension.Write(core.Extension110));
             Raw(writer, extension => { extension.Write(core.Extension114.Value); extension.Write(core.Extension114.Flag); });
-            Raw(writer, extension => { extension.Write(core.Extension119); extension.Write(core.Extension120); extension.Write(core.Extension121); });
+            // 023C40A1目标仅为1B；多写会覆盖前面的来源编号临时变量。
+            Raw(writer, extension => extension.Write(core.Extension119));
+            Raw(writer, extension => extension.Write((int)core.Extension120));
         }
     }
 

@@ -120,7 +120,7 @@ internal static class AssetPublicationTests
         await projection.EnterAsync(context);
         Packet player = sent.Single(packet => packet.Kind == 0 && packet.Opcode == (ushort)NotiPacketType.USERINFO && packet.Body[0] == 1);
         AssetWireResult playerEquipment = AssetWireChecks.PlayerEntries(player.Body, 126);
-        TestCheck.That(playerEquipment.ConsumedBytes == 461 && playerEquipment.Entries.Length == 5,
+        TestCheck.That(playerEquipment.ConsumedBytes == 446 && playerEquipment.Entries.Length == 5,
             "fresh selected Player projection consumes complete equipment and public tail");
         TestCheck.That(playerEquipment.Entries.All(entry => instances.Any(item => item.Position.Index == entry.Slot && item.Core.ItemId == entry.TemplateId
             && item.Core.Value == entry.Data && item.Core.Durability == entry.Durability)),

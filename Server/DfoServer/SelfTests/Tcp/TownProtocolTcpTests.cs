@@ -422,8 +422,8 @@ internal static partial class TownProtocolTcpTests
                 That(actorEquipment.Entries.Length == 5 && actorEquipment.ConsumedBytes == 126, "town Actor consumes five complete entries");
                 CheckAssetRows(fixture, job, actorEquipment, false);
                 player = packets[3].Body;
-                That(U32(player, 32) == 89 && player.Length == 622 + 6 * counts[job] && player[598] == (counts[job] == 0 ? 255 : 0), "player stat/skill width");
-                at = 599;
+                That(U32(player, 32) == 89 && player.Length == 607 + 6 * counts[job] && player[583] == (counts[job] == 0 ? 255 : 0), "player stat/skill width");
+                at = 584;
                 for (int tree = 0; tree < 2; tree++)
                 {
                     int count = player[at++];

@@ -138,7 +138,8 @@ internal static partial class FormalDungeonTcpTests
                     { writer.Write((byte)1); writer.Write((byte)family.Bag); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write(family.Worn); }));
                     if (family.Worn is 26 or 33) That(peer.Expect(0, 105).Body[0] == 5, "换真实或幻化宠物保留全部详情UID通知");
                     int deltas = family.Worn is >= 26 and <= 29 ? 2 : 1;
-                    ushort opcode = family.Bag == InventoryListType.Main ? (ushort)1681 : (ushort)14;
+                    bool suppressNotice = family.Bag is InventoryListType.Main or InventoryListType.Avatar;
+                    ushort opcode = suppressNotice ? (ushort)1681 : (ushort)14;
                     for (int index = 0; index < deltas; index++)
                     {
                         var delta = peer.Expect(0, opcode).Body;
@@ -146,10 +147,10 @@ internal static partial class FormalDungeonTcpTests
                         short slot = list == 3 ? family.Worn : bag;
                         int beforeId = list == 3 ? toId : fromId;
                         int afterId = list == 3 ? fromId : toId;
-                        if (family.Bag == InventoryListType.Main && toId != 0 || beforeId != 0 && afterId != 0 && beforeId != afterId)
+                        if (suppressNotice && toId != 0 || beforeId != 0 && afterId != 0 && beforeId != afterId)
                         {
                             That(delta[0] == list && U16(delta, 1) == 1 && U16(delta, 3) == slot && U32(delta, 5) == uint.MaxValue,
-                                "普通卸装和同模板换装均先清ACK对象，特殊容器仍只清不同模板覆盖");
+                                "普通装备及装扮卸装和互换先清ACK对象，宠物仍沿原模板覆盖规则");
                             delta = peer.Expect(0, opcode).Body;
                         }
                         That(delta[0] == list, "保留所属容器及宠物专属差量");
@@ -260,7 +261,12 @@ internal static partial class FormalDungeonTcpTests
                 { writer.Write((byte)1); writer.Write((byte)1); writer.Write(bag); writer.Write(1);
                     writer.Write((byte)3); writer.Write(wornSlot); });
                 That(ack.SequenceEqual(expectedAck), $"结算光环ACK: {wornSlot}, {fromId}->{toId}, actual={Convert.ToHexString(ack)}, expected={Convert.ToHexString(expectedAck)}");
-                peer.Expect(0, 14);
+                var avatarDelta = peer.Expect(0, 1681).Body;
+                if (toId != 0)
+                {
+                    That(U32(avatarDelta, 5) == uint.MaxValue, "结算卸下光环先静默清除ACK包裹图标");
+                    peer.Expect(0, 1681);
+                }
                 byte[] actor = peer.Expect(0, 2).Body;
                 int nameWidth = checked((int)U32(actor, 123));
                 int count = actor[133 + nameWidth];

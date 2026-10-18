@@ -11,7 +11,7 @@ internal static class InventoryMoveService
     const ushort CannotMoveItem = 23;
 
     public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds,
-        PremiumContractCatalog? contracts = null)
+        PremiumContractCatalog? contracts = null, GameWorld.Characters.CharacterCatalog? characters = null)
     {
         if (request.Source == new InventorySlot(InventoryListType.Equipment, 30) ||
             request.Destination == new InventorySlot(InventoryListType.Equipment, 30))
@@ -80,7 +80,7 @@ internal static class InventoryMoveService
             }
         }
         var planned = before.Items.ToDictionary(item => item.Position);
-        var moving = PrepareForDestination(source, destinationSlot, destination, catalog);
+        var moving = PrepareForDestination(source, destinationSlot, destination, catalog, character, characters, utcSeconds);
         if (destination is not null && source.Core.IsStackable && destination.Core.IsStackable && source.Core.ItemId == destination.Core.ItemId)
         {
             // 同模板拖放只能完整合并本次数量，不能偷偷少移动或退化为交换。
@@ -94,7 +94,7 @@ internal static class InventoryMoveService
             if (count != source.Core.Count || !AllowsAt(sourceSlot, destination.Core) ||
                 sourceSlot.List != destinationSlot.List && !InventoryCargoService.AllowsInsert(destination.Core, sourceSlot.List, catalog.Get(destination.Core.ItemId)))
                 return InventoryResult.Reject(CannotMoveItem);
-            planned[sourceSlot] = PrepareForDestination(destination, sourceSlot, source, catalog);
+            planned[sourceSlot] = PrepareForDestination(destination, sourceSlot, source, catalog, character, characters, utcSeconds);
             planned[destinationSlot] = moving;
             count = 1;
         }
@@ -222,7 +222,8 @@ internal static class InventoryMoveService
         bool HasSkill(ushort id) => character.Skills.Any(skill => skill.Id == id && skill.Level != 0);
     }
 
-    static InventoryItem PrepareForDestination(InventoryItem item, InventorySlot destination, InventoryItem? previous, ItemCatalog catalog)
+    static InventoryItem PrepareForDestination(InventoryItem item, InventorySlot destination, InventoryItem? previous, ItemCatalog catalog,
+        Character character, GameWorld.Characters.CharacterCatalog? characters, long utcSeconds)
     {
         var source = item.Position;
         var core = item.Core;
@@ -237,13 +238,32 @@ internal static class InventoryMoveService
         if (avatar is not null)
         {
             var template = catalog.Get(core.ItemId);
-            bool borrow = template.CloneAvatar && template.BorrowAvatarAppearance && destination.List == InventoryListType.Equipment &&
-                previous?.Avatar is not null && !catalog.Get(previous.Core.ItemId).CloneAvatar;
+            bool borrow = template.CloneAvatar && template.BorrowAvatarAppearance && destination.List == InventoryListType.Equipment;
+            int appearance = 0;
+            long sourceUid = 0;
+            AvatarDetail? previousAppearance = null;
+            if (borrow)
+            {
+                if (previous?.Avatar is { } prior)
+                {
+                    bool previousClone = catalog.Get(previous.Core.ItemId).CloneAvatar;
+                    appearance = previousClone ? prior.ClearAvatarId : previous.Core.ItemId;
+                    sourceUid = previousClone ? prior.ClearAvatarSourceUid : previous.Uid;
+                    previousAppearance = prior;
+                }
+                // 空武器装扮先继承实际武器；皮肤仓库选定武器外观归独立系统，不能写入此关联字段。
+                if (appearance == 0 && destination.Index == 10 &&
+                    character.Inventory.Find(new(InventoryListType.Equipment, 12)) is { } weapon && !weapon.IsExpired(utcSeconds))
+                    appearance = weapon.Core.ItemId;
+                if (appearance == 0)
+                    appearance = characters?.Get(character.Job).DefaultAvatarEquipment.GetValueOrDefault(checked((byte)destination.Index)) ?? 0;
+            }
             avatar = avatar with
             {
-                ClearAvatarId = borrow ? previous!.Core.ItemId : 0,
-                Color1 = template.CloneAvatar ? borrow ? previous!.Avatar!.Color1 : (ushort)0 : avatar.Color1,
-                Color2 = template.CloneAvatar ? borrow ? previous!.Avatar!.Color2 : (ushort)0 : avatar.Color2
+                ClearAvatarId = appearance,
+                ClearAvatarSourceUid = sourceUid,
+                Color1 = template.CloneAvatar ? previousAppearance?.Color1 ?? 0 : avatar.Color1,
+                Color2 = template.CloneAvatar ? previousAppearance?.Color2 ?? 0 : avatar.Color2
             };
         }
         return item with { Position = destination, Core = core, Avatar = avatar };

@@ -72,8 +72,17 @@ internal static class CollectBoxTcpTests
             var state = peer.Expect(0, 1030);
             ValidateState(state, box.Index, slot.ItemId, selected: true);
             That(U32(state.Body, 2) == uint.MaxValue, "历史活动期限保持过期显示但不阻断宝珠放入");
-            clock.Now = now;
             peer.Expect(1, 1024, [1]);
+            // 等原请求尾部的日界通知完成后再回拨，不能与新增每日视图刷新竞争。
+            That(peer.InitialDailyBoosterPackets.Length > 0, "收集箱选角已初始化完整每日礼盒视图");
+            foreach (var packet in peer.InitialDailyBoosterPackets)
+            {
+                That(Inventory.DailyBoosterProjectionTests.Decode(packet).Values.All(used => used == 0),
+                    "本用例没有消费每日礼盒，跨日应完整恢复零次数");
+                peer.Expect(0, 541, packet);
+            }
+            peer.Barrier();
+            clock.Now = now;
             peer.Send(1024, Add(box.Index, sourceSlot, slot.ItemId));
             peer.Expect(1, 1024, [0, 0x17, 0]);
             peer.Send(1025, Remove(box.Index, int.MaxValue));
