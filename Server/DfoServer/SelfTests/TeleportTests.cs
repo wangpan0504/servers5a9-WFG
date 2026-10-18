@@ -29,6 +29,8 @@ internal static class TeleportTests
         That(potion == new PotionTeleportRequest(65, 2600014, 0, new(38, 0, 1327, 234, 1)), "原生237请求完整保留源槽、模板、模式和目的地");
         That(TeleportRequests.Solo(Convert.FromHexString("FFFFFFFF0700000027030F03CD0005")) ==
             new SoloTeleportRequest(-1, 7, new(39, 3, 783, 205, 5)), "原生470区分玩家ID与NPC ID而非把i32截断成u16");
+        That(TeleportRequests.Solo(Convert.FromHexString("ffffffffffffffff28049d014b0105")) ==
+            new SoloTeleportRequest(-1, -1, new(40, 4, 413, 331, 5)), "实机个人传送470的角色和NPC都是-1，坐标在后7字节");
         Reject<InvalidDataException>(() => TeleportRequests.Potion(new byte[13]), "237短包不能被当成功");
         Reject<InvalidDataException>(() => TeleportRequests.Solo(new byte[16]), "470未知追加字段拒绝");
         That(TeleportCatalog.ReadPotion(new(PotionText)) is { MinimumLevel: 60, CoolTime: 10000 } &&
@@ -65,8 +67,10 @@ internal static class TeleportTests
             fixture.Service.Potion(character with { Level = 59 }, fixture.Request, fixture.Clock.Now + 10000).Plan is null,
             "绕过普通邻接不绕过目的地任务与药剂等级");
         That(fixture.Service.Solo(character, new(-1, 999, new(2, 0, 10, 10)), null, fixture.Clock.Now).Plan is null &&
-            fixture.Service.Solo(character, new(-1, 7, new(1, 0, 10, 10)), null, fixture.Clock.Now).Plan is null,
-            "未知NPC与私有房间目标拒绝");
+            fixture.Service.Solo(character, new(-1, 7, new(1, 0, 10, 10)), null, fixture.Clock.Now).Plan is null &&
+            fixture.Service.Solo(character, new(-1, -1, new(1, 0, 10, 10, 5)), null, fixture.Clock.Now).Reason == "private-room-target" &&
+            fixture.Service.Solo(character, new(-1, -1, new(2, 0, 30, 30, 5)), null, fixture.Clock.Now).Reason == "ready",
+            "未知NPC与私有房间目标拒绝；双-1按请求坐标传送");
         var aura = session.TeleportSolo(new(-1, 7, new(2, 0, 30, 30)), fixture.Service, null);
         That(aura.Accepted && fixture.Read().TeleportCooldowns.AuraUntil == fixture.Clock.Now + 420000 &&
             TeleportPackets.Cooldown(aura.Receipt!.Travel.Character, fixture.Clock.Now).SequenceEqual(new byte[] { 1, 2, 164, 1, 0, 0 }),

@@ -64,7 +64,10 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
         if (definition is null) return ("aura-unavailable", null);
         if (character.TeleportCooldowns.AuraUntil > now) return ("aura-cooldown", null);
         Location target;
-        if (request.CharacterId == -1 && request.NpcId > 0)
+        // 实机个人传送点选城镇时两个 i32 都是 -1，目的地在随后的 town/area/坐标。不是玩家目标。
+        if (request.CharacterId == -1 && request.NpcId == -1)
+            target = request.Target;
+        else if (request.CharacterId == -1 && request.NpcId > 0)
         {
             target = request.Target;
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
