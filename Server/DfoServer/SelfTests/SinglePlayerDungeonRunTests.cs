@@ -52,6 +52,14 @@ internal static class SinglePlayerDungeonRunTests
             authority, out var fatigueRun, out _) && fatigueRun!.Snapshot.ConsumedFatigue == 0,
             "普通实例在加载成功前不计应耗疲劳");
         var fatigue = fatigueRun!;
+        var noFatigueEntry = fatigue.Entry with { DisableFatigueConsumption = true };
+        That(SinglePlayerDungeonRun.TryCreate(noFatigueEntry,2,200,fatigueRoute,authority,out var noFatigueRun,out _),
+            "疲劳值免扣普通路线仍按原实例身份建立Run");
+        noFatigueRun!.CompleteLoading(noFatigueRun.Snapshot.Identity,Guid.NewGuid());
+        noFatigueRun.Move(noFatigueRun.Snapshot.Identity,Guid.NewGuid(),friendly.Position);
+        noFatigueRun.CompleteLoading(noFatigueRun.Snapshot.Identity,Guid.NewGuid());
+        That(noFatigueRun.Snapshot.ConsumedFatigue == 0 && !noFatigueEntry.HasFreeCombatConsumption &&
+            !noFatigueEntry.DisableGiveupPenalty,"no fatigue的首次房间与过房都不计应耗疲劳值，不附送其他免耗或免罚");
         var loadingIdentity = fatigue.Snapshot.Identity;
         Guid loadingAction = Guid.NewGuid();
         fatigue.CompleteLoading(loadingIdentity, loadingAction);

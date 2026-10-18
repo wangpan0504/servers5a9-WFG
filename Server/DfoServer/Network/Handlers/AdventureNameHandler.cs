@@ -52,7 +52,8 @@ internal sealed class AdventureNameHandler(AdventureNameService service, Adventu
         if (initial && result.Changed && result.Selected is { } selected && Guard())
         {
             await context.Notify(NotiPacketType.USERINFO,
-                TownPackets.Actor(selected, context.Channel, adventureName: result.Snapshot!.State.Name), "adventure_name_actor", Guard);
+                TownPackets.Actor(selected, context.Channel, adventureName: result.Snapshot!.State.Name,
+                    premiumPcRoom: context.Session.PremiumPcRoom), "adventure_name_actor", Guard);
             context.Owner.Execute(() =>
             {
                 if (Guard()) town.Refresh(context);

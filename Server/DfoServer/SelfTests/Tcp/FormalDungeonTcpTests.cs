@@ -270,6 +270,7 @@ internal static partial class FormalDungeonTcpTests
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"black-diamond FormalTcp 30",out string blackReply) && blackReply.StartsWith("OK ") &&
                 DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"gold-card FormalTcp 30",out string goldReply) && goldReply.StartsWith("OK "),
                 "在线GM为当前账号保存黑钻及58期限，启用魔王服务0但不隐式启用双倍");
+            peer.CheckBlackDiamondRefresh(active: true);
             expectContractOverview = true;
             var fatigueAfterBlack = fixture.Query("SELECT f.used,f.maximum,f.remaining,c.revision FROM character_fatigue f JOIN characters c ON c.id=f.character_id WHERE c.id=$p0",peer.Id).Single();
             That(Convert.ToInt64(fatigueAfterBlack[0]) == Convert.ToInt64(fatigueBeforeBlack[0]) &&

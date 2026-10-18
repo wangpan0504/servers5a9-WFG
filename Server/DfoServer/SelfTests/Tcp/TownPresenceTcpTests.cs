@@ -9,15 +9,24 @@ internal static class TownPresenceTcpTests
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "presence"), gm: true, resources: resources);
         await fixture.StartAsync();
+        That((await fixture.CliAsync(null, "--gm", "pc-room", "on")) == "OK {\"premiumPcRoom\":true}",
+            "新建会话前全局开启独立网吧身份");
         using (var alpha = Open(fixture, "alpha"))
         using (var beta = Open(fixture, "beta"))
         {
             alpha.Create("PresenceA");
             beta.Create("PresenceB");
-            alpha.Select();
-            beta.Select();
+            AssertBlackDiamondActor(alpha.Select()[2].Body, active: false, pcRoom: true);
+            AssertBlackDiamondActor(beta.Select()[2].Body, active: false, pcRoom: true);
             alpha.Barrier();
             beta.Barrier();
+            string beforePcRoom = fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account");
+            That((await fixture.CliAsync(null, "--gm", "pc-room", "off")) == "OK {\"premiumPcRoom\":false}",
+                "全局关闭网吧身份而不是按账号撤销黑钻");
+            alpha.CheckPcRoomRefresh(false, blackDiamond: false);
+            beta.CheckPcRoomRefresh(false, blackDiamond: false);
+            That(fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account") == beforePcRoom,
+                "同一全局开关作用于两个账号但不写任何角色资产或会员期限");
             alpha.Send(1426);
             alpha.SendBarrier();
             alpha.Batch((0, 23), (0, 24), (1, 1347));
@@ -31,6 +40,23 @@ internal static class TownPresenceTcpTests
                 w.Write((ushort)622); w.Write((ushort)196); w.Write((byte)0); w.Write((byte)3); }),
                 "远端23携带同一地图与显示位，创建实体而不切换接收者地图");
             Bytes(aEntry[3].Body, Position(beta.Id, 622, 196), "peer entrance position");
+            string otherBefore = fixture.Snapshot("SELECT * FROM account_wallets WHERE account='beta'") +
+                fixture.Snapshot("SELECT * FROM characters WHERE account='beta'");
+            foreach (bool active in new[] { true, false })
+            {
+                string reply = await fixture.CliAsync(null, "--gm", "account", "alpha", "black-diamond", "PresenceA", active ? "30" : "0");
+                That(reply.StartsWith("OK ", StringComparison.Ordinal), "同屏场景按账号开通或撤销黑钻");
+                alpha.CheckBlackDiamondRefresh(active);
+                beta.SendBarrier();
+                var refreshed = beta.Expect(0, 2).Body;
+                That(U16(refreshed, 121) == alpha.Id, "黑钻刷新只替换原同屏成员，不更换成员身份或场景");
+                AssertBlackDiamondActor(refreshed, active);
+                beta.Expect(1, 1347, [1]);
+                beta.Barrier();
+                That(fixture.Snapshot("SELECT * FROM account_wallets WHERE account='beta'") +
+                    fixture.Snapshot("SELECT * FROM characters WHERE account='beta'") == otherBefore,
+                    "同屏观察不把源账号黑钻或PC房资格写入接收账号");
+            }
             string selectionBefore = fixture.Snapshot();
             alpha.Send(15, new byte[4]);
             var select = alpha.Batch((0, 6), (1, 15), (0, 3), (0, 1536), (0, 27));

@@ -101,6 +101,7 @@ internal sealed record DungeonMaze(
 
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
+    public string? DungeonType { get; init; }
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
     // [tournament dungeon] 1：魂·黄龙/青龙大会等比赛副本（实验性，依据来自 Go 项目反汇编）。
@@ -122,6 +123,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         RawSections.Where(row => row.Tag == "enter without fatigue").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool RoomMoveKeepState { get; init; }
     public bool IndividualMapMovement { get; init; }
+    public bool DisableGiveupPenalty { get; init; }
+    public bool DisableFatigueConsumption { get; init; }
 
     bool Marker(string name)
     {
@@ -383,10 +386,26 @@ internal sealed class DungeonCatalog
         Finish();
         if (mazes.Count == 0)
             throw new NotSupportedException("unsupported: 未发现 maze info 资源结构");
+        string? dungeonType = sections.LastOrDefault(section => section.Tag == "dungeon type")?.Tokens is [{ Type: 6 } type]
+            ? resolve(type.Value) : null;
         return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections))
         {
+            DungeonType = dungeonType,
             RoomMoveKeepState = Flag("room move keep state"),
-            IndividualMapMovement = Flag("individual map movement")
+            IndividualMapMovement = Flag("individual map movement"),
+            DisableFatigueConsumption = sections.Any(section => section.Tag == "no fatigue" && section.Tokens.Count == 0),
+            // 同名数值后值覆盖，无值开关重复置位；不同标签独立授予豁免。
+            DisableGiveupPenalty = dungeonType is "tower of dazzlement" or "tower of death" or "boss rush dungeon" ||
+                sections.Where(section => section.Tag is "raid dungeon" or "raid normal dungeon" or "risk dungeon" or
+                    "dimension dungeon" or "tower of despair" or "blood dungeon" or "operation hope dungeon" or
+                    "enable give up" or "anton dungeon" or "event dungeon" or "ancient dungeon" or "no giveup panalty")
+                .GroupBy(section => section.Tag, StringComparer.Ordinal).Any(group => group.Key switch
+                {
+                    "raid dungeon" or "risk dungeon" or "operation hope dungeon" or "event dungeon" or "ancient dungeon" =>
+                        group.Last().Tokens is [{ Type: 0, Value: 1 }],
+                    "blood dungeon" => group.Last().Tokens is [{ Type: 0, Value: 1 or 2 }],
+                    _ => group.Any(section => section.Tokens.Count == 0)
+                })
         };
 
         bool Flag(string tag) => sections.LastOrDefault(section => section.Tag == tag)?.Tokens is [{ Type: 0, Value: 1 }];

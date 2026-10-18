@@ -299,6 +299,53 @@ internal sealed class TcpPeer : IDisposable
         w.Write(encoded);
     });
     public static int NameWidth(string name) => names.GetByteCount(name);
+    public static void AssertBlackDiamondActor(byte[] body, bool active, bool dungeon = false, bool pcRoom = false)
+    {
+        TestCheck.That(body.Length > 134 && body[0] == 0 && U16(body, 1) == 1, "会员刷新使用完整单角色Actor，不以Player冒充PC房字段");
+        int count = checked(133 + (int)U32(body, 123));
+        TestCheck.That(count < body.Length && body[count - 1] == (dungeon ? 1 : 0), "会员刷新保持当前城镇或副本成员状态");
+        int pet = checked(count + 1 + body[count] * 25 + 22);
+        int pcroom = checked(pet + 9 + (int)U32(body, pet + 4));
+        TestCheck.That(pcroom + 1 < body.Length && body[pcroom] == (pcRoom ? 1 : 0) && body[pcroom + 1] == (active ? 1 : 0),
+            "全局网吧身份与账号黑钻外观各自发送，不互相开启或清除");
+    }
+    public void CheckBlackDiamondRefresh(bool active, bool dungeon = false, bool appearanceChanged = true, bool pcRoom = false)
+    {
+        Send(63);
+        var first = Read();
+        bool ceraFirst = first is { Kind: 0, Opcode: 53 };
+        var overview = ceraFirst ? Expect(0, 1760) : first;
+        TestCheck.That(overview is { Kind: 0, Opcode: 1760 } && overview.Body.Length == 1 + overview.Body[0] * 9 &&
+            Enumerable.Range(0, overview.Body[0]).Any(index => overview.Body[1 + index * 9] == 56 &&
+                (BinaryPrimitives.ReadInt64LittleEndian(overview.Body.AsSpan(2 + index * 9)) > 0) == active),
+            "黑钻刷新包含当前56有效期或明确清除值，不跳过其他通知");
+        if (appearanceChanged)
+        {
+            AssertBlackDiamondActor(Expect(0, 2).Body, active, dungeon, pcRoom);
+            var player = Expect(0, 2).Body;
+            TestCheck.That(player[0] == 1 && U16(player, 22) == Id && player[36 + 84] == 100,
+                "会员刷新保持Actor再完整本人Player包序，不改变无虚弱时的属性");
+        }
+        // 屏障ACK不表示命令尾部已完成；GM或时钟变化也可能由上一请求尾部发现。
+        if (!ceraFirst) Expect(0, 53);
+        Barrier();
+    }
+    public void CheckPcRoomRefresh(bool enabled, bool blackDiamond, bool dungeon = false, bool appearanceChanged = true)
+    {
+        Send(63);
+        var first = Read();
+        bool ceraFirst = first is { Kind: 0, Opcode: 53 };
+        if (appearanceChanged)
+        {
+            var actor = ceraFirst ? Expect(0, 2) : first;
+            TestCheck.That(actor is { Kind: 0, Opcode: 2 }, "网吧身份变化只刷新Actor，不捏造账号契约通知");
+            AssertBlackDiamondActor(actor.Body, blackDiamond, dungeon, enabled);
+            TestCheck.That(Expect(0, 2).Body is [1, ..], "网吧身份刷新后恢复完整本人Player");
+            if (!ceraFirst) Expect(0, 53);
+        }
+        else TestCheck.That(ceraFirst, "同值开关或Loading不重复刷新Actor");
+        Barrier();
+    }
     public static string DecodeName(byte[] body, int at, int width) => names.GetString(body, at, width);
     public static string DecodeActorAdventureName(byte[] body)
     {

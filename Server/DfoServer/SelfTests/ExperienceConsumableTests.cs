@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
@@ -111,6 +112,10 @@ internal static class ExperienceConsumableTests
                 "未知结果不安装旧内存或假报失败回滚");
             That(f.Session.UseExperienceConsumable(Slot, service).Outcome == ConsumableUseOutcome.CloseConnection,
                 "未知结果保留未决状态，不能重发增量ACK");
+            var committed = f.Read();
+            TestCheck.Reject<InvalidOperationException>(() => f.Session.SetCardMembership(before.Name, CardMembershipKind.BlackDiamond,
+                clock.GetUtcNow().AddDays(1).ToUnixTimeSeconds()), "消耗提交结果未确认时不能借黑钻替换原角色快照");
+            That(Same(committed, f.Read()) && Same(before, f.Session.Selected!), "拒绝黑钻修改不影响已提交经验与原未决内存");
             f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             That(Same(f.Read(), f.Session.Selected!), "重新选角加载实际已提交经验和库存，不补发奖励");
         }

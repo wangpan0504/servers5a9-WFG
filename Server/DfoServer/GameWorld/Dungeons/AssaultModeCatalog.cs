@@ -43,7 +43,7 @@ internal sealed class AssaultModeCatalog
 
     public static AssaultModeCatalog Load(PvfArchive pvf, DungeonCatalog dungeons)
     {
-        var catalog = Parse(pvf.ReadTokens(ResourcePath), pvf.ResolveString, id => ReadRequirement(dungeons.Get(id), pvf.ResolveString));
+        var catalog = Parse(pvf.ReadTokens(ResourcePath), pvf.ResolveString, id => ReadRequirement(dungeons.Get(id)));
         catalog.ClearRewards = ParseClearRewards(pvf.ReadTokens(ClearRewardPath), pvf.ResolveString,
             catalog.Missions.Values.SelectMany(rows => rows).ToHashSet());
         return catalog;
@@ -203,11 +203,9 @@ internal sealed class AssaultModeCatalog
 
     // 任务副本必须声明 [dungeon type] `assaultmode dungeon`、最低等级与唯一的 [required item] itemId count flag。
     // flag(第三列)PVF 均为1，含义待确认；不据此改变扣除行为。
-    internal static AssaultModeMissionRequirement ReadRequirement(DungeonDefinition definition, Func<int, string> resolve)
+    internal static AssaultModeMissionRequirement ReadRequirement(DungeonDefinition definition)
     {
-        var type = definition.RawSections.Where(row => row.Tag == "dungeon type").ToArray();
-        if (type is not [{ Tokens: [{ Type: not 0 } token] }] ||
-            !string.Equals(resolve(token.Value).Trim(), MissionDungeonType, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(definition.DungeonType?.Trim(), MissionDungeonType, StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException("副本不是 assaultmode dungeon: " + definition.Id);
         if (definition.MinimumLevel is not > 0)
             throw new InvalidDataException("强袭任务副本缺少最低等级: " + definition.Id);

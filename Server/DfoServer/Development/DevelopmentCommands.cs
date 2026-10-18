@@ -48,7 +48,7 @@ internal static class DevelopmentCommands
             }
         }
 
-        if (request.Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue)
+        if (request.Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue or DevelopmentAction.PcRoom)
         {
             Console.Error.WriteLine("调试开关仅支持在线服务，请传入实际运行实例的 --gm-port。");
             return 1;

@@ -68,7 +68,7 @@ internal static class TownPackets
     }
 
     public static byte[] Actor(Character character, ChannelIdentity channel = default, long? utcSeconds = null,
-        string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town)
+        string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
@@ -110,9 +110,11 @@ internal static class TownPackets
             writer.Write(creatureEnabled ? checked((uint)creature!.Core.ItemId) : 0u);
             PacketEncoding.WriteString(writer, creature?.Creature?.Name ?? "");
             writer.Write(creatureEnabled ? (byte)1 : (byte)0); // 零会令02CD6FA0跳过场景挂接与更新。
-            writer.Write((byte)0); // 02677320：PC房效果，与黑钻分开。
-            // 02677430写Actor+344h；02AA85A4/02AA8ACC据此绘制金色名称和pcroompremiumreward.img的index3。
-            writer.Write(character.BlackDiamondExpiresAt > (utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()) ? (byte)1 : (byte)0);
+            bool blackDiamond = character.BlackDiamondExpiresAt > (utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            // 02677320写Data+33C：网吧身份控制index2及原生退图警告，不由黑钻联动开启。
+            writer.Write(premiumPcRoom ? (byte)1 : (byte)0);
+            // 02677430写Data+344；02AA1A60独立绘制index3，两种身份同时有效时保留两张图标。
+            writer.Write(blackDiamond ? (byte)1 : (byte)0);
             writer.Write(0u);
             PacketEncoding.WriteString(writer, character.Guild?.Name ?? "");
             writer.Write(0u);

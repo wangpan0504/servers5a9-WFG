@@ -28,6 +28,8 @@ internal sealed record DungeonEntryPlan(
     public int? PlayerTeam { get; init; }
     public bool IsTutorial { get; init; }
     public bool DisableClearReward { get; init; }
+    public bool DisableGiveupPenalty { get; init; }
+    public bool DisableFatigueConsumption { get; init; }
     public Guid QuestAcceptanceId { get; init; }
     public bool IsOrdinaryHunt { get; init; }
     public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
@@ -37,7 +39,8 @@ internal sealed record DungeonEntryPlan(
     public bool HasFreeCombatConsumption => IsPractice || IsTrainingRoom || IsClassExperience;
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
-    public bool UsesFatigue => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice;
+    public bool RequiresFatigueOwner => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice;
+    public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public bool HasExplicitClearMap { get; init; }
@@ -366,6 +369,8 @@ internal sealed record DungeonEntryPlan(
             PlayerTeam = 0,
             IsTutorial = definition.IsTutorial,
             DisableClearReward = definition.DisableClearReward,
+            DisableGiveupPenalty = definition.DisableGiveupPenalty,
+            DisableFatigueConsumption = definition.DisableFatigueConsumption,
             MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],

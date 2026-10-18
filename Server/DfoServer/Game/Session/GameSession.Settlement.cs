@@ -343,7 +343,7 @@ internal sealed partial class GameSession
 
     public CardMembership SetCardMembership(string name,CardMembershipKind kind,long expires) => owner.Execute(() =>
     {
-        if (HasPendingFormalCard ||
+        if (pendingRental is not null || pendingConsumableUse is not null || HasPendingTownQuestCommit || HasPendingFormalCard ||
             formalDungeon?.HasPendingFatigue == true || formalDungeon?.Run.HasPendingDeath == true ||
             formalDungeon?.Run.HasPendingSettlement == true || formalDungeon?.Ground.HasPendingOperation == true ||
             formalDungeon?.PendingTutorialClear is not null || pendingQuestCompletion is not null ||

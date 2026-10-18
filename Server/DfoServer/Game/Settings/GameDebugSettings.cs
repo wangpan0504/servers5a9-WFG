@@ -7,4 +7,6 @@ internal sealed class GameDebugSettings
     public volatile bool IgnoreCashShopAbsoluteExpiration = true;
     public volatile bool IgnoreCashShopUsablePeriod = false;
     public volatile bool InfiniteFatigue = true;
+    // 网吧身份独立于账号黑钻；默认关闭，重启不沿用上次的调试资格。
+    public volatile bool PremiumPcRoom;
 }

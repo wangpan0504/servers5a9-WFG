@@ -105,7 +105,7 @@ internal static partial class FormalDungeonTcpTests
             Use(peer,69,1073); Accepted(peer,69,1073); peer.Barrier();
             That(ItemCount(68) == 0 && ItemCount(69) == 1,"离开修炼场后投掷和放置恢复实扣，最后一件清槽且不泄漏免耗策略");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Expect(0,4,[10]); peer.Barrier();
-            That(fixture.Query("SELECT stamina_until>0 FROM characters WHERE id=$p0",id) is [[1L]], "普通副本撤退保存虚弱，与修炼场区分");
+            That(fixture.Query("SELECT stamina_until>0 FROM characters WHERE id=$p0",id) is [[1L]], "达到20级门槛的普通副本撤退保存虚弱，与修炼场区分");
         }
         Console.WriteLine("PASS 修炼场原生道具免扣、sub type2完整同步、脚本材料及复活币免耗、丢弃/商城实扣及场外恢复消费TCP");
 

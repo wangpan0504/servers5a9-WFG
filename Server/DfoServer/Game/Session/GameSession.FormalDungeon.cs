@@ -198,7 +198,8 @@ internal sealed partial class GameSession
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
-        if (entry.UsesFatigue && (expected.Fatigue is null || FatigueForClient(expected).Remaining == 0)) return RejectFormal("fatigue-exhausted");
+        if (entry.RequiresFatigueOwner && expected.Fatigue is null ||
+            entry.UsesFatigue && FatigueForClient(expected).Remaining == 0) return RejectFormal("fatigue-exhausted");
         var ordinaryReturn = entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
@@ -684,10 +685,8 @@ internal sealed partial class GameSession
         else
         {
             var before = Selected.Inventory;
-            // 转职体验(7142)带[no fatigue]且承诺不改资产：未通关退出不写魔王虚弱期限。
-            var after = !dungeon.Entry.IsTutorial && !dungeon.Entry.HasFreeCombatConsumption && Selected.Level >= 6 &&
-                dungeon.Run.Phase == SinglePlayerDungeonPhase.Dungeon
-                ? before with { StaminaUntil = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 600 } : before;
+            var after = StaminaRecoveryService.ApplyDungeonRetreat(Selected, dungeon.Entry, dungeon.Run.Phase, DateTimeOffset.UtcNow,
+                PremiumPcRoom);
             var back = dungeon.OrdinaryReturnPosition ?? Selected.Position;
             if (Selected.Position != back || after != before)
                 Selected = repository.Save(owner, Selected, back, Selected.Return,

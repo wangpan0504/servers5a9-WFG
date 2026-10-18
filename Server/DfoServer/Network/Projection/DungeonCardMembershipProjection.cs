@@ -6,12 +6,12 @@ namespace DfoServer.Network.Projection;
 
 internal static class DungeonCardMembershipProjection
 {
-    public static async Task RefreshAsync(GameConnectionContext context, bool includeOverview = true)
+    public static async Task RefreshAsync(GameConnectionContext context, bool includeOverview = true, DateTimeOffset? frozenAt = null)
     {
         var receipt = context.Session.CardMembershipForClient();
         if (receipt is null) return;
         bool CanSend() => context.Session.CanPublishCardMembership(receipt);
-        var now = DateTimeOffset.UtcNow;
+        var now = frozenAt ?? DateTimeOffset.UtcNow;
         if (includeOverview && context.Premiums is { } premiums) await premiums.ContractsAsync(receipt.Character, now, CanSend, [56, 58]);
         else if (includeOverview) await context.Notify(NotiPacketType.PREMIUM_INFO_LIST,
             PremiumPackets.SelectEntries(receipt.Character.Inventory.AccountWallet, now, [56, 58]), "premium_info_committed", CanSend);

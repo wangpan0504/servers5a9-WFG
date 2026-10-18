@@ -40,7 +40,8 @@ internal sealed class GuildProjection(InventoryProjection inventory, TownPresenc
         await context.Notify(NotiPacketType.GUILD_ENTER,
             GuildPackets.Entered(guild.Id, character.Id, guild.Name, character.Name), "guild_enter", CanSend);
         await context.Notify(NotiPacketType.USERINFO,
-            TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName()), "guild_actor", CanSend);
+            TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName(),
+                premiumPcRoom: context.Session.PremiumPcRoom), "guild_actor", CanSend);
         await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(guild, context.Channel.ServerIndex), "guild_information", CanSend);
         context.Owner.Execute(() =>
         {

@@ -35,7 +35,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (contracts is not null)
         {
             var cubeService = new DfoServer.Game.Inventory.Services.CubeContractService(contracts);
-            context.Premiums = new(context, cubeService, stats ?? throw new InvalidOperationException("契约缺少属性投影"), time, devil, inventory);
+            context.Premiums = new(context, cubeService, stats ?? throw new InvalidOperationException("契约缺少属性投影"), time, devil, inventory, projection);
             cubeConsumption = new(context, cubeService, inventory ?? throw new InvalidOperationException("契约缺少库存投影"), log, time);
         }
         var elevator = new DungeonElevatorProjection(context, log);

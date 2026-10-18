@@ -5,6 +5,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Network.Management;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -13,13 +14,21 @@ namespace DfoServer.Testing;
 
 internal static class DevilContractTcpTests
 {
+    sealed class Clock : TimeProvider
+    {
+        long seconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(Interlocked.Read(ref seconds));
+        public void Set(long value) => Interlocked.Exchange(ref seconds, value);
+    }
+
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var r = resources.ItemResources;
         That(r.CashShop.Product(100817) is { ContractType: 586, Count: 1, DurationDays: 7, CeraPrice: 250 } &&
             r.CashShop.Product(103156) is { Count: 1, DurationDays: 30, CeraPrice: 3880 },
             "现行PVF服务编号和套餐价格不再误读为数量或零价格");
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "devil-contract"), resources: resources);
+        var clock = new Clock();
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "devil-contract"), gm: true, resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         Character initial;
@@ -152,12 +161,128 @@ internal static class DevilContractTcpTests
                 "完整重启后保留各子服务期限和修理次数");
             peer.Barrier();
         }
+        VerifyStaminaExemptions(fixture, clock);
         await fixture.StopAsync();
 
         string State() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold,devil_usage FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_wallets")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_currency_balances")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items"));
+    }
+
+    static void VerifyStaminaExemptions(TcpTestFixture fixture, Clock clock)
+    {
+        fixture.Sql("UPDATE characters SET level=19");
+        using (var peer = Open(fixture))
+        {
+            AssertBlackDiamondActor(peer.Select()[2].Body, active: false);
+            FormalDungeonTcpTests.EntryTown(peer);
+            FormalDungeonTcpTests.Enter(peer);
+            FormalDungeonTcpTests.Load(peer);
+            Return(peer); peer.Barrier();
+            That(fixture.Query("SELECT stamina_until FROM characters") is [[0L]], "19级真实退图不制造虚弱");
+        }
+        fixture.Sql("UPDATE characters SET level=20");
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            FormalDungeonTcpTests.EntryTown(peer);
+            FormalDungeonTcpTests.Enter(peer);
+            FormalDungeonTcpTests.Load(peer);
+            Return(peer);
+            peer.Expect(0, 4, [10]);
+            peer.Barrier();
+            That(fixture.Query("SELECT stamina_until FROM characters") is [[long until]] && until > DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                "20级普通角色真实42退图保存虚弱；魔王免费恢复服务不自动免罚");
+        }
+        // 模拟存量误罚账号已具有黑钻；选角用例必须显式修复，不能依赖修改玩家库的外部脚本。
+        long expires = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds();
+        fixture.Sql($"UPDATE account_wallets SET premium_contracts=json_set(premium_contracts,'$.56',{expires})");
+        using (var peer = Open(fixture))
+        {
+            AssertBlackDiamondActor(peer.Select()[2].Body, active: true);
+            That(fixture.Query("SELECT stamina_until FROM characters") is [[0L]], "黑钻重登清除既有误罚期限");
+            FormalDungeonTcpTests.EntryTown(peer);
+            FormalDungeonTcpTests.Enter(peer);
+            FormalDungeonTcpTests.Load(peer);
+            Return(peer);
+            peer.Barrier();
+            That(fixture.Query("SELECT stamina_until FROM characters") is [[0L]],
+                "有效黑钻真实42退图不新增虚弱，完整回城包序和连接继续可用");
+            SetBlackDiamond(0, active: false);
+            SetBlackDiamond(30, active: true);
+            SetBlackDiamond(31, active: true, appearanceChanged: false);
+            SetPcRoom(true, blackDiamond: true);
+            SetBlackDiamond(0, active: false, pcRoom: true);
+            FormalDungeonTcpTests.Enter(peer);
+            FormalDungeonTcpTests.Load(peer);
+            Return(peer); peer.Barrier();
+            That(fixture.Query("SELECT stamina_until FROM characters") is [[0L]],
+                "只有全局网吧资格时真实42退图免虚弱，不需要黑钻期限");
+            SetPcRoom(false, blackDiamond: false);
+            SetPcRoom(false, blackDiamond: false, appearanceChanged: false);
+            SetBlackDiamond(30, active: true);
+            FormalDungeonTcpTests.Enter(peer);
+            SetBlackDiamond(0, active: false, appearanceChanged: false);
+            FormalDungeonTcpTests.Load(peer);
+            AssertBlackDiamondActor(peer.Expect(0, 2).Body, active: false, dungeon: true);
+            That(peer.Expect(0, 2).Body is [1, ..], "Loading变更只同步期限，待37完成后才按副本状态刷新Actor及本人属性");
+            peer.Barrier();
+            SetBlackDiamond(30, active: true, dungeon: true);
+            SetBlackDiamond(0, active: false, dungeon: true);
+            SetBlackDiamond(30, active: true, dungeon: true);
+            Return(peer); peer.Barrier();
+            That(fixture.Query("SELECT stamina_until FROM characters") is [[0L]], "副本内特权刷新后仍可退出，恢复当前账号实际黑钻免罚");
+            FormalDungeonTcpTests.Enter(peer);
+            SetPcRoom(true, blackDiamond: true, appearanceChanged: false);
+            FormalDungeonTcpTests.Load(peer);
+            AssertBlackDiamondActor(peer.Expect(0, 2).Body, active: true, dungeon: true, pcRoom: true);
+            That(peer.Expect(0, 2).Body is [1, ..], "Loading期间网吧开关延后到37刷新，不提前重建场景");
+            peer.Barrier();
+            SetPcRoom(false, blackDiamond: true, dungeon: true);
+            Return(peer); peer.Barrier();
+            long expiry = (long)fixture.Query("SELECT json_extract(premium_contracts,'$.56') FROM account_wallets")[0][0];
+            string beforeExpiry = fixture.Snapshot("SELECT revision,premium_contracts FROM account_wallets");
+            clock.Set(expiry - 1); peer.Barrier();
+            clock.Set(expiry);
+            peer.CheckBlackDiamondRefresh(active: false);
+            peer.Barrier();
+            That(fixture.Snapshot("SELECT revision,premium_contracts FROM account_wallets") == beforeExpiry,
+                "自然到期刷新只更新已发视图，不改写期限或重复写库");
+
+            void SetBlackDiamond(int days, bool active, bool dungeon = false, bool appearanceChanged = true, bool pcRoom = false)
+            {
+                That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "black-diamond DevilTcp " + days, out string reply) &&
+                    reply.StartsWith("OK ", StringComparison.Ordinal), "在线GM提交黑钻开通、续期或撤销");
+                peer.CheckBlackDiamondRefresh(active, dungeon, appearanceChanged, pcRoom);
+            }
+
+            void SetPcRoom(bool enabled, bool blackDiamond, bool dungeon = false, bool appearanceChanged = true)
+            {
+                peer.Barrier();
+                string before = fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets");
+                That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "pc-room " + (enabled ? "on" : "off"), out string reply) &&
+                    reply == "OK {\"premiumPcRoom\":" + (enabled ? "true}" : "false}"), "在线GM全局开关返回实际网吧身份");
+                peer.CheckPcRoomRefresh(enabled, blackDiamond, dungeon, appearanceChanged);
+                That(fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets") == before,
+                    "切换全局网吧身份不写角色资产、账号期限或revision");
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            AssertBlackDiamondActor(peer.Select()[2].Body, active: false);
+            That(peer.PremiumServices[56] == 0, "到期后重连不恢复黑钻外观，已关闭的网吧身份独立保持关闭");
+            peer.Barrier();
+        }
+
+        static void Return(TcpPeer peer)
+        {
+            peer.Send(42);
+            peer.Expect(1, 42, [1]);
+            peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
+            peer.Expect(0, 24);
+            FormalDungeonTcpTests.RefreshedQuests(peer);
+        }
     }
 
     static void PolicyChecks(Character initial, TcpTestResources resources)

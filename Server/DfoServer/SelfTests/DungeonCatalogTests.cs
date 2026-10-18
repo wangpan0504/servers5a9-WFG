@@ -107,9 +107,81 @@ internal static class DungeonCatalogTests
         Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(fixture.Tag("unknown dungeon"))
             .Concat(fixture.Tag("size",fixture.Int(5),fixture.Int(3))).ToArray()),"未知标记不能用作放宽重复布局的边界");
         VerifyOrdinaryMapOverrides();
-        Console.WriteLine($"PASS {Count-checks} 无资源故事、普通难度及魔兽模式作用域断言");
+        VerifyGiveupPenaltyFlags();
+        Console.WriteLine($"PASS {Count-checks} 无资源副本难度、作用域及退图豁免断言");
 
         static DungeonDefinition Definition(params DungeonRawSection[] sections) => new(17,"dungeon/difficulty-fixture.dgn",1,1,[],sections);
+    }
+
+    static void VerifyGiveupPenaltyFlags()
+    {
+        var fixture = new Fixture();
+        DungeonDefinition Parse(params PvfToken[][] declarations) => fixture.Parse(fixture.Maze()
+            .Concat(declarations.SelectMany(row => row)).ToArray());
+        That(Parse() is { DungeonType: null, DisableGiveupPenalty: false } &&
+            !Parse(fixture.Tag("no fatigue")).DisableGiveupPenalty,
+            "未声明豁免及普通免疲劳标记不自动授予退图免罚");
+        That(Parse() is { DisableFatigueConsumption: false } &&
+            Parse(fixture.Tag("no fatigue")) is { DisableFatigueConsumption: true, DisableGiveupPenalty: false } &&
+            Parse(fixture.Tag("no fatigue"),fixture.Tag("no fatigue")).DisableFatigueConsumption &&
+            !Parse(fixture.Tag("no fatigue",fixture.Int(1))).DisableFatigueConsumption,
+            "no fatigue是无值疲劳值免扣开关，重复置位，不与Stamina退图虚弱混同");
+        foreach (string tag in new[] { "raid dungeon","risk dungeon","blood dungeon","operation hope dungeon","event dungeon","ancient dungeon" })
+        {
+            foreach (int value in new[] { -1,0,1,2,3 })
+                That(Parse(fixture.Tag(tag,fixture.Int(value))).DisableGiveupPenalty == (value == 1 || tag == "blood dungeon" && value == 2),
+                    tag + "仅接受已支持数值，blood额外支持2：" + value);
+            foreach (var invalid in new[] { Array.Empty<PvfToken>(),new[] { fixture.String("1") },
+                new[] { fixture.Int(1),fixture.Int(0) },new[] { new PvfToken(7,1) } })
+                That(!Parse(fixture.Tag(tag,invalid)).DisableGiveupPenalty,tag + "不把空值、错类型及多参数当开启");
+            foreach (var values in new[] { new[] { 1,0 },new[] { 0,1 },new[] { 1,1 },new[] { 1,3 } })
+                That(Parse(values.Select(value => fixture.Tag(tag,fixture.Int(value))).ToArray()).DisableGiveupPenalty == (values[^1] == 1),
+                    tag + "重复数值声明由后值覆盖，不拒绝重复或累计旧值");
+        }
+        foreach (string tag in new[] { "raid normal dungeon","dimension dungeon","tower of despair","enable give up","anton dungeon","no giveup panalty" })
+        {
+            That(Parse(fixture.Tag(tag)).DisableGiveupPenalty && Parse(fixture.Tag(tag),fixture.Tag(tag)).DisableGiveupPenalty,
+                tag + "无值开关重复出现仍开启");
+            That(!Parse(fixture.Tag(tag,fixture.Int(0))).DisableGiveupPenalty && !Parse(fixture.Tag(tag,fixture.Int(1))).DisableGiveupPenalty,
+                tag + "不把未确认的带参格式当无值开关");
+        }
+        foreach (string type in new[] { "tower of dazzlement","tower of death","boss rush dungeon","dungeon","assaultmode dungeon","future dungeon" })
+        {
+            var definition = Parse(fixture.Tag("dungeon type",fixture.String(type)));
+            That(definition.DungeonType == type && definition.DisableGiveupPenalty ==
+                (type is "tower of dazzlement" or "tower of death" or "boss rush dungeon"),
+                "副本类型统一解析并保留未知字符串，只有明确类型豁免：" + type);
+        }
+        var tower = fixture.Tag("dungeon type",fixture.String("tower of death"));
+        var ordinary = fixture.Tag("dungeon type",fixture.String("dungeon"));
+        var overwritten = Parse(tower,ordinary);
+        That(overwritten is { DungeonType: "dungeon", DisableGiveupPenalty: false } &&
+            overwritten.RawSections.Count(row => row.Tag == "dungeon type") == 2 &&
+            Parse(ordinary,tower) is { DungeonType: "tower of death", DisableGiveupPenalty: true },
+            "重复副本类型后值覆盖，普通类型可撤销塔类型，原声明完整保留");
+        foreach (var invalid in new[] { Array.Empty<PvfToken>(),new[] { fixture.Int(1) },
+            new[] { new PvfToken(7,1) },new[] { fixture.String("tower of death"),fixture.Int(1) } })
+            That(Parse(tower,fixture.Tag("dungeon type",invalid)) is { DungeonType: null, DisableGiveupPenalty: false },
+                "末条类型声明畸形时不回退旧类型或猜测引用");
+        That(Parse(fixture.Tag("raid dungeon",fixture.Int(1)),fixture.Tag("raid dungeon",fixture.Int(0)),
+            fixture.Tag("dimension dungeon"),ordinary).DisableGiveupPenalty &&
+            Parse(tower,fixture.Tag("event dungeon",fixture.Int(0))).DisableGiveupPenalty &&
+            Parse(fixture.Tag("ancient dungeon",fixture.Int(1)),ordinary).DisableGiveupPenalty &&
+            Parse(fixture.Tag("no giveup panalty"),fixture.Tag("raid dungeon",fixture.Int(0)),ordinary).DisableGiveupPenalty,
+            "不同豁免标签互不抵消，同名后值关闭只影响自身");
+        That(Parse(fixture.Tag("no fatigue"),fixture.Tag("raid dungeon",fixture.Int(1))) is
+            { DisableFatigueConsumption: true, DisableGiveupPenalty: true } &&
+            Parse(fixture.Tag("raid dungeon",fixture.Int(1))) is { DisableFatigueConsumption: false, DisableGiveupPenalty: true },
+            "疲劳值免扣和退图免罚分别解析，不因另一标签开启而联动");
+
+        var assault = fixture.Tag("dungeon type",fixture.String("assaultmode dungeon"));
+        var level = fixture.Tag("minimum required level",fixture.Int(95));
+        var items = fixture.Tag("required item",fixture.Int(10161610),fixture.Int(10),fixture.Int(1));
+        That(AssaultModeCatalog.ReadRequirement(Parse(ordinary,assault,level,items)) is
+            { MinimumLevel: 95, ItemId: 10161610, ItemCount: 10, ItemFlag: 1 },
+            "强袭读取同一副本类型属性，不再单独解码或拒绝重复类型");
+        Reject<NotSupportedException>(() => AssaultModeCatalog.ReadRequirement(Parse(assault,ordinary,level,items)),
+            "末条类型非强袭时保持强袭准入拒绝");
     }
 
     static void VerifyOrdinaryMapOverrides()

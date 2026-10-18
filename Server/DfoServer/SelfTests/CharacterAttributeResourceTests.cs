@@ -22,6 +22,13 @@ internal static class CharacterAttributeResourceTests
             "662100001E1400007B002D0043005900F6FF1400E2FF28000000000000000000000000000000000000000000000000000000000000000000000000000053070000000D02200300006400640070176400580200006400000000");
         byte[] normalPlayer = DfoServer.Network.Builders.TownPackets.Player(
             weak with { Inventory = weak.Inventory with { StaminaUntil = 0 } }, baseStats, utcNow: now);
+        var diamond = weak with { Inventory = weak.Inventory with { StaminaUntil = now.ToUnixTimeSeconds() + 600,
+            AccountWallet = weak.Inventory.AccountWallet.SetContractExpiry(56, now.ToUnixTimeSeconds() + 1) } };
+        byte[] diamondPlayer = DfoServer.Network.Builders.TownPackets.Player(diamond, baseStats, utcNow: now);
+        Check(diamondPlayer.AsSpan(36, 89).SequenceEqual(expectedStats) && diamond.Inventory.StaminaUntil > 0,
+            "有效黑钻的全量Player以100%投影存量误罚，不在只读构包中改写期限或缩放属性");
+        Check(DfoServer.Network.Builders.TownPackets.Player(diamond, baseStats, utcNow: now.AddSeconds(1))[36 + 84] == 10,
+            "黑钻到期端点不能继续掩盖未经用例修复的存量期限");
         foreach (var (seconds, expected) in new (long, byte)[]
             { (600, 10), (541, 10), (540, 19), (481, 19), (1, 91), (0, 100), (-1, 100) })
         {

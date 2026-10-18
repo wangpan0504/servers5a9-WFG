@@ -279,9 +279,9 @@ internal static class QuestReplayPublicationTests
                 using var stop = new CancellationTokenSource(); using var output = new ControlledOutput();
                 await using var sender = new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_) => { });
                 var context = Context(f,output,sender,stop);
-                That(await commands.DispatchAsync(context,Entry(0)) == CommandResult.Handled && Frames(output,(1,15),(0,3),(0,1536),(0,27)) &&
+                That(await commands.DispatchAsync(context,Entry(0)) == CommandResult.Handled && Frames(output,(1,15),(0,3),(0,27)) &&
                     f.Session.Phase == SessionPhase.MapSelect && Same(before,f.Read()),
-                    "连图15通过真实Handler只打开MapSelect，16前无地图通知或持久预留");
+                    "连图15按ACK、state1、27打开MapSelect，不混入普通入口1536，16前无地图通知或持久预留");
                 output.Frames.Clear();
                 foreach (int offset in new[] { 0,4,5,7,8,9,11,15,16,20,21 })
                 {

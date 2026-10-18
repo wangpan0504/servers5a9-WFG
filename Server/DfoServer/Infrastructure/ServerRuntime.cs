@@ -55,7 +55,8 @@ internal static class ServerRuntime
         var online = new OnlineSessionDirectory();
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
         accounts.EnsureDevelopmentAccount();
-        var presence = new TownPresence(towns, channels.GameIdentity);
+        var debugSettings = new GameDebugSettings();
+        var presence = new TownPresence(towns, channels.GameIdentity, clock, debugSettings);
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")),
@@ -89,7 +90,6 @@ internal static class ServerRuntime
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
         var guildProjection = new GuildProjection(inventoryProjection, presence);
-        var debugSettings = new GameDebugSettings();
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil);

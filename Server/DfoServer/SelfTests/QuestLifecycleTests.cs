@@ -3,6 +3,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Auth;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
@@ -226,6 +227,8 @@ internal static class QuestLifecycleTests
                 "未决租赁允许独立键位保存及只读设置加载，不安装可见性快照");
             Reject<InvalidOperationException>(() => f.Session.SetCharacterGold(selected.Name,10),
                 "未决租赁拒绝GM金币覆盖");
+            Reject<InvalidOperationException>(() => f.Session.SetCardMembership(selected.Name, CardMembershipKind.BlackDiamond,
+                DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds()), "未决租赁不能借黑钻清除虚弱并覆盖待恢复的原快照");
             That(f.Session.AcceptStoryDigest() is null && ReferenceEquals(selected,f.Session.Selected),
                 "未决租赁阻止剧情写入并保持原计划");
         }

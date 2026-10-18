@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Session;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Protocol;
@@ -11,7 +12,7 @@ namespace DfoServer.Network.Projection;
 // 这里只记录已下发视图；账号期限和角色选择始终来自Session的正式快照。
 internal sealed class PremiumContractProjection(GameConnectionContext context, CubeContractService cubes,
     CharacterStatComputer stats, TimeProvider? time = null, DevilContractService? devil = null,
-    Inventory.InventoryProjection? inventory = null)
+    Inventory.InventoryProjection? inventory = null, TownProjection? town = null)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     ImmutableSortedDictionary<int, long>? announced;
@@ -21,6 +22,14 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
     (bool Growth, sbyte Cube)? announcedEffects;
     long effectsEpoch = -1;
     (long Epoch, byte Percent)? announcedStamina;
+    (long Epoch, bool BlackDiamond, bool PcRoom)? announcedAppearance;
+
+    public void RecordPremiumAppearance(Character character, long utcSeconds, bool premiumPcRoom) => context.Owner.Execute(() =>
+    {
+        if (ReferenceEquals(context.Session.Selected, character))
+            announcedAppearance = (context.Session.SelectionEpoch, character.BlackDiamondExpiresAt > utcSeconds, premiumPcRoom);
+        return true;
+    });
 
     public async Task ContractsAsync(Character character, DateTimeOffset? frozenAt = null,
         Func<bool>? guard = null, IReadOnlyCollection<int>? resetTypes = null)
@@ -62,15 +71,46 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
         if (!captured.Ready || captured.Selected is not { } character) return;
         bool Guard() => context.Owner.Execute(() => context.Session.SelectionEpoch == captured.SelectionEpoch &&
             ReferenceEquals(context.Session.Selected, character));
-        long now = clock.GetUtcNow().ToUnixTimeSeconds();
+        var instant = clock.GetUtcNow();
+        long now = instant.ToUnixTimeSeconds();
         await StaminaAsync(character, Guard);
-        // 56/58及已有玩法继续在各自原包序刷新；不能因任意请求把过期会员通知插入普通副本ACK前后。
-        bool changed = announced is null || new[] { 84, 97 }.Any(type =>
+        // 请求完成后检查黑钻到期/撤销；不在业务ACK之前插入会员刷新，也不把魔王子服务扩展为逐请求重发。
+        bool changed = announced is null || new[] { 56, 84, 97 }.Any(type =>
             announced.GetValueOrDefault(type) != (character.Inventory.AccountWallet.ContractExpiry(type) > now ?
                 character.Inventory.AccountWallet.ContractExpiry(type) : 0));
         if (changed)
-            await ContractsAsync(character, guard: Guard);
+            await ContractsAsync(character, instant, Guard);
         else await SelectionAsync(character, now, Guard);
+        await AppearanceAsync(character, now, Guard);
+    }
+
+    async Task AppearanceAsync(Character character, long now, Func<bool> guard)
+    {
+        var state = (Epoch: context.Session.SelectionEpoch, BlackDiamond: character.BlackDiamondExpiresAt > now,
+            PcRoom: context.Session.PremiumPcRoom);
+        if (announcedAppearance == state || !guard()) return;
+        var captured = context.Owner.Execute(() => (Epoch: context.Session.SelectionEpoch,
+            Phase: context.Session.Phase, Name: context.Session.Phase == SessionPhase.Loading ? "" : context.Session.ReadAdventureName()));
+        // 等37完成当前房间加载后再更新Actor，不能重建尚未就绪的场景，也不提前记录已发视图。
+        if (captured.Phase == SessionPhase.Loading) return;
+        bool CanSend() => context.Owner.Execute(() => guard() && context.Session.SelectionEpoch == captured.Epoch &&
+            context.Session.Phase == captured.Phase);
+        bool sent = false;
+        // 两种身份各自刷新；保留副本场景位，再以Player恢复完整本人属性。
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel, now, captured.Name,
+            captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? ActorSceneState.Dungeon : ActorSceneState.Town,
+            state.PcRoom), "premium_identity_actor", () => sent = CanSend());
+        if (!sent) return;
+        sent = false;
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(character, stats.Compute(character), context.Channel,
+            DateTimeOffset.FromUnixTimeSeconds(now)), "premium_identity_player", () => sent = CanSend());
+        if (!sent) return;
+        announcedAppearance = state;
+        context.Owner.Execute(() =>
+        {
+            if (CanSend() && captured.Phase == SessionPhase.Town) town?.Refresh(context);
+            return true;
+        });
     }
 
     public async Task StaminaAsync(Character character, Func<bool>? guard = null)

@@ -32,9 +32,13 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // 首次创建本人UI前先初始化主设置；地区绑定后仍回放完整设置，补齐依赖角色实体的应用。
         if (settings is not null && settingReceipt is not null)
             await settings.PreloadGameOptionsAsync(context, settingReceipt);
+        var appearanceTime = timer.GetUtcNow();
+        bool premiumPcRoom = context.Session.PremiumPcRoom;
         await context.Notify(NotiPacketType.USERINFO,
-            TownPackets.Actor(c, context.Channel, adventureName: context.Session.ReadAdventureName()), "actor");
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c), context.Channel), "player");
+            TownPackets.Actor(c, context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
+                premiumPcRoom: premiumPcRoom), "actor");
+        context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c), context.Channel, appearanceTime), "player");
         if (c.Guild is { } membership)
             await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
@@ -57,7 +61,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await InventoryProjection.RestoreLocksAsync(context, c.Inventory, c.Inventory.Items.Select(item => item.Position));
         await context.Notify(NotiPacketType.UPGRADE_CARRY_GOLD, CurrencyPackets.GoldLimit(c.Inventory), "gold_limit_initialize");
         await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(c.Inventory.AccountWallet), "account_cera_initialize");
-        await DungeonCardMembershipProjection.RefreshAsync(context);
+        await DungeonCardMembershipProjection.RefreshAsync(context, frozenAt: appearanceTime);
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
         if (collectBoxes is not null)
             await collectBoxes.InitializeAsync(context);

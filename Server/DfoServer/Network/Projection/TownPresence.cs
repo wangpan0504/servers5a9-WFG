@@ -4,10 +4,12 @@ using DfoServer.Game.Characters;
 using DfoServer.Network.Builders;
 using DfoServer.GameWorld.Channels;
 using DfoServer.Game.Town;
+using DfoServer.Game.Settings;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = default)
+internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = default, TimeProvider? clock = null,
+    GameDebugSettings? debugSettings = null)
 {
     sealed record Scene(ChannelIdentity Channel, byte Town, byte Area, string Map, string? RoomAccount);
     sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, string adventureName)
@@ -44,7 +46,8 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     Bodies Capture(Member source)
     {
         var c = source.Character;
-        return new(TownPackets.Actor(c, source.Channel, adventureName: source.AdventureName), TownPackets.ActorState(c.Id),
+        return new(TownPackets.Actor(c, source.Channel, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds(), source.AdventureName,
+            premiumPcRoom: debugSettings?.PremiumPcRoom == true), TownPackets.ActorState(c.Id),
             TownPackets.Position(c, false), TownPackets.Position(c, true));
     }
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>

@@ -27,9 +27,12 @@ internal sealed partial class CharacterRepository
         int type = kind == CardMembershipKind.BlackDiamond ? CardMembership.BlackDiamondType : CardMembership.DevilContractType;
         var before = current.Inventory;
         var after = before with { AccountWallet = before.AccountWallet.SetContractExpiry(type, expires) };
+        bool blackDiamond = kind == CardMembershipKind.BlackDiamond && expires > DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        if (blackDiamond)
+            after = after with { StaminaUntil = 0 };
         var plan = new InventoryPlan(before, after, "gm_premium_contract");
         var committed = CommitInventoryInTransaction(db, tx, owner, current, plan);
-        if (kind == CardMembershipKind.BlackDiamond && expires > DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+        if (blackDiamond)
             GrantAccountBlackDiamondFatigue(db, tx, owner.Account, committed.Revision != current.Revision ? current.Id : null);
         var result = ReadCardMembership(db,tx,owner.Account,current.Id,DateTimeOffset.UtcNow);
         tx.Commit();
@@ -69,8 +72,14 @@ internal sealed partial class CharacterRepository
         query.Parameters.AddWithValue("$bonus", CharacterFatigueState.BlackDiamondBonus);
         query.Parameters.AddWithValue("$committed", (object?)committedCharacter ?? DBNull.Value);
         query.CommandText = """
-            UPDATE characters SET revision=revision+1 WHERE account=$account AND ($committed IS NULL OR id<>$committed) AND id IN
-              (SELECT character_id FROM character_fatigue WHERE account=$account AND maximum=$base);
+            SELECT EXISTS(SELECT 1 FROM characters WHERE account=$account AND
+              (stamina_until>0 OR id IN (SELECT character_id FROM character_fatigue WHERE account=$account AND maximum=$base)))
+            """;
+        if (query.ExecuteScalar() is 0L) return;
+        query.CommandText = """
+            UPDATE characters SET revision=revision+1,stamina_until=0
+              WHERE account=$account AND ($committed IS NULL OR id<>$committed) AND
+                (stamina_until>0 OR id IN (SELECT character_id FROM character_fatigue WHERE account=$account AND maximum=$base));
             UPDATE character_fatigue SET maximum=maximum+$bonus,remaining=remaining+$bonus
               WHERE account=$account AND maximum=$base;
             """;

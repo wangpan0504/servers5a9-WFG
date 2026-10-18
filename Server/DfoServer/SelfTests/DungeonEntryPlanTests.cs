@@ -79,6 +79,15 @@ internal static class DungeonEntryPlanTests
         Reject(character, 3, 3145, byte.MaxValue, "difficulty-unsupported");
 
         var definition = catalog.Get(3);
+        That(!definition.DisableGiveupPenalty && !selected.DisableGiveupPenalty &&
+            DungeonEntryPlan.TryCreate(definition with { DisableGiveupPenalty = true },character,3,3145,0,out var exemptPlan,out _) &&
+            exemptPlan is { DisableGiveupPenalty: true } && !selected.DisableGiveupPenalty && !definition.DisableGiveupPenalty,
+            "入场冻结本次资源退图豁免，保留共享定义与此前实例的原资格");
+        That(DungeonEntryPlan.TryCreate(definition with { DisableFatigueConsumption = true },
+            character with { ActiveMainQuests = [] },3,0,0,out var noFatiguePlan,out _) && noFatiguePlan is
+            { IsOrdinary: true, RequiresFatigueOwner: true, UsesFatigue: false, DisableFatigueConsumption: true,
+              DisableGiveupPenalty: false, HasFreeCombatConsumption: false } && !definition.DisableFatigueConsumption,
+            "no fatigue只冻结疲劳值免扣，不绕过原owner校验、不免虚弱或道具消耗，也不改共享定义");
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         AuxiliaryEquipmentHuntRoutes(catalog,quests,character);

@@ -51,8 +51,46 @@ internal static class FormalDungeonSessionTests
         OrdinaryRoutes();
         CharacterRevive();
         DeathReturnAndPurchase();
+        RetreatStamina();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Session文件库、六房合成击杀、身份及回滚断言（非实机）");
         return Task.CompletedTask;
+
+        void RetreatStamina()
+        {
+            using var f = new Fixture("RetreatWeak", towns, characters, learning, quests);
+            f.Sql("UPDATE characters SET level=20");
+            f.SelectEntry();
+            Enter(f);
+            f.Session.CompleteFormalDungeonLoading();
+            var original = f.Session.Selected!;
+            f.Sql("CREATE TRIGGER fail_retreat BEFORE UPDATE OF stamina_until ON characters WHEN NEW.stamina_until>OLD.stamina_until BEGIN SELECT RAISE(ABORT,'retreat rollback'); END");
+            Reject<SqliteException>(() => f.Session.ReturnFromFormalDungeon(), "退图虚弱的SQL失败不发布回城成功");
+            Check(ReferenceEquals(original, f.Session.Selected) && Same(original, f.Read()) && f.Session.Phase == SessionPhase.Dungeon,
+                "退图失败回滚位置、期限及revision，原实例仍可重试");
+            f.Sql("DROP TRIGGER fail_retreat");
+            var retreated = f.Session.ReturnFromFormalDungeon()!.Character;
+            long until = retreated.Inventory.StaminaUntil;
+            Check(until > DateTimeOffset.UtcNow.ToUnixTimeSeconds() && Same(retreated, f.Read()),
+                "20级普通角色退图按实际提交保存虚弱");
+            Enter(f);
+            f.Session.CompleteFormalDungeonLoading();
+            long repeatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long repeatedUntil = f.Session.ReturnFromFormalDungeon()!.Character.Inventory.StaminaUntil;
+            Check(repeatedUntil >= repeatedAt + 600 && repeatedUntil <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 600,
+                "非豁免普通角色重复退图仍沿用原十分钟规则");
+            Enter(f);
+            f.Session.CompleteFormalDungeonLoading();
+            f.Session.SetCardMembership(f.Created.Name, CardMembershipKind.BlackDiamond, DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds());
+            var diamond = f.Session.Selected!;
+            Check(diamond.Inventory.StaminaUntil == 0 && f.Session.ReturnFromFormalDungeon()!.Character.Inventory.StaminaUntil == 0 &&
+                Same(f.Session.Selected!, f.Read()), "副本内开通黑钻沿当前资格免罚，不使用入场前冻结的过期资格");
+            Enter(f);
+            f.Session.CompleteFormalDungeonLoading();
+            f.Session.SetCardMembership(f.Created.Name, CardMembershipKind.BlackDiamond, 0);
+            Check(f.Session.ReturnFromFormalDungeon()!.Character.Inventory.StaminaUntil > 0,
+                "副本内撤销黑钻后按当前资格恢复惩罚，不沿用旧会员资格");
+            Check((string?)f.Query("PRAGMA integrity_check") == "ok", "连续免罚、恢复与失败重试后文件库保持完整");
+        }
 
         void InfiniteFatigueProgress()
         {

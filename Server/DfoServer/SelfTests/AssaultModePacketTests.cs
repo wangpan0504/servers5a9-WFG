@@ -37,7 +37,8 @@ internal static class AssaultModePacketTests
             "强袭 daily open dungeon 七天均开放7300且隐藏副本按日轮换");
         foreach (int mission in catalog.Missions[7300])
             That(catalog.TryGetRequirement(mission, out var requirement, out string? error) &&
-                requirement is { MinimumLevel: 95, ItemId: 10161610, ItemCount: 10, ItemFlag: 1 }, "强袭任务副本入场声明 " + mission + " " + error);
+                dungeons.Get(mission).DungeonType == AssaultModeCatalog.MissionDungeonType &&
+                requirement is { MinimumLevel: 95, ItemId: 10161610, ItemCount: 10, ItemFlag: 1 }, "强袭任务副本统一类型与入场声明 " + mission + " " + error);
         That(!catalog.TryGetRequirement(7300, out _, out _), "主副本7300不是assaultmode dungeon，不能作为任务副本");
 
         var pieces = new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]");

@@ -44,26 +44,31 @@ internal sealed partial class CharacterRepository
 
     public Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now) => owner.Execute(() =>
     {
+        bool expand = expected.Fatigue?.Maximum == CharacterFatigueState.OrdinaryMaximum;
         if (expected.BlackDiamondExpiresAt <= now.ToUnixTimeSeconds() ||
-            expected.Fatigue?.Maximum != CharacterFatigueState.OrdinaryMaximum) return expected;
+            !expand && expected.Inventory.StaminaUntil == 0) return expected;
         using var db = database.Open();
         using var tx = db.BeginTransaction(deferred: true);
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id || current.Revision != expected.Revision || current.Fatigue != expected.Fatigue ||
-            current.BlackDiamondExpiresAt != expected.BlackDiamondExpiresAt)
+            current.BlackDiamondExpiresAt != expected.BlackDiamondExpiresAt || current.Inventory.StaminaUntil != expected.Inventory.StaminaUntil)
             throw new InvalidOperationException("黑钻疲劳补齐的原角色快照已变化");
-        var target = current.Fatigue!.GrantBlackDiamondCapacity();
         using var query = db.CreateCommand();
         query.Transaction = tx;
         query.Parameters.AddWithValue("$id", current.Id);
         query.Parameters.AddWithValue("$account", owner.Account);
         query.Parameters.AddWithValue("$revision", current.Revision);
-        query.Parameters.AddWithValue("$maximum", target.Maximum);
-        query.Parameters.AddWithValue("$remaining", target.Remaining);
-        query.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        // 选角显式修复旧版误罚，与疲劳补齐共用一次事务；普通读取仍保持只读。
+        query.CommandText = "UPDATE characters SET revision=revision+1,stamina_until=0 WHERE id=$id AND account=$account AND revision=$revision";
         if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("黑钻疲劳补齐revision冲突");
-        query.CommandText = "UPDATE character_fatigue SET maximum=$maximum,remaining=$remaining WHERE character_id=$id AND account=$account";
-        if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("黑钻疲劳补齐缺少原owner");
+        if (expand)
+        {
+            var target = current.Fatigue!.GrantBlackDiamondCapacity();
+            query.Parameters.AddWithValue("$maximum", target.Maximum);
+            query.Parameters.AddWithValue("$remaining", target.Remaining);
+            query.CommandText = "UPDATE character_fatigue SET maximum=$maximum,remaining=$remaining WHERE character_id=$id AND account=$account";
+            if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("黑钻疲劳补齐缺少原owner");
+        }
         var committed = Require(db, tx, owner.Account, current.Name);
         tx.Commit();
         return committed;

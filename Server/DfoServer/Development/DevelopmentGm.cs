@@ -56,6 +56,12 @@ internal static partial class DevelopmentGm
                 if (request.Primary >= 0) debugSettings.InfiniteFatigue = request.Primary == 1;
                 return "OK " + JsonSerializer.Serialize(new { infiniteFatigue = debugSettings.InfiniteFatigue });
             }
+            if (request.Action == DevelopmentAction.PcRoom)
+            {
+                if (debugSettings is null) throw new InvalidOperationException("网吧身份开关仅支持在线服务");
+                if (request.Primary >= 0) debugSettings.PremiumPcRoom = request.Primary == 1;
+                return "OK " + JsonSerializer.Serialize(new { premiumPcRoom = debugSettings.PremiumPcRoom });
+            }
             if (request.Action == DevelopmentAction.CashShopExpiration)
             {
                 if (cashShop is null) throw new InvalidOperationException("商城期限调试开关仅支持在线服务");

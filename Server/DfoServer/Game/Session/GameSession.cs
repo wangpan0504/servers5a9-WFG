@@ -32,6 +32,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public SessionPhase Phase { get; private set; } = SessionPhase.Unselected;
     public long SelectionEpoch { get; private set; }
     public string TravelReason { get; private set; } = "not-requested";
+    public bool PremiumPcRoom => debugSettings?.PremiumPcRoom == true;
 
     public CharacterFatigueState FatigueForClient(Character character)
     {

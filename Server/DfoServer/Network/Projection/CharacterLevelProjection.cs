@@ -22,7 +22,8 @@ internal sealed class CharacterLevelProjection(CharacterStatComputer stats, Ques
         if (previousGrowType is { } grow && grow != committed.GrowType ||
             context.Owner.Execute(() => context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect))
             await context.Notify(NotiPacketType.USERINFO,
-                TownPackets.Actor(committed, context.Channel, adventureName: context.Session.ReadAdventureName()), action + "_actor", canSend);
+                TownPackets.Actor(committed, context.Channel, adventureName: context.Session.ReadAdventureName(),
+                    premiumPcRoom: context.Session.PremiumPcRoom), action + "_actor", canSend);
         await PlayerAsync(context,committed,action + "_player",canSend);
         if (quests is not null)
             await quests.RefreshAsync(context, committed, canSend, restoreCompletedQuests);

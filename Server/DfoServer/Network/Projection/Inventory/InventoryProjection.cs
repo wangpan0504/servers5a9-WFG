@@ -112,7 +112,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 await context.Notify(NotiPacketType.USERINFO,
                     TownPackets.Actor(current, context.Channel, adventureName: context.Session.ReadAdventureName(),
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
-                            ? ActorSceneState.Dungeon : ActorSceneState.Town), "equipment_actor", CanSend);
+                            ? ActorSceneState.Dungeon : ActorSceneState.Town,
+                        premiumPcRoom: context.Session.PremiumPcRoom), "equipment_actor", CanSend);
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
