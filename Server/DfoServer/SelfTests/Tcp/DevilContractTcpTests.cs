@@ -41,8 +41,15 @@ internal static class DevilContractTcpTests
         }
         PolicyChecks(initial, resources);
         // 恢复真实v48缺列结构，验证本次权益迁移。
+        fixture.Sql("DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses");
         fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until; PRAGMA user_version=48");
+        That(fixture.Query("PRAGMA user_version") is [[48L]] &&
+            fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[0L]] &&
+            fixture.Query("SELECT count(*) FROM pragma_table_info('characters') WHERE name IN('devil_usage','stamina_until')") is [[0L]],
+            "契约迁移输入为缺权益列的v48旧库，不残留v53阶段旁表");
         await fixture.StartAsync();
+        That(fixture.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[2L]],
+            "v48旧库真实迁移建立两个阶段旁表");
         That(fixture.Query("SELECT devil_usage FROM characters") is [["[]"]] &&
             fixture.Query("PRAGMA user_version") is [[long version]] && version == SqliteMigrations.CurrentVersion, "旧角色自动升级为空次数账本及自然恢复期限");
         fixture.Sql("CREATE TRIGGER fail_devil_purchase BEFORE INSERT ON account_currency_balances WHEN NEW.currency_kind=15 AND NEW.balance<10000 BEGIN SELECT RAISE(ABORT,'devil purchase rollback'); END");

@@ -14,6 +14,7 @@ internal interface ICharacterRenamer
 
 internal interface ICharacterRepository
 {
+    QuestStageState LoadQuestStageState(AccountOwners.Lease owner, Character expected);
     string ReadAdventureName(AccountOwners.Lease owner);
     bool AdventureNameExists(AccountOwners.Lease owner, string name);
     DfoServer.Game.Adventure.AdventureNameCommit CommitAdventureName(AccountOwners.Lease owner,

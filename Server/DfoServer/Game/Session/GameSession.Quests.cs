@@ -81,7 +81,8 @@ internal sealed partial class GameSession
             preparation = new(QuestCompletionOutcome.Accepted, pending.Plan, "原领奖计划精确重试");
         else
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
-                growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth);
+                growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth, stageGraph,
+                stageGraph is null ? null : repository.LoadQuestStageState(owner, expected));
         return owner.Execute(() =>
         {
             if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||

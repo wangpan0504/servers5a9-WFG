@@ -641,6 +641,8 @@ internal static class SessionPlanningTests
                   experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards,clear_acceptance_id)
                   VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',30,'1234567890abcdef1234567890abcdef','instance',1,1,
                     1,'test','test','test',0,1,0,'normal',1,1,0,1,1,0,1,0,1,'[]','1234567890abcdef1234567890abcdef');
+                INSERT INTO character_quest_stage_witnesses VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',30,1,13,1,'Granted','{}');
+                INSERT INTO character_quest_stage_claims VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','1234567890abcdef1234567890abcdef',13,1,2,1,1);
                 INSERT INTO character_dungeon_settlement_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,
                   dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,
                   rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision)

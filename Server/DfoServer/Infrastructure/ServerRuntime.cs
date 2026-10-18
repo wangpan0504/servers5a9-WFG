@@ -45,6 +45,7 @@ internal static class ServerRuntime
         GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures);
+        var questStages = QuestStageGraph.Build(quests);
         itemResources.Creatures.PrepareEvolutions();
         var channels = LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
         var gameChannels = new GameChannelListeners(options, channels);
@@ -280,7 +281,7 @@ internal static class ServerRuntime
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

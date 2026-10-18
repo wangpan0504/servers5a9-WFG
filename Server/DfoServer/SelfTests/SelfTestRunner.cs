@@ -71,6 +71,7 @@ internal static class SelfTestRunner
         AdventureExpeditionTests.RunCore();
         AdventureShopTests.RunCore();
         QuestEligibilityTests.Run();
+        QuestStagePolicyTests.RunCore();
         QuestCatalogTests.RunCore();
         QuestHuntProgressTests.Run();
         QuestHarlemExpTests.RunCore();

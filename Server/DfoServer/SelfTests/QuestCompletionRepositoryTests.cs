@@ -313,6 +313,8 @@ internal static class QuestCompletionRepositoryTests
         public bool LoseGrowthResult { get; init; }
         public Func<PreparedDungeonDeath,bool>? GrowthLossCondition { get; init; }
         public bool LoseCompletionResult { get; init; } = true;
+        public int CompletionLossCall { get; set; } = 1;
+        public QuestCompletionPlan? LastPlan { get; private set; }
         public bool LoseInventoryResult { get; init; }
         int inventoryCalls;
         public bool SameLifecyclePlan { get; private set; }
@@ -335,16 +337,23 @@ internal static class QuestCompletionRepositoryTests
         public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan)
         {
             Calls++;
+            LastPlan = plan;
             first ??= plan;
             SamePlan = ReferenceEquals(first, plan);
             var result = inner.CommitQuestCompletion(owner, plan);
             LastDuplicate = result.Duplicate;
-            if (LoseCompletionResult && Calls == 1)
+            if (LoseCompletionResult && Calls == CompletionLossCall)
                 throw new IOException("合成领奖SQL已提交但返回值丢失");
             return result;
         }
         public AccountWallet LoadAccountWallet(AccountOwners.Lease owner) => inner.LoadAccountWallet(owner);
         public CharacterRosterEntry[] ListRoster(AccountOwners.Lease owner) => inner.ListRoster(owner);
+        public int StageLoads { get; private set; }
+        public DfoServer.Game.Quests.QuestStageState LoadQuestStageState(AccountOwners.Lease owner, Character expected)
+        {
+            StageLoads++;
+            return inner.LoadQuestStageState(owner, expected);
+        }
         public Character LoadCharacter(AccountOwners.Lease owner, ushort slot) => inner.LoadCharacter(owner, slot);
         public Character[] List(AccountOwners.Lease owner) => inner.List(owner);
         public bool NameExists(string name) => inner.NameExists(name);

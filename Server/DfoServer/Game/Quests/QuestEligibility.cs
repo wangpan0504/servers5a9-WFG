@@ -5,6 +5,7 @@ using DfoServer.GameWorld.Quests;
 namespace DfoServer.Game.Quests;
 
 internal sealed record QuestEligibilityResult(bool Eligible, bool Visible, string Reason);
+internal enum QuestEligibilityMode { Ordinary, IgnoreMinimumLevel }
 internal enum QuestResourceEntry { Ordinary, Dialogue, Dedicated, OutsideLevels, Event, Creature, Profession, Hardcore, Invalid, Hidden }
 internal sealed record QuestResourceAccess(QuestResourceEntry Entry, string Reason);
 
@@ -82,14 +83,15 @@ internal static class QuestEligibility
     }
 
     public static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
-        bool allowAboveMaximum = false) =>
+        bool allowAboveMaximum = false, QuestEligibilityMode mode = QuestEligibilityMode.Ordinary) =>
         Evaluate(character, quest, catalog, Completed(character),
-            character.ActiveMainQuests.Select(active => (int)active.QuestId).ToHashSet(), allowAboveMaximum: allowAboveMaximum);
+            character.ActiveMainQuests.Select(active => (int)active.QuestId).ToHashSet(), allowAboveMaximum: allowAboveMaximum, mode: mode);
 
     public static HashSet<int> Completed(Character character) => character.CompletedQuests.Concat(character.AccountCompletedQuests).ToHashSet();
 
     private static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
-        IReadOnlySet<int> completed, IReadOnlySet<int> active, bool includeActive = false, bool allowAboveMaximum = false)
+        IReadOnlySet<int> completed, IReadOnlySet<int> active, bool includeActive = false, bool allowAboveMaximum = false,
+        QuestEligibilityMode mode = QuestEligibilityMode.Ordinary)
     {
         var access = InspectResource(quest);
         if (access.Entry is QuestResourceEntry.Invalid or QuestResourceEntry.OutsideLevels or QuestResourceEntry.Event or
@@ -105,27 +107,11 @@ internal static class QuestEligibility
             return Reject("角色等级或职业无效");
         // 特殊等级标记保留原值，不能截为1或95后成为普通可接任务。
         if (quest.MinimumLevel < 1 || quest.MaximumLevel < quest.MinimumLevel ||
-            character.Level < quest.MinimumLevel || !allowAboveMaximum && character.Level > quest.MaximumLevel)
+            mode != QuestEligibilityMode.IgnoreMinimumLevel && character.Level < quest.MinimumLevel ||
+            !allowAboveMaximum && character.Level > quest.MaximumLevel)
             return Reject("等级不符");
-        if (!MatchesJob(character.Job, definition.Job))
-            return Reject("职业不符");
-        int grow = character.GrowType & 15, awakening = character.GrowType >> 4;
-        if (definition.TargetCharacters.Length != 0 && !definition.TargetCharacters.Any(target =>
-            (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
-            (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening ||
-                target.Awakening==1 && awakening==2 && AwakenedStoryAlternative(quest,catalog,character.Job,grow))))
-            return Reject("目标转职或觉醒不符");
-        if (definition.NonTargetCharacters.Any(target => (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
-            (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening)))
-            return Reject("角色符合任务排除职业条件");
-        bool selfAwakening = character.Job is 9 or 10 && quest.Grade == "[realization]";
-        if (definition.JobChange == 1 && (quest.RewardType == "[grow type]" && grow != 0 ||
-                quest.RewardType != "[grow type]" && (TransferredStoryAlternative(quest,catalog,character.Job) ? grow == 0 : grow != 0)) ||
-            definition.JobChange == 2 && ((!selfAwakening && grow == 0) || awakening != 0) ||
-            definition.JobChange == 3 && ((!selfAwakening && grow == 0) || awakening != 1) ||
-            definition.GrowType != -1 && definition.JobChange is not (1 or 10 or 20) &&
-            definition.GrowType != (definition.JobChange is 2 or 3 ? grow : character.GrowType))
-            return Reject("转职阶段不符");
+        var characterRequirements = CharacterRequirements(character, quest, catalog);
+        if (!characterRequirements.Eligible) return characterRequirements;
         if (completed.Contains(quest.Id) && !QuestCycle.Repeat(quest) || !includeActive && active.Contains(quest.Id))
             return Reject("已完成或已接取");
         if (definition.PrerequisiteGroups.Length != 0 && !definition.PrerequisiteGroups.Any(group =>
@@ -157,6 +143,33 @@ internal static class QuestEligibility
             definition.ExposedByNpc && OrdinaryGrade(quest.Grade)) &&
             !definition.HideOnCompletedQuests.Any(completed.Contains);
         return new(true, visible, visible ? "资格满足" : "需要专用任务入口");
+    }
+
+    // 与普通资格共用角色适用性；不将尚未完成的前置或未作答当成已排除的职业分支。
+    internal static QuestEligibilityResult CharacterRequirements(Character character, StoryQuest quest, QuestCatalog catalog)
+    {
+        if (character.Job >= Jobs.Length || quest.Definition is not { } definition)
+            return Reject("角色职业或任务定义无效");
+        if (!MatchesJob(character.Job, definition.Job))
+            return Reject("职业不符");
+        int grow = character.GrowType & 15, awakening = character.GrowType >> 4;
+        if (definition.TargetCharacters.Length != 0 && !definition.TargetCharacters.Any(target =>
+            (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
+            (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening ||
+                target.Awakening==1 && awakening==2 && AwakenedStoryAlternative(quest,catalog,character.Job,grow))))
+            return Reject("目标转职或觉醒不符");
+        if (definition.NonTargetCharacters.Any(target => (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
+            (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening)))
+            return Reject("角色符合任务排除职业条件");
+        bool selfAwakening = character.Job is 9 or 10 && quest.Grade == "[realization]";
+        if (definition.JobChange == 1 && (quest.RewardType == "[grow type]" && grow != 0 ||
+                quest.RewardType != "[grow type]" && (TransferredStoryAlternative(quest,catalog,character.Job) ? grow == 0 : grow != 0)) ||
+            definition.JobChange == 2 && ((!selfAwakening && grow == 0) || awakening != 0) ||
+            definition.JobChange == 3 && ((!selfAwakening && grow == 0) || awakening != 1) ||
+            definition.GrowType != -1 && definition.JobChange is not (1 or 10 or 20) &&
+            definition.GrowType != (definition.JobChange is 2 or 3 ? grow : character.GrowType))
+            return Reject("转职阶段不符");
+        return new(true, false, "角色条件满足");
     }
 
     // 50级主线以互斥分支区分觉醒任务和已觉醒角色的普通衔接任务；二觉仍满足后者的一觉资格。

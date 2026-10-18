@@ -182,6 +182,14 @@ internal sealed partial class CharacterRepository
             WriteQuestEffectReceipt(db,tx,expected,plan.OperationId,inventory,persistedInventory);
         var committed = Require(db,tx,owner.Account,expected.Name);
         if (!Matches(committed,After())) throw new InvalidOperationException("持久无奖励跳过结果与完整规划不同");
+        if (committed.Level != expected.Level || committed.GrowType != expected.GrowType ||
+            committed.Learning.Experience != expected.Learning.Experience ||
+            !committed.CompletedQuests.SequenceEqual(expected.CompletedQuests) ||
+            !committed.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) ||
+            !committed.AccountCompletedQuests.SequenceEqual(expected.AccountCompletedQuests) ||
+            !QuestCycle.SameAnswers(committed.QuestAnswers,expected.QuestAnswers) ||
+            !QuestCycle.SameAnswers(committed.AccountQuestAnswers,expected.AccountQuestAnswers))
+            InvalidateQuestStages(db,tx,expected.Id,"quest_skip");
         tx.Commit();
         return new QuestQuickClearCommit(committed,plan,false,true);
 

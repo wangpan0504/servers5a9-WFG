@@ -216,6 +216,7 @@ internal static class DatabaseSchemaTests
             VerifyTutorialSchema(root);
             VerifyTitleMigration(root);
             VerifyCollectBoxMigrations(root);
+            VerifyQuestStageMigrations(root);
             VerifyExperienceCapMigration(root);
             VerifyAccountQuestSourceMigration(root);
             VerifyFutureMigrations(path);
@@ -383,6 +384,7 @@ internal static class DatabaseSchemaTests
 
     static void RewindDevilServices(SqliteConnection db)
     {
+        DropQuestStageSchema(db);
         foreach (string column in new[] { "devil_usage", "stamina_until" })
             if (Query(db, "SELECT count(*) FROM pragma_table_info('characters') WHERE name='" + column + "'") is 1L)
                 Execute(db, "ALTER TABLE characters DROP COLUMN " + column);
@@ -1750,6 +1752,9 @@ internal static class DatabaseSchemaTests
     static void DropCollectBoxSchema(SqliteConnection db) =>
         Execute(db, "DROP TABLE IF EXISTS character_collectbox_expirations; DROP TABLE IF EXISTS character_collectbox_slots; DROP TABLE IF EXISTS character_collectbox_state");
 
+    internal static void DropQuestStageSchema(SqliteConnection db) =>
+        Execute(db,"DROP TABLE IF EXISTS character_quest_stage_claims; DROP TABLE IF EXISTS character_quest_stage_witnesses");
+
     static void DropAuctionSchema(SqliteConnection db) =>
         Execute(db, "DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings");
 
@@ -1832,6 +1837,7 @@ internal static class DatabaseSchemaTests
             using (var db = Open(path))
             {
                 if (oldVersion < 49) RewindDevilServices(db);
+                if (oldVersion < 53) DropQuestStageSchema(db);
                 if (oldVersion < 46) RewindQuestDungeonAlternatives(db);
                 if (oldVersion < 45)
                 {
@@ -2263,6 +2269,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(v50);
         using (var db = Open(v50))
         {
+            DropQuestStageSchema(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold)
                 VALUES(1,'collect-v50',0,'CollectV50',7,38,1,450,234,0,321);
@@ -2284,6 +2291,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(v51);
         using (var db = Open(v51))
         {
+            DropQuestStageSchema(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
                 VALUES(1,'collect-v51',0,'CollectV51',9,38,1,450,234,0);
@@ -2311,6 +2319,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(v50Failure);
         using (var db = Open(v50Failure))
         {
+            DropQuestStageSchema(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
                 VALUES(1,'collect-fail',0,'CollectFail',11,38,1,450,234,0);
@@ -2333,6 +2342,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(v51Failure);
         using (var db = Open(v51Failure))
         {
+            DropQuestStageSchema(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
                 VALUES(1,'expiry-fail',0,'ExpiryFail',13,38,1,450,234,0);
@@ -2346,6 +2356,41 @@ internal static class DatabaseSchemaTests
         before = Snapshot(v51Failure);
         Reject<SqliteException>(() => new CharacterRepository(v51Failure), "v52期限表撞名");
         Check(Snapshot(v51Failure) == before, "v52迁移失败保留v51选择、模板槽、角色数据和版本");
+    }
+
+    private static void VerifyQuestStageMigrations(string root)
+    {
+        foreach (bool fail in new[] { false,true })
+        {
+            string path = Path.Combine(root,"quest-stage-v52-" + fail + ".db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                DropQuestStageSchema(db);
+                Execute(db,"PRAGMA user_version=52; INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('stage-old',0,'StageOld',7,38,1,450,234,0,321)");
+                if (fail) Execute(db,"CREATE VIEW character_quest_stage_claims AS SELECT 1 AS collision");
+            }
+            string before = Snapshot(path);
+            if (fail)
+            {
+                Reject<SqliteException>(() => new CharacterRepository(path),"v53第二表撞名整笔迁移回滚");
+                Check(Snapshot(path) == before,"v53失败不留witness半表、不改旧资产/版本/结构");
+                continue;
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+                Check(Query(db,"PRAGMA user_version") is 53L && Query(db,"SELECT revision||':'||gold FROM characters") is "7:321" &&
+                    Query(db,"SELECT count(*) FROM character_quest_stage_witnesses") is 0L && Query(db,"SELECT count(*) FROM character_quest_stage_claims") is 0L &&
+                    Query(db,"SELECT count(*) FROM pragma_index_list('character_quest_stage_claims') WHERE [unique]=1") is 2L,
+                    "v52追加空阶段旁表与双唯一，不猜旧来源或改旧角色");
+            string upgraded = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == upgraded,"v53重开逐表字节保持，不重跑迁移");
+            using (var db = Open(path)) Execute(db,"PRAGMA user_version=54");
+            string newer = Snapshot(path);
+            Reject<InvalidDataException>(() => new CharacterRepository(path),"阶段仓储拒绝较新版本");
+            Check(Snapshot(path) == newer,"较新版本拒绝不写库");
+        }
     }
 
     private static void VerifyFutureMigrations(string path)

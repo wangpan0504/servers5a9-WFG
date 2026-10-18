@@ -860,7 +860,7 @@ internal static class QuestOrdinaryCompletionTests
         public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, CharacterGrowthCatalog growth,
             QuestRewardParameterCatalog parameters, ItemResources items, StoryQuest quest, int materialCount = 5, bool locked = false,
             bool fullEquipment = false, bool loseResult = false, StoryQuest[]? definitions = null, ActiveMainQuest[]? active = null,
-            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null,bool resumeTown=false,bool loseLifecycleResult=false)
+            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null,bool resumeTown=false,bool loseLifecycleResult=false, QuestStageGraph? stages=null)
         {
             this.items = items; this.growth = growth; this.parameters = parameters;
             Catalog = new((definitions ?? [quest]).ToDictionary(row => row.Id));
@@ -880,10 +880,11 @@ internal static class QuestOrdinaryCompletionTests
             }
             Repository.Create(Owner, candidate with { ActiveMainQuests = active ?? [new(0, (ushort)quest.Id, 1)], Inventory = candidate.Inventory with { Items = inventory.ToImmutable() } });
             Lost = loseResult || loseLifecycleResult ? new(Repository) { LoseCompletionResult = loseResult, LoseLifecycleResult = loseLifecycleResult } : null;
-            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null,questEffects:questEffects);
+            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null,questEffects:questEffects,stageGraph:stages);
             Session.Select(0,resumeTown: resumeTown); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner, 0);
+        internal string OpenPath => Path.Combine(root,"game.db");
         public QuestCompletionPreparation Prepare(ushort selector, ushort multiplier = 1) => QuestCompletionPlan.Prepare(Read(), Catalog.Get(100), selector,
             Catalog, parameters, items.Items, items.GoldLimits, items.EpicPieces, growth, DateTimeOffset.UtcNow,multiplier: multiplier);
         public QuestLifecycleReceipt? Change(ushort id, QuestLifecycleAction action, QuestClientCondition? condition = null) =>

@@ -49,6 +49,7 @@ internal sealed partial class CharacterRepository
             command.Parameters.RemoveAt("$quest");
         }
         committed = Require(db, tx, owner.Account, expected.Name);
+        InvalidateQuestStages(db, tx, expected.Id, "class_change");
         tx.Commit();
         return committed;
     });

@@ -68,14 +68,14 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(character.Inventory, InventoryListType.Main,
                 commit.ChangedSlots.Concat(commit.DirectGoldAmount == 0 ? [] : new[] { new InventorySlot(InventoryListType.Main, 0) }).ToArray()),
                 "quest_reward_inventory", Guard);
-        if (commit.ExperienceReward.Amount != 0)
+        if (commit.ExperienceReward.Amount != 0 || commit.GainedExperience != 0)
         {
             var state = character.DungeonState ?? throw new InvalidOperationException("已提交任务成长缺少附属owner");
             var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)character.Inventory.WinPoints), state.GrowthCapsuleExperience,
                 state.ProficiencyLevel, state.ProficiencyExperience);
             var display = CharacterExperienceDisplay.Ordinary with
-            { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(commit.ExperienceReward.Amount - commit.ExperienceReward.GrowthContractExperience,
-                commit.ExperienceReward.GrowthContractExperience, commit.GainedExperience) };
+            { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(commit.OrdinaryExperience,
+                commit.ContractExperience, Math.Min(commit.GainedExperience, commit.ExperienceReward.Amount)) };
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning, auxiliary, display),
                 "quest_reward_experience", Guard);
         }

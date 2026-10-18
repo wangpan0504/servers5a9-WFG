@@ -29,10 +29,11 @@ internal sealed class QuestCompletionPlan
         uint gold, int goldBase, int goldMultiple, int penalty, DateTimeOffset now, QuestCatalog quests, QuestClearReceipt? clear,
         byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
         byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold,
-        int? completedParentId = null)
+        int? completedParentId = null, QuestStagePlan? stagePlan = null)
     {
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
         CompletedParentId = completedParentId;
+        StagePlan = stagePlan;
         AuthoritativeClear = clear;
         ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[clear a dungeon]" => 45, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
             "[custom quest]" when QuestRentalProgress.Supports(quest) => 19,
@@ -72,6 +73,13 @@ internal sealed class QuestCompletionPlan
         Snapshot = JsonSerializer.Serialize(new { QuestId, AcceptanceId, QuestSlot, ConditionType, RewardSelector, Multiplier,
             ExperienceReward, GoldAmount, goldBase, goldMultiple, penalty, Consumed, Rewards, Currencies, FrozenAt, DailyPeriod, AccountQuest,
             AuthoritativeClear, Answer, Learning = TargetLearning, Level = TargetLevel, GrowType = TargetGrowType, EquipmentSlotFlags = TargetEquipmentSlotFlags });
+        if (StagePlan is not null)
+        {
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot["Stage"] = JsonSerializer.SerializeToNode(new { StagePlan, OrdinaryExperience, ContractExperience,
+                StageExperience, TotalRequestedExperience, ActualExperience });
+            Snapshot = snapshot.ToJsonString();
+        }
         if (CompletedParentId is { } completedParent)
         {
             var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
@@ -111,6 +119,20 @@ internal sealed class QuestCompletionPlan
             Snapshot = snapshot.ToJsonString();
         }
     }
+
+    public QuestStagePlan? StagePlan { get; }
+    public uint OrdinaryExperience => ExperienceReward.Amount - ExperienceReward.GrowthContractExperience;
+    public uint ContractExperience => ExperienceReward.GrowthContractExperience;
+    public uint StageExperience => StagePlan?.BonusExperience ?? 0;
+    public uint TotalRequestedExperience => checked(ExperienceReward.Amount + StageExperience);
+    public uint ActualExperience => checked((uint)(TargetLearning.Experience - Expected.Learning.Experience));
+    Character ProjectedCharacter => Expected with { Revision = checked(Expected.Revision + 1),
+        Inventory = Inventory.After, Level = TargetLevel, GrowType = TargetGrowType, Learning = TargetLearning,
+        EquipmentSlotFlags = TargetEquipmentSlotFlags, CompletedQuests = CompletedAfter.ToArray(),
+        AccountCompletedQuests = AccountCompletedAfter.ToArray(), ActiveMainQuests = ActiveAfter.ToArray(),
+        QuestAnswers = AnswersAfter, AccountQuestAnswers = AccountAnswersAfter, AccountQuestDailyClaims = AccountDailyClaimsAfter,
+        Skills = !UpdatesLearning ? Expected.Skills : TargetLearning.Trees.Single(tree => tree.Context == 0).Skills
+            .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id).ToArray() };
 
     public Character Expected { get; }
     public QuestClearReceipt? AuthoritativeClear { get; }
@@ -161,7 +183,7 @@ internal sealed class QuestCompletionPlan
     public static QuestCompletionPreparation Prepare(Character expected, StoryQuest quest, ushort selector,
         QuestCatalog quests, QuestRewardParameterCatalog parameters, ItemCatalog items, GoldLimitCatalog goldLimits,
         EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1,
-        GrowthContractBenefits? growthContract = null)
+        GrowthContractBenefits? growthContract = null, QuestStageGraph? stageGraph = null, QuestStageState? stageState = null)
     {
         try
         {
@@ -407,10 +429,38 @@ internal sealed class QuestCompletionPlan
                 int deadline = expected.Inventory.Find(DfoServer.Game.Creatures.CreatureRules.EquippedSlot)!.ExpireTime;
                 creaturePrecondition = new(expected, deadline == 0 ? null : deadline);
             }
-            return new(QuestCompletionOutcome.Accepted, new(expected, active, quest, selector, experience,
-                new(expected.Inventory, after, "quest_complete", creaturePrecondition), growth, rewards.ToImmutable(), consumed.ToImmutable(),
-                gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, rewardLearning, multiplier, currencies.ToImmutable(),
-                QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold), "通用领奖计划已冻结");
+            QuestCompletionPlan Create(CharacterGrowthPlan? finalGrowth, CharacterLearningState? finalLearning, QuestStagePlan? stage = null) => new(expected, active, quest, selector, experience,
+                new(expected.Inventory, after, "quest_complete", creaturePrecondition), finalGrowth, rewards.ToImmutable(), consumed.ToImmutable(),
+                gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, finalLearning, multiplier, currencies.ToImmutable(),
+                QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage);
+            var normal = Create(growth, rewardLearning);
+            if ((stageGraph is null) != (stageState is null)) throw new InvalidDataException("阶段图与持久状态必须同时提供");
+            if (stageGraph is null) return new(QuestCompletionOutcome.Accepted, normal, "通用领奖计划已冻结");
+            var stage = QuestStagePolicy.Prepare(expected, normal.ProjectedCharacter, quest, active.AcceptanceId,
+                quests, stageGraph, growthCatalog.CumulativeExperience, stageState!);
+            // 已有足够经验同样消费一次目标资格；多个来源按固定来源顺序只落一笔0额claim。
+            if (stage.Claim is null)
+            {
+                var consumedTargets = stage.Expected.Witnesses.Where(row => row.Status is QuestStageStatus.Granted or QuestStageStatus.Satisfied)
+                    .Select(row => row.TargetLevel).ToHashSet();
+                var satisfied = stage.WitnessesAfter.Where(row => row.Status == QuestStageStatus.Satisfied && !consumedTargets.Contains(row.TargetLevel))
+                    .OrderBy(row => row.TargetLevel).ThenBy(row => row.SourceCompletionRevision).ThenBy(row => row.SourceAcceptanceId).FirstOrDefault();
+                if (satisfied is not null) stage = stage with { Claim = new(satisfied.SourceAcceptanceId, active.AcceptanceId,
+                    satisfied.TargetLevel, normal.TargetLearning.Experience, normal.TargetLearning.Experience, 0) };
+            }
+            if (stage.BonusExperience != 0)
+            {
+                if (expected.DungeonState is null) throw new InvalidDataException("任务经验缺少现有成长附属状态");
+                if ((ulong)experience.Amount + stage.BonusExperience > int.MaxValue)
+                    throw new InvalidDataException("普通及阶段总经验超过本版显示范围");
+                var result = CharacterGrowthPlan.AddExperience(expected, checked(experience.Amount + stage.BonusExperience), growthCatalog);
+                if (!result.Success || result.Plan is null) throw new InvalidDataException("阶段成长被拒绝: " + result.Failure);
+                growth = result.Plan;
+                rewardLearning = profession is { } finalProfession ? QuestProfessionReward.Prepare(expected, finalProfession,
+                    growth.TargetLevel, growth.Learning, growthCatalog.Learning!, now) : null;
+                if (tpAmount != 0) rewardLearning = QuestCharacterReward.AddTp(growth.Learning, tpAmount);
+            }
+            return new(QuestCompletionOutcome.Accepted, Create(growth, rewardLearning, stage), "通用及阶段领奖计划已冻结");
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException or ArgumentOutOfRangeException)
         {

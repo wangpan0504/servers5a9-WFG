@@ -130,6 +130,9 @@ internal sealed partial class CharacterRepository
         }
 
         var updated = Require(db, tx, owner.Account, request.Name);
+        if (updated.Level != current.Level || updated.GrowType != current.GrowType ||
+            updated.AcceptedStoryLevel != current.AcceptedStoryLevel || !updated.CompletedQuests.SequenceEqual(current.CompletedQuests))
+            InvalidateQuestStages(db, tx, current.Id, "progress_edit");
         tx.Commit();
         return updated;
     });
@@ -161,6 +164,9 @@ internal sealed partial class CharacterRepository
         WriteLearning(db, tx, current.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, current.Id, plan.Learning);
         var updated = Require(db, tx, owner.Account, current.Name);
+        if (updated.Level != current.Level || updated.GrowType != current.GrowType ||
+            updated.Learning.Experience != current.Learning.Experience)
+            InvalidateQuestStages(db, tx, current.Id, "progress_reset");
         tx.Commit();
         return updated;
     });

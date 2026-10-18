@@ -137,6 +137,11 @@ internal static class SqliteMigrations
         new(50, "强袭模式每日通关次数", static (db, tx) => Execute(db, tx, AssaultDailySchema)),
         new(51, "角色宝珠收集箱选择与模板槽", UpgradeCollectBoxState),
         new(52, "角色宝珠收集箱期限", UpgradeCollectBoxExpiration),
+        new(53, "真实主线阶段资格与双唯一消费", static (db, tx) =>
+        {
+            Execute(db, tx, QuestStageSchema.WitnessSql);
+            Execute(db, tx, QuestStageSchema.ClaimSql);
+        }),
     ];
 
     static void UpgradeCollectBoxState(SqliteConnection db, SqliteTransaction tx)
@@ -1234,7 +1239,9 @@ internal static class SqliteMigrations
             ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),
             ("character_collectbox_slots",CollectBoxSlotsTableSchema),
-            ("character_collectbox_expirations",CollectBoxExpirationSchema) })
+            ("character_collectbox_expirations",CollectBoxExpirationSchema),
+            ("character_quest_stage_witnesses",QuestStageSchema.WitnessSql),
+            ("character_quest_stage_claims",QuestStageSchema.ClaimSql) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
@@ -1255,6 +1262,8 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,account,source_acceptance_id,source_quest_id,source_revision,target_level,rule_version,status,proof FROM character_quest_stage_witnesses LIMIT 0",
+        "SELECT character_id,account,source_acceptance_id,trigger_acceptance_id,target_level,before_experience,after_experience,amount,revision FROM character_quest_stage_claims LIMIT 0",
         "SELECT character_id,account,ground_key,instance_id,task_attempt,epoch,picked_core,gold_amount,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision FROM character_dungeon_passive_pickups LIMIT 0",
         // 拍卖行挂牌表由 v37 建出（`IF NOT EXISTS`），列是否齐全在这里兜底：
         // 缺列或缺表都会在建库/升级阶段直接拒绝启动，而不是等到运行时读挂牌才发现。

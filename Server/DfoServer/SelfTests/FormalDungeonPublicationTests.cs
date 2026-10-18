@@ -756,6 +756,7 @@ internal static class FormalDungeonPublicationTests
         }
         public AccountWallet LoadAccountWallet(AccountOwners.Lease owner) => inner.LoadAccountWallet(owner);
         public CharacterRosterEntry[] ListRoster(AccountOwners.Lease owner) => inner.ListRoster(owner);
+        public DfoServer.Game.Quests.QuestStageState LoadQuestStageState(AccountOwners.Lease owner, Character expected) => inner.LoadQuestStageState(owner, expected);
         public Character LoadCharacter(AccountOwners.Lease owner, ushort slot) => inner.LoadCharacter(owner, slot);
         public Character[] List(AccountOwners.Lease owner) => inner.List(owner);
         public bool NameExists(string name) => inner.NameExists(name);

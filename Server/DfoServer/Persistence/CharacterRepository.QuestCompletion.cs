@@ -27,7 +27,7 @@ internal sealed partial class CharacterRepository
             active.QuestId != plan.QuestId || active.Slot != plan.QuestSlot || expected.CompletedQuests.Contains(plan.QuestId) ||
             plan.CascadeMarkerQuestId is { } cascade && (cascade is <= 0 or >= 30000 || cascade == plan.QuestId) ||
             reward.ResourcePath != QuestRewardParameterCatalog.ResourcePath ||
-            (plan.GrowthPlan?.RequestedExperience ?? 0) != reward.Amount ||
+            (plan.GrowthPlan?.RequestedExperience ?? 0) != plan.TotalRequestedExperience ||
             plan.TargetLearning.Experience != (plan.GrowthPlan?.Learning.Experience ?? expected.Learning.Experience) ||
             closed.Count != plan.ClosedChildren.Length || closed.Contains(plan.AcceptanceId) ||
             plan.ClosedChildren.Length != 0 && plan.ConditionType != 70 ||
@@ -43,7 +43,7 @@ internal sealed partial class CharacterRepository
         if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 64 or 65 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
             plan.Snapshot is null || plan.MailedGoldAmount != 0 && plan.MailedGoldAmount != plan.GoldAmount ||
             plan.ConditionType is not (0 or 42) && active.ConditionState != 0 ||
-            reward.Amount == 0 && plan.GrowthPlan is not null || reward.Amount != 0 && plan.GrowthPlan is null ||
+            plan.TotalRequestedExperience == 0 && plan.GrowthPlan is not null || plan.TotalRequestedExperience != 0 && plan.GrowthPlan is null ||
             plan.GrowthPlan is { } growth && (growth.CharacterId != expected.Id || growth.Revision != expected.Revision) ||
             (plan.ConditionType is 1 or 3 or 45) != (clear is not null) ||
             clear is not null && !QuestCompletionPlan.MatchesClearedActiveQuest(expected, clear) ||
@@ -88,7 +88,7 @@ internal sealed partial class CharacterRepository
                     clear is not null && (I("task_attempt") != clear.TaskAttempt || I("epoch") != clear.Epoch) ||
                     S("resource_source") != reward.ResourcePath || S("quest_source") != reward.QuestPath ||
                     I("native_index") != reward.NativeIndex || I("base_experience") != reward.BaseExperience || I("raw_additional_percent") != reward.RawAdditionalPercent ||
-                    S("difficulty_key") != reward.DifficultyKey || I("difficulty_weight") != reward.DifficultyWeight || I("experience_amount") != reward.Amount ||
+                    S("difficulty_key") != reward.DifficultyKey || I("difficulty_weight") != reward.DifficultyWeight || I("experience_amount") != plan.TotalRequestedExperience ||
                     I("gold_amount") != plan.GoldAmount || I("before_revision") != expected.Revision || I("before_level") != expected.Level ||
                     I("before_experience") != checked((long)expected.Learning.Experience) || I("condition_type") != plan.ConditionType ||
                     I("selector") != plan.RewardSelector || I("multiplier") != plan.Multiplier || S("consumed") != consumed ||
@@ -201,7 +201,7 @@ internal sealed partial class CharacterRepository
             ("$event", clear?.EventId.ToString("N")), ("$instance", clear?.InstanceId.ToString("N")), ("$attempt", clear?.TaskAttempt), ("$epoch", clear?.Epoch),
             ("$clear", clear?.AcceptanceId.ToString("N")), ("$generation", owner.Generation), ("$rule", ""), ("$resource", reward.ResourcePath),
             ("$questPath", reward.QuestPath), ("$index", reward.NativeIndex), ("$basis", reward.BaseExperience), ("$additional", reward.RawAdditionalPercent),
-            ("$difficulty", reward.DifficultyKey), ("$weight", reward.DifficultyWeight), ("$amount", reward.Amount), ("$gold", plan.GoldAmount),
+            ("$difficulty", reward.DifficultyKey), ("$weight", reward.DifficultyWeight), ("$amount", plan.TotalRequestedExperience), ("$gold", plan.GoldAmount),
             ("$beforeLevel", expected.Level), ("$beforeExperience", checked((long)expected.Learning.Experience)), ("$beforeRevision", expected.Revision),
             ("$rewards", JsonSerializer.Serialize(grantedItems)), ("$condition", plan.ConditionType), ("$selector", plan.RewardSelector), ("$multiplier",plan.Multiplier),
             ("$consumed", consumed), ("$changed", JsonSerializer.Serialize(changedItems)), ("$snapshot", plan.Snapshot)
@@ -216,6 +216,7 @@ internal sealed partial class CharacterRepository
               $clear,$condition,$selector,$multiplier,$consumed,$changed,$snapshot)
             """;
         command.ExecuteNonQuery();
+        if (plan.StagePlan is { } stage) WriteQuestStage(db, tx, owner.Account, expected, stage);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Revision != expected.Revision + 1 || committed.Level != plan.TargetLevel || committed.GrowType != plan.TargetGrowType ||
             committed.EquipmentSlotFlags != plan.TargetEquipmentSlotFlags ||
@@ -237,7 +238,8 @@ internal sealed partial class CharacterRepository
             new(character, clear, reward, rows, duplicate, projection, expected.Level, expected.Learning) {
                 QuestId = plan.QuestId, AcceptanceId = plan.AcceptanceId, ConditionType = plan.ConditionType,
                 GoldAmount = plan.GoldAmount, MailedGoldAmount = plan.MailedGoldAmount, GoldMailId = goldMailId,
-                GainedExperience = gained, TpAmount = plan.TpAmount, HellChallenge = plan.HellChallenge, Consumed = plan.Consumed, Currencies = plan.Currencies,
+                GainedExperience = gained, StagePlan = plan.StagePlan, OrdinaryExperience = plan.OrdinaryExperience,
+                ContractExperience = plan.ContractExperience, TotalRequestedExperience = plan.TotalRequestedExperience, TpAmount = plan.TpAmount, HellChallenge = plan.HellChallenge, Consumed = plan.Consumed, Currencies = plan.Currencies,
                 ChangedSlots = plan.Inventory.ChangedSlots.Concat(plan.Inventory.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
                     .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main,slot!.Value)))
                     .Concat(plan.Consumed.Where(row => row.Uid == 0).Select(row => row.Position)).Distinct().ToImmutableArray(), PreviousQuests = expected.ActiveMainQuests,

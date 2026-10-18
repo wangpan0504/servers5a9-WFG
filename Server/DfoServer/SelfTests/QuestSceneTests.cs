@@ -140,6 +140,65 @@ internal static class QuestSceneTests
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
     }
 
+    public static void RunStageBudgets(TcpTestResources r)
+    {
+        int checks = Count;
+        var quests=r.Quests; var growth=SelfTestCatalogs.Growth(r.Archive,r.Learning);
+        var parameters=SelfTestCatalogs.QuestRewardParameters(r.Archive);
+        var dungeons=SelfTestCatalogs.Dungeons(r.Archive); var rooms=SelfTestCatalogs.Rooms(r.Archive);
+        var kills=SelfTestCatalogs.KillExperience(r.Archive); var clears=SelfTestCatalogs.ClearExperience(r.Archive);
+        var graph=QuestStageGraph.Build(quests);
+        foreach (var scenario in new[] {(Quest:3149,Next:3150,Level:(byte)11,Start:80875UL,Target:164460UL),
+            (Quest:3150,Next:3151,Level:(byte)13,Start:164460UL,Target:303835UL)})
+        {
+            var ordinary=Complete(false); var stage=Complete(true);
+            That(ordinary.Character.Learning.Experience < scenario.Target && ordinary.StageExperience == 0,
+                $"{scenario.Quest}自然一轮普通奖励仍不足下一门槛");
+            That(stage.Character.Learning.Experience == scenario.Target && stage.StageExperience == scenario.Target-ordinary.Character.Learning.Experience &&
+                QuestEligibility.Evaluate(stage.Character,quests.Get(scenario.Next),quests).Eligible,
+                $"{scenario.Quest}阶段只补精确{scenario.Target}并立即可接{scenario.Next}");
+
+            QuestCompletionCommit Complete(bool enabled)
+            {
+                int[] done=[3054,3145,3146,3147,3148,3157,4873,4875,..Enumerable.Range(3149,scenario.Quest-3149)];
+                var entrance=MiddleQuestEntryTests.Entrance(r.Towns,quests.Get(scenario.Quest),checked((uint)quests.Get(scenario.Quest).DungeonIndex!.Value));
+                using var f=new Fixture(r.Towns,r.Characters,r.Learning,growth,quests,false,scenario.Level,done,
+                    position:entrance.Position,stages:enabled ? graph : null);
+                That(f.Read().Learning.Experience == scenario.Start,"预算从原级0%开始，没有契约或额外刷图");
+                That(f.Session.ChangeQuest(checked((ushort)scenario.Quest),QuestLifecycleAction.Accept,quests,r.ItemResources.Items,
+                    r.ItemResources.GoldLimits,r.ItemResources.EpicPieces)?.Commit is not null,"预算真实接取");
+                var opening=f.Session.EnterFormalDungeon(checked((uint)quests.Get(scenario.Quest).DungeonIndex!.Value),checked((uint)scenario.Quest),0,dungeons,rooms)!;
+                var path=QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology,opening.Entry.StartMap.Position,opening.Entry.BossMap.Position);
+                That(path.Length == 6,"预算经过真实六房路线");
+                var receipt=f.Session.CompleteFormalDungeonLoading()!;
+                ulong killStart=f.Read().Learning.Experience;
+                foreach(var point in path)
+                {
+                    foreach(var monster in receipt.Monsters.Monsters.Where(row=>row.CanReportDeath).OrderBy(row=>row.IsBoss))
+                        That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,monster),kills,growth).Outcome == DungeonRunOutcome.Accepted,
+                            "预算只提交本房真实敌方死亡");
+                    if(point == opening.Entry.BossMap.Position) break;
+                    var next=path[Array.IndexOf(path,point)+1];
+                    That(f.Session.MoveFormalDungeon(checked((byte)next.X),checked((byte)next.Y)) is not null,"预算真实门墙换房");
+                    receipt=f.Session.CompleteFormalDungeonLoading()!;
+                }
+                ulong afterKills=f.Read().Learning.Experience;
+                That(f.Session.Phase == SessionPhase.Settlement,"预算真实Boss死亡进入结算");
+                That(f.Session.SettleFormalDungeon(f.Read().Id,99,99,[1,2,3,4],dungeons,clears,growth).Outcome == DungeonRunOutcome.Accepted,"预算原46结算经验");
+                ulong afterClear=f.Read().Learning.Experience;
+                var result=f.Session.FinishQuest(checked((ushort)scenario.Quest),ushort.MaxValue,quests,parameters,r.ItemResources.Items,
+                    r.ItemResources.GoldLimits,r.ItemResources.EpicPieces,growth);
+                That(result.Outcome == QuestFinishOutcome.Committed,$"预算真实普通34交付：{result.Reason}");
+                var commit=result.Receipt!.Commit;
+                Console.WriteLine($"BUDGET quest={scenario.Quest} stage={enabled} start={killStart} kill={afterKills-killStart} clear={afterClear-afterKills} ordinary={commit.OrdinaryExperience} contract={commit.ContractExperience} topup={commit.StageExperience} final={commit.Character.Learning.Experience}");
+                That(QuestCompletionRepositoryTests.Same(commit.Character,f.Read()) &&
+                    f.Query("SELECT count(*) FROM character_quest_completion_receipts") is 1L,"预算完整双树资产及领奖SQL一致");
+                return commit;
+            }
+        }
+        Console.WriteLine($"PASS {Count-checks} 两个真实Scene自然一轮预算断言（非实机）");
+    }
+
     // 三个真实笼子分别由所在地图唯一寻址；合成33不证明客户端自然触发，也不借dummy死亡完成任务。
     static void VerifyMetroCages(TownCatalog towns,CharacterCatalog characters,ItemResources items,QuestCatalog quests,
         SkillLearningCatalog skills,CharacterGrowthCatalog growth,DungeonCatalog dungeons,DungeonRoomCatalog rooms,
@@ -562,7 +621,7 @@ internal static class QuestSceneTests
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
             byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
-            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null)
+            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
@@ -589,7 +648,7 @@ internal static class QuestSceneTests
             if (loseSettlement)
                 repository = new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,loseSettlement:true);
             Session = new(repository,towns,Owner,questCatalog: quests,
-                contracts: contracts,timeProvider: timeProvider);
+                contracts: contracts,timeProvider: timeProvider,stageGraph: stages);
             Session.Select(0, resumeTown: position is not null); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner,0);

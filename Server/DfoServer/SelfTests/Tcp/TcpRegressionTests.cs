@@ -7,6 +7,14 @@ internal static class TcpRegressionTests
 {
     static readonly (string Name, Func<ServerOptions, string, TcpTestResources, Task> Run)[] Groups =
     [
+        ("quest-stage-growth", async (options, root, resources) =>
+        {
+            QuestStagePolicyTests.RunResources(resources);
+            QuestSceneTests.RunStageBudgets(resources);
+            QuestStageRepositoryTests.Run(resources);
+            await QuestCompletionPublicationTests.RunStageAsync(resources);
+            await QuestLifecycleTcpTests.RunStageAsync(options,root,resources);
+        }),
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
         ("packet-capture", (options, root, _) => PacketCaptureTcpTests.RunAsync(options, root)),

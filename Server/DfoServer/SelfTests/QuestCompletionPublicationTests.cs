@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Net;
+using System.Text.Json;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -22,6 +23,222 @@ namespace DfoServer;
 
 internal static class QuestCompletionPublicationTests
 {
+    public static async Task RunStageAsync(TcpTestResources r)
+    {
+        int checks=TestCheck.Count;
+        var growth=SelfTestCatalogs.Growth(r.Archive,r.Learning);
+        var parameters=SelfTestCatalogs.QuestRewardParameters(r.Archive);
+        var a=QuestEligibilityTests.Quest(100) with {SubType=1,Difficulty="G",Attributes=[],Rewards=[],Definition=new([]){Job="[all]"}};
+        var c=a with {Id=101,Attributes=["not give exp quest"],Definition=a.Definition! with {PrerequisiteGroups=[[100]]}};
+        var n=a with {Id=102,MinimumLevel=13,Definition=a.Definition! with {PrerequisiteGroups=[[100]]}};
+        var catalog=new DfoServer.GameWorld.Quests.QuestCatalog(new[] {a,c,n}.ToDictionary(row=>row.Id));
+        var graph=DfoServer.GameWorld.Quests.QuestStageGraph.Build(catalog);
+        foreach (string mode in new[] {"normal","missing-growth","sql","lost","send","reselect","stale","owner"})
+        {
+            using var f=new QuestOrdinaryCompletionTests.Fixture(r.Towns,r.Characters,r.Learning,growth,parameters,r.ItemResources,a,
+                materialCount:0,definitions:[a,c,n],active:[],loseResult:mode is "lost" or "stale",stages:graph,
+                configure:candidate=>candidate with {Level=11,InitialLearning=DfoServer.Game.Skills.SkillPointLedger.Synchronize(
+                    0,0,11,candidate.InitialLearning with {Experience=growth.GetLevelStartExperience(11)},r.Learning)});
+            if(f.Lost is not null) f.Lost.CompletionLossCall=2;
+            Check(f.Change(100,QuestLifecycleAction.Accept) is not null && f.Finish(ushort.MaxValue).Receipt is not null &&
+                f.Change(101,QuestLifecycleAction.Accept) is not null,"阶段发布准备真实A延期/C接取");
+            if(mode=="missing-growth")
+            {
+                // 仅在临时库模拟成长附属行缺失，重选后以真实载入状态交付延期阶段。
+                f.Sql("DELETE FROM character_dungeon_state; UPDATE characters SET revision=revision+1");
+                f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            }
+            var selected=f.Read();
+            using var log=new ServerLog(Path.Combine(Path.GetDirectoryName(f.OpenPath)!,"log"));
+            var projection=new QuestProjection(catalog);
+            var registry=new GameCommandRegistry();
+            new QuestCompletionHandler(catalog,parameters,r.ItemResources.Items,r.ItemResources.GoldLimits,r.ItemResources.EpicPieces,growth,
+                log,new CharacterLevelProjection(new(r.Characters),projection),projection).Register(registry);
+            registry.Seal();
+            using var stop=new CancellationTokenSource();
+            using var stream=new ControlledOutput {FailOn=mode=="send"?2:0,HoldOn=mode=="reselect"?1:0};
+            await using var sender=new GameConnectionSender(f.Owner,stream,stop,0,(_,_,_,_,_)=>{});
+            var context=new GameConnectionContext(new(88,IPAddress.Loopback,stream,stop),f.Owner,f.Session,sender);
+            var packet=new Packet(1,34,Convert.FromHexString("22006500FFFF0100FFFF"));
+            if(mode=="missing-growth")
+            {
+                var state=f.Repository.LoadQuestStageState(f.Owner,selected);
+                var ordinary=QuestCompletionPlan.Prepare(selected,c,ushort.MaxValue,catalog,parameters,r.ItemResources.Items,
+                    r.ItemResources.GoldLimits,r.ItemResources.EpicPieces,growth,DateTimeOffset.UtcNow).Plan!;
+                Check(selected.DungeonState is null && state.Witnesses is [{Status:QuestStageStatus.Deferred,SourceQuestId:100,TargetLevel:13}] &&
+                    selected.CompletedQuests.SequenceEqual([100]) && selected.ActiveMainQuests.Single().QuestId==101 &&
+                    ordinary.TotalRequestedExperience==0 && selected.Learning.Experience<growth.GetLevelStartExperience(13),
+                    "缺成长附属状态的C普通0，但真实A延期仍有正额阶段资格");
+                string stored=StageStorageSnapshot(f);
+                Check(await registry.DispatchAsync(context,packet)==CommandResult.Handled,
+                    "普通0阶段正额缺成长附属状态时Handler正常拒绝，不在提交后抛错");
+                ValidateRejection(stream.Frames,19);
+                var rejected=f.Finish(ushort.MaxValue,101);
+                Check(rejected.Outcome==QuestFinishOutcome.Rejected && rejected.Reason=="任务经验缺少现有成长附属状态" &&
+                    rejected.Receipt is null && !stop.IsCancellationRequested,
+                    "阶段正额复用普通成长前提，在规划阶段拒绝并保留原诊断");
+                Check(QuestCompletionRepositoryTests.Same(selected,f.Read()) && QuestCompletionRepositoryTests.Same(selected,f.Session.Selected!) &&
+                    StageStorageSnapshot(f)==stored && f.Receipts==1 &&
+                    f.Repository.LoadQuestStageState(f.Owner,f.Read()).Witnesses.Single().Status==QuestStageStatus.Deferred,
+                    "拒绝后完整角色/Selected/XP/revision/完成位/receipt/witness/claim不变，A延期不消费且无成功ACK或EXP");
+                continue;
+            }
+            if(mode=="sql")
+            {
+                f.Sql("CREATE TRIGGER abort_stage_publication AFTER INSERT ON character_quest_stage_claims BEGIN SELECT RAISE(ABORT,'stage publication rollback'); END");
+                await RejectAsync(typeof(SqliteException),()=>registry.DispatchAsync(context,packet),"阶段claim SQL失败不提前成功");
+                Check(stream.Frames.Count==0 && QuestCompletionRepositoryTests.Same(selected,f.Read()),"阶段SQL失败双树资产完整回滚且无ACK");
+                f.Sql("DROP TRIGGER abort_stage_publication");
+            }
+            if(mode is "lost" or "stale")
+            {
+                if(mode=="stale")
+                {
+                    await RejectAsync(typeof(IOException),()=>registry.DispatchAsync(context,packet),"阶段旧revision准备已提交未知结果");
+                    f.Sql("UPDATE characters SET revision=revision+1");
+                    var stale=f.Finish(ushort.MaxValue,101).Receipt!;
+                    Check(!stale.Commit.ProjectionCurrent && !f.Session.CanPublishQuestCompletion(stale) && stream.Frames.Count==0,
+                        "旧revision阶段pending重放不能发布或覆盖Selected");
+                    continue;
+                }
+                await RejectAsync(typeof(IOException),()=>registry.DispatchAsync(context,packet),"阶段COMMIT返回丢失");
+                Check(stream.Frames.Count==0 && QuestCompletionRepositoryTests.Same(selected,f.Session.Selected!) && f.Read().Level==13,"阶段丢返回无提前ACK，持久成长已提交");
+            }
+            if(mode=="owner")
+            {
+                var receipt=f.Session.FinishQuest(101,ushort.MaxValue,catalog,parameters,r.ItemResources.Items,r.ItemResources.GoldLimits,r.ItemResources.EpicPieces,growth).Receipt!;
+                using var replacement=f.Owners.Acquire("ordinary-quest",()=>{});
+                TestCheck.Reject<InvalidOperationException>(()=>f.Session.CanPublishQuestCompletion(receipt),"旧owner阶段receipt不能发布新会话");
+                continue;
+            }
+            if(mode=="send")
+            {
+                await RejectAsync(typeof(IOException),()=>registry.DispatchAsync(context,packet),"阶段通知发送失败");
+                Check(stream.Frames.Count==1 && f.Read().Level==13 && stop.IsCancellationRequested,"ACK后发送失败不回滚已提交阶段成长");
+                f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+                Check(QuestCompletionRepositoryTests.Same(f.Session.Selected!,f.Read()),"发送失败重选恢复完整阶段双树资产");
+                continue;
+            }
+            if(mode=="reselect")
+            {
+                var sending=registry.DispatchAsync(context,packet);
+                try
+                {
+                    await stream.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+                }
+                finally { stream.Release.TrySetResult(); }
+                Check(await sending.WaitAsync(TimeSpan.FromSeconds(5)) == CommandResult.Handled && stream.Frames.Count==1 && !stop.IsCancellationRequested && sender.PendingBytes==0,
+                    "阶段换角允许在途ACK完成并拦截旧epoch后续通知");
+                Check(f.Read().Level==13 && QuestCompletionRepositoryTests.Same(f.Read(),f.Session.Selected!),"旧epoch不覆盖新选角已提交阶段状态");
+                continue;
+            }
+            await registry.DispatchAsync(context,packet);
+            var committed=f.Read();
+            var notices=stream.Opcodes.ToArray();
+            Check(notices.Contains((ushort)37),"普通XP为0、阶段正额仍必须发送NOTI37");
+            var ack=stream.Frames.Single(frame=>frame[0]==1 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1))==34).AsSpan(16).ToArray();
+            var exp=stream.Frames.Single(frame=>BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1))==37).AsSpan(16).ToArray();
+            uint total=checked((uint)(committed.Learning.Experience-selected.Learning.Experience));
+            Check(ack[0]==1 && BinaryPrimitives.ReadUInt32LittleEndian(ack.AsSpan(4))==total && total>0 &&
+                exp.Length==91 && exp[0]==13 && BinaryPrimitives.ReadUInt64LittleEndian(exp.AsSpan(1))==growth.GetLevelStartExperience(13) &&
+                BinaryPrimitives.ReadUInt32LittleEndian(exp.AsSpan(9))==0 && BinaryPrimitives.ReadUInt32LittleEndian(exp.AsSpan(34))==0,
+                "独立解码ACK34实际总额/NOTI37绝对XP，普通0阶段不伪造组队或契约分量");
+            Check(Array.IndexOf(notices,(ushort)34)<Array.IndexOf(notices,(ushort)37) && Array.IndexOf(notices,(ushort)37)<Array.IndexOf(notices,(ushort)2) &&
+                QuestCompletionRepositoryTests.Same(committed,f.Session.Selected!),"ACK→EXP→升级Player沿已提交双树状态发布");
+            stream.Frames.Clear(); await registry.DispatchAsync(context,packet);
+            ValidateRejection(stream.Frames,19);
+            Check(QuestCompletionRepositoryTests.Same(committed,f.Read()) && f.Receipts==2,"阶段重复请求不二次成长或建receipt");
+        }
+        await UnknownStageOrdinaryAsync();
+        Console.WriteLine($"PASS {TestCheck.Count-checks} 阶段Handler独立wire及发布故障恢复断言（非监听）");
+
+        static string StageStorageSnapshot(QuestOrdinaryCompletionTests.Fixture fixture)
+        {
+            using var db=fixture.Open();
+            var tables=new List<List<object[]>>();
+            foreach(string table in new[] {"character_quest_completion_receipts","character_quest_stage_witnesses","character_quest_stage_claims"})
+            {
+                using var command=db.CreateCommand();
+                command.CommandText=$"SELECT * FROM {table} ORDER BY rowid";
+                using var reader=command.ExecuteReader();
+                var rows=new List<object[]>();
+                while(reader.Read())
+                {
+                    var values=new object[reader.FieldCount];
+                    reader.GetValues(values); rows.Add(values);
+                }
+                tables.Add(rows);
+            }
+            return JsonSerializer.Serialize(tables);
+        }
+
+        async Task UnknownStageOrdinaryAsync()
+        {
+            var unknown=n with {Condition="[unknown]"};
+            var unknownCatalog=new DfoServer.GameWorld.Quests.QuestCatalog(new[] {a,unknown}.ToDictionary(row=>row.Id));
+            var unknownGraph=DfoServer.GameWorld.Quests.QuestStageGraph.Build(unknownCatalog);
+            using var f=new QuestOrdinaryCompletionTests.Fixture(r.Towns,r.Characters,r.Learning,growth,parameters,r.ItemResources,a,
+                materialCount:0,definitions:[a,unknown],active:[],stages:unknownGraph,
+                configure:candidate=>candidate with {Level=11,InitialLearning=DfoServer.Game.Skills.SkillPointLedger.Synchronize(
+                    0,0,11,candidate.InitialLearning with {Experience=growth.GetLevelStartExperience(11)},r.Learning)});
+            Check(f.Change(100,QuestLifecycleAction.Accept)?.Commit is not null,"未知后继不阻止合法普通源真实接取");
+            var before=f.Read();
+            var ordinary=f.Prepare(ushort.MaxValue).Plan!;
+            Check(ordinary.OrdinaryExperience>0 && ordinary.ContractExperience==0 && ordinary.TargetLevel==before.Level,
+                "未知阶段对照为无契约、未跨级的合法普通奖励计划");
+            using var log=new ServerLog(Path.Combine(Path.GetDirectoryName(f.OpenPath)!,"log"));
+            var projection=new QuestProjection(unknownCatalog);
+            var registry=new GameCommandRegistry();
+            new QuestCompletionHandler(unknownCatalog,parameters,r.ItemResources.Items,r.ItemResources.GoldLimits,r.ItemResources.EpicPieces,growth,
+                log,new CharacterLevelProjection(new(r.Characters),projection),projection).Register(registry);
+            registry.Seal();
+            using var stop=new CancellationTokenSource();
+            using var stream=new ControlledOutput();
+            await using var sender=new GameConnectionSender(f.Owner,stream,stop,0,(_,_,_,_,_)=>{});
+            var context=new GameConnectionContext(new(89,IPAddress.Loopback,stream,stop),f.Owner,f.Session,sender);
+            Check(await registry.DispatchAsync(context,new Packet(1,34,Convert.FromHexString("22006400FFFF0100FFFF")))==CommandResult.Handled,
+                "相关frontier未知时真实Handler仍正常处理普通34");
+            var saved=f.Read();
+            var expected=before with {Revision=before.Revision+1,Learning=ordinary.TargetLearning,ActiveMainQuests=[],CompletedQuests=[100],
+                Skills=ordinary.TargetLearning.Trees.Single(tree=>tree.Context==0).Skills
+                    .Select(skill=>new CharacterSkill(skill.Id,skill.Level)).OrderBy(skill=>skill.Id).ToArray()};
+            Check(QuestCompletionRepositoryTests.Same(expected,saved) && QuestCompletionRepositoryTests.Same(saved,f.Session.Selected!) && f.Receipts==1,
+                "未知阶段普通奖励、完成位与单次revision完整持久化，Selected双树资产一致");
+            using(var db=f.Open())
+            using(var command=db.CreateCommand())
+            {
+                command.CommandText="SELECT acceptance_id,experience_amount,plan_snapshot FROM character_quest_completion_receipts WHERE quest_id=100";
+                using(var reader=command.ExecuteReader())
+                {
+                    Check(reader.Read() && reader.GetString(0)==before.ActiveMainQuests.Single().AcceptanceId.ToString("N") &&
+                        reader.GetInt64(1)==ordinary.OrdinaryExperience,"未知阶段普通receipt对应本次真实接取与实际普通到账");
+                    using var snapshot=JsonDocument.Parse(reader.GetString(2));
+                    var stage=snapshot.RootElement.GetProperty("Stage");
+                    var plan=stage.GetProperty("StagePlan");
+                    Check(stage.GetProperty("OrdinaryExperience").GetUInt32()==ordinary.OrdinaryExperience &&
+                        stage.GetProperty("ContractExperience").GetUInt32()==0 && stage.GetProperty("StageExperience").GetUInt32()==0 &&
+                        stage.GetProperty("TotalRequestedExperience").GetUInt32()==ordinary.OrdinaryExperience &&
+                        stage.GetProperty("ActualExperience").GetUInt32()==ordinary.OrdinaryExperience &&
+                        plan.GetProperty("Reason").GetString()=="stage-unknown-definition" && plan.GetProperty("Claim").ValueKind==JsonValueKind.Null &&
+                        plan.GetProperty("WitnessesAfter").GetArrayLength()==0 && !reader.Read(),
+                        "真实冻结receipt明确unknown，阶段0且不创建资格或claim，普通分项照旧");
+                }
+                command.CommandText="SELECT (SELECT count(*) FROM character_quest_stage_witnesses)+(SELECT count(*) FROM character_quest_stage_claims)";
+                Check((long)command.ExecuteScalar()! == 0,"未知阶段普通成功提交后阶段两表均无额外行");
+            }
+            var ack=stream.Frames.Single(frame=>frame[0]==1 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1))==34).AsSpan(16).ToArray();
+            var exp=stream.Frames.Single(frame=>frame[0]==0 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1))==37).AsSpan(16).ToArray();
+            var completed=stream.Frames.Single(frame=>BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1))==356).AsSpan(16).ToArray();
+            Check(ack.Length==10 && ack[0]==1 && BinaryPrimitives.ReadUInt16LittleEndian(ack.AsSpan(1))==100 && ack[3]==4 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(ack.AsSpan(4))==ordinary.OrdinaryExperience && ack[8]==0 && ack[9]==0 &&
+                exp.Length==91 && exp[0]==before.Level && BinaryPrimitives.ReadUInt64LittleEndian(exp.AsSpan(1))==before.Learning.Experience+ordinary.OrdinaryExperience &&
+                BinaryPrimitives.ReadUInt32LittleEndian(exp.AsSpan(9))==0 && BinaryPrimitives.ReadUInt32LittleEndian(exp.AsSpan(34))==0 &&
+                completed.Length==30004 && completed[104]==1 && stream.Opcodes.SequenceEqual(new ushort[] {34,37,21,356}),
+                "未知阶段独立解码普通ACK/EXP及356完成位，保留34→37→21→356原通知序列");
+        }
+    }
+
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items)
     {
         int before = TestCheck.Count;

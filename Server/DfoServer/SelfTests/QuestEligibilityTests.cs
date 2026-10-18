@@ -17,6 +17,23 @@ internal static class QuestEligibilityTests
         var next = Quest(101) with { Definition = new QuestDefinition([]) { PrerequisiteGroups = [[100, 102], [103]] } };
         var catalog = new QuestCatalog(new[] { first, next, Quest(102), Quest(103) }.ToDictionary(quest => quest.Id));
         That(QuestEligibility.Evaluate(origin, first, catalog).Visible, "普通资格允许Lv1未完成任务");
+        var levelGate = first with { MinimumLevel = 13 };
+        That(!QuestEligibility.Evaluate(origin, levelGate, catalog).Eligible &&
+            QuestEligibility.Evaluate(origin, levelGate, catalog, mode: QuestEligibilityMode.IgnoreMinimumLevel).Eligible,
+            "阶段模式仅忽略最低等级");
+        foreach (var guarded in new[]
+        {
+            levelGate with { MaximumLevel = 12 },
+            levelGate with { Definition = new([]) { Job = "[fighter]" } },
+            levelGate with { Definition = new([]) { IsEvent = true } },
+            levelGate with { Definition = new([]) { RequiredAnswers = [new(103,1)] } },
+            levelGate with { Definition = new([]) { PrerequisiteGroups = [[103]] } },
+            levelGate with { Definition = new([]) { Collisions = [103] } }
+        })
+            That(!QuestEligibility.Evaluate(origin with { ActiveMainQuests = [new(0,103,0)] }, guarded, catalog,
+                mode: QuestEligibilityMode.IgnoreMinimumLevel).Eligible, "阶段模式保留非最低等级资格");
+        That(!QuestEligibility.Evaluate(origin with { Level = 14 }, levelGate with { MaximumLevel = 13 }, catalog,
+            mode: QuestEligibilityMode.IgnoreMinimumLevel).Eligible, "阶段模式不忽略最高等级");
         That(!QuestEligibility.Evaluate(origin, next, catalog).Eligible, "前置组不以任意单个前置代替整组");
         That(!QuestEligibility.Evaluate(origin with { CompletedQuests = [100] }, next, catalog).Eligible,
             "AND组缺一个前置仍拒绝");

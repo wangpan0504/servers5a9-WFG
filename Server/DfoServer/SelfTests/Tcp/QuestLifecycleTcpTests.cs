@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
@@ -15,6 +16,114 @@ namespace DfoServer.Testing;
 
 internal static class QuestLifecycleTcpTests
 {
+    public static async Task RunStageAsync(ServerOptions options,string root,TcpTestResources r)
+    {
+        var growth=SelfTestCatalogs.Growth(r.Archive,r.Learning);
+        var a=QuestEligibilityTests.Quest(29960) with {SubType=1,Difficulty="G",Attributes=[],Rewards=[],Definition=new([]){Job="[all]"}};
+        var c=a with {Id=29961,Attributes=["not give exp quest"],Definition=a.Definition! with {PrerequisiteGroups=[[29960]]}};
+        var n=a with {Id=29962,MinimumLevel=13,Definition=a.Definition! with {PrerequisiteGroups=[[29960]]}};
+        var b=a with {Id=29963};
+        var m=n with {Id=29964,Definition=n.Definition! with {PrerequisiteGroups=[[29963]]}};
+        var catalog=new QuestCatalog(new[] {a,c,n,b,m}.ToDictionary(row=>row.Id));
+        await using var f=new TcpTestFixture(options,Path.Combine(root,"quest-stage-wire"),resources:r,questCatalog:catalog);
+        var repository=new CharacterRepository(f.Database,catalog);
+        var created=new List<Character>();
+        using(var owner=new AccountOwners().Acquire(f.Options.DevelopmentAccount,()=>{}))
+            foreach(string name in new[] {"StageZero","StagePerk","StageRoll"})
+            {
+                var candidate=CharacterCreation.Prepare(name,r.Characters.Get(0),r.Towns.Room,r.Towns.InitialReturn,r.Learning.Get);
+                created.Add(repository.Create(owner,candidate with {Level=11,InitialLearning=SkillPointLedger.Synchronize(0,0,11,
+                    candidate.InitialLearning with {Experience=growth.GetLevelStartExperience(11)},r.Learning)}));
+            }
+        await f.StartAsync();
+        using(var peer=Open(f))
+        {
+            peer.Select(created[0].Slot);
+            Accept(peer,29960); var first=Finish(peer,29960);
+            That(first.Ack[0]==1 && f.Query("SELECT status FROM character_quest_stage_witnesses WHERE character_id=$p0",peer.Id) is [["Deferred"]],
+                "监听A真实完成冻结Deferred而不越过C");
+            Accept(peer,29961); ulong before=Experience(peer.Id); var result=Finish(peer,29961);
+            Validate(result,13,growth.GetLevelStartExperience(13),checked((uint)(growth.GetLevelStartExperience(13)-before)),0);
+            That(result.Notices.Single(row=>row.Opcode==21).Body is { } available && List(available,13).Contains(29962),"阶段EXP升级后真实任务列表立即开放后继");
+            string saved=State(peer.Id); var repeat=Finish(peer,29961);
+            Bytes(repeat.Ack,[0,19,0],"阶段重发ACK34拒绝");
+            That(repeat.Notices.Length==0 && State(peer.Id)==saved,"屏障确认重发无奖励通知且SQL不变");
+        }
+        using(var peer=Open(f))
+        {
+            peer.Select(created[0].Slot,prepared:true);
+            string saved=State(peer.Id); var repeat=Finish(peer,29961);
+            Bytes(repeat.Ack,[0,19,0],"重登阶段领奖不二奖");
+            That(repeat.Notices.Length==0 && Experience(peer.Id)==growth.GetLevelStartExperience(13) && State(peer.Id)==saved,"真实重登保留精确XP与唯一阶段claim");
+        }
+        uint expectedContract=0;
+        long expiry=f.UtcNow.AddHours(1).ToUnixTimeSeconds();
+        f.Sql($"INSERT INTO account_wallets(account,revision,premium_contracts) VALUES('{f.Options.DevelopmentAccount}',0,'{{\"84\":{expiry}}}') ON CONFLICT(account) DO UPDATE SET premium_contracts=excluded.premium_contracts");
+        using(var peer=Open(f))
+        {
+            peer.Select(created[1].Slot,premiumContracts:true); Accept(peer,29963);
+            ulong before=Experience(peer.Id); var result=Finish(peer,29963);
+            using var snapshot=JsonDocument.Parse((string)f.Query("SELECT plan_snapshot FROM character_quest_completion_receipts WHERE character_id=$p0",peer.Id)[0][0]);
+            var stage=snapshot.RootElement.GetProperty("Stage");
+            uint ordinary=stage.GetProperty("OrdinaryExperience").GetUInt32();
+            uint contract=stage.GetProperty("ContractExperience").GetUInt32();
+            expectedContract=contract;
+            uint topup=stage.GetProperty("StageExperience").GetUInt32();
+            That(ordinary>0 && contract==ordinary*(uint)r.ItemResources.Contracts.Growth!.ExperiencePercent/100 && topup>0 &&
+                ordinary+contract+topup==growth.GetLevelStartExperience(13)-before,"监听有效契约只加普通项，阶段补差冻结到同一receipt");
+            Validate(result,13,growth.GetLevelStartExperience(13),checked((uint)(growth.GetLevelStartExperience(13)-before)),contract);
+        }
+        using(var peer=Open(f))
+        {
+            peer.Select(created[2].Slot,premiumContracts:true); Accept(peer,29963); string before=State(peer.Id);
+            f.Sql("CREATE TRIGGER abort_stage_wire AFTER INSERT ON character_quest_stage_claims BEGIN SELECT RAISE(ABORT,'stage TCP rollback'); END");
+            SendFinish(peer,29963); peer.Closed();
+            That(State(peer.Id)==before && f.Query("SELECT count(*) FROM character_quest_stage_claims WHERE character_id=$p0",peer.Id) is [[0L]],
+                "监听SQL末段失败以EOF收尾，无提前成功帧且成长/双树/完成/claim回滚");
+            f.Sql("DROP TRIGGER abort_stage_wire");
+        }
+        using(var peer=Open(f))
+        {
+            peer.Select(created[2].Slot,premiumContracts:true); ulong before=Experience(peer.Id);
+            var result=Finish(peer,29963);
+            Validate(result,13,growth.GetLevelStartExperience(13),checked((uint)(growth.GetLevelStartExperience(13)-before)),expectedContract);
+            That(f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0",peer.Id) is [[1L]] &&
+                f.Query("SELECT count(*) FROM character_quest_stage_claims WHERE character_id=$p0",peer.Id) is [[1L]],"监听SQL失败后新连接真实重试只提交一次");
+        }
+
+        ulong Experience(ushort id)=>checked((ulong)(long)f.Query("SELECT experience FROM characters WHERE id=$p0",id)[0][0]);
+        string State(ushort id)
+        {
+            using var owner=new AccountOwners().Acquire(f.Options.DevelopmentAccount,()=>{});
+            var character=repository.LoadCharacter(owner,created.Single(row=>row.Id==id).Slot);
+            return JsonSerializer.Serialize(character)+
+                f.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0",id)+
+                f.Snapshot("SELECT * FROM character_quest_stage_witnesses WHERE character_id=$p0",id)+
+                f.Snapshot("SELECT * FROM character_quest_stage_claims WHERE character_id=$p0",id);
+        }
+        void Accept(TcpPeer peer,ushort id)
+        {
+            peer.Send(31,[31,0,(byte)id,(byte)(id>>8)]); var ack=peer.Expect(1,31).Body;
+            That(ack[0]==1 && U16(ack,1)==id,"监听阶段真实31接取"); DrainNotifications(peer);
+        }
+        void SendFinish(TcpPeer peer,ushort id)=>peer.Send(34,[34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]);
+        (byte[] Ack,WirePacket[] Notices) Finish(TcpPeer peer,ushort id)
+        {
+            SendFinish(peer,id); var ack=peer.Expect(1,34).Body; var notices=new List<WirePacket>();
+            DrainNotifications(peer,notices.Add); return (ack,notices.ToArray());
+        }
+        void Validate((byte[] Ack,WirePacket[] Notices) result,byte level,ulong absolute,uint amount,uint contract)
+        {
+            That(result.Ack[0]==1 && U32(result.Ack,4)==amount,"监听独立解码ACK34实际总到账额");
+            var exp=result.Notices.Single(row=>row.Opcode==37).Body;
+            That(exp.Length==91 && exp[0]==level && BinaryPrimitives.ReadUInt64LittleEndian(exp.AsSpan(1))==absolute &&
+                U32(exp,9)==0 && U32(exp,34)==contract,"监听NOTI37完整91B绝对XP/无伪队伍/仅合法普通契约");
+            var sequence=result.Notices.Select(row=>row.Opcode).ToArray();
+            That(Array.IndexOf(sequence,(ushort)37)<Array.IndexOf(sequence,(ushort)2) && Array.IndexOf(sequence,(ushort)2)<Array.IndexOf(sequence,(ushort)21) &&
+                sequence[^1]==356,"监听ACK后EXP→升级Player→任务列表→完整完成位包序");
+        }
+    }
+
     // 原 quests 组按互不共享数据库的五段 fixture 拆分，可分片并行；旧组名 "quests" 保留为五段的别名。
     public static Task RunAsync(ServerOptions options, string root, TcpTestResources resources) =>
         RunPartAsync(options, root, resources, QuestPart.Lifecycle);
@@ -121,22 +230,50 @@ internal static class QuestLifecycleTcpTests
                 peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
                 peer.Send(33, Convert.FromHexString("210009130000")); peer.Expect(1, 33, Convert.FromHexString("01091300000000"));
                 long revision = (long)f.Query("SELECT revision FROM characters")[0][0];
+                Character before4873;
+                using (var readerOwner=new AccountOwners().Acquire(f.Options.DevelopmentAccount,()=>{}))
+                    before4873=new CharacterRepository(f.Database,new(catalog)).LoadCharacter(readerOwner,0);
+                var normal4873=before4873 with {Revision=revision+1,CompletedQuests=[..before4873.CompletedQuests,4873],ActiveMainQuests=[],
+                    Learning=before4873.Learning with {Experience=30}};
+                var target3146=resources.Quests.Get(3146);
+                That(before4873.Level==1 && before4873.Learning.Experience==0 && before4873.CompletedQuests.SequenceEqual([3145]) &&
+                    before4873.ActiveMainQuests is [{QuestId:4873,ConditionState:0}] && target3146.MinimumLevel==3 &&
+                    target3146.Definition!.PrerequisiteGroups.Any(group=>group.SequenceEqual([4873])) &&
+                    !QuestEligibility.Evaluate(normal4873,target3146,resources.Quests).Eligible &&
+                    QuestEligibility.Evaluate(normal4873,target3146,resources.Quests,mode:QuestEligibilityMode.IgnoreMinimumLevel).Eligible &&
+                    !QuestEligibility.Evaluate(normal4873,resources.Quests.Get(3157),resources.Quests,mode:QuestEligibilityMode.IgnoreMinimumLevel).Eligible,
+                    "4873真实收尾仅缺Lv3的3146；3157未有活动父任务不能作为同级工作");
+                ulong targetExperience=SelfTestCatalogs.Growth(resources.Archive,resources.Learning).GetLevelStartExperience(3);
+                That(targetExperience==2035,"4873阶段T3起点由共享累计表确定");
                 peer.Send(34, Convert.FromHexString("22000913FFFF0100FFFF"));
                 byte[] acknowledgement = Finished(peer).Body;
                 That(acknowledgement.Length == 29 && acknowledgement[0] == 1 &&
                     BinaryPrimitives.ReadUInt16LittleEndian(acknowledgement.AsSpan(1)) == 4873 && acknowledgement[3] == 4 &&
-                    BinaryPrimitives.ReadUInt32LittleEndian(acknowledgement.AsSpan(4)) == 30 && acknowledgement[8] == 0 && acknowledgement[9] == 1 &&
+                    BinaryPrimitives.ReadUInt32LittleEndian(acknowledgement.AsSpan(4)) == targetExperience && acknowledgement[8] == 0 && acknowledgement[9] == 1 &&
                     BinaryPrimitives.ReadUInt16LittleEndian(acknowledgement.AsSpan(10)) == 0 &&
                     BinaryPrimitives.ReadUInt32LittleEndian(acknowledgement.AsSpan(12)) == 0 &&
                     BinaryPrimitives.ReadUInt32LittleEndian(acknowledgement.AsSpan(16)) == 101,
-                    "真实4873按本服G百分比发30XP、item0声明发101Gold，按会面分类完整投影");
-                peer.Expect(0, 14); peer.Expect(0, 37);
-                int[] available = List(peer.Expect(0, 21).Body, 1);
+                    "真实4873普通30XP加阶段2005XP，ACK发实际2035XP与原101Gold");
+                peer.Expect(0,14); var experience=peer.Expect(0,37).Body;
+                That(experience.Length==91 && experience[0]==3 && BinaryPrimitives.ReadUInt64LittleEndian(experience.AsSpan(1))==targetExperience &&
+                    U32(experience,9)==0 && U32(experience,34)==0,"4873真实NOTI37绝对XP，阶段不伪装队伍或契约");
+                var skills=SkillPacketsTests.DecodeInitialized(peer.Expect(0,19).Body);
+                That(skills.Length==2 && skills.Select((tree,index)=>tree.Sp==U16(experience,13+index*2) && tree.Tp==U16(experience,17+index*2)).All(value=>value),
+                    "4873跨级绑定变化的SKILLINFO两树余额与前置EXP一致");
+                var actor=peer.Expect(0,2).Body;
+                var player=peer.Expect(0,2).Body;
+                That(actor[0]==0 && player[0]==1 && BinaryPrimitives.ReadUInt64LittleEndian(player.AsSpan(24))==targetExperience,
+                    "EXP及技能后依次刷新升级Actor/Player实际累计XP");
+                int[] available = List(peer.Expect(0, 21).Body, 3);
                 var completed4873 = peer.Expect(0,356).Body;
                 That(completed4873.Length == 30004 && completed4873[4+4873] == 1,"整次投影最后同步真实4873完成位");
-                That(!available.Contains(4873) && !available.Contains(3146), "交付后列表不再显示4873，不因前置完成越过Lv3资格");
-                That(f.Query("SELECT revision,experience,gold FROM characters") is [[long next,30L,101L]] && next == revision + 1,
-                    "普通交付一次revision保存XP和Gold");
+                That(!available.Contains(4873) && available.Contains(3146), "4873交付阶段补到Lv3后立即开放3146");
+                That(f.Query("SELECT revision,experience,gold FROM characters") is [[long next,2035L,101L]] && next == revision + 1,
+                    "普通和阶段同一次revision保存XP和原Gold");
+                That(f.Query("SELECT json_extract(plan_snapshot,'$.ExperienceReward.Amount'),json_extract(plan_snapshot,'$.Stage.OrdinaryExperience'),json_extract(plan_snapshot,'$.Stage.ContractExperience'),json_extract(plan_snapshot,'$.Stage.StageExperience'),experience_amount FROM character_quest_completion_receipts WHERE quest_id=4873") is [[30L,30L,0L,2005L,2035L]],
+                    "4873 receipt普通30/契约0/阶段2005/总2035明确分开");
+                That(f.Query("SELECT w.source_quest_id,w.target_level,w.status,json_array_length(w.proof,'$.BoundaryQuestIds'),json_extract(w.proof,'$.BoundaryQuestIds[0]'),c.before_experience,c.after_experience,c.amount,c.source_acceptance_id=r.acceptance_id,c.trigger_acceptance_id=r.acceptance_id FROM character_quest_stage_witnesses w JOIN character_quest_stage_claims c ON c.character_id=w.character_id AND c.source_acceptance_id=w.source_acceptance_id JOIN character_quest_completion_receipts r ON r.character_id=c.character_id AND r.quest_id=4873") is [[4873L,3L,"Granted",1L,3146L,30L,2035L,2005L,1L,1L]],
+                    "唯一4873真实来源及目标3146的T3 claim与本次普通AcceptanceId一致");
                 That(f.Query("SELECT quest_id,condition_type,event_id IS NULL,instance_id IS NULL FROM character_quest_completion_receipts") is [[4873L,4L,1L,1L]],
                     "普通交付保存完整回执，不伪造清图");
                 string after = f.Snapshot();
@@ -195,7 +332,7 @@ internal static class QuestLifecycleTcpTests
                     BinaryPrimitives.ReadUInt32LittleEndian(complete.AsSpan(20)) == 2058 && BinaryPrimitives.ReadUInt32LittleEndian(complete.AsSpan(24)) == 5,
                     "合成寻物ACK34写消耗增量3与固定/选择合并增量5，零XP无需不存在的成长附属owner");
                 peer.Expect(0,14); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
-                That(f.Query("SELECT experience,gold FROM characters") is [[30L,101L]] &&
+                That(f.Query("SELECT experience,gold FROM characters") is [[2035L,101L]] &&
                     f.Query("SELECT count(*) FROM character_active_main_quests") is [[0L]] &&
                     f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id=29990 AND experience_amount=0 AND condition_type=0") is [[1L]],
                     "寻物扣除/奖励/清槽/零经验回执完整落库，其他余额保留");
@@ -207,7 +344,7 @@ internal static class QuestLifecycleTcpTests
             {
                 peer.Select(prepared: true); peer.Travel(38,0,622,196,38,1,bottom: true);
                 peer.Send(31,Convert.FromHexString("1F002775")); peer.Expect(1,31,Convert.FromHexString("0127750200000000")); peer.Expect(0,21); peer.Expect(0,356);
-                That(!List(peer.AvailableQuests,1).Contains(29992), "隐藏子任务不由全量普通列表提前暴露");
+                That(!List(peer.AvailableQuests,3).Contains(29992), "隐藏子任务不由全量普通列表提前暴露");
                 string before = f.Snapshot();
                 peer.Send(34,Convert.FromHexString("22002775FFFF0100FFFF")); Finished(peer,[0,19,0]); peer.Barrier();
                 That(f.Snapshot() == before, "新父任务不能提前领取自身奖励");
@@ -242,7 +379,7 @@ internal static class QuestLifecycleTcpTests
                     "父33同步实体材料删除及实际钱包扣除，保留原生对话边界");
                 peer.Barrier();
                 That(f.Query("SELECT quest_id,condition_state FROM character_active_main_quests") is [[29991L,0L]] &&
-                    f.Query("SELECT revision,experience,gold FROM characters") is [[long next,30L,101L]] && next == revision + 2 &&
+                    f.Query("SELECT revision,experience,gold FROM characters") is [[long next,2035L,101L]] && next == revision + 2 &&
                     f.Query("SELECT count(*) FROM character_completed_quests WHERE quest_id=29991") is [[0L]] &&
                     f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id IN(29992,29993)") is [[2L]],
                     "NPC条件先持久化，末子交付与父归零同一次revision，父未自动完成或领奖");
@@ -261,7 +398,7 @@ internal static class QuestLifecycleTcpTests
                 That(finish.Length == 29 && finish[3] == 44 && finish[9] == 1 && U32(finish,12) == 2058 && U32(finish,16) == 1,
                     "父任务ACK34分类44只发实际父奖励增量，不再发子奖励或消耗段");
                 peer.Expect(0,14); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
-                That(f.Query("SELECT revision,experience,gold FROM characters") is [[long next,30L,101L]] && next == revision + 1 &&
+                That(f.Query("SELECT revision,experience,gold FROM characters") is [[long next,2035L,101L]] && next == revision + 1 &&
                     f.Query("SELECT condition_type,event_id IS NULL FROM character_quest_completion_receipts WHERE quest_id=29991") is [[44L,1L]],
                     "父交付同事务保存自身奖励与分类44回执，不伪造清图或经验");
             }

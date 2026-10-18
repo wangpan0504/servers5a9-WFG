@@ -28,10 +28,18 @@ internal static class AvatarCapacityTcpTests
             InventoryService.Commit(repository, owner, role, new CurrencyService(r.GoldLimits).Grant(role, CurrencyKind.Cera, 1_000_000));
         }
         // 恢复v47实际缺列和两个槽位约束，覆盖新增列及350以上装扮槽迁移。
+        fixture.Sql("DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses");
         fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until");
         fixture.Sql("ALTER TABLE characters DROP COLUMN avatar_expansion");
         fixture.Sql("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(replace(sql,'CHECK(list_type<>1 OR slot_index<420)','CHECK(list_type<>1 OR slot_index<210)'),'CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419))','CHECK(slot_index BETWEEN 0 AND 351)') WHERE name='character_inventory_slots'; PRAGMA writable_schema=OFF; PRAGMA schema_version=9000; PRAGMA user_version=47");
+        That(fixture.Query("PRAGMA user_version") is [[47L]] &&
+            fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[0L]] &&
+            fixture.Query("SELECT count(*) FROM pragma_table_info('characters') WHERE name='avatar_expansion'") is [[0L]],
+            "装扮迁移输入为缺容量列的v47旧库，不残留v53阶段旁表");
         await fixture.StartAsync();
+        That(fixture.Query("PRAGMA user_version") is [[long version]] && version == SqliteMigrations.CurrentVersion &&
+            fixture.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[2L]],
+            "v47旧库真实升级至当前版本并建立两个阶段旁表");
         That(fixture.Query("SELECT avatar_expansion FROM characters") is [[105L]], "旧角色保留默认210格");
         fixture.Sql("CREATE TRIGGER fail_avatar_purchase BEFORE UPDATE OF avatar_expansion ON characters WHEN NEW.avatar_expansion>OLD.avatar_expansion BEGIN SELECT RAISE(ABORT,'avatar rollback'); END");
         using (var peer = Open(fixture))

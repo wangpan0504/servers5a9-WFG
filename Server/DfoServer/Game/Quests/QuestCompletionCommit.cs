@@ -19,6 +19,11 @@ internal sealed record QuestCompletionCommit(Character Character, QuestClearRece
     public uint DirectGoldAmount => GoldAmount - MailedGoldAmount;
     public uint? GoldMailId { get; init; }
     public uint GainedExperience { get; init; }
+    public QuestStagePlan? StagePlan { get; init; }
+    public uint OrdinaryExperience { get; init; }
+    public uint ContractExperience { get; init; }
+    public uint StageExperience => StagePlan?.BonusExperience ?? 0;
+    public uint TotalRequestedExperience { get; init; }
     public ushort TpAmount { get; init; }
     public bool HellChallenge { get; init; }
     public ImmutableArray<QuestConsumedItem> Consumed { get; init; } = [];
