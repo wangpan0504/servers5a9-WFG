@@ -28,18 +28,20 @@ internal static class CharacterSlotsTcpTests
             Reject<InvalidDataException>(() => repository.Create(owner, new("Denied33", resources.Towns.Room, resources.Towns.InitialReturn)), "默认32栏不越界建角");
         }
         // 真正恢复v46缺列与旧CHECK；不只修改user_version伪造旧库。
-        fixture.Sql("DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses");
+        fixture.Sql("DROP TABLE character_skill_switch_inventory_items; DROP TABLE character_skill_switch_inventory; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses");
         fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until");
         fixture.Sql("ALTER TABLE account_wallets DROP COLUMN character_slots");
         fixture.Sql("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql,'CHECK(slot BETWEEN 0 AND 61)','CHECK(slot BETWEEN 0 AND 31)') WHERE name='characters'; PRAGMA writable_schema=OFF; PRAGMA schema_version=9000; PRAGMA user_version=46");
         That(fixture.Query("PRAGMA user_version") is [[46L]] &&
             fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[0L]] &&
+            fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_skill_switch_inventory','character_skill_switch_inventory_items')") is [[0L]] &&
             fixture.Query("SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='character_slots'") is [[0L]],
-            "角色栏迁移输入为缺容量列的v46旧库，不残留v53阶段旁表");
+            "角色栏迁移输入为缺容量列的v46旧库，不残留v53阶段或v54强化旁表");
         await fixture.StartAsync();
         That(fixture.Query("PRAGMA user_version") is [[long version]] && version == SqliteMigrations.CurrentVersion &&
-            fixture.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[2L]],
-            "v46旧库真实升级至当前版本并建立两个阶段旁表");
+            fixture.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[2L]] &&
+            fixture.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_skill_switch_inventory','character_skill_switch_inventory_items')") is [[2L]],
+            "v46旧库真实升级至当前版本并建立阶段与强化旁表");
         That(fixture.Query("SELECT character_slots FROM account_wallets") is [[32L]] &&
             fixture.Query("SELECT count(*) FROM characters") is [[32L]], "旧库升级默认32且保留所有角色");
         fixture.Sql("CREATE TRIGGER fail_slot_purchase BEFORE UPDATE OF character_slots ON account_wallets WHEN NEW.character_slots>OLD.character_slots BEGIN SELECT RAISE(ABORT,'slots rollback'); END");

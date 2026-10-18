@@ -656,16 +656,18 @@ internal static class SessionPlanningTests
                 INSERT INTO character_inventory_items(item_uid,character_id,account,item_core)
                   VALUES(95000,{{id}},'planning','{"ItemId":26596,"Kind":1,"Value":1}');
                 INSERT INTO character_title_book_slots VALUES({{id}},'planning',18,0,95000);
+                INSERT INTO character_inventory_items(item_uid,character_id,account,item_core)
+                  VALUES(95001,{{id}},'planning','{"ItemId":2001,"Kind":1,"Value":1}');
+                INSERT INTO character_inventory_slots(character_id,account,list_type,slot_index,item_uid)
+                  VALUES({{id}},'planning',0,9,95001);
+                INSERT INTO character_skill_switch_inventory(character_id,account,skill_id) VALUES({{id}},'planning',5);
+                INSERT INTO character_skill_switch_inventory_items(character_id,equipment_part,item_uid,item_id)
+                  VALUES({{id}},4,95001,2001);
                 INSERT INTO character_title_progress VALUES({{id}},'planning',6501,1,2,3,0);
                 INSERT INTO character_title_sections VALUES({{id}},'planning',0,1);
                 INSERT INTO character_collectbox_state VALUES({{id}},'planning',2);
                 INSERT INTO character_collectbox_slots VALUES({{id}},'planning',2,3,104);
                 INSERT INTO character_collectbox_expirations VALUES({{id}},'planning',2,2000000000);
-                INSERT INTO character_inventory_items(item_uid,character_id,account,item_core)
-                  VALUES(95001,{{id}},'planning','{"ItemId":1001,"Kind":1,"Value":1}');
-                INSERT INTO character_inventory_slots VALUES({{id}},'planning',0,9,95001);
-                INSERT INTO character_skill_switch_inventory VALUES({{id}},'planning',77);
-                INSERT INTO character_skill_switch_inventory_items VALUES({{id}},4,95001,1001);
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }

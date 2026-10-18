@@ -2450,6 +2450,14 @@ internal static class DatabaseSchemaTests
                 VALUES(12345,1,'skill-switch-v53','{"ItemId":1001,"Kind":1,"Value":1}');
                 INSERT INTO character_skill_switch_inventory_items(character_id,equipment_part,item_uid,item_id)
                 VALUES(1,4,12345,1001);
+                """);
+            Reject<SqliteException>(() => Execute(db, "DELETE FROM characters WHERE id=1"),
+                "未清理私人物品时，既有库存外键仍拒绝裸删角色");
+            Check(Query(db, "SELECT item_uid FROM character_inventory_items WHERE character_id=1") is 12345L &&
+                Query(db, "SELECT count(*) FROM character_skill_switch_inventory_items") is 1L &&
+                Query(db, "SELECT skill_id FROM character_skill_switch_inventory WHERE character_id=1") is 77L,
+                "裸删角色失败回滚级联操作，保留库存及Buff强化绑定");
+            Execute(db, """
                 UPDATE character_inventory_items SET character_id=NULL WHERE item_uid=12345;
                 DELETE FROM characters WHERE id=1;
                 """);

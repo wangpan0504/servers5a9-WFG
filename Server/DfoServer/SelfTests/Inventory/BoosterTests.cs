@@ -87,9 +87,11 @@ internal static class BoosterTests
                 "固定开包在提交前不改源，规划奖励数量与资源一致 " + id);
             That(packageService.OpenCeraPackage(role, new(65, [new(1042, 255)]), out var rejectedReceipt, now) is { Accepted: false } && rejectedReceipt is null &&
                 !packageService.Open(role, new(65, 1), out _, now).Accepted, "非空时装选择和普通开箱入口均不能消费固定商城包 " + id);
-            var expiredSource = role with { Inventory = new([new(1, Bag(65), InventoryRewardGrantService.Create(catalog.Get(id), utcNow: now))]) };
-            That(!service.OpenCeraPackage(expiredSource, new(65, []), out _, now).Accepted,
-                "按PVF原期限创建的2020礼包已经过期，不能消费源 " + id);
+            var expiredCore = role.Inventory.Find(Bag(65))!.Core with { ExpireTime = checked((int)now.ToUnixTimeSeconds() - 1) };
+            var expiredSource = role with { Inventory = new([new(1, Bag(65), expiredCore)]) };
+            That(packageService.OpenCeraPackage(expiredSource, new(65, []), out var expiredReceipt, now) is { Accepted: false, Plan: null } &&
+                expiredReceipt is null && expiredSource.Inventory.Find(Bag(65))!.Core == expiredCore && expiredCore.Count == 1,
+                "忽略商城绝对期限也必须拒绝已过期源实例，保留源且不生成奖励规划 " + id);
         }
         var ordinarySource = current with { Inventory = new([new(1, Bag(65), Core(7542))]) };
         That(!packageService.OpenCeraPackage(ordinarySource, new(65, []), out _, now).Accepted, "商城开包命令不能消费普通随机盒");
@@ -268,7 +270,12 @@ internal static class BoosterTests
         That(result.Accepted && current.Level == 1 && current.Job == 15 && output.Core == InventoryRewardGrantService.Create(catalog.Get(receipt!.Rewards[0].ItemId)),
             "equipment reward keeps full core, seal and durability without output job or wear-level restrictions");
 
-        foreach (var (box, reward, count) in new[] { (2660291, 1, 10), (10160255, 10158124, 1), (2683799, 2681762, 720) })
+        var resourceWalletBox = itemResources.Boosters.Get(2683799);
+        That(resourceWalletBox.Available && resourceWalletBox.Selection is null && resourceWalletBox.PackageRewards.IsDefaultOrEmpty &&
+            resourceWalletBox.Pools is [{ Draws: 1, Rewards: [{ ItemId: 2681762, Weight: > 0, Count: > 0 }] }],
+            "匹配资源中的钱包礼盒必须具有唯一确定奖励，不能静默跳过结构变化");
+        int resourceWalletCount = resourceWalletBox.Pools[0].Rewards[0].Count;
+        foreach (var (box, reward, count) in new[] { (2660291, 1, 10), (10160255, 10158124, 1), (2683799, 2681762, resourceWalletCount) })
         {
             current = current with { Inventory = new([new(1, Bag(3), Core(box))]) };
             result = service.Open(current, new(3, 1), out receipt);

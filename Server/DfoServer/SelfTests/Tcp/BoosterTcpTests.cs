@@ -15,6 +15,11 @@ internal static class BoosterTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
+        var resourceWalletBox = itemResources.Boosters.Get(2683799);
+        That(resourceWalletBox.Available && resourceWalletBox.Selection is null && resourceWalletBox.PackageRewards.IsDefaultOrEmpty &&
+            resourceWalletBox.Pools is [{ Draws: 1, Rewards: [{ ItemId: 2681762, Weight: > 0, Count: > 0 }] }],
+            "钱包礼盒TCP用例要求匹配资源具有唯一确定奖励");
+        int resourceWalletCount = resourceWalletBox.Pools[0].Rewards[0].Count;
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster"), gm: true, resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
@@ -75,9 +80,9 @@ internal static class BoosterTcpTests
             Entry(coinDelta, 3, -1, 0);
             Entry(coinDelta, 1, 1, 20);
             SendOpen(peer, 4, 1);
-            ExpectAck(peer, 2683799, 4, [(2681762, 720)]);
+            ExpectAck(peer, 2683799, 4, [(2681762, resourceWalletCount)]);
             Entry(peer.Expect(0, 14).Body, 4, -1, 0);
-            peer.Expect(0, 53, Build(writer => { writer.Write((byte)1); writer.Write(0); writer.Write(720); writer.Write(0); }));
+            peer.Expect(0, 53, Build(writer => { writer.Write((byte)1); writer.Write(0); writer.Write(resourceWalletCount); writer.Write(0); }));
             SendOpen(peer, 5, 1);
             ExpectAck(peer, 10160255, 5, [(10158124, 1)]);
             byte[] soulDelta = peer.Expect(0, 14).Body;
@@ -95,8 +100,9 @@ internal static class BoosterTcpTests
             Entry(emblemDelta, 289, first, 1);
             Entry(emblemDelta, 290, second, 1);
             peer.Barrier();
-            That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[6L, 6L]],
-                "only real potions and emblems have physical instances");
+            That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[8L, 8L]] &&
+                fixture.Query("SELECT count(DISTINCT character_id) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=490704570") is [[2L]],
+                "药剂、徽章和保留的源礼盒共有八个唯一实例，两个角色的转职礼盒仍在");
             var timer = System.Diagnostics.Stopwatch.StartNew();
             SendOpen(peer, 7, int.MaxValue);
             byte[] bulkAck = peer.Expect(1, 160).Body;
