@@ -19,6 +19,7 @@ internal static class QuestRoomClearTcpTests
     {
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (bool ordinary in new[] { false,true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
+        foreach (bool ordinary in new[] { false,true }) VerifyGrandine(fixture,resources,growth,drain,dungeons,ordinary);
     }
 
     static void VerifyCase(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
@@ -182,6 +183,183 @@ internal static class QuestRoomClearTcpTests
             fixture.Snapshot("SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind",fixture.Options.DevelopmentAccount);
     }
 
+    // 实际3753/D104资源链；39仅为独立编码的合法合成输入，不代表ACT/CMT自然送包或客户端验收。
+    static void VerifyGrandine(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
+        Action<TcpPeer,Action<WirePacket>?> drain,DungeonCatalog dungeons,bool ordinary)
+    {
+        var quest = resources.Quests.Get(3753);
+        That(quest.Path == "n_quest/quest_renewal/epic_quest/slough/slough_epic_32.qst" &&
+            quest.Condition == "[clear map]" && quest.SubType == -1 && quest.IntData.SequenceEqual(new[] { 76648 }) &&
+            quest.MinimumLevel == 83 && quest.MaximumLevel == 99 && quest.Prerequisites.SequenceEqual(new[] { 3752 }) &&
+            quest.Npc == 77 && quest.CompleteNpc == 76 && quest.Definition!.Dungeons.Any(row => row.DungeonId == 104),
+            "3753开路使用真实83级前置3752、76648清图及D104声明");
+        var area = resources.Towns.Areas.Values.First(row => row.Level <= 83 && row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(Eligible));
+        var option = resources.Towns.DungeonMaps[area.DungeonWorldMap!.Value].Options.First(Eligible);
+        var done = new HashSet<int>(area.Quests) { 3145,4873,3752 };
+        if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests.First(id => id != 3753));
+        if (!option.InProgress && option.QuestId > 0) done.Add(option.QuestId);
+        done.UnionWith(area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0 && !gate.Quests.Contains(3753)).Quests);
+        done.Remove(3753);
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town,area.Area,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
+        string account = ordinary ? "grandine0" : "grandine3753";
+        Character created;
+        using (var owner = new AccountOwners().Acquire(account,() => { }))
+        {
+            // 仅准备等级和入口前置；3753接取、进度、清图凭据与交付均由真实TCP产生。
+            var candidate = CharacterCreation.Prepare(ordinary ? "GrandineZero" : "GrandineQ",
+                resources.Characters.Get(0),position,position,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,83,candidate.InitialLearning with
+                { Experience = growth.GetLevelStartExperience(83) },resources.Learning);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with
+                { Level = 83,AcceptedStoryLevel = 83,CompletedQuests = done.ToArray(),InitialLearning = learning });
+        }
+        ushort requested = ordinary ? (ushort)0 : (ushort)3753;
+        byte[] lastDeath = [];
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(0,prepared:true,resumeTown:true,room:false);
+            That(peer.Id == created.Id && fixture.Query(
+                "SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id).Length == 0,
+                "3753独立账号未预写活动任务或完成状态");
+            byte[] information = [];
+            var map = FormalDungeonTcpTests.Enter(peer,3753,104,row => information = row,requestQuestId:requested);
+            var active = fixture.Query("SELECT slot,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3753",peer.Id).Single();
+            long questSlot = (long)active[0]; string acceptance = (string)active[2];
+            That((long)active[1] == 1 && acceptance.Length != 0,"实际31接取3753生成唯一待清图槽及接取身份");
+            var maze = dungeons.Get(104).Mazes.Single(row => row.SourceOrdinal == information[7]);
+            var target = maze.MapSpecification!.Single(row => row.Id == 76648);
+            var boss = maze.MapSpecification!.Single(row => row.Id == 76649);
+            var targetRoom = SelfTestCatalogs.Rooms(resources.Archive).Get(target);
+            That(targetRoom.Monsters is [{ MonsterId:61273 }] && target.Position != boss.Position &&
+                information[8] == boss.Position.X && information[9] == boss.Position.Y,
+                "真实76648唯一monster ordinal0为61273，D104保留76649原Boss终点");
+            int enabled = 0,bossChecks = 0,deathCount = 0;
+            bool zeroPublished = false;
+            var dead = new HashSet<ushort>();
+            FormalDungeonTcpTests.Load(peer); Drain();
+            var path = QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),target.Position);
+            foreach (var next in path.Skip(1)) { KillRoom(); Move(next); }
+            That(map.Length >= 19+22*map[18] && U32(map,14) == 76648,"本次正式Run到达实际76648并保留完整NOTI29演员行");
+            int actor = Enumerable.Range(0,map[18]).Select(at => 19+22*at).Single(at => U32(map,at+8) == 61273);
+            ushort key = U16(map,actor+6);
+            That(U32(map,actor+2) == 0 && map[actor+21] == 0 && key != peer.Id,
+                "61273以真实ordinal0敌对行发布；死亡key仅取本次NOTI29行+6，不借模板号或其他演员");
+            string before = State();
+            peer.Send(34,QuestRequest(34,3753,[255,255,1,0,255,255])); peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == before && !zeroPublished && enabled == 0 && bossChecks == 0 && fixture.Query(
+                "SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3753",peer.Id) is [[1L]] &&
+                fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "61273未退场时不能提前34、清图归零或产生原Boss结算许可");
+            lastDeath = GrandineRetirement(key,peer.Id);
+            peer.Send(39,lastDeath); Drain(); deathCount++;
+            That(zeroPublished && enabled == 0 && bossChecks == 0 && fixture.Query(
+                "SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3753",peer.Id) is [[0L]] &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3753",peer.Id).Length == 0,
+                "61273的普通count0完整39推进3753并发布574归零，保持手动交付及原终点");
+            var clear = fixture.Query("""
+                SELECT r.acceptance_id,r.quest_slot,r.dungeon_id,r.map_id,r.epoch,g.epoch,g.quest_id,
+                  r.instance_id,g.instance_id,r.task_attempt,g.task_attempt,g.monster_id
+                FROM character_quest_clear_receipts r JOIN character_dungeon_growth_receipts g
+                ON g.character_id=r.character_id AND g.event_id=r.growth_event_id
+                WHERE r.character_id=$p0 AND r.quest_id=3753
+                """,peer.Id);
+            That(clear is [[string accepted,long slot,104L,76648L,long clearEpoch,long growthEpoch,long instanceQuest,
+                    string instance,string growthInstance,long attempt,long growthAttempt,61273L]] &&
+                accepted == acceptance && slot == questSlot && clearEpoch == growthEpoch+1 && instanceQuest == requested &&
+                instance == growthInstance && attempt == growthAttempt && fixture.Query(
+                    "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",peer.Id) is [[long savedDeaths]] &&
+                savedDeaths == deathCount && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "3753清图凭据绑定原接取、槽、D104/76648、61273成长事件及同实例attempt，不伪造整副本结算");
+            That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)
+                    is [[long currentAttempt]] && currentAttempt == (long)clear[0][9],
+                "3753清图来源属于当前持久化尝试，不仅是两份历史回执彼此相等");
+            before = State(); peer.Send(39,lastDeath); Drain();
+            That(State() == before && enabled == 0 && bossChecks == 0,"重复61273退场不重写清图、成长或资产");
+            peer.Send(33,QuestRequest(33,3753,[0,0])); peer.Expect(1,33,[1,169,14,0,0,0,0]); Drain();
+            That(State() == before,"真实33只读取3753已持久化的归零进度");
+            peer.Send(34,QuestRequest(34,3753,[255,255,1,0,255,255]));
+            var finished = peer.Expect(1,34).Body;
+            That(finished.Length >= 4 && finished[0] == 1 && U16(finished,1) == 3753,"实际34交付开路3753"); Drain();
+            That(fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3753",peer.Id).Length == 0 &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3753",peer.Id) is [[3753L]] &&
+                fixture.Query("""
+                    SELECT acceptance_id,instance_id,task_attempt,epoch,rewards
+                    FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3753
+                    """,peer.Id) is [[string completedAcceptance,string completedInstance,long completedAttempt,long completedEpoch,"[]"]] &&
+                completedAcceptance == acceptance && completedInstance == (string)clear[0][7] &&
+                completedAttempt == (long)clear[0][9] && completedEpoch == (long)clear[0][4],
+                "3753唯一34回执保留本次清图来源及接取身份，真实0/0物品声明不生成物品奖励");
+            before = State();
+            peer.Send(34,QuestRequest(34,3753,[255,255,1,0,255,255])); peer.Expect(1,34,[0,19,0]); Drain();
+            peer.Send(39,lastDeath); Drain();
+            That(State() == before,"交付后重复34及迟到39不再次修改凭据或资产");
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+
+            void Drain() => drain(peer,packet =>
+            {
+                if (packet.Opcode == 31) enabled++;
+                if (packet.Opcode == 115) bossChecks++;
+                if (packet.Opcode != 574) return;
+                var body = packet.Body;
+                That(body.Length >= 4 && body.Length == 4+6*U32(body,0),"3753完整活动条件通知574");
+                for (int at = 4; at < body.Length; at += 6)
+                    if (U16(body,at) == 3753 && U32(body,at+2) == 0) zeroPublished = true;
+            });
+            void KillRoom()
+            {
+                foreach (int offset in Enumerable.Range(0,map[18]).Select(at => 19+22*at).Where(at => map[at+21] == 0 && map[at+13] != 9))
+                {
+                    ushort monsterKey = U16(map,offset+6);
+                    if (!dead.Add(monsterKey)) continue;
+                    peer.Send(39,FormalDungeonTcpTests.Death(monsterKey,peer.Id,map[offset+12])); Drain(); deathCount++;
+                }
+            }
+            void Move(DungeonPoint point)
+            {
+                var request = new byte[100]; request[0] = checked((byte)point.X); request[1] = checked((byte)point.Y);
+                peer.Send(45,request); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+                FormalDungeonTcpTests.Load(peer); Drain();
+            }
+        }
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(0,prepared:true); peer.Barrier();
+            That(peer.Id == created.Id && peer.CompletedQuestHistory[4+3753] == 1 && fixture.Query(
+                "SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3753",peer.Id) is [[3753L]] &&
+                fixture.Query("SELECT map_id FROM character_quest_clear_receipts WHERE character_id=$p0 AND quest_id=3753",peer.Id) is [[76648L]],
+                "重登回放3753完成及唯一76648清图、交付凭据");
+            string before = State(); peer.Send(39,lastDeath); drain(peer,null);
+            That(State() == before,"重登后的旧Run61273退场不能重放清图或发奖");
+        }
+        bool Eligible(DfoServer.GameWorld.Towns.TownDungeonOption row) => row.DungeonId == 104 &&
+            (row.QuestId == -1 || row.InProgress && row.QuestId == 3753 || !row.InProgress && row.QuestId != 3753);
+        string State() => fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_quest_clear_receipts WHERE character_id=$p0",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY combat_sequence",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index",created.Id)+
+            fixture.Snapshot("SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind",account);
+    }
+
+    static byte[] GrandineRetirement(ushort key,ushort reporter)
+    {
+        // 实际61273普通producer的零参与者合同，不复制友方APC/其他模板回报。
+        // 统计及helper上下文使用明确合成的0值；reason7在68，不把31解释成CMT参数。
+        var body = new byte[74];
+        BinaryPrimitives.WriteUInt32LittleEndian(body,key);
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4),reporter);
+        body[30] = 0; body[68] = 7;
+        FormalDungeonTcpTests.SealDeath(body);
+        return body;
+    }
     static byte[] QuestRequest(byte command,ushort quest,ReadOnlySpan<byte> tail)
     {
         var body = new byte[4+tail.Length]; body[0] = command;
