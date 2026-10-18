@@ -16,6 +16,7 @@ internal static class CargoTcpTests
     {
         var itemResources = resources.ItemResources;
         Inventory.CargoTests.RunCore();
+        Inventory.CargoTests.Run(resources.Towns, resources.Characters, itemResources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "cargo"), resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
@@ -112,8 +113,8 @@ internal static class CargoTcpTests
             peer.Barrier();
             peer.Send(713, [12, 0, 0]);
             peer.Expect(1, 713, [1, 12, 0, 0]);
-            peer.Send(306);
-            peer.Expect(1, 306, [1]);
+            peer.Send(64, CargoPurchaseTcpTests.Purchase(100534));
+            That(peer.Expect(1, 64).Body[0] == 1, "付费仓库档经真实商城商品购买");
             peer.Expect(0, 53, [1, 184, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
             Cargo(peer.Expect(0, 13).Body, 12, 16, 750, 1);
             peer.Expect(1, 713, [1, 12, 0, 0]);

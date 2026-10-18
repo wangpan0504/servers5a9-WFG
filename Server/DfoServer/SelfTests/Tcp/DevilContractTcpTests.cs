@@ -292,7 +292,7 @@ internal static class DevilContractTcpTests
         var r = resources.ItemResources;
         var now = DateTimeOffset.UtcNow;
         var devil = new DevilContractService(r.DevilContracts, r.Items, r.GoldLimits, r.EpicPieces);
-        var shop = new InventoryCashShopService(r.Items, r.CashShop, r.GoldLimits, r.EpicPieces, contracts: r.Contracts, devil: devil);
+        var shop = new InventoryCashShopService(r.Items, r.CashShop, r.GoldLimits, r.EpicPieces, r.Cargo, contracts: r.Contracts, devil: devil);
         int[] mixedProducts = [103156, 100615, 103660, 104415, 100063];
         var mixedRequest = new CashShopPurchaseRequest(0, mixedProducts.Select(id => new CashShopPurchaseItem(id, 0)).ToArray());
         var mixed = shop.Buy(initial, mixedRequest, out _, now);

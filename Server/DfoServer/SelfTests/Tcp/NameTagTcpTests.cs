@@ -33,7 +33,7 @@ internal static class NameTagTcpTests
         {
             var character = repository.LoadCharacter(owner, 0);
             var r = resources.ItemResources;
-            var service = new InventoryCashShopService(r.Items, r.CashShop, r.GoldLimits, r.EpicPieces, contracts: r.Contracts);
+            var service = new InventoryCashShopService(r.Items, r.CashShop, r.GoldLimits, r.EpicPieces, r.Cargo, contracts: r.Contracts);
             var now = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             var tagRequest = new CashShopPurchaseRequest(0, [new(100615, 0)]);
             var tagged = service.Buy(character, tagRequest, out _, now);

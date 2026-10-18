@@ -146,7 +146,7 @@ internal static partial class CashShopTests
                 AccountWallet = AccountWallet.Empty.Set(CurrencyKind.Cera, 100_000)
             }
         };
-        var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, contracts: resources.Contracts)
+        var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo, contracts: resources.Contracts)
             { IgnoreAbsoluteExpiration = false };
         // 新版PVF商城新增商品可能指向含重复 impossible contents 块的物品（加载器按设计拒绝）；这类商品不能作为过期夹具，跳过。
         LegacyExpiryFixture.Restore(resources.Items, (490705385, "2020-04-09 06:00:00"), (490705234, "2020-04-09 06:00:00"), (490705235, "2020-04-09 06:00:00"),
@@ -182,7 +182,7 @@ internal static partial class CashShopTests
         DevelopmentGm.Answer("cash-shop-expiration off", "10000", repo, owners, _ => null, cashShop: service);
         That(!service.IgnoreAbsoluteExpiration && !service.Buy(character, expiredRequest, out _, now).Accepted && debugItem.Core.ExpireTime == int.MaxValue,
             "关闭恢复正常规则，不追溯改写已规划实例");
-        That(new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces).IgnoreAbsoluteExpiration,
+        That(new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo).IgnoreAbsoluteExpiration,
             "重新装配商城服务默认开启");
         That(!service.IgnoreUsablePeriod && DevelopmentGm.Answer("cash-shop-usable-period", "10000", repo, owners,
             _ => throw new Exception("不应查询角色"), cashShop: service) == "OK {\"ignoreUsablePeriod\":false}", "相对期限默认保留，查询不加载角色");
@@ -227,7 +227,7 @@ internal static partial class CashShopTests
                 CurrencyWallet.RewardKind(row.ItemId) is null && !resources.EpicPieces.ByPiece.ContainsKey(row.ItemId));
             var shop = CashShopCatalog.Parse("[premium]\n700301 " + contract.ItemId + " 1 0 0 13 0 0 0\n" +
                 "700302 1108 1 0 0 5 0 0 0", "[bonus item]\n700302 " + contract.ItemId + " 1\n[/bonus item]");
-            var service = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits, resources.EpicPieces, contracts: resources.Contracts);
+            var service = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits, resources.EpicPieces, resources.Cargo, contracts: resources.Contracts);
             var before = character.Inventory;
             foreach (var request in new CashShopPurchaseRequest[]
             {
@@ -245,7 +245,7 @@ internal static partial class CashShopTests
         var shop = CashShopCatalog.Parse("[material]\n700001 3037 3 0 0 1 0 0 0\n" +
             "700002 3037 4 0 0 2 0 0 0\n700003 1108 1 0 0 3 0 0 0",
             "[bonus item]\n700003 3037 5\n[/bonus item]");
-        var service = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits, resources.EpicPieces);
+        var service = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits, resources.EpicPieces, resources.Cargo);
         var current = repository.LoadCharacter(owner, slot);
         var currency = new CurrencyService(resources.GoldLimits);
         current = InventoryService.Commit(repository, owner, current, currency.Grant(current, CurrencyKind.Cera, 20));

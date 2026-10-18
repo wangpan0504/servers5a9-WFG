@@ -93,7 +93,7 @@ internal static class AvatarCapacityTcpTests
                 "拖放允许末格216而拒绝217");
             var sorted = InventorySortService.Plan(moved.Plan!.After, ItemKind.Avatar, 0, r.Items, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), InventoryListType.Avatar);
             That(sorted.Accepted && sorted.Plan!.After.Find(new(InventoryListType.Avatar, 0)) is not null, "整理包括新增末格");
-            var service = new InventoryCashShopService(r.Items, r.CashShop, r.GoldLimits, r.EpicPieces, contracts: r.Contracts);
+            var service = new InventoryCashShopService(r.Items, r.CashShop, r.GoldLimits, r.EpicPieces, r.Cargo, contracts: r.Contracts);
             That(!service.Buy(role with { Inventory = role.Inventory with { AvatarExpansion = 98 } }, new(0, [new(104415, 0)]), out _).Accepted,
                 "跳过下一阶段不可购买");
             var maximum = role.Inventory with { AvatarExpansion = 315, Items = [prototype with { Position = new(InventoryListType.Avatar, 419) }] };

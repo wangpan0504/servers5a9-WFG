@@ -8,7 +8,7 @@ using DfoServer.Game.Settings;
 namespace DfoServer.Game.Inventory.Services;
 
 // 商品、扣点券及资源明确声明的契约或实物奖励在同一个库存计划提交。
-internal sealed partial class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
+internal sealed partial class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CargoCatalog cargo,
     GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null)
 {
     readonly GameDebugSettings debug = debugSettings ?? new();
@@ -95,7 +95,22 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 total += product.CeraPrice;
                 var template = !devilProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
-                if (template is { CharacterSlotMaximum: > 0 })
+                if (cargo.AccountTiers.Any(tier => tier.ProductId == product.CommodityId))
+                {
+                    var tier = cargo.Next(paid.AccountCargo.Capacity);
+                    if (tier is null || tier.ProductId != product.CommodityId || product.ItemId != tier.ToolItemId ||
+                        product.Count != 1 || product.CeraPrice != tier.CeraCost)
+                        return InventoryResult.Reject(17);
+                    var upgrade = InventoryCargoService.PaidUpgrade(character with { Inventory = paid }, catalog, tier, now, false, out var tool);
+                    if (!upgrade.Accepted) return upgrade;
+                    paid = upgrade.Plan!.After;
+                    if (tool is not null)
+                    {
+                        total -= product.CeraPrice;
+                        Deadline(tool.ExpireTime);
+                    }
+                }
+                else if (template is { CharacterSlotMaximum: > 0 })
                 {
                     if (product.Count != 1 || characterSlots >= Math.Min(62, template.CharacterSlotMaximum))
                         return InventoryResult.Reject(17);

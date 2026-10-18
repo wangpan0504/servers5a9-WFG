@@ -1,6 +1,7 @@
 using static DfoServer.Testing.TestCheck;
 using DfoServer.Infrastructure;
 using System.Text.Json;
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -174,15 +175,24 @@ internal static class CargoTests
                 "personal tool grants defined capacity and consumes one");
             That(!cargo.PersonalUpgrade(current, toolSlot).Accepted, "duplicate target does not consume second tool");
             current = Commit(currency.Grant(current, CurrencyKind.Cera, 1_000_000));
+            VerifyAccountPurchases(current, itemResources);
+            var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo);
+            var stalePurchaseRole = current;
+            var stalePurchase = cashShop.Buy(current, new(0, [new(100534, 0)]), out _);
+            current = Commit(currency.Grant(current, CurrencyKind.Gold, 1));
+            string freshState = Snapshot();
+            Reject(() => InventoryService.Commit(repo, owner, stalePurchaseRole, stalePurchase), "旧角色revision的购买计划拒绝");
+            Reject(() => InventoryService.Commit(repo, owner, current, stalePurchase), "刷新expected也不能重绑旧购买资格");
+            That(Snapshot() == freshState, "旧购买计划不改变费用、容量或审计");
             string beforeCashFailure = Snapshot();
             Sql("CREATE TRIGGER reject_cargo_cash BEFORE INSERT ON cargo_audit_log BEGIN SELECT RAISE(ABORT,'fixture'); END");
-            Reject(() => Commit(cargo.AccountUpgrade(current, false)), "capacity failure rolls back account Cera and wallet version");
+            Reject(() => Commit(cashShop.Buy(current, new(0, [new(100534, 0)]), out _)), "capacity failure rolls back account Cera and wallet version");
             Sql("DROP TRIGGER reject_cargo_cash");
             That(Snapshot() == beforeCashFailure, "failed paid upgrade retains balance, capacity and audits");
             foreach (var tier in itemResources.Cargo.AccountTiers.Where(tier => tier.Capacity > 8))
             {
                 var before = current.Inventory;
-                current = Commit(cargo.AccountUpgrade(current, false));
+                current = Commit(tier.ProductId > 0 ? cashShop.Buy(current, new(0, [new(tier.ProductId, 0)]), out _) : cargo.AccountUpgrade(current, false));
                 That(current.Inventory.AccountCargo.Capacity == tier.Capacity && current.Inventory.Gold == before.Gold - tier.GoldCost &&
                     current.Inventory.AccountWallet.Get(CurrencyKind.Cera) == before.AccountWallet.Get(CurrencyKind.Cera) - tier.CeraCost,
                     "resource-defined upgrade and cost " + tier.Capacity);
@@ -245,6 +255,9 @@ internal static class CargoTests
             That(repo.List(owner)[1].Inventory.Items.All(item => item.Position.List != InventoryListType.AccountCargo), "expired shared assets cannot reappear on sibling");
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject(() => Commit(cargo.Gold(current, 1, false)), "stale generation cannot withdraw");
+            var purchaseFixture = current with { Inventory = current.Inventory with { AccountCargo = current.Inventory.AccountCargo with { Capacity = 8 } } };
+            Reject(() => InventoryService.Commit(repo, owner, purchaseFixture,
+                cashShop.Buy(purchaseFixture, new(0, [new(100534, 0)]), out _)), "旧owner不能提交账号购买");
 
             Character Commit(InventoryResult result)
             {
@@ -267,5 +280,95 @@ internal static class CargoTests
         }
         finally { Directory.Delete(root, true); }
         Console.WriteLine($"PASS {Count - checks} cargo assertions");
+    }
+
+    static void VerifyAccountPurchases(Character source, ItemResources resources)
+    {
+        // 匹配资源独立核对的31档矩阵，商品号与历史工具模板号分别断言。
+        (ushort From, ushort To, int Product, int Tool, int Price)[] expected =
+        [
+            (0, 1, -1, 0, 0), (1, 8, -1, 0, 0), (8, 16, 100534, 2681921, 2000),
+            (16, 24, -1, 0, 0), (24, 32, -1, 0, 0), (32, 40, 102045, 2682968, 2000),
+            (40, 48, 102108, 2683046, 2000), (48, 56, 102316, 2683324, 2500), (56, 64, 102659, 2683926, 2500),
+            (64, 72, 103665, 490700152, 3000), (72, 80, 103666, 490700153, 3000),
+            (80, 88, 103667, 490700154, 4000), (88, 96, 103668, 490700155, 4000),
+            (96, 104, 103669, 490700156, 5000), (104, 112, 103670, 490700157, 5000),
+            (112, 120, 103671, 490700158, 6000), (120, 128, 104893, 490702625, 6000),
+            (128, 136, 104894, 490702626, 7000), (136, 144, 104895, 490702627, 7000),
+            (144, 152, 104896, 490702628, 8000), (152, 160, 104897, 490702629, 8000),
+            (160, 168, 104898, 490702630, 9000), (168, 176, 104899, 490702631, 9000),
+            (176, 184, 104900, 490702632, 10000), (184, 192, 104901, 490702633, 10000),
+            (192, 200, 104902, 490702634, 11000), (200, 208, 104903, 490702635, 11000),
+            (208, 216, 104904, 490702636, 12000), (216, 224, 104905, 490702637, 12000),
+            (224, 232, 104906, 490702638, 13000), (232, 240, 104907, 490702639, 13000)
+        ];
+        That(resources.Cargo.AccountTiers.Count == expected.Length, "账号金库资源不丢失任何档位");
+        foreach (var row in expected)
+        {
+            var tier = resources.Cargo.Next(row.From);
+            That(tier is not null && tier.Capacity == row.To && tier.ProductId == row.Product && tier.ToolItemId == row.Tool && tier.CeraCost == row.Price,
+                "31档真实商品、模板和点券矩阵 " + row.To);
+        }
+        var shop = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo);
+        var cargo = new InventoryCargoService(resources.Items, resources.Cargo, resources.GoldLimits);
+        var role = source with { Inventory = source.Inventory with { Items = [], AccountCargo = source.Inventory.AccountCargo with { Capacity = 8 } } };
+        InventoryResult Buy(Character value, params int[] products) => shop.Buy(value, new(0, products.Select(id => new CashShopPurchaseItem(id, 0)).ToArray()), out _);
+        That(!cargo.AccountUpgrade(role, false).Accepted, "裸306不能无商品凭据扣付费下一档");
+        foreach (var products in new[] { new[] { 102045 }, new[] { 100534, 100534 }, new[] { 100534, int.MaxValue }, new[] { 100534, 102045 } })
+            That(!Buy(role, products).Accepted, "未来档、重复商品、后续无效商品及跨材料档混单整笔拒绝");
+        var poor = role with { Inventory = role.Inventory with { AccountWallet = role.Inventory.AccountWallet.Set(CurrencyKind.Cera, 1999) } };
+        That(!Buy(poor, 100534).Accepted, "点券不足不扩容不发工具");
+        var tool = new InventoryItem(100000, new(InventoryListType.Main, 3), new(2681921, GameWorld.Items.ItemKind.Consumable, 2));
+        var historical = poor with { Level = 1, Inventory = poor.Inventory with { Items = [tool] } };
+        var redeemed = Buy(historical, 100534);
+        That(redeemed.Accepted && redeemed.Plan!.After.AccountCargo.Capacity == 16 &&
+            redeemed.Plan.After.AccountWallet == historical.Inventory.AccountWallet && redeemed.Plan.After.Find(tool.Position)?.Core.Count == 1,
+            "历史合法工具在商城主动购买兑换一张免二次点券，后续升级不增加开通等级门槛");
+        var direct = cargo.AccountUpgrade(historical, false);
+        That(direct.Accepted && direct.Plan!.After.AccountCargo.Capacity == 16 && direct.Plan.After.Find(tool.Position)?.Core.Count == 1 &&
+            direct.Plan.After.AccountWallet == historical.Inventory.AccountWallet, "306也仅兑一张对应预付工具");
+        foreach (var invalid in new[]
+        {
+            tool with { Core = tool.Core with { ItemId = 2682968 } },
+            tool with { Core = tool.Core with { Kind = GameWorld.Items.ItemKind.Material } },
+            tool with { Core = tool.Core with { EquipmentLockId = 1 } },
+            tool with { Core = tool.Core with { ExpireTime = 1 } },
+            tool with { Position = new(InventoryListType.PersonalCargo, 0) }
+        })
+        {
+            var value = historical with { Inventory = historical.Inventory with { Items = [invalid] } };
+            That(!Buy(value, 100534).Accepted && !cargo.AccountUpgrade(value, false).Accepted && value.Inventory.Items.Single() == invalid,
+                "未来档、锁、过期及其他容器工具不充当凭据，余额不足零变化");
+        }
+        var passed = role with { Inventory = role.Inventory with { AccountCargo = role.Inventory.AccountCargo with { Capacity = 40 }, Items = [tool] } };
+        That(!cargo.AccountUpgrade(passed, false).Accepted, "商城成功后跟随306不能推进下一付费档或消费旧档工具");
+        That(!Buy(passed, 100534).Accepted && !Buy(role with { Inventory = role.Inventory with { AccountCargo = role.Inventory.AccountCargo with { Capacity = 240 } } }, 104907).Accepted,
+            "已过档与满级拒绝重复收费");
+        var chain = Buy(role with { Inventory = role.Inventory with { AccountCargo = role.Inventory.AccountCargo with { Capacity = 32 } } }, 102045, 102108);
+        That(chain.Accepted && chain.Plan!.After.AccountCargo.Capacity == 48 && chain.Plan.After.AccountWallet.Get(CurrencyKind.Cera) == role.Inventory.AccountWallet.Get(CurrencyKind.Cera) - 4000 &&
+            chain.Plan.After.Items.IsEmpty, "连续合法付费档按计划状态推进且各扣一次，不发主工具");
+        var mixedCatalog = GameWorld.Items.CashShopCatalog.Parse("[item etc]\n100534 2681921 1 0 0 2000 0 0 0\n700001 1108 1 0 0 7 0 0 0",
+            "[bonus item]\n100534 3299 2\n[/bonus item]");
+        var mixedShop = new InventoryCashShopService(resources.Items, mixedCatalog, resources.GoldLimits, resources.EpicPieces, resources.Cargo);
+        var mixed = mixedShop.Buy(role, new(0, [new(100534, 0), new(700001, 0)]), out var mixedReceipt);
+        That(mixed.Accepted && mixed.Plan!.After.AccountCargo.Capacity == 16 &&
+            mixed.Plan.After.AccountWallet.Get(CurrencyKind.Cera) == role.Inventory.AccountWallet.Get(CurrencyKind.Cera) - 2007 &&
+            mixed.Plan.After.Items.Single(item => item.Core.ItemId == 3299).Core.Count == 2 &&
+            mixed.Plan.After.Items.Single(item => item.Core.ItemId == 1108).Core.Count == 1 && mixed.Plan.After.Items.Length == 2 &&
+            mixedReceipt!.Bonuses[100534].Single().ItemId == 3299, "账号直扩保留真实附赠及同车普通商品，合并扣费不吞奖励");
+        var historicalBonus = mixedShop.Buy(historical, new(0, [new(100534, 0)]), out _);
+        That(historicalBonus.Accepted && historicalBonus.Plan!.After.AccountWallet == historical.Inventory.AccountWallet &&
+            historicalBonus.Plan.After.Items.Single(item => item.Core.ItemId == 3299).Core.Count == 2,
+            "历史工具免点券仍完整规划商品附赠");
+        var full = role with { Inventory = role.Inventory with { Items = Enumerable.Range(0, 56).Select(index =>
+            new InventoryItem(index + 1, new(InventoryListType.Main, checked((short)(index + 65))), new(1108, GameWorld.Items.ItemKind.Consumable, 1))).ToImmutableArray() } };
+        var fullPurchase = Buy(full, 100534);
+        That(fullPurchase.Accepted && fullPurchase.Plan!.After.AccountCargo.Capacity == 16 && fullPurchase.Plan.OverflowItems.IsEmpty &&
+            fullPurchase.Plan.After.Items.SequenceEqual(full.Inventory.Items), "账号商城扩容不依赖Main空格，不另发工具或溢出邮件");
+        var expires = tool with { Core = tool.Core with { ExpireTime = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 120) } };
+        var expiring = historical with { Inventory = historical.Inventory with { Items = [expires] } };
+        var expiringPlan = Buy(expiring, 100534).Plan!;
+        That(expiringPlan.CharacterPrecondition!.Matches(expiring, expires.ExpireTime - 1) &&
+            !expiringPlan.CharacterPrecondition.Matches(expiring, expires.ExpireTime), "历史券期限在提交时复验");
     }
 }

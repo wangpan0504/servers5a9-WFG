@@ -190,7 +190,7 @@ internal static class FormalDungeonSessionTests
             Check(product is { ItemId: 1, Count: 1, CeraPrice: 100 }, "匹配PVF死亡窗口商品100004是一币100点券");
             InventoryService.Commit(f.Repository, f.Owner, f.Read(),
                 new DfoServer.Game.Currency.CurrencyService(itemResources.GoldLimits).Grant(f.Read(), DfoServer.Game.Currency.CurrencyKind.Cera, product.CeraPrice));
-            var shop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces);
+            var shop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo);
             var request = DfoServer.Network.Parsers.Inventory.CashShopRequests.Buy(
                 Convert.FromHexString("0000010000FF00A48601000000000000000000"));
             InventoryResult Buy() => f.Session.PlanAndCommitInventory(character => shop.Buy(character, request, out _), 17, requireTown: false);

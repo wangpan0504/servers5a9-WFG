@@ -51,7 +51,7 @@ internal static partial class CashShopTests
             Job = 3, Level = 60,
             Inventory = InventorySnapshot.Empty with { AccountWallet = AccountWallet.Empty.Set(CurrencyKind.Cera, 10_000) }
         };
-        var service = new InventoryCashShopService(items, resources.CashShop, resources.GoldLimits, resources.EpicPieces,
+        var service = new InventoryCashShopService(items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo,
             contracts: resources.Contracts, avatars: resources.AvatarPackages) { IgnoreAbsoluteExpiration = false };
         var dyedCart = CashShopRequests.Buy(Convert.FromHexString("00000200000403EF340400000000000000000000FFFF3B9C01000000000000000000"));
         var dyed = service.Buy(character, dyedCart, out var dyedReceipt, now);
@@ -102,7 +102,7 @@ internal static partial class CashShopTests
                 "兑换兼容同gift type的活动券，快捷栏源也只扣一件、不扣点券 " + couponId);
         }
         var synthetic = CashShopCatalog.Parse("[avatar]\n700091 42611 3 0 0 -1\n700092 401500147 3 0 0 -1\n[/avatar]");
-        var alternate = new InventoryCashShopService(items, synthetic, resources.GoldLimits, resources.EpicPieces,
+        var alternate = new InventoryCashShopService(items, synthetic, resources.GoldLimits, resources.EpicPieces, resources.Cargo,
             avatars: resources.AvatarPackages) { IgnoreAbsoluteExpiration = false };
         foreach (int id in new[] { 2681594, 10004898 })
         {
@@ -117,7 +117,7 @@ internal static partial class CashShopTests
         var selected = new AvatarPackageCatalog(_ => "[avatar type select]\n7 3 4 5 0 0 0\n[/avatar type select]",
             new Dictionary<int, string> { [106550541] = "price.equ" }, new Dictionary<int, string>());
         var costs = CashShopCatalog.Parse("[avatar]\n700093 106550541 1 0 0 -1\n[/avatar]");
-        var multipleCurrencies = new InventoryCashShopService(items, costs, resources.GoldLimits, resources.EpicPieces, avatars: selected)
+        var multipleCurrencies = new InventoryCashShopService(items, costs, resources.GoldLimits, resources.EpicPieces, resources.Cargo, avatars: selected)
             { IgnoreAbsoluteExpiration = false };
         var funded = character with { Inventory = character.Inventory with { Gold = 10, WinPoints = 10 } };
         var payment = multipleCurrencies.Buy(funded, Request(costs.Product(700093)!, 0), out _, now);

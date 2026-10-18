@@ -68,7 +68,7 @@ internal static class CharacterSlotsTcpTests
         {
             That(repository.Create(owner, new("Slot33", resources.Towns.Room, resources.Towns.InitialReturn)).Slot == 32, "第33角色可真实保存");
             Reject<InvalidDataException>(() => repository.Create(owner, new("Denied34", resources.Towns.Room, resources.Towns.InitialReturn)), "未买第34栏时拒绝建角");
-            var service = new InventoryCashShopService(r.Items, r.CashShop, r.GoldLimits, r.EpicPieces, contracts: r.Contracts);
+            var service = new InventoryCashShopService(r.Items, r.CashShop, r.GoldLimits, r.EpicPieces, r.Cargo, contracts: r.Contracts);
             var role = repository.LoadCharacter(owner, 0);
             for (int i = 33; i < 62; i++)
             {

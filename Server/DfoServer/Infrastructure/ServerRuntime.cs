@@ -95,7 +95,7 @@ internal static class ServerRuntime
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
         var guildProjection = new GuildProjection(inventoryProjection, presence);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
-        var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces,
+        var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
