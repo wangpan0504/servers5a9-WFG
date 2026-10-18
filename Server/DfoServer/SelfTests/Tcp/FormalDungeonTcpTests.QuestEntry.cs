@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
@@ -25,7 +27,8 @@ internal static partial class FormalDungeonTcpTests
         foreach (var scenario in new[] { (Quest:3772,Dungeon:235,Previous:3771,Level:(byte)84), (Quest:3773,Dungeon:227,Previous:3772,Level:(byte)84),
             (Quest:3774,Dungeon:1005,Previous:3773,Level:(byte)84), (Quest:3776,Dungeon:1007,Previous:3775,Level:(byte)84),
             (Quest:3777,Dungeon:238,Previous:3776,Level:(byte)84), (Quest:3946,Dungeon:310,Previous:3945,Level:(byte)88),
-            (Quest:2948,Dungeon:40,Previous:0,Level:(byte)45) })
+            (Quest:2948,Dungeon:40,Previous:0,Level:(byte)45),
+            (Quest:674,Dungeon:163,Previous:0,Level:(byte)60), (Quest:675,Dungeon:82,Previous:0,Level:(byte)65) })
         {
             var done = new HashSet<int>();
             if (scenario.Previous != 0) done.Add(scenario.Previous);
@@ -49,30 +52,48 @@ internal static partial class FormalDungeonTcpTests
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             string? acceptance = null;
             long attempt = 0;
-            foreach (ushort request in new[] { checked((ushort)scenario.Quest),(ushort)0 })
+            bool auxiliary = scenario.Quest is 674 or 675;
+            uint initial = scenario.Quest == 2948 || auxiliary ? QuestHuntProgress.Initial(resources.Quests.Get(scenario.Quest)) : 1;
+            foreach (ushort request in auxiliary ? new[] { checked((ushort)scenario.Quest) } : new[] { checked((ushort)scenario.Quest),(ushort)0 })
             {
                 byte[] information = [];
-                var map = Enter(peer,checked((ushort)scenario.Quest),checked((uint)scenario.Dungeon),row => information=row,requestQuestId:request);
+                byte[] map;
+                if (auxiliary)
+                {
+                    peer.Send(31,[31,0,(byte)scenario.Quest,(byte)(scenario.Quest >> 8)]);
+                    That(peer.Expect(1,31).Body[0] == 1,"装备槽资格任务由生产31合法接取"); RefreshedQuests(peer);
+                    SelectMap(peer);
+                    var selection = Selection(1);
+                    BinaryPrimitives.WriteUInt32LittleEndian(selection,checked((uint)scenario.Dungeon));
+                    BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),request);
+                    string before = fixture.Snapshot();
+                    peer.Send(16,selection); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+                    That(fixture.Snapshot() == before,"资格任务低于声明难度拒绝，不保存尝试或篡改接取");
+                    selection[4] = 2;
+                    peer.Send(16,selection); information=peer.Expect(0,28).Body; map=peer.Expect(0,29).Body;
+                    That(information[4] == 2,"原显式任务请求在拒绝后仍可按合法难度入场");
+                }
+                else map = Enter(peer,checked((ushort)scenario.Quest),checked((uint)scenario.Dungeon),row => information=row,requestQuestId:request);
                 var maze = dungeons.Get(scenario.Dungeon).Mazes.Single(row => row.SourceOrdinal == information[7]);
                 var start = maze.MapSpecification!.Single(row => row.Position == maze.Starts.Single());
                 That(U32(map,14) == start.Id && information[8] == maze.Bosses.Single().X && information[9] == maze.Bosses.Single().Y,
                     "真实TCP的任务及普通0请求进入原起点与Boss坐标："+scenario.Quest);
                 Load(peer);
-                if (scenario.Quest == 2948)
+                if (scenario.Quest == 2948 || auxiliary)
                 {
                     int used = checked((int)attempt+1);
                     peer.Expect(0,36,[checked((byte)used),0,156,0,0,0,checked((byte)(156-used)),0,0,0]);
                     peer.Send(37,new byte[8]); peer.Barrier();
                     That(maze.QuestConnectionTokens.Count == 0 && fixture.Query(
                         "SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[long actualUsed,long remaining]] &&
-                        actualUsed == used && remaining == 156-used,"匿名信显式及普通0请求均用真实普通迷宫，生产疲劳投影与重复加载SQL去重一致");
+                        actualUsed == used && remaining == 156-used,"普通猎杀请求使用真实普通迷宫，生产疲劳投影与重复加载SQL去重一致");
                 }
                 else peer.Barrier();
                 var active = fixture.Query("SELECT acceptance_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,scenario.Quest).Single();
                 acceptance ??= (string)active[0];
-                That((string)active[0] == acceptance && Convert.ToInt64(active[1]) == (scenario.Quest == 2948 ? 2 : 1) &&
+                That((string)active[0] == acceptance && Convert.ToInt64(active[1]) == initial &&
                     fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[long actualAttempt]] && actualAttempt == ++attempt,
-                    "两种请求保留同一真实接取，分别只建立一次正式尝试："+scenario.Quest);
+                    "入场请求保留真实接取，分别只建立一次正式尝试："+scenario.Quest);
                 peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
                 That(fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]] &&
                     fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,scenario.Quest) is [[0L]],

@@ -398,8 +398,9 @@ internal sealed record DungeonEntryPlan(
     {
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
             quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
-            // 一般杀怪任务声明参数-1；觉醒任务的杀怪/收集阶段以同一行参数声明最低难度，且不得低于它。
-            quest.Grade == "[side]" && !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter == -1) ||
+            // 支线杀怪声明参数-1或0..3最低难度；觉醒杀怪/收集阶段同样不得低于声明难度。
+            quest.Grade == "[side]" && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
+                (row.Parameter == -1 || quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
                 !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
             quest.Grade is not ("[side]" or "[achievement]") ||
