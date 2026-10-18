@@ -16,8 +16,8 @@ internal static class EquipmentCatalogTests
     public static void Run(PvfArchive pvf, EquipmentCatalog catalog)
     {
         int checks = Count;
-        That(catalog.TemplateCount == 178840 && catalog.TemplateIds.Count == 178840 &&
-            catalog.TemplateIds.Distinct().Count() == 178840, "完整装备索引178840项无重复ID");
+        That(catalog.TemplateCount == 178841 && catalog.TemplateIds.Count == 178841 &&
+            catalog.TemplateIds.Distinct().Count() == 178841, "完整装备索引178841项无重复ID");
         int[] ids = [10400, 12400, 16400, 18400, 101010912, 102040571, 104010559, 106020596,
             108000525, 109000493, 106040493, 101030782, 114000248, 116000011];
         int[] weights = [1900, 1500, 800, 900, 2800, 2300, 1500, 2200, 3100, 2100, 2500, 4000, 3200, 2400];
@@ -58,7 +58,7 @@ internal static class EquipmentCatalogTests
                 definition.DeclaredSellPrice is not null || !definition.UnsupportedFields.Contains("sell price"))
                 throw new InvalidOperationException("FAIL 装备全索引路径、脚本类型或卖价边界: " + id);
         }
-        That(true, "全178840项真实脚本可读且全部缺卖价");
+        That(true, "全178841项真实脚本可读且全部缺卖价");
         Reject<KeyNotFoundException>(() => catalog.Get(0));
         Reject<KeyNotFoundException>(() => catalog.Get(-1));
         Reject<KeyNotFoundException>(() => catalog.Get(int.MaxValue));

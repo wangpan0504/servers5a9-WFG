@@ -86,7 +86,8 @@ internal static class DevelopmentGmExtendedTests
         TestCheck.That(avatarSample.ValueKind == JsonValueKind.Object, "时装预览带有可选属性行");
         var skillSample = catalog.Items.Where(row => row.Equipment).Take(20000).Select(row => Preview(row.Id)).FirstOrDefault(value => value.GetProperty("skillBonus").GetArrayLength() > 0);
         TestCheck.That(skillSample.ValueKind == JsonValueKind.Object, "装备预览带有技能加成行");
-        var dated = catalog.Items.Where(row => !row.Equipment).Take(200).Select(row => Preview(row.Id)).FirstOrDefault(value => value.GetProperty("expiration").GetProperty("absoluteExpireDate").GetString()!.Length > 0);
+        // 更新后的 PVF 只剩 stackable/event/chn_event_20141230_sheep_puzzle 的 10004550 保留 [expiration date]，不再按前200项扫描。
+        var dated = catalog.Items.Where(row => row.Id == 10004550).Select(row => Preview(row.Id)).FirstOrDefault(value => value.GetProperty("expiration").GetProperty("absoluteExpireDate").GetString()!.Length > 0);
         TestCheck.That(dated.ValueKind == JsonValueKind.Object && DateTime.TryParse(dated.GetProperty("expiration").GetProperty("absoluteExpireDate").GetString(), out _), "绝对到期日按文本日期读取");
         var categories = Json(Answer("item-categories"));
         TestCheck.That(categories.GetProperty("categories").GetArrayLength() > 1 && categories.GetProperty("maxRefinement").GetInt32() > 0, "分类与锻造上限来自资源");

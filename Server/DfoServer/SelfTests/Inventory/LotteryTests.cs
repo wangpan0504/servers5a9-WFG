@@ -15,6 +15,7 @@ internal static class LotteryTests
     {
         int checks = Count;
         var items = resources.ItemResources;
+        LegacyExpiryFixture.Restore(items.Items, Enumerable.Range(490705157, 7).Select(id => (id, "2020-03-19 06:00:00")).ToArray());
         var random = new EdgeRandom();
         var settings = new GameDebugSettings();
         var service = new InventoryBoosterService(items.Items, items.Boosters, items.GoldLimits, items.EpicPieces,

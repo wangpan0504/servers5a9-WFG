@@ -216,6 +216,7 @@ internal static class ShopTests
             That(expires.AbsoluteTime == nextDay.ToUnixTimeSeconds(), "absolute PVF expiry is UTC+8");
             var timed = catalog.Get(3175) with { Expiration = new(expires.AbsoluteTime, 2) };
             That(InventoryRewardGrantService.Create(timed, 1, now).ExpireTime == now.AddDays(2).ToUnixTimeSeconds(), "usable days takes creation-relative expiry");
+            LegacyExpiryFixture.Restore(catalog, (10005759, "2015-07-30 06:00:00"));
             That(!InventoryRewardGrantService.TryGrantBatch(current, [new(10005759, 1)], catalog, itemResources.GoldLimits, itemResources.EpicPieces).Accepted,
                 "matched expired event reward is not turned into a permanent item");
             That(ShopRequests.Buy(new byte[16]) == new BuyItemRequest(0, 0, 0, 0), "purchase request width");

@@ -14,6 +14,7 @@ internal static class BoosterSelectionTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
+        LegacyExpiryFixture.Restore(itemResources.Items, (10002064, "2013-09-24 06:00:00"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-selection"), gm: true, resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;

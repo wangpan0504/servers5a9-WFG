@@ -15,6 +15,7 @@ internal static class InventoryStackLimitTests
         // 该真实模板有绝对期限，用有效期内的时刻单独验证堆叠规则，不修改资源或生产期限。
         var now = new DateTimeOffset(2016, 2, 1, 0, 0, 0, TimeSpan.Zero);
         var empty = Role();
+        LegacyExpiryFixture.Restore(catalog, (10008885, "2016-03-10 06:00:00"));
         var limited = catalog.Get(10008885);
         var first = Grant(empty, new InventoryReward(limited.Id, 1));
         check(limited.StackLimit == 1 && first.Accepted && first.Plan!.After.Items.Length == 1,

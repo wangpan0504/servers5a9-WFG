@@ -35,7 +35,7 @@ internal static class CharacterPreparationTests
         }
 
         var definition = CharacterPreparation.Load(pvf);
-        That(definition.MainQuests.Length == 915, "matching Client main quest catalog");
+        That(definition.MainQuests.Length == 916, "matching Client main quest catalog");
         That(definition.JobQuests.SequenceEqual(new[] { 5151, 5153, 5154, 5155, 5156, 5161, 5162, 5163, 5164, 5165, 5166 }), "Ghostblade job and both awakening chains");
         That(new[] { 10100, 2670, 6928, 8664, 8665, 8672, 6170, 8703, 8709, 2941 }.All(definition.MapQuests.Contains), "map access includes non-epic unlock quests");
         That(definition.CompletedQuests.Contains(8663) && definition.CompletedQuests.Contains(8702), "map unlock prerequisite chains");

@@ -30,6 +30,7 @@ internal static class BoosterSelectionTests
             That(failed, name);
         }
         var catalog = itemResources.Items;
+        LegacyExpiryFixture.Restore(catalog, (10002064, "2013-09-24 06:00:00"));
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
         var creatureCategory = Parse("0 0\n[creature]\n400990444 1 400990445 1\n[/creature]").Selection!.Categories.Single();

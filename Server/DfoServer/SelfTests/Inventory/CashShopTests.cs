@@ -148,10 +148,18 @@ internal static partial class CashShopTests
         };
         var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, contracts: resources.Contracts)
             { IgnoreAbsoluteExpiration = false };
+        // 新版PVF商城新增商品可能指向含重复 impossible contents 块的物品（加载器按设计拒绝）；这类商品不能作为过期夹具，跳过。
+        LegacyExpiryFixture.Restore(resources.Items, (490705385, "2020-04-09 06:00:00"), (490705234, "2020-04-09 06:00:00"), (490705235, "2020-04-09 06:00:00"),
+            (490705286, "2020-03-19 06:00:00"), (490705249, "2020-02-20 06:00:00"));
+        ItemTemplate? LoadableItem(int id)
+        {
+            try { return resources.Items.Get(id); }
+            catch (InvalidDataException) { return null; }
+        }
         var expired = resources.CashShop.Products.Values.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
             row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
             !resources.Contracts.Recognizes(row.ItemId) && CurrencyWallet.RewardKind(row.ItemId) is null &&
-            resources.Items.Get(row.ItemId).Expiration is { Days: 0, AbsoluteTime: > 0 } expiration && expiration.AbsoluteTime <= now.ToUnixTimeSeconds());
+            LoadableItem(row.ItemId)?.Expiration is { Days: 0, AbsoluteTime: > 0 } expiration && expiration.AbsoluteTime <= now.ToUnixTimeSeconds());
         var expiredRequest = new DfoServer.Game.Inventory.Models.CashShopPurchaseRequest(0, [new(expired.CommodityId, 0)]);
         That(!service.IgnoreAbsoluteExpiration && !service.Buy(character, expiredRequest, out _, now).Accepted,
             "商城调试关闭时拒绝已过绝对期限商品");

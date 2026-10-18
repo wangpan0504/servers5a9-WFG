@@ -232,6 +232,7 @@ internal static class SelfTestRunner
         await TownPresenceIndexTests.RunAsync(towns);
         DungeonCatalogTests.Run(pvf);
         AssaultModePacketTests.RunResources(pvf);
+        AssaultHuntQuestTests.RunResources(pvf, sharedQuests);
         DungeonGreedGridTests.Run(pvf);
         DungeonRoomCatalogTests.Run(pvf);
         DungeonMonsterPlanTests.Run(pvf);

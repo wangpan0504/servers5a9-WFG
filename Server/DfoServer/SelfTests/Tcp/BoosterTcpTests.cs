@@ -67,9 +67,9 @@ internal static class BoosterTcpTests
             Entry(coinDelta, 3, -1, 0);
             Entry(coinDelta, 1, 1, 20);
             SendOpen(peer, 4, 1);
-            ExpectAck(peer, 2683799, 4, [(2681762, 720)]);
+            ExpectAck(peer, 2683799, 4, [(2681762, 10000)]);
             Entry(peer.Expect(0, 14).Body, 4, -1, 0);
-            peer.Expect(0, 53, Build(writer => { writer.Write((byte)1); writer.Write(0); writer.Write(720); writer.Write(0); }));
+            peer.Expect(0, 53, Build(writer => { writer.Write((byte)1); writer.Write(0); writer.Write(10000); writer.Write(0); }));
             SendOpen(peer, 5, 1);
             ExpectAck(peer, 10160255, 5, [(10158124, 1)]);
             byte[] soulDelta = peer.Expect(0, 14).Body;

@@ -16,8 +16,8 @@ internal static class StackableCatalogTests
     {
         int checks = Count;
         var catalog = StackableCatalog.Load(pvf);
-        That(catalog.TemplateCount == 81365 && catalog.TemplateIds.Count == 81365 && catalog.TemplateIds[0] == 0,
-            "匹配索引全81365项包含金币ID0");
+        That(catalog.TemplateCount == 82227 && catalog.TemplateIds.Count == 82227 && catalog.TemplateIds[0] == 0,
+            "匹配索引全82227项包含金币ID0");
         StackableFile gold = catalog.Get(0);
         That(gold.ScriptPath == "stackable/gold.stk" && gold.TypeDeclaration!.Label == "[waste]" &&
             gold.TypeDeclaration.Parameters.SequenceEqual(new[] { 0 }) && gold.DeclaredMinimumLevel == 1 &&
@@ -47,7 +47,7 @@ internal static class StackableCatalogTests
             if (definition.TemplateId != id || pvf.FindFile(definition.ScriptPath)?.DataType != 1)
                 throw new InvalidOperationException("FAIL 堆叠索引模板路径或脚本类型不一致: " + id);
         }
-        That(true, "全部81365项真实脚本可读且ID路径保持对应");
+        That(true, "全部82227项真实脚本可读且ID路径保持对应");
         Reject<KeyNotFoundException>(() => catalog.Get(-1));
         Reject<KeyNotFoundException>(() => catalog.Get(int.MaxValue));
 

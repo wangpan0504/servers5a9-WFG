@@ -72,6 +72,7 @@ internal static class BoosterTests
         var packageService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
             itemResources.EpicPieces, debugSettings: new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true },
             contracts: itemResources.Contracts);
+        LegacyExpiryFixture.Restore(catalog, (490705385, "2020-04-09 06:00:00"), (490705386, "2020-04-09 06:00:00"), (490705483, "2020-04-09 06:00:00"));
         foreach (int id in new[] { 490705385, 490705386, 490705483 })
         {
             var expected = itemResources.Boosters.Get(id).PackageRewards.GroupBy(row => row.ItemId)
@@ -265,7 +266,7 @@ internal static class BoosterTests
         That(result.Accepted && current.Level == 1 && current.Job == 15 && output.Core == InventoryRewardGrantService.Create(catalog.Get(receipt!.Rewards[0].ItemId)),
             "equipment reward keeps full core, seal and durability without output job or wear-level restrictions");
 
-        foreach (var (box, reward, count) in new[] { (2660291, 1, 10), (10160255, 10158124, 1), (2683799, 2681762, 720) })
+        foreach (var (box, reward, count) in new[] { (2660291, 1, 10), (10160255, 10158124, 1), (2683799, 2681762, 10000) })
         {
             current = current with { Inventory = new([new(1, Bag(3), Core(box))]) };
             result = service.Open(current, new(3, 1), out receipt);
