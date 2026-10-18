@@ -30,6 +30,7 @@ internal static class SelfTestRunner
         AvatarPackageTests.RunCore();
         EquipmentEmblemTests.RunCore();
         AvatarDyeTests.RunCore();
+        SkillSwitchInventoryTests.RunCore();
         FrameCrcTests.Run();
         CreatureProjectionTests.RunCore();
         await BufferedLogTests.RunAsync();

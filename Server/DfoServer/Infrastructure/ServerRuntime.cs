@@ -79,6 +79,10 @@ internal static class ServerRuntime
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
+        var skillSwitchInventory = new Game.Skills.SkillSwitchInventoryService(
+            itemResources.Items,
+            SwitchingSupportSkillCatalog.Load(pvf),
+            clock);
         // 建会认证申请与入城补投：入城序列只依赖窄投递接口（顺序模式：创建者与被邀请方不同时在线）。
         var guildPermits = new Game.Guild.GuildPermitRegistry();
         var guildPermitDelivery = new GuildPermitDelivery(guildPermits);
@@ -208,6 +212,7 @@ internal static class ServerRuntime
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, clock),
             new AdventureCapsuleHandler(new Game.Adventure.AdventureCapsuleService(adventureCatalog, growth), levelProjection, clock),
             new SkillHandler(learning, log),
+            new SkillSwitchInventoryHandler(skillSwitchInventory, log),
             new TownHandler(projection, log),
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
                 options.TeleportPotionGates), projection, inventoryProjection, presence, log),

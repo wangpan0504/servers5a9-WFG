@@ -9,6 +9,7 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
+using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Inventory.Models;
@@ -271,7 +272,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             }
             return CommandResult.Handled;
         }
-        var previousLearning = context.Session.Selected?.Learning;
+        var previousCharacter = context.Session.Selected;
         FormalDungeonDeathResult result;
         uint objectKey;
         object audit;
@@ -349,8 +350,16 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (result.QuestDropSlots.Count > 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main,[.. result.QuestDropSlots]),"formal_quest_drop_items",Guard);
-        if (previousLearning is not null && SkillPackets.BindingsChanged(previousLearning, receipt.Character.Learning))
+        if (previousCharacter is not null && SkillPackets.BindingsChanged(previousCharacter.Learning, receipt.Character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_growth_skills", Guard);
+        if (previousCharacter is not null)
+            await SkillSwitchInventoryProjection.RefreshStateAsync(
+                context,
+                previousCharacter.SkillSwitchInventory,
+                previousCharacter.Inventory,
+                receipt.Character,
+                Guard,
+                "formal_growth_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character,
             result.PreviousLevel ?? throw new InvalidOperationException("已提交死亡缺少原实际等级"), "formal_level_committed", Guard);
         bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);

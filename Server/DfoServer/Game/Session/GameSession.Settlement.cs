@@ -201,7 +201,11 @@ internal sealed partial class GameSession
                 inventory = new InventoryResult(true, 0, plan)
                 {
                     Receipt = new(Selected, owner.Generation, SelectionEpoch)
-                        { Phase = Phase, DungeonIdentity = dungeon.Run.Snapshot.Identity }
+                    {
+                        Phase = Phase,
+                        DungeonIdentity = dungeon.Run.Snapshot.Identity,
+                        PreviousSkillSwitchInventory = expected.SkillSwitchInventory
+                    }
                 };
             settlement.Committed = true;
         }
@@ -261,7 +265,11 @@ internal sealed partial class GameSession
             inventory = new(true, 0, committed.Inventory)
             {
                 Receipt = new(Selected, owner.Generation, SelectionEpoch)
-                    { Phase = Phase, DungeonIdentity = formalDungeon!.Run.Snapshot.Identity }
+                {
+                    Phase = Phase,
+                    DungeonIdentity = formalDungeon!.Run.Snapshot.Identity,
+                    PreviousSkillSwitchInventory = claim.Expected.SkillSwitchInventory
+                }
             };
             settlement.Claim = null;
         }
@@ -322,7 +330,12 @@ internal sealed partial class GameSession
         InventoryResult? inventory = committed.Inventory is { } plan ? new(true,0,plan)
         {
             Receipt = new(Selected,owner.Generation,SelectionEpoch)
-                { Phase = Phase,DungeonIdentity = formalDungeon.Run.Snapshot.Identity,PreviousQuests = before.ActiveMainQuests }
+                {
+                    Phase = Phase,
+                    DungeonIdentity = formalDungeon.Run.Snapshot.Identity,
+                    PreviousQuests = before.ActiveMainQuests,
+                    PreviousSkillSwitchInventory = before.SkillSwitchInventory
+                }
         } : null;
         return new(FormalReceipt(),committed.Reward,inventory,committed.MailId,committed.Duplicate);
     });

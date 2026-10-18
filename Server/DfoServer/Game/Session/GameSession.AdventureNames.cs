@@ -31,7 +31,11 @@ internal sealed partial class GameSession
                 inventory = new(true, 0, changed)
                 {
                     Receipt = new(Selected, owner.Generation, SelectionEpoch)
-                        { Phase = Phase, PreviousQuests = capture.Selected!.ActiveMainQuests }
+                        {
+                            Phase = Phase,
+                            PreviousQuests = capture.Selected!.ActiveMainQuests,
+                            PreviousSkillSwitchInventory = capture.Selected!.SkillSwitchInventory
+                        }
                 };
             }
             return new AdventureNameResult(true, 0, committed.Snapshot, inventory)

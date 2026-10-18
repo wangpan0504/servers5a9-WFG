@@ -46,7 +46,12 @@ internal sealed partial class GameSession
         Selected = InventoryService.Commit(repository, owner, character, result);
         return result with { Receipt = result.Accepted && result.Plan is not null
             ? new(Selected, owner.Generation, SelectionEpoch)
-                { Phase = Phase, DungeonIdentity = formalDungeon?.Run.Snapshot.Identity, PreviousQuests = character.ActiveMainQuests } : null };
+                {
+                    Phase = Phase,
+                    DungeonIdentity = formalDungeon?.Run.Snapshot.Identity,
+                    PreviousQuests = character.ActiveMainQuests,
+                    PreviousSkillSwitchInventory = character.SkillSwitchInventory
+                } : null };
     }
 
     public bool CanPublishInventory(InventoryCommitReceipt receipt) => owner.Execute(() =>

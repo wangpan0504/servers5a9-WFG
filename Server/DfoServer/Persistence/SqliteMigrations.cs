@@ -142,6 +142,7 @@ internal static class SqliteMigrations
             Execute(db, tx, QuestStageSchema.WitnessSql);
             Execute(db, tx, QuestStageSchema.ClaimSql);
         }),
+        new(54, "角色Buff强化登记", UpgradeSkillSwitchInventory),
     ];
 
     static void UpgradeCollectBoxState(SqliteConnection db, SqliteTransaction tx)
@@ -157,6 +158,14 @@ internal static class SqliteMigrations
         if (KnownTable(db, tx, "character_collectbox_expirations", CollectBoxExpirationSchema))
             return;
         Execute(db, tx, CollectBoxExpirationSchema);
+    }
+
+    static void UpgradeSkillSwitchInventory(SqliteConnection db, SqliteTransaction tx)
+    {
+        if (KnownTable(db, tx, "character_skill_switch_inventory", SkillSwitchInventoryStateSchema) &&
+            KnownTable(db, tx, "character_skill_switch_inventory_items", SkillSwitchInventoryItemsSchema))
+            return;
+        Execute(db, tx, SkillSwitchInventorySchema);
     }
 
     static bool KnownTable(SqliteConnection db, SqliteTransaction tx, string table, string expected)
@@ -1241,7 +1250,9 @@ internal static class SqliteMigrations
             ("character_collectbox_slots",CollectBoxSlotsTableSchema),
             ("character_collectbox_expirations",CollectBoxExpirationSchema),
             ("character_quest_stage_witnesses",QuestStageSchema.WitnessSql),
-            ("character_quest_stage_claims",QuestStageSchema.ClaimSql) })
+            ("character_quest_stage_claims",QuestStageSchema.ClaimSql),
+            ("character_skill_switch_inventory",SkillSwitchInventoryStateSchema),
+            ("character_skill_switch_inventory_items",SkillSwitchInventoryItemsSchema) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
@@ -1290,6 +1301,8 @@ internal static class SqliteMigrations
         "SELECT character_id,account,selected_box FROM character_collectbox_state LIMIT 0",
         "SELECT character_id,account,box_index,slot_index,item_id FROM character_collectbox_slots LIMIT 0",
         "SELECT character_id,account,box_index,expires_at FROM character_collectbox_expirations LIMIT 0",
+        "SELECT character_id,account,skill_id FROM character_skill_switch_inventory LIMIT 0",
+        "SELECT character_id,equipment_part,item_uid,item_id FROM character_skill_switch_inventory_items LIMIT 0",
         "SELECT account,black_diamond_expires,gold_card_expires,revision FROM account_card_memberships LIMIT 0",
         "SELECT character_id,account,service_day,used FROM character_gold_card_uses LIMIT 0",
         "SELECT character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id,paid_reward_json,paid_mail_id,paid_cost,paid_revision,paid_day FROM character_dungeon_card_options LIMIT 0",
@@ -1383,6 +1396,31 @@ internal static class SqliteMigrations
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
         );
         """;
+
+    internal const string SkillSwitchInventoryStateSchema = """
+        CREATE TABLE character_skill_switch_inventory(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            skill_id INTEGER NOT NULL CHECK(skill_id BETWEEN 0 AND 65534),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string SkillSwitchInventoryItemsSchema = """
+        CREATE TABLE character_skill_switch_inventory_items(
+            character_id INTEGER NOT NULL,
+            equipment_part INTEGER NOT NULL CHECK(equipment_part BETWEEN 0 AND 35),
+            item_uid INTEGER NOT NULL CHECK(item_uid>0),
+            item_id INTEGER NOT NULL CHECK(item_id>0),
+            PRIMARY KEY(character_id,equipment_part),
+            UNIQUE(character_id,item_uid),
+            FOREIGN KEY(character_id) REFERENCES character_skill_switch_inventory(character_id) ON DELETE CASCADE,
+            FOREIGN KEY(item_uid) REFERENCES character_inventory_items(item_uid) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string SkillSwitchInventorySchema =
+        SkillSwitchInventoryStateSchema + SkillSwitchInventoryItemsSchema;
 
     // 设置按账号与角色分别保存原始字节；缺省不建行，不改角色资产与 revision。
     internal const string ClientSettingsSchema = """

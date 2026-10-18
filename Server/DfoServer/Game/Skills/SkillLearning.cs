@@ -22,6 +22,7 @@ internal sealed record SkillLearningCommand(byte Context, byte Mode, IReadOnlyLi
 internal sealed record SkillLearningReceipt(Character Character, long Generation, long SelectionEpoch)
 {
     public DfoServer.Game.Session.SessionPhase Phase { get; init; } = DfoServer.Game.Session.SessionPhase.Town;
+    public SkillSwitchInventoryState PreviousSkillSwitchInventory { get; init; } = Character.SkillSwitchInventory;
 }
 internal sealed record SkillLearningResult(SkillLearningFailure Failure, CharacterLearningState? State, IReadOnlyList<LearnedSkill> Changes)
 {

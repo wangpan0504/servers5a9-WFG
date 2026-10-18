@@ -154,6 +154,8 @@ internal static class DatabaseSchemaTests
                 "DROP TABLE character_title_progress", "DROP TABLE character_title_book_slots", "DROP TRIGGER inventory_not_title_insert",
                 "DROP TABLE character_collectbox_state", "DROP TABLE character_collectbox_slots",
                 "DROP TABLE character_collectbox_expirations",
+                "DROP TABLE character_skill_switch_inventory_items",
+                "DROP TABLE character_skill_switch_inventory_items; DROP TABLE character_skill_switch_inventory",
                 "DROP INDEX auction_listings_expiry; DROP INDEX auction_listings_seller; DROP INDEX auction_listings_template; DROP TABLE auction_listings"
             })
             {
@@ -217,6 +219,7 @@ internal static class DatabaseSchemaTests
             VerifyTitleMigration(root);
             VerifyCollectBoxMigrations(root);
             VerifyQuestStageMigrations(root);
+            VerifySkillSwitchInventoryMigration(root);
             VerifyExperienceCapMigration(root);
             VerifyAccountQuestSourceMigration(root);
             VerifyFutureMigrations(path);
@@ -1741,13 +1744,17 @@ internal static class DatabaseSchemaTests
             "CHECK(after_experience=before_experience+experience_amount)", StringComparison.Ordinal)));
     }
 
-    // 旧库夹具同时移除后续拍卖、公会和收集箱结构；子表先于所属表删除。
+    // 旧库夹具同时移除后续拍卖、公会、收集箱和Buff强化结构；子表先于所属表删除。
     static void DropLaterTables(SqliteConnection db)
     {
+        DropSkillSwitchInventorySchema(db);
         DropCollectBoxSchema(db);
         DropAuctionSchema(db);
         DropGuildSchema(db);
     }
+
+    static void DropSkillSwitchInventorySchema(SqliteConnection db) =>
+        Execute(db, "DROP TABLE IF EXISTS character_skill_switch_inventory_items; DROP TABLE IF EXISTS character_skill_switch_inventory");
 
     static void DropCollectBoxSchema(SqliteConnection db) =>
         Execute(db, "DROP TABLE IF EXISTS character_collectbox_expirations; DROP TABLE IF EXISTS character_collectbox_slots; DROP TABLE IF EXISTS character_collectbox_state");
@@ -1899,6 +1906,7 @@ internal static class DatabaseSchemaTests
                 // （不能用「改版本号」冒充旧库，否则 v37 的 CREATE 会撞表）。
                 if (oldVersion < 37) DropAuctionSchema(db);
                 if (oldVersion < 44) DropGuildSchema(db);
+                if (oldVersion < 54) DropSkillSwitchInventorySchema(db);
                 if (oldVersion < 39) Execute(db, "DROP TABLE IF EXISTS character_teleport_cooldowns");
                 if (oldVersion < 50) Execute(db, "DROP TABLE IF EXISTS character_assault_daily");
                 if (oldVersion < 41) Execute(db, "DROP TABLE IF EXISTS cube_premium");
@@ -2379,18 +2387,96 @@ internal static class DatabaseSchemaTests
             }
             _ = new CharacterRepository(path);
             using (var db = Open(path))
-                Check(Query(db,"PRAGMA user_version") is 53L && Query(db,"SELECT revision||':'||gold FROM characters") is "7:321" &&
+                Check(Query(db,"PRAGMA user_version") is 54L && Query(db,"SELECT revision||':'||gold FROM characters") is "7:321" &&
                     Query(db,"SELECT count(*) FROM character_quest_stage_witnesses") is 0L && Query(db,"SELECT count(*) FROM character_quest_stage_claims") is 0L &&
                     Query(db,"SELECT count(*) FROM pragma_index_list('character_quest_stage_claims') WHERE [unique]=1") is 2L,
                     "v52追加空阶段旁表与双唯一，不猜旧来源或改旧角色");
             string upgraded = Snapshot(path);
             _ = new CharacterRepository(path);
             Check(Snapshot(path) == upgraded,"v53重开逐表字节保持，不重跑迁移");
-            using (var db = Open(path)) Execute(db,"PRAGMA user_version=54");
+            using (var db = Open(path)) Execute(db,"PRAGMA user_version=55");
             string newer = Snapshot(path);
             Reject<InvalidDataException>(() => new CharacterRepository(path),"阶段仓储拒绝较新版本");
             Check(Snapshot(path) == newer,"较新版本拒绝不写库");
         }
+    }
+
+    private static void VerifySkillSwitchInventoryMigration(string root)
+    {
+        string v53 = Path.Combine(root, "skill-switch-v53.db");
+        _ = new CharacterRepository(v53);
+        using (var db = Open(v53))
+        {
+            Execute(db, """
+                INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold)
+                VALUES(1,'skill-switch-v53',0,'SkillSwitchV53',17,38,1,450,234,0,456);
+                INSERT INTO character_inventory_items(item_uid,character_id,account,item_core)
+                VALUES(12345,1,'skill-switch-v53','{"ItemId":1001,"Kind":1,"Value":1}');
+                INSERT INTO character_inventory_slots(character_id,account,list_type,slot_index,item_uid)
+                VALUES(1,'skill-switch-v53',0,9,12345);
+                DROP TABLE character_skill_switch_inventory_items;
+                DROP TABLE character_skill_switch_inventory;
+                PRAGMA user_version=53;
+                """);
+        }
+        _ = new CharacterRepository(v53);
+        using (var db = Open(v53))
+        {
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                Query(db, "SELECT revision||':'||gold FROM characters WHERE id=1") is "17:456" &&
+                Query(db, "SELECT item_uid FROM character_inventory_slots WHERE character_id=1") is 12345L &&
+                Query(db, "SELECT count(*) FROM character_skill_switch_inventory") is 0L,
+                "v53升级只新增空Buff强化表，保留旧角色与库存实例");
+            Execute(db, """
+                INSERT INTO character_skill_switch_inventory(character_id,account,skill_id)
+                VALUES(1,'skill-switch-v53',77);
+                INSERT INTO character_skill_switch_inventory_items(character_id,equipment_part,item_uid,item_id)
+                VALUES(1,4,12345,1001);
+                """);
+            Reject<SqliteException>(() => Execute(db, """
+                INSERT INTO character_skill_switch_inventory_items(character_id,equipment_part,item_uid,item_id)
+                VALUES(1,36,12345,1001)
+                """), "Buff强化持久化拒绝越界部位");
+            Reject<SqliteException>(() => Execute(db, """
+                INSERT INTO character_skill_switch_inventory_items(character_id,equipment_part,item_uid,item_id)
+                VALUES(1,5,12345,1001)
+                """), "Buff强化持久化拒绝同角色重复实例绑定");
+            Execute(db, "DELETE FROM character_inventory_items WHERE item_uid=12345");
+            Check(Query(db, "SELECT count(*) FROM character_skill_switch_inventory_items") is 0L &&
+                Query(db, "SELECT skill_id FROM character_skill_switch_inventory WHERE character_id=1") is 77L,
+                "删除库存实例级联清理绑定但保留指定技能");
+            Execute(db, """
+                INSERT INTO character_inventory_items(item_uid,character_id,account,item_core)
+                VALUES(12345,1,'skill-switch-v53','{"ItemId":1001,"Kind":1,"Value":1}');
+                INSERT INTO character_skill_switch_inventory_items(character_id,equipment_part,item_uid,item_id)
+                VALUES(1,4,12345,1001);
+                DELETE FROM characters WHERE id=1;
+                """);
+            Check(Query(db, "SELECT count(*) FROM character_skill_switch_inventory") is 0L &&
+                Query(db, "SELECT count(*) FROM character_skill_switch_inventory_items") is 0L,
+                "删除角色级联清理Buff强化指定技能与全部绑定");
+        }
+
+        string failure = Path.Combine(root, "skill-switch-v53-failure.db");
+        _ = new CharacterRepository(failure);
+        using (var db = Open(failure))
+        {
+            Execute(db, """
+                INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
+                VALUES(1,'skill-switch-fail',0,'SkillSwitchFail',19,38,1,450,234,0);
+                DROP TABLE character_skill_switch_inventory_items;
+                DROP TABLE character_skill_switch_inventory;
+                CREATE VIEW character_skill_switch_inventory_items AS SELECT id AS character_id FROM characters;
+                PRAGMA user_version=53;
+                """);
+        }
+        string before = Snapshot(failure);
+        Reject<SqliteException>(() => new CharacterRepository(failure), "v54第二张Buff强化表撞名");
+        using (var db = Open(failure))
+            Check(Snapshot(failure) == before && Query(db, "PRAGMA user_version") is 53L &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_skill_switch_inventory'") is 0L &&
+                Query(db, "SELECT revision FROM characters WHERE id=1") is 19L,
+                "v54迁移失败回滚前置DDL并保留旧角色、版本与冲突现场");
     }
 
     private static void VerifyFutureMigrations(string path)

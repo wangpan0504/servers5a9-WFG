@@ -39,7 +39,12 @@ internal sealed partial class GameSession
             var inventory = new InventoryResult(true, 0, plan.Inventory)
             {
                 Receipt = new(character, owner.Generation, SelectionEpoch)
-                { Phase = Phase, DungeonIdentity = formalDungeon?.Run.Snapshot.Identity, PreviousQuests = expected.ActiveMainQuests }
+                {
+                    Phase = Phase,
+                    DungeonIdentity = formalDungeon?.Run.Snapshot.Identity,
+                    PreviousQuests = expected.ActiveMainQuests,
+                    PreviousSkillSwitchInventory = expected.SkillSwitchInventory
+                }
             };
             return new ConsumableUseResult(ConsumableUseOutcome.Committed, "committed", inventory, UseGuard())
                 { SourceUid = plan.Source.Uid, Experience = plan };

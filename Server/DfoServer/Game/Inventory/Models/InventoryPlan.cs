@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Skills;
 
 namespace DfoServer.Game.Inventory.Models;
 
@@ -61,6 +62,7 @@ internal sealed class InventoryCommitReceipt(Character character, long generatio
     public DfoServer.Game.Session.SessionPhase Phase { get; init; } = DfoServer.Game.Session.SessionPhase.Town;
     public DfoServer.Game.Dungeons.DungeonRunIdentity? DungeonIdentity { get; init; }
     public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
+    public SkillSwitchInventoryState PreviousSkillSwitchInventory { get; init; } = character.SkillSwitchInventory;
     readonly Lazy<InventoryIndex> index = new(() => new(character.Inventory));
     public InventoryIndex Index => index.Value;
 }

@@ -71,8 +71,15 @@ internal sealed partial class CharacterRepository
         // context0为既有角色技能投影及工具读取的主树；费用与全部绑定同事务写入。
         CharacterSkill[] skills = WriteCanonicalSkills(db, transaction, expected.Id, learning);
         CharacterLearningState committed = ReadLearning(db, expected.Id, transaction);
+        var skillSwitch = ReadSkillSwitchInventory(db, expected.Id, transaction);
         transaction.Commit();
-        return expected with { Revision = expected.Revision + 1, Skills = skills, Learning = committed };
+        return expected with
+        {
+            Revision = expected.Revision + 1,
+            Skills = skills,
+            Learning = committed,
+            SkillSwitchInventory = skillSwitch
+        };
     });
 
     private static CharacterSkill[] WriteCanonicalSkills(SqliteConnection db, SqliteTransaction transaction, ushort id, CharacterLearningState learning)
@@ -94,6 +101,7 @@ internal sealed partial class CharacterRepository
             command.Parameters["$level"].Value = skill.Level;
             command.ExecuteNonQuery();
         }
+        ReconcileSkillSwitchSkill(db, transaction, id);
         return skills;
     }
 

@@ -71,7 +71,12 @@ internal sealed partial class GameSession
         Selected = saved.Character;
         InventoryResult? inventory = plan is null ? null : new InventoryResult(true, 0, plan)
         {
-            Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase, DungeonIdentity = formalDungeon?.Run.Snapshot.Identity }
+            Receipt = new(Selected, owner.Generation, SelectionEpoch)
+            {
+                Phase = Phase,
+                DungeonIdentity = formalDungeon?.Run.Snapshot.Identity,
+                PreviousSkillSwitchInventory = character.SkillSwitchInventory
+            }
         };
         return new(saved.Counts, granted, issue, inventory);
     }

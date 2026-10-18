@@ -6,6 +6,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
+using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
@@ -393,6 +394,8 @@ internal static class QuestCompletionRepositoryTests
             if (LoseInventoryResult && ++inventoryCalls == 1) throw new IOException("合成库存已提交但返回结果丢失");
             return result;
         }
+        public Character CommitSkillSwitchInventory(AccountOwners.Lease owner, SkillSwitchInventoryPlan plan) =>
+            inner.CommitSkillSwitchInventory(owner, plan);
         public Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan) =>
             inner.CommitCollectBox(owner, plan);
     }

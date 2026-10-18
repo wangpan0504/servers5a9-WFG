@@ -72,6 +72,14 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_quest_conditions",Guard);
         if (SkillPackets.BindingsChanged(previous.Learning, receipt.Character.Learning))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_clear_skills", Guard);
+        if (result.Inventory is null)
+            await SkillSwitchInventoryProjection.RefreshStateAsync(
+                context,
+                previous.SkillSwitchInventory,
+                previous.Inventory,
+                receipt.Character,
+                Guard,
+                "formal_clear_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard);
         if (!receipt.Entry.IsTutorial)
             await DungeonCardMembershipProjection.RefreshAsync(context);

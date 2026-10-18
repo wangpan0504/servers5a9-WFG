@@ -21,7 +21,12 @@ internal sealed partial class GameSession
             var inventory = plan.Inventory with
             {
                 Receipt = new InventoryCommitReceipt(committed.Character, owner.Generation, SelectionEpoch)
-                    { Phase = Phase, DungeonIdentity = capture.Identity, PreviousQuests = character.ActiveMainQuests }
+                    {
+                        Phase = Phase,
+                        DungeonIdentity = capture.Identity,
+                        PreviousQuests = character.ActiveMainQuests,
+                        PreviousSkillSwitchInventory = character.SkillSwitchInventory
+                    }
             };
             return new AdventureShopResult(true, 0, committed.Snapshot, inventory);
         });

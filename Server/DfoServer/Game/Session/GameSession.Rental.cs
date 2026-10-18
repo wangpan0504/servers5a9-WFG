@@ -47,7 +47,11 @@ internal sealed partial class GameSession
             completed = QuestEligibility.Completed(commit.Character);
             pendingRental = null;
             return result with { Receipt = new(commit.Character, owner.Generation, capture.SelectionEpoch)
-                { Phase = SessionPhase.Town, PreviousQuests = expected.ActiveMainQuests } };
+                {
+                    Phase = SessionPhase.Town,
+                    PreviousQuests = expected.ActiveMainQuests,
+                    PreviousSkillSwitchInventory = expected.SkillSwitchInventory
+                } };
         });
 
         bool CanRent() => pendingCommunication is null && Ready && Phase == SessionPhase.Town && Selected is not null && !HasPendingQuestScene &&

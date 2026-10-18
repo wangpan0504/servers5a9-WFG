@@ -54,7 +54,12 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("已提交地面丢弃不能确认原准备");
             dungeon.PendingInventoryDiscard = null;
             var receipt = new InventoryCommitReceipt(Selected, owner.Generation, SelectionEpoch)
-                { Phase = Phase, DungeonIdentity = identity, PreviousQuests = expected.ActiveMainQuests };
+            {
+                Phase = Phase,
+                DungeonIdentity = identity,
+                PreviousQuests = expected.ActiveMainQuests,
+                PreviousSkillSwitchInventory = expected.SkillSwitchInventory
+            };
             return new DungeonInventoryDiscardResult(0, new InventoryResult(true, 0, prepared.Plan.Inventory) { Receipt = receipt }, prepared.Ground);
         });
     }

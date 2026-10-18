@@ -161,6 +161,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         }
         if (receipt.PreviousQuests is { } previous && !previous.SequenceEqual(current.ActiveMainQuests))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(current.ActiveMainQuests), "inventory_quest_conditions", CanSend);
+        await SkillSwitchInventoryProjection.RefreshInventoryAsync(context, receipt, plan.Before);
         if (creatures is not null && !inPlaceCreature && receipt.Phase == SessionPhase.Town && changedSlots.Contains(creatureSlot))
             await creatures.QuestsChangedAsync(context, plan.Before, current, CanSend);
     }

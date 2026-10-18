@@ -28,7 +28,12 @@ internal sealed partial class GameSession
             if (!result.Accepted || result.Plan is not { } plan) return result;
             Selected = repository.CommitTitleAchievement(owner, plan);
             return result with { Receipt = new(Selected, owner.Generation, SelectionEpoch)
-                { Phase = Phase, DungeonIdentity = formalDungeon?.Run.Snapshot.Identity, PreviousQuests = character.ActiveMainQuests } };
+                {
+                    Phase = Phase,
+                    DungeonIdentity = formalDungeon?.Run.Snapshot.Identity,
+                    PreviousQuests = character.ActiveMainQuests,
+                    PreviousSkillSwitchInventory = character.SkillSwitchInventory
+                } };
         });
 
         bool CanUpdate() => owner.Execute(() => pendingCommunication is null && pendingRental is null && Selected is not null && (initializing

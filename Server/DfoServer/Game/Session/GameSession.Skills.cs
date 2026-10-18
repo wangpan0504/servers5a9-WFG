@@ -81,7 +81,15 @@ internal sealed partial class GameSession
                 return result;
             if (!ReferenceEquals(result.State, character.Learning))
                 Selected = repository.CommitLearning(owner, character, result.State!, result.TotalSp, result.TotalTp);
-            return result with { State = Selected!.Learning, Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase } };
+            return result with
+            {
+                State = Selected!.Learning,
+                Receipt = new(Selected, owner.Generation, SelectionEpoch)
+                {
+                    Phase = Phase,
+                    PreviousSkillSwitchInventory = character.SkillSwitchInventory
+                }
+            };
         });
     }
 

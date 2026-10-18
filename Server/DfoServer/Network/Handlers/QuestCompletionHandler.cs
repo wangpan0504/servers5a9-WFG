@@ -10,6 +10,7 @@ using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
+using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
@@ -27,7 +28,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             request is not { Reserved: ushort.MaxValue } ||
             context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
-        var previousInventory = context.Owner.Execute(() => context.Session.Selected?.Inventory);
+        var previous = context.Owner.Execute(() => context.Session.Selected);
         var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier);
         log.Write("quest_completion", new { Connection = context.Id, Quest = request.QuestId, result.Outcome,
             Accepted = result.Outcome == QuestFinishOutcome.Committed, Failure = result.Failure.ToString(), RejectReason = result.Reason,
@@ -61,13 +62,21 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         if (profession)
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "quest_profession_skills", Guard);
         await context.Reply(CmdPacketType.FINISH_QUEST, acknowledgement, "quest_completion_committed", Guard);
-        if (creatures is not null && previousInventory is not null && commit.ChangedSlots.Contains(Game.Creatures.CreatureRules.EquippedSlot))
-            await creatures.ChangedAsync(context, previousInventory, character, receipt.Phase, Guard);
+        if (creatures is not null && previous is not null && commit.ChangedSlots.Contains(Game.Creatures.CreatureRules.EquippedSlot))
+            await creatures.ChangedAsync(context, previous.Inventory, character, receipt.Phase, Guard);
         // ACK34先消费真实增量，再投影完整Core及绝对成长；不在最终库存之后重放增量奖励。
         if (commit.ChangedSlots.Length != 0 || commit.DirectGoldAmount != 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(character.Inventory, InventoryListType.Main,
                 commit.ChangedSlots.Concat(commit.DirectGoldAmount == 0 ? [] : new[] { new InventorySlot(InventoryListType.Main, 0) }).ToArray()),
                 "quest_reward_inventory", Guard);
+        if (previous is not null)
+            await SkillSwitchInventoryProjection.RefreshStateAsync(
+                context,
+                previous.SkillSwitchInventory,
+                previous.Inventory,
+                character,
+                Guard,
+                "quest_skill_switch_inventory");
         if (commit.ExperienceReward.Amount != 0 || commit.GainedExperience != 0)
         {
             var state = character.DungeonState ?? throw new InvalidOperationException("已提交任务成长缺少附属owner");
@@ -82,7 +91,8 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         if (commit.PreviousQuests.Count - character.ActiveMainQuests.Length > 1 ||
             character.ActiveMainQuests.Any(row => commit.PreviousQuests.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests), "quest_reward_conditions", Guard);
-        if (!profession && (commit.TpAmount != 0 || commit.PreviousLearning is { } previous && SkillPackets.BindingsChanged(previous, character.Learning)))
+        if (!profession && (commit.TpAmount != 0 || commit.PreviousLearning is { } previousLearning &&
+            SkillPackets.BindingsChanged(previousLearning, character.Learning)))
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "quest_growth_skills", Guard);
         if (character.EquipmentSlotFlags != commit.PreviousEquipmentSlotFlags)
             await levelProjection.PlayerAsync(context,character,"quest_equipment_slots",Guard);

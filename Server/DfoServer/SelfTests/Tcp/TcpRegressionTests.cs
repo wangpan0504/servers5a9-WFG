@@ -184,6 +184,7 @@ internal static class TcpRegressionTests
             await SkillProtocolTcpTests.RunAsync(options, root, resources);
             await SkillExtendedTcpTests.RunAsync(options, root, resources);
         }),
+        ("skill-switch-inventory", SkillSwitchInventoryTcpTests.RunAsync),
         ("skill-slots", SkillQuickSlotsTcpTests.RunAsync),
         ("skill-material", SkillMaterialTcpTests.RunAsync),
         ("gm-progress", CharacterProgressTcpTests.RunAsync),
