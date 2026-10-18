@@ -114,7 +114,7 @@ PR 使用[合入模板](.forgejo/PULL_REQUEST_TEMPLATE.md)，关联 Issue，说�
 
 PR 创建、追加提交和重新打开时，由[无 PVF 检查工作流](.forgejo/workflows/tests.yml)使用 `codeberg-medium` 运行自动检查。工作流使用官方 .NET 10 Linux SDK 镜像，按 Debug、Release 分为两个独立配置 job，使用 `codeberg-medium`、每个 job 限时 8 分钟；该 runner 的公开规格上限为 10 分钟，避免完整构建、自测和收尾挤入 `codeberg-small` 的 5 分钟上限。两个配置可以并行调度，任一配置失败不跳过另一个，实际开始时间仍取决于公共 runner 队列。检出本次事件对应的 PR 源提交后，使用单个 MSBuild 节点构建，再分步骤从同一 `build/check/bin/<项目>/<配置小写>/` 产物直接运行分层正反例、PvfLib 合成测试、服务端 `--selftest-core` 和 `--selftest-tcp commands`，任一步失败均使该配置失败。CI 直接调用上述入口，不执行 `Tools/Check-Development.ps1` 的仓库链接/路径步骤；本地基础检查仍须按上述统一命令执行。检查只使用源码、合成输入和临时 SQLite，Fork PR 无需额外 secrets。该工作流不包含真实 PVF 的业务自测、完整业务 TCP、资源普查或客户端验收；本地验证仍按[检查范围](#检查范围)补齐。
 
-[完整资源检查工作流](.forgejo/workflows/full-tests.yml)在推送到 `master`、PR 及手动触发时运行完整 `--selftest` 与完整 TCP。它需要标签为 `s5a9-pvf` 的自托管 runner，并通过 runner 主机上的 `S5A9_PVF_PATH` 环境变量提供 PVF；PVF 不入库，也不能放入公共 runner 或 secrets。没有此 runner 时作业保持排队，不能作为必需检查；Fork PR 的代码会在该主机执行，管理员须先确认信任边界后再启用。
+完整 `--selftest` 与完整 TCP 需要真实 PVF，PVF 不入库，也不能放入公共 runner 或 secrets，因此不在 CI 中运行（仓库没有带 PVF 的自托管 runner），改由有 PVF 的本机手动执行：`pwsh -NoProfile -File Tools/Check-Development.ps1 -PvfPath <PVF>` 运行完整 `--selftest`，`pwsh -NoProfile -File Tools/Select-AffectedTests.ps1 -Run -Full -PvfPath <PVF>` 运行全量 TCP；具体命令见上方清单。合并前的验证结果写入 PR「验证」一节。
 
 两个配置结束后，`no-pvf` 汇总 job 复用原有检查名称，使用 `codeberg-tiny`、轻量 Alpine 镜像和 `sh`，只在两个配置全部成功时通过；失败、取消、跳过或缺失结果均拒绝，不重复构建和自测。管理员须在仓库设置的 `Units > Overview` 中启用 Actions；工作流文件不会自动修改平台设置或分支保护。必需检查以实际配置为准，未启用或尚未验证可运行的 CI 状态不得作为必需检查阻塞所有 PR。
 

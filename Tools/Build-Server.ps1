@@ -55,9 +55,31 @@ function Assert-NoLinks([string]$Path) {
     }
 }
 
+function Write-Step([string]$Message) {
+    Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Message)
+}
+
 function Invoke-Dotnet([string[]]$Arguments) {
+    $label = "dotnet $($Arguments[0]) $(Split-Path -Leaf $Arguments[1])"
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    Write-Step "开始：$label"
     & dotnet @Arguments
     if ($LASTEXITCODE -ne 0) { throw "dotnet 执行失败，退出码：$LASTEXITCODE" }
+    Write-Step ("结束：{0}，耗时 {1:N1} 秒" -f $label, $watch.Elapsed.TotalSeconds)
+}
+
+# 自检进程带超时：超时则结束进程树并明确报错，避免 CI 无输出地挂住。
+function Invoke-SelfCheck([string]$Name, [string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds = 60) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    Write-Step "开始自检：$Name（超时 $TimeoutSeconds 秒）"
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -WindowStyle Hidden -PassThru
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill($true) } catch { Write-Warning "结束自检进程失败：$($_.Exception.Message)" }
+        throw "自检超时：$Name 在 $TimeoutSeconds 秒内未退出，已强制结束（PID $($process.Id)）。"
+    }
+    $process.WaitForExit()
+    Write-Step ("结束自检：{0}，退出码 {1}，耗时 {2:N1} 秒" -f $Name, $process.ExitCode, $watch.Elapsed.TotalSeconds)
+    return $process
 }
 
 function Remove-Stage {
@@ -154,16 +176,16 @@ foreach ($name in $requiredFiles) {
 if (-not $windows) {
     Write-Warning '本次为 Windows 交叉编译，未执行 Windows EXE 启动及内置 GM 检查；不代表客户端验收通过。'
 } elseif ($SingleFile) {
-    $serverCheck = Start-Process -FilePath (Join-Path $payload $program) -ArgumentList '--server','--help' -WindowStyle Hidden -Wait -PassThru
+    $serverCheck = Invoke-SelfCheck '服务端 --server --help' (Join-Path $payload $program) @('--server', '--help')
     if ($serverCheck.ExitCode -ne 0) { throw "内置服务端启动检查失败；临时产物保留在 $stage" }
 } else {
     & (Join-Path $payload $program) --help
     if ($LASTEXITCODE -ne 0) { throw "发布程序启动检查失败；临时产物保留在 $stage" }
 }
 if ($windows) {
-    $launcherCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--help' -WindowStyle Hidden -Wait -PassThru
+    $launcherCheck = Invoke-SelfCheck '启动器 --help' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--help')
     if ($launcherCheck.ExitCode -ne 0) { throw "启动器检查失败；临时产物保留在 $stage" }
-    $gmCheck = Start-Process -FilePath (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) -ArgumentList '--selftest-gm' -WindowStyle Hidden -Wait -PassThru
+    $gmCheck = Invoke-SelfCheck '内置 GM 网页 --selftest-gm' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--selftest-gm')
     if ($gmCheck.ExitCode -ne 0) { throw "内置GM网页检查失败；临时产物保留在 $stage" }
 }
 
@@ -201,7 +223,9 @@ S5A9Server $PackageVersion (Windows x64)
     New-Item -ItemType Directory -Path $output -Force | Out-Null
     $archive = Join-Path $output "S5A9Server-$PackageVersion-win-x64.zip"
     $archivePaths = @($program, 'README.txt', 'build-info.json') + $licensePaths
+    Write-Step '开始：压缩 ZIP'
     Compress-Archive -LiteralPath @($archivePaths | ForEach-Object { Join-Path $archiveRoot $_ }) -DestinationPath $archive
+    Write-Step '结束：压缩 ZIP'
     $stream = [IO.File]::OpenRead($archive)
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try { $hash = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
@@ -261,7 +285,7 @@ try {
         if ($sourcePvf) { Copy-Item -LiteralPath $sourcePvf -Destination $targetPvf }
     }
     if ($SingleFile) {
-        $installedCheck = Start-Process -FilePath (Join-Path $output $program) -ArgumentList '--server','--help' -WindowStyle Hidden -Wait -PassThru
+        $installedCheck = Invoke-SelfCheck '安装目录 --server --help' (Join-Path $output $program) @('--server', '--help')
         if ($installedCheck.ExitCode -ne 0) { throw '运行目录中的单文件程序启动检查失败。' }
     } else {
         & (Join-Path $output $program) --help

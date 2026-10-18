@@ -18,7 +18,7 @@ jobs:
     runs-on: codeberg-medium
     container:
       image: mcr.microsoft.com/dotnet/sdk:10.0-noble
-    timeout-minutes: 10
+    timeout-minutes: 25
     defaults:
       run:
         shell: pwsh
