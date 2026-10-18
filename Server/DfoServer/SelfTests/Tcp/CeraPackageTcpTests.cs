@@ -21,7 +21,7 @@ internal static class CeraPackageTcpTests
             {
                 Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
                 Inventory = new([new(0, Bag(3), Core(490705386)), new(0, Bag(4), Core(490705385)),
-                    new(0, Bag(5), Core(490705483)), new(0, Bag(6), Core(7542))])
+                    new(0, Bag(5), Core(490705483)), new(0, Bag(6), Core(7542)), new(0, Bag(7), Core(490704193))])
             });
         await fixture.StartAsync();
         BoosterTcpTests.SetExpirationDebug(fixture, true);
@@ -77,20 +77,51 @@ internal static class CeraPackageTcpTests
                 }
             }
             peer.Barrier();
+            var costumeChoices = new (int ItemId, byte Option)[]
+            {
+                (401550106, 4), (401560063, 4), (401570036, 2), (401520056, 2), (401500096, 9),
+                (401530044, 4), (401510075, 0), (401540071, 0), (401580002, 0)
+            };
+            string costumeBefore = Snapshot();
+            Send(peer, 7, [(1042, 4), .. costumeChoices[1..]]);
+            peer.Expect(1, 518, [0, 4, 0]);
+            peer.Barrier();
+            That(costumeBefore == Snapshot(), "错时装选择不消耗夏日礼包");
+            Send(peer, 7, costumeChoices);
+            peer.Expect(1, 518, [1, 7, 0]);
+            byte[] costumeMain = peer.Expect(0, 14).Body;
+            BoosterTcpTests.Entry(costumeMain, 7, -1, 0);
+            byte[] costumeAvatars = peer.Expect(0, 14).Body;
+            That(costumeAvatars[0] == 1 && U16(costumeAvatars, 1) == 9 && costumeAvatars.Length == 3 + 9 * 165,
+                "含时装固定礼包一次提交时装栏九件完整条目");
+            foreach (var choice in costumeChoices)
+            {
+                int at = Enumerable.Range(0, 9).Select(index => 3 + index * 165)
+                    .Single(at => U32(costumeAvatars, at + 2) == choice.ItemId);
+                That(U16(costumeAvatars, at + 11) == choice.Option, "518时装option写入Durability " + choice.ItemId);
+            }
+            peer.Barrier();
+            before = Snapshot();
+            Send(peer, 7, costumeChoices);
+            peer.Expect(1, 518, [0, 4, 0]);
+            peer.Barrier();
+            That(before == Snapshot(), "耗尽后重放夏日礼包不再发奖");
         }
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
             using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
             var saved = repo.List(owner).Single();
-            That(saved.Inventory.Items.All(item => item.Core.ItemId is not (490705385 or 490705386 or 490705483)) &&
-                saved.Inventory.Items.Where(item => item.Core.ItemId == 490705400).Sum(item => item.Core.Count) == 6,
-                "重登恢复耗尽源与所有已提交奖励");
+            That(saved.Inventory.Items.All(item => item.Core.ItemId is not (490705385 or 490705386 or 490705483 or 490704193)) &&
+                saved.Inventory.Items.Where(item => item.Core.ItemId == 490705400).Sum(item => item.Core.Count) == 6 &&
+                saved.Inventory.Items.Count(item => item.Position.List == InventoryListType.Avatar) == 9,
+                "重登恢复耗尽源、固定奖励和九件时装");
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "固定礼包存档完整性");
         await RunOverflowAsync(source, root, resources);
+        await CeraPackageAvatarOverflowTcpTests.RunAsync(source, root, resources);
 
         ItemCore Core(int id) => InventoryRewardGrantService.Create(items.Items.Get(id), shopExpiration: true);
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold,revive_coins FROM characters")) +

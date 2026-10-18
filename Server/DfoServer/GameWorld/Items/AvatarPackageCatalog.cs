@@ -190,12 +190,27 @@ internal sealed class AvatarPackageCatalog
             }
             types.Add(new(raw.Days, new(sockets[0], sockets[1], sockets[2], sockets[3], sockets[4]), raw.Gold, raw.WinPoints, raw.Cera));
         }
-        string direct = Block(text, "avatar select ability");
         ImmutableHashSet<byte> abilities;
         if (Fields(text, "avatar select ability").Count != 0)
         {
-            abilities = ParseAbilities(direct);
-            if (abilities.IsEmpty) return Reject("装扮属性选项无效");
+            string masked = MaskStrings(text);
+            var blocks = Regex.Matches(masked, @"\[avatar select ability\](.*?)\[/avatar select ability\]", RegexOptions.Singleline);
+            if (blocks.Count != Fields(text, "avatar select ability").Count ||
+                blocks.Count != Fields(text, "/avatar select ability").Count) return Reject("装扮属性选项无效");
+            abilities = [];
+            string[]? firstTokens = null;
+            foreach (Match block in blocks)
+            {
+                var value = block.Groups[1];
+                string body = text.Substring(value.Index, value.Length);
+                var parsed = ParseAbilities(body);
+                var tokens = Tokens(body);
+                // 动画段可重复完整声明；只忽略token之间的空白，不合并冲突选项或取首段掩盖坏段。
+                if (parsed.IsEmpty || firstTokens is not null && !firstTokens.SequenceEqual(tokens, StringComparer.Ordinal))
+                    return Reject("装扮属性选项无效");
+                firstTokens ??= tokens;
+                abilities = parsed;
+            }
         }
         else if (Fields(text, "ability case index").Count != 0)
         {

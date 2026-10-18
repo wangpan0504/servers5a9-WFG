@@ -95,6 +95,53 @@ internal static class BoosterTests
         }
         var ordinarySource = current with { Inventory = new([new(1, Bag(65), Core(7542))]) };
         That(!packageService.OpenCeraPackage(ordinarySource, new(65, []), out _, now).Accepted, "商城开包命令不能消费普通随机盒");
+        var avatarPackageService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
+            itemResources.EpicPieces, debugSettings: new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true },
+            contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages);
+        const int costumePack = 490704193;
+        var costumeDefinition = itemResources.Boosters.Get(costumePack);
+        var costumeAvatars = InventoryCeraPackageAvatarRewards.AvatarIds(costumeDefinition.PackageRewards, catalog);
+        var capturedCostume = new CeraPackageChoice[]
+        {
+            new(401550106, 4), new(401560063, 4), new(401570036, 2), new(401520056, 2), new(401500096, 9),
+            new(401530044, 4), new(401510075, 0), new(401540071, 0), new(401580002, 0)
+        };
+        That(costumeDefinition.Available && costumeAvatars.SetEquals(capturedCostume.Select(choice => choice.ItemId)),
+            "夏日化装舞会礼包的时装奖励就是客户端518提交的九件");
+        var costumeRole = current with
+        {
+            Job = 0,
+            Inventory = new([new(1, Bag(65), InventoryRewardGrantService.Create(catalog.Get(costumePack), utcNow: now, shopExpiration: true))])
+        };
+        That(!avatarPackageService.OpenCeraPackage(costumeRole, new(65, capturedCostume[..^1]), out _).Accepted &&
+            costumeRole.Inventory.Find(Bag(65))!.Core.ItemId == costumePack, "少选一件时装不能开含时装的固定礼包");
+        That(!avatarPackageService.OpenCeraPackage(costumeRole, new(65, [.. capturedCostume, new(1042, 0)]), out _).Accepted,
+            "多选外来编号不能开含时装的固定礼包");
+        var wrongCostume = capturedCostume.ToArray();
+        wrongCostume[0] = new(1042, 4);
+        That(!avatarPackageService.OpenCeraPackage(costumeRole, new(65, wrongCostume), out _).Accepted,
+            "错ID不能开含时装的固定礼包");
+        byte invalidAbility = Enumerable.Range(0, 256).Select(value => (byte)value)
+            .First(value => !itemResources.AvatarPackages.GetAvatar(401550106).Abilities.Contains(value));
+        var invalidCostume = capturedCostume.ToArray();
+        invalidCostume[0] = new(invalidCostume[0].ItemId, invalidAbility);
+        That(!avatarPackageService.OpenCeraPackage(costumeRole, new(65, invalidCostume), out _).Accepted &&
+            costumeRole.Inventory.Find(Bag(65))!.Core.Count == 1, "非法时装属性不能消费源");
+        var openedCostume = avatarPackageService.OpenCeraPackage(costumeRole, new(65, capturedCostume), out var costumeReceipt, now);
+        var expectedCostume = costumeDefinition.PackageRewards.GroupBy(row => row.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(row => row.Count));
+        That(openedCostume.Accepted && costumeReceipt is { ItemId: costumePack, Slot: 65 } &&
+            expectedCostume.All(pair => costumeReceipt.Rewards.Any(row => row.ItemId == pair.Key && row.Count == pair.Value)),
+            "选择集合对齐礼包内全部时装时发放整包，包括盒子和账号绑定物");
+        foreach (var choice in capturedCostume)
+            That(openedCostume.Plan!.After.Items.Any(item => item.Core.ItemId == choice.ItemId && item.Core.Durability == choice.Option &&
+                item.Position.List == InventoryListType.Avatar && item.Avatar is not null),
+                "时装Durability写入玩家选择 " + choice.ItemId);
+        That(costumeRole.Inventory.Find(Bag(65))!.Core.Count == 1, "含时装固定礼包提交前不改源");
+        That(avatarPackageService.OpenCeraPackage(costumeRole, new(65, []), out var emptyCostumeReceipt, now).Accepted &&
+            emptyCostumeReceipt!.Rewards.Length == expectedCostume.Count,
+            "空选择仍走固定包发放，不要求时装option");
+        CeraPackageAvatarTests.Run(towns, itemResources);
         var contractRole = current with { Inventory = InventorySnapshot.Empty with { AccountWallet = AccountWallet.Empty } };
         foreach (int type in new[] { 22, 27 })
         {

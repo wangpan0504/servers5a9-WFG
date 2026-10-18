@@ -148,9 +148,11 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
 
         BoosterReceipt? receipt = null;
         InventoryResult result;
+        int? itemId = null;
         try
         {
             var source = capture.Selected?.Inventory.Find(new(InventoryListType.Main, request.Slot));
+            itemId = source?.Core.ItemId;
             bool avatar = avatars.Definition(source?.Core.ItemId ?? 0).Recognized;
             result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(4) :
                 context.Session.PlanAndCommitInventory(character => !ReferenceEquals(character, capture.Selected) ? InventoryResult.Reject(19) :
@@ -162,8 +164,9 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
             result = InventoryResult.Reject(19);
         }
         bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) : SameSelection();
-        log.Write("booster_open", new { Connection = context.Id, Slot = request.Slot, CeraPackage = true,
-            result.Accepted, Revision = result.Receipt?.Character.Revision });
+        log.Write("booster_open", new { Connection = context.Id, Slot = request.Slot, ItemId = itemId, CeraPackage = true,
+            result.Accepted, result.Error, Reason = result.RejectReason ?? (result.Accepted ? "accepted" : "operation_rejected"),
+            Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.OPEN_CERAPACKAGE, CeraPackagePackets.Opened(result, request),
             result.Accepted ? "cera_package_opened" : "cera_package_rejected", Guard);
         await projection.RefreshAsync(context, result);

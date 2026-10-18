@@ -7,7 +7,8 @@ using DfoServer.Game.Settings;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    Random? random = null, GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null)
+    Random? random = null, GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null,
+    AvatarPackageCatalog? avatars = null)
 {
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
         => OpenCore(character, request, out receipt, utcNow, ceraPackage: false);
@@ -51,10 +52,125 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         DateTimeOffset? utcNow = null)
     {
         receipt = null;
-        // 非零列表是独立的时装选择合同；在资格和属性未实现前保留整包，不能忽略玩家选择。
-        if (request.Choices.Length != 0)
+        if (request.Choices.Length == 0)
+            return OpenCore(character, new(request.Slot, 1), out receipt, utcNow, ceraPackage: true);
+        return OpenCeraPackageAvatars(character, request, out receipt, utcNow);
+    }
+
+    InventoryResult OpenCeraPackageAvatars(Character character, CeraPackageOpenRequest request, out BoosterReceipt? receipt,
+        DateTimeOffset? utcNow)
+    {
+        receipt = null;
+        bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
+        bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
+        var before = character.Inventory;
+        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var source = before.Find(new(InventoryListType.Main, request.Slot));
+        if (source is null || !source.Core.IsStackable || source.Core.Count < 1 ||
+            source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
-        return OpenCore(character, new(request.Slot, 1), out receipt, utcNow, ceraPackage: true);
+        ItemTemplate sourceTemplate;
+        try
+        {
+            sourceTemplate = catalog.Get(source.Core.ItemId);
+        }
+        catch (Exception error) when (error is InvalidDataException or KeyNotFoundException)
+        {
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_source_resource_invalid" };
+        }
+        if (!InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate))
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_source_ineligible" };
+        var definition = boosters.Get(source.Core.ItemId);
+        if (!definition.Available || definition.PackageRewards.IsDefaultOrEmpty || avatars is null)
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_unconfigured" };
+        HashSet<int> avatarIds;
+        try
+        {
+            avatarIds = InventoryCeraPackageAvatarRewards.AvatarIds(definition.PackageRewards, catalog);
+        }
+        catch (Exception error) when (error is InvalidDataException or KeyNotFoundException)
+        {
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_resource_invalid" };
+        }
+        if (!InventoryCeraPackageAvatarRewards.Matches(avatarIds, request.Choices))
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_choice_mismatch" };
+        long? rewardDeadline = null;
+        try
+        {
+            foreach (int id in definition.PackageRewards.Select(row => row.ItemId).Distinct())
+            {
+                if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
+                    continue;
+                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).AcquisitionContract is not null)
+                    continue;
+                if (contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id))
+                    return InventoryResult.Reject(19);
+                var template = catalog.Get(id);
+                if (template.IsPremiumService)
+                    return InventoryResult.Reject(19);
+                if (template.Kind != ItemKind.Avatar)
+                {
+                    var core = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration,
+                        ignoreUsablePeriod: ignoreUsablePeriod);
+                    if (core.IsExpired(now.ToUnixTimeSeconds()))
+                        return InventoryResult.Reject(19);
+                    if (core.ExpireTime > 0 && (rewardDeadline is null || core.ExpireTime < rewardDeadline.Value))
+                        rewardDeadline = core.ExpireTime;
+                }
+            }
+        }
+        catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
+        {
+            return InventoryResult.Reject(19);
+        }
+        if (!InventoryCeraPackageAvatarRewards.TryCreate(catalog, avatars, definition.PackageRewards, request.Choices, now,
+            shopExpiration, ignoreUsablePeriod, out var avatarItems, out string? reason))
+            return InventoryResult.Reject(19) with { RejectReason = reason };
+        long? deadline = InventoryAvatarPackageService.EarliestDeadline(source, avatarItems);
+        if (rewardDeadline is not null && (deadline is null || rewardDeadline < deadline))
+            deadline = rewardDeadline;
+        var totals = new Dictionary<int, int>();
+        try
+        {
+            foreach (var row in definition.PackageRewards)
+                totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + row.Count);
+        }
+        catch (OverflowException)
+        {
+            return InventoryResult.Reject(4);
+        }
+        if (totals.Count is 0 or > BoosterReceipt.MaximumItems)
+            return InventoryResult.Reject(4);
+        var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.Value, 1).Plan!.After;
+        foreach (var rewards in totals.GroupBy(pair => CurrencyWallet.RewardKind(pair.Key)))
+        {
+            if (rewards.Key is not { } kind)
+                continue;
+            int limit = kind == CurrencyKind.Gold ? new CurrencyService(goldLimits).CarryLimit(character) : int.MaxValue;
+            if (CurrencyWallet.Get(paid, kind) + rewards.Sum(pair => (long)pair.Value) > limit)
+                return InventoryResult.Reject(4);
+        }
+        var avatarGrant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid }, avatarItems, catalog,
+            goldLimits, pieces, now, allowOverflowMail: true);
+        if (!avatarGrant.Accepted)
+            return InventoryResult.Reject(avatarGrant.Error == 19 ? (ushort)19 : (ushort)4);
+        var rest = totals.Where(pair => catalog.Get(pair.Key).Kind != ItemKind.Avatar)
+            .Select(pair => new InventoryReward(pair.Key, pair.Value)).ToArray();
+        var after = avatarGrant.Plan!.After;
+        IReadOnlyList<InventoryItem> overflow = avatarGrant.Plan.OverflowItems;
+        if (rest.Length != 0)
+        {
+            var restGrant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = after }, rest, catalog,
+                goldLimits, pieces, now, shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: true,
+                ignoreUsablePeriod: ignoreUsablePeriod);
+            if (!restGrant.Accepted)
+                return InventoryResult.Reject(restGrant.Error == 19 ? (ushort)19 : (ushort)4);
+            after = restGrant.Plan!.After;
+            overflow = [.. overflow, .. restGrant.Plan.OverflowItems];
+        }
+        receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
+        return new(true, 0, new(before, after, "booster_open",
+            new InventoryCharacterPrecondition(character, deadline), overflow));
     }
 
     InventoryResult OpenCore(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt,

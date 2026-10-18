@@ -80,6 +80,7 @@ internal static class AvatarPackageTests
             "140 `[SKILL_LEVEL]` `[swordman]` 261 1\n[/ability case]\n[ability case]\n150 0 `[HP MAX]` `+` 100\n[/ability case]\n[/ability datas]");
         That(cases[50].SetEquals([1, 140]) && !cases[50].Contains(0) && cases[150].SetEquals([0]) &&
             AvatarPackageCatalog.ParseAvatar(shared, cases).Abilities.SetEquals([1, 140]), "case50不补不存在的0，完整保留大于31和127的选项");
+        DuplicateAbilityDeclarations();
         byte[] body = Body([101, 102], [new(101, 0), new(102, 37)]);
         var request = AvatarPackageRequests.Read(body, 2, 2);
         That(request is { Slot: 73, Count: 1, Category: 1, Subcategory: 3 } && request.ItemIds.SequenceEqual([101, 102]) &&
@@ -99,6 +100,49 @@ internal static class AvatarPackageTests
         That(captured is { Slot: 73, Count: 1, Category: 0, Subcategory: 0 } && captured.Choices.SequenceEqual(CapturedChoices()) &&
             captured.ItemIds.SequenceEqual(CapturedChoices().Select(choice => choice.ItemId)), "实际91B请求完整保留九部位和九项选择，不按普通160零扩展布局截断");
         QualificationAndDeadlines();
+    }
+
+    static void DuplicateAbilityDeclarations()
+    {
+        const string stats = "0 `[HP MAX]` `+` 100 37 `[MP MAX]` `*` 1.5";
+        const string skill = "140 `[SKILL_LEVEL]` `[swordman]` 261 1";
+        static string Block(string value) => "\n[avatar select ability]\n" + value + "\n[/avatar select ability]";
+        foreach (string abilities in new[] { stats, skill })
+        {
+            var single = AvatarPackageCatalog.ParseAvatar(AvatarText(abilities));
+            string repeated = AvatarText(abilities) + "\n[animation job]\n`[demonic swordman]`" +
+                Block(" \t" + abilities.Replace(" `", "\r\n`") + "\n") + Block(abilities);
+            var actual = AvatarPackageCatalog.ParseAvatar(repeated);
+            That(actual.PendingRule is null && actual.RequiresAbilityChoice && actual.Types.SequenceEqual(single.Types) &&
+                actual.Abilities.SetEquals(abilities == stats ? new byte[] { 0, 37 } : [140]),
+                "不同动画段间完整同token的重复声明保留能力、期限与孔位，普通分隔空白不影响一致性");
+        }
+        foreach (string changed in new[] {
+            "0 `[HP MAX]` `+` 101 37 `[MP MAX]` `*` 1.5",
+            "0 `[HP MAX]` `*` 100 37 `[MP MAX]` `*` 1.5",
+            "0 `[HP MAX]` `+` 1e2 37 `[MP MAX]` `*` 1.5",
+            "0 `[HP  MAX]` `+` 100 37 `[MP MAX]` `*` 1.5",
+            "0 `[MP MAX]` `+` 100 37 `[MP MAX]` `*` 1.5",
+            "37 `[MP MAX]` `*` 1.5 0 `[HP MAX]` `+` 100" })
+            That(AvatarPackageCatalog.ParseAvatar(AvatarText(stats) + Block(changed)).PendingRule is not null,
+                "能力索引相同仍拒绝数值、操作符、词法表示、字符串内部空白、种类或顺序冲突");
+        foreach (string changed in new[] { "140 `[SKILL_LEVEL]` `[mage]` 261 1", "140 `[SKILL_LEVEL]` `[swordman]` 262 1",
+            "140 `[SKILL_LEVEL]` `[swordman]` 261 2" })
+            That(AvatarPackageCatalog.ParseAvatar(AvatarText(skill) + Block(changed)).PendingRule is not null,
+                "重复技能能力声明的职业、技能编号与等级必须全部相同");
+        foreach (string text in new[] {
+            AvatarText(stats) + Block(""), AvatarText("") + Block(stats),
+            AvatarText(stats) + Block("0 `[HP MAX]` `+`"),
+            AvatarText(stats) + Block(stats + "\n[unknown]\n1"),
+            AvatarText(stats) + "\n[avatar select ability]\n" + stats,
+            "[avatar select ability]\n" + stats + Block(stats),
+            AvatarText(stats) + Block(stats) + "\n[/avatar select ability]",
+            AvatarText(stats + " " + stats), AvatarText(stats + " " + stats) + Block(stats + " " + stats) })
+            That(AvatarPackageCatalog.ParseAvatar(text).PendingRule is not null,
+                "任一空段、残缺、未知结构、开闭数量不符及段内重复索引均整件拒绝");
+        That(AvatarPackageCatalog.ParseAvatar("[name]\n`[avatar select ability]文字[/avatar select ability]`") is
+            { PendingRule: null, RequiresAbilityChoice: false } noChoice && noChoice.Abilities.SetEquals([0]),
+            "字符串伪标签仍不构成能力声明，无声明保留属性0");
     }
 
     public static void RunResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
@@ -155,6 +199,50 @@ internal static class AvatarPackageTests
         }
         PeriodDeadlinePlans(towns, resources);
         CapturedNoAbilitySelections(towns, resources, packages);
+        LegacySelections(towns, resources, packages);
+    }
+
+    static void LegacySelections(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var debug = new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true };
+        var avatars = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces, debug);
+        var boosters = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces,
+            debugSettings: debug);
+        Character character = new(1, 0, "LegacyAvatar", 0, towns.Room, towns.InitialReturn) { Job = 0, Level = 99 };
+        var parent = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(resources.Items.Get(2683776), 2, now,
+            shopExpiration: true));
+        for (byte category = 0; category < 4; category++)
+        {
+            int childId = 2683777 + category;
+            var before = new InventorySnapshot([parent]);
+            var result = boosters.Open(character with { Inventory = before }, new(73, 1, new(category, 0, [childId])), out var receipt, now);
+            That(result.Accepted && result.Plan!.After.Find(Bag()) is { Uid: 1000, Core.Count: 1 } &&
+                result.Plan.After.Items.Single(item => item.Core.ItemId == childId) is { Core.Count: 1, Avatar: null } &&
+                result.Plan.After.Items.Length == 2 && receipt!.Rewards.Single().ItemId == childId,
+                "追忆父盒四种合法分类仅扣一个源并生成所选实体子盒，不递归开启或提前发装扮");
+        }
+        foreach (int id in new[] { 490008059, 2683777, 2683778, 2683779, 2683780 })
+        {
+            var package = packages.Get(id);
+            That(package.Available && package.SelectionCount == 0, "追忆装扮盒完整分类沿既有160全领合同");
+            foreach (var category in package.Categories)
+            {
+                var source = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(resources.Items.Get(id), 2, now,
+                    shopExpiration: true));
+                var before = new InventorySnapshot([source]);
+                var choices = category.Rows.Select(row => new AvatarPackageChoice(row.ItemId, packages.GetAvatar(row.ItemId).Abilities.Max())).ToArray();
+                var request = new AvatarPackageOpenRequest(73, 1, category.Category, category.Subcategory,
+                    category.Rows.Select(row => row.ItemId).ToArray(), choices);
+                var result = avatars.Open(character with { Inventory = before }, request, out var receipt, now);
+                That(result.Accepted && result.Plan!.After.Find(Bag()) is { Uid: 1000, Core.Count: 1 } &&
+                    result.Plan.After.Items.Length == 9 && receipt!.Rewards.Sum(row => row.Count) == 8 &&
+                    result.Plan.After.Items.Where(item => item.Avatar is not null).All(item => item.Uid == 0 &&
+                        item.Core is { Value: 0, Attr: 0, ExpireTime: 0 } && item.Avatar == new AvatarDetail() &&
+                        item.Core.Durability == choices.Single(choice => choice.ItemId == item.Core.ItemId).Ability),
+                    $"追忆各分类八部位保留合法能力、永久无孔完整原型且源仅扣一次 id={id} category={category.Category} accepted={result.Accepted} error={result.Error}");
+            }
+        }
     }
 
     static void CapturedNoAbilitySelections(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)

@@ -20,10 +20,12 @@ internal static class AvatarPackageTcpTests
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             repo.Create(owner, new("AvatarBoxes", resources.Towns.Room, resources.Towns.InitialReturn)
             {
-                Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
+                // 旧追忆源保留资源职业门槛，夹具使用其允许的基础职业。
+                Job = 0, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
                 Inventory = new([.. Enumerable.Range(65, 8).Select(slot => new InventoryItem(0, Bag((short)slot),
                     InventoryRewardGrantService.Create(items.Get(1106), 1000))),
-                    new(0, Bag(73), Core(490705385)), new(0, Bag(74), Core(490705425)), new(0, Bag(75), Core(490705426))])
+                    new(0, Bag(73), Core(490705385)), new(0, Bag(74), Core(490705425)), new(0, Bag(75), Core(490705426)),
+                    new(0, Bag(76), Core(490008059)), new(0, Bag(77), Core(2683776))])
             });
         await fixture.StartAsync();
         BoosterTcpTests.SetExpirationDebug(fixture, true);
@@ -61,6 +63,36 @@ internal static class AvatarPackageTcpTests
                 peer.Send(160, body); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
                 That(before == Snapshot(fixture), "装扮成功后重放耗尽源不重复创建核心、详情或UID");
             }
+            OpenLegacy(490008059, 76);
+            BoosterSelectionTcpTests.SendSelect(peer, 77, [2683778], category: 1);
+            BoosterTcpTests.ExpectAck(peer, 2683776, 77, [(2683778, 1)]);
+            byte[] delta = peer.Expect(0, 14).Body;
+            BoosterTcpTests.Entry(delta, 77, -1, 0);
+            short childSlot = Convert.ToInt16(fixture.Query("SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE json_extract(i.item_core,'$.ItemId')=2683778").Single().Single());
+            byte[] child = childSlot == 77 ? peer.Expect(0, 14).Body : delta;
+            BoosterTcpTests.Entry(child, childSlot, 2683778, 1);
+            That(U16(child, 1) == (childSlot == 77 ? 1 : 2), "追忆父选择只发一个实体子盒，未提前递归发装扮");
+            peer.Barrier();
+            OpenLegacy(2683778, childSlot);
+
+            void OpenLegacy(int id, short slot)
+            {
+                var rows = packages.Get(id).Categories.Single(row => row.Category == 0 && row.Subcategory == 0).Rows.ToArray();
+                var choices = rows.Select(row => new AvatarPackageChoice(row.ItemId, packages.GetAvatar(row.ItemId).Abilities.Max())).ToArray();
+                string before = Snapshot(fixture);
+                peer.Send(160, Selection(slot, rows, [.. choices[..^1], new(choices[^1].ItemId, 255)]));
+                peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+                That(before == Snapshot(fixture), "追忆完整奖励中任一能力非法时保留源、全部实例、UID和审计，连接可继续");
+                peer.Send(160, Selection(slot, rows, choices));
+                BoosterTcpTests.ExpectAck(peer, id, slot, rows.Select(row => (row.ItemId, (int)row.Count)).ToArray());
+                BoosterTcpTests.Entry(peer.Expect(0, 14).Body, slot, -1, 0);
+                CheckAvatarRows(peer.Expect(0, 14).Body, choices);
+                expected.AddRange(choices);
+                peer.Barrier();
+                before = Snapshot(fixture);
+                peer.Send(160, Selection(slot, rows, choices)); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+                That(before == Snapshot(fixture), "追忆源只消费一次，耗尽重放不重复发八件装扮");
+            }
         }
         using (var peer = Open(fixture))
         {
@@ -68,9 +100,9 @@ internal static class AvatarPackageTcpTests
             CheckAvatarRows(peer.SpecialContainers[1].Body, expected.ToArray(), full: true);
         }
         await fixture.StopAsync();
-        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[18L]] &&
-            fixture.Query("SELECT count(*),count(DISTINCT i.item_uid) FROM character_inventory_items i JOIN inventory_avatar_details a USING(item_uid)") is [[18L, 18L]],
-            "九件、八件、单件各自保存一份唯一核心与装扮详情");
+        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[34L]] &&
+            fixture.Query("SELECT count(*),count(DISTINCT i.item_uid) FROM character_inventory_items i JOIN inventory_avatar_details a USING(item_uid)") is [[34L, 34L]],
+            "既有十八件及追忆直开和子盒各八件各自保存一份唯一核心与装扮详情");
         await RunMailAsync(source, root, resources, packages);
         await RunObservedSelectionsAsync(source, root, resources);
 
