@@ -9,11 +9,14 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record NpcShop(int NpcId, FrozenSet<int> Items);
 internal sealed class NpcShopCatalog
 {
+    readonly FrozenSet<int> saleRestrictions;
     public FrozenDictionary<int, NpcShop> Shops { get; }
     public int EquipmentSellRate { get; }
 
     public NpcShopCatalog(PvfArchive pvf)
     {
+        const string restrictionsPath = "etc/chn_undeletable_item.etc";
+        saleRestrictions = ParseSaleRestrictions(pvf.Contains(restrictionsPath) ? pvf.ReadText(restrictionsPath) : null);
         EquipmentSellRate = Integers(Section(pvf.ReadText("equipment/pricetable.tbl"), "rate")).First();
         var shops = new Dictionary<int, NpcShop>();
         foreach (var (id, path) in List(pvf.ReadText("itemshop/itemshop.lst")))
@@ -41,6 +44,25 @@ internal sealed class NpcShopCatalog
 
     public bool Allows(int npcId, int shopId, int itemId) => Shops.TryGetValue(shopId, out var shop) &&
         shop.NpcId == npcId && shop.Items.Contains(itemId);
+
+    public bool CanSell(int itemId) => itemId > 0 && !saleRestrictions.Contains(itemId);
+
+    internal static FrozenSet<int> ParseSaleRestrictions(string? text)
+    {
+        // 该名册由原生出售资格读取；缺失或损坏不能静默退化成允许全部出售。
+        var block = Regex.Match(text ?? "", @"\A\s*\[undeletable item\](.*?)\[/undeletable item\]\s*\z",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        if (!block.Success)
+            throw new InvalidDataException("PVF 售卖限制名册缺失或块结构无效");
+        var items = new HashSet<int>();
+        foreach (string token in block.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!int.TryParse(token, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int id) || id <= 0)
+                throw new InvalidDataException("PVF 售卖限制名册包含无效物品编号");
+            items.Add(id);
+        }
+        return items.ToFrozenSet();
+    }
 }
 
 internal sealed record ItemPurchaseLimit(bool AccountWide, int Count, bool ResetDaily);
