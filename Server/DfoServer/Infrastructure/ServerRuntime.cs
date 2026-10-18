@@ -257,6 +257,8 @@ internal static class ServerRuntime
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             new CreatureHandler(creatures, creatureProjection, log),
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new AvatarDisjointHandler(new InventoryAvatarDisjointService(itemResources.Items, itemResources.AvatarDisjoint,
+                itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
                 debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages), inventoryProjection,

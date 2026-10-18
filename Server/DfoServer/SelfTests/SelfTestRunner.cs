@@ -32,6 +32,7 @@ internal static class SelfTestRunner
         EquipmentEmblemTests.RunCore();
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();
+        AvatarDisjointTests.RunCore();
         SkillSwitchInventoryTests.RunCore();
         FrameCrcTests.Run();
         CreatureProjectionTests.RunCore();
@@ -226,6 +227,7 @@ internal static class SelfTestRunner
         RefinementTests.Run(towns, characters, itemResources);
         await RefinementTicketTests.RunAsync(towns, characters, itemResources);
         DisjointTests.Run(towns, characters, itemResources);
+        AvatarDisjointTests.RunResources(towns, itemResources);
         EpicPieceTests.Run(towns, characters, itemResources);
         MaterialExchangeTests.Run(towns, characters, itemResources);
         BoosterTests.Run(towns, characters, itemResources);

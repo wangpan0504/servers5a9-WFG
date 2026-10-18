@@ -244,6 +244,7 @@ internal static class TcpRegressionTests
         ("refinement", RefinementTcpTests.RunAsync),
         ("refinement-tickets", RefinementTicketTcpTests.RunAsync),
         ("disjoint", DisjointTcpTests.RunAsync),
+        ("avatar-disjoint", AvatarDisjointTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("booster", BoosterTcpTests.RunAsync),

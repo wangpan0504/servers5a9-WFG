@@ -15,6 +15,7 @@ internal sealed class ItemResources
     public EquipmentRefinementCatalog Refinement { get; }
     public RandomOptionCatalog RandomOptions { get; }
     public DisjointCatalog Disjoint { get; }
+    public AvatarDisjointCatalog AvatarDisjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
@@ -48,6 +49,7 @@ internal sealed class ItemResources
         Repair = new(archive);
         Refinement = new(archive);
         Disjoint = new(archive);
+        AvatarDisjoint = new(archive);
         EpicPieces = new(archive);
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
