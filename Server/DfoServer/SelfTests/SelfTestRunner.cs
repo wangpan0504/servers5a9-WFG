@@ -22,6 +22,7 @@ internal static class SelfTestRunner
         CashShopTests.RunCore();
         PremiumContractTests.RunCore();
         GrowthCubeContractTests.RunCore();
+        LimitCubeTests.RunCore();
         EnchantmentTests.RunCore();
         EnhancementTests.RunCore();
         CreatureSkinTests.RunCore();
@@ -192,6 +193,7 @@ internal static class SelfTestRunner
         CashShopTests.Run(towns, characters, itemResources);
         PremiumContractTests.RunResources(itemResources, pvf);
         GrowthCubeContractTests.RunResources(itemResources,towns,characters);
+        LimitCubeTests.RunResources(itemResources);
         EnchantmentTests.RunResources(itemResources, itemResources.Enchantments);
         EnhancementTests.RunResources(itemResources, itemResources.Enhancements);
         CreatureEggTests.RunResources(itemResources.CreatureEggs, itemResources.Items);
