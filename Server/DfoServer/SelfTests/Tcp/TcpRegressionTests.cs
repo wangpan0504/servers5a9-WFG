@@ -223,6 +223,7 @@ internal static class TcpRegressionTests
         ("creature-group", CreatureGroupTcpTests.RunAsync),
         ("creature-dungeon", FormalDungeonTcpTests.RunCreatureAsync),
         ("avatar-package", (options, root, resources) => AvatarPackageTcpTests.RunAsync(options, root, resources, resources.ItemResources.AvatarPackages)),
+        ("equipment-emblem", EquipmentEmblemTcpTests.RunAsync),
         ("avatar-dye", AvatarDyeTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),
         ("gm-assets", DevelopmentAssetTcpTests.RunAsync),

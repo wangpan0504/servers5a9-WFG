@@ -51,6 +51,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool CloneAvatar { get; init; }
     public bool BorrowAvatarAppearance { get; init; }
     public int? AvatarGiftType { get; init; }
+    public ushort EmblemTargetSockets { get; init; }
     public ImmutableHashSet<string> GuardianGemEffects { get; init; } = [];
 }
 

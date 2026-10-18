@@ -314,6 +314,7 @@ internal sealed class ItemCatalog
             CloneAvatar = Int("clear avatar", 0) == 1 || text.Section("item category").Contains("clear avatar", StringComparison.OrdinalIgnoreCase),
             BorrowAvatarAppearance = kind == ItemKind.Avatar && slot != 9,
             AvatarGiftType = isEquipment ? null : AvatarTypeSelectionFile.GiftType(text),
+            EmblemTargetSockets = kind == ItemKind.Emblem ? ReadEmblemTargetSockets(text) : (ushort)0,
             GuardianGemEffects = kind == ItemKind.GuardianGem ? ReadGuardianGemEffects(text) : [],
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),
@@ -335,6 +336,29 @@ internal sealed class ItemCatalog
         Regex.Matches(text.Block("enchant"), @"\[([^\]/]+)\]")
             .Select(match => match.Groups[1].Value.Trim()).Where(value => value.Length != 0)
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    internal static ushort ReadEmblemTargetSockets(PvfDocument text)
+    {
+        string declaration = text.Block("avatar emblem target type");
+        if (declaration.Length == 0)
+            declaration = text.Section("avatar emblem target type");
+        ushort mask = 0;
+        foreach (Match match in Regex.Matches(declaration, @"\[\s*([ABCDSM])\s+socket\s*\]",
+            RegexOptions.IgnoreCase))
+        {
+            mask |= char.ToUpperInvariant(match.Groups[1].Value[0]) switch
+            {
+                'A' => 1,
+                'B' => 2,
+                'C' => 4,
+                'D' => 8,
+                'S' => 16,
+                'M' => 239,
+                _ => 0
+            };
+        }
+        return mask;
+    }
 
     internal static AvatarSocketTypes ReadAvatarSockets(PvfDocument text)
     {
