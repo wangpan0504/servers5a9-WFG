@@ -96,11 +96,14 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
         ItemPurchaseLimit? limit = null;
         if (limited.Length != 0)
         {
-            string scope = Regex.Match(limited, "`([^`]+)`").Groups[1].Value;
+            string scope = Regex.Match(limited, "`([^`]+)`").Groups[1].Value.ToLowerInvariant();
             int count = Integers(limited).Single();
-            if (scope is not ("account" or "character" or "charac") || count <= 0)
+            // trade：可交易商品的购买上限，按账号共享。chraracter 是 character 的笔误。
+            bool account = scope is "account" or "trade";
+            bool character = scope is "character" or "charac" or "chraracter";
+            if ((!account && !character) || count <= 0)
                 throw new InvalidDataException("NPC 限购定义无效");
-            limit = new(scope == "account", count, text.Has("reset daily purchase item"));
+            limit = new(account, count, text.Has("reset daily purchase item"));
         }
         var materials = Enumerable.Range(0, material.Length / 2).Select(index => new ItemMaterialCost(material[index * 2], material[index * 2 + 1])).ToImmutableArray();
         var result = new ItemShopPrice((int)gold, sell, materials, limit)

@@ -21,6 +21,7 @@ public sealed class PvfTokenDocument
             .Select(tag => tag[2..^1].Trim().ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
         int at = 0;
         var diagnostics = ImmutableArray.CreateBuilder<string>();
+        var closedBlocks = new HashSet<string>(StringComparer.Ordinal);
         Sections = Read(null, 0);
         Diagnostics = diagnostics.ToImmutable();
 
@@ -39,15 +40,35 @@ public sealed class PvfTokenDocument
                 string name = tag[1..^1].Trim().ToLowerInvariant();
                 if (name.StartsWith('/'))
                 {
-                    if (end is null && preserveExtraEndTags)
+                    string closed = name[1..];
+                    bool matches = end is not null && (closed == end ||
+                        blockEndAliases?.TryGetValue(end, out var aliasEnd) == true && closed == aliasEnd);
+                    if (matches)
+                    {
+                        closedBlocks.Add(end!);
+                        return rows.ToImmutable();
+                    }
+                    // 内层块漏了闭合（如 skill node 里的 attack info），把这个闭合交还给外层。
+                    if (end is not null)
+                    {
+                        at--;
+                        diagnostics.Add("缺少闭合标签: " + end);
+                        return rows.ToImmutable();
+                    }
+                    // 同一块已经正常闭合过，文件末尾再多一个闭合（礼盒脚本常见）只记诊断。
+                    // preserveExtraEndTags 的调用方（任务）仍要把多余闭合留成独立段。
+                    if (!preserveExtraEndTags && closedBlocks.Contains(closed))
+                    {
+                        diagnostics.Add("多余闭合标签: " + name);
+                        continue;
+                    }
+                    if (preserveExtraEndTags)
                     {
                         diagnostics.Add("多余闭合标签: " + name);
                         rows.Add(new(name, [], []));
                         continue;
                     }
-                    if (name[1..] != end && !(end is not null && blockEndAliases?.TryGetValue(end, out var aliasEnd) == true && name[1..] == aliasEnd))
-                        throw new InvalidDataException("PVF声明闭合标签不匹配: " + name);
-                    return rows.ToImmutable();
+                    throw new InvalidDataException("PVF声明闭合标签不匹配: " + name);
                 }
                 int start = at;
                 while (at < tokens.Count && tokens[at].Type != 3)

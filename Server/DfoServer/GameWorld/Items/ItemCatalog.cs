@@ -50,7 +50,11 @@ internal sealed class ItemCatalog
         ["support"] = 22,
         ["magic stone"] = 23,
         ["support weapon"] = 24,
-        ["earring"] = 25
+        ["earring"] = 25,
+        // 新 PVF 的 [talisman]/[charm] 后整数是子类型（护石恒为 16，符咒恒为 1），不是穿戴槽。
+        // 当前 ARAD 没有这两个槽位的字符串。34/35 落在已占用的 0–32 之外，避免被当成裤子或武器。
+        ["talisman"] = 34,
+        ["charm"] = 35
     };
 
     readonly int equipmentSellRate;
@@ -237,17 +241,26 @@ internal sealed class ItemCatalog
         {
             string type = Regex.Match(text.Section("stackable type"), @"\[([^\]]+)\]").Groups[1].Value.ToLowerInvariant();
             if (type.Length == 0)
-                throw new InvalidDataException("该物品需要独立特殊容器: " + id);
-            kind = type == "flag gem" ? ItemKind.GuardianGem :
-                type is "creature" or "feed" ? ItemKind.CreatureConsumable : type == "avatar emblem" ? ItemKind.Emblem :
-                type == "material expert job" ? ItemKind.Profession :
-                type == "quest" || type.StartsWith("quest ", StringComparison.Ordinal) ? ItemKind.Quest :
-                type == "material" || type.StartsWith("material ", StringComparison.Ordinal) ? ItemKind.Material : ItemKind.Consumable;
+            {
+                // 品级箱等只有 action type、没有 stackable type。没有动作声明的仍留给专用容器。
+                if (!text.Has("action type"))
+                    throw new InvalidDataException("该物品需要独立特殊容器: " + id);
+                kind = ItemKind.Consumable;
+            }
+            else
+            {
+                kind = type == "flag gem" ? ItemKind.GuardianGem :
+                    type is "creature" or "feed" ? ItemKind.CreatureConsumable : type == "avatar emblem" ? ItemKind.Emblem :
+                    type == "material expert job" ? ItemKind.Profession :
+                    type == "quest" || type.StartsWith("quest ", StringComparison.Ordinal) ? ItemKind.Quest :
+                    type == "material" || type.StartsWith("material ", StringComparison.Ordinal) ? ItemKind.Material : ItemKind.Consumable;
+            }
         }
 
         string jobs = text.Section("usable job");
         ushort jobMask = ushort.MaxValue;
-        if (jobs.Length != 0 && !jobs.Contains("[all]", StringComparison.OrdinalIgnoreCase))
+        // [account] 是账号级物品的可用职业声明（如新版附魔废料），不限职业。
+        if (jobs.Length != 0 && !jobs.Contains("[all]", StringComparison.OrdinalIgnoreCase) && !jobs.Contains("[account]", StringComparison.OrdinalIgnoreCase))
         {
             jobMask = 0;
             foreach (Match tag in Regex.Matches(jobs, @"\[([^\]]+)\]"))
@@ -269,7 +282,8 @@ internal sealed class ItemCatalog
         int stackLimit = isEquipment ? 1 : Int("stack limit", 0);
         if (stackLimit <= 0)
             stackLimit = int.MaxValue;
-        if (id <= 0 || minimum is < 0 or > 255 || durability is < 0 or > ushort.MaxValue)
+        // 0 是 stackable.lst 里的金币占位，不是空槽。空槽不调用 Get。
+        if (id < 0 || minimum is < 0 or > 255 || durability is < 0 or > ushort.MaxValue)
             throw new InvalidDataException("无效 PVF 物品定义: " + id);
         string impossible = text.Block("impossible contents");
         string name = text.Section("name").Trim('`', ' ', '\r', '\n');

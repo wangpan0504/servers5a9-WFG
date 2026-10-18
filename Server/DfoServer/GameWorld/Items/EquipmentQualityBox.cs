@@ -12,13 +12,19 @@ internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercen
     {
         string action = Regex.Match(script.Section("action type"), @"\[([^\]]+)\]").Groups[1].Value;
         bool fixedRange = action == "fixed probability kaleido";
-        // 本版旧商城15/897没有action type；活动版本由PVF动作声明识别。
-        if (!fixedRange && action != "kaleido" && !(id is 15 or 897 && action.Length == 0)) return null;
+        bool gold = action == "gold kaleido box";
+        // 本版旧商城15/897没有action type；活动版本由PVF动作声明识别。黄金箱说明是取最高品级。
+        if (!fixedRange && !gold && action != "kaleido" && !(id is 15 or 897 && action.Length == 0)) return null;
         var arguments = PvfScript.Integers(script.Section("action type"));
         if (fixedRange && (arguments.Length != 2 || arguments[0] < 1 || arguments[1] > 100 || arguments[0] > arguments[1]))
             throw new InvalidDataException("品级调整箱固定范围无效");
-        var slots = Regex.Matches(script.Section("usable equipment type"), @"\[([^\]]+)\]")
+        string slotText = script.Section("usable equipment type");
+        if (slotText.Length == 0)
+            slotText = script.Section("usable equip type");
+        var slots = Regex.Matches(slotText, @"\[([^\]]+)\]")
             .Select(match => ItemCatalog.Slot(match.Groups[1].Value)).Distinct().ToImmutableArray();
+        if (gold)
+            return new(100, 100, slots);
         return new(fixedRange ? arguments[0] : -1, fixedRange ? arguments[1] : -1, slots);
     }
 

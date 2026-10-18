@@ -156,6 +156,11 @@ internal static partial class CashShopTests
             try { return resources.Items.Get(id); }
             catch (InvalidDataException) { return null; }
         }
+        // 新版 PVF 有 177 个春节礼包把 [impossible contents] 原样写了两遍；PvfScript.Block 现按“内容相同即一块”读取，商城所有普通商品都必须能加载。
+        var unloadable = resources.CashShop.Products.Values.Where(row => row.Section is not ("selectable character premium" or "charac premium package" or "avatar") &&
+            CurrencyWallet.RewardKind(row.ItemId) is null && !resources.Contracts.Recognizes(row.ItemId) && !resources.EpicPieces.ByPiece.ContainsKey(row.ItemId) &&
+            LoadableItem(row.ItemId) is null).Select(row => row.CommodityId).ToArray();
+        That(unloadable.Length == 0, "商城普通商品的道具模板均可加载: " + string.Join(",", unloadable.Take(10)));
         var expired = resources.CashShop.Products.Values.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
             row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
             !resources.Contracts.Recognizes(row.ItemId) && CurrencyWallet.RewardKind(row.ItemId) is null &&

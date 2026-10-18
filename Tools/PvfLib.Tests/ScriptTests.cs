@@ -22,6 +22,11 @@ internal static class ScriptTests
         That(list.Count == 2 && list[1] == "dir/a.stk" && list[2] == "b.stk", "list normalization");
         Reject<InvalidDataException>(() => PvfScript.List("1 `a` 1 `b`"));
         Reject<InvalidDataException>(() => PvfScript.Block("[x]a[/x][x]b[/x]", "x"));
+        Reject<InvalidDataException>(() => PvfScript.Block("[x]a[/x][x]a[/x]", "x"));
+        That(new PvfDocument("[x]\n`gift`\n[/x]\n[x] `gift` [/x]\n").Block("x").Trim() == "`gift`", "identical duplicate item block reads as one block");
+        Reject<InvalidDataException>(() => new PvfDocument("[x]a[/x][x]a b[/x]").Block("x"));
+        var union = new PvfDocument("[impossible contents]\n`ban redeemitem`\n[/impossible contents]\n\n[impossible contents]\n`gift`\n[/impossible contents]\n").Block("impossible contents");
+        That(union.Contains("ban redeemitem") && union.Contains("gift"), "impossible contents 多块按并集读取");
         That(PvfScript.Block("[x]a", "x") == "", "incomplete block is absent");
         TokenDocument();
         AiCharacter();
@@ -80,6 +85,21 @@ internal static class ScriptTests
         Reject<InvalidDataException>(() => new PvfTokenDocument([Tag(7)], Resolve));
         Reject<InvalidDataException>(() => new PvfTokenDocument([Int(1)], Resolve));
         Reject<InvalidDataException>(() => new PvfTokenDocument([Tag(3), Tag(7)], Resolve, aliases));
+        // skill node 内的 attack info 漏了闭合，外层 [/skill node] 仍然结束 skill node。
+        string[] skillNames = ["[skill list]", "[skill node]", "[attack info]", "[/attack info]", "[/skill node]", "[/skill list]"];
+        string Skill(int at) => skillNames[at];
+        PvfToken SkillTag(int at) => new(3, at);
+        var skill = new PvfTokenDocument([
+            SkillTag(2), SkillTag(3), SkillTag(0), SkillTag(1), SkillTag(2), SkillTag(4), SkillTag(5)
+        ], Skill);
+        var skillList = skill.Sections.Single(section => section.Name == "skill list");
+        That(skillList.Children.Single().Name == "skill node" &&
+            skill.Diagnostics.Any(row => row.Contains("attack info", StringComparison.Ordinal)),
+            "内层漏闭合时，外层闭合标签结束外层块");
+        string[] extraNames = ["[booster select category]", "[/booster select category]"];
+        var extra = new PvfTokenDocument([new(3, 0), new(3, 1), new(3, 1)], at => extraNames[at]);
+        That(extra.Sections.Single().Name == "booster select category" && extra.Diagnostics.Any(row => row.Contains("多余闭合标签", StringComparison.Ordinal)),
+            "已经闭合过的块，文件末尾多一个闭合标签不再拒绝");
         document = new PvfTokenDocument([Tag(7)], Resolve, preserveExtraEndTags: true);
         That(document.Diagnostics.Length == 1 && document.Sections.Single().Name == "/bad", "extra closing tag is retained as a diagnostic");
         var deep = Enumerable.Repeat(Tag(1), 34).Concat(Enumerable.Repeat(Tag(2), 34)).ToArray();

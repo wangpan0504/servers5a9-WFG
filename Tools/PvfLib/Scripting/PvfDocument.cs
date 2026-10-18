@@ -71,5 +71,5 @@ public sealed class PvfDocument
     public string Section(string tag) => fields.TryGetValue(tag, out var field)
         ? text.AsSpan(field.Start, field.End - field.Start).TrimStart().ToString()
         : parent?.Section(tag) ?? "";
-    public string Block(string tag) => fields.ContainsKey(tag) ? PvfScript.Block(text, tag) : parent?.Block(tag) ?? "";
+    public string Block(string tag) => fields.ContainsKey(tag) ? PvfScript.BlockAllowingIdenticalDuplicates(text, tag) : parent?.Block(tag) ?? "";
 }
