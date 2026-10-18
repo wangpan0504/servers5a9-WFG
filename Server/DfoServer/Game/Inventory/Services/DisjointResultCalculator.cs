@@ -10,6 +10,14 @@ internal static class DisjointResultCalculator
         int rarity = template.Rarity;
         if (rarity is < 0 or > 6)
             return [];
+        if (config.EventResults.Contains(template.Id))
+            return [];
+        if (config.SpecialResults.Contains(template.Id) && !config.IndependentResults.ContainsKey(template.Id) &&
+            !config.PieceResults.ContainsKey(template.Id))
+            return [];
+        if (config.IndependentResults.TryGetValue(template.Id, out var independent) &&
+            (independent.Length == 0 || independent.Any(row => row.ItemId <= 0 || row.Probability != 1000 || row.Count <= 0)))
+            return [];
         Add(config.CubeItemId, checked((int)Math.Max(1, Math.Floor(template.DisjointValue * config.CubeMultipliers[rarity] / config.CubeBase))));
         if (config.Additional[rarity] is { } extra)
         {
@@ -24,6 +32,12 @@ internal static class DisjointResultCalculator
                 count++;
             Add(soul.ItemId, count);
         }
+        if (independent is not null)
+            foreach (var row in independent)
+                Add(row.ItemId, row.Count);
+        // 本服明确政策：整数均匀90..110，NPC及便携均不另乘机器倍率；不是已恢复的原服分布。
+        if (config.PieceResults.TryGetValue(template.Id, out int piece))
+            Add(piece, 90 + random.Next(21));
         return rewards.Select(pair => new InventoryReward(pair.Key, pair.Value)).ToArray();
 
         double Percent() => random.Next(1_000_000) / 10_000.0;

@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
+using DfoServer.Network.Builders.Inventory;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -33,12 +34,36 @@ internal static partial class FormalDungeonTcpTests
     static void RejectDelilahServices(TcpTestFixture fixture, TcpPeer peer, string phase)
     {
         string before = fixture.Snapshot();
+        const short sourceSlot = 10;
+        const string sourceSql = "SELECT i.item_uid,i.item_core FROM character_inventory_items i " +
+            "JOIN character_inventory_slots s ON s.item_uid=i.item_uid WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1";
+        var sourceRows = fixture.Query(sourceSql,peer.Id,sourceSlot);
+        That(sourceRows.Length == 1,phase+" rejected disjoint fixture retains one authoritative Main source");
+        long sourceUid = Convert.ToInt64(sourceRows[0][0]);
+        var sourceCore = JsonSerializer.Deserialize<ItemCore>((string)sourceRows[0][1])!;
         SendDelilahRepair(peer,0,4,false);
         peer.Expect(1,23,[0,19,0]);
-        SendDelilahDisjoint(peer,10,-1);
+        SendDelilahDisjoint(peer,sourceSlot,-1);
         peer.Expect(1,26,[0,19,0]);
+        byte[] rejected = peer.Expect(0,14).Body;
+        That(rejected.Length == 249 && rejected[0] == 0 && U16(rejected,1) == 2 &&
+            U16(rejected,3) == sourceSlot && U32(rejected,5) == uint.MaxValue && U16(rejected,126) == sourceSlot,
+            phase+" rejected disjoint sends one complete Main frame with two ordered entries for the same source slot");
+        var emptyEntry = Build(writer => ItemListProtocolWriter.Write(writer,sourceSlot,null));
+        var originalEntry = Build(writer => ItemListProtocolWriter.Write(writer,sourceSlot,sourceCore));
+        That(rejected.AsSpan(3,123).SequenceEqual(emptyEntry) && rejected.AsSpan(126).SequenceEqual(originalEntry),
+            phase+" rejected disjoint clears the old object then projects every authoritative original core field");
+        if (sourceCore.SortLockFlag != 0)
+            peer.Expect(1,713,Build(writer => { writer.Write((byte)1);writer.Write((byte)0);writer.Write(sourceSlot); }));
+        if (sourceCore.EquipmentLockId != 0)
+            peer.Expect(0,251,Build(writer => { writer.Write((ushort)1);writer.Write((byte)0);writer.Write(sourceSlot);writer.Write((byte)1); }));
         peer.Barrier();
+        var retained = fixture.Query(sourceSql,peer.Id,sourceSlot);
+        That(retained.Length == 1 && Convert.ToInt64(retained[0][0]) == sourceUid &&
+            JsonSerializer.Deserialize<ItemCore>((string)retained[0][1]) == sourceCore,
+            phase+" rejected disjoint preserves the original source UID and full persisted core");
         That(fixture.Snapshot() == before,phase+" rejects NPC services without durability, gold, source or reward changes");
+        Console.WriteLine($"PASS Delilah rejected disjoint projection: phase={phase}, slot={sourceSlot}, uid={sourceUid}, bytes={rejected.Length}, sortLock={sourceCore.SortLockFlag}, equipmentLock={sourceCore.EquipmentLockId}");
     }
 
     static void VerifyDelilahServices(TcpTestFixture fixture, TcpPeer peer, TcpTestResources resources)

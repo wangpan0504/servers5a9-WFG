@@ -14,7 +14,8 @@ internal sealed class DisjointHandler(InventoryDisjointService disjoint, Invento
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
     {
         var request = DisjointRequests.Read(packet.Body);
-        var original = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var original = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase,
+            RejectedSource: context.Session.CaptureDisjointRejectedSource(request)));
         DisjointReceipt? receipt = null;
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
             context.Session.DisjointEquipment(request, disjoint, out receipt);
@@ -23,6 +24,14 @@ internal sealed class DisjointHandler(InventoryDisjointService disjoint, Invento
             ReferenceEquals(context.Session.Selected, original.Selected));
         await context.Reply(CmdPacketType.DISJOINT_ITEM, DisjointPackets.Ack(result, receipt),
             result.Accepted ? "equipment_disjoint" : "equipment_disjoint_rejected", CanSend);
+        if (!result.Accepted && original.RejectedSource is { } rejectedSource)
+        {
+            bool CanRestore() => context.Session.CanPublishDisjointRejectedSource(rejectedSource);
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, DisjointPackets.RejectedSource(rejectedSource.Source),
+                "equipment_disjoint_rejected_source", CanRestore);
+            await InventoryProjection.RestoreLocksAsync(context, rejectedSource.Character.Inventory,
+                [rejectedSource.Source.Position], canSend: CanRestore);
+        }
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }

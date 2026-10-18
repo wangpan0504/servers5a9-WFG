@@ -8,6 +8,7 @@ namespace DfoServer.GameWorld.Items;
 
 internal sealed record DisjointAdditional(int[] Items, double GreatDivisor, double NormalDivisor, double GreatChance, double NormalChance);
 internal sealed record DisjointSoul(int ItemId, double LevelDivisor, double GreatChance, double NormalChance);
+internal sealed record DisjointIndependent(int ItemId, int Probability, int Count);
 
 internal sealed class DisjointCatalog
 {
@@ -18,6 +19,9 @@ internal sealed class DisjointCatalog
     public DisjointSoul?[] Souls { get; }
     public FrozenSet<int> ExcludedSouls { get; }
     public FrozenSet<int> SpecialResults { get; }
+    public FrozenDictionary<int, DisjointIndependent[]> IndependentResults { get; }
+    public FrozenDictionary<int, int> PieceResults { get; }
+    public FrozenSet<int> EventResults { get; }
 
     public DisjointCatalog(PvfArchive pvf) : this(pvf.ReadText("etc/disjoint.etc"), pvf.ReadText("etc/epicpieceinfo.etc")) { }
 
@@ -59,7 +63,22 @@ internal sealed class DisjointCatalog
         int[] pieces = Integers(Block(epicPieces, "piece list"));
         if (events.Length % 3 != 0 || pieces.Length % 2 != 0)
             throw new InvalidDataException("PVF特殊分解索引无效");
-        // 独立产物、活动产物和账号碎片尚需各自结算；不能先销毁装备却只交付普通材料。
+        var independent = new Dictionary<int, DisjointIndependent[]>();
+        foreach (Match match in Regex.Matches(Block(text, "independent result"), @"\[particular item\](.*?)\[/particular item\]", RegexOptions.Singleline))
+        {
+            int[] outputs = Integers(Block(match.Groups[1].Value, "output index"));
+            var rows = outputs.Length % 3 == 0 ? Enumerable.Range(0, outputs.Length / 3)
+                .Select(index => new DisjointIndependent(outputs[index * 3], outputs[index * 3 + 1], outputs[index * 3 + 2])).ToArray() : [];
+            foreach (int input in Integers(Block(match.Groups[1].Value, "input index")))
+                if (input <= 0 || !independent.TryAdd(input, rows))
+                    throw new InvalidDataException("PVF独立分解输入无效或重复");
+        }
+        IndependentResults = independent.ToFrozenDictionary();
+        EventResults = events.Where((_, index) => index % 3 == 0).ToFrozenSet();
+        if (pieces.Any(value => value <= 0))
+            throw new InvalidDataException("PVF分解碎片映射无效");
+        PieceResults = Enumerable.Range(0, pieces.Length / 2).ToFrozenDictionary(index => pieces[index * 2], index => pieces[index * 2 + 1]);
+        // 保留完整特殊输入索引供诊断；活动奖励的替代/追加语义尚未确认。
         SpecialResults = Regex.Matches(text, @"\[input index\](.*?)\[/input index\]", RegexOptions.Singleline)
             .SelectMany(match => Integers(match.Groups[1].Value))
             .Concat(events.Where((_, index) => index % 3 == 0))

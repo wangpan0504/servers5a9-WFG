@@ -4,6 +4,20 @@ namespace DfoServer.Network.Builders.Inventory;
 
 internal static class DisjointPackets
 {
+    public static byte[] RejectedSource(InventoryItem source)
+    {
+        if (source.Position.List != InventoryListType.Main || source.Core.Kind != DfoServer.GameWorld.Items.ItemKind.Equipment)
+            throw new InvalidDataException("分解拒绝收尾只允许原Main装备");
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)InventoryListType.Main);
+        writer.Write((ushort)2);
+        // 同帧按线序先移除旧对象再装入完整核心；不能走会去重同槽的Delta。
+        ItemListProtocolWriter.Write(writer, source.Position.Index, null);
+        ItemListProtocolWriter.Write(writer, source.Position.Index, source.Core);
+        return stream.ToArray();
+    }
+
     public static byte[] Ack(InventoryResult result, DisjointReceipt? receipt)
     {
         if (!result.Accepted)

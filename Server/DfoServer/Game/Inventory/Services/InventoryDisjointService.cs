@@ -19,7 +19,10 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
             return InventoryResult.Reject(19);
         var template = catalog.Get(source.Core.ItemId);
         if (template.DisjointForbidden || template.AttachType.Contains("[trade delete]", StringComparison.OrdinalIgnoreCase) ||
-            (source.Core.AmplifyType & 0x80) != 0 || disjoint.SpecialResults.Contains(template.Id))
+            (source.Core.AmplifyType & 0x80) != 0)
+            return InventoryResult.Reject(19);
+        if (disjoint.PieceResults.TryGetValue(template.Id, out int pieceId) &&
+            (!pieces.ByPiece.TryGetValue(pieceId, out var piece) || piece.EquipmentId != template.Id))
             return InventoryResult.Reject(19);
         InventoryItem? tool = null;
         if (request.ToolSlot != -1)
@@ -29,7 +32,9 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
                 template.MinimumLevel > catalog.Get(tool.Core.ItemId).PortableDisjointLevel)
                 return InventoryResult.Reject(19);
         }
-        InventoryReward[] rewards = DisjointResultCalculator.Calculate(disjoint, template, random ?? Random.Shared);
+        InventoryReward[] rewards;
+        try { rewards = DisjointResultCalculator.Calculate(disjoint, template, random ?? Random.Shared); }
+        catch (OverflowException) { return InventoryResult.Reject(4); }
         if (rewards.Length == 0)
             return InventoryResult.Reject(19);
         // 先释放输入，再按真实产物规划空间；分解不能沿普通赠送的封顶策略吞掉超限产物。
@@ -39,14 +44,19 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
         foreach (var reward in rewards)
             if (CurrencyWallet.RewardKind(reward.ItemId) is { } kind && (long)CurrencyWallet.Get(paid, kind) + reward.Count > int.MaxValue)
                 return InventoryResult.Reject(4);
-        var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, rewards, catalog, goldLimits, pieces, now);
+        InventoryResult grant;
+        try { grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, rewards, catalog, goldLimits, pieces, now); }
+        catch (InvalidDataException) { return InventoryResult.Reject(19); }
+        catch (OverflowException) { return InventoryResult.Reject(4); }
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         var after = grant.Plan!.After;
         var received = new List<DisjointReward>();
         foreach (var reward in rewards)
         {
-            if (CurrencyWallet.RewardKind(reward.ItemId) is { } kind)
+            if (pieces.ByPiece.ContainsKey(reward.ItemId))
+                received.Add(new(-1, reward.ItemId, reward.Count));
+            else if (CurrencyWallet.RewardKind(reward.ItemId) is { } kind)
                 received.Add(new(ItemSlotBoundService.CurrencySlot(kind) ?? throw new InvalidDataException("分解回执不支持非Main钱包"), reward.ItemId, reward.Count));
             else
                 foreach (var item in after.Items.Where(item => item.Core.ItemId == reward.ItemId && item.Position.List == InventoryListType.Main))
