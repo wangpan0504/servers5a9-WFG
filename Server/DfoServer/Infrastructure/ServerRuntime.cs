@@ -130,8 +130,6 @@ internal static class ServerRuntime
         DungeonRoomCatalog? questRooms = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
         var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
-        // GM 网页启用时，启动后立即在后台预热物品/任务/词条索引（首次扫描后落盘缓存，之后启动直接读缓存）。
-        if (options.GmWebPort != 0 || options.GmPort != 0) developmentCatalog.StartWarmup();
         IGameCommandModule dungeon;
         IGameCommandModule? settlement = null;
         IGameCommandModule? questReplay = null;
@@ -290,15 +288,41 @@ internal static class ServerRuntime
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
                 DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null), new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl"))), stop);
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
-        Func<CancellationToken, Task>? management = (gmCommands, gmWeb) switch
-        {
-            (null, null) => null,
-            ({ } commands1, null) => commands1,
-            (null, { } web1) => web1,
-            ({ } commands2, { } web2) => async stop => await await Task.WhenAny(commands2(stop), web2(stop))
-        };
+        Func<CancellationToken, Task>? management = gmCommands is null && gmWeb is null ? null : RunManagement;
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
         return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels);
+
+        async Task RunManagement(CancellationToken stop)
+        {
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
+            var running = new List<Task>();
+            Exception? failure = null;
+            try
+            {
+                stop.ThrowIfCancellationRequested();
+                // 仅在管理入口真正启动时预热；装配或前置监听失败不留下后台资源读取。
+                developmentCatalog.StartWarmup();
+                if (gmCommands is not null) running.Add(gmCommands(lifetime.Token));
+                if (gmWeb is not null) running.Add(gmWeb(lifetime.Token));
+                await await Task.WhenAny(running);
+            }
+            catch (Exception error)
+            {
+                failure = error;
+                throw;
+            }
+            finally
+            {
+                lifetime.Cancel();
+                // 双入口任一退出时，等待另一入口与全部索引收尾后再结束本实例。
+                try { await Task.WhenAll([.. running, developmentCatalog.StopWarmupAsync()]); }
+                catch (OperationCanceledException) when (failure is not null && lifetime.IsCancellationRequested) { }
+                catch (Exception cleanup) when (failure is not null && !ReferenceEquals(cleanup, failure))
+                {
+                    throw new AggregateException("GM入口失败且退出收尾失败", failure, cleanup);
+                }
+            }
+        }
         OnlineCharacterView[] OnlineCharacters() => online.Snapshot()
             .Select(character => new OnlineCharacterView(character.Account, character.CharacterId, character.Name,
                 character.Ready, character.Phase.ToString(), character.State.ToString())).ToArray();

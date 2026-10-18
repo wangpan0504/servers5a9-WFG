@@ -19,6 +19,15 @@ internal static class DevelopmentGmExtendedTests
     public static void RunResources(TownCatalog towns, ItemResources resources, PvfArchive pvf, QuestCatalog quests, DfoServer.GameWorld.Characters.CharacterCatalog characters)
     {
         int before = TestCheck.Count;
+        var stopping = new DevelopmentCatalog(pvf, resources, quests);
+        stopping.StartWarmup(attributesToo: false);
+        Task stopWarmup = stopping.StopWarmupAsync();
+        TestCheck.That(ReferenceEquals(stopWarmup, stopping.StopWarmupAsync()), "并发停机等待同一个索引退出屏障");
+        stopWarmup.GetAwaiter().GetResult();
+        bool rejected = false;
+        try { stopping.WarmAttributes(TimeSpan.FromSeconds(1)); }
+        catch (ObjectDisposedException) { rejected = true; }
+        TestCheck.That(rejected && !stopping.AttributesReady, "停机后拒绝启动尚未建立的属性索引，不再借用PVF");
         using var f = new MailboxPersistenceTests.Fixture();
         f.OtherOwner.Dispose();
         var mailbox = new MailboxService(f.Repository, resources.Items, resources.GoldLimits, resources.EpicPieces);

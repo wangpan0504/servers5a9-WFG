@@ -58,12 +58,12 @@ internal static partial class GmWebServer
             kestrel.Limits.MaxRequestBodySize = 16 * 1024;
             kestrel.Listen(IPAddress.Loopback, port, listen => listen.Protocols = HttpProtocols.Http1);
         });
-        var app = builder.Build();
+        await using var app = builder.Build();
         Map(app, data);
         await app.StartAsync(stop);
         try { await Task.Delay(Timeout.Infinite, stop); }
         catch (OperationCanceledException) { }
-        finally { await app.StopAsync(CancellationToken.None); await app.DisposeAsync(); }
+        finally { await app.StopAsync(CancellationToken.None); }
     }
 
     static readonly Regex Token = new(@"^[^\s\p{C}]{1,32}$", RegexOptions.Compiled);

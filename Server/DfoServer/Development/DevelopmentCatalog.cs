@@ -19,46 +19,91 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
 
     // 索引只在每个服务进程里建一次：启动后由 StartWarmup 在后台预热；命中磁盘缓存（按 PVF 大小+修改时间校验）时跳过全量扫描。
     readonly object warmGate = new();
+    readonly CancellationTokenSource warmupStop = new();
     Task<ImmutableArray<ItemEntry>>? itemsTask;
     Task<ImmutableDictionary<int, GmItemAttributes.Attrs>>? attributesTask;
+    Task<ImmutableDictionary<int, string>>? questNamesTask;
+    Task? stoppingTask;
+    bool stopping;
     public string? PvfPath { get; init; }
     public string? CacheDirectory { get; init; }
-    Task<ImmutableArray<ItemEntry>> ItemsTask { get { lock (warmGate) return itemsTask ??= Task.Run(() => Cached("items", () => BuildItems(pvf))); } }
-    Task<ImmutableDictionary<int, GmItemAttributes.Attrs>> AttributesTask { get { lock (warmGate) return attributesTask ??= Task.Run(() => Cached("attrs", () => BuildAttributes(pvf))); } }
+    Task<ImmutableArray<ItemEntry>> ItemsTask => Start(ref itemsTask, () => Cached("items", () => BuildItems(pvf, warmupStop.Token)));
+    Task<ImmutableDictionary<int, GmItemAttributes.Attrs>> AttributesTask => Start(ref attributesTask, () => Cached("attrs", () => BuildAttributes(pvf, warmupStop.Token)));
+    Task<ImmutableDictionary<int, string>> QuestNamesTask => Start(ref questNamesTask, () => BuildQuestNames(pvf, quests, warmupStop.Token));
+
+    Task<T> Start<T>(ref Task<T>? task, Func<T> build)
+    {
+        lock (warmGate)
+        {
+            if (task is not null) return task;
+            ObjectDisposedException.ThrowIf(stopping, this);
+            return task = Task.Run(build, warmupStop.Token);
+        }
+    }
     public void StartWarmup(bool attributesToo = true)
     {
-        _ = ItemsTask; _ = questNames.Value;
+        _ = ItemsTask; _ = QuestNamesTask;
         if (attributesToo) _ = AttributesTask;
     }
     public (bool Items, bool Quests, bool Attributes) IndexState
     {
-        get { lock (warmGate) return (itemsTask?.IsCompletedSuccessfully == true, questNames.IsValueCreated && questNames.Value.IsCompletedSuccessfully, attributesTask?.IsCompletedSuccessfully == true); }
+        get { lock (warmGate) return (itemsTask?.IsCompletedSuccessfully == true, questNamesTask?.IsCompletedSuccessfully == true, attributesTask?.IsCompletedSuccessfully == true); }
+    }
+
+    // 停止后不再创建索引任务；所有调用者等待同一个退出屏障，再释放借用的PVF。
+    public Task StopWarmupAsync()
+    {
+        lock (warmGate)
+        {
+            if (stoppingTask is not null) return stoppingTask;
+            stopping = true;
+            Task[] tasks = [.. itemsTask is null ? [] : new Task[] { itemsTask },
+                .. attributesTask is null ? [] : new Task[] { attributesTask },
+                .. questNamesTask is null ? [] : new Task[] { questNamesTask }];
+            return stoppingTask = FinishAsync(tasks);
+        }
+
+        async Task FinishAsync(Task[] tasks)
+        {
+            warmupStop.Cancel();
+            try { await Task.WhenAll(tasks).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (warmupStop.IsCancellationRequested) { }
+            finally { warmupStop.Dispose(); }
+        }
     }
 
     sealed record CacheFile<T>(int V, long Size, long Ticks, T Data);
     T Cached<T>(string name, Func<T> build)
     {
+        var stop = warmupStop.Token;
+        stop.ThrowIfCancellationRequested();
         string? path = CacheDirectory is { Length: > 0 } && PvfPath is { Length: > 0 } && File.Exists(PvfPath) ? Path.Combine(CacheDirectory, "gm-index-" + name + ".json") : null;
         if (path is null) return build();
         var info = new FileInfo(PvfPath!);
         try
         {
             if (File.Exists(path) && System.Text.Json.JsonSerializer.Deserialize<CacheFile<T>>(File.ReadAllBytes(path)) is { V: 1 } cached
-                && cached.Size == info.Length && cached.Ticks == info.LastWriteTimeUtc.Ticks && cached.Data is not null) return cached.Data;
+                && cached.Size == info.Length && cached.Ticks == info.LastWriteTimeUtc.Ticks && cached.Data is not null)
+            {
+                stop.ThrowIfCancellationRequested();
+                return cached.Data;
+            }
         }
         catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException or NotSupportedException) { }
         var built = build();
+        stop.ThrowIfCancellationRequested();
         try
         {
             Directory.CreateDirectory(CacheDirectory!);
             string temp = path + ".tmp";
-            File.WriteAllBytes(temp, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new CacheFile<T>(1, info.Length, info.LastWriteTimeUtc.Ticks, built)));
+            byte[] content = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new CacheFile<T>(1, info.Length, info.LastWriteTimeUtc.Ticks, built));
+            stop.ThrowIfCancellationRequested();
+            File.WriteAllBytes(temp, content);
             File.Move(temp, path, true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return built;
     }
-    readonly Lazy<Task<ImmutableDictionary<int, string>>> questNames = new(() => Task.Run(() => BuildQuestNames(pvf, quests)), LazyThreadSafetyMode.ExecutionAndPublication);
 
     public ItemResources Resources => resources;
     // 服务端属性计算器（只读）；未装配时 stats 命令明确拒绝。
@@ -114,12 +159,13 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
         if (!AttributesTask.Wait(timeout)) throw new TimeoutException("物品属性索引构建超时");
     }
 
-    static ImmutableDictionary<int, GmItemAttributes.Attrs> BuildAttributes(PvfArchive pvf)
+    static ImmutableDictionary<int, GmItemAttributes.Attrs> BuildAttributes(PvfArchive pvf, CancellationToken stop)
     {
         var map = ImmutableDictionary.CreateBuilder<int, GmItemAttributes.Attrs>();
         foreach (var (equipment, list) in new[] { (true, "equipment/equipment.lst"), (false, "stackable/stackable.lst") })
             foreach (var (id, path) in PvfScript.List(pvf.ReadText(list)))
             {
+                stop.ThrowIfCancellationRequested();
                 try
                 {
                     var attrs = GmItemAttributes.Parse(pvf.ReadText((equipment ? "equipment/" : "stackable/") + path));
@@ -131,7 +177,7 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
     }
 
     public ImmutableArray<ItemEntry> Items => Ready(ItemsTask, "物品索引");
-    public ImmutableDictionary<int, string> QuestNames => Ready(questNames.Value, "任务名称索引");
+    public ImmutableDictionary<int, string> QuestNames => Ready(QuestNamesTask, "任务名称索引");
 
     static T Ready<T>(Task<T> task, string label)
     {
@@ -145,19 +191,20 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
     // 测试与预热入口：等待构建完成；业务查询不使用。
     public void Warm(bool itemIndex, bool questIndex, TimeSpan timeout)
     {
-        Task[] tasks = [.. itemIndex ? [ItemsTask] : Array.Empty<Task>(), .. questIndex ? [questNames.Value] : Array.Empty<Task>()];
+        Task[] tasks = [.. itemIndex ? [ItemsTask] : Array.Empty<Task>(), .. questIndex ? [QuestNamesTask] : Array.Empty<Task>()];
         if (!Task.WaitAll(tasks, timeout))
             throw new TimeoutException("开发GM索引构建超时");
     }
 
-    public string QuestName(int id) => questNames.Value.IsCompletedSuccessfully && questNames.Value.Result.TryGetValue(id, out var name) ? name : "任务 " + id;
+    public string QuestName(int id) => QuestNamesTask.IsCompletedSuccessfully && QuestNamesTask.Result.TryGetValue(id, out var name) ? name : "任务 " + id;
 
-    static ImmutableArray<ItemEntry> BuildItems(PvfArchive pvf)
+    static ImmutableArray<ItemEntry> BuildItems(PvfArchive pvf, CancellationToken stop)
     {
         var rows = ImmutableArray.CreateBuilder<ItemEntry>();
         foreach (var (equipment, list) in new[] { (true, "equipment/equipment.lst"), (false, "stackable/stackable.lst") })
             foreach (var (id, path) in PvfScript.List(pvf.ReadText(list)))
             {
+                stop.ThrowIfCancellationRequested();
                 try
                 {
                     var doc = equipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) : new PvfDocument(pvf.ReadText("stackable/" + path));
@@ -192,11 +239,12 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
         return mask;
     }
 
-    static ImmutableDictionary<int, string> BuildQuestNames(PvfArchive pvf, QuestCatalog? quests)
+    static ImmutableDictionary<int, string> BuildQuestNames(PvfArchive pvf, QuestCatalog? quests, CancellationToken stop)
     {
         var names = ImmutableDictionary.CreateBuilder<int, string>();
         foreach (var quest in quests?.All ?? [])
         {
+            stop.ThrowIfCancellationRequested();
             try { names[quest.Id] = PvfScript.Section(pvf.ReadText(quest.Path), "name").Trim().Trim('`'); }
             catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException or KeyNotFoundException) { }
         }

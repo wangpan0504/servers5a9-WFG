@@ -29,13 +29,19 @@ internal static class LimitCubeTcpTests
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
-            repository.Create(owner, new("LimitCubeTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+        {
+            var initial = BuildInventory();
+            var created = repository.Create(owner, new("LimitCubeTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Level = 95,
                 AcceptedStoryLevel = 1,
                 Skills = resources.Characters.Get(0).Skills,
-                Inventory = BuildInventory()
+                Inventory = initial with { AccountWallet = AccountWallet.Empty, EpicPieces = EpicPieceBook.Empty }
             });
+            repository.CommitInventory(owner, created, new(created.Inventory,
+                created.Inventory with { AccountWallet = initial.AccountWallet, EpicPieces = initial.EpicPieces },
+                "limit_cube_fixture"));
+        }
         await fixture.StartAsync();
 
         using (var peer = Open(fixture))

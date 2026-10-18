@@ -58,6 +58,14 @@ internal static class GmWebServerTests
         Directory.CreateDirectory(directory);
         string auditPath = Path.Combine(directory, "gm-audit.jsonl");
         var data = new FakeData(auditPath);
+        using (var cancelled = new CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            bool rejected = false;
+            try { await GmWebServer.RunAsync(port, data, cancelled.Token); }
+            catch (OperationCanceledException) { rejected = true; }
+            TestCheck.That(rejected, "GM网页启动前取消后释放应用，不占用后续启动端口");
+        }
         using var stop = new CancellationTokenSource();
         var server = GmWebServer.RunAsync(port, data, stop.Token);
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(10) };
