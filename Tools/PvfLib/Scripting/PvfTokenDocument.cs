@@ -3,7 +3,8 @@ using System.Collections.Immutable;
 namespace PvfLib;
 
 // 保留声明顺序、重复字段和嵌套块；不决定游戏字段的默认值或覆盖关系。
-public sealed record PvfTokenSection(string Name, ImmutableArray<PvfToken> Values, ImmutableArray<PvfTokenSection> Children);
+public sealed record PvfTokenSection(string Name, ImmutableArray<PvfToken> Values,
+    ImmutableArray<PvfTokenSection> Children, bool IsBlock = false);
 
 public sealed class PvfTokenDocument
 {
@@ -54,7 +55,7 @@ public sealed class PvfTokenDocument
                 var values = tokens.Skip(start).Take(at - start).ToImmutableArray();
                 string? blockEnd = blocks.Contains(name) || blockEndAliases?.ContainsKey(name) == true ? name : null;
                 var children = blockEnd is not null ? Read(blockEnd, depth + 1) : [];
-                rows.Add(new(name, values, children));
+                rows.Add(new(name, values, children, blockEnd is not null));
             }
             if (end is not null)
                 throw new InvalidDataException("PVF声明块未闭合: " + end);

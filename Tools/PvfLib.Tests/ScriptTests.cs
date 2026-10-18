@@ -71,7 +71,8 @@ internal static class ScriptTests
         string Resolve(int at) => names[at];
         var document = new PvfTokenDocument([Tag(0), Int(1), Int(99), Tag(1), Int(10), Tag(2), Tag(1), Int(20), Tag(2)], Resolve);
         That(document.Sections.Length == 3 && document.Sections[1].Values.Single().Value == 10 &&
-            document.Sections[2].Values.Single().Value == 20, "token document preserves repeated prerequisite alternatives");
+            document.Sections[2].Values.Single().Value == 20 && !document.Sections[0].IsBlock &&
+            document.Sections[1].IsBlock, "token document preserves repeated alternatives and exposes matched block closure");
         var aliases = new Dictionary<string, string> { ["dialog depend on job"] = "dialog" };
         document = new PvfTokenDocument([Tag(3), Tag(6), Int(1), Tag(4), Tag(3), Tag(6), Int(2), Tag(5)], Resolve, aliases);
         That(document.Sections.Length == 2 && document.Sections[1].Children.Single().Values.Single().Value == 2,

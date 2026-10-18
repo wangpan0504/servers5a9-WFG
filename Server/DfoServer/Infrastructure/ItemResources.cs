@@ -31,6 +31,7 @@ internal sealed class ItemResources
     public GameWorld.Creatures.CreatureCatalog Creatures { get; }
     public GameWorld.Creatures.CreatureGroupCatalog CreatureGroups { get; }
     public AvatarPackageCatalog AvatarPackages { get; }
+    public AvatarCompoundCatalog AvatarCompounds { get; }
     public AvatarDyeCatalog AvatarDyes { get; }
     public TeleportCatalog Teleports { get; }
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
@@ -65,6 +66,7 @@ internal sealed class ItemResources
         Enhancements = new(archive, stackable, equipment);
         CreatureEggs = new(archive, equipment, Items);
         AvatarPackages = new(archive, equipment, stackable);
+        AvatarCompounds = new(archive);
         AvatarDyes = new(archive, equipment, stackable);
         Teleports = new(archive.ReadText, equipment, stackable);
         RandomOptions = new(archive, equipment);
