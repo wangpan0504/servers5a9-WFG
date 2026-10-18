@@ -225,7 +225,14 @@ internal static class HellPartyEntryTests
                 DungeonDefinition? dungeon;
                 try { dungeon = dungeons.Get(option.DungeonId); } catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException) { dungeon = null; }
                 var eligible = dungeon?.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is not null).ToArray() ?? [];
-                if (eligible.Length == 0) { uncovered++; Console.WriteLine($"HELLENUM uncovered area-map={hellWorld.Id} dungeon={option.DungeonId} reason={(dungeon is null ? "dungeon-unavailable" : "no-eligible-maze")}"); continue; }
+                if (eligible.Length == 0)
+                {
+                    uncovered++;
+                    string skip = dungeon is null ? "dungeon-unavailable" :
+                        InfernoNoSeal(dungeon) ? "inferno-no-seal" : "no-eligible-maze";
+                    Console.WriteLine($"HELLENUM uncovered area-map={hellWorld.Id} dungeon={option.DungeonId} reason={skip}");
+                    continue;
+                }
                 dungeonsWithHellMaze++;
                 foreach (var maze in eligible)
                 {
@@ -243,6 +250,16 @@ internal static class HellPartyEntryTests
         Console.WriteLine($"HELLENUM areas={hellAreas} options={optionTotal} dungeons-with-hell-maze={dungeonsWithHellMaze} covered-mazes={covered} uncovered={uncovered}");
         Console.WriteLine("HELLENUM covered: " + string.Join(" ", coveredMaps));
         That(covered > 0 && coveredMaps.Contains("291100308:313163@2,2"), "枚举：至少覆盖黑暗都市 291100308 的深渊房间");
+        That(coveredMaps.Contains("77:60064@3,1") && coveredMaps.Contains("92:60056@1,2") && coveredMaps.Contains("104:60070@2,1"),
+            "枚举：迷之觉悟 77 / 雾都 92 / 格兰迪 104 的密门深渊房间可展开");
+        foreach (int inferno in new[] { 7191, 7527, 7528, 7529, 7530, 7531, 7532, 7533, 7534, 7535, 7539, 7540, 7541, 7542 })
+        {
+            var infernoDungeon = dungeons.Get(inferno);
+            bool infernoPlan = DungeonEntryPlan.TryCreate(dungeons, character, (uint)inferno, 0, 0, out _, out var infernoReason, quests: quests, hellParty: true);
+            That(InfernoNoSeal(infernoDungeon) && infernoDungeon.Mazes.All(maze => maze.HellParty is null) &&
+                !infernoPlan && infernoReason == "hell-party-maze-unavailable",
+                "Inferno/时空裂缝 " + inferno + " 只有副本头 [hell dungeon]、没有 seal door，不编造深渊房间：" + infernoReason);
+        }
 
         // 同一副本有多个深渊 maze（291100319：313166 / 313173，同在 (3,0)）：按抽签选其一，不再按“有歧义”拒绝。
         var multi = dungeons.Get(291100319).Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is not null).ToArray();
@@ -256,6 +273,37 @@ internal static class HellPartyEntryTests
             That(multiPlan.Maze.MapSpecification!.Single(row => row.Position == multiPlan.HellParty.Room).Id == multiPlan.HellParty.MapId, "291100319 深渊房间已替换");
         }
         That(multiMaps.Distinct().Count() == 2 || multi.Length > 2, "291100319 抽签 0/1 选中不同的深渊 maze（" + string.Join(",", multiMaps) + "）");
+
+        var consciousness = dungeons.Get(77);
+        That(consciousness.Mazes[0] is { ResourceError: null, Starts.Count: 2, Bosses.Count: 2, HellParty: { MapId: 60064, Room: { X: 3, Y: 1 } } } maze77 &&
+            maze77.StaticTopology.Supported && maze77.MapSpecification!.Count(row => row.Position == new DungeonPoint(4, 0) || row.Position == new DungeonPoint(0, 3)) == 2,
+            "迷之觉悟 maze0：同格 map+boss last-wins 后仍解析密门 60064@(3,1)，拓扑可走");
+        var haze = dungeons.Get(92);
+        That(haze.Mazes.Count(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is { MapId: 60056, Room: { X: 1, Y: 2 } }) >= 1 &&
+            haze.Mazes[0].Starts.Count == 2 && haze.Mazes[0].Bosses.Count == 1 && haze.Mazes[0].StaticTopology.Supported,
+            "雾都 maze0：两个起点一个 Boss，密门 60056@(1,2)");
+        var grandine = dungeons.Get(104);
+        That(grandine.Mazes[0] is { ResourceError: null, Starts.Count: 1, Bosses.Count: 1, HellParty: { MapId: 60070, Room: { X: 2, Y: 1 } } } &&
+            grandine.Mazes[0].StaticTopology.Supported,
+            "格兰迪发电站 maze0：密门 60070@(2,1)");
+        foreach (var (dungeonId, mapId, objectId) in new (uint, int, int)[] { (77, 60064, 16012), (92, 60056, 30519), (104, 60070, 30528), (291100319, 313166, 30528) })
+        {
+            byte difficulty = OrdinaryDifficulty(dungeons.Get(checked((int)dungeonId)));
+            That(DungeonEntryPlan.TryCreate(dungeons, character, dungeonId, 0, difficulty, out var namedPlan, out var namedReason, quests: quests,
+                draw: dungeonId == 291100319 ? _ => 0 : null, hellParty: true) &&
+                namedPlan!.HellParty is { } namedHell && namedHell.MapId == mapId,
+                dungeonId + " 深渊入场计划：" + namedReason);
+            var namedRoom = rooms.Get(namedPlan!.Maze.MapSpecification!.Single(row => row.Position == namedPlan.HellParty!.Room), requirePassiveDefinitions: false);
+            var namedWaves = rooms.ResolveHellWaves(namedRoom, 1, namedPlan.BasisLevel, _ => 0);
+            var namedMonsters = DungeonMonsterPlan.FromRoom(namedRoom, character.Id, 1, namedPlan.BasisLevel).WithHellWaves(namedWaves, character.Id);
+            That(namedRoom.SpecialObjects.Any(parent => parent.ObjectId == objectId && parent.Children.Any(child => child.Kind == "[hellparty]")) &&
+                namedWaves.Count > 0 &&
+                !namedMonsters.SpecialObjects.Any(actor => actor.Source.Children.Any(child => child.Kind == "[hellparty]")) &&
+                namedMonsters.HellWaves.Count == namedWaves.Count &&
+                DungeonPackets.HellPartyMonsterInfo(namedMonsters) is { Length: > 4 } namedInfo &&
+                BinaryPrimitives.ReadInt32LittleEndian(namedInfo) == namedWaves.Select(wave => wave.MonsterId).Distinct().Count(),
+                dungeonId + " 深渊图 " + mapId + "：地图柱子 " + objectId + " 不进 START_MAP，波次/679 仍在（waves=" + namedWaves.Count + "）");
+        }
 
         // ===== 波次怪死亡只登记：不进 Monsters，不影响清房/存活列表 =====
         var runMap = new DungeonMap("boss", new(0, 0), 99, "map/hell-wave.map");
@@ -289,6 +337,14 @@ internal static class HellPartyEntryTests
             hellRules.GradeRange(90) == (84, 92),
             "etc/itemdropinfo_monster_hell.etc：概率 875/1000/0、稀有度行 A 原样、行 B 单调夹紧、90 级装备等级区间 [84,92]");        Console.WriteLine("HellPartyEntryTests: " + (Count - checks) + " checks");
     }
+
+    static bool InfernoNoSeal(DungeonDefinition dungeon) =>
+        dungeon.RawSections.TakeWhile(section => section.Tag != "maze info")
+            .Any(section => section.Tag == "hell dungeon" && section.Tokens is [{ Type: 0, Value: 1 }]) &&
+        dungeon.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).All(maze => maze.HellParty is null);
+
+    static byte OrdinaryDifficulty(DungeonDefinition dungeon) =>
+        Enumerable.Range(0, 5).Select(value => (byte)value).First(value => dungeon.AllowsDifficulty(value, false));
 
     static HashSet<int> baseDone95(DfoServer.GameWorld.Towns.TownArea area)
     {

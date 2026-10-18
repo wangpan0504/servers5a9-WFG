@@ -12,7 +12,7 @@ internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, st
     public IReadOnlyList<int> CandidateIds { get; init; } = Array.Empty<int>();
 }
 internal sealed record DungeonRawSection(string Tag, IReadOnlyList<PvfToken> Tokens);
-// 实验性（未在95客户端实证）：深渊派对房间 = maze 内 [hell dungeon] 1 + [seal door map index]（深渊房间地图）+ [seal door pos]（该房间在迷宫内的坐标）。
+// 实验性（未在95客户端实证）：深渊派对房间 = （maze 内或副本头）[hell dungeon] 1 + [seal door map index]（深渊房间地图）+ [seal door pos]（该房间在迷宫内的坐标）。
 // 依据参考项目 dungeon_hell_room.go（对应 A21 FindHellMapRoom/TryBuildSealDoorHellPartyRoom）。
 internal sealed record DungeonHellPartyRoom(int MapId, DungeonPoint Room)
 {
@@ -34,7 +34,7 @@ internal sealed record DungeonMaze(
     IReadOnlyList<DungeonMap>? MapSpecification,
     IReadOnlyList<PvfToken> QuestConnectionTokens)
 {
-    // 实验性：只有普通（非任务连接）maze 带 [hell dungeon] 时才非空；任务 maze 带 [escape hell]，不属于深渊派对。
+    // 实验性：只有普通（非任务连接）maze 带密门深渊房间时才非空；任务 maze 带 [escape hell]，不属于深渊派对。
     public DungeonHellPartyRoom? HellParty { get; init; }
     // 实验性：深渊房间地图的 PVF 路径（[seal door map index] 对应的 map 文件），用于把 HellParty.Room 处的普通房间换成深渊房间。
     public string? HellPartyPath { get; init; }
@@ -333,6 +333,12 @@ internal sealed class DungeonCatalog
         if (id < 0)
             throw new InvalidDataException("副本索引不能为负");
         var sections = Sections(tokens, resolve);
+        bool dungeonHell = false;
+        foreach (var section in sections)
+        {
+            if (section.Tag == "maze info") break;
+            if (section.Tag == "hell dungeon" && section.Tokens is [{ Type: 0, Value: 1 }]) dungeonHell = true;
+        }
         int? minimum = Scalar("minimum required level"), basis = Scalar("basis level");
         var mazes = new List<DungeonMaze>();
         Dictionary<string, DungeonRawSection>? current = null;
@@ -424,7 +430,7 @@ internal sealed class DungeonCatalog
         {
             if (current is null)
                 return;
-            try { mazes.Add(ParseMaze(mazes.Count, current, mazeSections, resolve, mapPaths, exists)); }
+            try { mazes.Add(ParseMaze(mazes.Count, current, mazeSections, resolve, mapPaths, exists, dungeonHell)); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException)
             {
                 // 每条路线独立装载；未使用的旧路线不能阻断同副本的有效剧情路线。
@@ -436,7 +442,7 @@ internal sealed class DungeonCatalog
     }
 
     private static DungeonMaze ParseMaze(int ordinal, IReadOnlyDictionary<string, DungeonRawSection> sections, IReadOnlyList<DungeonRawSection> mazeSections,
-        Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, Func<string, bool> exists)
+        Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, Func<string, bool> exists, bool dungeonHell)
     {
         var size = Integers(Required("size"));
         if (size.Length != 2 || size[0] <= 0 || size[1] <= 0)
@@ -530,8 +536,8 @@ internal sealed class DungeonCatalog
             foreach (var group in specification.GroupBy(map => map.Position))
             {
                 // Full03 0409C98C按坐标取同一格，0409C9B9先清普通map候选再追加本行。
-                // 仅解释同种普通map；既有Boss剧情阶段、混合种类校验与叠层身份保持独立。
-                if (group.All(map => map.Kind == "map"))
+                // 同格同种普通 map 与同格混合 map+boss 都 last-wins；两行同种 boss 仍留给下面的坐标重复诊断。
+                if (group.All(map => map.Kind == "map") || group.Select(map => map.Kind).Distinct().Count() > 1)
                 {
                     effective.Add(group.Last());
                     overridden.AddRange(group.SkipLast(1));
@@ -562,8 +568,12 @@ internal sealed class DungeonCatalog
             var flags = mazeSections.Where(s => s.Tag == "hell dungeon").ToArray();
             var maps = mazeSections.Where(s => s.Tag == "seal door map index").ToArray();
             var positions = mazeSections.Where(s => s.Tag == "seal door pos").ToArray();
-            if (quest.Count != 0 || specification is null || flags.Length != 1 || maps.Length != 1 || positions.Length != 1 ||
-                flags[0].Tokens is not [{ Type: 0, Value: 1 }] || maps[0].Tokens is not [{ Type: 0, Value: > 0 } mapToken] ||
+            bool mazeHell = flags.Length == 1 && flags[0].Tokens is [{ Type: 0, Value: 1 }];
+            // maze 内 [hell dungeon] 1，或副本头（第一条 maze info 之前）的 [hell dungeon] 1 + 本 maze 密门。
+            // 时空裂缝一类只有副本头标记、没有 seal door 的 Inferno maze 仍返回 null，不编造深渊房间。
+            if (quest.Count != 0 || specification is null || maps.Length != 1 || positions.Length != 1 ||
+                !(mazeHell || flags.Length == 0 && dungeonHell) ||
+                maps[0].Tokens is not [{ Type: 0, Value: > 0 } mapToken] ||
                 positions[0].Tokens is not [{ Type: 0 } x, { Type: 0 } y]) return null;
             var room = new DungeonPoint(x.Value, y.Value);
             if (room.X < 0 || room.Y < 0 || room.X >= width || room.Y >= height ||

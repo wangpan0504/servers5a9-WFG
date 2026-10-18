@@ -205,9 +205,9 @@ internal static class DungeonCatalogTests
             "后声明单图覆盖前声明多候选，旧候选仅留资源来源不参与有效路线");
         var mixed = fixture.Parse(fixture.Maze(mapRows: [fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1),
             fixture.String("boss"),fixture.Int(0),fixture.Int(0),fixture.Int(2)]));
-        That(mixed.Mazes.Single() is { MapSpecification: null, ResourceError: not null } rejected &&
-            rejected.ResourceError.Contains("重复 map specification 坐标",StringComparison.Ordinal),
-            "未确认普通与Boss混合重叠不能借用同种map覆盖规则");
+        That(mixed.Mazes.Single() is { ResourceError: null, MapSpecification: [{ Kind: "boss", Id: 2 }] } &&
+            mixed.Mazes[0].OverriddenMaps is [{ Kind: "map", Id: 1 }],
+            "同格 map 后跟 boss 按 0409C9B9 last-wins，保留末行 Boss 身份");
         var repeated = fixture.Parse(fixture.Maze(mapRows: [fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1),
             fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(2),
             fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(3)]));

@@ -255,8 +255,14 @@ internal sealed record DungeonEntryPlan(
         { reason = "dungeon-resource-unavailable"; return false; }
         if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0,maze.ConnectionQuestId))
         { reason = "difficulty-unsupported"; return false; }
-        if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 ||
-            (maze.StoryStages.Count == 0 ? maze.Bosses.Count != 1 : maze.StoryStages.Count != maze.Bosses.Count)
+        // 深渊派对只替换 seal-door 格，不改起点/Boss 几何。雾都/迷之觉悟等普通 maze 声明了多个 start/boss，
+        // 仍用资源第一项（与 StaticTopology 从 Starts[0] 可达性扫描一致），普通入场继续要求恰好各 1 个。
+        bool hellPartyLayout = hellParty && maze.HellParty is not null && maze.StoryStages.Count == 0;
+        if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count == 0 ||
+            (!hellPartyLayout && maze.Starts.Count != 1) ||
+            (maze.StoryStages.Count == 0
+                ? maze.Bosses.Count == 0 || (!hellPartyLayout && maze.Bosses.Count != 1)
+                : maze.StoryStages.Count != maze.Bosses.Count)
             || maze.MapSpecification is not { Count: > 0 } maps)
         {
             reason = "quest-maze-layout-unsupported";
