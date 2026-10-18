@@ -81,6 +81,7 @@ internal static class DungeonEntryPlanTests
         var definition = catalog.Get(3);
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        AuxiliaryEquipmentHuntRoutes(catalog,quests,character);
         OrdinaryHuntRoutes(catalog,quests,rooms,character);
         AwakeningDungeonRoutes(catalog,quests,rooms,character);
         TournamentEntry(catalog,character,rooms);
@@ -488,6 +489,75 @@ internal static class DungeonEntryPlanTests
         ];
     }
 
+    static void AuxiliaryEquipmentHuntRoutes(DungeonCatalog catalog, QuestCatalog quests, Character basis)
+    {
+        var results = new List<string>();
+        foreach (var sample in new[] { (Quest:674,Dungeon:163,Difficulty:(byte)2), (Quest:675,Dungeon:82,Difficulty:(byte)2),
+            (Quest:675,Dungeon:82,Difficulty:(byte)3) })
+        {
+            var quest = quests.Get(sample.Quest);
+            var active = new ActiveMainQuest(5,checked((ushort)sample.Quest),QuestHuntProgress.Initial(quest)) { AcceptanceId=Guid.NewGuid() };
+            var character = basis with { Level=checked((byte)quest.MinimumLevel),ActiveMainQuests=[active] };
+            bool created = DungeonEntryPlan.TryCreate(catalog,character,checked((uint)sample.Dungeon),checked((uint)sample.Quest),
+                sample.Difficulty,out var plan,out var reason,quest:quest,draw:_ => 0,quests:quests);
+            if (!created || plan is not { IsOrdinaryHunt:true,IsOrdinary:true,UsesFatigue:true,RouteQuestId:0 } ||
+                plan.QuestId != sample.Quest || plan.Difficulty != sample.Difficulty || plan.ActiveQuestSlot != active.Slot ||
+                plan.QuestAcceptanceId != active.AcceptanceId || !plan.QuestAcceptances.SequenceEqual(character.ActiveMainQuests))
+                results.Add($"{sample.Quest}/{sample.Dungeon}/{sample.Difficulty}: {reason}");
+            if (!created || plan is null) continue;
+            var after = active;
+            That(QuestHuntProgress.TryTargets(quest,out var targets) && targets.Length == 3,"真实资格任务保留三个猎杀通道");
+            foreach (var target in targets)
+            {
+                var monster = new DungeonPlannedMonster(0,1,target.MonsterId,1,null);
+                after = QuestHuntProgress.MonsterDeath([after],plan,quests,monster).Single();
+                That(QuestHuntProgress.MonsterDeath([active with { AcceptanceId=Guid.NewGuid() }],plan,quests,monster).Single().ConditionState ==
+                    active.ConditionState,"真实入场计划的旧接取不能推进重接任务");
+            }
+            That(after.ConditionState == 0 && after.AcceptanceId == active.AcceptanceId,"真实入场计划绑定三个实际模板的权威死亡推进");
+            foreach (byte rejected in new byte[] { 0,1,4 }.Concat(sample.Dungeon == 163 ? new byte[] { 3 } : []).Distinct())
+                That(!DungeonEntryPlan.TryCreate(catalog,character,checked((uint)sample.Dungeon),checked((uint)sample.Quest),rejected,
+                    out _,out _,quest:quest,quests:quests),"资格任务保留最低难度与真实DUN上限："+sample.Quest+"/"+rejected);
+            That(!DungeonEntryPlan.TryCreate(catalog,character,sample.Dungeon == 163 ? 82u : 163u,checked((uint)sample.Quest),2,
+                out _,out _,quest:quest,quests:quests),"资格任务不能进入未声明副本");
+            foreach (var invalid in new[] { character with { ActiveMainQuests=[] },character with { CompletedQuests=[sample.Quest] },
+                character with { ActiveMainQuests=[active with { AcceptanceId=Guid.Empty }] },
+                character with { ActiveMainQuests=[active,new(5,100,1) { AcceptanceId=Guid.NewGuid() }] } })
+                That(!DungeonEntryPlan.TryCreate(catalog,invalid,checked((uint)sample.Dungeon),checked((uint)sample.Quest),sample.Difficulty,
+                    out _,out _,quest:quest,quests:quests),"资格任务保留唯一活动接取门禁");
+            var definition = catalog.Get(sample.Dungeon);
+            var normal = definition.Mazes.First(maze => maze.QuestConnectionTokens.Count == 0);
+            foreach (var connection in new[] { new PvfToken[] {new(0,0),new(0,sample.Quest),new(0,0)},
+                [new(0,2),new(0,100),new(0,-1)] })
+                That(!DungeonEntryPlan.TryCreate(definition with { Mazes=[normal,normal with { QuestConnectionTokens=connection }] },
+                    character,checked((uint)sample.Dungeon),checked((uint)sample.Quest),sample.Difficulty,out _,out _,quest:quest),
+                    "资格任务不绕过自身不满足或未知连接");
+            That(!DungeonEntryPlan.TryCreate(definition with { Mazes=[] },character,checked((uint)sample.Dungeon),checked((uint)sample.Quest),
+                sample.Difficulty,out _,out _,quest:quest),"资格任务仍要求真实普通迷宫");
+        }
+        That(results.Count == 0,"真实装备槽资格任务按最低难度进入普通路线并保留接取身份："+string.Join("; ",results));
+        var probe = quests.Get(675);
+        var pending = basis with { Level=65,ActiveMainQuests=[new(5,675,QuestHuntProgress.Initial(probe)) { AcceptanceId=Guid.NewGuid() }] };
+        foreach (int parameter in new[] { -2,-1,0,1,2,3,4 })
+            That(DungeonEntryPlan.TryCreate(catalog,pending,82,675,2,out _,out _,quest:probe with
+                { Definition=probe.Definition! with { Dungeons=[new(82,parameter)] } }) == (parameter is >= -1 and <= 2),
+                "支线声明仅接受不限或不高于请求的0..3最低难度："+parameter);
+        foreach (var invalid in new[] { probe with { MainQuest=100 },probe with { Grade="[story]" },probe with { Grade="[achievement]" },
+            probe with { SubType=1 },probe with { IntData=[82,3,61710,1] },probe with { IntData=[82,2,-5,1] },
+            probe with { Definition=probe.Definition! with { Dungeons=[] } } })
+            That(!DungeonEntryPlan.TryCreate(catalog,pending,82,675,2,out _,out _,quest:invalid),
+                "最低难度扩展仍拒绝父任务、其它分类、未知子类、较高目标与未知选择符");
+        foreach (var sample in new[] { (Quest:649,Dungeon:163,Previous:674,Level:(byte)60), (Quest:650,Dungeon:82,Previous:675,Level:(byte)65) })
+        {
+            var material = basis with { Level=sample.Level,CompletedQuests=[sample.Previous],
+                ActiveMainQuests=[new(5,checked((ushort)sample.Quest),1) { AcceptanceId=Guid.NewGuid() }] };
+            That(DungeonEntryPlan.TryCreate(catalog,material,checked((uint)sample.Dungeon),0,2,out var ordinary,out _,quests:quests) &&
+                ordinary is { QuestId:0,IsOrdinary:true,IsOrdinaryHunt:false } &&
+                !DungeonEntryPlan.TryCreate(catalog,material,checked((uint)sample.Dungeon),checked((uint)sample.Quest),2,out _,out _,
+                    quest:quests.Get(sample.Quest),quests:quests),"材料后继活动时普通0仍可入场，不补造材料任务战斗路线");
+        }
+    }
+
     static void OrdinaryHuntRoutes(DungeonCatalog catalog, QuestCatalog quests, DungeonRoomCatalog rooms, Character basis)
     {
         int[] letters = [3921,2948,2967,3919,4894,4876,2958,2973,4915,3793,6114];
@@ -546,7 +616,7 @@ internal static class DungeonEntryPlanTests
             letter with { IntData=[40,1,1014,2] }, letter with { IntData=[-1,-1,1014,0] },
             letter with { Definition=letter.Definition! with { Dungeons=[] } },
             letter with { Definition=letter.Definition! with { Dungeons=[new(41,-1)] } },
-            letter with { Definition=letter.Definition! with { Dungeons=[new(40,0)] } } })
+            letter with { Definition=letter.Definition! with { Dungeons=[new(40,-2)] } } })
             That(!DungeonEntryPlan.TryCreate(definition,pending,40,2948,0,out _,out _,quest:invalid),
                 "普通猎杀只接入已证任务形状、正目标、本图及难度声明");
         foreach (var connection in new[] {
