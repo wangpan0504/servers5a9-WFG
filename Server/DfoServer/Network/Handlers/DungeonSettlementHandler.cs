@@ -217,6 +217,21 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         if (option == 0)
         {
+            // 强袭不能原地重开：PrepareFormalDungeon 对 retry 直接拒绝（assault-retry-or-class-experience），
+            // 无 ACK 会让结算页停住，后面的回城/选图点击也不再发出。按 1/1 无后继的同一做法，回 ACK option 2 并回城。
+            if (context.Session.IsFormalDungeonAssault())
+            {
+                var assaultReturn = context.Session.ReturnFromFormalDungeon();
+                if (assaultReturn is null)
+                {
+                    log.Write("formal_result_assault_retry_rejected", new { Connection = context.Id });
+                    return CommandResult.Unhandled;
+                }
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, 2), "formal_result_assault_retry_return", () => context.Session.CanPublishTravel(assaultReturn));
+                await town.ReturnFromFormalDungeonAsync(context, assaultReturn, "formal_result_town");
+                log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "assault-retry", assaultReturn.Character.Id, assaultReturn.Character.Position });
+                return CommandResult.Handled;
+            }
             var retry = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items,pieces);
             if (retry is null) return CommandResult.Unhandled;
             bool RetryGuard() => context.Session.CanPublishDungeonSettlement(retry);
@@ -230,25 +245,29 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         if (option == 1)
         {
-            var continuation = context.Session.BeginFormalDungeonQuestContinuation(current,dungeons,rooms,drops,items,pieces,
-                out bool returnToTown,out string reason);
-            if (continuation is not null)
+            // 强袭没有主线后继。续图失败且原因不是 no-accepted-successor 时不回 ACK，结算页会停住。
+            if (!context.Session.IsFormalDungeonAssault())
             {
-                log.Write("formal_quest_continuation",new { Connection = context.Id, Accepted = true, Reason = reason, current.Entry.RouteQuestId });
-                var returning = returnToTown ? context.Session.ReturnFromFormalDungeon() : context.Session.LeaveFormalDungeonForContinuation();
-                if (returning is null) return CommandResult.Handled;
-                // 无后继必须确认回城选项，不能让客户端继续执行下一任务的15入场链。
-                await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,returnToTown ? (byte)2 : option),
-                    "formal_result_next_quest",() => context.Session.CanPublishTravel(returning));
-                await town.ReturnFromFormalDungeonAsync(context,returning,"formal_next_quest_town_boundary");
-                log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "next-quest", returnToTown,
-                    returning.Character.Id, returning.Character.Position });
-                return CommandResult.Handled;
-            }
-            if (reason != "no-accepted-successor")
-            {
-                log.Write("formal_quest_continuation",new { Connection = context.Id, Accepted = false, Reason = reason, current.Entry.RouteQuestId });
-                return CommandResult.Handled;
+                var continuation = context.Session.BeginFormalDungeonQuestContinuation(current,dungeons,rooms,drops,items,pieces,
+                    out bool returnToTown,out string reason);
+                if (continuation is not null)
+                {
+                    log.Write("formal_quest_continuation",new { Connection = context.Id, Accepted = true, Reason = reason, current.Entry.RouteQuestId });
+                    var returning = returnToTown ? context.Session.ReturnFromFormalDungeon() : context.Session.LeaveFormalDungeonForContinuation();
+                    if (returning is null) return CommandResult.Handled;
+                    // 无后继必须确认回城选项，不能让客户端继续执行下一任务的15入场链。
+                    await context.Reply(CmdPacketType.EPLP_COMMAND,DungeonSettlementPackets.ResultCommand(state,returnToTown ? (byte)2 : option),
+                        "formal_result_next_quest",() => context.Session.CanPublishTravel(returning));
+                    await town.ReturnFromFormalDungeonAsync(context,returning,"formal_next_quest_town_boundary");
+                    log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "next-quest", returnToTown,
+                        returning.Character.Id, returning.Character.Position });
+                    return CommandResult.Handled;
+                }
+                if (reason != "no-accepted-successor")
+                {
+                    log.Write("formal_quest_continuation",new { Connection = context.Id, Accepted = false, Reason = reason, current.Entry.RouteQuestId });
+                    return CommandResult.Handled;
+                }
             }
             var opening = context.Session.BeginFormalDungeonOtherSelection();
             if (opening is null) return CommandResult.Unhandled;

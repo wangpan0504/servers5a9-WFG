@@ -389,6 +389,8 @@ internal sealed partial class GameSession
     public FormalDungeonReceipt? FormalDungeonResultFocus() => owner.Execute(() =>
         Ready && !HasPendingFormalCard && Phase == SessionPhase.Settlement && HasFinishedDungeon(formalDungeon) ? FormalReceipt() : null);
 
+    // 强袭副本不支持原地重开（再次挑战需重新走 CMD1547 授权与扣券）；handler 据此把再次挑战按返回城镇处理，避免客户端无应答卡死。
+    public bool IsFormalDungeonAssault() => owner.Execute(() => formalDungeon?.Assault is not null);
     public FormalDungeonReceipt? BeginFormalDungeonOtherSelection() => owner.Execute(() =>
     {
         if (!Ready || HasPendingFormalCard || Phase != SessionPhase.Settlement || !HasFinishedDungeon(formalDungeon))
