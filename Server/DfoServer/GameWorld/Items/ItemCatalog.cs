@@ -333,13 +333,23 @@ internal sealed class ItemCatalog
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
-            UseForbidden = Regex.Matches(impossible, @"`([^`]+)`").Any(match => match.Groups[1].Value.Equals("enable", StringComparison.OrdinalIgnoreCase)),
+            UseForbidden = ForbidsUse(impossible),
             // 分解采用模板价值及基础出售倍率，不使用NPC售出时的耐久和90%折价。
             DisjointValue = isEquipment ? (int)Math.Clamp((long)baseValue * equipmentSellRate / 1000, 1, int.MaxValue) : 0,
             PortableDisjointLevel = Int("portable disjoint", -1) switch { 0 => 30, 1 => 50, 2 => 70, 3 => 85, 4 => 95, _ => -1 }
         };
 
         int Int(string tag, int fallback) => Integers(text.Section(tag)).FirstOrDefault(fallback);
+    }
+
+    // `enable` 是限制名单的开关，不是“禁止使用”。只有开关打开且没有具体内容时才禁止使用；
+    // 名单里仅有 `hardcore mode` 时，普通角色仍可使用（远古精灵秘药 7377/7429/7440）。
+    internal static bool ForbidsUse(string impossible)
+    {
+        var tags = Regex.Matches(impossible, @"`([^`]+)`").Select(match => match.Groups[1].Value).ToArray();
+        if (!tags.Any(tag => tag.Equals("enable", StringComparison.OrdinalIgnoreCase))) return false;
+        var restrictions = tags.Where(tag => !tag.Equals("enable", StringComparison.OrdinalIgnoreCase)).ToArray();
+        return restrictions.Length == 0 || restrictions.Any(tag => !tag.Equals("hardcore mode", StringComparison.OrdinalIgnoreCase));
     }
 
     internal static bool IsPremiumStackable(PvfDocument text) =>

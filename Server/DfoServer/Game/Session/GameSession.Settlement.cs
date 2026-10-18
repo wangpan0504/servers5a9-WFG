@@ -135,9 +135,11 @@ internal sealed partial class GameSession
             dungeon.Entry.Difficulty, rankPoint);
         if (dungeon.Settlement is null)
         {
-            uint bonus = GrowthContractPolicy.ExperienceBonus(Selected!, reward.BaseExperience, contracts?.Growth,
-                DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            reward = reward with { TotalExperience = checked(reward.TotalExperience + bonus), GrowthContractExperience = bonus };
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            uint bonus = GrowthContractPolicy.ExperienceBonus(Selected!, reward.BaseExperience, contracts?.Growth, now);
+            uint potion = ExpBonusPolicy.Bonus(Selected!, checked(reward.BaseExperience + reward.RankExperience), now);
+            reward = reward with { TotalExperience = checked(reward.TotalExperience + bonus + potion),
+                GrowthContractExperience = bonus, PotionExperience = potion };
         }
         if (dungeon.Settlement is null && !(dungeon.Entry.IsTutorial && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)

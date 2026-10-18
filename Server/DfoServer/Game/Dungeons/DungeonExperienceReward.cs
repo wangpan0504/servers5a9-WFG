@@ -7,6 +7,7 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record DungeonExperienceReward(string RuleId, string ResourceSource, int MonsterId, int MonsterLevel, uint Amount)
 {
     public uint GrowthContractExperience { get; init; }
+    public uint PotionExperience { get; init; }
 }
 
 // 存储返回实际提交后的角色；Duplicate表示账本精确重放，不是新的击杀或新奖励。

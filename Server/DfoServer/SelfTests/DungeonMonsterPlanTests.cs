@@ -22,6 +22,10 @@ internal static class DungeonMonsterPlanTests
         That(ordinaryPlan.Monsters.Select(monster => monster.CandidateLevel).SequenceEqual([7, 3]) &&
             ordinaryPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 1, 0 }) &&
             ReferenceEquals(ordinaryPlan.Monsters[0].Source, relative), "本服普通相对和绝对等级分别计算，完整冠军原行和类型保留");
+        That(defaultPlan.WithChampionRolls([100, 0, 0, 0], 0, _ => 0).Monsters.Single(monster => monster.Source?.RankKind == "[normal]").SpawnType == 1 &&
+            defaultPlan.WithChampionRolls([0, 0, 0, 0], 0, _ => 0).Monsters.Single(monster => monster.Source?.RankKind == "[normal]").SpawnType == 0 &&
+            defaultPlan.WithChampionRolls([100, 0, 0, 0], 0, _ => 0).Monsters.Single(monster => monster.IsBoss).SpawnType == 3,
+            "断头谷精英率只把普通怪升成类型1，Boss保持类型3");
         var named = relative with { RankKind = "[named]", RankParameterCount = null };
         var namedPlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [source,named] },99,98,5,playerTeam:0);
         That(namedPlan.Monsters[1] is { SourceOrdinal:1, ObjectKey:100, CandidateLevel:7, SpawnType:0, ExperienceType:0,

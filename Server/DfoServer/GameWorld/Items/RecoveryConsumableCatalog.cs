@@ -11,6 +11,8 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public bool UseForbidden { get; init; }
     public bool RequiresDungeon { get; init; }
     public bool EffectsAfterAcknowledgement { get; init; }
+    public int ExpBonusPermille { get; init; }
+    public int ExpBonusMilliseconds { get; init; }
     public bool Allows(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
         job < 16 && (Jobs & (1 << job)) != 0;
 }
@@ -61,10 +63,13 @@ internal sealed class RecoveryConsumableCatalog
             }
         }
         // HP/MP、持续属性、异常状态及随机效果由客户端执行，不以其数值或格式限制消耗资格。
+        bool expBonus = file.ExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0;
         return new(file.TemplateId, raw.DeclaredMinimumLevel ?? 0, file.CoolTime ?? 0, file.CoolGroup ?? -file.TemplateId,
             SummonsApc: file.DeclaredFields.Contains("summon apc"))
         { MaximumLevel = raw.DeclaredMaximumLevel ?? int.MaxValue, Jobs = jobs,
-            RequiresDungeon = raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2 };
+            RequiresDungeon = raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
+            ExpBonusPermille = expBonus ? file.ExpBonusPermille!.Value : 0,
+            ExpBonusMilliseconds = expBonus ? file.ExpBonusMilliseconds!.Value : 0 };
     }
 
     public bool TryGet(int id, out RecoveryConsumableDefinition definition)

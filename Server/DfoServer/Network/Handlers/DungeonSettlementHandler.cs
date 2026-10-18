@@ -57,9 +57,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var reward = result.Reward ?? throw new InvalidOperationException("已提交结算缺少经验奖励");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints),
             state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
+        uint plainClear = reward.TotalExperience - reward.GrowthContractExperience - reward.PotionExperience;
         var display = CharacterExperienceDisplay.Ordinary with
-        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(reward.TotalExperience - reward.GrowthContractExperience,
-            reward.GrowthContractExperience, result.GainedExperience) };
+        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainClear, reward.GrowthContractExperience, result.GainedExperience),
+            PotionExperience = ExpBonusPolicy.Shown(plainClear, reward.GrowthContractExperience, reward.PotionExperience, result.GainedExperience) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
         // 大会副本没有普通结算页：不发 34/35，改发 NOTI388（见 TournamentReward 注释）。
         bool tournament = receipt.Entry.IsTournament;

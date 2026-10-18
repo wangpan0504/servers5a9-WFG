@@ -10,6 +10,8 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     ImmutableArray<string> DeclaredFields, ImmutableArray<string> Diagnostics)
 {
     public int? SubType { get; init; }
+    public int? ExpBonusPermille { get; init; }
+    public int? ExpBonusMilliseconds { get; init; }
 
     public static RecoveryConsumableFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -43,6 +45,32 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         int? coolTime = Scalar("cool time"), group = Scalar("cooltime group"), subType = Scalar("sub type");
         var hp = Recovery("hp recovery"); var mp = Recovery("mp recovery");
         return new(id, path, StackableFile.Parse(id, path, tokens, resolve), coolTime, group, hp, mp,
-            document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray()) { SubType = subType };
+            document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray())
+        { SubType = subType, ExpBonusPermille = ExpBonus(document, resolve, errors), ExpBonusMilliseconds = ExpDuration(document, resolve, errors) };
+    }
+
+    static int? ExpBonus(PvfTokenDocument document, Func<int, string> resolve, List<string> errors)
+    {
+        var sections = document.Sections.Where(section => section.Name == "exp bonus rate").ToArray();
+        if (sections.Length == 0) return null;
+        if (sections is [{ Children.Length: 0, Values: [{ } token] }])
+        {
+            float rate = token.Type == 2 ? BitConverter.Int32BitsToSingle(token.Value) : token.Type == 0 ? token.Value : float.NaN;
+            if (float.IsFinite(rate) && rate > 0 && rate <= 10)
+                return checked((int)Math.Round(rate * 1000, MidpointRounding.AwayFromZero));
+        }
+        errors.Add("经验加成倍率不完整");
+        return null;
+    }
+
+    static int? ExpDuration(PvfTokenDocument document, Func<int, string> resolve, List<string> errors)
+    {
+        var sections = document.Sections.Where(section => section.Name == "stat change duration").ToArray();
+        if (sections.Length == 0) return null;
+        if (sections is [{ Children.Length: 0, Values: [{ Type: 0, Value: > 0 and <= 86_400_000 } duration, { Type: 6 } target] }] &&
+            resolve(target.Value) == "myself")
+            return duration.Value;
+        errors.Add("经验加成持续时间不完整");
+        return null;
     }
 }

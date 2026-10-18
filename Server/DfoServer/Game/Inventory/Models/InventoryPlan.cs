@@ -14,6 +14,8 @@ internal sealed class InventoryPlan
     public InventoryCharacterPrecondition? CharacterPrecondition { get; }
     public ImmutableArray<InventoryItem> OverflowItems { get; }
     public bool PreserveMaterials { get; init; }
+    // 同一次扣药事务写入的限时经验加成。Until 为 Unix 秒，Permille 1000 表示在原经验上加 100%。
+    public (long Until, int Permille)? ExpBonus { get; set; }
     public byte? EquipmentSlotFlagsAfter { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;

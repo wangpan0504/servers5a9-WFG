@@ -7,6 +7,15 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
+    static (long Until, int Permille) ReadExpBonus(SqliteConnection db, ushort id, SqliteTransaction? tx)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT until_unix,permille FROM character_exp_bonus WHERE character_id=$id";
+        query.Parameters.AddWithValue("$id", id);
+        using var reader = query.ExecuteReader();
+        return reader.Read() ? (reader.GetInt64(0), reader.GetInt32(1)) : (0, 0);
+    }
+
     static TeleportCooldowns ReadTeleportCooldowns(SqliteConnection db, ushort id, SqliteTransaction? tx)
     {
         using var query = db.CreateCommand(); query.Transaction = tx;

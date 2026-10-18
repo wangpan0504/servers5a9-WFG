@@ -644,7 +644,7 @@ internal static class DungeonEntryPlanTests
 
     static void HarlemSeekingRoutes(DungeonCatalog catalog, QuestCatalog quests, Character basis)
     {
-        // #256：黑市EXP 6053/6056/6059（seeking sub type 0）沿普通路线进入断头谷7322；6060的-2猎杀目标仍无法入场。
+        // #256：黑市EXP 6053/6056/6059（seeking sub type 0）沿普通路线进入断头谷7322；6060同样入场，并带上精英出现率。
         foreach (int id in new[] { 6053, 6056, 6059 })
         {
             var quest = quests.Get(id);
@@ -661,7 +661,8 @@ internal static class DungeonEntryPlanTests
         var negative = basis with { Level = 93, CompletedQuests = [6050],
             ActiveMainQuests = [new(5,6060,1) { AcceptanceId = Guid.NewGuid() }] };
         That(DungeonEntryPlan.TryCreate(catalog,negative,7322,6060,0,out var elitePlan,out var eliteReason,quest: quests.Get(6060),quests: quests) &&
-            elitePlan is { IsOrdinaryHunt: true },"6060按“-2=精英怪”假设走普通路线进断头谷：" + eliteReason);
+            elitePlan is { IsOrdinaryHunt: true } && elitePlan.ChampionPercents.SequenceEqual(new[] { 25, 40, 60, 60 }),
+            "6060走普通路线进断头谷，并带上精英出现率：" + eliteReason);
 
         // #256 系统排查：6051-6060 每个任务按其 PVF 声明的目标副本逐个走入场规划（已接取、等级达标）。
         // 6054 等 [hunt monster] 的 -3（普通 Boss）目标曾被入场规划误拒为 quest-maze-unavailable。

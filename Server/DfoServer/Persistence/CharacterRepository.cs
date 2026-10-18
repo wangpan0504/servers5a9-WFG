@@ -267,6 +267,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         byte flags = DfoServer.Game.Settings.ClientSettingsRules.VisibilityFlags(
             query.ExecuteScalar() is byte[] options ? [.. options] : default);
         var accountProgress = accountQuests ?? ReadAccountQuests(db, character.Id, transaction);
+        var expBonus = ReadExpBonus(db, character.Id, transaction);
         return character with
         {
             CompletedQuests = quests.ToArray(),
@@ -286,6 +287,8 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             Tutorial = ReadTutorial(db, character.Id, transaction),
             Fatigue = ReadFatigue(db, character.Id, transaction),
             TeleportCooldowns = ReadTeleportCooldowns(db, character.Id, transaction),
+            ExpBonusUntil = expBonus.Until,
+            ExpBonusPermille = expBonus.Permille,
             TitleProgress = ReadTitleProgress(db, character.Id, transaction),
             TitleSections = ReadTitleSections(db, character.Id, transaction),
             CollectBox = ReadCollectBox(db, character.Id, transaction)

@@ -341,9 +341,10 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints), state.GrowthCapsuleExperience,
             state.ProficiencyLevel, state.ProficiencyExperience);
+        uint plainKill = reward.Amount - reward.GrowthContractExperience - reward.PotionExperience;
         var display = CharacterExperienceDisplay.Ordinary with
-        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(reward.Amount - reward.GrowthContractExperience,
-            reward.GrowthContractExperience, result.GainedExperience) };
+        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainKill, reward.GrowthContractExperience, result.GainedExperience),
+            PotionExperience = ExpBonusPolicy.Shown(plainKill, reward.GrowthContractExperience, reward.PotionExperience, result.GainedExperience) };
         foreach (ushort key in result.CulledMonsterKeys)
             await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(key, []), "formal_clear_room_cull", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);

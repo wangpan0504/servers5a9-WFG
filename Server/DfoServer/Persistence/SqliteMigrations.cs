@@ -143,6 +143,7 @@ internal static class SqliteMigrations
             Execute(db, tx, QuestStageSchema.ClaimSql);
         }),
         new(54, "角色Buff强化登记", UpgradeSkillSwitchInventory),
+        new(55, "角色秘药经验状态", static (db, tx) => Execute(db, tx, ExpBonusSchema)),
     ];
 
     static void UpgradeCollectBoxState(SqliteConnection db, SqliteTransaction tx)
@@ -392,6 +393,16 @@ internal static class SqliteMigrations
           day INTEGER NOT NULL,
           clear_count INTEGER NOT NULL CHECK(clear_count BETWEEN 0 AND 255),
           hidden_count INTEGER NOT NULL CHECK(hidden_count BETWEEN 0 AND 255),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string ExpBonusSchema = """
+        CREATE TABLE IF NOT EXISTS character_exp_bonus(
+          character_id INTEGER PRIMARY KEY,
+          account TEXT NOT NULL,
+          until_unix INTEGER NOT NULL CHECK(until_unix>=0),
+          permille INTEGER NOT NULL CHECK(permille BETWEEN 0 AND 10000),
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
         );
         """;
@@ -1321,6 +1332,7 @@ internal static class SqliteMigrations
         "SELECT account,expires_at FROM account_expert_contracts LIMIT 0",
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
         "SELECT character_id,account,potion_until,aura_until FROM character_teleport_cooldowns LIMIT 0",
+        "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",

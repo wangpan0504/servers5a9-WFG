@@ -1,6 +1,8 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
@@ -134,6 +136,7 @@ internal static class QuestSceneTests
             DungeonClearExperienceCatalog.Load(pvf),DungeonDropRuleCatalog.Load(pvf));
         VerifyRoomProgress(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
         VerifyTerminalLayerReentry(towns,characters,items,quests,skills,growth,dungeons,rooms,kills);
+        VerifyAganzoSpice(towns,characters,items,quests,skills,growth,dungeons,rooms,kills);
         VerifyMetroCages(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
         QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters,global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
@@ -537,6 +540,50 @@ internal static class QuestSceneTests
                     if (f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey)) Kill(monster);
             }
         }
+    }
+
+    // 3213 寻找阿甘左：香料是副本投掷，阿甘左是非阻挡敌对 APC。死亡后才有结算许可。
+    private static void VerifyAganzoSpice(TownCatalog towns, CharacterCatalog characters, ItemResources items,
+        QuestCatalog quests, SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons,
+        DungeonRoomCatalog rooms, DungeonKillExperienceCatalog kills)
+    {
+        var area = towns.Areas.Values.First(row => row.Level <= 30 && row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 26));
+        var done = new HashSet<int>(area.Quests) { 3212 };
+        if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)), checked((ushort)(bounds.Y + bounds.Height / 2)));
+        using var f = new Fixture(towns, characters, skills, growth, quests, false, 30, done.ToArray(), position: position);
+        var accept = f.Session.ChangeQuest(3213, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces);
+        That(accept?.Commit is not null, "完成3212后可以接取寻找阿甘左");
+        var granted = f.Session.PlanAndCommitInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+            [new InventoryReward(10162711, 1)], items.Items, items.GoldLimits, items.EpicPieces, DateTimeOffset.UnixEpoch));
+        That(granted.Accepted, "艾丽丝的香料能进主背包");
+        var opening = f.Session.EnterFormalDungeon(26, 3213, 0, dungeons, rooms);
+        That(opening is not null && opening.Entry.BossMap.Id == 53529, "3213进入第二脊椎，终点是阿甘左所在的53529：" + f.Session.LastFormalDungeonRejection);
+        var path = QuestStoryRouteTests.Path(opening!.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, opening.Entry.BossMap.Position);
+        FormalDungeonReceipt receipt = opening;
+        foreach (var point in path)
+        {
+            receipt = f.Session.CompleteFormalDungeonLoading()!;
+            if (point == opening.Entry.BossMap.Position) break;
+            foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).ToArray())
+                That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth).Outcome == DungeonRunOutcome.Accepted,
+                    "3213沿路清掉阻挡怪");
+            var next = path[Array.IndexOf(path, point) + 1];
+            That(f.Session.MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null, "3213按门墙走到阿甘左");
+        }
+        var spice = f.Session.Selected!.Inventory.Items.Single(row => row.Core.ItemId == 10162711);
+        var used = f.Session.UseConsumable(new(spice.Position, 0, 10162711, 0), new InventoryConsumableUseService(items.RecoveryConsumables));
+        That(used.Outcome == ConsumableUseOutcome.Committed && f.Session.Selected.Inventory.Find(spice.Position) is null,
+            "副本里使用香料成功并扣掉这一件：" + used.Reason);
+        var aganzo = receipt.Monsters.Monsters.Single(row => row.MonsterId == 2004);
+        That(aganzo is { SpawnType: 8, IsBoss: true, CanReportDeath: true, IsBlocking: false }, "53529的阿甘左是可上报死亡的敌对APC");
+        var death = f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, aganzo), kills, growth);
+        That(death.Outcome == DungeonRunOutcome.Accepted && death.ClearFact is not null && f.Session.Phase == SessionPhase.Settlement &&
+            f.Session.EnableFormalDungeonSettlement() is { } permit && permit.Receipt.Snapshot.CurrentMap.Id == 53529,
+            "香料打出的阿甘左死亡给出53529结算许可");
+        That(f.Repository.LoadQuestClear(f.Owner, f.Session.Selected, 3213)?.MapId == 53529, "3213清图凭据记在53529，可以回城交付");
     }
 
     private static void VerifyTerminalLayerReentry(TownCatalog towns, CharacterCatalog characters, ItemResources items,

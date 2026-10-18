@@ -94,7 +94,7 @@ internal static class QuestHarlemExpTests
         foreach (int id in new[] { 6053, 6056, 6059 })
             That(QuestCoverage.HasSupportedTarget(catalog.Get(id),catalog) && QuestLifecyclePlan.HarlemSeeking(catalog.Get(id)),"seeking子类型0目标已按精确形状接入：" + id);
         That(QuestCoverage.HasSupportedTarget(catalog.Get(6060),catalog) && QuestHuntProgress.TryTargets(catalog.Get(6060),out _),
-            "6060的猎杀选择符-2按“精英怪”假设放行（无原服依据，见RunElite）");
+            "6060的猎杀选择符-2按精英品级放行（见RunElite）");
         // 其余已知带这两声明的任务只有这批；其它任务的未确认声明不受影响。
         That(catalog.All.Where(quest => quest.Definition?.Has("daily random set") == true || quest.Definition?.Has("next relation quest") == true)
             .Select(quest => quest.Id).Order().SequenceEqual(Group),"资源中带这两个声明的只有6051–6060");
@@ -168,7 +168,7 @@ internal static class QuestHarlemExpTests
         Console.WriteLine($"PASS {Count - checks} 黑市EXP seeking子类型0（6053/6056/6059）接取、掉落、进度与交付断言");
     }
 
-    // #256：6060“除掉战争的元凶”(7322 -1 -2 9)。**假设（无原服依据）**：-2 = 精英怪（副本 [named monster] 登记的怪物）。
+    // #256：6060“除掉战争的元凶”(7322 -1 -2 9)。-2 = 精英（生成类型 1 冠军 / 2 超级冠军），不是 named 名单。
     public static void RunElite(PvfArchive pvf, ItemResources items)
     {
         int checks = Count;
@@ -189,15 +189,14 @@ internal static class QuestHarlemExpTests
         var initial = QuestHuntProgress.Initial(quest);
         That(initial == 9u,"初值为9");
         var active = new ActiveMainQuest(5,6060,initial) { AcceptanceId = Guid.NewGuid() };
-        var entry = new DungeonEntryPlan(1,1,7322,6060,0,0,null!,null!,null!) { QuestAcceptances = [active], NamedMonsters = [500,501] };
+        var entry = new DungeonEntryPlan(1,1,7322,6060,0,0,null!,null!,null!) { QuestAcceptances = [active] };
         DungeonPlannedMonster Mob(int id, byte spawn = 0) => new(0,1,id,93,null) { SpawnType = spawn };
-        var after = QuestHuntProgress.MonsterDeath([active],entry,catalog,Mob(500))[0];
-        That(after.ConditionState == 8u && after.AcceptanceId == active.AcceptanceId,"杀精英怪(named monster)推进一次");
+        var after = QuestHuntProgress.MonsterDeath([active],entry,catalog,Mob(500,1))[0];
+        That(after.ConditionState == 8u && after.AcceptanceId == active.AcceptanceId,"杀冠军精英推进一次");
+        That(QuestHuntProgress.MonsterDeath([active],entry,catalog,Mob(500,2))[0].ConditionState == 8u,"超级冠军同样推进");
         That(QuestHuntProgress.MonsterDeath([active],entry,catalog,Mob(999))[0] == active &&
-            QuestHuntProgress.MonsterDeath([active],entry,catalog,Mob(999,1))[0] == active &&
-            QuestHuntProgress.MonsterDeath([active],entry,catalog,Mob(999,3))[0] == active,"杀普通怪/冠军/Boss（非named）不推进");
-        That(QuestHuntProgress.MonsterDeath([active],entry with { NamedMonsters = [] },catalog,Mob(500))[0] == active,"副本未登记该精英怪时不推进");
-        That(QuestHuntProgress.MonsterDeath([active],entry with { DungeonId = 3 },catalog,Mob(500))[0] == active,"其它副本的精英怪不推进");
+            QuestHuntProgress.MonsterDeath([active],entry,catalog,Mob(999,3))[0] == active,"杀普通怪或Boss不推进");
+        That(QuestHuntProgress.MonsterDeath([active],entry with { DungeonId = 3 },catalog,Mob(500,1))[0] == active,"其它副本的精英怪不推进");
         That(QuestHuntProgress.MonsterDeath([active with { AcceptanceId = Guid.NewGuid() }],entry,catalog,Mob(500))[0].ConditionState == 9u,"旧接取不推进");
         var apc = Mob(500) with { AiCharacter = new(500,[],"[monster]","[named]","aicharacter/fixture.aic",1), SpawnType = 5 };
         That(QuestHuntProgress.MonsterDeath([active],entry,catalog,apc)[0] == active,"APC不计");
@@ -205,10 +204,10 @@ internal static class QuestHarlemExpTests
         for (int index = 0; index < 9; index++)
         {
             That(progress.ConditionState == 9u - index,"逐次推进：" + index);
-            progress = QuestHuntProgress.MonsterDeath([progress],entry with { QuestAcceptances = [progress] },catalog,Mob(500 + index % 2))[0];
+            progress = QuestHuntProgress.MonsterDeath([progress],entry with { QuestAcceptances = [progress] },catalog,Mob(500 + index % 2, 1))[0];
         }
         That(progress.ConditionState == 0,"满9次达成");
-        That(QuestHuntProgress.MonsterDeath([progress],entry with { QuestAcceptances = [progress] },catalog,Mob(500))[0] == progress,"达成后不下溢");
+        That(QuestHuntProgress.MonsterDeath([progress],entry with { QuestAcceptances = [progress] },catalog,Mob(500, 1))[0] == progress,"达成后不下溢");
         var character = new Character(1,0,"Exp",93,new Location(38,2,450,240),null) with { Level = 93, CompletedQuests = [6050],
             ActiveMainQuests = [progress], DungeonState = CharacterDungeonState.NewOrdinary,
             Learning = new(growth.GetLevelStartExperience(93), [new(0, 7, 9, [new(12, 5, 2)]), new(1, 29, 11, [new(7, 8, 3)])]) };
@@ -218,6 +217,6 @@ internal static class QuestHarlemExpTests
         var partial = QuestCompletionPlan.Prepare(character with { ActiveMainQuests = [active with { ConditionState = 3 }] },quest,ushort.MaxValue,catalog,
             parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,now);
         That(partial.Outcome != QuestCompletionOutcome.Accepted,"未满9次不可交付");
-        Console.WriteLine($"PASS {Count - checks} 黑市EXP 6060（-2=精英怪假设）接取、推进与交付通过");
+        Console.WriteLine($"PASS {Count - checks} 黑市EXP 6060（-2=精英品级）接取、推进与交付通过");
     }
 }

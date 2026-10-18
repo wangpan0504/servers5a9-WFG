@@ -37,6 +37,9 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public CharacterDungeonState? DungeonState { get; init; }
     public CharacterFatigueState? Fatigue { get; init; }
     public DfoServer.Game.Town.TeleportCooldowns TeleportCooldowns { get; init; } = new();
+    // 远古精灵秘药的限时经验加成。Unix 秒截止；0 表示没有。死亡、回城和重登都保留。
+    public long ExpBonusUntil { get; init; }
+    public int ExpBonusPermille { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public long BlackDiamondExpiresAt => Inventory.AccountWallet.ContractExpiry(56);
 }

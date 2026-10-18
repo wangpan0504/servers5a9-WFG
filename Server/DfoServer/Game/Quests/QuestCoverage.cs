@@ -39,8 +39,8 @@ internal static class QuestCoverage
             !(field.Name is "daily random set" or "next relation quest" && HarlemExpRelationGroup(quest)))
         .Select(field => field.Name).Distinct().Order().ToImmutableArray() ?? [];
 
-    // #256 假设：黑市EXP 6051–6060是一组互为next relation的[side]任务；两声明只描述客户端每日随机/关联分组，
-    // 资源与官方文档均无选取、互斥或重置规则，服务端不猜这些规则，也不把任务改成每日或可重复。
+    // #256：黑市EXP 6051–6060是一组互为next relation的[side]任务。daily random set / next relation quest
+    // 只描述客户端分组，不选取、不互斥、不每日重置；各任务完成一次后不再出现。
     // 仅精确形状（空daily random set＋其余九个组员的单个next relation quest）视为已确认，其它任何形状仍保留限制。
     internal const int HarlemExpFirst = 6051, HarlemExpLast = 6060;
     static bool HarlemExpRelationGroup(StoryQuest quest) =>

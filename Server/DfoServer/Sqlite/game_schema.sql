@@ -7,6 +7,13 @@ CREATE TABLE character_assault_daily(
   hidden_count INTEGER NOT NULL CHECK(hidden_count BETWEEN 0 AND 255),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_exp_bonus(
+  character_id INTEGER PRIMARY KEY,
+  account TEXT NOT NULL,
+  until_unix INTEGER NOT NULL CHECK(until_unix>=0),
+  permille INTEGER NOT NULL CHECK(permille BETWEEN 0 AND 10000),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TABLE character_teleport_cooldowns(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,

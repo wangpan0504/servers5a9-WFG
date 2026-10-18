@@ -2387,14 +2387,14 @@ internal static class DatabaseSchemaTests
             }
             _ = new CharacterRepository(path);
             using (var db = Open(path))
-                Check(Query(db,"PRAGMA user_version") is 54L && Query(db,"SELECT revision||':'||gold FROM characters") is "7:321" &&
+                Check(Query(db,"PRAGMA user_version") is 55L && Query(db,"SELECT revision||':'||gold FROM characters") is "7:321" &&
                     Query(db,"SELECT count(*) FROM character_quest_stage_witnesses") is 0L && Query(db,"SELECT count(*) FROM character_quest_stage_claims") is 0L &&
                     Query(db,"SELECT count(*) FROM pragma_index_list('character_quest_stage_claims') WHERE [unique]=1") is 2L,
                     "v52追加空阶段旁表与双唯一，不猜旧来源或改旧角色");
             string upgraded = Snapshot(path);
             _ = new CharacterRepository(path);
             Check(Snapshot(path) == upgraded,"v53重开逐表字节保持，不重跑迁移");
-            using (var db = Open(path)) Execute(db,"PRAGMA user_version=55");
+            using (var db = Open(path)) Execute(db,"PRAGMA user_version=56");
             string newer = Snapshot(path);
             Reject<InvalidDataException>(() => new CharacterRepository(path),"阶段仓储拒绝较新版本");
             Check(Snapshot(path) == newer,"较新版本拒绝不写库");

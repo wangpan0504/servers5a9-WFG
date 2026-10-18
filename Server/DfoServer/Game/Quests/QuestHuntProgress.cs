@@ -13,8 +13,8 @@ internal readonly record struct QuestHuntTarget(int DungeonId, int MinimumDiffic
 // Full03分类2/6分别读取四/五元组，怪物、APC与被动物件消费服务端绑定的独立事件。
 internal static class QuestHuntProgress
 {
-    // #256 假设（无原服依据）：猎杀目标怪物编号 -2 视为“精英怪”（副本 [named monster] 段登记的怪物）。
-    // 全 PVF 仅 6060“除掉战争的元凶”(7322 -1 -2 9)使用 -2，无其它样本、参考实现与客户端取证；因此只对 6060 放行，不泛化到其它任务。
+    // #256：猎杀目标 -2 只放行 6060。断头谷没有 [named monster]，稀有怪是地图品级里的精英（冠军/超级冠军，生成类型 1/2）。
+    // 全 PVF 仅这一条使用 -2，其它任务仍拒绝。
     internal const int EliteMonsterSelector = -2, EliteQuestId = 6060;
 
     internal static bool EliteSelectorAllowed(StoryQuest quest, int dungeon, int monster) =>
@@ -58,7 +58,7 @@ internal static class QuestHuntProgress
 
     public static ImmutableArray<ActiveMainQuest> MonsterDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
         QuestCatalog quests, DungeonPlannedMonster monster) => monster.AiCharacter is null
-        ? Death(active,entry,quests,monster.MonsterId,1,monster.SpawnType == 3,entry.NamedMonsters.Contains(monster.MonsterId))
+        ? Death(active,entry,quests,monster.MonsterId,1,monster.SpawnType == 3,monster.SpawnType is 1 or 2)
         : active.ToImmutableArray();
 
     public static ImmutableArray<ActiveMainQuest> AiCharacterDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,

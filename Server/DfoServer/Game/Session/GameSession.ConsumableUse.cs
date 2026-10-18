@@ -52,6 +52,10 @@ internal sealed partial class GameSession
             bool preserve = PreservesDungeonConsumables;
             var actual = preserve ? new InventoryResult(true,0,new(character.Inventory,character.Inventory,
                 "free_dungeon_use_consumable",new(character))) : preliminary;
+            // 秘药的 2 小时冷却只记在自己的 cooltime group（7440/7377 为 99），不挡住组 0/1 的 HP/MP。
+            if (!preserve && definition.ExpBonusPermille > 0 && actual.Plan is { } bonusPlan)
+                bonusPlan.ExpBonus = (checked(service.Clock.GetUtcNow().ToUnixTimeSeconds() + definition.ExpBonusMilliseconds / 1000),
+                    definition.ExpBonusPermille);
             pendingConsumableUse = actual.Plan;
             var result = CommitInventory(character, actual);
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。

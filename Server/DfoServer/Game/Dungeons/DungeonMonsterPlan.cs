@@ -32,6 +32,18 @@ internal sealed record DungeonPlannedSpecialObject(ushort ObjectKey, DungeonRoom
 internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyList<DungeonPlannedMonster> Monsters)
 {
     public IReadOnlyList<DungeonPlannedSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonPlannedSpecialObject>();
+    public DungeonMonsterPlan WithChampionRolls(IReadOnlyList<int> percents, byte difficulty, Func<int, int> draw)
+    {
+        if (percents.Count == 0) return this;
+        int percent = difficulty < percents.Count ? percents[difficulty] : percents[^1];
+        if (percent <= 0) return this;
+        return this with
+        {
+            Monsters = Monsters.Select(monster => monster.SpawnType == 0 && monster.Source?.RankKind == "[normal]" &&
+                monster.CanReportDeath && !monster.IsFriendly && draw(100) < percent ? monster with { SpawnType = 1 } : monster).ToArray()
+        };
+    }
+
     public uint NextObjectKey => (uint)Monsters.Select(monster => (int)monster.ObjectKey)
         .Concat(SpecialObjects.Select(actor => (int)actor.ObjectKey)).Concat(HellWaves.Select(wave => (int)wave.ObjectKey)).DefaultIfEmpty(0).Max() + 1;
     // 实验性（未在95客户端实证）：深渊派对房间柱子的波次怪（START_MAP 隐藏模板行 + NOTI 679）。不进 Monsters：不参与清房/开门判定，也不产生经验/掉落。

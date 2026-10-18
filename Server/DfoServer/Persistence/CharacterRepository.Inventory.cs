@@ -318,9 +318,28 @@ internal sealed partial class CharacterRepository
             WriteQuestConditions(db, transaction, current.Id, active, refreshed);
             active = refreshed.ToArray();
         }
+        if (plan.ExpBonus is { } bonus)
+        {
+            if (bonus.Permille is <= 0 or > 10000 || bonus.Until <= 0)
+                throw new InvalidDataException("秘药经验状态无效");
+            using var exp = db.CreateCommand();
+            exp.Transaction = transaction;
+            exp.CommandText = """
+                INSERT INTO character_exp_bonus(character_id,account,until_unix,permille)
+                VALUES($id,$account,$until,$permille)
+                ON CONFLICT(character_id) DO UPDATE SET until_unix=excluded.until_unix,permille=excluded.permille;
+                """;
+            exp.Parameters.AddWithValue("$id", expected.Id);
+            exp.Parameters.AddWithValue("$account", owner.Account);
+            exp.Parameters.AddWithValue("$until", bonus.Until);
+            exp.Parameters.AddWithValue("$permille", bonus.Permille);
+            exp.ExecuteNonQuery();
+        }
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
         return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning,
-            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags, SkillSwitchInventory = skillSwitch };
+            EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags, SkillSwitchInventory = skillSwitch,
+            ExpBonusUntil = plan.ExpBonus?.Until ?? current.ExpBonusUntil,
+            ExpBonusPermille = plan.ExpBonus?.Permille ?? current.ExpBonusPermille };
     }
 
     static void WriteQuestConditions(SqliteConnection db, SqliteTransaction transaction, ushort characterId,

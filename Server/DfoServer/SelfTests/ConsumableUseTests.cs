@@ -67,6 +67,10 @@ internal static class ConsumableUseTests
             { EffectsAfterAcknowledgement: false }, "sub type2的应答后效果不能套发送端即时效果的原生免扣");
         That(RecoveryConsumableCatalog.Read(raw with { DeclaredFields = raw.DeclaredFields.Add("sub type") }) is null,
             "畸形子类型不能当作缺省0而错误选择免扣应答");
+        That(!ItemCatalog.ForbidsUse("[impossible contents]\n`enable` `hardcore mode`\n[/impossible contents]") &&
+            ItemCatalog.ForbidsUse("[impossible contents]\n`enable`\n[/impossible contents]") &&
+            !ItemCatalog.ForbidsUse("[impossible contents]\n`hardcore mode`\n[/impossible contents]"),
+            "impossible contents 的 enable 是开关；只有硬核限制时普通使用仍放行，空开关继续禁止");
         That(RecoveryConsumableCatalog.Read(raw with { CoolTime = -1 }) is null &&
             RecoveryConsumableCatalog.Read(raw with { CoolTime = null }) is null &&
             RecoveryConsumableCatalog.Read(raw with { CoolGroup = null }) is null &&
@@ -118,6 +122,11 @@ internal static class ConsumableUseTests
             "现场1107入门HP药剂及1065魔力之花沿普通类别读取PVF资格");
         That(resources.RecoveryConsumables.TryGet(1113, out var beginnerMp) && beginnerMp == new RecoveryConsumableDefinition(1113, 6, 10000, 1),
             "现场1113入门MP药剂无需加入ID白名单即可获得普通消费资格");
+        That(resources.Items.Get(7440) is { UseForbidden: false, Name: "远古精灵的秘药" } &&
+            resources.RecoveryConsumables.TryGet(7440, out var secret) && secret is { ExpBonusPermille: 1000, ExpBonusMilliseconds: 7200000, CoolGroup: 99, CoolTime: 7200000 } &&
+            resources.Items.Get(7377).UseForbidden == false && resources.RecoveryConsumables.TryGet(7377, out var older) && older.ExpBonusPermille == 1000 &&
+            resources.RecoveryConsumables.TryGet(7429, out var grey) && grey.ExpBonusPermille == 200 && grey.CoolGroup == 99,
+            "远古精灵秘药可使用，2小时加成按脚本倍率，冷却组99不与HP/MP的0/1共用");
         foreach (int id in new[] { 1000, 1016, 1047, 1051, 1065, 1107, 1108, 1113, 1114, 1073, 6001 })
             That(resources.RecoveryConsumables.TryGet(id, out var definition) && resources.Items.Get(id).Kind == ItemKind.Consumable &&
                 resources.Items.Get(id).MinimumLevel == definition.MinimumLevel,

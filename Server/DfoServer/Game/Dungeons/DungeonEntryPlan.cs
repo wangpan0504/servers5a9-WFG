@@ -57,6 +57,8 @@ internal sealed record DungeonEntryPlan(
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
     public float ExperienceWeight { get; init; } = 1;
     public IReadOnlyList<int> NamedMonsters { get; init; } = Array.Empty<int>();
+    // 断头谷 [champion] 后四项：难度 0–3 把普通怪升为精英的百分比。其它副本保持 0，不改已有生成。
+    public int[] ChampionPercents { get; init; } = [];
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
@@ -391,6 +393,7 @@ internal sealed record DungeonEntryPlan(
             QuestAcceptances = definition.IsClassExperience || practice ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
+            ChampionPercents = DungeonChampionRates.For(definition),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
             IsPractice = practice,

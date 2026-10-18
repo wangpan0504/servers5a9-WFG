@@ -7,13 +7,15 @@ internal sealed record DungeonClearExperienceReward(
     int RankBonusIndex, string RuleId, string ResourceSource)
 {
     public uint GrowthContractExperience { get; init; }
+    public uint PotionExperience { get; init; }
     public DungeonClearExperienceReward Applied(uint amount)
     {
         if (amount > TotalExperience) throw new InvalidDataException("通关实际经验超过冻结额度");
         uint basis = Math.Min(BaseExperience, amount);
         uint rank = Math.Min(RankExperience, amount - basis);
-        return this with { BaseExperience = basis, RankExperience = rank,
-            GrowthContractExperience = amount - basis - rank, TotalExperience = amount };
+        uint contract = Math.Min(GrowthContractExperience, amount - basis - rank);
+        return this with { BaseExperience = basis, RankExperience = rank, GrowthContractExperience = contract,
+            PotionExperience = amount - basis - rank - contract, TotalExperience = amount };
     }
 }
 

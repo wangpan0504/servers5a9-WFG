@@ -606,6 +606,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_dungeon_state VALUES({{id}},'planning',256,1,0,0,0);
                 INSERT INTO character_fatigue VALUES({{id}},'planning',0,156,0,156,0,0);
                 INSERT INTO character_teleport_cooldowns VALUES({{id}},'planning',2000000000000,2000000420000);
+                INSERT INTO character_exp_bonus VALUES({{id}},'planning',2000007200,1000);
                 INSERT INTO character_assault_daily VALUES({{id}},'planning',740000,2,1);
                 INSERT INTO character_dungeon_fatigue_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,1,1,1,'test',0,1,'{}','{}');
                 INSERT INTO character_gold_card_uses VALUES({{id}},'planning',20261011,2);

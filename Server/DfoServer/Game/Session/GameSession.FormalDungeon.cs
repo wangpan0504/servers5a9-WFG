@@ -229,6 +229,8 @@ internal sealed partial class GameSession
                         tournamentLevel,entry.PlayerTeam)
                     : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.BasisLevel,
                         includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam);
+                if (entry.ChampionPercents.Length > 0)
+                    plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, RandomNumberGenerator.GetInt32);
                 // 实验性（未在95客户端实证）：深渊派对房间（[seal door pos] 处换成 [seal door map index] 深渊图）抽波次。
                 if (entry.HellParty is { } hellRoom && map.Position == hellRoom.Room && map.Id == hellRoom.MapId)
                     plan = plan.WithHellWaves(rooms.ResolveHellWaves(room, entry.HellPartyMode, entry.BasisLevel, RandomNumberGenerator.GetInt32), expected.Id,
@@ -587,8 +589,9 @@ internal sealed partial class GameSession
             var at = (timeProvider ?? TimeProvider.System).GetUtcNow();
             var basis = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
             uint bonus = GrowthContractPolicy.ExperienceBonus(Selected, basis.Amount, contracts?.Growth, at.ToUnixTimeSeconds());
+            uint potion = ExpBonusPolicy.Bonus(Selected, basis.Amount, at.ToUnixTimeSeconds());
             dungeon.PendingDeathReward = (pending, basis with
-                { Amount = checked(basis.Amount + bonus), GrowthContractExperience = bonus }, at);
+                { Amount = checked(basis.Amount + bonus + potion), GrowthContractExperience = bonus, PotionExperience = potion }, at);
         }
         var frozen = dungeon.PendingDeathReward.Value;
         if (!ReferenceEquals(frozen.Death, pending))
