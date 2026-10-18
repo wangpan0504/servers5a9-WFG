@@ -28,6 +28,7 @@ internal static class SelfTestRunner
         CreatureSkinTests.RunCore();
         CreatureEggTests.RunCore();
         AvatarPackageTests.RunCore();
+        EmblemCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();
@@ -203,6 +204,7 @@ internal static class SelfTestRunner
         CreatureEggTests.RunResources(itemResources.CreatureEggs, itemResources.Items);
         CreatureSkinMoveTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
+        EmblemCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
         MagicBoxTests.Run(towns, itemResources);
