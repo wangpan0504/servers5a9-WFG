@@ -66,8 +66,23 @@ internal static class ClearAvatarTests
                 result.Plan.After.Find(original.Position) is null, "卸装清理所属关联，不留下假穿戴物品");
             role = Role([bag]);
             result = Move(role, bag.Position, original.Position);
-            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarSourceUid: 0 } empty && empty.ClearAvatarId == original.Core.ItemId,
-                "空槽使用职业默认外观，并把解析后的EQU编号写入原时装详情");
+            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarSourceUid: 0 } empty &&
+                empty.ClearAvatarId == (slot == 10 ? original.Core.ItemId : 0),
+                "普通空槽不固定默认EQU，武器装扮保留独立默认武器来源");
+            foreach (byte growth in new byte[] { 1, 0x11, 0x21 })
+            {
+                role = Role([bag]) with { GrowType = growth };
+                result = Move(role, bag.Position, original.Position);
+                That(result.Plan!.After.Find(original.Position) is { } native && native.Uid == bag.Uid &&
+                    native.Core == bag.Core && native.Avatar is { ClearAvatarSourceUid: 0 } nativeDetail &&
+                    nativeDetail.ClearAvatarId == (slot == 10 ? original.Core.ItemId : 0) && result.Plan.After.Items.Length == 1,
+                    "转职及两次觉醒均不创建基础外观物品或固定普通空槽来源，完整克隆实例不变");
+                role = Role([bag, original]) with { GrowType = growth };
+                result = Move(role, bag.Position, original.Position);
+                That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarSourceUid: 12 } explicitSource &&
+                    explicitSource.ClearAvatarId == original.Core.ItemId,
+                    "觉醒只影响无原件的基础外观，不覆盖真实原件来源");
+            }
         }
         var weapon = new InventoryItem(21, new(InventoryListType.Equipment, 12), new(300, ItemKind.Equipment, 0));
         var clearWeapon = Avatar(22, new(InventoryListType.Avatar, 0), Template(10, true).Id, details);

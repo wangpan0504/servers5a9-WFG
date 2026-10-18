@@ -255,7 +255,8 @@ internal static class InventoryMoveService
                 if (appearance == 0 && destination.Index == 10 &&
                     character.Inventory.Find(new(InventoryListType.Equipment, 12)) is { } weapon && !weapon.IsExpired(utcSeconds))
                     appearance = weapon.Core.ItemId;
-                if (appearance == 0)
+                // 其余空槽让客户端按转职、觉醒及显示设置选择基础外观，不固定为未觉醒EQU。
+                if (appearance == 0 && destination.Index == 10)
                     appearance = characters?.Get(character.Job).DefaultAvatarEquipment.GetValueOrDefault(checked((byte)destination.Index)) ?? 0;
             }
             avatar = avatar with

@@ -18,9 +18,11 @@ internal static class ClearAvatarTcpTests
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "clear-avatar"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         int originalCoat = resources.Characters.Get(0).DefaultAvatarEquipment[3];
-        var cases = new[] { (Name: "ClearCoat", Slot: (short)3, Clone: 101500878, Original: originalCoat),
-            (Name: "ClearEmpty", Slot: (short)3, Clone: 101500878, Original: 0),
-            (Name: "ClearAura", Slot: (short)9, Clone: 113590006, Original: 101590068) };
+        var cases = new[] { (Name: "ClearCoat", Slot: (short)3, Clone: 101500878, Original: originalCoat, Grow: (byte)0),
+            (Name: "ClearEmpty", Slot: (short)3, Clone: 101500878, Original: 0, Grow: (byte)0),
+            (Name: "ClearAura", Slot: (short)9, Clone: 113590006, Original: 101590068, Grow: (byte)0),
+            (Name: "ClearAwaken", Slot: (short)3, Clone: 101500878, Original: 0, Grow: (byte)0x11),
+            (Name: "ClearSecond", Slot: (short)3, Clone: 101500878, Original: 0, Grow: (byte)0x21) };
         var roles = new List<Character>();
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             foreach (var row in cases)
@@ -28,13 +30,13 @@ internal static class ClearAvatarTcpTests
                 var items = new List<InventoryItem> { Item(0, new(InventoryListType.Avatar, 0), row.Clone) };
                 if (row.Original != 0) items.Add(Item(0, new(InventoryListType.Equipment, row.Slot), row.Original));
                 roles.Add(repository.Create(owner, new(row.Name, resources.Towns.Room, resources.Towns.InitialReturn)
-                    { Level = 95, AcceptedStoryLevel = 1, Inventory = new([.. items]) }));
+                    { Level = 95, GrowType = row.Grow, AcceptedStoryLevel = 1, Inventory = new([.. items]) }));
             }
         await fixture.StartAsync();
         for (int index = 0; index < cases.Length; index++)
         {
             var row = cases[index];
-            int appearance = row.Original == 0 ? originalCoat : row.Original;
+            int appearance = row.Original;
             ushort color = row.Original == 0 ? (ushort)0 : (ushort)7;
             using (var peer = Open(fixture))
             {
@@ -83,7 +85,12 @@ internal static class ClearAvatarTcpTests
                 WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=$p1
                 """, roles[index].Id, row.Slot).Single().Single()!)!;
             That(detail.ClearAvatarId == appearance && detail.Color1 == color && detail.Color2 == (color == 0 ? 0 : 8),
-                "CMD19提交后的外观编号、染色和重登实际wire一致，空槽也有持久关联");
+                "CMD19提交后的来源、染色和重登wire一致，空槽及觉醒空槽不保存固定默认EQU");
+            if (row.Original == 0)
+                That(detail.ClearAvatarSourceUid == 0 && fixture.Query(
+                    "SELECT COUNT(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type IN (1,3)",
+                    roles[index].Id).Single().Single() is long count && count == 1,
+                    "空槽克隆只保存真实实例，不发放或存储基础外观替代物品");
             if (row.Original != 0)
                 That(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=1 AND slot_index=$p1",
                     roles[index].Id, index == 0 ? 2 : 0).Single().Single() is long uid && uid == detail.ClearAvatarSourceUid,
@@ -111,7 +118,7 @@ internal static class ClearAvatarTcpTests
         using (var peer = Open(fixture))
         {
             var packets = peer.Select(roles[1].Slot);
-            Verify(packets[2].Body, packets[3].Body, cases[1].Name, 3, 101500878, originalCoat, 0);
+            Verify(packets[2].Body, packets[3].Body, cases[1].Name, 3, 101500878, 0, 0);
             peer.Barrier();
         }
 
@@ -137,7 +144,7 @@ internal static class ClearAvatarTcpTests
             That(actor[at - 1] == 1 && actor[at] == slot && U32(actor, at + 1) == physical &&
                 U32(actor, at + 16) == appearance && player[126] == 1 && player[127] == slot &&
                 U32(player, 128) == physical && U32(player, 141) == appearance,
-                "Actor及Player保持真实克隆模板，独立关联字段恢复被覆盖或默认EQU");
+                "Actor及Player保持真实克隆模板，只传真实覆盖来源，空槽由客户端选择基础外观");
             That(U32(actor, at + 5) == 4 && U16(actor, at + 9) == color && U16(actor, at + 11) == (color == 0 ? 0 : 8),
                 "Actor借用染色与关联编号来自同一已提交详情");
             int sockets = slot == 9 ? 187 : 153;
