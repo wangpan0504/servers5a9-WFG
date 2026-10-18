@@ -2,6 +2,10 @@
 <#
 .SYNOPSIS
 将干净源码生成的单 EXE 包上传为 Forgejo 预发布版本；失败保留草稿，不替换已有版本。
+.PARAMETER KeepLatest
+发布成功后只保留最新 N 个已发布 Release（含本次），更旧的连同附件删除；默认 3，0 表示不清理。草稿与本次版本永不删除，git 标签保留；清理失败只警告。上传遇到 HTTP 413（配额不足）时，会先按 N-1 个旧版本清理一次再重试上传。
+.PARAMETER CleanupDryRun
+只列出会删除的旧 Release，不执行删除（含 413 重试前的清理）。
 .PARAMETER CheckOnly
 仅核对远端仓库、版本和标签，不构建、不上传、不创建版本。
 #>
@@ -13,6 +17,8 @@ param(
     [string]$Directory = 'dist/releases',
     [uri]$ApiUrl = $env:GITHUB_API_URL,
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository = $env:GITHUB_REPOSITORY,
+    [ValidateRange(0, 100)][int]$KeepLatest = 3,
+    [switch]$CleanupDryRun,
     [switch]$CheckOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -22,6 +28,7 @@ if (-not $ApiUrl -or $ApiUrl.Scheme -ne 'https' -or $ApiUrl.UserInfo -or $ApiUrl
 if (-not $Repository -or -not $env:FORGEJO_TOKEN) { throw '缺少仓库名称或工作流自动令牌 FORGEJO_TOKEN。' }
 $endpoint = $ApiUrl.AbsoluteUri.TrimEnd('/') + '/repos/' + $Repository
 $headers = @{ Authorization = 'token ' + $env:FORGEJO_TOKEN }
+. (Join-Path $PSScriptRoot 'ReleaseRetention.ps1')
 
 function Write-ApiFailure([string]$Method, [string]$Uri, $Status, $Headers, $Content) {
     # 仅输出诊断信息，不改变失败即抛错的语义；不输出请求头（含 token）。
@@ -54,6 +61,36 @@ function Invoke-Api([string]$Method, [string]$Path, $Body = $null, $Form = $null
     if ($status -lt 200 -or $status -ge 300) { Write-ApiFailure $Method $arguments.Uri $status $responseHeaders $response }
     if ($status -lt 200 -or $status -ge 300) { throw "Forgejo API $Method $Path 失败（HTTP $status）；未覆盖已有版本。" }
     return $response
+}
+
+# 按保留策略清理旧 Release（只删 Release 及附件，不删 git 标签，不删草稿，不删本次版本）。
+# 返回实际删除数；列表或删除失败只警告，不抛出。
+function Invoke-ReleaseCleanup([string]$CurrentTag, [int]$Keep, [string]$Reason) {
+    if ($Keep -le 0) { return 0 }
+    try {
+        $all = @()
+        for ($page = 1; ; $page++) {
+            $items = @(Invoke-Api 'Get' "/releases?limit=50&page=$page")
+            if ($items.Count -eq 0) { break }
+            $all += $items
+            if ($page -ge 40) { throw 'Release 列表分页超过 40 页，放弃清理。' }
+        }
+        $victims = @(Select-ReleasesToPrune -Releases $all -KeepLatest $Keep -CurrentTag $CurrentTag)
+        Write-Host ("Release 清理（{0}）：共 {1} 个，保留最新 {2} 个（含 {3}），将删除 {4} 个{5}" -f
+            $Reason, $all.Count, $Keep, $CurrentTag, $victims.Count, $(if ($CleanupDryRun) { '【试运行，不删除】' } else { '' }))
+        $deleted = 0
+        foreach ($victim in $victims) {
+            if ($victim.draft -or $victim.tag_name -ceq $CurrentTag) { continue }   # 双重保险
+            Write-Host ("  - {0}（id {1}，发布 {2}）" -f $victim.tag_name, $victim.id, $victim.published_at)
+            if ($CleanupDryRun) { continue }
+            try { [void](Invoke-Api 'Delete' "/releases/$($victim.id)"); $deleted++ }
+            catch { Write-Warning "删除 Release $($victim.tag_name) 失败：$($_.Exception.Message)" }
+        }
+        return $deleted
+    } catch {
+        Write-Warning "Release 清理已跳过：$($_.Exception.Message)"
+        return 0
+    }
 }
 
 # 先确定仓库可访问，不能把无权访问或 Releases 未启用误判成版本不存在。
@@ -132,7 +169,14 @@ try {
         $item = Get-Item -LiteralPath $file
         $assetPath = "/releases/$($release.id)/assets?name=$($item.Name)"
         Write-Host ("上传附件：{0}，大小 {1} 字节（{2:N2} MiB），目标 {3}" -f $item.Name, $item.Length, ($item.Length / 1MB), ($endpoint + $assetPath))
-        $asset = Invoke-Api 'Post' $assetPath -Form @{ attachment = $item }
+        try { $asset = Invoke-Api 'Post' $assetPath -Form @{ attachment = $item } }
+        catch {
+            if ($_.Exception.Message -notmatch 'HTTP 413') { throw }
+            # 配额不足：只在确实失败后清理旧版本（保留 KeepLatest-1 个旧版本，加本次共 KeepLatest 个），再重试一次。
+            Write-Warning '上传返回 HTTP 413（疑似配额不足），尝试清理旧版本后重试一次。'
+            if ((Invoke-ReleaseCleanup $Version $KeepLatest '413 重试前') -le 0) { throw }
+            $asset = Invoke-Api 'Post' $assetPath -Form @{ attachment = $item }
+        }
         if ($asset.name -cne $item.Name -or $asset.size -ne $item.Length) { throw '附件返回的文件名或长度不符。' }
     }
     $assets = @(Invoke-Api 'Get' "/releases/$($release.id)/assets")
@@ -146,3 +190,6 @@ try {
     Write-Warning "Release $($release.id) 未确认完成，请检查草稿与附件；本脚本不删除版本或重试覆盖。"
     throw
 }
+
+# 仅在新版本附件齐全并确认发布后清理旧版本；任何清理问题只警告，不影响本次发布结果。
+[void](Invoke-ReleaseCleanup $Version $KeepLatest '发布完成后')
