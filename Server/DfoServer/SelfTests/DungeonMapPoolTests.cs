@@ -60,6 +60,7 @@ internal static class DungeonMapPoolTests
                 .Select(map => map.Id).SequenceEqual([101,201]),
             "覆盖历史不改变有效路线等价性，任务专用历史的全部候选仍不能进入普通池");
         ExplicitCandidates();
+        GriefResource();
         var trainingMaze = new DungeonMaze(0,1,1,"BB",[new(0,0)],[new(0,0)],null,[]);
         var trainingDefinition = new DungeonDefinition(5000,"dungeon/poongjintrainingroom/poongjintrainingroom.dgn",1,null,[trainingMaze],[]);
         var trainingPool = new DungeonMapPool([new(36250,"map/poongjintrainingroom/11100(0,0)start.map",[5000],"[normal]",2)]);
@@ -71,6 +72,46 @@ internal static class DungeonMapPoolTests
             ReferenceEquals(trainingPool.Resolve(trainingDefinition,invalidTrainingMaze,_ => 0),invalidTrainingMaze),
             "修炼场资源放行不扩大到别的副本或不匹配坐标");
         Console.WriteLine($"PASS {Count-checks} 普通地图池归属、方向、随机与剧情隔离断言");
+    }
+
+    static void GriefResource()
+    {
+        var maze = new DungeonMaze(0,1,1,"BB",[new(0,0)],[new(0,0)],null,[]);
+        var definition = new DungeonDefinition(5115,"dungeon/towers/grief/5115_001.dgn",90,90,[maze],
+            [new("tower of grief",[])]);
+        var candidate = new DungeonMapPoolEntry(100247,"map/towerofgrief_down/100247_001.map",[5115],"[normal]",2);
+        var pool = new DungeonMapPool([candidate]);
+        var resolved = pool.Resolve(definition,maze,_ => throw new InvalidOperationException());
+        That(resolved.IsGriefTower && resolved.Greed == "BB" && resolved.StaticTopology is { Supported: true, Links.Count: 0 } &&
+            resolved.StaticTopology.Rooms is [{ ExitMask: 0, Map.Id: 100247 }] && resolved.MapSpecification![0].Path == candidate.Path &&
+            maze.MapSpecification is null,"悲叹精确资源生成无邻接单房间，保留共享原始1x1 BB");
+        foreach (var invalid in new[] { definition with { Id = 5116 },definition with { Path = "dungeon/wrong.dgn" },
+            definition with { RawSections = [] },definition with { RawSections = [new("tower of grief",[new(0,1)])] },
+            definition with { RawSections = [new("tower of grief",[]),new("tower of grief",[])] } })
+            That(ReferenceEquals(pool.Resolve(invalid,maze,_ => 0),maze),"错误副本、路径或模式声明不授予悲叹几何");
+        foreach (var wrong in new[] { candidate with { Dungeons = [5116] },candidate with { Dungeons = [5115,5116] },candidate with { Id = 100248 },
+            candidate with { Path = "map/wrong.map" },candidate with { Kind = "[boss]" },candidate with { Layouts = 18 } })
+            That(ReferenceEquals(new DungeonMapPool([wrong]).Resolve(definition,maze,_ => 0),maze),"归属、ID、路径、类型或布局不符拒绝");
+        That(ReferenceEquals(new DungeonMapPool([candidate,candidate with { Id = 100248 }]).Resolve(definition,maze,_ => 0),maze),
+            "反向池存在两个可用候选时不任选首项");
+        foreach (var wrong in new[] { maze with { Greed = "AA" },maze with { Bosses = [new(1,0)] },
+            maze with { MapSpecification = resolved.MapSpecification },maze with { LayeredMaps = resolved.MapSpecification! },
+            maze with { WarpMaps = [new(new(0,0),new(0,0))] },
+            maze with { QuestConnectionTokens = [new(0,0),new(0,2929),new(0,-1)] } })
+            That(ReferenceEquals(pool.Resolve(definition,wrong,_ => 0),wrong),"错误布局、坐标、显式图、叠层或任务连接不进入专用补图");
+        That(!(resolved with { IsGriefTower = false }).StaticTopology.Supported &&
+            !(resolved with { MapSpecification = [resolved.MapSpecification![0] with { Id = 100248 }] }).StaticTopology.Supported,
+            "普通BB出口仍拒绝，专用标记也不接受其他地图");
+        var quest = QuestEligibilityTests.Quest(2929);
+        var character = new Character(99,0,"GriefFixture",0,new(38,2,1085,249),null)
+            { Level = 90, ActiveMainQuests = [new(0,2929,1)] };
+        foreach (var scenario in new[] { (Quest:0u,Replay:false),(Quest:2929u,Replay:false),(Quest:2929u,Replay:true) })
+        {
+            var expected = scenario.Replay ? character with { CompletedQuests = [2929] } : character;
+            That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [resolved] },expected,5115,scenario.Quest,0,
+                out var entry,out string reason,quest: quest,isReplay: scenario.Replay) && entry is null &&
+                reason == "grief-tower-entry-contract-unsupported","资源几何不能让普通、显式或回放绕过未知票据/疲劳准入合同");
+        }
     }
 
     static void ExplicitCandidates()
@@ -166,6 +207,20 @@ internal static class DungeonMapPoolTests
         var resolved = catalog.ResolveOrdinaryMaze(definition with { Mazes = [maze,..definition.Mazes.Where(row => row.QuestConnectionTokens.Count != 0)] },maze,_ => 0);
         That(resolved.StaticTopology.Supported && resolved.MapSpecification!.Select(row => row.Id).SequenceEqual([58597,58605]),
             "实际PVF普通MAP池选择龙人之塔58597/58605，排除任务7984专用地图");
+        var griefDefinition = catalog.Get(5115);
+        var griefMaze = griefDefinition.Mazes.Single();
+        var grief = catalog.ResolveOrdinaryMaze(griefDefinition,griefMaze,_ => throw new InvalidOperationException());
+        That(griefDefinition.IsGriefTower && griefMaze.MapSpecification is null && griefMaze.GreedGrid.Cells is [{ Index: 1 }] &&
+            grief.IsGriefTower && grief.Width == 1 && grief.Height == 1 && grief.Greed == griefMaze.Greed &&
+            grief.StaticTopology is { Supported: true, Rooms.Count: 1, Links.Count: 0 } &&
+            grief.MapSpecification is [{ Id: 100247, Path: "map/towerofgrief_down/100247_001.map" }],
+            "真实D5115仅补精确100247，不改原始BB几何");
+        var room = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf).Get(grief.MapSpecification![0]);
+        That(room.DeclaredType == "[normal]" && room.AiCharacters is [{ Id: 470, Faction: "[monster]", RankKind: "[boss]" }],
+            "真实100247仍保留敌对Boss APC470，不为单房拓扑删除演员");
+        var eligible = new Character(99,0,"GriefResource",0,new(38,2,1085,249),null) { Level = 90 };
+        That(!DungeonEntryPlan.TryCreate(catalog,eligible,5115,0,0,out var entry,out string reason) && entry is null &&
+            reason == "grief-tower-entry-contract-unsupported","真实目录正式入口仍明确拒绝，资源成功不创建Run");
         Console.WriteLine($"PASS {Count-checks} 匹配PVF普通地图池与显式路线资源断言（合成布局，非实机）");
     }
 }

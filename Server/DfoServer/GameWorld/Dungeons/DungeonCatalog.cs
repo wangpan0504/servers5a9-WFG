@@ -50,6 +50,7 @@ internal sealed record DungeonMaze(
     public string? ResourceError { get; init; }
     public bool IsTrainingRoom { get; init; }
     public bool IsClassExperience { get; init; }
+    public bool IsGriefTower { get; init; }
     // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
     public bool IsTournament { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
@@ -104,6 +105,11 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
     // [tournament dungeon] 1：魂·黄龙/青龙大会等比赛副本（实验性，依据来自 Go 项目反汇编）。
     public bool IsTournament => RawSections.Where(row => row.Tag == "tournament dungeon").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
+    // 资源识别与正式准入分开；畸形声明也不能落回普通入场。
+    public bool RequiresGriefEntryContract => Id == 5115;
+    public bool IsGriefTower => Id == 5115 &&
+        Path.Equals("dungeon/towers/grief/5115_001.dgn", StringComparison.OrdinalIgnoreCase) &&
+        RawSections.Where(row => row.Tag == "tower of grief").ToArray() is [{ Tokens.Count: 0 }];
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
     public bool AllowsPractice => !IsTutorial && !IsClassExperience && !IsTournament && Id != 5000 &&
         RawSections.Where(row => row.Tag == "prohibit practice").All(row => row.Tokens is [{ Type: 0, Value: 0 }]);

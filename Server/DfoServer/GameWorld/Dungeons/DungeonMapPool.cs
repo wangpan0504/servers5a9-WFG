@@ -62,6 +62,19 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             .SelectMany(row => row.CandidateIds.Count == 0 ? new[] { row.Id } : row.CandidateIds).ToHashSet();
         var pool = entries.Where(row => row.Dungeons.Contains(definition.Id) && !excluded.Contains(row.Id)).ToArray();
         var start = Choose(maze.Starts); var boss = Choose(maze.Bosses);
+        // 悲叹之塔的原始BB是单房声明，不把右出口补成网格外房间。
+        if (definition.RequiresGriefEntryContract)
+        {
+            if (!definition.IsGriefTower || maze.Width != 1 || maze.Height != 1 ||
+                maze.Starts.Count != 1 || maze.Bosses.Count != 1 || start != new DungeonPoint(0,0) || boss != start ||
+                maze.MapSpecification is not null || maze.GreedGrid.Cells is not [{ Index: 1 }] ||
+                maze.LayeredMaps.Count != 0 || maze.WarpMaps.Count != 0 || maze.ConditionalMaps.Count != 0 ||
+                maze.StoryStages.Count != 0 || maze.BossEntrance is not null || maze.HellParty is not null) return maze;
+            var grief = pool.Where(row => row.Kind == "[normal]" && (row.Layouts & 2) != 0).ToArray();
+            if (grief is not [{ Id: 100247, Layouts: 2, Dungeons: [5115] } candidate] ||
+                !candidate.Path.Equals("map/towerofgrief_down/100247_001.map",StringComparison.OrdinalIgnoreCase)) return maze;
+            return maze with { IsGriefTower = true, MapSpecification = [new("boss",start,candidate.Id,candidate.Path)] };
+        }
         // 本版职业体验是无出口的真实单房间；只接受已核验的资源归属、类型、坐标与AA，不放宽普通空格。
         if (definition.IsClassExperience && maze.Width == 1 && maze.Height == 1 && maze.Starts.Count == 1 && maze.Bosses.Count == 1 &&
             start == new DungeonPoint(0,0) && boss == start && maps.Count == 0 && maze.GreedGrid.Cells is [{ Index: 0 }])

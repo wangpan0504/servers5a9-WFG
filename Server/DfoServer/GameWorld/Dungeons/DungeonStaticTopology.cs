@@ -18,6 +18,14 @@ internal sealed record DungeonStaticTopology(
             return Unsupported(grid.UnsupportedReason!);
         if (maze.MapSpecification is null)
             return Unsupported("未提供显式地图，不能生成静态连接");
+        // 该标记只由严格资源池设置；仍核对唯一实际地图，不能借它放行普通BB。
+        if (maze.IsGriefTower && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
+            grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss", Id: 100247 } grief] &&
+            grief.Path.Equals("map/towerofgrief_down/100247_001.map",StringComparison.OrdinalIgnoreCase) &&
+            grief.Position == new DungeonPoint(0,0) && maze.Starts.SequenceEqual([grief.Position]) && maze.Bosses.SequenceEqual([grief.Position]) &&
+            maze.QuestConnectionTokens.Count == 0 && maze.LayeredMaps.Count == 0 && maze.WarpMaps.Count == 0 &&
+            maze.ConditionalMaps.Count == 0 && maze.StoryStages.Count == 0 && maze.BossEntrance is null && maze.HellParty is null)
+            return new([new(grief,0)],[],null);
         // 专用单房间保留修炼场BB或体验AA；实际无邻接，不补出口，也不放宽普通地图。
         if ((maze.IsTrainingRoom && grid.Cells is [{ Index: 1 }] || maze.IsClassExperience && grid.Cells is [{ Index: 0 }] ||
             maze.IsTournament && grid.Cells is [{ Index: 1 }]) &&

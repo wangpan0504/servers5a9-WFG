@@ -114,6 +114,12 @@ internal sealed record DungeonEntryPlan(
             reason = "dungeon-resource-mismatch";
             return false;
         }
+        // 几何支持不代表票据与零疲劳准入合同已经实现；共享入口同时覆盖普通、显式和回放。
+        if (definition.RequiresGriefEntryContract)
+        {
+            reason = "grief-tower-entry-contract-unsupported";
+            return false;
+        }
         if (practice && (!definition.AllowsPractice || questId != 0 || isReplay || hellParty || hellLegend || quest is not null))
         { reason = "practice-mode-or-resource-unsupported"; return false; }
 
