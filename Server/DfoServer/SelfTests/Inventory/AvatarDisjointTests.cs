@@ -193,7 +193,7 @@ internal static class AvatarDisjointTests
             using var owner = owners.Acquire("avatar-disjoint", () => { });
             var source = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, 0),
                 InventoryRewardGrantService.Create(template));
-            repository.Create(owner, new("AvatarDisjoint", towns.Room, towns.InitialReturn)
+            repository.Create(owner, new("AvDisjoint", towns.Room, towns.InitialReturn)
             {
                 Inventory = new([source])
             });

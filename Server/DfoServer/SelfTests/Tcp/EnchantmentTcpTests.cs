@@ -29,7 +29,8 @@ internal static class EnchantmentTcpTests
                 Level = 25, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
                 Inventory = new([
                     new(0, Main(sourceSlot), InventoryRewardGrantService.Create(items.Get(beadId), 3) with { SortLockFlag = 1 }),
-                    new(0, Main(20), wrist), new(0, Main(23), ring), new(0, Main(9), Core(27308)),
+                    new(0, Main(20), wrist with { EnchantCardId = 0, EnchantUpgrade = 0 }),
+                    new(0, Main(23), ring), new(0, Main(9), Core(27308)),
                     new(0, new(InventoryListType.Equipment, 20), wrist)], Gold: 1234)
             });
         string originalUids = Uids();
@@ -58,9 +59,8 @@ internal static class EnchantmentTcpTests
             foreach (var (slot, remaining) in new[] { ((short)20, 2), ((short)23, 1) })
             {
                 Send(peer, 0, slot);
-                peer.Expect(1, 272, [1, 0, (byte)slot, 0]);
                 var delta = peer.Expect(0, 14).Body;
-                That(delta[0] == 0 && U16(delta, 1) == 2, "ACK272后完整差量同时同步真实源数量和目标核心");
+                That(delta[0] == 0 && U16(delta, 1) == 2, "成功窗打开前完整差量同步真实源数量和目标核心");
                 var row = Row(delta, slot);
                 var original = Row(full, slot, full: true);
                 That(U32(row, 14) == cardId && row[18] == 0 && row.AsSpan(0, 14).SequenceEqual(original.AsSpan(0, 14)) &&
@@ -71,10 +71,11 @@ internal static class EnchantmentTcpTests
                 if (slot == 20) savedWrist = row; else savedRing = row;
                 peer.Expect(1, 713, [1, 0, (byte)slot, 0]);
                 peer.Expect(1, 713, [1, 0, (byte)sourceSlot, 0]);
+                // ACK272立即按当前目标附魔创建结果窗；首次与覆盖附魔都不能读到旧核心。
+                peer.Expect(1, 272, [1, 0, (byte)slot, 0]);
                 peer.Barrier();
             }
             Send(peer, 3, 20);
-            peer.Expect(1, 272, [1, 3, 20, 0]);
             var clear = peer.Expect(0, 14).Body;
             That(clear[0] == 0 && U32(Row(clear, sourceSlot), 2) == uint.MaxValue, "最后一件宝珠由源差量清槽");
             var equipment = peer.Expect(0, 14).Body;
@@ -83,6 +84,7 @@ internal static class EnchantmentTcpTests
             That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1,
                 "穿戴附魔沿共享Actor/Player刷新，不向CHR基础属性重复叠加宝珠效果");
             peer.Expect(1, 713, [1, 3, 20, 0]);
+            peer.Expect(1, 272, [1, 3, 20, 0]);
             peer.Barrier();
             string before = Snapshot();
             Send(peer, 0, 23); peer.Expect(1, 272, [0, 23, 0]); peer.Barrier();

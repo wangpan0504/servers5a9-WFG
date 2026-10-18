@@ -23,7 +23,7 @@ internal static class AvatarDisjointTcpTests
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "avatar-disjoint"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
-            repository.Create(owner, new("AvatarDisjointTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            repository.Create(owner, new("AvDisjTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Level = 60,
                 AcceptedStoryLevel = 1,
@@ -37,9 +37,9 @@ internal static class AvatarDisjointTcpTests
             string unselected = Snapshot();
             peer.Send(202, Request(0, template.Id));
             peer.Expect(1, 202, [0, 19, 0]);
+            That(Snapshot() == unselected, "未选角的CMD202失败ACK不改变时装、详情或revision");
             peer.Select();
             peer.Barrier();
-            That(Snapshot() == unselected, "未选角的CMD202失败ACK不改变时装、详情或revision");
 
             string unchanged = Snapshot();
             peer.Send(449, [0, 0]);

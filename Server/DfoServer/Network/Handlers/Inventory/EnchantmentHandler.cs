@@ -32,9 +32,10 @@ internal sealed class EnchantmentHandler(InventoryEnchantmentService service, In
                 capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);
         log.Write("enchantment", new { Connection = context.Id, SourceList = request.Source.List, SourceSlot = request.Source.Index,
             TargetList = request.Target.List, TargetSlot = request.Target.Index, result.Accepted, Revision = result.Receipt?.Character.Revision });
+        // 成功ACK会立即读取目标附魔并按描述尺寸创建结果窗，必须先安装已提交的核心。
+        await projection.RefreshAsync(context, result);
         await context.Reply(CmdPacketType.ENCHANT_BY_BEAD, EnchantmentPackets.Ack(result, request),
             result.Accepted ? "enchantment_committed" : "enchantment_rejected", Guard);
-        await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }
 }
