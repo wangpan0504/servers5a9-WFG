@@ -247,7 +247,9 @@ internal sealed partial class GameSession
         if (drops is not null && items is not null && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice)
         {
             foreach (var plan in plans)
-            foreach (var monster in plan.Monsters.Where(monster => monster.IsBlocking && monster.Source is not null &&
+            foreach (var monster in plan.Monsters.Where(monster =>
+                monster.HellWave is not null && monster.HellRewardRolls > 0 && monster.Source is null ||
+                monster.IsBlocking && monster.Source is not null &&
                 (prepareDrops is not null || monster.MonsterId is 1 or 2 && monster.SpawnType == 0)))
             {
                 // 资源准备在owner锁外；每个真实monster保留自己的等级、类型、难度及完整数量规则。
@@ -275,8 +277,13 @@ internal sealed partial class GameSession
                 {
                     if (next == expected.Id) next++;
                     if (next > ushort.MaxValue) return RejectFormal("ground-reservation-overflow");
-                    groundReservations.Add(new(monster.ObjectKey, next++, plan.Room.Map,
-                        unchecked((ushort)monster.Source!.RawValues[3]), unchecked((ushort)monster.Source.RawValues[4]), 0, ordinal));
+                    ushort groundX = 0, groundY = 0;
+                    if (monster.Source is { } source)
+                    {
+                        groundX = unchecked((ushort)source.RawValues[3]);
+                        groundY = unchecked((ushort)source.RawValues[4]);
+                    }
+                    groundReservations.Add(new(monster.ObjectKey, next++, plan.Room.Map, groundX, groundY, 0, ordinal));
                 }
             }
         }

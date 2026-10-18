@@ -165,11 +165,13 @@ internal sealed partial class SinglePlayerDungeonRun
             !current.Plan.HellWaves.Any(wave => wave.ObjectKey == key)) return DungeonRunOutcome.Rejected;
         return current.Dead.Add(key) ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate;
     }
-    // 实验性：key 是否是其波次（同 Order）里最后一只尚存的波次怪（其余都已死亡/被剔除）；参考项目 IsLastGroupMonster 的等价物。
+    // 最后一波里最后一只尚存的波次怪。前面的恶魔波次不掉深渊装备。
     internal bool IsLastLivingHellWaveMember(ushort key)
     {
-        var target = current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key && monster.HellWave is not null);
-        return target is not null && current.Plan.Monsters.Where(monster => monster.HellWave?.Order == target.HellWave!.Order).All(monster =>
+        var waves = current.Plan.Monsters.Where(monster => monster.HellWave is not null).ToArray();
+        var target = waves.SingleOrDefault(monster => monster.ObjectKey == key);
+        if (target?.HellWave is not { } wave || waves.Max(monster => monster.HellWave!.Order) != wave.Order) return false;
+        return waves.Where(monster => monster.HellWave!.Order == wave.Order).All(monster =>
             monster.ObjectKey == key || current.Dead.Contains(monster.ObjectKey) || current.Culled.Contains(monster.ObjectKey));
     }
     internal bool IsCulledMonster(ushort key) => Phase == SinglePlayerDungeonPhase.Settlement && ClearFact is not null && current.Culled.Contains(key);

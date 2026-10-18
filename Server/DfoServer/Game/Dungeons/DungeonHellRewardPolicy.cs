@@ -3,7 +3,7 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
-// 实验性（未在95客户端实证）：深渊派对波次末位怪的"hellparty 装备奖励"。参考项目 90：每个波次最后一只怪死亡时，按 [difficulty] 档位的 RewardRollCount
+// 深渊派对最后一波末位怪的 hellparty 装备奖励。前面的恶魔波次不带这组骰。按 [difficulty] 档位的 RewardRollCount
 // （A=8/B=6/C=4/D=0）投骰，每骰命中概率 (rate+1)/1001，稀有度按档位行、装备等级区间按 item drop ref table。
 // 这里把它作为额外的掉落试验（Trial）追加到该怪的普通掉落计划上，经现有掉落/地面流水线发放。
 // 未实现：史诗碎片（参考项目的概率来自环境变量，PVF/95 没有依据）、材料奖励。

@@ -49,11 +49,9 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (next > ushort.MaxValue) throw new InvalidDataException("深渊波次 object key 超出 ushort 范围");
             result.Add(wave with { ObjectKey = (ushort)next++, PacketIndex = wave.Type >= 5 ? apcIndex++ : normalIndex++ });
         }
-        // 实验性：同一个 Order（一个波次）里最后一只带 hellparty 奖励骰。
-        // 奖励载体在死亡时动态决定（实际最后死的那只，见 SinglePlayerDungeonRun.IsLastLivingHellWaveMember）；所以每只波次怪都带奖励骰数，
-        // 入场时给它们都预留地面槽位并准备"带奖励"的掉落计划，死亡时只有最后一只用带奖励的计划。
-        var rewardKeys = rewardRolls <= 0 ? [] : result.Select(wave => wave.ObjectKey).ToHashSet();
-        int ordinal = 0;
+        // 深渊装备只从最后一波掉：恶魔是前面的波次，死后出来的 APC/随从才是最后一波。
+        // 死亡时再从这最后一波里挑实际最后死的那只（IsLastLivingHellWaveMember）。
+        int finalOrder = result.Count == 0 ? -1 : result.Max(wave => wave.Order);
         var planned = new List<DungeonPlannedMonster>();
         foreach (var wave in result)
         {
@@ -69,8 +67,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 {
                     SpawnType = 0, IsBlocking = true, HellWave = wave
                 };
-            planned.Add(monster with { HellRewardRolls = rewardKeys.Contains(wave.ObjectKey) ? rewardRolls : 0 });
-            ordinal++;
+            planned.Add(monster with { HellRewardRolls = rewardRolls > 0 && wave.Order == finalOrder ? rewardRolls : 0 });
         }
         return this with { HellWaves = Array.AsReadOnly(result.ToArray()), Monsters = Array.AsReadOnly(Monsters.Concat(planned).ToArray()) };
     }
@@ -165,7 +162,9 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (parent.SourceOrdinal is < 0 or > sbyte.MaxValue || parent.RawValues.Count != 5 || parent.RawValues[0] != parent.ObjectId ||
                 parent.RawValues[4] != parent.Children.Count)
                 throw new NotSupportedException("特殊父对象身份或关联范围未支持");
-            objects.Add(new(Allocate(), parent));
+            // 带 [hellparty] 的柱子由地图文件在客户端本地生成。再发一条 type9 会叠出第二根柱子，打到的也不是地图脚本那根。
+            if (!parent.Children.Any(child => child.Kind == "[hellparty]"))
+                objects.Add(new(Allocate(), parent));
             foreach (var child in parent.Children)
             {
                 if (child.Kind != "[monster]") continue; // 其他子规则由实际父脚本消费，保留原声明、不冒充怪物。

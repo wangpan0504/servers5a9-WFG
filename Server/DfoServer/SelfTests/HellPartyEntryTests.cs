@@ -186,6 +186,8 @@ internal static class HellPartyEntryTests
             rooms.ResolveHellWaves(hellRoom, 1, null, _ => 0).Count == 0,
             "没有柱子的房间或没有基准等级时不产生波次");
         var hellPlan = DungeonMonsterPlan.FromRoom(hellRoom, character.Id, 1, plan!.BasisLevel).WithHellWaves(waves, character.Id);
+        That(!hellPlan.SpecialObjects.Any(actor => actor.Source.ObjectId == 30528 || actor.Source.Children.Any(child => child.Kind == "[hellparty]")),
+            "313163 的地图柱子 30528 不进 START_MAP，避免和客户端本地柱子叠成两根");
         That(hellPlan.HellWaves.Count == 4 && hellPlan.HellWaves.Select(row => (int)row.ObjectKey).Distinct().Count() == 4 &&
             hellPlan.HellWaves.All(row => row.ObjectKey > hellPlan.Monsters.Where(monster => monster.HellWave is null).Max(monster => monster.ObjectKey) && row.ObjectKey != character.Id) &&
             hellPlan.HellWaves.Select(row => row.PacketIndex).SequenceEqual([10, 11, 12, 13]) && hellPlan.NextObjectKey == hellPlan.HellWaves.Max(row => row.ObjectKey) + 1,
@@ -273,11 +275,13 @@ internal static class HellPartyEntryTests
             "波次怪成为阻挡型真实怪，进入 Run 的存活列表（不再只是登记）");
         var rewardPlan = DungeonMonsterPlan.FromRoom(runRoom, 99, 10).WithHellWaves(
             [new(1, 125, 1050, 20, 0, 0, 0), new(2, 216, 107010514, 20, 0, 0, 0), new(2, 216, 107010515, 20, 0, 0, 0)], 99, rewardRolls: 8);
-        That(rewardPlan.Monsters.Where(monster => monster.HellRewardRolls == 8).Select(monster => monster.MonsterId).SequenceEqual([1050, 107010514, 107010515]) &&
-            waveRun.IsLastLivingHellWaveMember(wavePlan.HellWaves[0].ObjectKey) && !waveRun.IsLastLivingHellWaveMember(10) &&
+        That(rewardPlan.Monsters.Where(monster => monster.HellRewardRolls == 8).Select(monster => monster.MonsterId).SequenceEqual([107010514, 107010515]) &&
+            !waveRun.IsLastLivingHellWaveMember(wavePlan.HellWaves[0].ObjectKey) &&
+            waveRun.IsLastLivingHellWaveMember(wavePlan.HellWaves[1].ObjectKey) && !waveRun.IsLastLivingHellWaveMember(10) &&
             DungeonHellRewardPolicy.EpicFragmentRolls(1, 0) == 6 && DungeonHellRewardPolicy.EpicFragmentRolls(2, 4) == 10 && DungeonHellRewardPolicy.EpicFragmentRolls(1, 9) == 11 &&
+            DungeonMonsterPlan.FromRoom(runRoom, 99, 10).WithHellWaves([new(1, 125, 1050, 20, 0, 0, 0)], 99, rewardRolls: 8).Monsters.Single(monster => monster.HellWave is not null).HellRewardRolls == 8 &&
             DungeonMonsterPlan.FromRoom(runRoom, 99, 10).WithHellWaves([new(1, 125, 1050, 20, 0, 0, 0)], 99).Monsters.All(monster => monster.HellRewardRolls == 0),
-            "每个波次（Order）最后一只带 hellparty 奖励骰（8 骰），rewardRolls=0（D 档）时没有");
+            "只有最后一波带 hellparty 奖励骰；单独一波就是最后一波，rewardRolls=0（D 档）时没有");
         var hellRules = DungeonHellDropRules.TryLoad(pvf);
         That(hellRules is not null && hellRules.Rate(91, 1) == 875 && hellRules.Rate(50, 4) == 1000 && hellRules.Rate(10, 1) == 0 &&
             hellRules.Rarity(1) is { } rarityA && rarityA[1] == 599000 && rarityA[6] == 1000001 &&

@@ -169,8 +169,15 @@ internal static class ServerRuntime
             var hellRewards = DungeonHellDropRules.TryLoad(pvf) is { } hellDropRules ? new DungeonHellRewardPolicy(hellDropRules, dropCandidates, epicPool, epicPermille) : null;
             DungeonDropGenerationPlan PrepareDrops(DungeonEntryPlan entry, DungeonPlannedMonster monster)
             {
+                // APC 波次（spawn type 5..8）没有怪物掉落表。最后一波的深渊装备只走 hellparty 骰，不套普通怪概率。
+                if (monster.SpawnType > 3)
+                {
+                    var apc = new DungeonDropGenerationPlan("hell-party-apc", []);
+                    return monster.HellRewardRolls > 0 && hellRewards is not null
+                        ? hellRewards.Extend(apc, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : apc;
+                }
                 var plan = resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.SpawnType, entry.Difficulty, entry.BasisLevel);
-                // 实验性：深渊波次末位怪额外的 hellparty 装备骰；奖励规则文件缺失时保持普通掉落。
+                // 深渊装备骰只挂在最后一波；前面的恶魔波次保持各自的普通掉落。
                 return monster.HellRewardRolls > 0 && hellRewards is not null
                     ? hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : plan;
             }
