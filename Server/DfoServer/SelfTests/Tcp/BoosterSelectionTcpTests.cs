@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
+using DfoServer.Network.Management;
 using static DfoServer.Testing.BoosterTcpTests;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -116,6 +117,10 @@ internal static class BoosterSelectionTcpTests
             That(U16(defaultEquipment, 1) == 2, "stale default causes neither an extra reward nor an extra projection");
             Entry(defaultEquipment, 8, -1, 0);
             Entry(defaultEquipment, 19, 101000007, InventoryRewardGrantService.InitialQuality);
+            SendSelect(peer, 67, [3290, 3311]);
+            peer.Expect(1, 160, [0, 19, 0]);
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "level SelectTcp 75", out var levelReply) &&
+                levelReply.StartsWith("OK "), "通过原GM入口满足觉醒之息源盒真实最低75级，Lv1完整选择仍拒绝");
             SendSelect(peer, 67, [3290, 3311]);
             ExpectAck(peer, 10002056, 67, [(3290, 88), (3311, 88)]);
             byte[] defaultMaterials = peer.Expect(0, 14).Body;

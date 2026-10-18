@@ -144,6 +144,8 @@ internal static class SqliteMigrations
         }),
         new(54, "角色Buff强化登记", UpgradeSkillSwitchInventory),
         new(55, "角色秘药经验状态", static (db, tx) => Execute(db, tx, ExpBonusSchema)),
+        new(56, "每日保留礼盒次数", static (db, tx) => Execute(db, tx,
+            "ALTER TABLE characters ADD COLUMN daily_booster_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(daily_booster_usage) AND json_type(daily_booster_usage)='array')")),
     ];
 
     static void UpgradeCollectBoxState(SqliteConnection db, SqliteTransaction tx)
@@ -1357,6 +1359,7 @@ internal static class SqliteMigrations
         "SELECT [account],[revision],[rental_points],[seria_luck],[premium_contracts],[character_slots] FROM [account_wallets] LIMIT 0",
         "SELECT avatar_expansion FROM characters LIMIT 0",
         "SELECT devil_usage,stamina_until FROM characters LIMIT 0",
+        "SELECT daily_booster_usage FROM characters LIMIT 0",
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",

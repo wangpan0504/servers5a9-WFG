@@ -44,6 +44,8 @@ internal sealed class TcpPeer : IDisposable
     public byte[] SeriaLuckInfo { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
+    public Dictionary<int, byte> DailyBoosterUsed { get; } = [];
+    public byte[][] InitialDailyBoosterPackets { get; private set; } = [];
     public byte[] InitialGameOptions { get; private set; } = [];
     public byte[] AdventureName { get; private set; } = [];
     public string ActorAdventureName { get; private set; } = "";
@@ -309,10 +311,31 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(pcroom + 1 < body.Length && body[pcroom] == (pcRoom ? 1 : 0) && body[pcroom + 1] == (active ? 1 : 0),
             "全局网吧身份与账号黑钻外观各自发送，不互相开启或清除");
     }
-    public void CheckBlackDiamondRefresh(bool active, bool dungeon = false, bool appearanceChanged = true, bool pcRoom = false)
+    public void CheckBlackDiamondRefresh(bool active, bool dungeon = false, bool appearanceChanged = true, bool pcRoom = false,
+        bool allowDailyReset = false)
     {
         Send(63);
         var first = Read();
+        if (allowDailyReset && first is { Kind: 0, Opcode: 541 })
+        {
+            // 仅自然到期场景容纳已证前置日界通知，仍严格核对完整初始化名册和后续会员包序。
+            TestCheck.That(InitialDailyBoosterPackets.Length > 0, "日界刷新已有完整初始化名册");
+            var expected = InitialDailyBoosterPackets.SelectMany(Inventory.DailyBoosterProjectionTests.Decode)
+                .Select(row => row.Key).ToArray();
+            int chunks = Math.Max(1, (expected.Length + byte.MaxValue - 1) / byte.MaxValue);
+            int offset = 0;
+            for (int chunk = 0; chunk < chunks; chunk++)
+            {
+                var rows = Inventory.DailyBoosterProjectionTests.Decode(first.Body);
+                int count = Math.Min(byte.MaxValue, expected.Length - offset);
+                TestCheck.That(rows.Count == count && rows.Keys.SequenceEqual(expected.Skip(offset).Take(count)) &&
+                    rows.Values.All(used => used == 0), "日界541分片完整、有序、不重复且每项已用次数明确归零");
+                offset += count;
+                if (chunk + 1 < chunks) first = Expect(0, 541);
+            }
+            foreach (int id in expected) DailyBoosterUsed[id] = 0;
+            first = Read();
+        }
         bool ceraFirst = first is { Kind: 0, Opcode: 53 };
         var overview = ceraFirst ? Expect(0, 1760) : first;
         TestCheck.That(overview is { Kind: 0, Opcode: 1760 } && overview.Body.Length == 1 + overview.Body[0] * 9 &&
@@ -423,6 +446,24 @@ internal sealed class TcpPeer : IDisposable
         for (int index = 2; index < afterCargo; index++)
         {
             var packet = Read();
+            if (index == 5)
+            {
+                // Main全量之后严格接收完整541分片，保持Entry返回索引和后续988顺序。
+                var daily = new List<byte[]>();
+                int lastId = 0;
+                while (packet is { Kind: 0, Opcode: 541 })
+                {
+                    var rows = Inventory.DailyBoosterProjectionTests.Decode(packet.Body);
+                    TestCheck.That(daily.Count == 0 || rows.Count != 0 && rows.Keys.Min() > lastId,
+                        "541分片模板有序、不重复，空视图只有一包");
+                    foreach (var row in rows) DailyBoosterUsed[row.Key] = row.Value;
+                    if (rows.Count != 0) lastId = rows.Keys.Max();
+                    daily.Add(packet.Body);
+                    packet = Read();
+                }
+                TestCheck.That(daily.Count > 0, "Main全量之后必须初始化每日已用视图");
+                InitialDailyBoosterPackets = daily.ToArray();
+            }
             if (index == afterCargo - 2 && packet.Kind == 0 && packet.Opcode == 19)
             {
                 SkillInfo = packet.Body;

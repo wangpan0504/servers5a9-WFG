@@ -39,7 +39,7 @@ internal sealed class RentalService(RentalCatalog catalog, ItemCatalog items)
         }
         catch (InvalidDataException) { return InventoryResult.Reject(); }
         catch (InvalidOperationException) { return InventoryResult.Reject(); }
-        if (template.Kind != ItemKind.Equipment || template.EquipmentSlot is < 12 or > 24 ||
+        if (template.Kind != ItemKind.Equipment || !template.Expiration.SupportsCreation || template.EquipmentSlot is < 12 or > 24 ||
             (template.Jobs & (1 << character.Job)) == 0)
             return InventoryResult.Reject();
 

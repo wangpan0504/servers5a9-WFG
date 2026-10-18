@@ -75,6 +75,7 @@ $keywordGroups = [ordered]@{
     'Quest'      = 'quest-lifecycle','quest-extras','quest-chains','quest-chain-settlement','quest-metro','quest-gold-mail','quest-question-state','quest-continuation','quest-core-rewards','quest-initialization','story-digest'
     'Story'      = 'story-digest','story-cinematic','story-scenes','story-quest-entry','story-publication'
     'Dungeon'    = 'formal-dungeon','dungeon-training','class-experience','dungeon-revive','hero-tomb-entry','dungeon-probe','dungeon-settlement','dungeon-entry-plan'
+    'Booster'    = 'booster','booster-selection','booster-equipment','daily-retained-booster'
     'Inventory'  = 'inventory','consumable-use','inventory-persistence'
     'Items?/'    = 'inventory','shop','consumable-use'
     'Consumable' = 'consumable-use','consumable-use-rules'

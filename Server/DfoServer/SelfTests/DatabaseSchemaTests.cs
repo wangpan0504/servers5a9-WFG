@@ -1759,8 +1759,17 @@ internal static class DatabaseSchemaTests
     static void DropCollectBoxSchema(SqliteConnection db) =>
         Execute(db, "DROP TABLE IF EXISTS character_collectbox_expirations; DROP TABLE IF EXISTS character_collectbox_slots; DROP TABLE IF EXISTS character_collectbox_state");
 
-    internal static void DropQuestStageSchema(SqliteConnection db) =>
+    internal static void DropQuestStageSchema(SqliteConnection db)
+    {
+        RewindDailyBoosterUsage(db);
         Execute(db,"DROP TABLE IF EXISTS character_quest_stage_claims; DROP TABLE IF EXISTS character_quest_stage_witnesses");
+    }
+
+    static void RewindDailyBoosterUsage(SqliteConnection db)
+    {
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'") is 1L)
+            Execute(db, "ALTER TABLE characters DROP COLUMN daily_booster_usage");
+    }
 
     static void DropAuctionSchema(SqliteConnection db) =>
         Execute(db, "DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings");
@@ -1843,6 +1852,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RewindDailyBoosterUsage(db);
                 if (oldVersion < 49) RewindDevilServices(db);
                 if (oldVersion < 53) DropQuestStageSchema(db);
                 if (oldVersion < 46) RewindQuestDungeonAlternatives(db);
@@ -2387,14 +2397,14 @@ internal static class DatabaseSchemaTests
             }
             _ = new CharacterRepository(path);
             using (var db = Open(path))
-                Check(Query(db,"PRAGMA user_version") is 55L && Query(db,"SELECT revision||':'||gold FROM characters") is "7:321" &&
+                Check(Query(db,"PRAGMA user_version") is long stageVersion && stageVersion == SqliteMigrations.CurrentVersion && Query(db,"SELECT revision||':'||gold FROM characters") is "7:321" &&
                     Query(db,"SELECT count(*) FROM character_quest_stage_witnesses") is 0L && Query(db,"SELECT count(*) FROM character_quest_stage_claims") is 0L &&
                     Query(db,"SELECT count(*) FROM pragma_index_list('character_quest_stage_claims') WHERE [unique]=1") is 2L,
                     "v52追加空阶段旁表与双唯一，不猜旧来源或改旧角色");
             string upgraded = Snapshot(path);
             _ = new CharacterRepository(path);
             Check(Snapshot(path) == upgraded,"v53重开逐表字节保持，不重跑迁移");
-            using (var db = Open(path)) Execute(db,"PRAGMA user_version=56");
+            using (var db = Open(path)) Execute(db,$"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}");
             string newer = Snapshot(path);
             Reject<InvalidDataException>(() => new CharacterRepository(path),"阶段仓储拒绝较新版本");
             Check(Snapshot(path) == newer,"较新版本拒绝不写库");
@@ -2407,6 +2417,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(v53);
         using (var db = Open(v53))
         {
+            RewindDailyBoosterUsage(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold)
                 VALUES(1,'skill-switch-v53',0,'SkillSwitchV53',17,38,1,450,234,0,456);
@@ -2471,6 +2482,7 @@ internal static class DatabaseSchemaTests
         _ = new CharacterRepository(failure);
         using (var db = Open(failure))
         {
+            RewindDailyBoosterUsage(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
                 VALUES(1,'skill-switch-fail',0,'SkillSwitchFail',19,38,1,450,234,0);

@@ -140,6 +140,39 @@ internal static class ConsumableUseSessionTests
         }
     }
 
+    public static void RunQualificationExpiry(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        using var f = new Fixture(towns, characters);
+        f.Select();
+        f.Session.MutateInventory(character => new(true, 0, new(character.Inventory, character.Inventory with
+        {
+            Items = character.Inventory.Items.Select(item => item.Position == f.Request.Position ? item with
+                { Core = item.Core with { ExpireTime = 1900000002 } } : item).ToImmutableArray()
+        }, "potion_free_expiry_fixture")));
+        That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "免费源期限回归经真实城镇入口旅行");
+        f.Session.BeginDungeonSelection();
+        That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+            global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive), practice: true) is not null &&
+            f.Session.CompleteFormalDungeonLoading() is not null, "免费源期限回归建立真实练习实例");
+        string before = JsonSerializer.Serialize(f.Read());
+        f.Clock.BeforeUtcRead = () => { if (f.Clock.Reads == 4) f.Clock.Advance(TimeSpan.FromSeconds(3)); };
+        That(f.Use().Outcome == ConsumableUseOutcome.Rejected && JsonSerializer.Serialize(f.Read()) == before,
+            "免费副本零变化计划在Repository只读复验才跨截止，正常拒绝且原库存和revision不变");
+        f.Clock.BeforeUtcRead = null;
+        f.Session.MutateInventory(character => new(true, 0, new(character.Inventory, character.Inventory with
+        {
+            Items = character.Inventory.Items.Select(item => item.Position == f.Request.Position ? item with
+                { Core = item.Core with { ExpireTime = 0 } } : item).ToImmutableArray()
+        }, "potion_free_expiry_fixture_restore")), requireTown: false);
+        var retry = f.Use(8);
+        That(retry.Outcome == ConsumableUseOutcome.Committed && retry.PreserveSource && f.Count == 3,
+            "正常期限失败不写冷却或成功token，同连接修复合法源后可继续免费使用");
+        InventoryResult Noop(Character character) => new(true, 0, new(character.Inventory, character.Inventory, "booster_scene_probe"));
+        That(!f.Session.PlanAndCommitBooster(Noop, new(Village: true, SeriaRoom: true)).Accepted &&
+            f.Session.PlanAndCommitBooster(Noop, new()).Accepted,
+            "真实副本拒绝带城镇/房间并集声明的盒，而无声明保留既有副本合法地点");
+    }
+
     static bool Same(Character first, Character second) => JsonSerializer.Serialize(first) == JsonSerializer.Serialize(second);
 
     internal sealed class FakeClock : TimeProvider

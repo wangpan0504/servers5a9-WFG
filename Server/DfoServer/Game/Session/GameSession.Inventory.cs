@@ -38,12 +38,19 @@ internal sealed partial class GameSession
             formalDungeon?.PendingTutorialClear is not null || formalDungeon?.PendingInventoryDiscard is not null)
             return InventoryResult.Reject(invalidStateError);
         var result = operation(Selected);
-        return CommitInventory(Selected, result);
+        return CommitInventory(Selected, result, invalidStateError);
     });
 
-    InventoryResult CommitInventory(Character character, InventoryResult result)
+    InventoryResult CommitInventory(Character character, InventoryResult result, ushort qualificationError = 1)
     {
-        Selected = InventoryService.Commit(repository, owner, character, result);
+        try
+        {
+            Selected = InventoryService.Commit(repository, owner, character, result);
+        }
+        catch (InventoryQualificationExpiredException)
+        {
+            return InventoryResult.Reject(qualificationError) with { RejectReason = "qualification_expired" };
+        }
         return result with { Receipt = result.Accepted && result.Plan is not null
             ? new(Selected, owner.Generation, SelectionEpoch)
                 {
@@ -62,6 +69,13 @@ internal sealed partial class GameSession
 
     public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1,
         bool requireTown = true, SessionPhase? requiredPhase = null) => PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase);
+
+    public InventoryResult PlanAndCommitBooster(Func<Character, InventoryResult> plan,
+        DfoServer.GameWorld.Items.BoosterUsePlacesDefinition places) =>
+        PlanAndCommitInventory(plan, 19, requireTown: false, allowSettlement: false, additionalGuard: () =>
+            places.PendingRule is null && (!places.Village && !places.SeriaRoom ||
+                Phase == SessionPhase.Town && (places.Village || places.SeriaRoom && Selected is { } character &&
+                    towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character)))));
 
     public InventoryResult RepairEquipment(RepairEquipmentRequest request, InventoryRepairService repair) =>
         // 战斗中的耐久由本版客户端维护；CMD23 mode1触发后仍核对副本实例、契约期限与当日次数。
@@ -94,7 +108,7 @@ internal sealed partial class GameSession
                 !ReferenceEquals(formalDungeon, capture.Dungeon) || formalDungeon?.Run.Snapshot.Identity != capture.Identity ||
                 !ReferenceEquals(Selected, character))
                 return InventoryResult.Reject(invalidStateError);
-            return CommitInventory(character, result);
+            return CommitInventory(character, result, invalidStateError);
         });
 
         bool CanPlan()

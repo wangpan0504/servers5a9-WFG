@@ -109,7 +109,7 @@ internal static class InventoryRewardGrantService
                 catch (OverflowException) { return InventoryResult.Reject(19); }
                 continue;
             }
-            if (instances is null && template.IsPremiumService)
+            if (instances is null && (template.IsPremiumService || !template.Expiration.SupportsCreation))
                 return InventoryResult.Reject(19);
             if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
                 return InventoryResult.Reject();

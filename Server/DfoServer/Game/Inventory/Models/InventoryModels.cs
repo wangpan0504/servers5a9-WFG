@@ -55,6 +55,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public CubeContractState CubeContract { get; init; } = CubeContractState.Empty;
     public ushort AvatarExpansion { get; init; } = 105;
     public ImmutableArray<DevilServiceUsage> DevilUses { get; init; } = [];
+    public ImmutableArray<DailyBoosterUsage> DailyBoosterUses { get; init; } = [];
     public long StaminaUntil { get; init; }
     public ushort CargoCapacity { get; init; } = 8;
     public AccountCargoState AccountCargo { get; init; } = new();
@@ -66,6 +67,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
         if (AvatarExpansion > 315 || AvatarExpansion % 7 != 0) throw new InvalidDataException("装扮栏扩展值无效");
         AccountWallet.Validate();
         CubeContract.Validate();
+        DailyBoosterUsage.Validate(DailyBoosterUses);
         if (StaminaUntil < 0 || DevilUses.IsDefault || DevilUses.Any(row => row.Slot > 7 || row.Day < 0 || row.Allowance > 30) ||
             DevilUses.Select(row => row.Slot).Distinct().Count() != DevilUses.Length)
             throw new InvalidDataException("魔王契约次数账本无效");
@@ -100,8 +102,11 @@ internal sealed record InventoryDeleteRequest(InventoryListType List, InventoryD
 {
     public byte? ClientState { get; init; }
 }
+internal sealed class InventoryQualificationExpiredException() : InvalidOperationException("库存规划资格期限已过");
+
 // 移动资格必须属于生成计划时的角色；不能把旧计划重新绑定到刷新后的expected。
-internal sealed class InventoryCharacterPrecondition(Character character, long? qualificationExpiresAt = null)
+internal sealed class InventoryCharacterPrecondition(Character character, long? qualificationExpiresAt = null, TimeProvider? clock = null,
+    bool requirePosition = false)
 {
     readonly ushort id = character.Id;
     readonly long revision = character.Revision;
@@ -110,12 +115,15 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
     readonly byte level = character.Level;
     readonly byte equipmentSlots = character.EquipmentSlotFlags;
     readonly ImmutableArray<CharacterSkill> skills = character.Skills.OrderBy(skill => skill.Id).ToImmutableArray();
+    readonly DfoServer.GameWorld.Towns.Location? position = requirePosition ? character.Position : null;
 
     // 时间资格也在提交前复验，不能凭到期前的规划继续穿戴越级装备。
-    public bool Matches(Character value, long? utcSeconds = null) => value.Id == id && value.Revision == revision && value.Job == job &&
+    public bool MatchesIdentity(Character value) => value.Id == id && value.Revision == revision && value.Job == job &&
         value.GrowType == grow && value.Level == level && value.EquipmentSlotFlags == equipmentSlots &&
-        skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) &&
-        (qualificationExpiresAt is null || (utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()) < qualificationExpiresAt.Value);
+        skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) && (position is null || value.Position == position);
+    public bool IsExpired(long? utcSeconds = null) => qualificationExpiresAt is not null &&
+        (utcSeconds ?? (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) >= qualificationExpiresAt.Value;
+    public bool Matches(Character value, long? utcSeconds = null) => MatchesIdentity(value) && !IsExpired(utcSeconds);
 }
 
 internal sealed record InventoryResult(bool Accepted, ushort Error, InventoryPlan? Plan = null, int MoveCount = 0,

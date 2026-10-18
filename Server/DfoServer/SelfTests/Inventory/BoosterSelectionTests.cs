@@ -2,6 +2,8 @@ using static DfoServer.Testing.TestCheck;
 using DfoServer.Infrastructure;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -33,6 +35,7 @@ internal static class BoosterSelectionTests
         LegacyExpiryFixture.Restore(catalog, (10002064, "2013-09-24 06:00:00"));
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
+        RunDisjointInstanceSelection(towns, itemResources, now);
         var creatureCategory = Parse("0 0\n[creature]\n400990444 1 400990445 1\n[/creature]").Selection!.Categories.Single();
         That(creatureCategory.PendingRule is null && creatureCategory.Rewards.All(row => row.RequiredKind == ItemKind.Creature),
             "宠物自选段保留完整候选并约束实际产物类型");
@@ -167,20 +170,22 @@ internal static class BoosterSelectionTests
             !service.Open(current, Select(3, [101000007, 10000219]), out _).Accepted,
             "default hint never authorizes an item outside the real reward list or an extra selection");
         current = current with { Inventory = new([new(1, Bag(3), Core(10002056))]) };
+        That(!service.Open(current, Select(3, [3290, 3311]), out _).Accepted, "觉醒之息源盒最低75级在完整合法选择时仍生效");
+        current = current with { Level = 75 };
         result = service.Open(current, Select(3, [3290, 3311]), out receipt);
         That(result.Accepted && receipt!.Rewards.SequenceEqual(new BoosterGrantedItem[] { new(3290, 88), new(3311, 88) }) &&
             result.Plan!.After.Items.Length == 2 && result.Plan.After.Items.All(item => item.Core.Count == 88),
             "multiple defaults use actual row quantities, allow fewer than the selection maximum and do not auto-grant unchosen expired defaults");
         That(!service.Open(current, Select(3, [10002064]), out _).Accepted && current.Inventory.Items.Length == 1,
             "a default that is actually selected still needs a usable complete reward template");
-        current = current with { Inventory = new([new(1, Bag(3), Core(2749783))]) };
+        current = current with { Level = 16, Inventory = new([new(1, Bag(3), Core(2749783))]) };
         var historical = new DateTimeOffset(2013, 3, 1, 0, 0, 0, TimeSpan.Zero);
         result = service.Open(current, Select(3, [2749770]), out receipt, historical);
         That(result.Accepted && receipt!.Rewards.Single() == new BoosterGrantedItem(2749770, 5) &&
             result.Plan!.After.Items.Single().Core.Count == 5,
             "default list leading count and repeated ID do not replace or add to the configured five-item reward");
 
-        current = current with { Inventory = new(filled.SetItem(0, new(65, Bag(65), Core(10002056)))) };
+        current = current with { Level = 75, Inventory = new(filled.SetItem(0, new(65, Bag(65), Core(10002056)))) };
         var materialPage = Enumerable.Range(121, 56).Select(slot => new InventoryItem(slot, Bag((short)slot), Core(3290, int.MaxValue)));
         current = current with { Inventory = current.Inventory with { Items = current.Inventory.Items.AddRange(materialPage) } };
         before = current.Inventory;
@@ -218,6 +223,33 @@ internal static class BoosterSelectionTests
             That(JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(session.Selected),
                 "repository reopen retains complete equipment and consumable rewards");
             That(Query("SELECT COUNT(DISTINCT item_uid) FROM character_inventory_items") is 6L, "every final physical instance has a unique persisted UID");
+            repo.Create(owner, new("RookieSet", towns.Room, towns.InitialReturn)
+            {
+                Job = 15, Inventory = new([new(0, Bag(3), Core(490704519))])
+            });
+            var rookieSession = new GameSession(repo, towns, owner);
+            rookieSession.Select(1);
+            rookieSession.MarkReady();
+            int[] rookieSet = [400100084, 400150076, 400200076, 400250082, 400050092];
+            var rookieSaved = rookieSession.Selected;
+            snapshot = Snapshot();
+            Query("CREATE TRIGGER fail_rookie_set BEFORE INSERT ON character_inventory_slots WHEN NEW.slot_index=10 BEGIN SELECT RAISE(ABORT,'rookie set rollback'); END");
+            Reject(() => rookieSession.MutateInventory(role => service.Open(role, Select(3, rookieSet), out _, now)),
+                "新秀整套奖励后续写入失败传播");
+            That(rookieSession.Selected == rookieSaved && Snapshot() == snapshot,
+                "限定实例分解兼容仍保留源、已写产物、审计与UID序列的整组回滚");
+            Query("DROP TRIGGER fail_rookie_set");
+            That(rookieSession.MutateInventory(role => service.Open(role, Select(3, rookieSet), out _, now)).Accepted,
+                "新秀五件套沿真实Session事务完整提交");
+            var rookieReopened = new CharacterRepository(path).List(owner).Single(role => role.Name == "RookieSet");
+            That(JsonSerializer.Serialize(rookieReopened) == JsonSerializer.Serialize(rookieSession.Selected) &&
+                rookieReopened.Inventory.Items.Length == 5 && rookieReopened.Inventory.Items.All(item => item.Uid > 0 &&
+                    item.Core.ExpireTime == now.ToUnixTimeSeconds() + 30 * 86400) &&
+                rookieReopened.Inventory.Items.Select(item => item.Uid).Distinct().Count() == 5,
+                "重开库保留新秀整套独立UID、完整核心及30天期限");
+            snapshot = Snapshot();
+            That(!rookieSession.MutateInventory(role => service.Open(role, Select(3, rookieSet), out _, now)).Accepted && Snapshot() == snapshot,
+                "新秀整套成功后的耗尽重放不再发奖或记审计");
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject(() => session.MutateInventory(role => service.Open(role, Select(4, [10000871]), out _)), "old generation cannot open or replay a selection");
             That(Query("PRAGMA integrity_check") is "ok", "selection database integrity");
@@ -236,6 +268,141 @@ internal static class BoosterSelectionTests
         finally { Directory.Delete(root, true); }
         Console.WriteLine($"PASS {Count - checks} booster selection assertions");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(catalog.Get(id), count, now);
+    }
+
+    static void RunDisjointInstanceSelection(TownCatalog towns, ItemResources resources, DateTimeOffset now)
+    {
+        var catalog = resources.Items;
+        var service = new InventoryBoosterService(catalog, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        Character Role(int sourceId) => new(1, 0, "RookieBox", 0, towns.Room, towns.InitialReturn)
+        {
+            Job = 15, Inventory = new([new(1, Bag(3), InventoryRewardGrantService.Create(catalog.Get(sourceId), utcNow: now))], Gold: 12345)
+        };
+        var first = Role(490704518);
+        That(service.Open(first, Select(3, [401030066]), out _, now).Accepted,
+            "模板已禁分解的新秀武器盒能沿真实开箱入口发放，不能因空实例分解声明整盒拒绝");
+        for (byte job = 0; job < 16; job++)
+            foreach (byte level in new byte[] { 1, 95 })
+                That(service.Open(first with { Job = job, Level = level }, Select(3, [401030066]), out _, now).Accepted,
+                    "各职业及领取等级都可选择异职业武器，不将穿戴资格套用于领盒 " + job + ":" + level);
+        var unique = new HashSet<int>();
+        foreach (var (id, categories, lines, groupSize) in new[]
+        {
+            (490704518, 16, 76, 1), (490704519, 35, 175, 5), (490704520, 7, 21, 3), (490704521, 7, 14, 2)
+        })
+        {
+            var definition = resources.Boosters.Get(id);
+            That(definition.Available && definition.Selection!.Categories.Length == categories &&
+                definition.Selection.Categories.Sum(group => group.Rewards.Length) == lines,
+                "新秀四盒保留全部分类及声明行 " + id);
+            foreach (var category in definition.Selection!.Categories)
+            {
+                var selections = id == 490704518 ? category.Rewards.Select(row => new[] { row.ItemId }) :
+                    new[] { category.Rewards.Select(row => row.ItemId).ToArray() };
+                foreach (int[] ids in selections)
+                {
+                    var role = Role(id);
+                    var opened = service.Open(role, Select(3, ids, category.Category, category.Subcategory), out var receipt, now);
+                    That(opened.Accepted && receipt!.Rewards.Length == groupSize && opened.Plan!.After.Items.Length == groupSize &&
+                        opened.Plan.After.Gold == 12345 && opened.Plan.After.Find(Bag(3)) is null && role.Inventory.Items.Length == 1,
+                        "各分类完整发奖且只规划一次源消费，不额外限制领取职业/等级 " + id);
+                    foreach (var reward in opened.Plan!.After.Items)
+                    {
+                        unique.Add(reward.Core.ItemId);
+                        var template = catalog.Get(reward.Core.ItemId);
+                        That(ids.Contains(reward.Core.ItemId) && template is { Kind: ItemKind.Equipment,
+                            DisjointForbidden: true, PersonalCargoForbidden: true, Expiration.Days: 30 } &&
+                            reward.Core == InventoryRewardGrantService.Create(template, utcNow: now) with
+                            { Attr = (byte)(id == 490704518 ? 10 : 0), GenuineUpgrade = (byte)(id == 490704518 ? 5 : 0) },
+                            "实际装备完整核心、30天期限和模板限制保留，武器强化10锻造5 " + reward.Core.ItemId);
+                    }
+                }
+            }
+        }
+        That(unique.Count == 247, "四盒全部286声明行覆盖247个独立装备模板");
+        foreach (var request in new[] { Select(3, [401030066, 401030066]), Select(3, [400100084]),
+            Select(3, [401030066], 255), Select(3, []) })
+            That(!service.Open(first, request, out _, now).Accepted && first.Inventory.Items.Single().Core.ItemId == 490704518,
+                "新兼容盒仍拒绝重复、外来、错误分类和空选择，保留源");
+        foreach (var source in new[] { first.Inventory.Items.Single().Core with { EquipmentLockId = 1 },
+            first.Inventory.Items.Single().Core with { ExpireTime = (int)now.ToUnixTimeSeconds() } })
+            That(!service.Open(first with { Inventory = new([new(1, Bag(3), source)]) }, Select(3, [401030066]), out _, now).Accepted,
+                "兼容分解声明不绕过源安全锁和过期限制");
+        var range = ItemSlotBoundService.Range(ItemKind.Equipment, first.Inventory);
+        var full = first with { Inventory = first.Inventory with { Items = first.Inventory.Items.AddRange(
+            Enumerable.Range(range.Start, range.End - range.Start + 1).Select(slot => new InventoryItem(slot, Bag((short)slot),
+                InventoryRewardGrantService.Create(catalog.Get(16400), utcNow: now)))) } };
+        That(!service.Open(full, Select(3, [401030066]), out _, now).Accepted && full.Inventory.Items.Length == range.End - range.Start + 2,
+            "装备页满时整盒拒绝，不能丢奖励或改投其他容器");
+
+        // 每个负例用私有目录，不能改共享资源缓存；仍调用真实Open而非只检查Parse。
+        var archive = (PvfLib.PvfArchive)typeof(ItemCatalog).GetField("pvf", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(catalog)!;
+        var isolated = new BoosterCatalog(archive, new Dictionary<int, string>());
+        var definitions = (ConcurrentDictionary<int, BoosterDefinition>)typeof(BoosterCatalog)
+            .GetField("definitions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(isolated)!;
+        var guarded = new InventoryBoosterService(catalog, isolated, resources.GoldLimits, resources.EpicPieces);
+        const string marker = "[set disjoint instance type]\n";
+        string Text(string body, string declaration = marker) => declaration + "[stackable type]\n`[booster selection]` 0\n" +
+            "[booster selection num]\n0\n[booster select category]\n0 0\n" + body + "\n[/booster select category]\n";
+        const string safe = "[equipment]\n401030066 1\n[/equipment]";
+        definitions[10000743] = BoosterCatalog.Parse(Text(safe));
+        var syntheticRole = Role(10000743);
+        That(guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
+            "支持范围由声明及实际模板驱动，不按四个新秀盒ID放行");
+        definitions[10000743] = BoosterCatalog.Parse(Text(safe,
+            "[outer]\n[inner]\n[/outer]\n" + marker + "[/inner]\n"));
+        string beforeCrossedDeclaration = JsonSerializer.Serialize(syntheticRole);
+        var crossed = guarded.Open(syntheticRole, Select(3, [401030066]), out var crossedReceipt, now);
+        That(!crossed.Accepted && crossed.Plan is null && crossedReceipt is null &&
+            JsonSerializer.Serialize(syntheticRole) == beforeCrossedDeclaration,
+            "交叉闭合内层中的实例分解声明不是根级，必须整包拒绝并保留源与全部资产");
+        foreach (string nested in new[]
+        {
+            "[outer]\n[outer]\n[/outer]\n" + marker + "[/outer]\n",
+            "[outer]\n[outer]\n" + marker + "[/outer]\n[/outer]\n",
+            "[outer]\n[inner]\n" + marker + "[/inner]\n[/outer]\n",
+            "[outer]\n" + marker + "[/outer]\n"
+        })
+        {
+            definitions[10000743] = BoosterCatalog.Parse(Text(safe, nested));
+            var nestedResult = guarded.Open(syntheticRole, Select(3, [401030066]), out var nestedReceipt, now);
+            That(!nestedResult.Accepted && nestedResult.Plan is null && nestedReceipt is null &&
+                JsonSerializer.Serialize(syntheticRole) == beforeCrossedDeclaration,
+                "同名或异名嵌套外层仍开放时，实例分解声明不是根级，拒绝且资产不变");
+        }
+        definitions[10000743] = BoosterCatalog.Parse(Text(safe,
+            "[outer]\n[/outer]\n" + marker + "[outer]\n[/outer]\n"));
+        That(guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
+            "两个独立且完整闭合的同名区间之间仍是根级，不因保守配对扩大拒绝范围");
+        foreach (string declaration in new[] { marker + marker, marker + "1\n", marker + "`value`\n", marker + "[/set disjoint instance type]\n",
+            marker + marker + "[/set disjoint instance type]\n", "[/set disjoint instance type]\n",
+            "[set disjoint instance type\n", "[set disjoint instance type extra]\n", "[ set disjoint instance type]\n" })
+        {
+            definitions[10000743] = BoosterCatalog.Parse(Text(safe, declaration));
+            That(!guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
+                "重复、有值、嵌套或闭合冲突的实例分解声明保持拒绝");
+        }
+        definitions[10000743] = BoosterCatalog.Parse(Text(safe + "\n" + marker, ""));
+        That(!guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
+            "分类内嵌实例分解声明不能按根级空声明放行");
+        That(!catalog.Get(16400).DisjointForbidden, "负例普通装备确实允许分解");
+        foreach (int unsafeId in new[] { 16400, 1106, 1, resources.EpicPieces.ByPiece.Keys.First(), resources.Boosters.DirectActivationItems.First() })
+        {
+            definitions[10000743] = BoosterCatalog.Parse(Text(safe + "\n[etc]\n" + unsafeId + " 1\n[/etc]"));
+            var rejected = guarded.Open(syntheticRole, Select(3, [401030066, unsafeId]), out var receipt, now);
+            That(!rejected.Accepted && rejected.Plan is null && receipt is null && syntheticRole.Inventory.Gold == 12345 &&
+                syntheticRole.Inventory.Items.Single().Core.ItemId == 10000743,
+                "禁分解实例声明的实际所选奖励必须全为已禁分解装备，快捷钱包/碎片/契约也不能绕过 " + unsafeId);
+        }
+        definitions[10000743] = BoosterCatalog.Parse(Text(safe + "\n[etc]\n1106 1\n[/etc]")
+            .Replace("[booster selection num]\n0", "[booster selection num]\n1", StringComparison.Ordinal));
+        That(guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted &&
+            !guarded.Open(syntheticRole, Select(3, [1106]), out _, now).Accepted,
+            "限定兼容按实际选择预检，不因同分类内未选中的不安全候选额外拒绝");
+        definitions[10000743] = BoosterCatalog.Parse(marker + "[stackable type]\n`[booster]` 0\n" +
+            "[booster info]\n[equipment]\n1 401030066 1 1\n[/equipment]\n[/booster info]");
+        That(!guarded.Open(syntheticRole, new(3, 1), out _, now).Accepted,
+            "随机奖池不进入选择盒的限定兼容范围");
     }
 
     static BoosterDefinition Parse(string category, int count = 1) => BoosterCatalog.Parse("[stackable type]\n`[booster selection]` 0\n" +

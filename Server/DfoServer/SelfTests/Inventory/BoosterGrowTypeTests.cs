@@ -59,12 +59,16 @@ internal static class BoosterGrowTypeTests
             opened.Plan.After.Items.Single(item => item.Core.ItemId == 101000814).Core ==
                 InventoryRewardGrantService.Create(catalog.Get(101000814), utcNow: now),
             "匹配转职池扣除礼盒并发放一件完整灵魂武器");
+        That(service.CountMatchingPools(role with { Job = 15, GrowType = 0 }, 490704570) == (70, 0),
+            "枪剑士真实转职池仍为零匹配，与源职业资格独立核对");
+        That(service.CountMatchingPools(role with { Level = 0 }, 490704570) == (70, 0),
+            "等级越界真实转职池仍为零匹配，与源最低等级资格独立核对");
         That(service.Open(role with { Job = 15, GrowType = 0 }, new(65, 1), out _) is
-            { Accepted: false, Error: 19, Plan: null, RejectReason: "unmatched_grow_type_pool" },
-            "枪剑士没有匹配池时不扣源");
+            { Accepted: false, Error: 19, Plan: null, RejectReason: "booster_source_ineligible" },
+            "真实源职业资格排除枪剑士，优先拒绝且不扣源");
         That(service.Open(role with { Level = 0 }, new(65, 1), out _) is
-            { Accepted: false, Error: 19, Plan: null, RejectReason: "unmatched_grow_type_pool" },
-            "等级越界不抽其他职业或分支");
+            { Accepted: false, Error: 19, Plan: null, RejectReason: "booster_source_ineligible" },
+            "低于真实源最低等级时优先拒绝，不抽其他职业或分支");
 
         var platService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
             random, debugSettings: new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true });

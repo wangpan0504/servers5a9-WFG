@@ -42,6 +42,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (c.Guild is { } membership)
             await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
+        if (context.BoosterUses is { } boosterUses) await boosterUses.InitializeAsync(c);
         await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
         if (c.CompletedQuests.Length > 0 || c.AccountCompletedQuests.Length > 0)
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(c), "completed_quests");

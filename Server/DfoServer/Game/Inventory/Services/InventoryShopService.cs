@@ -6,8 +6,9 @@ using System.Collections.Immutable;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog shops, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces)
+internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog shops, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TimeProvider? clock = null)
 {
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     static readonly int[] CubeItemIds = [3033, 3034, 3035, 3036, 3037, 3262];
 
     public InventoryResult Buy(Character character, BuyItemRequest request, out ShopPurchaseReceipt? receipt, DateTimeOffset? utcNow = null)
@@ -128,7 +129,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             return InventoryResult.Reject(0xd6);
         if (!shops.CanSell(source.Core.ItemId))
             return InventoryResult.Reject();
-        if (source.IsExpired(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
+        if (source.IsExpired(Clock.GetUtcNow().ToUnixTimeSeconds()))
             return InventoryResult.Reject();
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
         var template = catalog.Get(source.Core.ItemId);
@@ -142,7 +143,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         var deletion = InventoryDeleteService.Plan(before, request.Position, source.Core.Value, count);
         if (!deletion.Accepted)
             return deletion;
-        return new(true, 0, new(before, deletion.Plan!.After with { Gold = checked((uint)gold) }, "npc_shop_sell"), count);
+        return new(true, 0, new(before, deletion.Plan!.After with { Gold = checked((uint)gold) }, "npc_shop_sell", new(character, source.ExpireTime > 0 ? source.ExpireTime : null, Clock)), count);
     }
 
     InventoryResult SellWalletCube(Character character, SellItemRequest request, CurrencyKind kind, int itemId)

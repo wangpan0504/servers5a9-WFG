@@ -50,7 +50,7 @@ internal sealed class InventoryPlan
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || !ShopPurchaseCount.Same(Before.ShopPurchases, After.ShopPurchases) ||
-        !Before.EpicPieces.Same(After.EpicPieces);
+        !Before.EpicPieces.Same(After.EpicPieces) || !DailyBoosterUsage.Same(Before.DailyBoosterUses, After.DailyBoosterUses);
     public bool AccountCargoChanged => Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || ChangedSlots.Any(slot => slot.List == InventoryListType.AccountCargo);
 }

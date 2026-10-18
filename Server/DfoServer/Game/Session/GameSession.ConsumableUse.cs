@@ -51,15 +51,16 @@ internal sealed partial class GameSession
                 return Reject("source-expired");
             bool preserve = PreservesDungeonConsumables;
             var actual = preserve ? new InventoryResult(true,0,new(character.Inventory,character.Inventory,
-                "free_dungeon_use_consumable",new(character))) : preliminary;
+                "free_dungeon_use_consumable",new(character, source.ExpireTime > 0 ? source.ExpireTime : null, service.Clock))) : preliminary;
             // 秘药的 2 小时冷却只记在自己的 cooltime group（7440/7377 为 99），不挡住组 0/1 的 HP/MP。
             if (!preserve && definition.ExpBonusPermille > 0 && actual.Plan is { } bonusPlan)
                 bonusPlan.ExpBonus = (checked(service.Clock.GetUtcNow().ToUnixTimeSeconds() + definition.ExpBonusMilliseconds / 1000),
                     definition.ExpBonusPermille);
             pendingConsumableUse = actual.Plan;
-            var result = CommitInventory(character, actual);
+            var result = CommitInventory(character, actual, 123);
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
+            if (!result.Accepted) return Reject("source-expired");
             usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock);
             return new ConsumableUseResult(ConsumableUseOutcome.Committed, preserve ? "dungeon-preserved" : "committed", result, UseGuard())
                 { SourceUid = source.Uid, PreserveSource = preserve,

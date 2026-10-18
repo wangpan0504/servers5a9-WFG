@@ -30,7 +30,7 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
         InventoryLockService.Plan(character.Inventory, slot, operation, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     public static Character Commit(ICharacterRepository repository, AccountOwners.Lease owner, Character character, InventoryResult result) => owner.Execute(() =>
     {
-        if (!result.Accepted || result.Plan is null || !result.Plan.Changed)
+        if (!result.Accepted || result.Plan is null || !result.Plan.Changed && result.Plan.CharacterPrecondition is null)
             return character;
         // Repository 内部重验 generation/revision，同一事务保存核心、槽位与审计；失败不发布规划快照。
         return repository.CommitInventory(owner, character, result.Plan);

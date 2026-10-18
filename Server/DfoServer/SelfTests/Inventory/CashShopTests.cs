@@ -22,6 +22,7 @@ internal static partial class CashShopTests
 {
     public static void RunCore()
     {
+        DailyItemExpirationTests.RunCore();
         AvatarCore();
         int checks = Count;
         var now = new DateTimeOffset(2026, 10, 11, 10, 0, 0, TimeSpan.FromHours(8));

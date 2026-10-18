@@ -13,6 +13,8 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        DailyBoosterProjectionTests.RunCore();
+        DailyBoosterUsageTests.RunCore();
         CreatureSystemTests.RunCore();
         CreatureChangeTests.RunCore();
         CreatureGroupTests.RunCore();

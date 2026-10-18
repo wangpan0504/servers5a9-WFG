@@ -222,8 +222,24 @@ internal sealed partial class CharacterRepository
     public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => owner.Execute(() =>
     {
         ValidateInventoryPlan(expected, plan);
+        if (plan.CharacterPrecondition?.IsExpired() == true)
+        {
+            // 时间自然推进不能掩盖已陈旧的库存/角色；到期拒绝前仍读真实当前快照。
+            using var expiredDb = database.Open();
+            using var read = expiredDb.BeginTransaction(deferred: true);
+            ValidateCurrentInventoryPlan(Require(expiredDb, read, owner.Account, expected.Name), expected, plan);
+            throw new InventoryQualificationExpiredException();
+        }
         if (!plan.Changed)
+        {
+            // 免费保留源等零资产变化计划仍需验证真实角色与当前期限，不启动writer。
+            using var unchangedDb = database.Open();
+            using var read = unchangedDb.BeginTransaction(deferred: true);
+            var current = Require(unchangedDb, read, owner.Account, expected.Name);
+            ValidateCurrentInventoryPlan(current, expected, plan);
+            if (plan.CharacterPrecondition?.IsExpired() == true) throw new InventoryQualificationExpiredException();
             return expected;
+        }
         using var db = database.Open();
         using var transaction = db.BeginTransaction(deferred: false);
         var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan);
@@ -233,7 +249,7 @@ internal sealed partial class CharacterRepository
 
     static void ValidateInventoryPlan(Character expected, InventoryPlan plan)
     {
-        if (!SameInventory(expected.Inventory, plan) || plan.CharacterPrecondition?.Matches(expected) == false)
+        if (!SameInventory(expected.Inventory, plan) || plan.CharacterPrecondition?.MatchesIdentity(expected) == false)
             throw new InvalidOperationException("背包规划不是当前快照");
         plan.After.Validate(allocating: true);
         if (plan.EquipmentSlotFlagsAfter is { } slots)
@@ -253,6 +269,13 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("业务不能修改账号资产版本");
     }
 
+    static void ValidateCurrentInventoryPlan(Character current, Character expected, InventoryPlan plan)
+    {
+        if (current.Id != expected.Id || current.Revision != expected.Revision ||
+            !SameInventory(current.Inventory, plan) || plan.CharacterPrecondition?.MatchesIdentity(current) == false)
+            throw new InvalidOperationException("角色库存、规划资格或owner/revision已变化");
+    }
+
     /// <summary>
     /// 在已有连接/事务内写背包（含 revision 复核、UID 分配、槽位、detail 与审计）。
     /// **只参与，不提交**：调用方拥有事务（见 <see cref="CommitInventory"/> 与
@@ -265,15 +288,15 @@ internal sealed partial class CharacterRepository
         ValidateInventoryPlan(expected, plan);
         var current = Require(db, transaction, owner.Account, expected.Name);
         // GM进度修改不递增revision；库存和规划资格都必须在写事务内重新核对。
-        if (current.Id != expected.Id || current.Revision != expected.Revision ||
-            !SameInventory(current.Inventory, plan) || plan.CharacterPrecondition?.Matches(current) == false)
-            throw new InvalidOperationException("角色库存、规划资格或owner/revision已变化");
+        ValidateCurrentInventoryPlan(current, expected, plan);
+        if (plan.CharacterPrecondition?.IsExpired() == true)
+            throw new InventoryQualificationExpiredException();
         if (!plan.Changed)
             return current;
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots
+            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,daily_booster_usage=$dailyBooster,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots
             WHERE id=$id AND account=$account AND revision=$revision AND equipment_slot_flags=$equipmentSlotsBefore;
             """;
         command.Parameters.AddWithValue("$id", expected.Id);
@@ -283,6 +306,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$expansion", plan.After.Expansion);
         command.Parameters.AddWithValue("$avatarExpansion", plan.After.AvatarExpansion);
         command.Parameters.AddWithValue("$devil", System.Text.Json.JsonSerializer.Serialize(plan.After.DevilUses));
+        command.Parameters.AddWithValue("$dailyBooster", JsonSerializer.Serialize(plan.After.DailyBoosterUses));
         command.Parameters.AddWithValue("$stamina", plan.After.StaminaUntil);
         command.Parameters.AddWithValue("$equipmentSlots", plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags);
         command.Parameters.AddWithValue("$equipmentSlotsBefore", current.EquipmentSlotFlags);
@@ -367,7 +391,7 @@ internal sealed partial class CharacterRepository
             return true;
         if (left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
-            !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
+            !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || !DailyBoosterUsage.Same(left.DailyBoosterUses, right.DailyBoosterUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
             left.Items.Length != right.Items.Length)
             return false;
@@ -384,7 +408,7 @@ internal sealed partial class CharacterRepository
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$id", characterId);
         command.CommandText = "SELECT c.inventory_expansion,c.gold,c.revive_coins,c.win_points,c.gold_carry_limit,c.auction_gold_limit,c.account,c.cargo_capacity," +
-            "coalesce(p.selected,0),coalesce(p.cube_type,-1),c.avatar_expansion,c.devil_usage,c.stamina_until FROM characters c LEFT JOIN cube_premium p ON p.charac_no=c.id WHERE c.id=$id";
+            "coalesce(p.selected,0),coalesce(p.cube_type,-1),c.avatar_expansion,c.devil_usage,c.stamina_until,c.daily_booster_usage FROM characters c LEFT JOIN cube_premium p ON p.charac_no=c.id WHERE c.id=$id";
         ushort expansion, capacity;
         uint gold;
         int coins, wins, carry, auction;
@@ -392,6 +416,7 @@ internal sealed partial class CharacterRepository
         CubeContractState cubeContract;
         ushort avatarExpansion;
         ImmutableArray<DevilServiceUsage> devilUses;
+        ImmutableArray<DailyBoosterUsage> dailyBoosterUses;
         long staminaUntil;
         using (var reader = command.ExecuteReader())
         {
@@ -409,6 +434,7 @@ internal sealed partial class CharacterRepository
             avatarExpansion = checked((ushort)reader.GetInt32(10));
             devilUses = System.Text.Json.JsonSerializer.Deserialize<ImmutableArray<DevilServiceUsage>>(reader.GetString(11));
             staminaUntil = reader.GetInt64(12);
+            dailyBoosterUses = JsonSerializer.Deserialize<ImmutableArray<DailyBoosterUsage>>(reader.GetString(13));
         }
 
         shared ??= ReadAccountInventory(db, account, transaction);
@@ -421,7 +447,7 @@ internal sealed partial class CharacterRepository
         {
             ReviveCoins = coins, WinPoints = wins, GoldCarryLimit = carry, AuctionGoldLimit = auction,
             AccountWallet = shared.Wallet, CubeContract = cubeContract, AvatarExpansion = avatarExpansion, DevilUses = devilUses, StaminaUntil = staminaUntil, CargoCapacity = capacity, AccountCargo = shared.Cargo,
-            ShopPurchases = purchases, EpicPieces = shared.Pieces
+            ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses
         };
         inventory.Validate();
         return inventory;

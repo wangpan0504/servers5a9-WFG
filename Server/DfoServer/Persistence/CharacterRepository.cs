@@ -47,6 +47,8 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
     public Character Create(AccountOwners.Lease owner, NewCharacter character) => owner.Execute(() =>
     {
         character.Validate();
+        if (!character.Inventory.DailyBoosterUses.IsEmpty)
+            throw new InvalidDataException("新角色不能携带历史每日礼盒次数");
         using var db = database.Open();
         using var transaction = db.BeginTransaction(deferred: false);
         using var command = db.CreateCommand();

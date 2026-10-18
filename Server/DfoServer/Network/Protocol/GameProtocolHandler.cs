@@ -18,7 +18,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     GuildProjection? guild = null,
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     DfoServer.Game.Creatures.CreatureService? creatures = null, CreatureProjection? creatureProjection = null,
-    DfoServer.GameWorld.Quests.QuestStageGraph? stageGraph = null) : IConnectionProtocol
+    DfoServer.GameWorld.Quests.QuestStageGraph? stageGraph = null, DfoServer.GameWorld.Items.BoosterCatalog? boosters = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -31,6 +31,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
+        if (boosters is not null) context.BoosterUses = new(context, boosters, log, time);
         CubeContractConsumptionProjection? cubeConsumption = null;
         if (contracts is not null)
         {
@@ -87,6 +88,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 await context.CommandGate.WaitAsync(connection.Stop);
                 try
                 {
+                    if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
                     if (context.Premiums is { } premiums) await premiums.RefreshAsync();
                     if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
                     if (context.Creatures is { } creatureClock) await creatureClock.RefreshAsync();
@@ -99,6 +101,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         finally
         {
+            if (context.BoosterUses is { } boosterUses) await boosterUses.DisposeAsync();
             if (context.Creatures is { } creatureClock) await creatureClock.DisposeAsync();
             if (cubeConsumption is not null) await cubeConsumption.DisposeAsync();
             await death.DisposeAsync();

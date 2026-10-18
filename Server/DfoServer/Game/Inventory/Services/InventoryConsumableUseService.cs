@@ -20,6 +20,6 @@ internal sealed class InventoryConsumableUseService(RecoveryConsumableCatalog co
             return InventoryResult.Reject(123);
         var deletion = InventoryDeleteService.Plan(before, request.Position, request.ItemId, 1);
         if (!deletion.Accepted || deletion.Plan is null) return InventoryResult.Reject(123);
-        return new(true, 0, new(before, deletion.Plan.After, "use_recovery_consumable", new(character)));
+        return new(true, 0, new(before, deletion.Plan.After, "use_recovery_consumable", new(character, source.ExpireTime > 0 ? source.ExpireTime : null, Clock)));
     }
 }

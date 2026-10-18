@@ -243,9 +243,16 @@ internal static partial class QuestStageRepositoryTests
             Learning=plan.TargetLearning,Level=plan.TargetLevel,GrowType=plan.TargetGrowType,EquipmentSlotFlags=plan.TargetEquipmentSlotFlags });
         That(plan.StagePlan is null && plan.Snapshot == legacy,"无阶段路径按旧匿名对象顺序保持Snapshot逐字节一致");
         f.Repository.CommitQuestCompletion(f.Owner,plan);
-        f.Sql("UPDATE character_quest_completion_receipts SET rowid=17,rule_id='legacy-ordinary'; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses; PRAGMA user_version=52");
+        var beforeMigration = f.Read();
+        f.Sql("UPDATE character_quest_completion_receipts SET rowid=17,rule_id='legacy-ordinary'; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses; ALTER TABLE characters DROP COLUMN daily_booster_usage; PRAGMA user_version=52");
+        That(Scalar(f,"PRAGMA user_version") == "52" &&
+            Scalar(f,"SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'") == "0",
+            "旧receipt迁移输入为真实v52缺每日礼盒列结构");
         string rows = Scalar(f,"SELECT rowid||':'||rule_id||':'||plan_snapshot FROM character_quest_completion_receipts");
         var reopened = new CharacterRepository(f.OpenPath,f.Catalog);
+        That(Scalar(f,"SELECT daily_booster_usage FROM characters") == "[]" &&
+            QuestCompletionRepositoryTests.Same(beforeMigration,reopened.LoadCharacter(f.Owner,beforeMigration.Slot)),
+            "v52升级默认空每日礼盒账本，保留同owner角色完整资产与revision");
         var replay = reopened.CommitQuestCompletion(f.Owner,plan);
         That(replay.Duplicate && replay.ProjectionCurrent && Scalar(f,"SELECT rowid||':'||rule_id||':'||plan_snapshot FROM character_quest_completion_receipts") == rows &&
             reopened.LoadQuestStageState(f.Owner,f.Read()).Witnesses.IsEmpty,"v52真实旧receipt升级保留rowid/rule_id/Snapshot且不猜补来源");

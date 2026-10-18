@@ -28,9 +28,32 @@ internal static class ScriptTests
         var union = new PvfDocument("[impossible contents]\n`ban redeemitem`\n[/impossible contents]\n\n[impossible contents]\n`gift`\n[/impossible contents]\n").Block("impossible contents");
         That(union.Contains("ban redeemitem") && union.Contains("gift"), "impossible contents 多块按并集读取");
         That(PvfScript.Block("[x]a", "x") == "", "incomplete block is absent");
+        RootInteger();
         TokenDocument();
         AiCharacter();
         MapNpcRows();
+    }
+
+    private static void RootInteger()
+    {
+        const string tag = "daily delete item";
+        var parent = new PvfDocument("[daily delete item]\n1");
+        That(new PvfDocument("[name]\n`[daily delete item] 9`", parent).ReadRootInt32(tag) == 1,
+            "quoted标签不覆盖父层标量");
+        That(new PvfDocument("[daily delete item]\n0", parent).ReadRootInt32(tag) == 0,
+            "显式零覆盖父层每日期限");
+        That(new PvfDocument("[a]\n1\n[/a]\n[daily delete item]\n1\n[b]\n2\n[/b]").ReadRootInt32(tag) == 1,
+            "两个闭合块之间的标量仍属于根");
+        That(new PvfDocument("[name]\n`text`\n").ReadRootInt32(tag) is null, "缺席根字段返回null");
+        foreach (string text in new[] { "[daily delete item]\n", "[daily delete item]\n1 2", "[daily delete item]\n1\n[daily delete item]\n1",
+            "[daily delete item", "[/daily delete item]", "[outer[daily delete item]\n1", "[daily delete item]\n1\n[/daily delete item]", "[a]\n[daily delete item]\n1\n[/a]",
+            "[a]\n[b]\n[daily delete item]\n1\n[/a]\n[/b]", "[a]\n[a]\n[/a]\n[daily delete item]\n1\n[/a]" })
+        {
+            bool rejected = false;
+            try { new PvfDocument(text, parent).ReadRootInt32(tag); }
+            catch (InvalidDataException) { rejected = true; }
+            That(rejected, "根整数坏声明不得回退父脚本：" + text);
+        }
     }
 
     private static void MapNpcRows()

@@ -49,20 +49,22 @@ internal static class DevilContractTcpTests
                 new(true, 0, new(initial.Inventory, withRepair, "devil_repair_test_qualification")));
         }
         PolicyChecks(initial, resources);
+        string migrationAssets = MigrationAssets();
         // 恢复真实v48缺列结构，验证本次权益迁移。
         fixture.Sql("DROP TABLE character_skill_switch_inventory_items; DROP TABLE character_skill_switch_inventory; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses");
-        fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until; PRAGMA user_version=48");
+        fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until; ALTER TABLE characters DROP COLUMN daily_booster_usage; PRAGMA user_version=48");
         That(fixture.Query("PRAGMA user_version") is [[48L]] &&
             fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[0L]] &&
             fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_skill_switch_inventory','character_skill_switch_inventory_items')") is [[0L]] &&
-            fixture.Query("SELECT count(*) FROM pragma_table_info('characters') WHERE name IN('devil_usage','stamina_until')") is [[0L]],
-            "契约迁移输入为缺权益列的v48旧库，不残留v53阶段或v54强化旁表");
+            fixture.Query("SELECT count(*) FROM pragma_table_info('characters') WHERE name IN('devil_usage','stamina_until','daily_booster_usage')") is [[0L]],
+            "契约迁移输入为缺权益及每日礼盒列的v48旧库，不残留v53阶段或v54强化旁表");
         await fixture.StartAsync();
         That(fixture.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[2L]] &&
             fixture.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_skill_switch_inventory','character_skill_switch_inventory_items')") is [[2L]],
             "v48旧库真实迁移建立阶段与强化旁表");
-        That(fixture.Query("SELECT devil_usage FROM characters") is [["[]"]] &&
-            fixture.Query("PRAGMA user_version") is [[long version]] && version == SqliteMigrations.CurrentVersion, "旧角色自动升级为空次数账本及自然恢复期限");
+        That(fixture.Query("SELECT devil_usage,daily_booster_usage FROM characters") is [["[]", "[]"]] &&
+            fixture.Query("PRAGMA user_version") is [[long version]] && version == SqliteMigrations.CurrentVersion, "旧角色自动升级为空权益与每日礼盒次数账本及自然恢复期限");
+        That(MigrationAssets() == migrationAssets, "v48升级保持角色归属、revision、金币、钱包和完整库存实体及槽位");
         fixture.Sql("CREATE TRIGGER fail_devil_purchase BEFORE INSERT ON account_currency_balances WHEN NEW.currency_kind=15 AND NEW.balance<10000 BEGIN SELECT RAISE(ABORT,'devil purchase rollback'); END");
         using (var peer = Open(fixture))
         {
@@ -166,6 +168,11 @@ internal static class DevilContractTcpTests
         VerifyStaminaExemptions(fixture, clock);
         await fixture.StopAsync();
 
+        string MigrationAssets() => JsonSerializer.Serialize(fixture.Query("SELECT id,account,revision,gold FROM characters")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_wallets")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_currency_balances")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots"));
         string State() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold,devil_usage FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_wallets")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_currency_balances")) +
@@ -247,7 +254,7 @@ internal static class DevilContractTcpTests
             string beforeExpiry = fixture.Snapshot("SELECT revision,premium_contracts FROM account_wallets");
             clock.Set(expiry - 1); peer.Barrier();
             clock.Set(expiry);
-            peer.CheckBlackDiamondRefresh(active: false);
+            peer.CheckBlackDiamondRefresh(active: false, allowDailyReset: true);
             peer.Barrier();
             That(fixture.Snapshot("SELECT revision,premium_contracts FROM account_wallets") == beforeExpiry,
                 "自然到期刷新只更新已发视图，不改写期限或重复写库");

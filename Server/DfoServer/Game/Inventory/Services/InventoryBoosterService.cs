@@ -8,8 +8,9 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
     Random? random = null, GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null,
-    AvatarPackageCatalog? avatars = null)
+    AvatarPackageCatalog? avatars = null, TimeProvider? clock = null)
 {
+    public BoosterUsePlacesDefinition UsePlaces(int itemId) => boosters.UsePlaces(itemId);
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
         => OpenCore(character, request, out receipt, utcNow, ceraPackage: false);
 
@@ -64,7 +65,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
         bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         var before = character.Inventory;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? (clock ?? TimeProvider.System).GetUtcNow();
         var source = before.Find(new(InventoryListType.Main, request.Slot));
         if (source is null || !source.Core.IsStackable || source.Core.Count < 1 ||
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
@@ -170,7 +171,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         }
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
         return new(true, 0, new(before, after, "booster_open",
-            new InventoryCharacterPrecondition(character, deadline), overflow));
+            new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true), overflow));
     }
 
     InventoryResult OpenCore(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt,
@@ -180,14 +181,29 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
         bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         var before = character.Inventory;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? (clock ?? TimeProvider.System).GetUtcNow();
         var source = before.Find(new(InventoryListType.Main, request.Slot));
         if (source is null || !source.Core.IsStackable || request.Count <= 0 || request.Count > source.Core.Count ||
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
+        if (!InventoryAvatarPackageService.SourceEligible(character, source, catalog.Get(source.Core.ItemId)))
+            return InventoryResult.Reject(19) with { RejectReason = "booster_source_ineligible" };
         var definition = boosters.Get(source.Core.ItemId);
         if (!definition.Available || ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty || lottery != definition.Lottery)
             return InventoryResult.Reject(19);
+        var dailyUses = before.DailyBoosterUses;
+        long? dailyDeadline = null;
+        if (definition.DailyRetainedLimit is { } dailyLimit)
+        {
+            var sourceTemplate = catalog.Get(source.Core.ItemId);
+            if (sourceTemplate.Id != source.Core.ItemId || sourceTemplate.Kind != source.Core.Kind ||
+                !sourceTemplate.AllowsUse(character.Level, character.Job) ||
+                !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate) ||
+                !DailyBoosterUsage.TryConsume(before.DailyBoosterUses, source.Core.ItemId, request.Count, dailyLimit, now, out dailyUses))
+                return InventoryResult.Reject(19) with { RejectReason = "daily_retained_source_or_quota_ineligible" };
+            dailyDeadline = DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds();
+            if (source.ExpireTime > 0) dailyDeadline = Math.Min(dailyDeadline.Value, source.ExpireTime);
+        }
         BoosterChoice[]? choices = null;
         if (definition.Selection is { } selection)
         {
@@ -213,6 +229,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 : pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
             foreach (int id in ids.Distinct())
             {
+                // 只兼容模板自身已禁分解的装备，不能猜写未知实例位，也不能被钱包等快捷发奖绕过。
+                if (definition.SetsDisjointInstanceType && catalog.Get(id) is not { Kind: ItemKind.Equipment, DisjointForbidden: true })
+                    return InventoryResult.Reject(19);
                 if (lottery && (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
                     contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id) ||
                     catalog.Get(id).AcquisitionContract is not null ||
@@ -300,7 +319,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (totals.Count is 0 or > BoosterReceipt.MaximumItems)
             return InventoryResult.Reject(4);
         // 标准消耗释放源格后再规划所有奖励；全包、钱包超限等失败均保留整批礼包。
-        var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.Value, request.Count).Plan!.After;
+        var paid = definition.DailyRetainedLimit is not null ? before :
+            InventoryDeleteService.Plan(before, source.Position, source.Core.Value, request.Count).Plan!.After;
         if (lottery && boosters.AllowsDevilDouble(source.Core.ItemId) &&
             DevilContractPolicy.TryConsume(paid, 1, DevilContractPolicy.LotteryAllowance(paid, now), now, out var doubled))
         {
@@ -363,8 +383,19 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             ignoreUsablePeriod: ignoreUsablePeriod);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
+        var after = grant.Plan!.After;
+        long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
+        if (dailyDeadline is not null && (deadline is null || dailyDeadline < deadline)) deadline = dailyDeadline;
+        foreach (var item in after.Items.Concat(grant.Plan.OverflowItems))
+            if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
+                (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
+        if (dailyDeadline is not null)
+        {
+            after = after with { DailyBoosterUses = dailyUses };
+        }
+        var precondition = new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true);
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
-        return new(true, 0, new(before, grant.Plan!.After, "booster_open", overflowItems: grant.Plan.OverflowItems));
+        return new(true, 0, new(before, after, "booster_open", precondition, overflowItems: grant.Plan.OverflowItems));
 
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));
     }

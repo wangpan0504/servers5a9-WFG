@@ -17,7 +17,7 @@ internal sealed partial class InventoryCashShopService
         if (avatars is null || request.PaymentMode > 1 || request.TypeIndex != product.AvatarType) return false;
         var template = catalog.Get(product.ItemId);
         var definition = avatars.GetAvatar(product.ItemId);
-        if (template.Kind != ItemKind.Avatar || definition.PendingRule is not null || request.TypeIndex >= definition.Types.Length ||
+        if (template.Kind != ItemKind.Avatar || !template.Expiration.SupportsCreation || definition.PendingRule is not null || request.TypeIndex >= definition.Types.Length ||
             !definition.Abilities.Contains(request.AttributeValue)) return false;
         type = definition.Types[request.TypeIndex];
         if (type.Cera < 0 || type.Gold < 0 || type.WinPoints < 0) return false;

@@ -6,7 +6,7 @@ using DfoServer.Game.Settings;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPackageCatalog packages,
-    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, GameDebugSettings? debugSettings = null)
+    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, GameDebugSettings? debugSettings = null, TimeProvider? clock = null)
 {
     public AvatarPackageDefinition Definition(int itemId) => packages.Get(itemId);
 
@@ -16,7 +16,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         receipt = null;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
         bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? (clock ?? TimeProvider.System).GetUtcNow();
         var source = Source(character, request.Slot, request.Count, now);
         if (source is null) return InventoryResult.Reject(19);
         var definition = packages.Get(source.Core.ItemId);
@@ -34,7 +34,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         // 518成功回执会消耗一个客户端源格；空选择不能当作打开面板成功，也不能自动选职业。
         if (request.Choices.Length == 0) return InventoryResult.Reject(19);
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? (clock ?? TimeProvider.System).GetUtcNow();
         var source = Source(character, request.Slot, 1, now);
         if (source is null) return InventoryResult.Reject(19);
         var definition = packages.Get(source.Core.ItemId);
@@ -62,8 +62,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     }
 
     internal static bool SourceEligible(Character character, InventoryItem source, ItemTemplate template) =>
-        template.Id == source.Core.ItemId && template.Kind == source.Core.Kind && !template.UseForbidden &&
-        character.Level >= template.MinimumLevel && character.Job < 16 && (template.Jobs & (1 << character.Job)) != 0 &&
+        template.Id == source.Core.ItemId && template.Kind == source.Core.Kind && template.AllowsUse(character.Level, character.Job) &&
         InventoryMoveService.RequiredSkillSatisfied(character, template);
 
     InventoryResult Grant(Character character, InventoryItem source, int count, AvatarPackageRow[] rows,
@@ -87,7 +86,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 var avatar = packages.GetAvatar(row.ItemId);
                 // 没有可选属性的光环、武器装扮不发送5B选项；有属性声明的部位仍须显式选择。
                 bool hasChoice = options.TryGetValue(row.ItemId, out byte ability);
-                if (template.Kind != ItemKind.Avatar || avatar.PendingRule is not null ||
+                if (template.Kind != ItemKind.Avatar || !template.Expiration.SupportsCreation || avatar.PendingRule is not null ||
                     !avatar.Types.IsEmpty && row.Type >= avatar.Types.Length ||
                     !hasChoice && avatar.RequiresAbilityChoice || !avatar.Abilities.Contains(ability)) return InventoryResult.Reject(19);
                 int amount = checked(row.Count * count);
@@ -135,7 +134,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         if (!grant.Accepted) return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
         return new(true, 0, new(before, grant.Plan!.After, "avatar_package_open",
-            new(character, EarliestDeadline(source, prototypes)), grant.Plan.OverflowItems));
+            new(character, EarliestDeadline(source, prototypes), clock, requirePosition: true), grant.Plan.OverflowItems));
     }
 
     internal static long? EarliestDeadline(InventoryItem source, IReadOnlyList<InventoryItem> rewards)

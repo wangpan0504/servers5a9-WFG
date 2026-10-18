@@ -44,6 +44,9 @@ internal sealed class DungeonDropGenerationPlan
                 throw new InvalidDataException("掉落生成计划的概率、数量或物品/金币来源不完整");
             var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty ?
                 Array.Empty<DungeonItemDropPool>() : trial.RarityPools.Select(row => row.Items).ToArray();
+            // 任一候选未支持新建时拒绝整份计划；不删候选、更改概率或延后至死亡中断。
+            if (pools.Any(pool => pool.Entries.Any(entry => !entry.Template.Expiration.SupportsCreation)))
+                throw new NotSupportedException("掉落候选包含尚未支持的新实例期限声明");
             if (pools.Any(pool => pool.TotalWeight < 0 || pool.Entries.Any(entry =>
                 !DungeonDropCreation.Supports(entry.Template.Kind) || entry.Template.StackLimit <= 0)))
                 throw new InvalidDataException("掉落生成计划须有完整普通资源候选池");

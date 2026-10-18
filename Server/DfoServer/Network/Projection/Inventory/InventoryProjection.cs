@@ -101,6 +101,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(updateType, InventoryPackets.Delta(current.Inventory, list, slots, index: receipt.Index),
                 result.WholeListRefresh ? "inventory_whole_list_refresh" : "inventory_committed_delta", CanSend);
         }
+        if (!DailyBoosterUsage.Same(plan.Before.DailyBoosterUses, current.Inventory.DailyBoosterUses) && context.BoosterUses is { } boosterUses)
+            await boosterUses.CommittedAsync(receipt);
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         if (refreshEquipment && (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null))
         {

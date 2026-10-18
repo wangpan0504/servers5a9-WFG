@@ -28,9 +28,9 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
         {
             request = BoosterRequests.ReadLottery(packet.Body);
             result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
-                context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, capture.Selected) ?
+                context.Session.PlanAndCommitBooster(character => ReferenceEquals(character, capture.Selected) ?
                     booster.OpenLottery(character, request, out receipt, (clock ?? TimeProvider.System).GetUtcNow()) :
-                    InventoryResult.Reject(19), 19, requireTown: false);
+                    InventoryResult.Reject(19), booster.UsePlaces(capture.Selected?.Inventory.Find(new(InventoryListType.Main, request.Slot))?.Core.ItemId ?? 0));
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
         {
@@ -81,9 +81,9 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
                         Math.Min(definition.SelectionCount, category.Rows.Select(row => row.ItemId).Distinct().Count());
                     var request = AvatarPackageRequests.Read(packet.Body, minimum, maximum);
                     result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
-                        context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, capture.Selected) ?
+                        context.Session.PlanAndCommitBooster(character => ReferenceEquals(character, capture.Selected) ?
                             avatars.Open(character, request, out receipt, (clock ?? TimeProvider.System).GetUtcNow()) :
-                            InventoryResult.Reject(19), 19, requireTown: false);
+                            InventoryResult.Reject(19), booster.UsePlaces(itemId ?? 0));
                 }
             }
             else if (source is null && packet.Body.Length > 6 && !BoosterRequests.IsItemSelection(packet.Body) &&
@@ -101,8 +101,8 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
                     return CommandResult.Unhandled;
                 var request = BoosterRequests.Read(packet.Body);
                 result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
-                    context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, capture.Selected) ?
-                        booster.Open(character, request, out receipt) : InventoryResult.Reject(19), 19, requireTown: false);
+                    context.Session.PlanAndCommitBooster(character => ReferenceEquals(character, capture.Selected) ?
+                        booster.Open(character, request, out receipt) : InventoryResult.Reject(19), booster.UsePlaces(itemId ?? 0));
             }
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
@@ -155,9 +155,9 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
             itemId = source?.Core.ItemId;
             bool avatar = avatars.Definition(source?.Core.ItemId ?? 0).Recognized;
             result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(4) :
-                context.Session.PlanAndCommitInventory(character => !ReferenceEquals(character, capture.Selected) ? InventoryResult.Reject(19) :
+                context.Session.PlanAndCommitBooster(character => !ReferenceEquals(character, capture.Selected) ? InventoryResult.Reject(19) :
                     avatar ? avatars.OpenCeraPackage(character, request, out receipt, (clock ?? TimeProvider.System).GetUtcNow()) :
-                    booster.OpenCeraPackage(character, request, out receipt), 19, requireTown: false);
+                    booster.OpenCeraPackage(character, request, out receipt), booster.UsePlaces(itemId ?? 0));
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
         {

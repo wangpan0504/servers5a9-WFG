@@ -51,6 +51,12 @@ internal static class ServerRuntime
         var gameChannels = new GameChannelListeners(options, channels);
         log.Write("startup", new { Stage = "Runtime assembly", State = "starting" });
         var timer = Stopwatch.StartNew();
+        // 支持模板全集在监听就绪前准备，首位玩家选角不承担STK扫描。
+        var boosterTimer = Stopwatch.StartNew();
+        int dailyBoosterTemplates = itemResources.Boosters.DailyRetainedTemplateIds.Count;
+        log.Write("startup", new { Stage = "Daily retained boosters", State = "complete",
+            SupportedTemplates = dailyBoosterTemplates, ScannedTemplates = itemResources.Boosters.DailyRetainedScannedTemplates,
+            ElapsedMs = Math.Round(boosterTimer.Elapsed.TotalMilliseconds, 3) });
         var owners = new AccountOwners();
         var online = new OnlineSessionDirectory();
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
@@ -236,7 +242,7 @@ internal static class ServerRuntime
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
             new ShopHandler(
-                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces),
+                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock),
                 cashShop,
                 inventoryProjection, log),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection, log),
@@ -261,8 +267,8 @@ internal static class ServerRuntime
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
-                debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages), inventoryProjection,
-                new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings), log, clock),
+                debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages, clock: clock), inventoryProjection,
+                new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),
             new DungeonSelectionHandler(projection, log, tutorials),
@@ -299,7 +305,7 @@ internal static class ServerRuntime
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

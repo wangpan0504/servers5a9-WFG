@@ -91,7 +91,9 @@ internal static class ConsumableUseTests
             Inventory = new([new(11, request.Position, core)])
         };
         var plan = service.Plan(character, request, 1000).Plan!;
-        That(plan.After.Items.Single() == new InventoryItem(11, request.Position, core with { Value = 1 }) && plan.CharacterPrecondition!.Matches(character),
+        That(plan.CharacterPrecondition!.Matches(character, 1999) && !plan.CharacterPrecondition.Matches(character, 2000),
+            "普通消耗计划绑定真实源截止，提交时恰到期不能继续使用");
+        That(plan.After.Items.Single() == new InventoryItem(11, request.Position, core with { Value = 1 }) && plan.CharacterPrecondition!.Matches(character, 1000),
             "单件消费仅改原指定UID数量，保留排序锁、期限和全部核心属性及角色资格");
         var last = service.Plan(character with { Inventory = plan.After }, request with { OpaqueCheck = 0 }, 1000);
         That(last.Accepted && last.Plan!.After.Items.IsEmpty, "最后一件清槽且opaque0是合法普通请求");
