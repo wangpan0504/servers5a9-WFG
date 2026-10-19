@@ -142,8 +142,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                     // 同款延长期限，换款覆盖；商品期限不受普通过期商品调试开关影响。
                     long start = old?.Core.ItemId == product.ItemId ? Math.Max(now.ToUnixTimeSeconds(), old.ExpireTime) : now.ToUnixTimeSeconds();
                     long expires = start + (long)product.DurationDays * 86400;
-                    if (expires > int.MaxValue)
-                        return InventoryResult.Reject(17);
+                    expires = Math.Min(expires, ItemExpiration.MaximumUnixTime);
                     nameTag = old?.Core.ItemId == product.ItemId ? old with { Core = old.Core with { ExpireTime = (int)expires } } :
                         InventoryRewardGrantService.CreateItem(visualTemplate, position,
                             InventoryRewardGrantService.Create(visualTemplate, utcNow: now) with { ExpireTime = (int)expires });

@@ -75,7 +75,7 @@ internal static class LimitCubeTests
             "A目标、1张券、物理B材料和账号晶块只在同一After中原子扣除");
         var output = after.Find(receipt!.ResultSlot);
         That(output is { Uid: 0, Core.ItemId: Fixture.ResultA, Core.Count: 1 } &&
-            output.Core.ExpireTime == int.MaxValue &&
+            output.Core.ExpireTime == ItemExpiration.MaximumUnixTime &&
             receipt.ResultSlot == new InventorySlot(InventoryListType.Main, 65),
             "结果按真实Main自动放置规则创建临时UID实例、忽略历史绝对日期并回显实际槽");
         That(!fixture.Service(_ => 0, ignoreAbsoluteExpiration: false).Apply(fixture.StackableCharacter(),

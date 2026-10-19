@@ -2,6 +2,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using DfoServer.Network.Management;
 using static DfoServer.Testing.BoosterSelectionTcpTests;
@@ -94,7 +95,7 @@ internal static class BoosterEquipmentTcpTests
             SendSelect(peer, 6, [401000005]);
             ExpectAck(peer, 10005273, 6, [(401000005, 1)]);
             byte[] debugDelta = peer.Expect(0, 14).Body;
-            That(U32(EquipmentEntry(debugDelta, 14), 56) == int.MaxValue,
+            That(U32(EquipmentEntry(debugDelta, 14), 56) == ItemExpiration.MaximumUnixTime,
                 "相对忽略开启后，礼包内部60天装备的NOTI14下发协议上限");
             SetExpirationDebug(fixture, false);
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "cash-shop-usable-period off", out relativeReply) &&
@@ -111,7 +112,7 @@ internal static class BoosterEquipmentTcpTests
         using (var peer = Open(fixture))
         {
             var full = peer.Select()[4].Body;
-            That(U32(EquipmentEntry(full, 14, true), 56) == int.MaxValue && U32(EquipmentEntry(full, 15, true), 56) < int.MaxValue,
+            That(U32(EquipmentEntry(full, 14, true), 56) == ItemExpiration.MaximumUnixTime && U32(EquipmentEntry(full, 15, true), 56) < ItemExpiration.MaximumUnixTime,
                 "关闭与重连仍保留各次开箱实际提交的期限");
             peer.Barrier();
         }

@@ -5,6 +5,7 @@ using DfoServer.Network.Builders.Inventory;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -52,9 +53,12 @@ internal static class NameTagTcpTests
             That(restarted.Accepted && restarted.Plan!.After.Find(tagSlot)!.ExpireTime == now.AddDays(7).ToUnixTimeSeconds(), "过期同款从当前时间重新计期");
             var cappedTag = tagged.Plan.After with { Items = tagged.Plan.After.Items.Select(item => item.Position == tagSlot ?
                 item with { Core = item.Core with { ExpireTime = int.MaxValue } } : item).ToImmutableArray() };
-            That(!service.Buy(character with { Inventory = cappedTag }, tagRequest, out _, now).Accepted &&
-                !service.Buy(character, new(0, [new(100615, 0), new(100616, 0)]), out _, now).Accepted,
-                "期限溢出及同订单多款覆盖拒绝扣费");
+            var cappedRenewal = service.Buy(character with { Inventory = cappedTag }, tagRequest, out _, now);
+            That(cappedRenewal.Accepted && cappedRenewal.Plan!.After.Find(tagSlot)!.ExpireTime == ItemExpiration.MaximumUnixTime &&
+                cappedRenewal.Plan.After.AccountWallet.Get(CurrencyKind.Cera) == 400,
+                "名称装饰续期超过安全日期仍完成原交易，截止钳到最大值");
+            That(!service.Buy(character, new(0, [new(100615, 0), new(100616, 0)]), out _, now).Accepted,
+                "同订单多款覆盖仍拒绝，不借期限钳位放宽购买规则");
             using (var tagStream = new MemoryStream())
             using (var tagWriter = new BinaryWriter(tagStream))
             {

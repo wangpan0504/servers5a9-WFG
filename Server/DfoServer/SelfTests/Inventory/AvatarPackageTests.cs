@@ -324,7 +324,7 @@ internal static class AvatarPackageTests
         That(result.Accepted && result.Plan!.After.Items.Select(item => item.ExpireTime).Order().SequenceEqual(
             new[] { (int)expires, (int)now.AddDays(30).ToUnixTimeSeconds() }), "只忽略绝对日期不改变装扮类型七天/三十天期限");
         debug.IgnoreCashShopUsablePeriod = true;
-        int shopExpiry = int.MaxValue;
+        int shopExpiry = ItemExpiration.MaximumUnixTime;
         result = service.Open(character, request, out _, now);
         That(result.Accepted && result.Plan!.After.Items.All(item => item.Avatar?.ExpireTime == shopExpiry) &&
             result.Plan.CharacterPrecondition!.Matches(character, shopExpiry - 1L) && !result.Plan.CharacterPrecondition.Matches(character, shopExpiry),

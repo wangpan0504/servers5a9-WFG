@@ -52,8 +52,8 @@ internal static class DailyItemExpirationTests
         foreach (string text in new[] { "[outer]\n[daily delete item]\n1\n[/outer]", "[outer]\n[inner]\n[daily delete item]\n1\n[/outer]\n[/inner]",
             "[outer]\n[outer]\n[/outer]\n[daily delete item]\n1\n[/outer]" })
             Reject<InvalidDataException>(() => ItemExpiration.Parse(new PvfDocument(text)), "嵌套及交叉闭合声明不变永久");
-        Reject<InvalidDataException>(() => daily.Resolve(DateTimeOffset.FromUnixTimeSeconds(int.MaxValue)),
-            "每日截止无法在线上范围表示时拒绝新发，不降为永久或溢出");
+        That(daily.Resolve(DateTimeOffset.FromUnixTimeSeconds(int.MaxValue)) == ItemExpiration.MaximumUnixTime,
+            "每日截止超出安全范围时钳回最大值，不抛异常、降为永久或溢出");
         That((daily with { Days = 7 }).Resolve(boundary.AddSeconds(-1)) == boundary.ToUnixTimeSeconds(),
             "普通相对期长于每日截止时取更早的每日边界");
         var template = new ItemTemplate(100, ItemKind.Consumable, 0, 1, 0, 1000, 0, 0, 1, "[trade]", ushort.MaxValue, 0, "每日奖励")

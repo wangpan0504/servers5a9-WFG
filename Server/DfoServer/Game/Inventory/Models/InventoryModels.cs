@@ -1,6 +1,7 @@
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using System.Collections.Immutable;
 using DfoServer.Game.Currency;
 
@@ -33,7 +34,8 @@ internal sealed record InventoryItem(long Uid, InventorySlot Position, ItemCore 
     public CreatureDetail? Creature { get; init; }
     public int ExpireTime => Avatar?.ExpireTime ?? Creature?.ExpireTime ?? Core.ExpireTime;
     public bool IsExpired(long utcSeconds) => ExpireTime > 0 && ExpireTime <= utcSeconds;
-    public int RemainingSeconds(long utcSeconds) => ExpireTime == 0 ? 0 : (int)Math.Clamp(ExpireTime - utcSeconds, 0, int.MaxValue);
+    public int RemainingSeconds(long utcSeconds) => ExpireTime == 0 ? 0 :
+        (int)Math.Clamp((long)ItemExpiration.ForClient(ExpireTime) - utcSeconds, 0, int.MaxValue);
     public void ValidateDetails(bool allocating)
     {
         if ((Core.Kind == DfoServer.GameWorld.Items.ItemKind.Avatar) != (Avatar is not null) ||

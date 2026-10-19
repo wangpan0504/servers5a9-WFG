@@ -53,9 +53,8 @@ internal sealed class RentalService(RentalCatalog catalog, ItemCatalog items)
         if (slot < 0)
             return InventoryResult.Reject(17);
 
-        long expires = now.ToUnixTimeSeconds() + TimeSpan.FromHours(24).Ticks / TimeSpan.TicksPerSecond;
-        if (expires > int.MaxValue)
-            return InventoryResult.Reject();
+        long expires = Math.Min(ItemExpiration.MaximumUnixTime,
+            now.ToUnixTimeSeconds() + TimeSpan.FromHours(24).Ticks / TimeSpan.TicksPerSecond);
         ItemCore core = InventoryRewardGrantService.Create(template, utcNow: now) with
         {
             ExpireTime = checked((int)expires),

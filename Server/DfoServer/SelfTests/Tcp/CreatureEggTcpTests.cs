@@ -56,8 +56,17 @@ internal static class CreatureEggTcpTests
         byte[]? savedDetails = null;
         using (var peer = Open(fixture))
         {
+            long beforeSelect = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713)]);
             byte[] full = peer.SpecialContainers.Single(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 7).Body;
+            long afterSelect = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            foreach (short slot in new short[] { 0, 1, 2 })
+            {
+                uint remaining = U32(Row(full, slot), 22);
+                That(remaining >= ItemExpiration.MaximumUnixTime - afterSelect &&
+                    remaining <= ItemExpiration.MaximumUnixTime - beforeSelect,
+                    "旧2038宠物实例在真实NOTI13中钳到2037截止，持久详情和UID不改写");
+            }
             savedDetails = peer.SpecialContainers.Single(packet => packet is { Kind: 0, Opcode: 105 }).Body;
             foreach (short slot in new short[] { 1, 0 })
             {

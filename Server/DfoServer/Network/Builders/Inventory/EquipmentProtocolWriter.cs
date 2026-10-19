@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Builders.Inventory;
 
@@ -69,7 +70,7 @@ internal static class EquipmentProtocolWriter
                 writer.Write(option.EquipmentType);
                 writer.Write(option.Number);
             }
-            writer.Write(item.Core.IsRental ? item.RemainingSeconds(now) : core.ExpireTime);
+            writer.Write(item.Core.IsRental ? item.RemainingSeconds(now) : ItemExpiration.ForClient(core.ExpireTime));
             writer.Write(core.EmblemSocketCount);
             if (core.EmblemSocketCount > 0)
                 writer.Write(core.Emblem1);
@@ -116,7 +117,7 @@ internal static class EquipmentProtocolWriter
         var item = inventory.Find(new(InventoryListType.Equipment, 30));
         bool active = item is not null && !item.IsExpired(utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         writer.Write(active ? item!.Core.ItemId : 0);
-        writer.Write(active ? item!.ExpireTime : 0);
+        writer.Write(active ? ItemExpiration.ForClient(item!.ExpireTime) : 0);
     }
 
     static void Raw(BinaryWriter writer, Action<BinaryWriter> write)

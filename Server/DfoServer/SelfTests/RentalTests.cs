@@ -132,6 +132,14 @@ internal static class RentalTests
                 That(!InventoryMoveService.Allows(before, new(InventoryListType.Equipment, 12), rented.Core, resources.Items),
                     "租赁领取放开不改变普通穿戴等级条件");
         }
+        foreach (int offset in new[] { -3600, 0, 3600 })
+        {
+            var capped = service.Rent(before, 408030023, 14, 0,
+                DateTimeOffset.FromUnixTimeSeconds((long)ItemExpiration.MaximumUnixTime + offset));
+            That(capped.Accepted && capped.Plan!.After.Find(new(InventoryListType.Main, 9))!.ExpireTime == ItemExpiration.MaximumUnixTime &&
+                capped.Plan.After.AccountWallet.RentalPoints == 47,
+                "租赁24小时期限越过安全上限仍完成原扣费和发放，不因时间越界拒绝");
+        }
         That(!service.Rent(before, 408030023, 0, 0, now).Accepted, "租赁职业回显不匹配仍拒绝");
         That(!service.Rent(before, 408030023, 14, ushort.MaxValue, now).Accepted, "PVF未配置档位仍拒绝");
         That(!service.Rent(before, 408030030, 14, 0, now).Accepted, "物品不在请求PVF档位仍拒绝");

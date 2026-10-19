@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Network.Management;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TcpPeer;
@@ -86,7 +87,7 @@ internal static partial class CashShopTcpTests
                 relativeReply == "OK {\"ignoreUsablePeriod\":true}", "只开启相对忽略，不改变绝对开关");
             long started = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             peer.Send(64, BuyAvatar(270621, 0, 1)); Bought(peer, 270621);
-            AvatarRow(peer.Expect(0, 14).Body, 0, checked((int)(int.MaxValue - started)), started);
+            AvatarRow(peer.Expect(0, 14).Body, 0, checked((int)(ItemExpiration.MaximumUnixTime - started)), started);
             That(U32(peer.Expect(0, 53).Body, 1) == 8280, "忽略相对期限不改变七天商品的真实收费");
             peer.Barrier();
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "cash-shop-usable-period off", out relativeReply) &&

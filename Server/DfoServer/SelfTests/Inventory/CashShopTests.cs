@@ -23,12 +23,13 @@ internal static partial class CashShopTests
     public static void RunCore()
     {
         DailyItemExpirationTests.RunCore();
+        ItemExpirationTests.RunCore();
         AvatarCore();
         int checks = Count;
         var now = new DateTimeOffset(2026, 10, 11, 10, 0, 0, TimeSpan.FromHours(8));
         var absolute = ItemExpiration.Parse(new PvfLib.PvfDocument("[expiration date]\n`2020-04-09 06:00:00`"));
-        That(absolute.Resolve(now) < now.ToUnixTimeSeconds() && absolute.ResolveShop(now) == int.MaxValue,
-            "正常规则保留绝对截止，调试使用2038协议上限");
+        That(absolute.Resolve(now) < now.ToUnixTimeSeconds() && absolute.ResolveShop(now) == ItemExpiration.MaximumUnixTime,
+            "正常规则保留绝对截止，调试使用2037安全上限");
         foreach (int days in new[] { 1, 7, 30 })
         {
             var relative = absolute with { Days = days };
@@ -38,18 +39,18 @@ internal static partial class CashShopTests
             foreach (bool ignoreRelative in new[] { false, true })
             {
                 int expected = !ignoreRelative ? (int)now.AddDays(days).ToUnixTimeSeconds() :
-                    ignoreAbsolute ? int.MaxValue : absolute.Resolve(now);
+                    ignoreAbsolute ? ItemExpiration.MaximumUnixTime : absolute.Resolve(now);
                 That(relative.Resolve(now, ignoreAbsolute, ignoreRelative) == expected,
                     "双声明四种组合：相对期限优先，忽略相对后仍遵守未忽略的绝对截止");
                 That(new ItemExpiration(Days: days).Resolve(now, ignoreAbsolute, ignoreRelative) ==
-                    (ignoreRelative ? int.MaxValue : (int)now.AddDays(days).ToUnixTimeSeconds()), "相对期限仅受自己的忽略开关控制");
+                    (ignoreRelative ? ItemExpiration.MaximumUnixTime : (int)now.AddDays(days).ToUnixTimeSeconds()), "相对期限仅受自己的忽略开关控制");
                 That(new ItemExpiration().Resolve(now, ignoreAbsolute, ignoreRelative) == 0, "永久物品不被调试开关制造截止");
             }
         }
         That(new ItemExpiration().Resolve(now) == 0 && new ItemExpiration().ResolveShop(now) == 0,
             "无期限配置在绝对日期调试开启时仍保持永久");
         That(DateTimeOffset.FromUnixTimeSeconds(absolute.ResolveShop(now)).ToOffset(TimeSpan.FromHours(8)) ==
-            new DateTimeOffset(2038, 1, 19, 11, 14, 7, TimeSpan.FromHours(8)), "调试截止为UTC+8的2038协议上限");
+            new DateTimeOffset(2037, 12, 31, 6, 0, 0, TimeSpan.FromHours(8)), "调试截止为UTC+8的2037安全上限");
         long distantTime = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds();
         foreach (var (value, expected) in new (string Value, long Expected)[]
         {
@@ -61,12 +62,12 @@ internal static partial class CashShopTests
         })
         {
             var expiration = ItemExpiration.Parse(new PvfLib.PvfDocument($"[expiration date]\n`{value}`"));
-            That(expiration.AbsoluteTime == expected && expiration.Resolve(now) == int.MaxValue && expiration.ResolveShop(now) == int.MaxValue,
+            That(expiration.AbsoluteTime == expected && expiration.Resolve(now) == ItemExpiration.MaximumUnixTime && expiration.ResolveShop(now) == ItemExpiration.MaximumUnixTime,
                 "远期PVF原值与实例32位期限分开，不产生负值、永久或目录加载失败：" + value);
         }
         var distant = ItemExpiration.Parse(new PvfLib.PvfDocument("[expiration date]\n`2099-01-01`"));
         That((distant with { Days = 7 }).Resolve(now) == now.AddDays(7).ToUnixTimeSeconds() &&
-            (distant with { Days = int.MaxValue }).Resolve(now) == int.MaxValue, "相对天数仍优先，宽整数计算后统一映射上限");
+            (distant with { Days = int.MaxValue }).Resolve(now) == ItemExpiration.MaximumUnixTime, "相对天数仍优先，宽整数计算后统一映射上限");
         foreach (string value in new[] { "not-a-date", "2100-02-29", "1960-01-01", "9223372036854775808" })
             Reject<InvalidDataException>(() => ItemExpiration.Parse(new PvfLib.PvfDocument($"[expiration date]\n`{value}`")),
                 "非法日期或超出64位的Unix值仍拒绝，不借兼容映射吞掉格式错误");
@@ -81,15 +82,15 @@ internal static partial class CashShopTests
                 "只忽略绝对日期时，核心或独立详情保留七天期限 " + kind);
             var ignored = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: true, ignoreUsablePeriod: true);
             var ignoredItem = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 65), ignored);
-            That((ignoredItem.Avatar?.ExpireTime ?? ignoredItem.Creature?.ExpireTime ?? ignoredItem.Core.ExpireTime) == int.MaxValue,
+            That((ignoredItem.Avatar?.ExpireTime ?? ignoredItem.Creature?.ExpireTime ?? ignoredItem.Core.ExpireTime) == ItemExpiration.MaximumUnixTime,
                 "两个声明均忽略时，核心或独立详情使用协议上限 " + kind);
             That(InventoryRewardGrantService.Create(template, utcNow: now).ExpireTime == now.ToUnixTimeSeconds() + 7 * 86400,
                 "其他创建入口保留原相对期限 " + kind);
             var futureTemplate = template with { Expiration = distant };
             var futureCore = InventoryRewardGrantService.Create(futureTemplate, utcNow: now);
             var futureItem = InventoryRewardGrantService.CreateItem(futureTemplate, new(InventoryListType.Main, 65), futureCore);
-            That((futureItem.Avatar?.ExpireTime ?? futureItem.Creature?.ExpireTime ?? futureItem.Core.ExpireTime) == int.MaxValue &&
-                !futureItem.IsExpired(now.ToUnixTimeSeconds()) && futureItem.IsExpired(int.MaxValue) &&
+            That((futureItem.Avatar?.ExpireTime ?? futureItem.Creature?.ExpireTime ?? futureItem.Core.ExpireTime) == ItemExpiration.MaximumUnixTime &&
+                !futureItem.IsExpired(now.ToUnixTimeSeconds()) && futureItem.IsExpired(ItemExpiration.MaximumUnixTime) &&
                 futureTemplate.Expiration.AbsoluteTime == distantTime, "普通创建将远期声明映射到核心或detail，仍保留到期清理资格 " + kind);
         }
         That(CashShopPackets.Failure().SequenceEqual(new byte[] { 0, 0, 0 }), "商城失败包完整3字节，u16错误码为0");
@@ -175,13 +176,13 @@ internal static partial class CashShopTests
             == "OK {\"ignoreAbsoluteExpiration\":true}", "GM在线开启同一商城服务的调试状态");
         var debug = service.Buy(character, expiredRequest, out var debugReceipt, now);
         That(debug.Accepted && debugReceipt is not null && debug.Plan!.After.AccountWallet.Get(CurrencyKind.Cera) ==
-            100_000 - expired.CeraPrice && debug.Plan.After.Items.Single(row => row.Core.ItemId == expired.ItemId).Core.ExpireTime == int.MaxValue,
+            100_000 - expired.CeraPrice && debug.Plan.After.Items.Single(row => row.Core.ItemId == expired.ItemId).Core.ExpireTime == ItemExpiration.MaximumUnixTime,
             "显式调试开启后历史商品可购买并正常规划扣款");
         That(!InventoryRewardGrantService.TryGrantBatch(character, [new(expired.ItemId, expired.Count)], resources.Items,
             resources.GoldLimits, resources.EpicPieces, now).Accepted, "调试开关不改变普通奖励绝对期限");
         var debugItem = debug.Plan!.After.Items.Single(row => row.Core.ItemId == expired.ItemId);
         DevelopmentGm.Answer("cash-shop-expiration off", "10000", repo, owners, _ => null, cashShop: service);
-        That(!service.IgnoreAbsoluteExpiration && !service.Buy(character, expiredRequest, out _, now).Accepted && debugItem.Core.ExpireTime == int.MaxValue,
+        That(!service.IgnoreAbsoluteExpiration && !service.Buy(character, expiredRequest, out _, now).Accepted && debugItem.Core.ExpireTime == ItemExpiration.MaximumUnixTime,
             "关闭恢复正常规则，不追溯改写已规划实例");
         That(new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo).IgnoreAbsoluteExpiration,
             "重新装配商城服务默认开启");

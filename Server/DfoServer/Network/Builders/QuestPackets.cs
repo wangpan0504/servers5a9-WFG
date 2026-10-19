@@ -202,7 +202,7 @@ internal static class QuestPackets
             writer.Write(checked((uint)(item.Core.IsStackable ? reward.GrantedCount : item.Core.Value)));
             writer.Write(item.Core.AmplifyType);
             writer.Write(item.Core.AmplifyValue);
-            writer.Write(unchecked((uint)item.Core.ExpireTime));
+            writer.Write(unchecked((uint)DfoServer.GameWorld.Items.ItemExpiration.ForClient(item.Core.ExpireTime)));
             writer.Write(item.Core.SortLockFlag);
             writer.Write(item.Core.RemainUseCount);
         }

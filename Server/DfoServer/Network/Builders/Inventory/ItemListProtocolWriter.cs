@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Builders.Inventory;
 
@@ -89,7 +90,7 @@ internal static class ItemListProtocolWriter
         writer.Write(core.Chronicle1.EquipmentType);
         writer.Write(core.Chronicle0.Number);
         writer.Write(core.Chronicle1.Number);
-        writer.Write(core.ExpireTime);
+        writer.Write(ItemExpiration.ForClient(core.ExpireTime));
         writer.Write(core.EmblemSocketCount);
         writer.Write(core.Emblem1);
         writer.Write(core.Emblem2);

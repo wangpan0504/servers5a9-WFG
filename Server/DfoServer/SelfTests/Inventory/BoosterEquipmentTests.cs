@@ -77,13 +77,13 @@ internal static class BoosterEquipmentTests
             "只忽略绝对日期仍保留礼包内部60天期限");
         debugSettings.IgnoreCashShopUsablePeriod = true;
         debugOpen = debugService.Open(current, Select(3, 401000005), out _, now);
-        That(debugOpen.Accepted && debugOpen.Plan!.After.Items.Single().Core is { ExpireTime: int.MaxValue, Attr: 7, GenuineUpgrade: 3 },
+        That(debugOpen.Accepted && debugOpen.Plan!.After.Items.Single().Core is { ExpireTime: ItemExpiration.MaximumUnixTime, Attr: 7, GenuineUpgrade: 3 },
             "额外开启相对忽略后，60天奖励使用协议上限且保持原装备属性");
         debugSettings.IgnoreCashShopAbsoluteExpiration = false;
         debugSettings.IgnoreCashShopUsablePeriod = false;
         var normalOpen = debugService.Open(current, Select(3, 401000005), out _, now);
         That(normalOpen.Accepted && normalOpen.Plan!.After.Items.Single().Core.ExpireTime == Core(401000005).ExpireTime &&
-            debugOpen.Plan!.After.Items.Single().Core.ExpireTime == int.MaxValue, "关闭恢复内部奖励相对期限，不改写已规划实例");
+            debugOpen.Plan!.After.Items.Single().Core.ExpireTime == ItemExpiration.MaximumUnixTime, "关闭恢复内部奖励相对期限，不改写已规划实例");
         debugSettings.IgnoreCashShopAbsoluteExpiration = true;
         debugSettings.IgnoreCashShopUsablePeriod = true;
         debugRandom.Values.Enqueue(0);

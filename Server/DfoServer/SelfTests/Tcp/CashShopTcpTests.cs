@@ -103,8 +103,8 @@ internal static partial class CashShopTcpTests
             var debugDelta = peer.Expect(0,14).Body;
             var debugEntries = Enumerable.Range(0,U16(debugDelta,1)).Select(index => 3 + index * 123)
                 .Where(at => U32(debugDelta,at + 2) == expired.ItemId).ToArray();
-            That(debugEntries.Length == 1 && U32(debugDelta,debugEntries[0] + 56) == int.MaxValue,
-                "历史商品NOTI14中对应物品条目的期限下发2038协议上限");
+            That(debugEntries.Length == 1 && U32(debugDelta,debugEntries[0] + 56) == ItemExpiration.MaximumUnixTime,
+                "历史商品NOTI14中对应物品条目的期限下发2037安全上限");
             That(U32(peer.Expect(0,53).Body,1) == 0 && fixture.Query("SELECT COALESCE((SELECT balance FROM account_currency_balances WHERE currency_kind=15),0)") is [[long paid]] && paid == 0,
                 "调试购买仍原子扣款并投影真实余额");
             peer.Send(64, body);
@@ -114,7 +114,7 @@ internal static partial class CashShopTcpTests
         }
         await fixture.StopAsync();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
-            That(repository.List(owner).Single().Inventory.Items.Single(row => row.Core.ItemId == expired.ItemId).Core.ExpireTime == int.MaxValue,
+            That(repository.List(owner).Single().Inventory.Items.Single(row => row.Core.ItemId == expired.ItemId).Core.ExpireTime == ItemExpiration.MaximumUnixTime,
                 "关闭开关不追溯修改已持久化调试物品");
         await fixture.StartAsync("restart");
         That(Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "重建Runtime恢复默认开启");

@@ -242,7 +242,7 @@ internal static class MagicBoxTests
                         {
                             datedRewards++;
                             Check(result.Accepted && result.Plan!.After.Items.Any(item => item.Core.ItemId == row.ItemId &&
-                                item.Core.ExpireTime == int.MaxValue), "开启忽略绝对日期后奖励使用客户端远期期限");
+                                item.Core.ExpireTime == ItemExpiration.MaximumUnixTime), "开启忽略绝对日期后奖励使用客户端安全期限");
                             settings.IgnoreCashShopAbsoluteExpiration = false;
                             Check(targeted.Open(candidate, noMaterial, out var strict) is { Accepted: false, Plan: null } &&
                                 strict is null && candidate.Inventory.Find(noMaterial.BoxSlot) is { Core.Count: 999 },
