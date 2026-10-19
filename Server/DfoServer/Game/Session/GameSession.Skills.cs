@@ -63,12 +63,12 @@ internal sealed partial class GameSession
 
     private SkillLearningResult ApplySkillLearning(Func<Character, SkillLearningResult> plan)
     {
-        var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
-            SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
-        if (!captured.Allowed)
+        // 返回选角后客户端可能补发迟到的技能写入包：无选中角色属于可拒绝请求，不能抛出关闭连接。
+        var captured = owner.Execute(() => (Character: Selected, SelectionEpoch, Phase,
+            Allowed: Selected is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
+        if (!captured.Allowed || captured.Character is not { } character)
             return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
 
-        var character = captured.Character;
         SkillLearningResult result;
         try { result = plan(character); }
         catch (NotSupportedException) { return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()); }
@@ -102,20 +102,21 @@ internal sealed partial class GameSession
 
     internal SkillLayoutResult MoveSkillSlot(SkillSlotChangeCommand command, Func<byte, ushort, SkillLearningDefinition> definition)
     {
-        var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
-            SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
-        if (!captured.Allowed)
+        // 与连招保存同因：返回选角后的迟到 C2S28 属于可拒绝请求，不能抛出关闭连接。
+        var captured = owner.Execute(() => (Character: Selected, SelectionEpoch, Phase,
+            Allowed: Selected is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
+        if (!captured.Allowed || captured.Character is not { } character)
             return new(SkillLearningFailure.Unsupported, null);
-        var result = SkillLayout.Move(captured.Character.Job, captured.Character.Learning, command, definition);
+        var result = SkillLayout.Move(character.Job, character.Learning, command, definition);
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character))
+            if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
                 throw new InvalidOperationException("Stale skill layout state");
             if (!result.Success)
                 return result;
             // 同槽请求只确认原事实；没有布局变化不申请writer或递增revision。
-            if (!ReferenceEquals(result.State, captured.Character.Learning))
-                Selected = repository.CommitSkillLayout(owner, captured.Character, result.State!);
+            if (!ReferenceEquals(result.State, character.Learning))
+                Selected = repository.CommitSkillLayout(owner, character, result.State!);
             return result with { State = Selected!.Learning, Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase } };
         });
     }
