@@ -146,7 +146,20 @@ internal static class SqliteMigrations
         new(55, "角色秘药经验状态", static (db, tx) => Execute(db, tx, ExpBonusSchema)),
         new(56, "每日保留礼盒次数", static (db, tx) => Execute(db, tx,
             "ALTER TABLE characters ADD COLUMN daily_booster_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(daily_booster_usage) AND json_type(daily_booster_usage)='array')")),
+        new(57, "角色副职业资格", static (db, tx) => Execute(db, tx, ExpertJobSchema)),
+        new(58, "副职业教程领奖原生类型17", UpgradeExpertJobTutorialCompletion),
+        new(59, "副职业熟练度", AddExpertJobExperience),
+        new(60, "副职业放弃阶与分解机", static (db, tx) => Execute(db, tx, ExpertJobMetaSchema)),
     ];
+
+    static void AddExpertJobExperience(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('character_expert_job') WHERE name='expertness'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE character_expert_job ADD COLUMN expertness INTEGER NOT NULL DEFAULT 0 CHECK(expertness>=0)");
+    }
 
     static void UpgradeCollectBoxState(SqliteConnection db, SqliteTransaction tx)
     {
@@ -247,6 +260,40 @@ internal static class SqliteMigrations
         .Replace("CHECK(condition_type IN(0,1,2,3,4,6,12,19,25,31,39,40,42,44,49,64,65,67,70))",
             "CHECK(condition_type IN(0,1,2,3,4,6,12,19,25,31,39,40,42,44,45,49,64,65,67,70))", StringComparison.Ordinal)
         .Replace("condition_type IN(1,3) AND", "condition_type IN(1,3,45) AND (condition_type<>45 OR (clear_acceptance_id IS NOT NULL AND plan_snapshot IS NOT NULL)) AND", StringComparison.Ordinal);
+
+    internal static string QuestCompletionSchemaV58 => QuestCompletionSchemaV46
+        .Replace("12,19,25", "12,17,19,25", StringComparison.Ordinal);
+
+    static void UpgradeExpertJobTutorialCompletion(SqliteConnection db, SqliteTransaction tx)
+    {
+        const string table = "character_quest_completion_receipts";
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.Parameters.AddWithValue("$table", table);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+        string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("副职业教程领奖迁移缺少原领奖账本");
+        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV58, table)) return;
+        if (NormalizeTable(actual, table) != NormalizeTable(QuestCompletionSchemaV46, table))
+            throw new InvalidDataException("副职业教程领奖迁移不是已确认的 v46 领奖结构");
+        // v53 阶段旁表已外键指向领奖账本，不能 DROP 重建；只把已确认的 IN 列表扩到原生类型 17。
+        string updated = actual.Replace("12,19,25", "12,17,19,25", StringComparison.Ordinal);
+        if (NormalizeTable(updated, table) != NormalizeTable(QuestCompletionSchemaV58, table))
+            throw new InvalidDataException("副职业教程领奖迁移不能得到已确认的 v58 领奖结构");
+        query.CommandText = "PRAGMA schema_version";
+        long schemaVersion = (long)query.ExecuteScalar()!;
+        Execute(db, tx, "PRAGMA writable_schema=ON");
+        try
+        {
+            query.CommandText = "UPDATE sqlite_schema SET sql=$sql WHERE type='table' AND name=$table";
+            query.Parameters.AddWithValue("$sql", updated);
+            if (query.ExecuteNonQuery() != 1) throw new InvalidDataException("副职业教程领奖约束更新失败");
+            Execute(db, tx, $"PRAGMA schema_version={checked(schemaVersion + 1)}");
+        }
+        finally { Execute(db, tx, "PRAGMA writable_schema=OFF"); }
+        Execute(db, tx, $"SELECT * FROM {table} LIMIT 0");
+        query.CommandText = "PRAGMA foreign_key_check";
+        using var failures = query.ExecuteReader();
+        if (failures.Read()) throw new InvalidDataException("副职业教程领奖迁移不能保全旧完成外键");
+    }
 
     static void UpgradeQuestDungeonAlternatives(SqliteConnection db, SqliteTransaction tx)
     {
@@ -405,6 +452,26 @@ internal static class SqliteMigrations
           account TEXT NOT NULL,
           until_unix INTEGER NOT NULL CHECK(until_unix>=0),
           permille INTEGER NOT NULL CHECK(permille BETWEEN 0 AND 10000),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string ExpertJobSchema = """
+        CREATE TABLE IF NOT EXISTS character_expert_job(
+          character_id INTEGER PRIMARY KEY,
+          account TEXT NOT NULL,
+          job_type INTEGER NOT NULL CHECK(job_type BETWEEN 1 AND 4),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string ExpertJobMetaSchema = """
+        CREATE TABLE IF NOT EXISTS character_expert_meta(
+          character_id INTEGER PRIMARY KEY,
+          account TEXT NOT NULL,
+          giveup_state INTEGER NOT NULL DEFAULT 0 CHECK(giveup_state BETWEEN 0 AND 3),
+          machine_grade INTEGER NOT NULL DEFAULT 1 CHECK(machine_grade BETWEEN 0 AND 11),
+          machine_endurance INTEGER NOT NULL DEFAULT 300 CHECK(machine_endurance>=0),
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
         );
         """;
@@ -1212,6 +1279,13 @@ internal static class SqliteMigrations
             query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_quest_effect_receipts','character_quest_special_reward_claims')";
             if (query.ExecuteScalar() is 0L) AddQuestEffects(db,tx);
         }
+        // 本地构建曾把副职业表记成 v56，而 origin/master 的 v56 是每日礼盒列。
+        // 这类库版本号已到 56 却没有 daily_booster_usage，按 55 重跑；v57 建表使用 IF NOT EXISTS。
+        if (version >= 56)
+        {
+            query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'";
+            if (query.ExecuteScalar() is 0L) version = 55;
+        }
         foreach (var step in steps)
         {
             if (step.Version <= version)
@@ -1252,7 +1326,7 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
-        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV46),
+        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV58),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
             ("character_dungeon_settlement_receipts",DungeonSceneSettlementSchema.SettlementSql),
@@ -1335,6 +1409,8 @@ internal static class SqliteMigrations
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
         "SELECT character_id,account,potion_until,aura_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
+        "SELECT character_id,account,job_type,expertness FROM character_expert_job LIMIT 0",
+        "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",

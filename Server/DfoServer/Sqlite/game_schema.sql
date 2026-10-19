@@ -14,6 +14,21 @@ CREATE TABLE character_exp_bonus(
   permille INTEGER NOT NULL CHECK(permille BETWEEN 0 AND 10000),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_expert_job(
+  character_id INTEGER PRIMARY KEY,
+  account TEXT NOT NULL,
+  job_type INTEGER NOT NULL CHECK(job_type BETWEEN 1 AND 4),
+  expertness INTEGER NOT NULL DEFAULT 0 CHECK(expertness>=0),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+CREATE TABLE character_expert_meta(
+  character_id INTEGER PRIMARY KEY,
+  account TEXT NOT NULL,
+  giveup_state INTEGER NOT NULL DEFAULT 0 CHECK(giveup_state BETWEEN 0 AND 3),
+  machine_grade INTEGER NOT NULL DEFAULT 1 CHECK(machine_grade BETWEEN 0 AND 11),
+  machine_endurance INTEGER NOT NULL DEFAULT 300 CHECK(machine_endurance>=0),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TABLE character_teleport_cooldowns(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,
@@ -211,13 +226,13 @@ CREATE TABLE character_quest_completion_receipts(
           before_experience INTEGER NOT NULL CHECK(before_experience>=0),after_experience INTEGER NOT NULL CHECK(after_experience>=before_experience AND after_experience<=before_experience+experience_amount),
           before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
           rewards TEXT NOT NULL CHECK(json_valid(rewards) AND json_type(rewards)='array' AND json_array_length(rewards)<=255),
-          clear_acceptance_id TEXT,condition_type INTEGER NOT NULL DEFAULT 3 CHECK(condition_type IN(0,1,2,3,4,6,12,19,25,31,39,40,42,44,45,49,64,65,67,70)),
+          clear_acceptance_id TEXT,condition_type INTEGER NOT NULL DEFAULT 3 CHECK(condition_type IN(0,1,2,3,4,6,12,17,19,25,31,39,40,42,44,45,49,64,65,67,70)),
           selector INTEGER NOT NULL DEFAULT 65535 CHECK(selector BETWEEN 0 AND 65535),multiplier INTEGER NOT NULL DEFAULT 1 CHECK(multiplier BETWEEN 1 AND 65535),
           consumed TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(consumed) AND json_type(consumed)='array' AND json_array_length(consumed)<=255),
           changed_items TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
           plan_snapshot TEXT CHECK(plan_snapshot IS NULL OR (json_valid(plan_snapshot) AND json_type(plan_snapshot)='object')),
           CHECK((condition_type IN(1,3,45) AND (condition_type<>45 OR (clear_acceptance_id IS NOT NULL AND plan_snapshot IS NOT NULL)) AND clear_acceptance_id=acceptance_id AND event_id IS NOT NULL AND instance_id IS NOT NULL AND task_attempt IS NOT NULL AND epoch IS NOT NULL)
-            OR (condition_type IN(0,2,4,6,12,19,25,31,39,40,42,44,49,64,65,67,70) AND clear_acceptance_id IS NULL AND event_id IS NULL AND instance_id IS NULL AND task_attempt IS NULL AND epoch IS NULL AND plan_snapshot IS NOT NULL)),
+            OR (condition_type IN(0,2,4,6,12,17,19,25,31,39,40,42,44,49,64,65,67,70) AND clear_acceptance_id IS NULL AND event_id IS NULL AND instance_id IS NULL AND task_attempt IS NULL AND epoch IS NULL AND plan_snapshot IS NOT NULL)),
           PRIMARY KEY(character_id,acceptance_id),
           FOREIGN KEY(character_id,clear_acceptance_id) REFERENCES character_quest_clear_receipts(character_id,acceptance_id),
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account));

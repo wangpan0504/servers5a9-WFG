@@ -194,6 +194,27 @@ internal static class QuestEligibilityTests
             !QuestLifecyclePlan.ValidSeeking(materials with { IntData = [3033,0,1] }) &&
             !QuestLifecyclePlan.ValidSeeking(materials with { IntData = [3033,200,0] }),
             "重复材料及总缺额超过uint仍完整聚合，非法数量和NPC继续拒绝");
+        StoryQuest Expert(int id, int type, params int[] collisions) => Quest(id) with
+        {
+            Condition = "[seeking]", SubType = -1, IntData = [3037, 100], MinimumLevel = 20, MaximumLevel = 99,
+            Grade = "[common unique]", RewardType = "[expert job]", Difficulty = null, Rewards = [new(0, type, null)],
+            Npc = 144, CompleteNpc = -1,
+            Definition = new([]) { Job = "[all]", JobChange = 20, GrowType = -1, Collisions = collisions.ToImmutableArray() }
+        };
+        var enchanter = Expert(2702, 1, 2708, 2710, 2712);
+        var alchemist = Expert(2708, 2, 2702);
+        var expertCatalog = new QuestCatalog(new[] { enchanter, alchemist }.ToDictionary(row => row.Id));
+        var qualified = origin with { Level = 20 };
+        That(QuestExpertJobReward.Type(enchanter) == 1 && QuestExpertJobReward.Type(alchemist) == 2 &&
+            QuestExpertJobReward.Type(enchanter with { Rewards = [new(0, 5, null)] }) is null &&
+            QuestExpertJobReward.Type(enchanter with { Rewards = [new(0, 1, null), new(0, 1, null)] }) is null,
+            "副职业奖励只接受一个 1–4 的类型整数");
+        That(QuestEligibility.Evaluate(qualified, enchanter, expertCatalog).Eligible &&
+            !QuestEligibility.Evaluate(origin, enchanter, expertCatalog).Eligible,
+            "20 级可以接附魔师资格，1 级不行");
+        That(!QuestEligibility.Evaluate(qualified with { CompletedQuests = [2702] }, alchemist, expertCatalog).Eligible &&
+            !QuestEligibility.Evaluate(qualified with { ActiveMainQuests = [new(0, 2702, 1)] }, alchemist, expertCatalog).Eligible,
+            "已接或已完成的副职业链挡住其他副职业第一步");
         Console.WriteLine($"PASS {Count - checks} 任务资源入口、等级/职业及前置/子任务资格断言");
     }
 

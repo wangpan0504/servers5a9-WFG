@@ -94,8 +94,9 @@ internal static class QuestEligibility
         QuestEligibilityMode mode = QuestEligibilityMode.Ordinary)
     {
         var access = InspectResource(quest);
-        if (access.Entry is QuestResourceEntry.Invalid or QuestResourceEntry.OutsideLevels or QuestResourceEntry.Event or
-            QuestResourceEntry.Profession)
+        if (access.Entry is QuestResourceEntry.Invalid or QuestResourceEntry.OutsideLevels or QuestResourceEntry.Event)
+            return Reject(access.Reason);
+        if (access.Entry == QuestResourceEntry.Profession && !QuestExpertJobProgress.MatchesLevel(character, quest))
             return Reject(access.Reason);
         if (access.Entry == QuestResourceEntry.Creature && !QuestCreatureReward.Matches(character, quest, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
             return Reject("未装备任务要求的宠物，或宠物种类、等级及进化产物不符");
@@ -139,8 +140,9 @@ internal static class QuestEligibility
                 return Reject("尚未到本子任务的资源顺序");
             return new(true, includeActive && active.Contains(quest.Id), "等待父任务对话入口");
         }
-        bool visible = (access.Entry == QuestResourceEntry.Ordinary || access.Entry == QuestResourceEntry.Creature &&
-            definition.ExposedByNpc && OrdinaryGrade(quest.Grade)) &&
+        bool visible = (access.Entry == QuestResourceEntry.Ordinary ||
+            access.Entry == QuestResourceEntry.Profession && definition.ExposedByNpc && OrdinaryGrade(quest.Grade) ||
+            access.Entry == QuestResourceEntry.Creature && definition.ExposedByNpc && OrdinaryGrade(quest.Grade)) &&
             !definition.HideOnCompletedQuests.Any(completed.Contains);
         return new(true, visible, visible ? "资格满足" : "需要专用任务入口");
     }

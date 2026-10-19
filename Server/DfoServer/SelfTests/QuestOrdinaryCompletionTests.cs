@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Auth;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
+using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
@@ -846,6 +847,307 @@ internal static class QuestOrdinaryCompletionTests
                 "完成后清接取槽、记录真实答案，只开放被选择的阵营");
         }
         Console.WriteLine($"PASS {Count-checks} 问答未接取/未回答/已回答/完成及三种投影状态断言");
+    }
+
+    public static void RunExpertJob(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items, QuestCatalog quests)
+    {
+        int checks = Count;
+        var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        var scripts = ExpertJobScriptCatalog.Load(pvf, items.Items);
+        NewCharacter Level20(NewCharacter source) => source with
+        {
+            Level = 20,
+            InitialLearning = SkillPointLedger.Synchronize(source.Job, source.GrowType, 20,
+                source.InitialLearning with { Experience = growth.GetLevelStartExperience(20) }, learning)
+        };
+        foreach (var sample in new (int Id, byte Type)[] { (2702, 1), (2708, 2), (2710, 3), (2712, 4) })
+        {
+            var quest = quests.Get(sample.Id);
+            That(QuestExpertJobReward.Type(quest) == sample.Type && quest.Difficulty is null &&
+                quest.Condition == "[seeking]" && quest.IntData.SequenceEqual([3037, 100]),
+                "真实副职业第一步消耗 100 个无色小晶块，奖励类型 " + sample.Type);
+            var covered = QuestCoverage.Scan(new(new[] { quest }.ToDictionary(row => row.Id)), items.Items, items.EpicPieces, parameters).Quests.Single();
+            That(covered.ImplementedPath, sample.Id + " 覆盖：" + string.Join("；", covered.Restrictions));
+            using var f = new Fixture(towns, characters, learning, growth, parameters, items, quest, materialCount: 0, configure: Level20);
+            var missing = QuestCompletionPlan.Prepare(f.Read(), quest, ushort.MaxValue, f.Catalog, parameters, items.Items,
+                items.GoldLimits, items.EpicPieces, growth, DateTimeOffset.UtcNow);
+            That(missing.Plan is null && f.Receipts == 0, "没有无色小晶块不能完成 " + sample.Id + "：" + missing.Reason);
+            That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character, [new(3037, 100)],
+                items.Items, items.GoldLimits, items.EpicPieces)).Accepted, "测试无色小晶块走现有钱包发放");
+            var funded = f.Read();
+            var malformed = QuestCompletionPlan.Prepare(funded, quest with { Rewards = [new(0, 5, null)] }, ushort.MaxValue, f.Catalog,
+                parameters, items.Items, items.GoldLimits, items.EpicPieces, growth, DateTimeOffset.UtcNow);
+            That(malformed.Plan is null && CurrencyWallet.Get(f.Read().Inventory, CurrencyKind.ClearCube) == 100,
+                "类型超出 1–4 时不扣无色小晶块");
+            var result = f.Finish(ushort.MaxValue, (ushort)sample.Id);
+            var commit = result.Receipt!.Commit;
+            byte[] ack = DfoServer.Network.Builders.QuestPackets.Finish((ushort)sample.Id, commit.ConditionType, commit.GainedExperience,
+                commit.Consumed.Select(row => new DfoServer.Network.Builders.QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(),
+                commit.DirectGoldAmount, []);
+            using var db = f.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "SELECT job_type FROM character_expert_job";
+            byte[] actor = DfoServer.Network.Builders.TownPackets.Actor(commit.Character);
+            byte[] actorBlind = DfoServer.Network.Builders.TownPackets.Actor(commit.Character with { ExpertJobType = 0 });
+            That(result.Outcome == QuestFinishOutcome.Committed && commit.GainedExperience == 0 && commit.DirectGoldAmount == 0 &&
+                commit.ExpertJobType == sample.Type && commit.Consumed.Single() is { ItemId: 3037, Count: 100, Uid: 0 } &&
+                commit.Consumed[0].Position.Index == ItemSlotBoundService.CurrencySlot(CurrencyKind.ClearCube) &&
+                commit.Character.ExpertJobType == sample.Type && commit.Character.CompletedQuests.Contains(sample.Id) &&
+                CurrencyWallet.Get(commit.Character.Inventory, CurrencyKind.ClearCube) == 0 &&
+                (long)command.ExecuteScalar()! == sample.Type && ack[^2] == 0 && ack[^1] == 0 &&
+                f.Receipts == 1 && actor.Length == actorBlind.Length &&
+                ActorExpertJobType(actor, actorBlind) == sample.Type,
+                "副职业 " + sample.Id + " 扣除 100 无色、经验为 0、类型落库，ACK 为寻物 mode0 零奖励，Actor 投影 I+3B0");
+            var replay = f.Finish(ushort.MaxValue, (ushort)sample.Id);
+            var saved = f.Read();
+            That(replay.Outcome == QuestFinishOutcome.AlreadyCompleted && saved.ExpertJobType == sample.Type &&
+                CurrencyWallet.Get(saved.Inventory, CurrencyKind.ClearCube) == 0 && f.Receipts == 1,
+                "完成后再次交付保持已完成，不重复扣晶块、不改类型");
+            That(f.Session.MutateInventory(character => CurrencyService.SetGold(character, 20_000)).Accepted, "放弃前置金币");
+            var given = f.Session.GiveUpExpertJob(scripts);
+            byte[] actorCleared = DfoServer.Network.Builders.TownPackets.Actor(given.Character!);
+            using var cleared = f.Open();
+            using var clearedCommand = cleared.CreateCommand();
+            clearedCommand.CommandText = "SELECT count(*) FROM character_expert_job";
+            using var meta = f.Open();
+            using var metaCommand = meta.CreateCommand();
+            metaCommand.CommandText = "SELECT giveup_state FROM character_expert_meta";
+            That(given.Error == 0 && given.Character!.ExpertJobType == 0 && given.Character.Inventory.Gold == 19_000 &&
+                given.Character.ExpertGiveUpState == 1 && (long)clearedCommand.ExecuteScalar()! == 0 &&
+                (long)metaCommand.ExecuteScalar()! == 1 &&
+                ActorExpertJobType(actor, actorCleared) == sample.Type &&
+                f.Read().ExpertJobType == 0 && f.Read().ExpertGiveUpState == 1,
+                "C2S 239 扣 1000 金后清 character_expert_job，放弃档留在 meta，Actor I+3B0 回到 0");
+            if (sample.Id == 2702)
+            {
+                var both = new QuestCatalog(new[] { quests.Get(2702), quests.Get(2708) }.ToDictionary(row => row.Id));
+                That(!QuestEligibility.Evaluate(commit.Character, quests.Get(2708), both).Eligible, "完成附魔师后，碰撞声明挡住炼金术师");
+                f.Sql("INSERT INTO character_expert_job(character_id,account,job_type) VALUES(" + commit.Character.Id +
+                    ",'ordinary-quest',1)");
+                f.Session.ReturnToRoster();
+                f.Session.Select(0);
+                f.Session.MarkReady();
+                var second = f.Session.GiveUpExpertJob(scripts);
+                That(second.Error == 0 && second.Character!.Inventory.Gold == 9_000 && second.Character.ExpertGiveUpState == 2 &&
+                    f.Read().ExpertJobType == 0,
+                    "第二次放弃在资格行删掉后仍按档 10000 扣金");
+                f.Sql("INSERT INTO character_expert_job(character_id,account,job_type) VALUES(" + commit.Character.Id +
+                    ",'ordinary-quest',1)");
+                f.Session.ReturnToRoster();
+                f.Session.Select(0);
+                f.Session.MarkReady();
+                That(f.Session.MutateInventory(character => CurrencyService.SetGold(character, 500)).Accepted, "不足金币");
+                var poor = f.Session.GiveUpExpertJob(scripts);
+                That(poor.Error == 19 && f.Read().ExpertJobType == 1 && f.Read().Inventory.Gold == 500,
+                    "金币不足错误 19 且不清资格");
+            }
+        }
+        RunExpertJobGameplay(towns, characters, learning, growth, parameters, items, quests, scripts);
+        void RejectLater(int id, int[] completed, ActiveMainQuest[]? active = null)
+        {
+            var quest = quests.Get(id);
+            using var f = new Fixture(towns, characters, learning, growth, parameters, items, quest, materialCount: 0,
+                active: active, configure: source => Level20(source) with { CompletedQuests = completed });
+            var prepared = QuestCompletionPlan.Prepare(f.Read(), quest, ushort.MaxValue, f.Catalog, parameters, items.Items,
+                items.GoldLimits, items.EpicPieces, growth, DateTimeOffset.UtcNow);
+            That(prepared.Plan is null && f.Receipts == 0, id + " 仍不能完成：" + prepared.Reason);
+        }
+        foreach (var meet in new (int Id, int Prerequisite, int Reward)[]
+                 { (11007, 2702, 2600482), (11013, 2708, 2600463), (11016, 2712, 2600474), (10020, 2710, 18400) })
+        {
+            var quest = quests.Get(meet.Id);
+            var first = quests.Get(meet.Prerequisite);
+            That(quest is { Condition: "[meet npc]", SubType: -1, Difficulty: null } && quest.IntData.SequenceEqual([144]) &&
+                quest.RewardType == "[item]" && QuestCoverage.Scan(new(new[] { quest, first }.ToDictionary(row => row.Id)),
+                    items.Items, items.EpicPieces, parameters).Quests.Single(row => row.Id == meet.Id).ImplementedPath,
+                meet.Id + " 会面第二步省略 difficulty 后可走普通领奖");
+            using var f = new Fixture(towns, characters, learning, growth, parameters, items, quest, materialCount: 0,
+                definitions: [quest, first], active: [new(0, (ushort)meet.Id, 0)],
+                configure: source => Level20(source) with { CompletedQuests = [meet.Prerequisite] });
+            var result = f.Finish(ushort.MaxValue, (ushort)meet.Id);
+            var commit = result.Receipt!.Commit;
+            That(result.Outcome == QuestFinishOutcome.Committed && commit.ConditionType == 4 &&
+                commit.ExperienceReward is { DifficultyKey: "", DifficultyWeight: 100, Amount: > 0 } &&
+                commit.Rewards.Single() is { GrantedCount: 1, Item.Core.ItemId: var rewardId } && rewardId == meet.Reward &&
+                commit.Character.CompletedQuests.Contains(meet.Id) && f.Receipts == 1,
+                meet.Id + " 会面交付发物品并按缺省 100 权重给经验：" + result.Reason);
+        }
+        foreach (var seek in new (int Id, int[] Completed, int Material, (int Id, int Count)[] Rewards)[]
+                 { (11019, [2702, 11007], 3227, [(3227, 5), (3166, 20), (3619, 1), (18400, 1)]),
+                   (11014, [2708, 11013], 2610024, [(2610024, 1), (2610027, 1)]),
+                   (11017, [2712, 11016], 2610042, [(2610042, 1), (2610031, 1)]) })
+        {
+            var quest = quests.Get(seek.Id);
+            var related = seek.Completed.Select(quests.Get).Append(quest).ToArray();
+            That(quest is { Condition: "[seeking]", SubType: -1, Difficulty: null } && quest.IntData.SequenceEqual([seek.Material, 1]),
+                seek.Id + " 寻物第三步消耗单件材料");
+            using var f = new Fixture(towns, characters, learning, growth, parameters, items, quest, materialCount: 0,
+                definitions: related, active: [new(0, (ushort)seek.Id, 0)],
+                configure: source => Level20(source) with { CompletedQuests = seek.Completed });
+            That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character, [new(seek.Material, 1)],
+                items.Items, items.GoldLimits, items.EpicPieces)).Accepted, seek.Id + " 寻物材料走现有发放");
+            var result = f.Finish(ushort.MaxValue, (ushort)seek.Id);
+            var commit = result.Receipt!.Commit;
+            bool Rewarded((int Id, int Count) row) =>
+                commit.Rewards.Any(granted => granted.Item.Core.ItemId == row.Id && granted.GrantedCount == row.Count) ||
+                commit.Currencies.Any(granted => granted.ItemId == row.Id && granted.Count == row.Count);
+            That(result.Outcome == QuestFinishOutcome.Committed && commit.ConditionType == 0 &&
+                commit.ExperienceReward is { DifficultyKey: "", DifficultyWeight: 100, Amount: > 0 } &&
+                commit.Consumed.Single() is { Count: 1, ItemId: var consumedId } && consumedId == seek.Material &&
+                seek.Rewards.All(Rewarded) && commit.Character.CompletedQuests.Contains(seek.Id) && f.Receipts == 1,
+                seek.Id + " 寻物交付扣材料、发奖励并按缺省 100 给经验：" + result.Reason);
+        }
+        RejectLater(11009, [2702, 11007, 11019]);
+        RejectLater(10021, [2710, 10020]);
+        foreach (var tutorial in new (int Id, int[] Completed, byte Type)[]
+                 { (11009, [2702, 11007, 11019], 1), (11015, [2708, 11013, 11014], 2),
+                   (10021, [2710, 10020], 3), (11018, [2712, 11016, 11017], 4) })
+        {
+            var quest = quests.Get(tutorial.Id);
+            var related = tutorial.Completed.Select(quests.Get).Append(quest).ToArray();
+            That(QuestExpertJobProgress.Tutorial(quest) && QuestExpertJobProgress.RequiredType(quest) == tutorial.Type &&
+                QuestCoverage.Scan(new(related.ToDictionary(row => row.Id)), items.Items, items.EpicPieces, parameters)
+                    .Quests.Single(row => row.Id == tutorial.Id).ImplementedPath,
+                tutorial.Id + " 第四步/分解末步覆盖：" + quest.Condition);
+            using var f = new Fixture(towns, characters, learning, growth, parameters, items, quest, materialCount: 0,
+                definitions: related, active: [new(0, (ushort)tutorial.Id, 1)],
+                configure: source => Level20(source) with { CompletedQuests = tutorial.Completed });
+            var created = f.Read();
+            f.Sql("INSERT INTO character_expert_job(character_id,account,job_type) VALUES(" + created.Id + ",'ordinary-quest'," +
+                tutorial.Type + ")");
+            f.Session.ReturnToRoster();
+            f.Session.Select(0);
+            f.Session.MarkReady();
+            That(f.Read().ExpertJobType == tutorial.Type && f.Session.OpenExpertJobStore(),
+                tutorial.Id + " 重登读到类型后才能开店");
+            var observed = f.Session.ObserveExpertJobTutorial((ushort)tutorial.Id, f.Catalog);
+            That(observed is { Outcome: QuestLifecycleOutcome.Committed } &&
+                f.Read().ActiveMainQuests.Single().ConditionState == 0,
+                tutorial.Id + " 商店事实归零条件：" + observed?.Reason);
+            var result = f.Finish(ushort.MaxValue, (ushort)tutorial.Id);
+            var commit = result.Receipt!.Commit;
+            That(result.Outcome == QuestFinishOutcome.Committed &&
+                commit.ConditionType == QuestExpertJobProgress.NativeType(quest) &&
+                commit.DirectGoldAmount == 0 &&
+                commit.ExperienceReward is { DifficultyKey: "", DifficultyWeight: 100, Amount: > 0 } &&
+                commit.Character.CompletedQuests.Contains(tutorial.Id) && f.Receipts == 1,
+                tutorial.Id + " 教程交付零金币、缺省 100 经验：" + result.Reason);
+        }
+        var plain = new Character(1, 0, "Expert", 1, new(38, 1, 1, 1), null) { Level = 20 };
+        TestCheck.Reject<NotSupportedException>(() => QuestExperiencePolicy.Prepare(plain,
+            quests.Get(11019) with { Path = "n_quest/ordinary/missing-difficulty.qst" }, parameters, out _),
+            "缺省 difficulty=100 不扩大到副职业目录以外的普通任务");
+        Console.WriteLine($"PASS {Count - checks} 四条副职业资格交付、落库、重登投影、第二/三/四步领奖与放弃断言");
+    }
+
+    static void RunExpertJobGameplay(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning,
+        CharacterGrowthCatalog growth, QuestRewardParameterCatalog parameters, ItemResources items, QuestCatalog quests,
+        ExpertJobScriptCatalog scripts)
+    {
+        NewCharacter Level20(NewCharacter source) => source with
+        {
+            Level = 20,
+            InitialLearning = SkillPointLedger.Synchronize(source.Job, source.GrowType, 20,
+                source.InitialLearning with { Experience = growth.GetLevelStartExperience(20) }, learning)
+        };
+        var dummy = quests.Get(2702);
+        byte[] type3 = DfoServer.Network.Builders.ExpertJobPackets.Info(3, [], 1, 300);
+        That(type3.Length == 10 && type3[0] == 0 && type3[1] == 3, "NOTI 205 分解师 10 字节");
+        var alchemist = new Character(1, 0, "Alch", 0, new(0, 0, 0, 0), null) { ExpertJobType = 2 };
+        byte[] type2 = DfoServer.Network.Builders.ExpertJobPackets.Info(alchemist, scripts);
+        That(type2.Length == 3 + 4 * type2[2] && type2[0] == 0 && type2[1] == 2, "NOTI 205 炼金 3+4n");
+        using (var f = new Fixture(towns, characters, learning, growth, parameters, items, dummy, materialCount: 0, configure: Level20))
+        {
+            var created = f.Read();
+            That(BitConverter.ToUInt16(DfoServer.Network.Builders.ExpertJobPackets.CreateStoreNotice(0, created.Id), 1) == created.Id,
+                "开店通知演员号等于 character.Id");
+            var board = new ExpertJobStoreBoard();
+            board.Open(new(created.Id, 2, 0, "shop", 7, 8, 9, 10, 1, 300));
+            That(board.TryGet(created.Id, out var store) && store.OwnerId == created.Id && store.First == 7,
+                "副职业商店按角色 Id 持久化");
+        }
+        using (var f = new Fixture(towns, characters, learning, growth, parameters, items, dummy, materialCount: 0, configure: Level20))
+        {
+            var created = f.Read();
+            f.Sql("INSERT INTO character_expert_job(character_id,account,job_type) VALUES(" + created.Id + ",'ordinary-quest',1)");
+            f.Session.ReturnToRoster();
+            f.Session.Select(0);
+            f.Session.MarkReady();
+            int cardId = 0;
+            foreach (int id in scripts.KnownCards(1))
+            {
+                try { _ = items.Items.Get(id); }
+                catch (InvalidDataException) { continue; }
+                if (f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character, [new(id, 1)],
+                    items.Items, items.GoldLimits, items.EpicPieces)).Accepted)
+                {
+                    cardId = id;
+                    break;
+                }
+            }
+            That(cardId != 0, "附魔师 [base result] 有可发放卡片");
+            var card = f.Read().Inventory.Items.Single(item => item.Core.ItemId == cardId);
+            That(ExpertJobCraft.TryPlan(f.Read(), scripts, items.Items, items.GoldLimits, items.EpicPieces, 0, 1,
+                (ushort)card.Position.Index, _ => 0, DateTimeOffset.UtcNow, out var plan, out _) &&
+                plan.Inventory.After.Find(card.Position) is null,
+                "C2S 238 卡片槽不是 0/65535 时不因槽位本身 Fail(19)");
+        }
+        using (var f = new Fixture(towns, characters, learning, growth, parameters, items, dummy, materialCount: 0, configure: Level20))
+        {
+            var created = f.Read();
+            f.Sql("INSERT INTO character_expert_job(character_id,account,job_type) VALUES(" + created.Id + ",'ordinary-quest',1)");
+            f.Session.ReturnToRoster();
+            f.Session.Select(0);
+            f.Session.MarkReady();
+            That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                [new(490705314, 1), new(22004, 1)], items.Items, items.GoldLimits, items.EpicPieces)).Accepted, "601 源与目标发放");
+            var snapshot = f.Read();
+            var bead = snapshot.Inventory.Items.Single(item => item.Core.ItemId == 490705314);
+            var gear = snapshot.Inventory.Items.Single(item => item.Core.ItemId == 22004);
+            var service = new InventoryEnchantmentService(items.Items, items.Enchantments);
+            That(ExpertJobCraft.TryPlanEnchant(snapshot, service, scripts, (byte)gear.Position.List, (ushort)gear.Position.Index,
+                (byte)bead.Position.List, (ushort)bead.Position.Index, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                out var plan, out int experience, out _) &&
+                f.Session.CommitExpertJobCraft(plan, experience).Accepted,
+                "C2S 601 规划消费宝珠并附魔");
+            var after = f.Read();
+            That(after.Inventory.Find(bead.Position) is null &&
+                after.Inventory.Find(gear.Position)!.Core.EnchantCardId == 10309006,
+                "C2S 601 消费源栈并写入目标 EnchantCardId");
+        }
+        using (var f = new Fixture(towns, characters, learning, growth, parameters, items, dummy, materialCount: 0, configure: Level20))
+        {
+            var created = f.Read();
+            f.Sql("INSERT INTO character_expert_job(character_id,account,job_type) VALUES(" + created.Id + ",'ordinary-quest',3)");
+            f.Session.ReturnToRoster();
+            f.Session.Select(0);
+            f.Session.MarkReady();
+            That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character, [new(10400, 1)],
+                items.Items, items.GoldLimits, items.EpicPieces)).Accepted, "分解装备发放");
+            var gear = f.Read().Inventory.Items.First(item => item.Core.ItemId == 10400 &&
+                item.Position.List == InventoryListType.Main && item.Core.EquipmentLockId == 0);
+            var service = new InventoryDisjointService(items.Items, items.Disjoint, items.GoldLimits, items.EpicPieces,
+                new Random(1), scripts);
+            var result = f.Session.DisjointEquipment(new(gear.Position, -1, 0), service, out var receipt);
+            That(result.Accepted && receipt is not null && receipt.Rewards.Any(row => row.ItemId == 3037 && row.Count > 0),
+                "分解师装备分解按 [disjoint result] 发放 3037，匹配 gradeKey=machineGrade-1/rarity/state");
+        }
+    }
+
+    static byte ActorExpertJobType(byte[] typed, byte[] blind)
+    {
+        int offset = -1;
+        for (int at = 0; at < typed.Length; at++)
+            if (typed[at] != blind[at])
+            {
+                TestCheck.That(offset < 0 && at + 4 < typed.Length, "Actor 副职业类型只能改一个字节");
+                offset = at;
+            }
+        TestCheck.That(offset >= 0 && typed.AsSpan(offset + 1, 4).SequenceEqual(blind.AsSpan(offset + 1, 4)),
+            "026777A0 的 u32 累计仍为 0");
+        return typed[offset];
     }
 
     internal sealed class Fixture : IDisposable

@@ -372,6 +372,10 @@ internal static class QuestCompletionRepositoryTests
         public Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitSkillLayout(owner, expected, learning);
         public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
         public Character CommitClassChange(AccountOwners.Lease owner, ClassChangePlan plan) => inner.CommitClassChange(owner, plan);
+        public Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected) => inner.CommitExpertJobClear(owner, expected);
+        public Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience) => inner.CommitExpertJobExperience(owner, expected, experience);
+        public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState) => inner.CommitExpertJobGiveUp(owner, expected, wallet, giveUpState);
+        public Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance) => inner.CommitExpertJobMachine(owner, expected, wallet, grade, endurance);
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,DungeonCardDelivery? premiumDelivery = null,
             bool grantLuckyStar = false, int luckyStarLimit = 0)
             => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit);

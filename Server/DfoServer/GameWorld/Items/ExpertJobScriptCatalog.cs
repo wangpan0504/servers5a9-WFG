@@ -1,0 +1,281 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+using PvfLib;
+
+namespace DfoServer.GameWorld.Items;
+
+internal readonly record struct ExpertJobRate(int MaximumLevelDifference, int SuccessPercent, int ExperienceMin, int ExperienceMax);
+internal sealed record ExpertJobRecipe(int RecipeId, int ProductId, int RequiredLevel, (int ItemId, int Count)[] Materials,
+    int ExperienceMin, int ExperienceMax);
+internal readonly record struct ExpertJobScriptResult(int KeyA, int KeyB, int KeyC, int ItemId, double Multiplier);
+internal readonly record struct ExpertJobMonsterCardExp(int Level, int Min, int Max);
+
+internal sealed class ExpertJobScriptCatalog
+{
+    static readonly Regex Number = new(@"[-+]?\d+(?:\.\d+)?", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    readonly Dictionary<byte, JobScript> jobs;
+
+    ExpertJobScriptCatalog(Dictionary<byte, JobScript> jobs) => this.jobs = jobs;
+
+    public static ExpertJobScriptCatalog Load(PvfArchive pvf, ItemCatalog items)
+    {
+        var jobs = new Dictionary<byte, JobScript>();
+        foreach (var (id, path) in PvfScript.List(pvf.ReadText("character/expertjob.lst")))
+        {
+            if (id is < 1 or > 4) continue;
+            string text = pvf.ReadText("character/" + path);
+            jobs[(byte)id] = JobScript.Parse(text, items);
+        }
+        return new(jobs);
+    }
+
+    public int Level(byte job, int experience) => jobs.TryGetValue(job, out var script) ? script.Level(experience) : 1;
+
+    public (int Min, int Max) DisjointGain(byte job) =>
+        jobs.TryGetValue(job, out var script) ? script.Gain : (0, 0);
+
+    public int[] GiveUpCosts(byte job) => jobs.TryGetValue(job, out var script) && script.GiveUpCosts.Length != 0
+        ? script.GiveUpCosts : [1000, 10000, 100000, 1000000];
+
+    public int EnduranceInitial(byte job) => jobs.TryGetValue(job, out var script) ? script.EnduranceInitial : 300;
+
+    public int BaseConst(byte job) => jobs.TryGetValue(job, out var script) && script.BaseConst > 0 ? script.BaseConst : 150;
+
+    public bool TryUpgradeCost(byte job, int grade, out int gold)
+    {
+        gold = 0;
+        return jobs.TryGetValue(job, out var script) && script.UpgradeCosts.TryGetValue(grade, out gold);
+    }
+
+    public bool TryRepair(byte job, int grade, out int gold, out int maxEndurance)
+    {
+        gold = 0;
+        maxEndurance = 300;
+        if (!jobs.TryGetValue(job, out var script) || grade < 1 || grade > script.RepairCosts.Length)
+            return false;
+        (gold, maxEndurance) = script.RepairCosts[grade - 1];
+        return maxEndurance > 0;
+    }
+
+    public bool TryExtractExp(byte job, int itemId, out int min, out int max)
+    {
+        min = max = 0;
+        if (!jobs.TryGetValue(job, out var script) || !script.ExtractExp.TryGetValue(itemId, out var range))
+            return false;
+        (min, max) = range;
+        return true;
+    }
+
+    public bool TryExtractResult(byte job, int extractorId, int rarity, int state, out ExpertJobScriptResult result)
+    {
+        result = default;
+        if (!jobs.TryGetValue(job, out var script)) return false;
+        foreach (var row in script.ExtractionResults)
+            if (row.KeyA == extractorId && row.KeyB == rarity && row.KeyC == state)
+            {
+                result = row;
+                return true;
+            }
+        return false;
+    }
+
+    public bool TryDisjointResult(byte job, int gradeKey, int rarity, int state, out ExpertJobScriptResult result)
+    {
+        result = default;
+        if (!jobs.TryGetValue(job, out var script)) return false;
+        foreach (var row in script.DisjointResults)
+            if (row.KeyA == gradeKey && row.KeyB == rarity && row.KeyC == state)
+            {
+                result = row;
+                return true;
+            }
+        return false;
+    }
+
+    public bool IsKnownCard(byte job, int itemId) =>
+        jobs.TryGetValue(job, out var script) && script.KnownCards.Contains(itemId);
+
+    public IReadOnlyCollection<int> KnownCards(byte job) =>
+        jobs.TryGetValue(job, out var script) ? script.KnownCards : (IReadOnlyCollection<int>)[];
+
+    public ExpertJobMonsterCardExp MonsterCardExp(byte job, int level)
+    {
+        if (!jobs.TryGetValue(job, out var script) || script.MonsterCard.Length == 0)
+            return new(level, 0, 0);
+        var selected = script.MonsterCard[^1];
+        foreach (var row in script.MonsterCard)
+            if (row.Level >= level) { selected = row; break; }
+        return selected;
+    }
+
+    public int[] UnlockedRecipes(byte job, int level)
+    {
+        if (!jobs.TryGetValue(job, out var script)) return [];
+        return script.Recipes.Values.Where(recipe => recipe.RequiredLevel <= level)
+            .Select(recipe => recipe.RecipeId).OrderBy(id => id).ToArray();
+    }
+
+    public int[] ShopItems(byte job) => jobs.TryGetValue(job, out var script) ? script.ShopItems : [];
+
+    public bool TryRecipe(byte job, int recipeId, out ExpertJobRecipe recipe)
+    {
+        recipe = null!;
+        return jobs.TryGetValue(job, out var script) && script.Recipes.TryGetValue(recipeId, out recipe!);
+    }
+
+    public (int SuccessPercent, int ExperienceMin, int ExperienceMax) Outcome(byte job, ExpertJobRecipe recipe, int jobLevel)
+    {
+        if (!jobs.TryGetValue(job, out var script) || script.Rates.Length == 0)
+            return (100, recipe.ExperienceMin, recipe.ExperienceMax);
+        int difference = recipe.RequiredLevel - jobLevel;
+        var rate = script.Rates[^1];
+        foreach (var candidate in script.Rates)
+            if (candidate.MaximumLevelDifference >= difference) { rate = candidate; break; }
+        return (rate.SuccessPercent, rate.ExperienceMin, rate.ExperienceMax);
+    }
+
+    sealed class JobScript
+    {
+        public ExpertJobRate[] Rates { get; init; } = [];
+        public Dictionary<int, ExpertJobRecipe> Recipes { get; init; } = [];
+        public (int Min, int Max) Gain { get; init; }
+        public int[] Thresholds { get; init; } = [];
+        public int[] GiveUpCosts { get; init; } = [];
+        public Dictionary<int, int> UpgradeCosts { get; init; } = [];
+        public (int Gold, int MaxEndurance)[] RepairCosts { get; init; } = [];
+        public int EnduranceInitial { get; init; } = 300;
+        public int BaseConst { get; init; }
+        public Dictionary<int, (int Min, int Max)> ExtractExp { get; init; } = [];
+        public ExpertJobScriptResult[] ExtractionResults { get; init; } = [];
+        public ExpertJobScriptResult[] DisjointResults { get; init; } = [];
+        public HashSet<int> KnownCards { get; init; } = [];
+        public ExpertJobMonsterCardExp[] MonsterCard { get; init; } = [];
+        public int[] ShopItems { get; init; } = [];
+
+        public int Level(int experience)
+        {
+            int level = 1;
+            foreach (int threshold in Thresholds)
+            {
+                if (experience < threshold) break;
+                level++;
+            }
+            return Math.Min(level, Math.Max(Thresholds.Length, 1));
+        }
+
+        public static JobScript Parse(string text, ItemCatalog items)
+        {
+            int[] thresholds = Pairs(PvfScript.Integers(Field(text, "expertness exp"))).Select(pair => pair.ItemId).ToArray();
+            int[] gain = PvfScript.Integers(Field(text, "gain exp"));
+            int[] rates = PvfScript.Integers(Field(text, "compound rate"));
+            int[] rows = PvfScript.Integers(Field(text, "items"));
+            int[] productExp = PvfScript.Integers(Field(text, "product exp"));
+            int[] giveUp = PvfScript.Integers(Field(text, "giveup cost"));
+            int[] upgrade = PvfScript.Integers(Field(text, "upgrade cost"));
+            int[] repair = PvfScript.Integers(Field(text, "endurance repair cost"));
+            int[] extractExp = PvfScript.Integers(Field(text, "extract exp"));
+            int[] shop = PvfScript.Integers(Field(text, "only sell items"));
+            int[] monster = PvfScript.Integers(Field(text, "monstercard exp"));
+            int enduranceInitial = PvfScript.Integers(Field(text, "endurance initial value")).FirstOrDefault(300);
+            int baseConst = PvfScript.Integers(Field(text, "base const")).FirstOrDefault(0);
+            var exp = new Dictionary<int, (int Min, int Max)>();
+            for (int index = 0; index + 2 < productExp.Length; index += 3)
+                exp[productExp[index]] = (productExp[index + 1], productExp[index + 2]);
+            var extract = new Dictionary<int, (int Min, int Max)>();
+            for (int index = 0; index + 2 < extractExp.Length; index += 3)
+                extract[extractExp[index]] = (extractExp[index + 1], extractExp[index + 2]);
+            var recipes = new Dictionary<int, ExpertJobRecipe>();
+            if (rows.Length % 4 == 0)
+            {
+                for (int index = 0; index < rows.Length; index += 4)
+                {
+                    int recipeId = rows[index + 1], productId = rows[index + 2], required = rows[index + 3];
+                    IReadOnlyList<(int ItemId, int Count)>? materials = null;
+                    try { materials = items.NeededMaterials(recipeId); }
+                    catch (InvalidDataException) { materials = null; }
+                    if (recipeId <= 0 || productId <= 0 || required <= 0 || materials is not { Count: > 0 }) continue;
+                    exp.TryGetValue(recipeId, out var range);
+                    recipes[recipeId] = new(recipeId, productId, required, materials.ToArray(), range.Min, range.Max);
+                }
+            }
+            var parsedRates = new List<ExpertJobRate>();
+            if (rates.Length % 4 == 0)
+                for (int index = 0; index < rates.Length; index += 4)
+                    parsedRates.Add(new(rates[index], rates[index + 1], rates[index + 2], rates[index + 3]));
+            var upgradeCosts = new Dictionary<int, int>();
+            if (upgrade.Length % 2 == 0)
+                for (int index = 0; index + 1 < upgrade.Length; index += 2)
+                    upgradeCosts[upgrade[index]] = upgrade[index + 1];
+            var repairCosts = new List<(int Gold, int MaxEndurance)>();
+            if (repair.Length % 2 == 0)
+                for (int index = 0; index + 1 < repair.Length; index += 2)
+                    repairCosts.Add((repair[index], repair[index + 1]));
+            var cards = new HashSet<int>();
+            foreach (var match in Regex.Matches(text, @"\[base result\](.*?)\[/base result\]",
+                RegexOptions.Singleline | RegexOptions.IgnoreCase).Cast<Match>())
+            {
+                int[] values = PvfScript.Integers(match.Groups[1].Value);
+                for (int index = 0; index + 1 < values.Length; index += 2)
+                    if (values[index] > 0) cards.Add(values[index]);
+            }
+            var monsterRows = new List<ExpertJobMonsterCardExp>();
+            if (monster.Length % 9 == 0)
+                for (int index = 0; index + 8 < monster.Length; index += 9)
+                    monsterRows.Add(new(monster[index], monster[index + 7], monster[index + 8]));
+            var shopItems = new List<int>();
+            if (shop.Length % 2 == 0)
+                for (int index = 0; index + 1 < shop.Length; index += 2)
+                    if (shop[index + 1] > 0) shopItems.Add(shop[index + 1]);
+            return new()
+            {
+                Thresholds = thresholds,
+                Gain = gain.Length >= 2 ? (gain[0], gain[1]) : (0, 0),
+                Rates = parsedRates.ToArray(),
+                Recipes = recipes,
+                GiveUpCosts = giveUp.Length == 0 ? [1000, 10000, 100000, 1000000] : giveUp,
+                UpgradeCosts = upgradeCosts,
+                RepairCosts = repairCosts.ToArray(),
+                EnduranceInitial = enduranceInitial <= 0 ? 300 : enduranceInitial,
+                BaseConst = baseConst,
+                ExtractExp = extract,
+                ExtractionResults = Results(Field(text, "extraction result")),
+                DisjointResults = Results(Field(text, "disjoint result")),
+                KnownCards = cards,
+                MonsterCard = monsterRows.ToArray(),
+                ShopItems = shopItems.ToArray()
+            };
+        }
+
+        // 附魔师把 [endurance repair cost] 原样写了两遍；分解师 [gain exp] 只有节、没有闭合块。
+        static string Field(string text, string tag)
+        {
+            string block = PvfScript.BlockAllowingIdenticalDuplicates(text, tag);
+            return block.Length != 0 ? block : PvfScript.Section(text, tag);
+        }
+
+        static ExpertJobScriptResult[] Results(string block)
+        {
+            double[] values = Numbers(block);
+            if (values.Length == 0 || values.Length % 8 != 0) return [];
+            var rows = new ExpertJobScriptResult[values.Length / 8];
+            for (int index = 0, row = 0; index + 7 < values.Length; index += 8, row++)
+                rows[row] = new((int)values[index], (int)values[index + 1], (int)values[index + 2],
+                    (int)values[index + 3], values[index + 4]);
+            return rows;
+        }
+
+        static double[] Numbers(string text)
+        {
+            var values = new List<double>();
+            foreach (Match match in Number.Matches(text))
+                values.Add(double.Parse(match.Value, CultureInfo.InvariantCulture));
+            return values.ToArray();
+        }
+
+        static IEnumerable<(int ItemId, int Count)> Pairs(int[] values)
+        {
+            for (int index = 0; index + 1 < values.Length; index += 2)
+                yield return (values[index], values[index + 1]);
+        }
+    }
+}

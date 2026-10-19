@@ -36,17 +36,6 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
-        // 实验性：深渊派对开始（客户端 op235，与分解请求共用同一 opcode；参考项目 HandleHellPartyStart 不回包）。只记录，不回包。
-        commands.Register(CmdPacketType.REQUEST_DISJOINT_ITEM, HellPartyStartAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
-    }
-
-    Task<CommandResult> HellPartyStartAsync(GameConnectionContext context, Packet request)
-    {
-        var receipt = context.Session.CurrentFormalDungeonScene();
-        if (receipt?.Entry.HellParty is null) return Task.FromResult(CommandResult.Unhandled);
-        log.Write("formal_hell_party_start_observed", new { Connection = context.Id, receipt.Entry.DungeonId, Length = request.Body.Length,
-            Body = Convert.ToHexString(request.Body), Experimental = true });
-        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> CharacterDeathAsync(GameConnectionContext context, Packet request)

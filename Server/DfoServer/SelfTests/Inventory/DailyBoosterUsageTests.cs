@@ -74,9 +74,9 @@ internal static class DailyBoosterUsageTests
             command.ExecuteNonQuery();
             _ = new CharacterRepository(path);
             command.CommandText = "SELECT revision||':'||gold||':'||daily_booster_usage FROM characters WHERE name='DailyOld'";
-            That((string)command.ExecuteScalar()! == "7:77:[]", "55升级56只新增空数组，不改旧资产或revision");
+            That((string)command.ExecuteScalar()! == "7:77:[]", "55 起升级只新增空数组，不改旧资产或 revision");
             command.CommandText = "PRAGMA user_version";
-            That((long)command.ExecuteScalar()! == 56, "迁移采用fresh核验的下一连续版本56");
+            That((long)command.ExecuteScalar()! == SqliteMigrations.CurrentVersion, "55 起升到当前连续版本并保留每日礼盒空数组");
             command.CommandText = "UPDATE characters SET daily_booster_usage='{}'";
             bool rejected = false;
             try { command.ExecuteNonQuery(); }

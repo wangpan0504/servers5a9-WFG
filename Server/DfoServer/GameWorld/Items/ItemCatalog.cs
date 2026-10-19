@@ -146,6 +146,21 @@ internal sealed class ItemCatalog
         return rate;
     }
 
+    public IReadOnlyList<(int ItemId, int Count)>? NeededMaterials(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        var raw = StackableFile.Parse(id, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
+        if (raw.DeclaredNeededMaterials is not { } materials || materials.Count % 2 != 0) return null;
+        var pairs = new (int ItemId, int Count)[materials.Count / 2];
+        for (int index = 0; index < pairs.Length; index++)
+        {
+            int itemId = materials[index * 2], count = materials[index * 2 + 1];
+            if (itemId <= 0 || count <= 0) return null;
+            pairs[index] = (itemId, count);
+        }
+        return pairs;
+    }
+
     public QuestTicketDefinition QuestTicket(int id) => questTickets.GetOrAdd(id, key =>
     {
         if (!stackable.TryGetValue(key,out var path)) throw new InvalidDataException("任务券不是堆叠物品: " + key);

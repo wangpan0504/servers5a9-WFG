@@ -17,7 +17,8 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardParameterCatalog parameters,
     ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth,
-    ServerLog log, CharacterLevelProjection levelProjection, QuestProjection? projection = null, CreatureProjection? creatures = null) : IGameCommandModule
+    ServerLog log, CharacterLevelProjection levelProjection, QuestProjection? projection = null, CreatureProjection? creatures = null,
+    ExpertJobScriptCatalog? expertJobs = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) =>
         commands.Register(CmdPacketType.FINISH_QUEST, FinishAsync, nameof(QuestCompletionHandler));
@@ -104,6 +105,9 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character),"quest_completed_list",Guard);
         if (commit.GoldMailId is not null && receipt.Phase == DfoServer.Game.Session.SessionPhase.Town)
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "quest_gold_mail_arrived", Guard);
+        if (expertJobs is not null && character.ExpertJobType is >= 1 and <= 4 && commit.ExpertJobType is >= 1 and <= 4)
+            await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(character, expertJobs),
+                "quest_expert_job_info", Guard);
         return CommandResult.Handled;
     }
 }

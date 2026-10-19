@@ -115,7 +115,8 @@ internal sealed class QuestLifecyclePlan
         uint initial = quest.Condition switch
         {
             // 租赁成功事务才归零；这是本窄用例的未达成模型，不是任意custom的初值。
-            "[custom quest]" when QuestRentalProgress.Supports(quest) => 1,
+            "[custom quest]" when QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest) => 1,
+            "[self disjoint item]" when QuestExpertJobProgress.SelfDisjoint(quest) => 1,
             "[meet npc]" when quest.SubType == -1 && quest.IntData.Count == 1 && quest.IntData[0] > 0 => 1,
             // Full03成功ACK31的type4/sub1立即触发event4归零，不读取实际点击NPC。
             "[meet npc]" when QuestStateProgress.Type(quest) == 4 => 0,
@@ -267,11 +268,25 @@ internal sealed class QuestLifecyclePlan
         bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest);
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
         bool observedRental = QuestRentalProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
-        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !question && !state && !observedClear && !observedRental && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
+        bool observedExpert = QuestExpertJobProgress.Tutorial(quest) && scalar == 0 && active.ConditionState == 0;
+        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !question && !state && !observedClear && !observedRental && !observedExpert && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
             throw new InvalidDataException("条件类型或接取身份不符");
         return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
             expected.ActiveMainQuests.Select(value => value.AcceptanceId == active.AcceptanceId ? value with { ConditionState = scalar } : value).ToImmutableArray(),
             new(expected.Inventory, expected.Inventory, "quest_condition"));
+    }
+
+    internal static QuestLifecyclePlan? ObserveExpertJobTutorial(Character expected, QuestCatalog quests, ushort questId)
+    {
+        var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == questId);
+        if (!quests.TryGet(questId, out var quest) || !QuestExpertJobProgress.Tutorial(quest) ||
+            QuestEligibility.Completed(expected).Contains(quest.Id) ||
+            expected.ExpertJobType != QuestExpertJobProgress.RequiredType(quest) ||
+            active is not { ConditionState: 1 } || active.AcceptanceId == Guid.Empty)
+            return null;
+        var after = expected.ActiveMainQuests.Select(row => row == active ? row with { ConditionState = 0 } : row).ToArray();
+        return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
+            after.ToImmutableArray(), new(expected.Inventory, expected.Inventory, "quest_condition"));
     }
 
     internal static QuestLifecyclePlan? ObserveRental(Character expected, InventoryPlan inventory, QuestCatalog quests, DateTimeOffset now)

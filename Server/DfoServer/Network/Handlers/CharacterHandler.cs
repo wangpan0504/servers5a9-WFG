@@ -9,7 +9,8 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class CharacterHandler(CharacterCatalog characters, TownProjection projection, ServerLog log, GoldLimitCatalog goldLimits,
-    SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null, AdventureProjection? adventure = null) : IGameCommandModule
+    SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null, AdventureProjection? adventure = null,
+    ExpertJobScriptCatalog? expertJobs = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -49,6 +50,8 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         var c = context.Session.Selected!;
         log.Write("selected", new { Connection = context.Id, Character = c.Id, c.Position, c.Return, c.Revision, ResumeTown = resumeTown });
         await projection.EnterAsync(context, resumeTown);
+        if (expertJobs is not null && context.Session.Selected is { ExpertJobType: >= 1 and <= 4 } selected)
+            await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(selected, expertJobs), "expert_job_info");
         context.Session.MarkReady();
         await projection.ReconcileQuestsAsync(context);
         projection.Join(context);

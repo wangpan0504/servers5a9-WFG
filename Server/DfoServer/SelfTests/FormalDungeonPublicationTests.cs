@@ -775,6 +775,10 @@ internal static class FormalDungeonPublicationTests
         public Character AdvanceAcceptedStoryLevel(AccountOwners.Lease owner, Character expected) => inner.AdvanceAcceptedStoryLevel(owner, expected);
         public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
         public Character CommitClassChange(AccountOwners.Lease owner, ClassChangePlan plan) => inner.CommitClassChange(owner, plan);
+        public Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected) => inner.CommitExpertJobClear(owner, expected);
+        public Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience) => inner.CommitExpertJobExperience(owner, expected, experience);
+        public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState) => inner.CommitExpertJobGiveUp(owner, expected, wallet, giveUpState);
+        public Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance) => inner.CommitExpertJobMachine(owner, expected, wallet, grade, endurance);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan) => inner.CommitQuestCompletion(owner, plan);

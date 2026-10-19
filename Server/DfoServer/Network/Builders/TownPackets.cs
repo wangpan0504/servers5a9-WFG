@@ -120,10 +120,11 @@ internal static class TownPackets
             writer.Write(0u);
             writer.Write((ushort)0); // 026775E3 / 026775F9: mandatory fields after the name.
             writer.Write(0u);
-            writer.Write((byte)1);
-            writer.Write(new byte[2]); // Main flag, 02679660 pair.
-            writer.Write((byte)0);
-            writer.Write(0u); // 026777A0.
+            writer.Write((byte)1); // 0267E0A8 默认1，写DTO bool。
+            writer.Write(new byte[2]); // 02679660 两个u8。
+            // USERINFO Actor：026777A0 读 type:u8 + expertness:u32 进局部DTO+3B0/+3B4；0267E541 后 02D8B110→015034E0 装回活 I。
+            writer.Write(character.ExpertJobType);
+            writer.Write(checked((uint)character.ExpertJobExperience));
             writer.Write((byte)0);
             writer.Write(0u);
             writer.Write(0u);

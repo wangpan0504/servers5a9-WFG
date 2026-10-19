@@ -32,6 +32,7 @@ internal sealed record QuestCompletionCommit(Character Character, QuestClearRece
     public IReadOnlyList<ActiveMainQuest> PreviousQuests { get; init; } = [];
     public byte PreviousGrowType { get; init; }
     public byte? ProfessionGrowType { get; init; }
+    public byte? ExpertJobType { get; init; }
     public byte PreviousEquipmentSlotFlags { get; init; }
 }
 

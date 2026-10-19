@@ -40,6 +40,18 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     // 远古精灵秘药的限时经验加成。Unix 秒截止；0 表示没有。死亡、回城和重登都保留。
     public long ExpBonusUntil { get; init; }
     public int ExpBonusPermille { get; init; }
+    // 副职业资格。0 表示没有；1 附魔、2 炼金、3 分解、4 控偶。
+    // USERINFO Actor 经 026777A0 写入局部 DTO+3B0，再由 02D8B110/015034E0 装回活 I；TownPackets.Actor 投影该字节。
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public byte ExpertJobType { get; init; }
+    // 副职业累计熟练度。Actor 在类型字节后写 u32，客户端装回 I+3B4，按 [expertness exp] 阈值自己显示等级。
+    public int ExpertJobExperience { get; init; }
+    // 放弃次数档。存在 character_expert_meta，删除 character_expert_job 后仍保留。
+    public int ExpertGiveUpState { get; init; }
+    // 分解机当前档；脚本 [upgrade cost] 首键为 1。
+    public int ExpertMachineGrade { get; init; } = 1;
+    // [endurance initial value] 300。
+    public int ExpertMachineEndurance { get; init; } = 300;
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public long BlackDiamondExpiresAt => Inventory.AccountWallet.ContractExpiry(56);
 }

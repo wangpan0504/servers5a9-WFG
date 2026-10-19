@@ -183,6 +183,7 @@ internal static class SelfTestRunner
         await GmWebServerTests.RunAsync();
         DevelopmentAssetTests.RunCore();
         RentalTests.Run();
+        ExpertJobProtocolTests.Run();
         SkillPacketsTests.Run();
         SkillExtendedTests.RunCore();
     }
@@ -192,6 +193,7 @@ internal static class SelfTestRunner
         await RunCoreAsync();
         var sharedQuests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var sharedSkills = SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels);
+        QuestOrdinaryCompletionTests.RunExpertJob(towns, pvf, characters, itemResources, sharedQuests);
         PacketCompatibilityTests.Run(characters);
         CharacterBoundaryTests.Run(towns, characters);
         SelfTests.Run(towns);

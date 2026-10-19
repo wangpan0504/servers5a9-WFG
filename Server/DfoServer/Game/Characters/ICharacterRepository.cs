@@ -57,6 +57,10 @@ internal interface ICharacterRepository
     Character AdvanceAcceptedStoryLevel(AccountOwners.Lease owner, Character expected);
     Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan);
     Character CommitClassChange(AccountOwners.Lease owner, ClassChangePlan plan);
+    Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected);
+    Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience);
+    Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState);
+    Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance);
     Character CommitExperienceConsumable(AccountOwners.Lease owner, ExperienceConsumablePlan plan, DateTimeOffset now);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
     QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);

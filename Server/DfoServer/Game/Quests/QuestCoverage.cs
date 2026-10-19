@@ -181,7 +181,8 @@ internal static class QuestCoverage
 
     internal static bool HasSupportedTarget(StoryQuest quest, QuestCatalog catalog) => quest.Condition switch
     {
-        "[custom quest]" => QuestRentalProgress.Supports(quest),
+        "[custom quest]" => QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest),
+        "[self disjoint item]" => QuestExpertJobProgress.SelfDisjoint(quest),
         "[meet npc]" => QuestStateProgress.Type(quest) is not null || quest.SubType == -1 && quest.IntData is [> 0],
         "[seeking]" or "[seek n meet npc]" => QuestLifecyclePlan.SeekingSubtype(quest) && QuestLifecyclePlan.ValidSeeking(quest),
         "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.TryTargets(quest,out _),
@@ -215,7 +216,8 @@ internal static class QuestCoverage
             if (quest.Condition is "[quest clear]" or "[clear quest]" or "[clear multi quest]") references = references.Concat(quest.IntData);
             var missing = references.Where(id => id > 0 && !catalog.TryGet(id, out _)).Distinct().Order().ToImmutableArray();
             if (access.Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !(access.Entry == QuestResourceEntry.Dialogue && QuestRelationProgress.DialogueChild(quest,catalog)) &&
-                !(access.Entry == QuestResourceEntry.Hidden && QuestHiddenEntry.Direct(quest,catalog)))
+                !(access.Entry == QuestResourceEntry.Hidden && QuestHiddenEntry.Direct(quest,catalog)) &&
+                !(access.Entry == QuestResourceEntry.Profession && QuestExpertJobProgress.Tutorial(quest)))
                 reasons.Add(access.Reason);
             if (definition is null || definition.Diagnostics.Length != 0) reasons.AddRange(definition?.Diagnostics ?? ["缺少完整定义"]);
             if (pending.Length != 0) reasons.Add("存在未确认声明");
@@ -238,7 +240,8 @@ internal static class QuestCoverage
                 bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
                 bool state = QuestStateProgress.Type(quest) is not null;
                 bool rental = QuestRentalProgress.Supports(quest);
-                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental && !QuestLifecyclePlan.SeekingSubtype(quest)) reasons.Add("目标子类型尚未接入");
+                bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
+                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental && !expertTutorial && !QuestLifecyclePlan.SeekingSubtype(quest)) reasons.Add("目标子类型尚未接入");
                 if (quest.MainQuest is not null && !QuestRelationProgress.DialogueChild(quest,catalog))
                     reasons.Add("隐藏子任务的实际对话及交付入口未接入");
                 bool target = HasSupportedTarget(quest,catalog);
@@ -253,16 +256,18 @@ internal static class QuestCoverage
                 bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _) ||
                     QuestCharacterReward.TryHellChallenge(quest);
                 bool creatureReward = QuestCreatureReward.Evolution(quest);
+                bool expertJob = QuestExpertJobReward.Type(quest) is not null;
                 if (access.Entry == QuestResourceEntry.Creature && catalog.Creatures is null) reasons.Add("宠物目录未装配");
-                if (quest.RewardType != "[item]" && !profession && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest))
+                if (quest.RewardType != "[item]" && !profession && !characterReward && !creatureReward && !expertJob && !QuestRelationProgress.ZeroRewardChild(quest))
                     reasons.Add(RewardRestriction(quest));
                 if (!quest.Attributes.Contains("not give exp quest") && !(creatureReward && quest.Difficulty is null) &&
+                    !(QuestExpertJobReward.Chain(quest) && quest.Difficulty is null) &&
                     (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))
                     reasons.Add("奖励缺少合法difficulty键");
                 if (!HasOrdinaryAttributes(quest)) reasons.Add("attribute包含未确认的值或声明形状");
                 try
                 {
-                    var rewards = QuestFixedRewardDefinition.Parse(profession || characterReward || creatureReward ? quest with { Rewards = [] } : quest, allowGold: true);
+                    var rewards = QuestFixedRewardDefinition.Parse(profession || characterReward || creatureReward || expertJob ? quest with { Rewards = [] } : quest, allowGold: true);
                     var selection = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition?.SelectRewards ?? [] });
                     var gifts = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition?.AcceptanceRewards ?? [] });
                     foreach (int id in Enumerable.Range(0, 16).SelectMany(job => Enumerable.Range(0,6).SelectMany(grow =>
@@ -326,7 +331,7 @@ internal static class QuestCoverage
     {
         "[tp]" => "TP奖励需要本版空奖励数组与固定2点声明形状；对应目标仍按实际玩法限制处理",
         "[creature evolution]" => "奖励依赖宠物进化状态；宠物领域尚未接入",
-        "[expert job]" => "奖励依赖副职业状态；副职业领域尚未接入",
+        "[expert job]" => "副职业奖励需要恰好一个 1–4 的类型整数，且不能带选择奖励",
         "[ridable]" => "奖励依赖坐骑状态；坐骑领域尚未接入",
         "[hell legend]" => "奖励依赖对应挑战或深渊资格；专用领域状态及通知尚未接入",
         "[operation hope]" => "奖励依赖代号希望玩法状态；对应领域尚未接入",

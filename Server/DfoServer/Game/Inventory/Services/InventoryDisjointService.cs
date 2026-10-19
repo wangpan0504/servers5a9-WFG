@@ -5,7 +5,8 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCatalog disjoint, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Random? random = null)
+internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCatalog disjoint, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Random? random = null,
+    ExpertJobScriptCatalog? expertJobs = null)
 {
     public InventoryResult Disjoint(Character character, DisjointRequest request, out DisjointReceipt? receipt, DateTimeOffset? utcNow = null)
     {
@@ -33,7 +34,12 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
                 return InventoryResult.Reject(19);
         }
         InventoryReward[] rewards;
-        try { rewards = DisjointResultCalculator.Calculate(disjoint, template, random ?? Random.Shared); }
+        try
+        {
+            rewards = character.ExpertJobType == 3 && expertJobs is not null
+                ? DfoServer.Game.ExpertJob.ExpertJobCraft.DisjointProducts(character, expertJobs, template, source.Core)
+                : DisjointResultCalculator.Calculate(disjoint, template, random ?? Random.Shared);
+        }
         catch (OverflowException) { return InventoryResult.Reject(4); }
         if (rewards.Length == 0)
             return InventoryResult.Reject(19);

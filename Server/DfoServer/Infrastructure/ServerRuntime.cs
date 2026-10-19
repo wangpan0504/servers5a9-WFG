@@ -9,6 +9,7 @@ using DfoServer.Network;
 using DfoServer.Network.Management;
 using DfoServer.Network.Handlers;
 using DfoServer.Network.Handlers.Inventory;
+using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Projection.Inventory;
@@ -63,6 +64,9 @@ internal static class ServerRuntime
         accounts.EnsureDevelopmentAccount();
         var debugSettings = new GameDebugSettings();
         var presence = new TownPresence(towns, channels.GameIdentity, clock, debugSettings);
+        var expertJobs = ExpertJobScriptCatalog.Load(pvf, itemResources.Items);
+        var expertStores = new ExpertJobStoreBoard();
+        var enchantmentService = new InventoryEnchantmentService(itemResources.Items, itemResources.Enchantments, clock);
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")),
@@ -215,7 +219,7 @@ internal static class ServerRuntime
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
-            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection),
+            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
@@ -256,13 +260,15 @@ internal static class ServerRuntime
                 itemResources.AvatarCompounds, itemResources.AvatarPackages), inventoryProjection, log),
             new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
-            new EnchantmentHandler(new InventoryEnchantmentService(itemResources.Items, itemResources.Enchantments, clock), inventoryProjection, log),
+            new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),
             new EnhancementHandler(new InventoryEnhancementService(itemResources.Items, itemResources.Enhancements, clock: clock), inventoryProjection, log),
             new CreatureSkinHandler(skinService, inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             new CreatureHandler(creatures, creatureProjection, log),
-            new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection),
+            new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, expertJobs: expertJobs), inventoryProjection, expertJobs),
+            new ExpertJobHandler(quests, expertJobs, itemResources.Items,
+                itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, presence, expertStores, enchantmentService),
             new AvatarDisjointHandler(new InventoryAvatarDisjointService(itemResources.Items, itemResources.AvatarDisjoint,
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
@@ -286,7 +292,7 @@ internal static class ServerRuntime
                     growthItems: itemResources.Items.CreatureGrowthItem),levelUpItems),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
-                itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection),
+                itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs),
             new ClassChangeHandler(new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests,
                 itemResources.EpicPieces), levelProjection, inventoryProjection, questProjection, projection, log, clock),
             dungeon,

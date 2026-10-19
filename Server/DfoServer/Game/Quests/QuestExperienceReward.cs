@@ -16,11 +16,19 @@ internal static class QuestExperiencePolicy
     {
         if (character.Job > 15 || character.Level is < 1 or > 95)
             throw new InvalidDataException("任务奖励角色等级或职业无效");
+        if (quest.MinimumLevel is < 1 or > 95 || quest.DeclaredIgnoreLevelForExperience is not (null or 0 or 1))
+            throw new NotSupportedException("本服通用任务经验需要完整原始difficulty和等级声明");
+        // 四条资格第一步没有 [difficulty]，ACK34 经验字段已冻结为 0，不改这条合同。
+        if (quest.Difficulty is null && QuestExpertJobReward.Type(quest) is not null)
+        {
+            penalty = 100;
+            int expertIndex = quest.DeclaredIgnoreLevelForExperience == 1 ? character.Level : quest.MinimumLevel;
+            return new(QuestRewardParameterCatalog.ResourcePath, quest.Path, expertIndex, 0, 0, "", 0, 0);
+        }
         string difficulty = quest.Difficulty ?? "";
         int weight = 100;
-        // ARAD 04333710与旧端getRewardWeight均以100作为未声明权重；当前仅接入已确认的宠物进化入口。
-        if (quest.MinimumLevel is < 1 or > 95 || quest.DeclaredIgnoreLevelForExperience is not (null or 0 or 1) ||
-            (quest.Difficulty is not null || !QuestCreatureReward.Evolution(quest)) &&
+        // 0200B010/040C28A1 的 EXP 表公式不乘 QST+4BC；04333710 缺键返回 100。后续副职业步骤与已确认宠物进化共用该缺省，不扩大到其它普通任务。
+        if ((quest.Difficulty is not null || !QuestExpertJobReward.AllowsOmittedDifficulty(quest)) &&
                 (!parameters.Difficulty.TryGetValue(difficulty, out weight) || weight < 0))
             throw new NotSupportedException("本服通用任务经验需要完整原始difficulty和等级声明");
         bool ignore = quest.DeclaredIgnoreLevelForExperience == 1;

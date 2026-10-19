@@ -29,14 +29,15 @@ internal sealed class QuestCompletionPlan
         uint gold, int goldBase, int goldMultiple, int penalty, DateTimeOffset now, QuestCatalog quests, QuestClearReceipt? clear,
         byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
         byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold,
-        int? completedParentId = null, QuestStagePlan? stagePlan = null)
+        int? completedParentId = null, QuestStagePlan? stagePlan = null, byte? expertJob = null)
     {
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
         CompletedParentId = completedParentId;
         StagePlan = stagePlan;
         AuthoritativeClear = clear;
         ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[clear a dungeon]" => 45, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
-            "[custom quest]" when QuestRentalProgress.Supports(quest) => 19,
+            "[custom quest]" when QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest) => 19,
+            "[self disjoint item]" when QuestExpertJobProgress.SelfDisjoint(quest) => 17,
             "[quest clear]" => 44, "[clear multi quest]" => 70, "[question]" => 42, "[reach the range]" => 64, "[look cinematic]" => 65,
             _ => QuestStateProgress.Type(quest) ?? (byte)4 };
         // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
@@ -53,6 +54,7 @@ internal sealed class QuestCompletionPlan
         AnswersAfter = Answer is { } answer ? expected.QuestAnswers.SetItem(quest.Id,answer) : expected.QuestAnswers;
         AccountAnswersAfter = AccountQuest && Answer is { } accountAnswer ? expected.AccountQuestAnswers.SetItem(quest.Id,accountAnswer) : expected.AccountQuestAnswers;
         ProfessionGrowType = profession; RewardLearning = rewardLearning; TargetEquipmentSlotFlags = equipmentSlots; TpAmount = tpAmount;
+        GrantedExpertJob = expertJob;
         // mode3 解锁提示只对已逆向确认的 [hell challenge] 成立；inferno/cosmo/6081 为假设性放行，仍走普通 mode0（Refs #256）。
         HellChallenge = quest.RewardType == "[hell challenge]" && QuestCharacterReward.TryHellChallenge(quest);
         ClosedChildren = closedChildren;
@@ -100,6 +102,12 @@ internal sealed class QuestCompletionPlan
             snapshot[nameof(TpAmount)] = TpAmount;
             Snapshot = snapshot.ToJsonString();
         }
+        if (GrantedExpertJob is { } grantedExpertJob)
+        {
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot[nameof(GrantedExpertJob)] = grantedExpertJob;
+            Snapshot = snapshot.ToJsonString();
+        }
         if (MailedGoldAmount != 0)
         {
             // 只有整笔金币转邮件时追加字段；普通任务及历史回执保持原Snapshot字节。
@@ -128,6 +136,7 @@ internal sealed class QuestCompletionPlan
     public uint ActualExperience => checked((uint)(TargetLearning.Experience - Expected.Learning.Experience));
     Character ProjectedCharacter => Expected with { Revision = checked(Expected.Revision + 1),
         Inventory = Inventory.After, Level = TargetLevel, GrowType = TargetGrowType, Learning = TargetLearning,
+        ExpertJobType = TargetExpertJob,
         EquipmentSlotFlags = TargetEquipmentSlotFlags, CompletedQuests = CompletedAfter.ToArray(),
         AccountCompletedQuests = AccountCompletedAfter.ToArray(), ActiveMainQuests = ActiveAfter.ToArray(),
         QuestAnswers = AnswersAfter, AccountQuestAnswers = AccountAnswersAfter, AccountQuestDailyClaims = AccountDailyClaimsAfter,
@@ -150,6 +159,8 @@ internal sealed class QuestCompletionPlan
     public CharacterGrowthPlan? GrowthPlan { get; }
     public CharacterGrowthPlan Growth => GrowthPlan ?? throw new InvalidOperationException("零经验任务不需要成长规划");
     public byte? ProfessionGrowType { get; }
+    public byte? GrantedExpertJob { get; }
+    public byte TargetExpertJob => GrantedExpertJob ?? Expected.ExpertJobType;
     private CharacterLearningState? RewardLearning { get; }
     public bool UpdatesLearning => GrowthPlan is not null || RewardLearning is not null;
     public byte TargetEquipmentSlotFlags { get; }
@@ -216,9 +227,11 @@ internal sealed class QuestCompletionPlan
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
             bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0 || QuestCharacterReward.TryHellChallenge(quest);
             bool creatureReward = QuestCreatureReward.Evolution(quest);
+            byte? expertJob = QuestExpertJobReward.Type(quest);
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
             bool rental = QuestRentalProgress.Supports(quest);
-            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) || quest.RewardType != "[item]" && profession is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
+            bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
+            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && !expertTutorial && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) || quest.RewardType != "[item]" && profession is null && expertJob is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) ||
                 !QuestCoverage.HasOrdinaryAttributes(quest) ||
                 quest.Definition!.Has("send postal"))
                 throw new NotSupportedException("任务需要尚未具备的周期、特殊奖励或附属交付规则");
@@ -278,6 +291,10 @@ internal sealed class QuestCompletionPlan
             {
                 if (active.ConditionState != 0) throw new InvalidDataException("租赁任务需要本次接取的已提交租赁事实");
             }
+            else if (expertTutorial)
+            {
+                if (active.ConditionState != 0) throw new InvalidDataException("副职业教程需要本次接取的已提交商店事实");
+            }
             else if (quest.Condition is not ("[seeking]" or "[seek n meet npc]") || !QuestLifecyclePlan.ValidSeeking(quest))
                 throw new NotSupportedException("此交付条件尚未接入权威事件");
             else if (quest.Condition == "[seek n meet npc]" && active.ConditionState != 0)
@@ -327,7 +344,7 @@ internal sealed class QuestCompletionPlan
                 }
                 if (consumed.Count > byte.MaxValue) throw new NotSupportedException("任务消耗数组超过本版容量");
             }
-            var definition = QuestFixedRewardDefinition.Parse(profession is not null || characterReward || creatureReward ? quest with { Rewards = [] } : quest, allowGold: true);
+            var definition = QuestFixedRewardDefinition.Parse(profession is not null || characterReward || creatureReward || expertJob is not null ? quest with { Rewards = [] } : quest, allowGold: true);
             var requested = definition.ForJob(expected.Job,expected.GrowType).ToBuilder();
             var selected = QuestFixedRewardDefinition.Parse(quest with { Rewards = quest.Definition!.SelectRewards }).ForJob(expected.Job,expected.GrowType);
             if (selected.Length == 0 ? selector != ushort.MaxValue : selector >= selected.Length)
@@ -346,7 +363,9 @@ internal sealed class QuestCompletionPlan
             // 禁经验子任务的0/0是零奖励占位，不能借普通任务的动态金币marker发奖。
             if (!QuestRelationProgress.ZeroRewardChild(quest) && (definition.HasGoldMarker || quest.DeclaredGoldMultiple > 0))
             {
-                if (definition.FixedGoldAmount > 0 && quest.DeclaredGoldMultiple is not > 0)
+                if (expertTutorial && definition.HasGoldMarker && definition.FixedGoldAmount == 0 && quest.DeclaredGoldMultiple is not > 0)
+                    gold = 0;
+                else if (definition.FixedGoldAmount > 0 && quest.DeclaredGoldMultiple is not > 0)
                     gold = definition.FixedGoldAmount;
                 else
                 {
@@ -432,7 +451,7 @@ internal sealed class QuestCompletionPlan
             QuestCompletionPlan Create(CharacterGrowthPlan? finalGrowth, CharacterLearningState? finalLearning, QuestStagePlan? stage = null) => new(expected, active, quest, selector, experience,
                 new(expected.Inventory, after, "quest_complete", creaturePrecondition), finalGrowth, rewards.ToImmutable(), consumed.ToImmutable(),
                 gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, finalLearning, multiplier, currencies.ToImmutable(),
-                QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage);
+                QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage, expertJob: expertJob);
             var normal = Create(growth, rewardLearning);
             if ((stageGraph is null) != (stageState is null)) throw new InvalidDataException("阶段图与持久状态必须同时提供");
             if (stageGraph is null) return new(QuestCompletionOutcome.Accepted, normal, "通用领奖计划已冻结");

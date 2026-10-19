@@ -7,6 +7,31 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
+    static (byte Type, int Experience) ReadExpertJob(SqliteConnection db, ushort id, SqliteTransaction? tx)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT job_type,expertness FROM character_expert_job WHERE character_id=$id";
+        query.Parameters.AddWithValue("$id", id);
+        using var reader = query.ExecuteReader();
+        if (!reader.Read()) return (0, 0);
+        int type = reader.GetInt32(0), experience = reader.GetInt32(1);
+        if (type is < 1 or > 4 || experience < 0) throw new InvalidDataException("副职业类型超出已确认范围");
+        return ((byte)type, experience);
+    }
+
+    static (int GiveUpState, int Grade, int Endurance) ReadExpertMeta(SqliteConnection db, ushort id, SqliteTransaction? tx)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT giveup_state,machine_grade,machine_endurance FROM character_expert_meta WHERE character_id=$id";
+        query.Parameters.AddWithValue("$id", id);
+        using var reader = query.ExecuteReader();
+        if (!reader.Read()) return (0, 1, 300);
+        int giveUp = reader.GetInt32(0), grade = reader.GetInt32(1), endurance = reader.GetInt32(2);
+        if (giveUp is < 0 or > 3 || grade is < 0 or > 11 || endurance < 0)
+            throw new InvalidDataException("副职业元数据超出已确认范围");
+        return (giveUp, grade, endurance);
+    }
+
     static (long Until, int Permille) ReadExpBonus(SqliteConnection db, ushort id, SqliteTransaction? tx)
     {
         using var query = db.CreateCommand(); query.Transaction = tx;

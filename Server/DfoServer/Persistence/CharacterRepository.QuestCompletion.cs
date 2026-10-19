@@ -40,7 +40,7 @@ internal sealed partial class CharacterRepository
             !plan.AccountCompletedAfter.SequenceEqual((plan.AccountQuest ? expected.AccountCompletedQuests.Append((int)plan.QuestId) : expected.AccountCompletedQuests)
                 .Concat(plan.SyncedQuestIds).Distinct().Order()))
             throw new InvalidDataException("领奖必须使用原接取、完整资产和成长规划");
-        if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 64 or 65 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
+            if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 64 or 65 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
             plan.Snapshot is null || plan.MailedGoldAmount != 0 && plan.MailedGoldAmount != plan.GoldAmount ||
             plan.ConditionType is not (0 or 42) && active.ConditionState != 0 ||
             plan.TotalRequestedExperience == 0 && plan.GrowthPlan is not null || plan.TotalRequestedExperience != 0 && plan.GrowthPlan is null ||
@@ -107,7 +107,7 @@ internal sealed partial class CharacterRepository
                     after = after with { AccountWallet = after.AccountWallet with { Revision = checked(expected.Inventory.AccountWallet.Revision + 1) } };
                 bool projection = current.Revision == I("revision") && current.Level == I("after_level") && current.Level == plan.TargetLevel &&
                     current.Job == expected.Job && current.GrowType == plan.TargetGrowType && current.Position == expected.Position &&
-                    current.EquipmentSlotFlags == plan.TargetEquipmentSlotFlags &&
+                    current.EquipmentSlotFlags == plan.TargetEquipmentSlotFlags && current.ExpertJobType == plan.TargetExpertJob &&
                     current.AcceptedStoryLevel == expected.AcceptedStoryLevel && current.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) &&
                     current.CompletedQuests.SequenceEqual(plan.CompletedAfter) && current.Learning.Experience == (ulong)I("after_experience") &&
                     current.AccountCompletedQuests.SequenceEqual(plan.AccountCompletedAfter) && QuestCycle.SameClaims(current.AccountQuestDailyClaims,plan.AccountDailyClaimsAfter) &&
@@ -121,7 +121,7 @@ internal sealed partial class CharacterRepository
         }
         if (current.Revision != expected.Revision || current.Level != expected.Level || current.Job != expected.Job ||
             current.GrowType != expected.GrowType || current.Position != expected.Position || current.AcceptedStoryLevel != expected.AcceptedStoryLevel ||
-            current.EquipmentSlotFlags != expected.EquipmentSlotFlags ||
+            current.EquipmentSlotFlags != expected.EquipmentSlotFlags || current.ExpertJobType != expected.ExpertJobType ||
             !SameLearning(current.Learning, expected.Learning) || !current.Skills.SequenceEqual(expected.Skills) ||
             !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) || !current.CompletedQuests.SequenceEqual(expected.CompletedQuests) ||
             !QuestCycle.Same(current, expected))
@@ -148,6 +148,16 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$equipmentSlots",plan.TargetEquipmentSlotFlags);
         command.CommandText = "UPDATE characters SET level=$level,experience=$experience,grow_type=$grow,equipment_slot_flags=$equipmentSlots WHERE id=$id AND account=$account AND revision=$revision";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("领奖资产提交revision已变化");
+        if (plan.GrantedExpertJob is { } expertJob)
+        {
+            command.Parameters.AddWithValue("$expertJob", expertJob);
+            command.CommandText = """
+                INSERT INTO character_expert_job(character_id,account,job_type) VALUES($id,$account,$expertJob)
+                ON CONFLICT(character_id) DO UPDATE SET account=excluded.account, job_type=excluded.job_type
+                WHERE character_expert_job.account=$account
+                """;
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业类型没有写入当前角色");
+        }
         if (plan.UpdatesLearning) { WriteLearning(db, tx, current.Id, plan.TargetLearning); WriteCanonicalSkills(db, tx, current.Id, plan.TargetLearning); }
         command.Parameters.AddWithValue("$slot", plan.QuestSlot);
         command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND slot=$slot AND quest_id=$quest AND acceptance_id=$acceptance";
@@ -219,7 +229,7 @@ internal sealed partial class CharacterRepository
         if (plan.StagePlan is { } stage) WriteQuestStage(db, tx, owner.Account, expected, stage);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Revision != expected.Revision + 1 || committed.Level != plan.TargetLevel || committed.GrowType != plan.TargetGrowType ||
-            committed.EquipmentSlotFlags != plan.TargetEquipmentSlotFlags ||
+            committed.EquipmentSlotFlags != plan.TargetEquipmentSlotFlags || committed.ExpertJobType != plan.TargetExpertJob ||
             !SameLearning(committed.Learning, plan.TargetLearning) || !committed.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) ||
             !committed.CompletedQuests.SequenceEqual(plan.CompletedAfter) || !committed.AccountCompletedQuests.SequenceEqual(plan.AccountCompletedAfter) ||
             !QuestCycle.SameAnswers(committed.QuestAnswers,plan.AnswersAfter) || !QuestCycle.SameAnswers(committed.AccountQuestAnswers,plan.AccountAnswersAfter) ||
@@ -243,7 +253,7 @@ internal sealed partial class CharacterRepository
                 ChangedSlots = plan.Inventory.ChangedSlots.Concat(plan.Inventory.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
                     .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main,slot!.Value)))
                     .Concat(plan.Consumed.Where(row => row.Uid == 0).Select(row => row.Position)).Distinct().ToImmutableArray(), PreviousQuests = expected.ActiveMainQuests,
-                PreviousGrowType = expected.GrowType, ProfessionGrowType = plan.ProfessionGrowType,
+                PreviousGrowType = expected.GrowType, ProfessionGrowType = plan.ProfessionGrowType, ExpertJobType = plan.GrantedExpertJob,
                 PreviousEquipmentSlotFlags = expected.EquipmentSlotFlags
             };
     });

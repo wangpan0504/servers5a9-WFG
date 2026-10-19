@@ -404,13 +404,29 @@ internal static class DatabaseSchemaTests
         ChangeReceiptDefinition(db,table,_ => SqliteMigrations.QuestCompletionSchemaV42);
     }
 
+    static void RewindExpertJobTutorialCompletion(SqliteConnection db)
+    {
+        const string table = "character_quest_completion_receipts";
+        if (Query(db, "SELECT sql FROM sqlite_schema WHERE type='table' AND name='" + table + "'") is not string sql ||
+            !sql.Contains("12,17,19,25", StringComparison.Ordinal)) return;
+        if (Query(db, "SELECT count(*) FROM " + table + " WHERE condition_type=17") is not 0L)
+            throw new InvalidOperationException("旧版本夹具不能丢弃真实类型17领奖");
+        long schemaVersion = (long)Query(db, "PRAGMA schema_version")!;
+        Execute(db, "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql='" +
+            sql.Replace("'", "''", StringComparison.Ordinal).Replace("12,17,19,25", "12,19,25", StringComparison.Ordinal) +
+            "' WHERE type='table' AND name='" + table + "'; PRAGMA schema_version=" + (schemaVersion + 1) +
+            "; PRAGMA writable_schema=OFF; SELECT * FROM " + table + " LIMIT 0");
+    }
+
     static void RewindQuestRentalCompletion(SqliteConnection db)
     {
         RewindDungeonSceneSettlement(db);
         const string table = "character_quest_completion_receipts";
         if (Query(db, "SELECT sql FROM sqlite_schema WHERE type='table' AND name='" + table + "'") is string sql &&
-            sql.Contains("12,19,25", StringComparison.Ordinal))
-            ChangeReceiptDefinition(db, table, definition => definition.Replace("12,19,25", "12,25", StringComparison.Ordinal));
+            (sql.Contains("12,17,19,25", StringComparison.Ordinal) || sql.Contains("12,19,25", StringComparison.Ordinal)))
+            ChangeReceiptDefinition(db, table, definition => definition
+                .Replace("12,17,19,25", "12,25", StringComparison.Ordinal)
+                .Replace("12,19,25", "12,25", StringComparison.Ordinal));
     }
 
     // v42仍是正死亡场景与结算；回退只接受没有v43新事实的夹具，不删除真实来源或奖励。
@@ -1739,7 +1755,7 @@ internal static class DatabaseSchemaTests
     static void ChangeCompletionDefinition(SqliteConnection db,Func<string,string> change)
     {
         RewindQuestDungeonAlternatives(db);
-        ChangeReceiptDefinition(db, "character_quest_completion_receipts", sql => change(sql.Replace("12,19,25", "12,25", StringComparison.Ordinal).Replace(
+        ChangeReceiptDefinition(db, "character_quest_completion_receipts", sql => change(sql.Replace("12,17,19,25", "12,25", StringComparison.Ordinal).Replace("12,19,25", "12,25", StringComparison.Ordinal).Replace(
             "CHECK(after_experience>=before_experience AND after_experience<=before_experience+experience_amount)",
             "CHECK(after_experience=before_experience+experience_amount)", StringComparison.Ordinal)));
     }
@@ -1855,6 +1871,7 @@ internal static class DatabaseSchemaTests
                 RewindDailyBoosterUsage(db);
                 if (oldVersion < 49) RewindDevilServices(db);
                 if (oldVersion < 53) DropQuestStageSchema(db);
+                if (oldVersion < 58 && oldVersion >= 46) RewindExpertJobTutorialCompletion(db);
                 if (oldVersion < 46) RewindQuestDungeonAlternatives(db);
                 if (oldVersion < 45)
                 {

@@ -154,6 +154,12 @@ internal static class QuestProtocolTests
         Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],1,hellChallenge: true),"深渊模式不能混合转职奖励");
         Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],tpAmount: 2,hellChallenge: true),"深渊模式不能混合TP奖励");
         Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],currencies: [new(354,3033,1)],hellChallenge: true),"深渊模式不能吞掉钱包材料奖励");
+        Check(QuestPackets.Finish(2702,0,0,[new(358,100)],0,[]).SequenceEqual(
+                Convert.FromHexString("018E0A000000000001006601640000000000")),
+            "附魔师资格是普通寻物成功：消耗后再读 mode0 和零奖励，不发 ACK34 mode20");
+        Check(QuestPackets.Finish(2710,0,0,[new(358,100)],0,[]).SequenceEqual(
+                Convert.FromHexString("01960A000000000001006601640000000000")),
+            "分解师资格同样走寻物 mode0，不把类型 3 写成 stage");
         foreach (byte branch in Enumerable.Range(1,5).Select(value => (byte)value))
             foreach (byte stage in Enumerable.Range(0,3).Select(value => (byte)value))
             {

@@ -112,6 +112,10 @@ internal sealed partial class GameSession
                 expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { AcceptanceId: var rentalAcceptance, ConditionState: 0 } &&
                 rentalAcceptance != Guid.Empty)
                 return QuestLifecyclePlan.SetCondition(expected, quest, 0);
+            if (QuestExpertJobProgress.Tutorial(quest) && condition is { Channel: null, Value: 0, Reserved: 0 } &&
+                expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { AcceptanceId: var expertAcceptance, ConditionState: 0 } &&
+                expertAcceptance != Guid.Empty)
+                return QuestLifecyclePlan.SetCondition(expected, quest, 0);
             if (QuestDungeonClearProgress.Supports(quest) && condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { } clearActive &&
                 QuestDungeonClearProgress.ValidScalar(quest,clearActive.ConditionState))
