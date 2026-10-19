@@ -41,7 +41,7 @@ kbd{font:11px var(--mono);border:1px solid var(--line2);border-bottom-width:2px;
 .panel>header{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
 .panel>header h2{margin:0}.panel>.body{padding:14px}
 .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
-input[type=text],input[type=number],input[type=search],select,textarea{height:32px;border:1px solid var(--line2);border-radius:6px;padding:0 10px;background:var(--bg);min-width:0}
+input[type=text],input[type=number],input[type=search],input[type=datetime-local],select,textarea{height:32px;border:1px solid var(--line2);border-radius:6px;padding:0 10px;background:var(--bg);min-width:0}
 textarea{height:auto;padding:8px 10px}
 input:focus,select:focus,textarea:focus,.btn:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--sub)}
@@ -120,6 +120,11 @@ td.wrap{white-space:normal;min-width:180px}
 .pager .pg-jump{width:64px;height:26px}
 .pager .pg-size{height:26px;font-size:12px}
 .abar{position:sticky;bottom:0;z-index:5;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:12px calc(-1 * clamp(16px,2.2vw,40px)) 0;padding:10px clamp(16px,2.2vw,40px);background:var(--bg2);border-top:1px solid var(--line2);box-shadow:0 -6px 18px rgba(0,0,0,.06)}
+.float-grant{position:fixed;right:24px;bottom:24px;z-index:15;display:flex;gap:8px;align-items:center;padding:8px 10px 8px 14px;border:1px solid var(--line2);border-radius:999px;background:var(--bg);box-shadow:var(--shadow)}
+.edit-box{width:min(880px,94vw);max-height:86vh;overflow:auto}
+.edit-list{display:flex;flex-direction:column;gap:10px;margin:8px 0}
+.edit-card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg2)}
+.edit-card .desc{color:var(--sub);font-size:12px;margin:4px 0 8px}
 .abar .grow{flex:1}.abar label.f{min-width:70px}.abar input[type=number]{width:84px}
 .sel-count{font-weight:600;align-self:center;min-width:92px}
 .skeleton{display:grid;gap:10px;padding:14px 4px}

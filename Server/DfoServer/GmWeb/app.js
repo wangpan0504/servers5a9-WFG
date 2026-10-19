@@ -19,7 +19,7 @@ const pages = [
 // 当前角色：顶部选一次，发放、任务、技能、邮件、属性等页面默认作用于它。
 export const state = {
   cur: JSON.parse(sessionStorage.getItem('gm.cur') || localStorage.getItem('gm.cur') || 'null'),
-  pending: null, status: null,
+  pending: null, status: null, tab: 'summary',
 };
 export function setCurrent(account, name) {
   state.cur = { account, name };
@@ -33,7 +33,7 @@ const selectCharacter = (account, name) => {
 };
 export const ctx = {
   state, setCurrent, selectCharacter,
-  openCharacter: (a, n) => { selectCharacter(a, n); location.hash = '#char'; if (current === 'char') route(); },
+  openCharacter: (a, n, tab) => { selectCharacter(a, n); state.tab = tab || 'summary'; location.hash = '#char'; if (current === 'char') route(); },
   openPicker: () => picker.open(), go: (page) => { location.hash = '#' + page; }, refreshTop,
 };
 const picker = charPicker(ctx);

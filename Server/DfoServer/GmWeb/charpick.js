@@ -27,7 +27,10 @@ export function charPicker(ctx) {
   const btn = h('button', { class: 'btn sm charbtn', id: 'charpick', title: '选择角色（Alt+C）', onclick: () => open() });
   const paint = () => {
     const c = ctx.state.cur;
-    btn.replaceChildren(h('span', { class: 'dot' + (c ? ' ok' : '') }), c ? h('b', null, c.name) : '选择角色', c ? h('small', null, ' · ' + c.account) : null, h('kbd', null, 'Alt C'));
+    const kids = [h('span', { class: 'dot' + (c ? ' ok' : '') }), c ? h('b', null, c.name) : '选择角色'];
+    if (c) kids.push(h('small', null, ' · ' + c.account));
+    kids.push(h('kbd', null, 'Alt C'));
+    btn.replaceChildren(...kids);
   };
   const open = async () => {
     closeDrawer();

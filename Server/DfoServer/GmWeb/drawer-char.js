@@ -1,21 +1,35 @@
 import { api } from './api.js';
-import { h, openDrawer, kv, parseSummary, table, field, note, toast, fmtTime, num, skeleton } from './ui.js';
+import { h, openDrawer, kv, parseSummary, table, field, note, toast, fmtTime, num, skeleton, pager } from './ui.js';
 import { actor, isOnline } from './ops.js';
 import { questPanel } from './p-quests.js';
+import { inventoryView } from './bag.js';
+import { catalogBrowser } from './p-grant.js';
+import { openEditor } from './edit.js';
 
-const CLEARABLE = ['Main', 'Avatar', 'Pet', 'PersonalCargo', 'AccountCargo'];
-const LIST_LABEL = { Main: '背包', Avatar: '时装', Pet: '宠物', PersonalCargo: '个人仓库', AccountCargo: '账号金库' };
+const CLEARABLE = ['Main', 'Equipment', 'Pet', 'PersonalCargo', 'AccountCargo'];
+const LIST_LABEL = { Main: '背包', Equipment: '穿戴（装备与时装）', Avatar: '时装', Pet: '宠物', PersonalCargo: '个人仓库', AccountCargo: '账号金库' };
 
 // 角色抽屉：概览 / 背包 / 任务 / 邮箱 / 操作。所有写操作都在抽屉内二次确认并写审计。
+function paged(rows, columns) {
+  const state = { page: 1, size: 25 };
+  const box = h('div');
+  const paint = () => {
+    const slice = rows.slice((state.page - 1) * state.size, state.page * state.size);
+    box.replaceChildren(table(columns, slice), pager({ total: rows.length, page: state.page, size: state.size, sizes: [25, 50, 100], onChange: (p, s) => { state.page = p; state.size = s; paint(); } }));
+  };
+  paint();
+  return box;
+}
+
 export function openCharacter(account, name, ctx) { openDrawer(name, d => buildCharacter(d, account, name, ctx)); }
 
 // 角色工作台内容：既可放进抽屉，也可放进整页（p-char.js）。d = { body, close, setTitle, confirm }
-export function buildCharacter(d, account, name, ctx) {
+export function buildCharacter(d, account, name, ctx, initial = 'summary') {
   {
     const tabs = [['summary', '基础'], ['inventory', '背包'], ['skills', '技能'], ['quests', '任务'], ['titles', '称号'], ['mails', '邮件'], ['stats', '属性'], ['ops', '快捷操作']];
     const content = h('div');
     const bar = h('div', { class: 'tabs', role: 'tablist', onkeydown: e => { const bs = [...bar.querySelectorAll('button')]; const i = bs.findIndex(b => b.getAttribute('aria-selected') === 'true'); if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const n = bs[(i + (e.key === 'ArrowRight' ? 1 : bs.length - 1)) % bs.length]; n.focus(); n.click(); e.preventDefault(); } } });
-    let current = 'summary';
+    let current = '';
     const scroller = () => d.body.closest('.body, #page') || document.getElementById('page');
     const show = async key => {
       const same = key === current; const top = same ? scroller()?.scrollTop : 0;
@@ -33,10 +47,13 @@ export function buildCharacter(d, account, name, ctx) {
         const s = await api.section(account, name, 'summary');
         const w = await api.section(account, name, 'wallet').catch(() => null);
         const p = await api.section(account, name, 'points').catch(() => null);
+        const g = await api.growth(account, name).catch(() => null);
         const online = await isOnline(account, name);
         const walletRows = w?.currencies || [];
+        const branch = g?.options?.growTypes?.find(t => t.value === g.first);
+        const awake = !g ? null : g.second === 0 ? '未觉醒' : (branch?.awakenings?.[g.second - 1] || String(g.second));
         return h('div', null, h('p', null, h('span', { class: 'badge ' + (online ? 'ok' : '') }, online ? '在线' : '离线'), ' 账号 ' + account),
-          kv(parseSummary(s)),
+          kv({ ...parseSummary(s), ...(g ? { 转职: branch?.label || g.first, 觉醒: awake } : {}) }),
           p && h('h2', { style: 'margin-top:18px' }, '额外 SP / TP'),
           p && kv({ 额外SP: p.bonusSp ?? '未接管', 额外TP: p.bonusTp ?? '未接管', 当前SP: p.sp ?? '-', 当前TP: p.tp ?? '-' }),
           w && h('h2', { style: 'margin-top:18px' }, '钱包'),
@@ -47,24 +64,31 @@ export function buildCharacter(d, account, name, ctx) {
       },
       skills: async () => {
         const s = await api.section(account, name, 'skill-list');
+        const g = await api.growth(account, name).catch(() => null);
         return h('div', null,
-          kv({ 职业: s.job, 等级: s.level, 当前SP: s.sp ?? '-', 当前TP: s.tp ?? '-', 额外SP: s.bonusSp ?? '未接管', 额外TP: s.bonusTp ?? '未接管' }),
+          kv({ 职业: g?.options?.baseName || s.job, 等级: s.level, 当前SP: s.sp ?? '-', 当前TP: s.tp ?? '-', 额外SP: s.bonusSp ?? '未接管', 额外TP: s.bonusTp ?? '未接管' }),
           h('p', { class: 'lead' }, s.initialized ? '技能名称来自 PVF 的技能脚本；等级为主技能树当前值。' : '该角色未启用技能学习模型，显示旧技能表。'),
-          table([{ key: 'id', label: '技能 ID', mono: true, num: true }, { key: 'name', label: '名称' }, { key: 'level', label: '等级', num: true }], s.skills));
+          paged(s.skills || [], [{ key: 'id', label: '技能 ID', mono: true, num: true }, { key: 'name', label: '名称' }, { key: 'level', label: '等级', num: true }]));
       },
       inventory: async () => {
         const inv = await api.section(account, name, 'inventory');
         const rows = inv.items || [];
         const picked = new Set();
-        const clearSel = h('select', { 'aria-label': '容器' }, ...[...new Set(rows.map(r => r.listName))].filter(x => CLEARABLE.includes(x)).map(x => h('option', { value: rows.find(r => r.listName === x).list }, LIST_LABEL[x] || x)));
         const delBtn = h('button', { class: 'btn danger sm', disabled: true, onclick: () => act('删除选中物品', 'items/delete', { refs: [...picked] }, { danger: true, needReturn: true, detail: `永久删除 ${picked.size} 件物品（不可恢复，已锁定的装备不会被删除）。` }) }, '删除选中');
+        const clearBtn = h('button', { class: 'btn danger sm', disabled: true }, '清空容器');
         const sync = () => { delBtn.disabled = picked.size === 0; delBtn.textContent = `删除选中（${picked.size}）`; };
-        return h('div', null, note(`共 ${rows.length} 件 · 版本 ${inv.rev} · 金币 ${num(inv.gold)}。删除/清空会写审计；角色在线时需先强制小退。`),
-          h('div', { class: 'toolbar' }, delBtn, clearSel,
-            h('button', { class: 'btn danger sm', disabled: !clearSel.options.length, onclick: () => act('清空容器', 'items/clear', { container: +clearSel.value }, { danger: true, needReturn: true, detail: `清空「${clearSel.selectedOptions[0]?.textContent}」中所有未锁定物品（不可恢复）。` }) }, '清空容器')),
-          table([{ label: '', render: r => h('input', { type: 'checkbox', 'aria-label': '选择', onchange: e => { const ref = `${r.list}:${r.slot}:${r.uid}`; e.target.checked ? picked.add(ref) : picked.delete(ref); sync(); } }) },
-            { key: 'listName', label: '容器', render: r => LIST_LABEL[r.listName] || r.listName }, { key: 'slot', label: '位置', num: true }, { key: 'id', label: 'ID', num: true, mono: true },
-            { label: '名称', render: r => r.name || '—' }, { key: 'count', label: '数量', num: true }], rows));
+        const CLEAR = { pet: 7, medal: 38, avatar: 1, personal: 2, account: 12 };
+        const view = inventoryView(rows, {
+          bar: h('div', { class: 'toolbar' }, delBtn, clearBtn),
+          onFilter: (state) => {
+            const container = CLEAR[state.sub] ?? CLEAR[state.group];
+            clearBtn.disabled = container == null;
+            clearBtn.onclick = () => act('清空容器', 'items/clear', { container }, { danger: true, needReturn: true, detail: '清空这一栏对应的整个容器（物品栏分页不会整栏清空，请勾选后删除）。' });
+          },
+          check: r => h('input', { type: 'checkbox', 'aria-label': '选择', onchange: e => { const ref = `${r.list}:${r.slot}:${r.uid}`; e.target.checked ? picked.add(ref) : picked.delete(ref); sync(); } }),
+          edit: r => r.kind === 'Equipment' || r.kind === 'Avatar' ? h('button', { class: 'btn sm', onclick: () => openEditor([{ id: r.id, name: r.name, ref: { list: r.list, slot: r.slot, uid: r.uid }, upgrade: r.upgrade, refine: r.refine, amplifyType: r.amplifyType, amplifyValue: r.amplifyValue, ability: r.ability, count: r.count, expire: r.expire }], { account, name, inventory: true }, () => show('inventory')) }, '改属性') : '',
+        });
+        return h('div', null, note(`共 ${rows.length} 件 · 版本 ${inv.rev} · 金币 ${num(inv.gold)}。点分类立即切换。删除会写审计；角色在线时需先强制小退。物品栏各分页共用一个容器，不能单独清空其中一页。`), view);
       },
       stats: async () => {
         const r = await api.section(account, name, 'stats');
@@ -88,13 +112,13 @@ export function buildCharacter(d, account, name, ctx) {
         const load = async () => {
           const r = await api.section(account, name, 'titles', filter.value.trim());
           box.replaceChildren(note(`成就 ${r.completed}/${r.total} 已完成，称号簿分区 ${r.sections}/${r.sectionTotal}；匹配 ${r.matched} 条${r.matched > r.quests.length ? `，仅显示前 ${r.quests.length} 条` : ''}。`),
-            table([{ key: 'id', label: 'ID', num: true, mono: true }, { key: 'name', label: '成就' }, { label: '分类', render: x => x.categories.join('/') || '—' },
+            paged(r.quests || [], [{ key: 'id', label: 'ID', num: true, mono: true }, { key: 'name', label: '成就' }, { label: '分类', render: x => x.categories.join('/') || '—' },
               { label: '状态', render: x => h('span', { class: 'badge ' + (x.done ? 'ok' : '') }, x.done ? '已完成' : '未完成') },
-              { label: '', render: x => x.done ? '' : h('button', { class: 'btn sm', onclick: () => act('完成成就', 'titles/complete', { spec: String(x.id) }, { danger: true, detail: `直接完成成就 ${x.id}（${x.name}），发放称号与奖励。` }) }, '完成') }], r.quests));
+              { label: '', render: x => x.done ? '' : h('button', { class: 'btn sm', onclick: () => act('完成成就', 'titles/complete', { spec: String(x.id) }, { danger: true, detail: `直接完成成就 ${x.id}（${x.name}），发放称号与奖励。` }) }, '完成') }]));
         };
         const run = h('button', { class: 'btn sm', onclick: () => load().catch(e => box.replaceChildren(note(e.message, 'err'))) }, '查询');
         queueMicrotask(() => run.click());
-        return h('div', null, note('称号簿与成就：直接完成会按服务端同一套规划发放称号、奖励与邮件，不检查玩法条件；仅选角界面可写，游戏中会先强制小退。已完成的成就无法撤销。', 'warn'),
+        return h('div', null, note('称号簿与成就：列表只显示当前职业，以及没写职业或全职业的成就；写死其他职业、其他分支或觉醒的不列出。直接完成会按服务端同一套规划发放称号、奖励与邮件，不检查玩法条件。在线角色也可以直接完成，客户端称号簿要重新选角后才刷新。已完成的成就无法撤销。', 'warn'),
           h('div', { class: 'toolbar' }, filter, run),
           h('div', { class: 'toolbar' }, spec,
             h('button', { class: 'btn danger sm', onclick: () => act('一键完成称号簿', 'titles/complete', { spec: spec.value }, { danger: true, detail: `一次性完成「${spec.selectedOptions[0].textContent}」，发放全部称号、奖励与邮件（不可撤销；奖励放不下时会逐个跳过）。` }) }, '一键完成'),
@@ -110,10 +134,10 @@ export function buildCharacter(d, account, name, ctx) {
         const sync = () => { delBtn.disabled = picked.size === 0; delBtn.textContent = `删除选中（${picked.size}）`; };
         return h('div', null, note('仅无附件、无金币且未过期的邮件可删除；含附件/金币的邮件需玩家领取。角色在线时需先强制小退。'),
           h('div', { class: 'toolbar' }, delBtn, h('button', { class: 'btn danger sm', onclick: () => act('删除全部可删邮件', 'mails/delete', { all: true }, { danger: true, needReturn: true, detail: '删除全部可删除的邮件（带附件或金币的保留）。' }) }, '删除全部可删')),
-          table([{ label: '', render: m => m.deletable ? h('input', { type: 'checkbox', 'aria-label': '选择', onchange: e => { e.target.checked ? picked.add(m.id) : picked.delete(m.id); sync(); } }) : '' },
+          paged(rows, [{ label: '', render: m => m.deletable ? h('input', { type: 'checkbox', 'aria-label': '选择', onchange: e => { e.target.checked ? picked.add(m.id) : picked.delete(m.id); sync(); } }) : '' },
             { key: 'id', label: 'ID', num: true }, { key: 'sender', label: '发件人' }, { key: 'text', label: '内容' },
             { key: 'gold', label: '金币', num: true, render: m => num(m.gold) }, { label: '附件', render: m => (m.attachments || []).map(a => `${a.name || a.itemId}×${a.count}`).join('，') },
-            { label: '到期', render: m => fmtTime(m.expires) }, { label: '状态', render: m => m.expired ? '已过期' : '有效' }], rows));
+            { label: '到期', render: m => fmtTime(m.expires) }, { label: '状态', render: m => m.expired ? '已过期' : '有效' }]));
       },
       ops: async () => opsView(account, name, act),
     };
@@ -129,21 +153,36 @@ export function buildCharacter(d, account, name, ctx) {
       content.append(box);
     };
     d.body.append(bar, content);
-    show('summary');
+    show(tabs.some(t => t[0] === initial) ? initial : 'summary');
   }
+}
+
+function pickModal(title, fill, tag, getJob) {
+  document.getElementById('modal')?.remove();
+  const close = () => modal.remove();
+  const box = h('div', { class: 'confirm', style: 'width:min(920px,94vw);max-height:86vh;overflow:auto' },
+    h('header', { class: 'toolbar' }, h('h2', null, title), h('span', { class: 'grow' }), h('button', { class: 'btn sm', onclick: close }, '关闭')),
+    catalogBrowser(row => { fill(row); close(); }, tag, null, getJob));
+  const modal = h('div', { id: 'modal' }, h('div', { class: 'scrim top', onclick: close }), box);
+  document.body.append(modal);
 }
 
 async function opsView(account, name, act) {
   const gold = h('input', { type: 'number', min: 1, max: 2000000000, value: 1000000 });
   const goldSet = h('input', { type: 'number', min: 0, max: 2147483647, placeholder: '0–2147483647' });
   const level = h('input', { type: 'number', min: 1, max: 95, placeholder: '1–95' });
-  const branch = h('input', { type: 'number', min: 0, max: 5, value: 0 });
-  const awake = h('input', { type: 'number', min: 0, max: 2, value: 0 });
+  const branch = h('select', { 'aria-label': '转职分支' }, h('option', { value: '' }, '读取中…'));
+  const awake = h('select', { 'aria-label': '觉醒' }, h('option', { value: '0' }, '未觉醒'));
   const newName = h('input', { type: 'text', maxlength: 14, placeholder: '新名字' });
   const sp = h('input', { type: 'number', min: 0, max: 50000, placeholder: '0–50000' });
   const tp = h('input', { type: 'number', min: 0, max: 50000, placeholder: '0–50000' });
   const itemId = h('input', { type: 'number', min: 1, placeholder: '物品 ID' }), count = h('input', { type: 'number', min: 1, value: 1 });
   const up = h('input', { type: 'number', min: 0, max: 31, value: 0 }), ref = h('input', { type: 'number', min: 0, max: 99, value: 0 });
+  const amp = h('input', { type: 'text', placeholder: 'amp:类型1-4:数值，可空' });
+  const need = (input, label) => {
+    if (String(input.value).trim() === '' || !Number.isFinite(Number(input.value))) { toast('请先填写' + label, true); return null; }
+    return Number(input.value);
+  };
   const setIdx = h('input', { type: 'number', min: 0, placeholder: '套装序号' });
   const expInput = h('input', { type: 'number', min: 0, max: 6000000000, placeholder: '累计经验' });
   const expHint = h('p', { class: 'lead', id: 'exp-hint' }, '');
@@ -155,25 +194,40 @@ async function opsView(account, name, act) {
     };
     level.addEventListener('input', update);
   }).catch(() => {});
+  api.growth(account, name).then(g => {
+    const types = g.options?.growTypes || [];
+    const fillAwake = () => {
+      const row = types.find(t => String(t.value) === branch.value);
+      const options = [['0', '未觉醒'], ...(row?.awakenings || []).map((label, i) => [String(i + 1), label])];
+      const keep = String(g.second ?? 0);
+      awake.replaceChildren(...options.map(([v, l]) => h('option', { value: v }, `${v} · ${l}`)));
+      awake.value = options.some(o => o[0] === keep) && branch.value === String(g.first) ? keep : (awake.value && options.some(o => o[0] === awake.value) ? awake.value : '0');
+    };
+    branch.replaceChildren(...types.map(t => h('option', { value: t.value }, `${t.value} · ${t.label}`)));
+    branch.value = String(g.first ?? types[0]?.value ?? 0);
+    fillAwake();
+    branch.addEventListener('change', () => { awake.value = '0'; fillAwake(); });
+  }).catch(e => { branch.replaceChildren(h('option', { value: '' }, e.message)); });
+  const wearerJob = async () => { const g = await api.growth(account, name); return { job: g.job, first: g.first }; };
   const panel = (title, ...kids) => h('div', { class: 'panel' }, h('header', null, h('h2', null, title)), h('div', { class: 'body form' }, ...kids));
   return h('div', { class: 'grid' },
     note('只有删除、清空、踢人/断线和“全部完成”会二次确认；其余操作直接执行，并用 toast 给出结果与撤销提示，所有写操作都记录到审计日志。在线角色可直接修改（不用小退）：金币、等级、转职、SP/TP、任务、称号成就、货币、邮件发送；客户端会在下次选角后刷新。背包类写入（直接入包、删除物品、改名）对在线角色会先提示并强制小退。', 'warn'),
     panel('发放金币（邮件）', field('金币数量', gold),
       h('button', { class: 'btn primary', onclick: () => act('发放金币邮件', 'mail/gold', { gold: +gold.value }, { detail: `给 ${name} 发送 ${num(+gold.value)} 金币的邮件；在线角色会收到新邮件提醒。` }) }, '发送邮件')),
     panel('直接设置金币', field('金币（覆盖）', goldSet),
-      h('button', { class: 'btn danger', onclick: () => act('设置金币', 'gold', { gold: +goldSet.value }, { danger: true, detail: `把 ${name} 的金币直接设为 ${num(+goldSet.value)}（覆盖原值）。` }) }, '设置')),
-    panel('额外 SP / TP', field('额外 SP', sp), h('button', { class: 'btn danger sm', onclick: () => act('设置额外 SP', 'sp', { value: +sp.value }, { danger: true, detail: `把 ${name} 的额外 SP 设为 ${sp.value}。` }) }, '写入 SP'),
-      field('额外 TP', tp), h('button', { class: 'btn danger sm', onclick: () => act('设置额外 TP', 'tp', { value: +tp.value }, { danger: true, detail: `把 ${name} 的额外 TP 设为 ${tp.value}。` }) }, '写入 TP')),
-    panel('入包发放物品（直接）', field('物品 ID', itemId), field('数量', count), field('强化', up), field('增幅/改造', ref),
-      h('button', { class: 'btn danger', onclick: () => act('直接入包发放', 'direct/item', { itemId: +itemId.value, count: +count.value, upgrade: +up.value, refine: +ref.value }, { danger: true, needReturn: true, detail: `把 ${itemId.value} ×${count.value} 直接放入 ${name} 的背包（背包满则失败）。` }) }, '入包')),
-    panel('入包发放套装（直接）', field('套装序号', setIdx),
+      h('button', { class: 'btn danger', onclick: () => { const n = need(goldSet, '金币'); if (n == null) return; act('设置金币', 'gold', { gold: n }, { danger: true, detail: `把 ${name} 的金币直接设为 ${num(n)}（覆盖原值）。` }); } }, '设置')),
+    panel('额外 SP / TP', field('额外 SP', sp), h('button', { class: 'btn danger sm', onclick: () => { const n = need(sp, '额外 SP'); if (n == null) return; act('设置额外 SP', 'sp', { value: n }, { danger: true, detail: `把 ${name} 的额外 SP 设为 ${n}。` }); } }, '写入 SP'),
+      field('额外 TP', tp), h('button', { class: 'btn danger sm', onclick: () => { const n = need(tp, '额外 TP'); if (n == null) return; act('设置额外 TP', 'tp', { value: n }, { danger: true, detail: `把 ${name} 的额外 TP 设为 ${n}。` }); } }, '写入 TP')),
+    panel('入包发放物品（直接）', h('button', { class: 'btn sm', onclick: () => pickModal('选择物品', row => openEditor([{ id: row.id, name: row.name }], { account, name }), null, wearerJob) }, '按词条发放'), field('物品 ID', itemId), field('数量', count), field('强化', up), field('锻造', ref), field('增幅', amp),
+      h('button', { class: 'btn danger', onclick: () => { const id = need(itemId, '物品 ID'); if (id == null) return; act('直接入包发放', 'direct/item', { itemId: id, count: +count.value || 1, upgrade: +up.value || 0, refine: +ref.value || 0, amp: amp.value.trim() || null }, { danger: true, needReturn: true, detail: `把 ${id} ×${count.value || 1} 直接放入 ${name} 的背包（背包满则失败）。` }); } }, '入包')),
+    panel('入包发放套装（直接）', h('button', { class: 'btn sm', onclick: () => pickModal('选择套装', row => api.setMembers(account, name, row.set).then(data => openEditor((data.items || []).map(x => ({ id: x.id, name: x.name })), { account, name, mode: 'direct' })).catch(e => toast(e.message, true)), 'sets', wearerJob) }, '按套发放'), field('套装序号', setIdx),
       h('button', { class: 'btn danger', onclick: () => act('直接入包发套装', 'direct/set', { setIndex: +setIdx.value, upgrade: +up.value, refine: +ref.value }, { danger: true, needReturn: true, detail: `把套装 #${setIdx.value} 直接放入 ${name} 的背包（强化/改造沿用上面物品栏的数值）。` }) }, '入包')),
     panel('等级调整', field('目标等级', level), expHint,
-      h('button', { class: 'btn danger', onclick: () => act('调整等级', 'level', { level: +level.value }, { danger: true, detail: `把 ${name} 调到 Lv${level.value}（重置技能，属性可能回到初始值）。` }) }, '执行'),
+      h('button', { class: 'btn danger', onclick: () => { const n = need(level, '目标等级'); if (n == null) return; act('调整等级', 'level', { level: n }, { danger: 'force', detail: `把 ${name} 调到 Lv${n}。已学技能、快捷栏和连招保留，经验设为该等级起点；降级时若技能超过新等级会整笔拒绝。` }); } }, '执行'),
       field('或按累计经验换算等级', expInput),
-      h('button', { class: 'btn danger', id: 'exp-go', onclick: () => act('按累计经验设等级', 'exp', { exp: +expInput.value }, { danger: true, detail: `按累计经验 ${num(+expInput.value)} 换算等级并调整 ${name}（只设等级，等级内经验归零；重置技能）。` }) }, '按经验设等级')),
-    panel('转职', field('分支 0-5', branch), field('觉醒 0-2', awake),
-      h('button', { class: 'btn danger', onclick: () => act('转职', 'job', { branch: +branch.value, awakening: +awake.value }, { danger: true, detail: `把 ${name} 转为分支 ${branch.value} / 觉醒 ${awake.value}（可用选项用 grow-options 查询）。` }) }, '执行')),
+      h('button', { class: 'btn danger', id: 'exp-go', onclick: () => { const n = need(expInput, '累计经验'); if (n == null) return; act('按累计经验设等级', 'exp', { exp: n }, { danger: 'force', detail: `按累计经验 ${num(n)} 换算等级并调整 ${name}（等级内经验归零，已学技能保留）。` }); } }, '按经验设等级')),
+    panel('转职', note('选项来自该职业的实际分支。转职会重建技能树并恢复点数，执行前会再确认。'), field('分支', branch), field('觉醒', awake),
+      h('button', { class: 'btn danger', id: 'job-go', onclick: () => { if (branch.value === '') return toast('转职选项还没加载完', true); act('转职', 'job', { branch: +branch.value, awakening: +awake.value }, { danger: 'force', detail: `把 ${name} 转为「${branch.selectedOptions[0]?.textContent} / ${awake.selectedOptions[0]?.textContent}」。这会重建技能树，已学的付费加点会被清掉，并补上这个分支当前阶段的转职和觉醒任务。` }); } }, '执行')),
     panel('角色改名', field('新角色名', newName),
       h('button', { class: 'btn danger', onclick: () => act('角色改名', 'characters/rename', { newName: newName.value.trim() }, { danger: true, needReturn: true, detail: `把 ${name} 改名为「${newName.value.trim()}」（名字不能与其他角色重复；邮件里已发出的历史发件人名不变）。` }) }, '改名')),
     panel('删除角色（永久）', note('95 服务端没有软删除：删除会永久清除角色及其背包、邮件、任务等全部数据，且不可恢复。审计日志会保存删除前快照。', 'warn'),

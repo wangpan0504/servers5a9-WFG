@@ -54,7 +54,17 @@ internal static class GmItemAttributes
     // [avatar select ability]：时装可选属性，每项一条。
     internal static string[] AvatarAbility(string text) =>
         [.. Blocks(text, "avatar select ability").SelectMany(block => Ability.Matches(block).Select(match =>
-            $"选项{match.Groups["idx"].Value}：{Label(match.Groups["tag"].Value)} {Signed(match.Groups["value"].Value)}{(match.Groups["op"].Value == "%" ? "%" : "")}"))];
+            $"选项{match.Groups["idx"].Value}：{AbilityLabel(match)}"))];
+
+    internal static object[] AvatarOptions(string text) =>
+        [.. Blocks(text, "avatar select ability").SelectMany(block => Ability.Matches(block).Select(match => (object)new
+        {
+            index = int.Parse(match.Groups["idx"].Value, CultureInfo.InvariantCulture),
+            label = AbilityLabel(match)
+        }))];
+
+    static string AbilityLabel(Match match) =>
+        $"{Label(match.Groups["tag"].Value)} {Signed(match.Groups["value"].Value)}{(match.Groups["op"].Value == "%" ? "%" : "")}";
 
     // 技能等级/数据加成；技能只显示编号（技能名属于另一份资源，不在这里解析）。
     internal static string[] SkillBonus(string text)

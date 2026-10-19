@@ -12,7 +12,8 @@ namespace DfoServer.Development;
 // 构建期间查询返回进度，不阻塞GM端口的5秒读写窗口，也不进入游戏请求路径。
 internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources, QuestCatalog? quests)
 {
-    internal sealed record ItemEntry(int Id, string Name, bool Equipment, string Tag, int MinLevel, int Rarity, int SetIndex, ushort Jobs);
+    // Grows：空脚本为全部分支；[usable first growtype] 写成 0–5 的位。无法识别的非空声明为 0，选了角色时不匹配任何分支。
+    internal sealed record ItemEntry(int Id, string Name, bool Equipment, string Tag, int MinLevel, int Rarity, int SetIndex, ushort Jobs, ushort Grows);
 
     static readonly string[] JobNames = ["swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief", "at fighter",
         "at mage", "demonic swordman", "creator mage", "at swordman", "knight", "demonic lancer", "at priest", "gun blader"];
@@ -27,7 +28,7 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
     bool stopping;
     public string? PvfPath { get; init; }
     public string? CacheDirectory { get; init; }
-    Task<ImmutableArray<ItemEntry>> ItemsTask => Start(ref itemsTask, () => Cached("items", () => BuildItems(pvf, warmupStop.Token)));
+    Task<ImmutableArray<ItemEntry>> ItemsTask => Start(ref itemsTask, () => Cached("items", () => BuildItems(pvf, warmupStop.Token), 2));
     Task<ImmutableDictionary<int, GmItemAttributes.Attrs>> AttributesTask => Start(ref attributesTask, () => Cached("attrs", () => BuildAttributes(pvf, warmupStop.Token)));
     Task<ImmutableDictionary<int, string>> QuestNamesTask => Start(ref questNamesTask, () => BuildQuestNames(pvf, quests, warmupStop.Token));
 
@@ -73,7 +74,7 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
     }
 
     sealed record CacheFile<T>(int V, long Size, long Ticks, T Data);
-    T Cached<T>(string name, Func<T> build)
+    T Cached<T>(string name, Func<T> build, int version = 1)
     {
         var stop = warmupStop.Token;
         stop.ThrowIfCancellationRequested();
@@ -82,8 +83,8 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
         var info = new FileInfo(PvfPath!);
         try
         {
-            if (File.Exists(path) && System.Text.Json.JsonSerializer.Deserialize<CacheFile<T>>(File.ReadAllBytes(path)) is { V: 1 } cached
-                && cached.Size == info.Length && cached.Ticks == info.LastWriteTimeUtc.Ticks && cached.Data is not null)
+            if (File.Exists(path) && System.Text.Json.JsonSerializer.Deserialize<CacheFile<T>>(File.ReadAllBytes(path)) is { } cached
+                && cached.V == version && cached.Size == info.Length && cached.Ticks == info.LastWriteTimeUtc.Ticks && cached.Data is not null)
             {
                 stop.ThrowIfCancellationRequested();
                 return cached.Data;
@@ -96,7 +97,7 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
         {
             Directory.CreateDirectory(CacheDirectory!);
             string temp = path + ".tmp";
-            byte[] content = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new CacheFile<T>(1, info.Length, info.LastWriteTimeUtc.Ticks, built));
+            byte[] content = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new CacheFile<T>(version, info.Length, info.LastWriteTimeUtc.Ticks, built));
             stop.ThrowIfCancellationRequested();
             File.WriteAllBytes(temp, content);
             File.Move(temp, path, true);
@@ -151,6 +152,19 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
     public QuestCatalog Quests => quests ?? throw new InvalidOperationException("任务资源未装配");
     public static string JobTag(byte job) => job < JobNames.Length ? "[" + JobNames[job] + "]" : "";
 
+    readonly Lazy<ImmutableDictionary<byte, DfoServer.GameWorld.Characters.CharacterGrowthOptions>> growthOptions = new(() =>
+    {
+        var map = ImmutableDictionary.CreateBuilder<byte, DfoServer.GameWorld.Characters.CharacterGrowthOptions>();
+        foreach (var entry in DfoServer.GameWorld.Characters.CharacterCatalog.ReadJobList(pvf))
+        {
+            string text = pvf.ReadText("character/" + entry.Value);
+            map[(byte)entry.Key] = DfoServer.GameWorld.Characters.CharacterCatalog.ParseGrowthOptions(text, (byte)entry.Key);
+        }
+        return map.ToImmutable();
+    }, LazyThreadSafetyMode.ExecutionAndPublication);
+    public DfoServer.GameWorld.Characters.CharacterGrowthOptions GrowthOptions(byte job) =>
+        growthOptions.Value.TryGetValue(job, out var options) ? options : throw new InvalidDataException("职业成长名册不存在");
+
     // 高级筛选用的属性索引：仅在第一次高级筛选时才在后台构建（全量扫描物品脚本，约数十秒），未就绪时明确提示稍后重试。
     public ImmutableDictionary<int, GmItemAttributes.Attrs> Attributes => Ready(AttributesTask, "物品属性索引");
     public bool AttributesReady => attributesTask?.IsCompletedSuccessfully == true;
@@ -198,6 +212,44 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
 
     public string QuestName(int id) => QuestNamesTask.IsCompletedSuccessfully && QuestNamesTask.Result.TryGetValue(id, out var name) ? name : "任务 " + id;
 
+    // 称号簿任务脚本通常没有 [name]，客户端显示的是称号簿槽位上的称号物品名。
+    ImmutableDictionary<int, string>? titleItemNames;
+    readonly object titleNameGate = new();
+    public string DisplayQuestName(int id)
+    {
+        if (QuestNames.TryGetValue(id, out var name) && name.Length > 0) return name;
+        return TitleItemNames.TryGetValue(id, out var itemName) && itemName.Length > 0 ? itemName : "任务 " + id;
+    }
+
+    ImmutableDictionary<int, string> TitleItemNames
+    {
+        get
+        {
+            if (titleItemNames is not null) return titleItemNames;
+            lock (titleNameGate)
+            {
+                if (titleItemNames is not null) return titleItemNames;
+                var byQuest = new Dictionary<int, int>();
+                foreach (var slot in Titles.Slots.Values)
+                    if (slot.QuestId > 0 && !slot.Items.IsDefaultOrEmpty && !byQuest.ContainsKey(slot.QuestId))
+                        byQuest[slot.QuestId] = slot.Items[0];
+                var map = ImmutableDictionary.CreateBuilder<int, string>();
+                foreach (var quest in Titles.Quests.Values)
+                {
+                    if (QuestNames.ContainsKey(quest.Quest.Id) || !byQuest.TryGetValue(quest.Quest.Id, out int itemId)) continue;
+                    try
+                    {
+                        string itemName = resources.Items.Get(itemId).Name.Trim();
+                        if (itemName.Length > 0) map[quest.Quest.Id] = itemName;
+                    }
+                    catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException or KeyNotFoundException) { }
+                }
+                titleItemNames = map.ToImmutable();
+                return titleItemNames;
+            }
+        }
+    }
+
     static ImmutableArray<ItemEntry> BuildItems(PvfArchive pvf, CancellationToken stop)
     {
         var rows = ImmutableArray.CreateBuilder<ItemEntry>();
@@ -213,7 +265,7 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
                     int level = doc.TryGetInt32("minimum level", out int minimum) ? minimum : 0;
                     int rarity = doc.TryGetInt32("rarity", out int value) ? value : 0;
                     int set = PvfScript.Integers(doc.Section("part set index")).FirstOrDefault();
-                    rows.Add(new(id, name, equipment, tag, level, rarity, set, Jobs(doc.Section("usable job"))));
+                    rows.Add(new(id, name, equipment, tag, level, rarity, set, Jobs(doc.Section("usable job")), GrowMask(doc.Section("usable first growtype"))));
                 }
                 catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException or KeyNotFoundException or FormatException or OverflowException)
                 {
@@ -239,13 +291,34 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
         return mask;
     }
 
+    // 没有 [usable first growtype] 的装备、徽章、护石不按分支藏。写了 0–5 才锁分支；写了但认不出的不当成通用。
+    static ushort GrowMask(string text)
+    {
+        if (text.Length == 0) return ushort.MaxValue;
+        var values = PvfScript.Integers(text);
+        if (values.Length == 0) return 0;
+        ushort mask = 0;
+        foreach (int value in values)
+        {
+            if (value is < 0 or > 5) return 0;
+            mask |= (ushort)(1 << value);
+        }
+        return mask;
+    }
+
     static ImmutableDictionary<int, string> BuildQuestNames(PvfArchive pvf, QuestCatalog? quests, CancellationToken stop)
     {
         var names = ImmutableDictionary.CreateBuilder<int, string>();
         foreach (var quest in quests?.All ?? [])
         {
             stop.ThrowIfCancellationRequested();
-            try { names[quest.Id] = PvfScript.Section(pvf.ReadText(quest.Path), "name").Trim().Trim('`'); }
+            try
+            {
+                string section = PvfScript.Section(pvf.ReadText(quest.Path), "name").Trim();
+                var quoted = Regex.Match(section, "`([^`]*)`");
+                string name = (quoted.Success ? quoted.Groups[1].Value : section).Trim().Trim('`');
+                if (name.Length > 0) names[quest.Id] = name;
+            }
             catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException or KeyNotFoundException) { }
         }
         return names.ToImmutable();

@@ -58,10 +58,10 @@ export function questPanel(ctx, account, name, onChange) {
   };
   async function load() {
     list.replaceChildren(skeleton(8));
-    try { last = await api.questSearch(account, name, { q: f.q, category: f.category, status: f.status, page: f.page, pageSize: f.size }); f.page = last.page; paint(); }
+    try { last = await api.questSearch(account, name, { q: f.q, category: f.category, status: f.status, job: 'mine', page: f.page, pageSize: f.size }); f.page = last.page; paint(); }
     catch (e) { list.replaceChildren(note(e.message, 'err')); }
   }
-  box.append(note('任务分类依据 PVF 任务脚本的 [grade]（主线=epic，支线=side/sub，普通=common unique，每日=daily 系，重复=normaly repeat，成就=achievement，称号=title，其余归“其他”）。勾选可跨页保留；在线角色直接提交，不需要小退。'),
+  box.append(note('只显示当前角色职业的任务，以及脚本标成全职业或未限制职业的任务。其他职业的任务不会出现。'),
     h('div', { class: 'toolbar' }, field('关键词', q), h('button', { class: 'btn primary', onclick: () => { f.q = q.value.trim(); f.page = 1; load(); } }, '查询')), list, bar);
   load();
   return box;
@@ -71,6 +71,6 @@ export function render(root, ctx) {
   const holder = h('div');
   const target = picker(ctx, () => mount());
   const mount = () => { const t = target.get(); holder.replaceChildren(); if (t) holder.append(questPanel(ctx, t.account, t.name)); };
-  root.append(h('h1', null, '任务'), h('p', { class: 'lead' }, '按状态与分类查看、勾选批量完成。'), target.el, holder);
+  root.append(h('h1', null, '任务'), h('p', { class: 'lead' }, '按状态与分类查看、勾选批量完成。只列出当前职业和当前分支能接到的任务，没写职业或全职业的任务仍在里面。'), target.el, holder);
   mount();
 }

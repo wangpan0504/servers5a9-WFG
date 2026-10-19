@@ -18,6 +18,17 @@ internal sealed partial class GmItemExtras(PvfArchive pvf, string? imagePacksPat
 
     readonly Lazy<ImmutableDictionary<int, (bool Equipment, string Path)>> paths = new(() => BuildPaths(pvf), LazyThreadSafetyMode.ExecutionAndPublication);
     readonly Lazy<ImagePackLibrary?> images = new(() => ImagePackLibrary.TryOpen(Locate(imagePacksPath)), LazyThreadSafetyMode.ExecutionAndPublication);
+    readonly Lazy<int> refineMax = new(() =>
+    {
+        try
+        {
+            var match = Regex.Match(pvf.ReadText("etc/upgrade_separate.etc"), @"\[separate upgrade max\]\s*(\d+)");
+            if (match.Success && int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int max) && max is >= 1 and <= 127)
+                return max;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException or KeyNotFoundException) { }
+        return 8;
+    }, LazyThreadSafetyMode.ExecutionAndPublication);
 
     // 套装定义：part set index -> (名称, 效果脚本)。按需解析 etc/equipmentpartset.etc 一次。
     readonly Lazy<ImmutableDictionary<int, (string Name, string Path)>> sets = new(() =>
@@ -156,9 +167,44 @@ internal sealed partial class GmItemExtras(PvfArchive pvf, string? imagePacksPat
                 usablePeriodDays = document.TryGetInt32("usable period", out int days) ? days : 0,
                 // [expiration date] 在 PVF 中是 `yyyy-MM-dd HH:mm:ss` 文本，而不是整数。
                 absoluteExpireDate = Regex.Match(raw, @"\[expiration date\]\s*`([^`]+)`") is { Success: true } expiry ? expiry.Groups[1].Value : ""
-            }
+            },
+            edit = EditOptions(document, raw, equipment, refineMax.Value)
         };
     }
+
+    // 发放和背包修改只提供这件脚本自己允许的项：强化/增幅看 impossible contents，锻造只给武器，装扮属性来自可选词条。
+    static object EditOptions(PvfDocument document, string raw, bool equipmentFile, int maxRefine)
+    {
+        string tag = Regex.Match(document.Section(equipmentFile ? "equipment type" : "stackable type"), @"\[([^\]]+)\]").Groups[1].Value.ToLowerInvariant();
+        bool avatar = tag.Contains("avatar", StringComparison.Ordinal);
+        bool gear = equipmentFile && !avatar && GearTags.Contains(tag);
+        bool reinforce = false, amplify = false;
+        if (gear)
+        {
+            if (!(document.Has("impossible contents") && !document.Has("/impossible contents")))
+            {
+                var forbidden = Regex.Matches(document.Block("impossible contents"), "`([^`]*)`")
+                    .Select(match => match.Groups[1].Value.Trim('[', ']', ' ').ToLowerInvariant()).ToHashSet();
+                reinforce = !forbidden.Contains("upgrade");
+                amplify = reinforce && !forbidden.Contains("amplify upgrade");
+            }
+        }
+        int stack = document.TryGetInt32("stack limit", out int limit) && limit > 1 ? limit : 1;
+        return new
+        {
+            gear, avatar, reinforce, amplify, refine = tag == "weapon", maxRefine,
+            seal = gear && document.Section("attach type").Contains("[sealing]", StringComparison.OrdinalIgnoreCase),
+            stackable = !equipmentFile && stack > 1,
+            countMax = !equipmentFile && stack > 1 ? stack : 10,
+            abilities = avatar ? GmItemAttributes.AvatarOptions(raw) : [],
+            periodDays = document.TryGetInt32("usable period", out int days) ? days : 0
+        };
+    }
+
+    static readonly HashSet<string> GearTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "weapon", "coat", "shoulder", "pants", "shoes", "waist", "amulet", "wrist", "ring", "earring", "support", "magic stone", "support weapon"
+    };
 
     // 沿用朋友工具的做法：扫描脚本里 “[属性] 数值…” 片段，按映射表合并并按固定顺序输出；未收录的属性不显示。
     static string[] Stats(string text)
@@ -176,9 +222,19 @@ internal sealed partial class GmItemExtras(PvfArchive pvf, string? imagePacksPat
         }
         var lines = new List<string>();
         foreach (string key in GmItemStatSpecs.Order)
-            if (bags.Remove(key, out var bag)) lines.Add(Format(bag));
-        lines.AddRange(bags.Values.Select(Format));
+            if (bags.Remove(key, out var bag)) lines.Add(OwnProperty.Contains(key) ? Plain(bag) : Format(bag));
+        lines.AddRange(bags.Select(pair => OwnProperty.Contains(pair.Key) ? Plain(pair.Value) : Format(pair.Value)));
         return [.. lines];
+    }
+
+    // 耐久、重量、堆叠、冷却是物品自身参数，不是加成。加成才用加号。
+    static readonly HashSet<string> OwnProperty = new(StringComparer.OrdinalIgnoreCase) { "durability", "weight", "stack limit", "cool time" };
+
+    static string Plain((string Label, bool Percent, long Low, long High) bag)
+    {
+        string unit = bag.Percent ? "%" : "";
+        string value = bag.Low == bag.High ? bag.Low.ToString(CultureInfo.InvariantCulture) + unit : bag.Low + unit + " ~ " + bag.High + unit;
+        return bag.Label + " " + value;
     }
 
     static string Format((string Label, bool Percent, long Low, long High) bag)

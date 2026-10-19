@@ -13,5 +13,6 @@ export function render(root, ctx) {
   const title = h('h1', null, c.name);
   const host = h('div', { class: 'workbench' });
   root.append(title, h('p', { class: 'lead' }, `账号 ${c.account}`), host);
-  buildCharacter({ body: host, setTitle: t => { title.textContent = t; }, close: () => ctx.go('accounts'), confirm: openConfirm }, c.account, c.name, ctx);
+  const tab = ctx.state.tab || 'summary'; ctx.state.tab = 'summary';
+  buildCharacter({ body: host, setTitle: t => { title.textContent = t; }, close: () => ctx.go('accounts'), confirm: openConfirm }, c.account, c.name, ctx, tab);
 }

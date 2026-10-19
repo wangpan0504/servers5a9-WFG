@@ -13,9 +13,15 @@ export function render(root, ctx) {
     chars.replaceChildren(skeleton(4));
     try {
       const rows = await api.characters(account);
-      chars.replaceChildren(table([{ key: 'slot', label: '栏位', num: true }, { key: 'name', label: '名称' }, { key: 'level', label: '等级', num: true },
-        { key: 'job', label: '职业', num: true }, { key: 'growType', label: '成长', num: true }, { key: 'gold', label: '金币', num: true, render: r => num(r.gold) },
-        { key: 'revision', label: '版本', num: true }], rows, r => ctx.openCharacter(account, r.name)));
+      let page = 1, size = 25;
+      const paint = () => {
+        const slice = rows.slice((page - 1) * size, page * size);
+        chars.replaceChildren(table([{ key: 'slot', label: '栏位', num: true }, { key: 'name', label: '名称' }, { key: 'level', label: '等级', num: true },
+          { key: 'job', label: '职业', num: true }, { key: 'growType', label: '成长', num: true }, { key: 'gold', label: '金币', num: true, render: r => num(r.gold) },
+          { key: 'revision', label: '版本', num: true }], slice, r => ctx.openCharacter(account, r.name)),
+        pager({ total: rows.length, page, size, onChange: (p, s) => { page = p; size = s; paint(); } }));
+      };
+      paint();
     } catch (e) { chars.replaceChildren(note(e.message, 'err')); }
   };
   const paintAccounts = () => {

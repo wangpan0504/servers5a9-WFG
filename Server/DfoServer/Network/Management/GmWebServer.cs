@@ -55,7 +55,8 @@ internal static partial class GmWebServer
         builder.WebHost.ConfigureKestrel(kestrel =>
         {
             kestrel.AddServerHeader = false;
-            kestrel.Limits.MaxRequestBodySize = 16 * 1024;
+            // 任务“全部完成”会一次提交当前筛选的编号列表，3000 个编号的 JSON 超过 16KB。
+            kestrel.Limits.MaxRequestBodySize = 128 * 1024;
             kestrel.Listen(IPAddress.Loopback, port, listen => listen.Protocols = HttpProtocols.Http1);
         });
         await using var app = builder.Build();
@@ -135,6 +136,7 @@ internal static partial class GmWebServer
             return command is null ? Results.NotFound(new { error = "未知分区" }) : Reply(data.Command(command));
         });
         app.MapGet("/api/exp-table", () => Reply(data.Command("exp-table")));
+        app.MapGet("/api/debug", () => Results.Json(new { ok = true, data = DebugState(data) }));
         app.MapPost("/api/disconnect", (HttpContext http, KickBody b) =>
         {
             if (!Token.IsMatch(b.Account)) return Bad("账号无效");
@@ -145,25 +147,32 @@ internal static partial class GmWebServer
             return Reply(result);
         });
         app.MapGet("/api/items/categories", () => Reply(data.Command("item-categories")));
-        app.MapGet("/api/items/search", (int? offset, int? page, int? pageSize, int? min, int? max, string? rarity, string? tag, string? q) =>
+        app.MapGet("/api/items/search", (int? offset, int? page, int? pageSize, int? min, int? max, string? rarity, string? tag, string? job, string? grow, string? q) =>
         {
             if (rarity is not null && rarity != "*" && !Regex.IsMatch(rarity, "^[0-9]{1,3}$")) return Bad("稀有度无效");
-            if (tag is not null && tag != "*" && !Tag.IsMatch(tag)) return Bad("分类无效");
+            if (tag is not null && tag != "*" && !Regex.IsMatch(tag, @"^[^\p{C}]{1,80}$")) return Bad("分类无效");
+            if (job is not null && job != "*" && !Regex.IsMatch(job, "^([0-9]|1[0-5])$")) return Bad("职业无效");
+            if (grow is not null && grow != "*" && !Regex.IsMatch(grow, "^([0-9]|1[0-5])$")) return Bad("分支无效");
             if (q is not null && !Keyword(q)) return Bad("关键字无效");
+            string tagToken = string.IsNullOrEmpty(tag) || tag == "*" ? "*" : tag.Replace(' ', '_');
+            string jobToken = (string.IsNullOrEmpty(job) || job == "*" ? "" : " job:" + job) + (string.IsNullOrEmpty(grow) || grow == "*" ? "" : " grow:" + grow);
             return Reply(data.Command($"item-search {PageToken(offset, page, pageSize)} {Math.Clamp(min ?? 0, 0, 255)} {Math.Clamp(max ?? 0, 0, 255)} " +
-                $"{(string.IsNullOrEmpty(rarity) ? "*" : rarity)} {(string.IsNullOrEmpty(tag) ? "*" : tag)} {q}".TrimEnd()));
+                $"{(string.IsNullOrEmpty(rarity) ? "*" : rarity)} {tagToken}{jobToken} {q}".TrimEnd()));
         });
-        app.MapGet("/api/items/filter", (int? offset, int? page, int? pageSize, int? min, int? max, string? rarity, string? tag, string? stat, string? period, string? skillJob, string? q) =>
+        app.MapGet("/api/items/filter", (int? offset, int? page, int? pageSize, int? min, int? max, string? rarity, string? tag, string? stat, string? period, string? skillJob, string? job, string? grow, string? q) =>
         {
             if (rarity is not null && rarity != "*" && !Regex.IsMatch(rarity, "^[0-9]{1,3}$")) return Bad("稀有度无效");
-            if (tag is not null && tag != "*" && !Tag.IsMatch(tag)) return Bad("分类无效");
+            if (tag is not null && tag != "*" && !Regex.IsMatch(tag, @"^[^\p{C}]{1,80}$")) return Bad("分类无效");
             if (stat is not null && stat != "*" && !Regex.IsMatch(stat, "^[a-z_ ]{1,40}$")) return Bad("词条无效");
             if (period is not null && period is not ("*" or "none" or "rel" or "abs" or "any")) return Bad("期限无效");
             if (skillJob is not null && skillJob != "*" && !Regex.IsMatch(skillJob, "^[a-z_ ]{1,20}$")) return Bad("技能职业无效");
+            if (job is not null && job != "*" && !Regex.IsMatch(job, "^([0-9]|1[0-5])$")) return Bad("职业无效");
+            if (grow is not null && grow != "*" && !Regex.IsMatch(grow, "^([0-9]|1[0-5])$")) return Bad("分支无效");
             if (q is not null && !Keyword(q)) return Bad("关键字无效");
             string S(string? value, string fallback = "*") => string.IsNullOrEmpty(value) ? fallback : value.Replace(' ', '_');
+            string jobToken = (string.IsNullOrEmpty(job) || job == "*" ? "" : " job:" + job) + (string.IsNullOrEmpty(grow) || grow == "*" ? "" : " grow:" + grow);
             return Reply(data.Command($"item-filter {PageToken(offset, page, pageSize)} {Math.Clamp(min ?? 0, 0, 255)} {Math.Clamp(max ?? 0, 0, 255)} " +
-                $"{S(rarity)} {S(tag)} {S(stat)} {S(period)} {S(skillJob)} {q}".TrimEnd()));
+                $"{S(rarity)} {S(tag)} {S(stat)} {S(period)} {S(skillJob)}{jobToken} {q}".TrimEnd()));
         });
         app.MapGet("/api/items/stat-keys", () =>
         {
@@ -228,8 +237,10 @@ internal static partial class GmWebServer
         {
             if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
             if (b.ItemId <= 0 || b.Count is < 1 or > 99999 || b.Upgrade is < 0 or > 31 || b.Refine is < 0 or > 99 ||
-                b.Amp is not null && !Amplify.IsMatch(b.Amp)) return Bad("物品参数无效");
-            return Run(http, data, "mail-item", b.Account, b.Name, $"account {b.Account} grant {b.Name} {b.ItemId} {b.Count} {b.Upgrade} {b.Refine} mail{(b.Amp is null ? "" : " " + b.Amp)}{(b.Unseal == true ? " seal:open" : "")}", null);
+                b.Amp is not null && !Amplify.IsMatch(b.Amp) && b.Amp != "amp:0:0" || b.Ability is < 0 or > 65535) return Bad("物品参数无效");
+            if (b.ClearPeriod == true && b.Expire is not null) return Bad("期限不能同时改为不过期和指定时间");
+            if (b.Expire is < 1) return Bad("到期时间无效");
+            return Run(http, data, "mail-item", b.Account, b.Name, $"account {b.Account} grant {b.Name} {b.ItemId} {b.Count} {b.Upgrade} {b.Refine} mail{(b.Amp is null ? "" : " " + b.Amp)}{(b.Unseal == true ? " seal:open" : "")}{(b.Ability is null ? "" : " ability:" + b.Ability)}{(b.ClearPeriod == true ? " period:off" : "")}{(b.Expire is null ? "" : " expire:" + b.Expire)}", null);
         });
         app.MapPost("/api/mail/set", (HttpContext http, MailSetBody b) =>
         {
@@ -292,11 +303,46 @@ internal static partial class GmWebServer
             if (b.Branch is < 0 or > 5 || b.Awakening is < 0 or > 2) return Bad("分支或觉醒无效");
             return Run(http, data, "job", b.Account, b.Name, $"account {b.Account} grow {b.Name} {b.Branch} {b.Awakening}", $"account {b.Account} show {b.Name}");
         });
+        app.MapGet("/api/characters/{account}/{name}/set/{index:int}", (string account, string name, int index) =>
+        {
+            if (!Token.IsMatch(account) || !Token.IsMatch(name) || index <= 0) return Bad("账号、角色或套装编号无效");
+            return Reply(data.Command($"account {account} set-members {name} {index}"));
+        });
         app.MapGet("/api/characters/{account}/{name}/growth", (string account, string name) =>
             !Token.IsMatch(account) || !Token.IsMatch(name) ? Bad("账号或角色名无效") : Reply(data.Command($"account {account} grow-options {name}")));
+        app.MapPost("/api/debug", (HttpContext http, DebugBody b) =>
+        {
+            if (b.Confirm != true) return Bad("需要二次确认");
+            if (b.Value is not ("on" or "off")) return Bad("开关须为 on 或 off");
+            if (b.Key is not ("infinite-fatigue" or "cash-shop-expiration" or "cash-shop-usable-period" or "pc-room")) return Bad("未知调试开关");
+            return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
+        });
     }
 
-    internal sealed record MailItemBody(string Account, string Name, int ItemId, int Count, int Upgrade, int Refine, string? Amp, bool? Confirm, bool? Unseal = null);
+    static Dictionary<string, bool?> DebugState(IGmWebData data)
+    {
+        bool? Flag(string command, string property)
+        {
+            string result = data.Command(command);
+            if (!result.StartsWith("OK ", StringComparison.Ordinal)) return null;
+            try
+            {
+                using var document = JsonDocument.Parse(result[3..]);
+                return document.RootElement.TryGetProperty(property, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? value.GetBoolean() : null;
+            }
+            catch (JsonException) { return null; }
+        }
+        return new()
+        {
+            ["infiniteFatigue"] = Flag("infinite-fatigue", "infiniteFatigue"),
+            ["ignoreAbsoluteExpiration"] = Flag("cash-shop-expiration", "ignoreAbsoluteExpiration"),
+            ["ignoreUsablePeriod"] = Flag("cash-shop-usable-period", "ignoreUsablePeriod"),
+            ["premiumPcRoom"] = Flag("pc-room", "premiumPcRoom")
+        };
+    }
+
+    internal sealed record MailItemBody(string Account, string Name, int ItemId, int Count, int Upgrade, int Refine, string? Amp, bool? Confirm, bool? Unseal = null, int? Ability = null, bool? ClearPeriod = null, int? Expire = null);
     internal sealed record MailSetBody(string Account, string Name, int SetIndex, int Upgrade, int Refine, bool? Confirm);
     internal sealed record MailGoldBody(string Account, string Name, long Gold, string? Text, bool? Confirm);
     internal sealed record KickBody(string Account, string? Name, bool? Confirm);
@@ -304,6 +350,7 @@ internal static partial class GmWebServer
     internal sealed record CurrencyBody(string Account, string Name, string Key, string Op, long Amount, bool? Confirm);
     internal sealed record LevelBody(string Account, string Name, int Level, bool? Confirm);
     internal sealed record JobBody(string Account, string Name, int Branch, int Awakening, bool? Confirm);
+    internal sealed record DebugBody(string Key, string Value, bool? Confirm);
 
     // 物品分页：page/pageSize（pageSize 1–200，默认 50）；兼容旧的 offset。命令偏移参数写成 "偏移/每页条数"。
     static string PageToken(int? offset, int? page, int? pageSize)

@@ -47,6 +47,8 @@ internal enum DevelopmentAction
     QuestChain,
     QuestBatch,
     ItemAmplify,
+    ItemEdit,
+    SetMembers,
     Points,
     Rename,
     CharDelete,
@@ -77,6 +79,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["grant"] = (DevelopmentAction.Grant, true, 5, 7),
         ["set-grant"] = (DevelopmentAction.SetGrant, true, 4, 5),
         ["item-amplify"] = (DevelopmentAction.ItemAmplify, true, 3, 3),
+        ["item-edit"] = (DevelopmentAction.ItemEdit, true, 2, 8),
+        ["set-members"] = (DevelopmentAction.SetMembers, true, 1, 1),
         ["item-delete"] = (DevelopmentAction.ItemDelete, true, 1, 1),
         ["item-clear"] = (DevelopmentAction.ItemClear, true, 1, 1),
         ["mails"] = (DevelopmentAction.Mails, true, 0, 0),
@@ -201,7 +205,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         }
         if (Action >= DevelopmentAction.Wallet)
         {
-            if (Args.IsDefault || Args.Any(arg => arg.Length is 0 or > 400) ||
+            // 单参数上限要能放下任务批量（最多 3000 个编号）和称号批量；整行仍受 32768 限制。
+            if (Args.IsDefault || Args.Any(arg => arg.Length is 0 or > 24000) ||
                 Action is not (DevelopmentAction.ItemCategories or DevelopmentAction.ItemSearch or DevelopmentAction.ItemFilter or DevelopmentAction.ExpTable or DevelopmentAction.ItemStatCounts or DevelopmentAction.IndexStatus) && !CharacterName.IsValid(Name))
                 throw new InvalidDataException("角色名或参数无效");
             return;
@@ -228,7 +233,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
 
     public bool Writes => Action == DevelopmentAction.Event ? Event?.Operation != "status" :
         Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue or DevelopmentAction.PcRoom ? Primary >= 0 :
-        Action is DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify or DevelopmentAction.Rename or DevelopmentAction.CharDelete or DevelopmentAction.TitleComplete ||
+        Action is DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify or DevelopmentAction.ItemEdit or DevelopmentAction.Rename or DevelopmentAction.CharDelete or DevelopmentAction.TitleComplete ||
         Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Tp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard;
 
     public CharacterProgressEdit ToProgressEdit()

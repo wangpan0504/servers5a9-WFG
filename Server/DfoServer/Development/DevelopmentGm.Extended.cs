@@ -102,10 +102,23 @@ internal static partial class DevelopmentGm
                 if (count <= 0) throw new InvalidDataException("数量至少为1");
                 RequireEquipmentOptions(template, upgrade, refinement);
                 string[] extra = [.. args.Skip(5)];
-                if (extra.Any(token => !token.StartsWith("amp:", StringComparison.Ordinal) && token != "seal:open") || extra.Count(token => token.StartsWith("amp:", StringComparison.Ordinal)) > 1 || extra.Count(token => token == "seal:open") > 1)
-                    throw new InvalidDataException("可选参数只能是一个 amp:<类型>:<值> 和/或 seal:open");
+                if (extra.Count(token => token.StartsWith("amp:", StringComparison.Ordinal)) > 1 || extra.Count(token => token == "seal:open") > 1 || extra.Count(token => token == "period:off") > 1 || extra.Count(token => token.StartsWith("ability:", StringComparison.Ordinal)) > 1 || extra.Count(token => token.StartsWith("expire:", StringComparison.Ordinal)) > 1)
+                    throw new InvalidDataException("可选参数只能各出现一次");
+                int ability = -1;
+                bool clearPeriod = false;
+                int? customExpire = null;
+                foreach (string token in extra)
+                {
+                    if (token.StartsWith("amp:", StringComparison.Ordinal) || token == "seal:open") continue;
+                    if (token == "period:off") { clearPeriod = true; continue; }
+                    if (token.StartsWith("expire:", StringComparison.Ordinal)) { customExpire = ParseExpire(token); continue; }
+                    if (token.StartsWith("ability:", StringComparison.Ordinal)) { ability = (int)Number(token[8..], 65535); continue; }
+                    throw new InvalidDataException("可选参数只能是 amp:<类型>:<值>、seal:open、ability:<选项>、period:off、expire:<Unix秒>");
+                }
+                if (clearPeriod && customExpire is not null) throw new InvalidDataException("期限不能同时改为不过期和指定时间");
                 var amplify = ParseAmplify(extra.FirstOrDefault(token => token.StartsWith("amp:", StringComparison.Ordinal)), false);
                 if (amplify.Type != 0 && template.Kind != ItemKind.Equipment) throw new InvalidDataException("只有普通装备可以增幅");
+                if (ability >= 0 && template.Kind != ItemKind.Avatar) throw new InvalidDataException("只有装扮可以指定属性选项");
                 bool unseal = extra.Contains("seal:open");
                 // 封印：模板 [attach type] 为 [sealing] 的普通装备创建时带封装标记；GM 可直接发为已解封（与称号簿穿戴消封同一语义）。其他物品没有封装语义，拒绝。
                 if (unseal && !(template.Kind == ItemKind.Equipment && template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase)))
@@ -119,14 +132,17 @@ internal static partial class DevelopmentGm
                     if (prototype.IsStackable) prototype = prototype with { Value = count };
                     prototype = WithAmplify(prototype, amplify);
                     if (unseal) prototype = prototype with { SealFlag = 0 };
+                    if (ability >= 0) prototype = prototype with { Durability = (ushort)ability };
+                    if (clearPeriod || customExpire is not null) prototype = prototype with { ExpireTime = clearPeriod ? ClearedExpire(template) : customExpire!.Value };
                     var attachments = Enumerable.Range(0, prototype.IsStackable ? 1 : count).Select(_ => InventoryRewardGrantService.CreateItem(template, FirstSlot(template), prototype));
                     return DeliverMail(mailbox, request, attachments, "开发GM发放：" + template.Name + " × " + count + Options(upgrade, refinement, amplify), now);
                 }
                 RequireMode(args[4]);
                 if (!InventoryRewardGrantService.Create(template).IsStackable && count > 352)
                     throw new InvalidDataException("单次直接入包非堆叠物品最多352件");
+                int? grantedExpire = clearPeriod ? ClearedExpire(template) : customExpire;
                 var granted = Commit(live, owners, repository, request, true, character => AmplifyNew(character.Inventory, InventoryRewardGrantService.TryGrantBatch(character,
-                    [new InventoryReward(template.Id, count, (byte)upgrade, (byte)refinement)], resources.Items, resources.GoldLimits, resources.EpicPieces), amplify, unseal),
+                    [new InventoryReward(template.Id, count, (byte)upgrade, (byte)refinement)], resources.Items, resources.GoldLimits, resources.EpicPieces), amplify, unseal, ability < 0 ? null : ability, grantedExpire),
                     "背包空间、堆叠、期限或余额上限不满足，整批未发放");
                 return Ok(new { target = "inventory", name = granted.Name, rev = granted.Revision, item = template.Id, itemName = template.Name, count, upgrade, refinement,
                     amplifyType = amplify.Type, amplifyValue = amplify.Value, unsealed = unseal });
@@ -134,8 +150,8 @@ internal static partial class DevelopmentGm
             case DevelopmentAction.SetGrant:
             {
                 int index = (int)Number(args[0], int.MaxValue), upgrade = (int)Number(args[1], 31), refinement = (int)Number(args[2], resources.Refinement.MaximumLevel);
-                var job = Target(live, owners, repository, request, false, (_, character) => character.Job);
-                var templates = SetMembers(catalog, index, job);
+                var role = Target(live, owners, repository, request, false, (_, character) => (character.Job, character.GrowType));
+                var templates = SetMembers(catalog, index, role.Job, (byte)(role.GrowType & 15));
                 var amplify = ParseAmplify(args.Length > 4 ? args[4] : null, false);
                 var rewards = templates.Select(template => new InventoryReward(template.Id, 1,
                     template.Kind == ItemKind.Equipment ? (byte)upgrade : (byte)0, template.Kind == ItemKind.Equipment && template.EquipmentSlot == 12 ? (byte)refinement : (byte)0)).ToArray();
@@ -166,6 +182,75 @@ internal static partial class DevelopmentGm
                 var granted = Commit(live, owners, repository, request, true, character => AmplifyNew(character.Inventory, InventoryRewardGrantService.TryGrantBatch(character, rewards,
                     resources.Items, resources.GoldLimits, resources.EpicPieces), amplify), "背包空间或期限不满足，整套未发放");
                 return Ok(new { target = "inventory", name = granted.Name, rev = granted.Revision, set = index, items = templates.Select(t => new { id = t.Id, name = t.Name }) });
+            }
+            case DevelopmentAction.SetMembers:
+            {
+                int index = (int)Number(args[0], int.MaxValue);
+                var role = Target(live, owners, repository, request, false, (_, character) => (character.Job, character.GrowType));
+                var members = SetMembers(catalog, index, role.Job, (byte)(role.GrowType & 15));
+                return Ok(new
+                {
+                    set = index,
+                    items = members.Select(template => new { id = template.Id, name = template.Name, slot = template.EquipmentSlot })
+                });
+            }
+            case DevelopmentAction.ItemEdit:
+            {
+                var parts = args[0].Split(':');
+                if (parts.Length != 3) throw new InvalidDataException("物品格式为 容器:位置:UID");
+                var position = new InventorySlot((InventoryListType)Number(parts[0], 255), (short)Number(parts[1], short.MaxValue));
+                long uid = Number(parts[2], long.MaxValue);
+                int? upgrade = null, refine = null, ability = null, count = null, customExpire = null;
+                (byte Type, ushort Value)? amplify = null;
+                bool clearPeriod = false;
+                foreach (string token in args.Skip(1))
+                {
+                    if (token == "period:off") { clearPeriod = true; continue; }
+                    if (token.StartsWith("expire:", StringComparison.Ordinal)) { customExpire = ParseExpire(token); continue; }
+                    if (token.StartsWith("up:", StringComparison.Ordinal)) upgrade = (int)Number(token[3..], 31);
+                    else if (token.StartsWith("ref:", StringComparison.Ordinal)) refine = (int)Number(token[4..], resources.Refinement.MaximumLevel);
+                    else if (token.StartsWith("amp:", StringComparison.Ordinal)) amplify = ParseAmplify(token, true);
+                    else if (token.StartsWith("ability:", StringComparison.Ordinal)) ability = (int)Number(token[8..], 65535);
+                    else if (token.StartsWith("count:", StringComparison.Ordinal)) count = (int)Number(token[6..], int.MaxValue);
+                    else throw new InvalidDataException("未知修改项：" + token);
+                }
+                if (clearPeriod && customExpire is not null) throw new InvalidDataException("期限不能同时改为不过期和指定时间");
+                var updated = Commit(live, owners, repository, request, true, character =>
+                {
+                    var before = character.Inventory;
+                    var item = before.Find(position);
+                    if (item is null || item.Uid != uid || item.Core.EquipmentLockId != 0) return InventoryResult.Reject();
+                    var template = resources.Items.Get(item.Core.ItemId);
+                    var core = item.Core;
+                    if (upgrade is not null || amplify is not null)
+                    {
+                        if (core.Kind != ItemKind.Equipment) return InventoryResult.Reject();
+                        int level = upgrade ?? (core.Attr & 31);
+                        var amp = amplify ?? (core.AmplifyType, core.AmplifyValue);
+                        core = core with { Attr = (byte)((core.Attr & 0xE0) | level), AmplifyType = amp.Item1, AmplifyValue = amp.Item2 };
+                    }
+                    if (refine is not null)
+                    {
+                        if (template.Kind != ItemKind.Equipment || template.EquipmentSlot != 12) return InventoryResult.Reject();
+                        core = core with { GenuineUpgrade = (byte)refine.Value };
+                    }
+                    if (ability is not null)
+                    {
+                        if (template.Kind != ItemKind.Avatar) return InventoryResult.Reject();
+                        core = core with { Durability = (ushort)ability.Value };
+                    }
+                    if (count is not null)
+                    {
+                        if (!core.IsStackable || count < 1 || count > template.StackLimit) return InventoryResult.Reject();
+                        core = core with { Value = count.Value };
+                    }
+                    var changed = item with { Core = core };
+                    if (clearPeriod || customExpire is not null) changed = ApplyExpire(changed, clearPeriod ? ClearedExpire(template) : customExpire!.Value);
+                    var after = before with { Items = before.Items.Replace(item, changed) };
+                    after.Validate();
+                    return new(true, 0, new InventoryPlan(before, after, "gm_item_edit"));
+                }, "物品实例已变化、被锁定，或这项属性该物品不能改");
+                return Ok(new { name = updated.Name, rev = updated.Revision });
             }
             case DevelopmentAction.ItemAmplify:
             {
@@ -398,13 +483,13 @@ internal static partial class DevelopmentGm
     static string TitleList(DevelopmentCatalog catalog, Character character, string filter)
     {
         var titles = catalog.Titles;
-        var names = catalog.QuestNames;
         int categoryFilter = Array.IndexOf(DfoServer.GameWorld.Quests.TitleCatalog.Categories, filter);
         var rows = titles.Quests.Values.Select(quest =>
         {
             var categories = titles.QuestCategories.GetValueOrDefault(quest.Quest.Id, []);
-            return (Quest: quest, Categories: categories, Name: names.GetValueOrDefault(quest.Quest.Id, "成就 " + quest.Quest.Id));
-        }).Where(row => filter.Length == 0 || categoryFilter >= 0 ? categoryFilter < 0 || row.Categories.Contains(categoryFilter) :
+            return (Quest: quest, Categories: categories, Name: catalog.DisplayQuestName(quest.Quest.Id) is { Length: > 0 } shown && shown != "任务 " + quest.Quest.Id ? shown : "成就 " + quest.Quest.Id);
+        }).Where(row => QuestVisible(row.Quest.Quest, character.Job, character.GrowType, catalog.GrowthOptions(character.Job), catalog.QuestName(row.Quest.Quest.Id)))
+            .Where(row => filter.Length == 0 || categoryFilter >= 0 ? categoryFilter < 0 || row.Categories.Contains(categoryFilter) :
             row.Quest.Quest.Id.ToString(CultureInfo.InvariantCulture) == filter || row.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
             .OrderBy(row => row.Quest.Quest.Id).ToArray();
         int completed = titles.Quests.Keys.Count(id => character.TitleProgress.GetValueOrDefault(id)?.Remaining.Complete == true);
@@ -461,13 +546,42 @@ internal static partial class DevelopmentGm
     static ItemCore WithAmplify(ItemCore core, (byte Type, ushort Value) amplify) =>
         amplify.Type == 0 ? core : core with { AmplifyType = amplify.Type, AmplifyValue = amplify.Value };
 
-    // 直接入包：统一发放规划完成后，只给本次新建的普通装备实例写入增幅类型与值，同一计划提交。
-    static InventoryResult AmplifyNew(InventorySnapshot before, InventoryResult result, (byte Type, ushort Value) amplify, bool unseal = false)
+    // 脚本带 [usable period] 或 [expiration date] 时，客户端把实例截止 0 减当前时间，剩余秒归零后显示「已超过使用期限」。
+    // 协议上限 2147483647（2038-01-19）是这类模板的不过期写法；时装和宠物的 0 在线路上就是永久，不能改成这个上限。
+    static int ClearedExpire(ItemTemplate template) =>
+        template.Kind is ItemKind.Avatar or ItemKind.Creature ? 0
+        : template.Expiration.Days > 0 || template.Expiration.AbsoluteTime > 0 ? int.MaxValue : 0;
+
+    static int ParseExpire(string token)
     {
-        if (amplify.Type == 0 && !unseal || !result.Accepted) return result;
+        if (!token.StartsWith("expire:", StringComparison.Ordinal)) throw new InvalidDataException("到期时间格式为 expire:<Unix秒>");
+        int value = (int)Number(token[7..], int.MaxValue);
+        if (value <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            throw new InvalidDataException("到期时间必须晚于现在，且不晚于 2038-01-19 11:14:07（UTC+8）");
+        return value;
+    }
+
+    // 时装和宠物的期限在详情上，核心必须保持 0；普通装备和堆叠物写在核心上。
+    static InventoryItem ApplyExpire(InventoryItem item, int expire) => item.Avatar is not null
+        ? item with { Core = item.Core with { ExpireTime = 0 }, Avatar = item.Avatar with { ExpireTime = expire } }
+        : item.Creature is not null
+            ? item with { Core = item.Core with { ExpireTime = 0 }, Creature = item.Creature with { ExpireTime = expire } }
+            : item with { Core = item.Core with { ExpireTime = expire } };
+
+    // 直接入包：统一发放规划完成后，只给本次新建的普通装备实例写入增幅类型与值，同一计划提交。
+    static InventoryResult AmplifyNew(InventorySnapshot before, InventoryResult result, (byte Type, ushort Value) amplify, bool unseal = false, int? ability = null, int? clearedExpire = null)
+    {
+        if (amplify.Type == 0 && !unseal && ability is null && clearedExpire is null || !result.Accepted) return result;
         var existing = before.Items.Select(item => item.Uid).ToHashSet();
         var after = result.Plan!.After;
-        after = after with { Items = [.. after.Items.Select(item => !existing.Contains(item.Uid) && item.Core.Kind == ItemKind.Equipment ? item with { Core = WithAmplify(unseal ? item.Core with { SealFlag = 0 } : item.Core, amplify) } : item)] };
+        after = after with { Items = [.. after.Items.Select(item =>
+        {
+            if (existing.Contains(item.Uid)) return item;
+            var core = item.Core;
+            if (core.Kind == ItemKind.Equipment) core = WithAmplify(unseal ? core with { SealFlag = 0 } : core, amplify);
+            if (ability is not null && core.Kind == ItemKind.Avatar) core = core with { Durability = (ushort)ability };
+            return clearedExpire is int expire ? ApplyExpire(item with { Core = core }, expire) : item with { Core = core };
+        })] };
         // 新建实例在提交时才分配UID，规划阶段按分配中快照校验。
         after.Validate(allocating: true);
         var plan = result.Plan;
@@ -534,6 +648,24 @@ internal static partial class DevelopmentGm
         });
     }
 
+    static readonly Dictionary<string, HashSet<string>> ItemGroups = new()
+    {
+        ["equip"] = new(["weapon", "coat", "shoulder", "pants", "shoes", "waist", "amulet", "wrist", "ring", "earring", "support", "magic stone", "support weapon", "title name", "name tag"], StringComparer.OrdinalIgnoreCase),
+        ["use"] = new(["waste", "unlimited waste", "waste instant item", "booster", "booster selection", "booster random", "cera booster", "cera package", "usable cera package", "enchant waste", "dye", "throw", "teleport potion", "npc teleport potion", "expert town potion", "contract", "coupon", "disguise", "random disguise", "quiz item", "etc", "unlimited etc", "only effect", "virtual", "town and dungeon", "unlimited town and dungeon"], StringComparer.OrdinalIgnoreCase),
+        ["mat"] = new(["material", "material instant item"], StringComparer.OrdinalIgnoreCase),
+        ["prof"] = new(["material expert job"], StringComparer.OrdinalIgnoreCase),
+        ["quest"] = new(["quest", "quest receive", "stackable"], StringComparer.OrdinalIgnoreCase),
+        ["avatar"] = new(["hat avatar", "hair avatar", "face avatar", "coat avatar", "breast avatar", "waist avatar", "pants avatar", "shoes avatar", "skin avatar", "aurora avatar", "weapon avatar"], StringComparer.OrdinalIgnoreCase),
+        ["emblem"] = new(["avatar emblem"], StringComparer.OrdinalIgnoreCase),
+        ["pet"] = new(["creature"], StringComparer.OrdinalIgnoreCase),
+        ["peteq"] = new(["artifact red", "artifact blue", "artifact green"], StringComparer.OrdinalIgnoreCase),
+        ["petuse"] = new(["feed", "creature expitem"], StringComparer.OrdinalIgnoreCase),
+        ["talisman"] = new(["talisman"], StringComparer.OrdinalIgnoreCase),
+        ["rune"] = new(["rune", "charm"], StringComparer.OrdinalIgnoreCase),
+        ["medal"] = new(["flag"], StringComparer.OrdinalIgnoreCase),
+        ["gem"] = new(["flag gem"], StringComparer.OrdinalIgnoreCase),
+    };
+
     static string SearchItems(DevelopmentCatalog catalog, ImmutableArray<string> args, bool advanced)
     {
         int keywordAt = advanced ? 8 : 5;
@@ -551,13 +683,63 @@ internal static partial class DevelopmentGm
         string[] offsetArg = args[0].Split('/');
         int offset = (int)Number(offsetArg[0], 1_000_000), pageSize = offsetArg.Length > 1 ? (int)Math.Clamp(Number(offsetArg[1], 200), 1, 200) : 50, minimum = (int)Number(args[1], 255), maximum = (int)Number(args[2], 255);
         int? rarity = args[3] == "*" ? null : (int)Number(args[3], 99);
-        string? tag = args[4] == "*" ? null : args[4];
-        string keyword = string.Join(' ', args[keywordAt..]);
+        string? tag = args[4] == "*" ? null : args[4].Replace('_', ' ');
+        bool listSets = tag == "sets";
+        if (listSets) tag = null;
+        string? group = null;
+        if (tag is not null && tag.StartsWith("g:", StringComparison.Ordinal))
+        {
+            group = tag[2..];
+            if (!ItemGroups.ContainsKey(group)) throw new InvalidDataException("分类无效");
+            tag = null;
+        }
+        int? setIndex = null;
+        bool setOnly = false;
+        if (tag is not null && tag.StartsWith("set:", StringComparison.Ordinal))
+        {
+            if (tag == "set:*") setOnly = true;
+            else setIndex = (int)Number(tag[4..], 1_000_000);
+            tag = null;
+        }
+        int? wearer = null, branch = null;
+        var words = new List<string>();
+        for (int i = keywordAt; i < args.Length; i++)
+        {
+            if (args[i].StartsWith("job:", StringComparison.Ordinal))
+                wearer = args[i][4..] == "*" ? null : (int)Number(args[i][4..], 15);
+            else if (args[i].StartsWith("grow:", StringComparison.Ordinal))
+                branch = args[i][5..] == "*" ? null : (int)Number(args[i][5..], 15);
+            else words.Add(args[i]);
+        }
+        string keyword = string.Join(' ', words);
         int.TryParse(keyword, NumberStyles.None, CultureInfo.InvariantCulture, out int id);
+        // 没选角色时不套职业或分支。通用职业位和没写分支的物品始终保留。
+        bool Fits(DevelopmentCatalog.ItemEntry row) =>
+            (wearer is not { } job || (row.Jobs & (1 << job)) != 0) &&
+            (branch is not { } value || (row.Grows & (1 << value)) != 0);
         var rows = catalog.Items.Where(row => row.MinLevel >= minimum && (maximum == 0 || row.MinLevel <= maximum) &&
             (rarity is null || row.Rarity == rarity) && (tag is null || row.Tag == tag) &&
-            (keyword.Length == 0 || row.Id == id || row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)) &&
+            (group is null || ItemGroups[group].Contains(row.Tag)) &&
+            (setIndex is null || row.SetIndex == setIndex) && (!setOnly || row.SetIndex > 0) && (!listSets || row.SetIndex > 0) &&
+            Fits(row) &&
+            (keyword.Length == 0 || row.Id == id || row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) || (listSets && row.SetIndex.ToString(CultureInfo.InvariantCulture) == keyword)) &&
             (attributes is null || AttributeMatches(attributes.GetValueOrDefault(row.Id), stat, period, skillJob))).ToArray();
+        if (listSets)
+        {
+            var groups = catalog.Items.Where(row => row.SetIndex > 0 && Fits(row)).GroupBy(row => row.SetIndex);
+            if (keyword.Length > 0)
+                groups = groups.Where(group => group.Key.ToString(CultureInfo.InvariantCulture) == keyword || group.Any(row => row.Id == id || row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
+            var pageGroups = groups.OrderBy(group => group.Key).ToArray();
+            return Ok(new
+            {
+                total = pageGroups.Length, offset, pageSize, page = offset / pageSize + 1,
+                items = pageGroups.Skip(offset).Take(pageSize).Select(group =>
+                {
+                    var sample = group.Where(Fits).OrderBy(row => row.Id).First();
+                    return new { id = sample.Id, name = sample.Name, equipment = sample.Equipment, tag = sample.Tag, minLevel = sample.MinLevel, rarity = sample.Rarity, set = group.Key, pieces = group.Where(Fits).Select(row => row.Tag).Distinct(StringComparer.OrdinalIgnoreCase).Count() };
+                })
+            });
+        }
         return Ok(new
         {
             total = rows.Length, offset, pageSize, page = offset / pageSize + 1,
@@ -581,10 +763,10 @@ internal static partial class DevelopmentGm
     }
 
     // 套装按 part set index 汇总当前职业可用的装备；同部位多件时取编号最小者，保证一套每部位一件。
-    static ItemTemplate[] SetMembers(DevelopmentCatalog catalog, int index, byte job)
+    static ItemTemplate[] SetMembers(DevelopmentCatalog catalog, int index, byte job, byte branch)
     {
         if (index <= 0) throw new InvalidDataException("套装编号无效");
-        var members = catalog.Items.Where(row => row.Equipment && row.SetIndex == index && (row.Jobs & 1 << job) != 0)
+        var members = catalog.Items.Where(row => row.Equipment && row.SetIndex == index && (row.Jobs & (1 << job)) != 0 && (row.Grows & (1 << branch)) != 0)
             .Select(row => catalog.Resources.Items.Get(row.Id)).GroupBy(template => template.EquipmentSlot)
             .Select(group => group.OrderBy(template => template.Id).First()).OrderBy(template => template.EquipmentSlot).ToArray();
         if (members.Length is < 2 or > 20) throw new InvalidDataException("该套装对当前职业没有2–20件可发放的部位");
@@ -602,6 +784,48 @@ internal static partial class DevelopmentGm
 
     static bool MatchesJob(StoryQuest quest, byte job) => quest.Definition?.Job is not { Length: > 0 } tag ||
         tag.Equals("[all]", StringComparison.OrdinalIgnoreCase) || tag.Equals(DevelopmentCatalog.JobTag(job), StringComparison.OrdinalIgnoreCase);
+
+    // 库列表用的身份条件。脚本 target 的觉醒 0/1 对应角色阶段 1/2；转职任务不写分支，名字里的分支名才是锁。
+    internal static bool QuestVisible(StoryQuest quest, byte job, byte growType,
+        DfoServer.GameWorld.Characters.CharacterGrowthOptions? options = null, string? name = null)
+    {
+        if (job > 15) return false;
+        var definition = quest.Definition;
+        if (definition is null) return true;
+        if (!MatchesJob(quest, job)) return false;
+        int branch = growType & 15, awakening = growType >> 4;
+        if (definition.TargetCharacters.Length != 0 && !definition.TargetCharacters.Any(target => TargetFits(target, job, branch, awakening)))
+            return false;
+        if (definition.NonTargetCharacters.Any(target => TargetFits(target, job, branch, awakening)))
+            return false;
+        if (definition.GrowType is >= 1 and <= 15 && definition.JobChange is not (10 or 20) && definition.GrowType != branch)
+            return false;
+        if (definition.JobChange == 2 && awakening != 1 || definition.JobChange == 3 && awakening != 2)
+            return false;
+        return options is null || name is not { Length: > 0 } || GrowthNameFits(options, name, branch, awakening);
+    }
+
+    static bool TargetFits(QuestTargetCharacter target, byte job, int branch, int awakening) =>
+        (target.Job.Equals("[all]", StringComparison.OrdinalIgnoreCase) || target.Job.Equals(DevelopmentCatalog.JobTag(job), StringComparison.OrdinalIgnoreCase)) &&
+        (target.GrowType < 1 || target.GrowType == branch) && (target.Awakening < 0 || target.Awakening + 1 == awakening);
+
+    static bool GrowthNameFits(DfoServer.GameWorld.Characters.CharacterGrowthOptions options, string name, int branch, int awakening)
+    {
+        foreach (var option in options.GrowTypes)
+        {
+            if (option.Value == branch) continue;
+            if (GrowthNameIs(name, "转职 - " + option.Label)) return false;
+            if (option.Awakenings.Any(label => GrowthNameIs(name, "觉醒 - " + label))) return false;
+        }
+        var current = options.GrowTypes.SingleOrDefault(option => option.Value == branch);
+        if (current is null) return true;
+        if (awakening != 1 && current.Awakenings.Count >= 1 && GrowthNameIs(name, "觉醒 - " + current.Awakenings[0])) return false;
+        if (awakening != 2 && current.Awakenings.Count >= 2 && GrowthNameIs(name, "觉醒 - " + current.Awakenings[1])) return false;
+        return true;
+    }
+
+    static bool GrowthNameIs(string name, string expected) => name.Equals(expected, StringComparison.Ordinal) ||
+        name.StartsWith(expected, StringComparison.Ordinal) && (name.Length == expected.Length || !char.IsLetterOrDigit(name[expected.Length]));
 
     // 任务分类依据 PVF 任务脚本的 [grade] 字段（原样查证：epic/side/sub/common unique/daily…）；客户端任务界面的分类名称未在资源里找到映射表，
     // 因此按 grade 归并为下列分类，无法归类的统一放“其他”。成就与称号类任务由称号簿处理，这里只读。
@@ -640,8 +864,9 @@ internal static partial class DevelopmentGm
         var completed = character.CompletedQuests.ToHashSet();
         var active = character.ActiveMainQuests.Select(quest => (int)quest.QuestId).ToHashSet();
         string StatusOf(int questId) => completed.Contains(questId) ? "done" : active.Contains(questId) ? "active" : "todo";
-        var matched = catalog.Quests.All.Where(quest => (jobMode == "any" || MatchesJob(quest, character.Job)) &&
-                (keyword.Length == 0 || quest.Id == id || names.GetValueOrDefault(quest.Id, "").Contains(keyword, StringComparison.OrdinalIgnoreCase)))
+        var growth = jobMode == "any" ? null : catalog.GrowthOptions(character.Job);
+        var matched = catalog.Quests.All.Where(quest => (jobMode == "any" || QuestVisible(quest, character.Job, character.GrowType, growth, names.GetValueOrDefault(quest.Id))) &&
+                (keyword.Length == 0 || quest.Id == id || catalog.DisplayQuestName(quest.Id).Contains(keyword, StringComparison.OrdinalIgnoreCase)))
             .OrderBy(quest => quest.MinimumLevel).ThenBy(quest => quest.Id).ToArray();
         var byCategory = QuestCategories.Select(row => new { key = row.Key, label = row.Label, count = matched.Count(quest => QuestCategory(quest.Grade) == row.Key) }).ToArray();
         var scoped = matched.Where(quest => category == "*" || QuestCategory(quest.Grade) == category).ToArray();
@@ -656,12 +881,90 @@ internal static partial class DevelopmentGm
             ids = rows.Where(quest => QuestCategory(quest.Grade) is not ("achievement" or "title")).Select(quest => quest.Id).Take(5000),
             quests = rows.Skip((page - 1) * size).Take(size).Select(quest => new
             {
-                id = quest.Id, name = names.GetValueOrDefault(quest.Id, "任务 " + quest.Id), grade = quest.Grade?.Trim('[', ']') ?? "",
+                id = quest.Id, name = catalog.DisplayQuestName(quest.Id), grade = quest.Grade?.Trim('[', ']') ?? "",
                 category = QuestCategory(quest.Grade), minLevel = quest.MinimumLevel, status = StatusOf(quest.Id),
                 pre = PrerequisiteGroup(catalog, quest, character.Job).Select(pre => new
                     { id = pre, name = names.GetValueOrDefault(pre, "任务 " + pre), done = completed.Contains(pre) })
             })
         });
+    }
+
+    // 转职或觉醒成功之后补当前分支应完成的任务。只加记录，不取消旧分支已完成的任务，也不动主线。
+    static (Character Character, string Note) FinishGrowthQuests(ICharacterRepository repository, AccountOwners owners, GameSession? live,
+        DevelopmentRequest request, CharacterProgressReset progress, DevelopmentCatalog catalog, Character character)
+    {
+        ImmutableDictionary<int, string> names;
+        try { names = catalog.QuestNames; }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("正在后台构建", StringComparison.Ordinal))
+        {
+            return (character, " 任务名称索引还在构建，转职已写入，对应任务未补，请稍后再执行一次相同转职。");
+        }
+        try
+        {
+            var option = progress.GetOptions(character.Job).GrowTypes.SingleOrDefault(value => value.Value == (character.GrowType & 15));
+            if (option is null) return (character, "");
+            var ids = GrowthQuestIds(catalog.Quests.All, names, character.Job, character.GrowType, option.Label, option.Awakenings);
+            var missing = ids.Where(id => !character.CompletedQuests.Contains(id)).ToArray();
+            if (ids.Length == 0) return (character, " 未在任务脚本中找到当前分支的转职或觉醒任务。");
+            if (missing.Length == 0) return (character, " 对应转职与觉醒任务已在完成列表。");
+            var edit = new CharacterProgressEdit(CharacterProgressField.QuestAdd, request.Account, request.Name, missing[0], 0) { Quests = [.. missing] };
+            edit.Validate();
+            var updated = live is not null ? live.UpdateProgress(edit) : WithLease(owners, request.Account, lease => repository.UpdateProgress(lease, edit));
+            return (updated, " 已补转职/觉醒任务 " + missing.Length + " 个。");
+        }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException)
+        {
+            return (character, " 转职已写入，补任务失败：" + ex.Message);
+        }
+    }
+
+    internal static int[] GrowthQuestIds(IEnumerable<StoryQuest> quests, IReadOnlyDictionary<int, string> names,
+        byte job, byte growType, string branchLabel, IReadOnlyList<string> awakenings)
+    {
+        int branch = growType & 15, stage = growType >> 4;
+        var wanted = new List<string> { "转职 - " + branchLabel };
+        if (stage >= 1 && awakenings.Count >= 1) wanted.Add("觉醒 - " + awakenings[0]);
+        if (stage >= 2 && awakenings.Count >= 2) wanted.Add("觉醒 - " + awakenings[1]);
+        bool Named(string name, string expected) => name.Equals(expected, StringComparison.Ordinal) ||
+            name.StartsWith(expected, StringComparison.Ordinal) && (name.Length == expected.Length || !char.IsLetterOrDigit(name[expected.Length]));
+        bool Later(string name) =>
+            stage < 1 && awakenings.Count >= 1 && Named(name, "觉醒 - " + awakenings[0]) ||
+            stage < 2 && awakenings.Count >= 2 && Named(name, "觉醒 - " + awakenings[1]);
+        var byId = quests.ToDictionary(quest => quest.Id);
+        var chosen = new HashSet<int>();
+        var queue = new Queue<int>();
+        foreach (var quest in byId.Values)
+        {
+            if (!names.TryGetValue(quest.Id, out var name) || !wanted.Any(prefix => Named(name, prefix)) || !GrowthQuestBelongs(quest, job, branch)) continue;
+            if (chosen.Add(quest.Id)) queue.Enqueue(quest.Id);
+        }
+        while (queue.TryDequeue(out int id))
+        {
+            if (!byId.TryGetValue(id, out var quest)) continue;
+            var groups = quest.Definition?.PrerequisiteGroups ?? [];
+            IEnumerable<int> pres = groups.IsDefaultOrEmpty ? quest.Prerequisites : groups.SelectMany(group => group);
+            foreach (int pre in pres.Distinct())
+            {
+                if (!byId.TryGetValue(pre, out var prior) || !names.TryGetValue(pre, out var pname)) continue;
+                if (!pname.StartsWith("转职 - ", StringComparison.Ordinal) && !pname.StartsWith("觉醒 - ", StringComparison.Ordinal) || Later(pname)) continue;
+                if (!GrowthQuestBelongs(prior, job, branch) || !chosen.Add(pre)) continue;
+                queue.Enqueue(pre);
+            }
+        }
+        return [.. chosen.Order()];
+    }
+
+    static bool GrowthQuestBelongs(StoryQuest quest, byte job, int branch)
+    {
+        var definition = quest.Definition;
+        if (definition is null) return true;
+        if (definition.Job is { Length: > 0 } tag && !tag.Equals("[all]", StringComparison.OrdinalIgnoreCase) &&
+            !tag.Equals(DevelopmentCatalog.JobTag(job), StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (definition.TargetCharacters.Length != 0 && !definition.TargetCharacters.Any(target =>
+            target.Job.Equals("[all]", StringComparison.OrdinalIgnoreCase) || target.Job.Equals(DevelopmentCatalog.JobTag(job), StringComparison.OrdinalIgnoreCase)))
+            return false;
+        return definition.GrowType is not (>= 1 and <= 15) || definition.JobChange is 10 or 20 || definition.GrowType == branch;
     }
 
     static string CompleteQuests(ICharacterRepository repository, AccountOwners owners, GameSession? live, DevelopmentRequest request,

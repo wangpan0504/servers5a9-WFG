@@ -9,8 +9,9 @@ export function undoHint(x) {
   switch (x.action) {
     case 'gold': { const v = pick(/gold=(\d+)/); return v ? `account ${account} gold ${name} ${v}（把金币设回修改前）` : '修改前金币未记录，无法给出反向命令'; }
     case 'level': { const v = pick(/level=(\d+)/); return v ? `account ${account} level ${name} ${v}（等级设回；经验不一定相同）` : '修改前等级未记录'; }
-    case 'quest-add': { const q = /quest-add \S+ \S+ (\d+)/.exec(cmd)?.[1]; return q ? `account ${account} quest-remove ${name} ${q}` : null; }
-    case 'quest-remove': { const q = /quest-remove \S+ \S+ (\d+)/.exec(cmd)?.[1]; return q ? `account ${account} quest-add ${name} ${q}` : null; }
+    case 'quest-add': { const q = /quest-add \S+ (\d+)/.exec(cmd)?.[1]; return q ? `account ${account} quest-del ${name} ${q}` : null; }
+    case 'quest-remove': { const q = /quest-(?:remove|del) \S+ (\d+)/.exec(cmd)?.[1]; return q ? `account ${account} quest-add ${name} ${q}` : null; }
+    case 'quest-batch': return '在任务页勾选这些编号后点“取消选中的完成”（成就类不会出现在这批编号里）';
     case 'rename': { const m = /rename (\S+) (\S+)$/.exec(cmd); return m ? `account ${account} rename ${m[2]} ${m[1]}` : null; }
     case 'mail-gold': case 'mail-item': case 'mail-set': return '邮件已发出：对方未领取前可在“邮箱”里用 mail-delete 删除；已领取的无法自动回收';
     case 'direct-item': case 'direct-set': return '在背包页选中对应物品执行“删除选中物品”（item-delete）';

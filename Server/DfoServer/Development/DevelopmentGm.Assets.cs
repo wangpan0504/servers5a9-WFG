@@ -94,7 +94,8 @@ internal static partial class DevelopmentGm
                 list = (int)item.Position.List, listName = item.Position.List.ToString(), slot = item.Position.Index,
                 uid = item.Uid, id = item.Core.ItemId, name = TryTemplate(items, item.Core.ItemId)?.Name,
                 kind = item.Core.Kind.ToString(), count = item.Core.IsStackable ? item.Core.Value : 1,
-                upgrade = item.Core.Kind == ItemKind.Equipment ? item.Core.Attr & 31 : 0, amplifyType = item.Core.AmplifyType, amplifyValue = item.Core.AmplifyValue,
+                upgrade = item.Core.Kind == ItemKind.Equipment ? item.Core.Attr & 31 : 0, refine = item.Core.Kind == ItemKind.Equipment ? item.Core.GenuineUpgrade : 0,
+                amplifyType = item.Core.AmplifyType, amplifyValue = item.Core.AmplifyValue, ability = item.Core.Kind == ItemKind.Avatar ? item.Core.Durability : 0,
                 isSealed = item.Core.SealFlag != 0, expire = item.ExpireTime
             })
         });

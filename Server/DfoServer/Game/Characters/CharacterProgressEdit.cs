@@ -23,9 +23,9 @@ internal sealed record CharacterProgressEdit(CharacterProgressField Field, strin
     public IEnumerable<int> QuestIds => Quests.IsDefaultOrEmpty ? [Primary] : Quests;
     public void Validate()
     {
-        if (!Quests.IsDefaultOrEmpty && (Field != CharacterProgressField.QuestAdd || Quests.Length > 2000 ||
+        if (!Quests.IsDefaultOrEmpty && (Field != CharacterProgressField.QuestAdd || Quests.Length > 3000 ||
             Quests.Any(id => id is < 1 or > 29999) || Quests.Distinct().Count() != Quests.Length))
-            throw new InvalidDataException("批量任务编号无效，范围1-29999且不能重复，最多2000个");
+            throw new InvalidDataException("批量任务编号无效，范围1-29999且不能重复，最多3000个");
         if (Account.Length is < 1 or > 64 || Account.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_' or '-')))
             throw new InvalidDataException("账号无效");
         if (!CharacterName.IsValid(Name))

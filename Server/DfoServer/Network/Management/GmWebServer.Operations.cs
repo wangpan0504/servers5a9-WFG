@@ -21,7 +21,8 @@ internal static partial class GmWebServer
     internal sealed record DeleteItemsBody(string Account, string Name, string[]? Refs, bool? ReturnFirst, bool? Confirm);
     internal sealed record ClearBody(string Account, string Name, int Container, bool? ReturnFirst, bool? Confirm);
     internal sealed record DeleteMailBody(string Account, string Name, uint[]? Ids, bool? All, bool? ReturnFirst, bool? Confirm);
-    internal sealed record DirectItemBody(string Account, string Name, int ItemId, int Count, int Upgrade, int Refine, string? Amp, bool? ReturnFirst, bool? Confirm, bool? Unseal = null);
+    internal sealed record DirectItemBody(string Account, string Name, int ItemId, int Count, int Upgrade, int Refine, string? Amp, bool? ReturnFirst, bool? Confirm, bool? Unseal = null, int? Ability = null, bool? ClearPeriod = null, int? Expire = null);
+    internal sealed record ItemEditBody(string Account, string Name, int List, int Slot, long Uid, int? Upgrade, int? Refine, string? Amp, int? Ability, int? Count, bool? ClearPeriod, bool? ReturnFirst, bool? Confirm, int? Expire = null);
     internal sealed record DirectSetBody(string Account, string Name, int SetIndex, int Upgrade, int Refine, bool? ReturnFirst, bool? Confirm);
     internal sealed record QuickItem(int Id, string? Label, int Count, int Upgrade, int Refine);
     internal sealed record QuickItemsBody(QuickItem[]? Items, bool? Confirm);
@@ -78,9 +79,30 @@ internal static partial class GmWebServer
         {
             if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
             if (b.ItemId <= 0 || b.Count is < 1 or > 99999 || b.Upgrade is < 0 or > 31 || b.Refine is < 0 or > 99 ||
-                b.Amp is not null && !Amplify.IsMatch(b.Amp)) return Bad("物品参数无效");
+                b.Amp is not null && !Amplify.IsMatch(b.Amp) && b.Amp != "amp:0:0" || b.Ability is < 0 or > 65535) return Bad("物品参数无效");
+            if (b.ClearPeriod == true && b.Expire is not null) return Bad("期限不能同时改为不过期和指定时间");
+            if (b.Expire is < 1) return Bad("到期时间无效");
             return await RunReturning(http, data, "direct-item", b.Account, b.Name,
-                $"account {b.Account} grant {b.Name} {b.ItemId} {b.Count} {b.Upgrade} {b.Refine} direct{(b.Amp is null ? "" : " " + b.Amp)}{(b.Unseal == true ? " seal:open" : "")}", b.ReturnFirst == true);
+                $"account {b.Account} grant {b.Name} {b.ItemId} {b.Count} {b.Upgrade} {b.Refine} direct{(b.Amp is null ? "" : " " + b.Amp)}{(b.Unseal == true ? " seal:open" : "")}{(b.Ability is null ? "" : " ability:" + b.Ability)}{(b.ClearPeriod == true ? " period:off" : "")}{(b.Expire is null ? "" : " expire:" + b.Expire)}", b.ReturnFirst == true);
+        });
+        app.MapPost("/api/items/edit", async (HttpContext http, ItemEditBody b) =>
+        {
+            if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
+            if (b.List < 0 || b.Slot < 0 || b.Uid <= 0) return Bad("物品位置无效");
+            if (b.Upgrade is < 0 or > 31 || b.Refine is < 0 or > 127 || b.Ability is < 0 or > 65535 || b.Count is < 1 or > 99999) return Bad("属性超出范围");
+            if (b.Amp is not null && !Amplify.IsMatch(b.Amp) && b.Amp != "amp:0:0") return Bad("增幅参数无效");
+            if (b.ClearPeriod == true && b.Expire is not null) return Bad("期限不能同时改为不过期和指定时间");
+            if (b.Expire is < 1) return Bad("到期时间无效");
+            var tokens = new List<string> { $"account {b.Account} item-edit {b.Name} {b.List}:{b.Slot}:{b.Uid}" };
+            if (b.Upgrade is not null) tokens.Add("up:" + b.Upgrade);
+            if (b.Refine is not null) tokens.Add("ref:" + b.Refine);
+            if (b.Amp is not null) tokens.Add(b.Amp);
+            if (b.Ability is not null) tokens.Add("ability:" + b.Ability);
+            if (b.Count is not null) tokens.Add("count:" + b.Count);
+            if (b.ClearPeriod == true) tokens.Add("period:off");
+            if (b.Expire is not null) tokens.Add("expire:" + b.Expire);
+            if (tokens.Count == 1) return Bad("没有要修改的属性");
+            return await RunReturning(http, data, "item-edit", b.Account, b.Name, string.Join(' ', tokens), b.ReturnFirst == true);
         });
         app.MapPost("/api/direct/set", async (HttpContext http, DirectSetBody b) =>
         {

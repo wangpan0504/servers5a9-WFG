@@ -78,6 +78,10 @@ internal static class DevelopmentGmTests
             catch (InvalidOperationException error) when (ReferenceEquals(error, expected)) { }
         }
         That(propagated, "GM未纳入单连接隔离的处理异常仍向宿主传播");
+        string batch = "quest-batch GmHero " + string.Join(',', Enumerable.Range(1, 800));
+        var batchRequest = DevelopmentRequest.Parse(batch, "development-local");
+        That(batchRequest.Action == DevelopmentAction.QuestBatch && batchRequest.Args[0].Length > 400 && batchRequest.Name == "GmHero",
+            "quest batch accepts id lists longer than 400 characters");
         Console.WriteLine($"PASS {Count - checks} development GM cancellation assertions");
     }
 

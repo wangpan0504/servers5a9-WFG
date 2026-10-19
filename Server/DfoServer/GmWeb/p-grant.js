@@ -1,7 +1,55 @@
 import { api } from './api.js';
-import { h, field, note, table, toast, num, openDrawer } from './ui.js';
+import { h, field, note, table, toast, num, openDrawer, pager } from './ui.js';
 import { isOnline, itemIcon } from './ops.js';
 import { picker } from './picker.js';
+import { ITEM_TREE, tagLabel } from './labels.js';
+import { inventoryView } from './bag.js';
+import { openEditor } from './edit.js';
+
+export function catalogBrowser(onPick, initialTag, multi, getJob) {
+  const sets = initialTag === 'sets';
+  const q = h('input', { type: 'search', placeholder: sets ? '套装编号或名称' : '名称或 ID', onkeydown: e => { if (e.key === 'Enter') run(1); } });
+  const tag = h('select', { 'aria-label': '分类' }, h('option', { value: sets ? 'sets' : '*', selected: sets }, sets ? '按套装' : '全部分类'));
+  if (!sets) for (const [group, rows] of ITEM_TREE) {
+    const og = h('optgroup', { label: group });
+    for (const [value, label] of rows) og.append(h('option', { value }, label));
+    tag.append(og);
+  }
+  const out = h('div');
+  const f = { page: 1, size: 25 };
+  let last = null;
+  const paint = () => {
+    const rows = last?.items || [];
+    const columns = (sets ? [
+      { key: 'set', label: '套装', num: true, mono: true },
+      { label: '代表物品', wrap: true, render: x => x.name },
+      { label: '分类', render: x => tagLabel(x.tag) },
+      { key: 'pieces', label: '部位', num: true },
+      { label: '', render: x => h('button', { class: 'btn sm', onclick: () => onPick(x) }, '选这套') },
+    ] : [
+      multi ? { label: '', render: x => h('input', { type: 'checkbox', 'aria-label': '选择 ' + x.name, checked: multi.selected.has(x.id), onchange: e => { e.target.checked ? multi.selected.set(x.id, x.name) : multi.selected.delete(x.id); multi.changed(); } }) } : { label: '', render: x => itemIcon(x.id) },
+      { label: '', render: x => itemIcon(x.id) },
+      { key: 'id', label: 'ID', mono: true, num: true }, { key: 'name', label: '名称', wrap: true },
+      { label: '分类', render: x => h('span', { title: x.tag || '' }, tagLabel(x.tag)) },
+      multi ? null : { label: '', render: x => h('button', { class: 'btn sm', onclick: () => onPick(x) }, '选择') },
+    ]).filter(Boolean);
+    out.replaceChildren(table(columns, rows), pager({ total: last?.total || 0, page: f.page, size: f.size, sizes: [25, 50], onChange: (p, s) => { f.size = s; run(p); } }));
+  };
+  async function run(page = 1) {
+    f.page = page;
+    try {
+      const fit = typeof getJob === 'function' ? await getJob() : null;
+      const job = fit == null ? null : typeof fit === 'object' ? fit.job : fit;
+      const grow = fit != null && typeof fit === 'object' ? fit.first : null;
+      last = await api.searchItems({ page, pageSize: f.size, tag: tag.value, min: 0, max: 0, rarity: '*', q: q.value.trim(), ...(job == null ? {} : { job }), ...(grow == null ? {} : { grow }) });
+      paint();
+    }
+    catch (e) { out.replaceChildren(note(e.message, 'err')); }
+  }
+  if (multi) multi.repaint = paint;
+  queueMicrotask(() => run(1));
+  return h('div', null, h('div', { class: 'toolbar' }, field('关键词', q), sets ? null : field('分类', tag), h('button', { class: 'btn primary', onclick: () => run(1) }, '搜索')), out);
+}
 
 // 背包与发放：物品/套装/金币邮件；只读背包视图。发放前在抽屉里二次确认并写审计。
 export function render(root, ctx) {
@@ -12,6 +60,16 @@ export function render(root, ctx) {
   const bar = h('div', { class: 'tabs', role: 'tablist' });
   const tabs = [['item', '发物品'], ['set', '发套装'], ['gold', '发金币'], ['inv', '背包（只读）']];
   const needTarget = () => { const t = target.get(); if (!t) toast('请先选择账号和角色', true); return t; };
+  let wearer = null;
+  const wearerJob = async () => {
+    const t = target.get();
+    if (!t) return null;
+    const key = t.account + '/' + t.name;
+    if (wearer?.key === key) return wearer.fit;
+    const g = await api.growth(t.account, t.name);
+    wearer = { key, fit: { job: g.job, first: g.first } };
+    return wearer.fit;
+  };
   const mode = h('select', { 'aria-label': '发放方式' }, h('option', { value: 'mail' }, '邮件发放'), h('option', { value: 'direct' }, '直接入包'));
   const send = async (label, path0, body, detail) => {
     const t = needTarget(); if (!t) return;
@@ -31,24 +89,34 @@ export function render(root, ctx) {
   };
   const views = {
     item: () => {
-      const id = h('input', { type: 'number', min: 1, value: pend?.itemId || '' }), count = h('input', { type: 'number', min: 1, value: 1 });
-      const up = h('input', { type: 'number', min: 0, max: 31, value: 0 }), ref = h('input', { type: 'number', min: 0, max: 99, value: 0 });
-      const amp = h('input', { type: 'text', placeholder: 'amp:类型1-4:数值（可空）' });
-      const unseal = h('input', { type: 'checkbox', 'aria-label': '解除封装' });
-      const info = h('div');
-      id.addEventListener('change', async () => { info.replaceChildren(); if (+id.value > 0) { try { const i = await api.itemInfo(+id.value); info.replaceChildren(note(`${i.name} · ${i.kind} · 堆叠上限 ${i.stackLimit} · 最低等级 ${i.minLevel}`)); } catch (e) { info.replaceChildren(note(e.message, 'err')); } } });
-      if (id.value) id.dispatchEvent(new Event('change'));
-      return h('div', null, h('p', { class: 'lead' }, '输入道具 ID（可在「物品库」查找并点“发放”带入）。非堆叠道具每封邮件最多 10 件。'),
-        h('div', { class: 'form' }, field('道具 ID', id), field('数量', count), field('强化 0-31', up), field('锻造 0-99', ref), field('增幅', amp), field('解除封装（仅[sealing]装备）', unseal)), info,
-        h('p', null, h('button', { class: 'btn primary', onclick: () => send('邮件发放物品', 'mail/item', { itemId: +id.value, count: +count.value, upgrade: +up.value, refine: +ref.value, amp: amp.value.trim() || null, unseal: unseal.checked },
-          t => `向 ${t.name} 发放道具 ${id.value} × ${count.value}（强化 ${up.value} / 锻造 ${ref.value}）。`) }, '发放…')));
+      const selected = new Map();
+      const multi = { selected, changed() { paintFloat(); }, repaint() {} };
+      const float = h('div', { class: 'float-grant' });
+      const paintFloat = () => {
+        if (!selected.size) { float.remove(); return; }
+        float.replaceChildren(h('b', null, `已选 ${selected.size} 种`),
+          h('button', { class: 'btn primary', onclick: () => { const t = needTarget(); if (!t) return; openEditor([...selected].map(([id, name]) => ({ id, name })), { ...t, mode: mode.value }, () => { selected.clear(); multi.repaint(); paintFloat(); }); } }, '设置并发放'),
+          h('button', { class: 'btn sm', onclick: () => { selected.clear(); multi.repaint(); paintFloat(); } }, '清除'));
+        content.append(float);
+      };
+      multi.changed = paintFloat;
+      if (pend?.itemId) selected.set(pend.itemId, '物品 ' + pend.itemId);
+      queueMicrotask(paintFloat);
+      return h('div', null, note('勾选物品后点右下角。弹窗按每件自己的词条给出强化、增幅、锻造、数量或装扮属性。'),
+        catalogBrowser(() => {}, '*', multi, wearerJob));
     },
     set: () => {
-      const idx = h('input', { type: 'number', min: 0, value: pend?.setIndex ?? '' });
-      const up = h('input', { type: 'number', min: 0, max: 31, value: 0 }), ref = h('input', { type: 'number', min: 0, max: 99, value: 0 });
-      return h('div', null, h('p', { class: 'lead' }, '套装编号取自「物品库」里装备的“套装”列。整套按邮件发放，背包或期限不满足会部分失败并提示。'),
-        h('div', { class: 'form' }, field('套装编号', idx), field('强化 0-31', up), field('锻造 0-99', ref)),
-        h('p', null, h('button', { class: 'btn primary', onclick: () => send('邮件发放套装', 'mail/set', { setIndex: +idx.value, upgrade: +up.value, refine: +ref.value }, t => `向 ${t.name} 发放套装 #${idx.value}。`) }, '发放…')));
+      const apply = async row => {
+        const t = needTarget(); if (!t) return;
+        try {
+          const data = await api.setMembers(t.account, t.name, row.set);
+          const pieces = data.items || [];
+          if (pieces.length < 2) return toast('这套对当前职业没有可发放的部位', true);
+          openEditor(pieces.map(x => ({ id: x.id, name: x.name })), { ...t, mode: mode.value });
+        } catch (e) { toast(e.message, true); }
+      };
+      if (pend?.setIndex) queueMicrotask(() => apply({ set: pend.setIndex, name: '套装 #' + pend.setIndex }));
+      return h('div', null, note('一行是一套。只列出当前职业能穿、并且没有写死其他分支的部位；没写分支的套装也保留。'), catalogBrowser(apply, 'sets', null, wearerJob));
     },
     gold: () => {
       const gold = h('input', { type: 'number', min: 1, max: 2000000000, value: 1000000 }), text = h('input', { type: 'text', maxlength: 60, placeholder: '开发GM发放金币' });
@@ -59,25 +127,21 @@ export function render(root, ctx) {
     inv: async () => {
       const t = target.get(); if (!t) return note('请先选择账号和角色。');
       const inv = await api.section(t.account, t.name, 'inventory');
-      return h('div', null, note(`${t.name} · 共 ${(inv.items || []).length} 件 · 金币 ${num(inv.gold)}。删除/清空请在角色抽屉的「背包」页操作。`),
-        table([{ key: 'listName', label: '容器' }, { key: 'slot', label: '位置', num: true }, { key: 'id', label: 'ID', num: true, mono: true }, { label: '名称', render: r => r.name || '—' }, { key: 'kind', label: '种类' }, { key: 'count', label: '数量', num: true }], inv.items || []));
+      return h('div', null, note(`${t.name} · 共 ${(inv.items || []).length} 件 · 金币 ${num(inv.gold)}。删除请到角色工作台的背包。`),
+        inventoryView(inv.items || [], { bar: h('div'), check: () => '' }));
     },
   };
   // 快捷物品：保存在存档目录 gm-quick-items.json，点击一项把参数填入下面的表单。
   async function quickBar() {
     let list = [];
     try { list = await api.quickItems(); } catch { /* 读取失败当作空 */ }
-    const form = () => content.querySelector('.form')?.querySelectorAll('input') || [];
     const save = async next => {
       try { await api.post('quick-items', { items: next }); list = next; toast('快捷物品已保存'); showTab('item'); } catch (e) { toast(e.message, true); }
     };
-    const label = h('input', { type: 'text', maxlength: 30, placeholder: '快捷名称' });
     const chips = list.map((q, n) => h('span', { class: 'chip' },
-      h('button', { class: 'btn sm', title: `${q.Id} ×${q.Count} 强化${q.Upgrade} 改造${q.Refine}`, onclick: () => { const f = [...form()]; if (f.length >= 4) { f[0].value = q.Id; f[1].value = q.Count; f[2].value = q.Upgrade; f[3].value = q.Refine; f[0].dispatchEvent(new Event('change')); } } }, q.Label || q.Id),
+      h('button', { class: 'btn sm', title: `${q.id ?? q.Id} ×${q.count ?? q.Count}`, onclick: () => { const t = needTarget(); if (!t) return; openEditor([{ id: q.id ?? q.Id, name: (q.label ?? q.Label) || String(q.id ?? q.Id), count: q.count ?? q.Count, upgrade: q.upgrade ?? q.Upgrade, refine: q.refine ?? q.Refine }], t); } }, (q.label ?? q.Label) || (q.id ?? q.Id)),
       h('button', { class: 'btn sm', 'aria-label': '删除快捷物品', onclick: () => save(list.filter((_, i) => i !== n)) }, '×')));
-    return h('div', { class: 'toolbar' }, ...chips, label,
-      h('button', { class: 'btn sm', onclick: () => { const f = [...form()]; if (f.length < 4 || !(+f[0].value > 0)) return toast('先在下面填好物品参数', true);
-        save([...list, { Id: +f[0].value, Label: label.value.trim() || String(f[0].value), Count: +f[1].value, Upgrade: +f[2].value, Refine: +f[3].value }].map(q => ({ id: q.Id, label: q.Label, count: q.Count, upgrade: q.Upgrade, refine: q.Refine }))); } }, '保存当前为快捷'));
+    return h('div', { class: 'toolbar' }, ...chips);
   }
   async function showTab(k) {
     tab = k; bar.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', b.dataset.k === k));
