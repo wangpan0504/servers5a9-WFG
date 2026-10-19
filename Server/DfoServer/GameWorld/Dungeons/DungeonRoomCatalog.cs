@@ -262,13 +262,21 @@ internal sealed class DungeonRoomCatalog
         return new(id,row.Values,row.Faction,row.Rank,path,minimum[5].Value);
     }
 
-    public bool ReportsQuestDeath(DungeonRoomPassiveObject source)
+    public bool ReportsQuestDeath(DungeonRoomPassiveObject source) =>
+        Tagged(source, "[quest type]", "[must be destroyed]");
+
+    // 时间广场巨大的泰拉石（85176）声明 [reward type] [quest item]，任务脚本用 enemy type 3 发材料。
+    // 它没有 [quest type] [must be destroyed]，销毁仍要进入任务掉落。
+    public bool ReportsQuestItemReward(DungeonRoomPassiveObject source) =>
+        Tagged(source, "[reward type]", "[quest item]");
+
+    bool Tagged(DungeonRoomPassiveObject source, string tag, string value)
     {
         if (!passiveObjects.TryGetValue(source.ObjectId,out var path) || path != source.Path || path.Length == 0 || !archive.Contains(path)) return false;
         var tokens = archive.ReadTokens(path);
         for (int at = 0; at + 1 < tokens.Length; at++)
-            if (tokens[at].Type == 3 && archive.ResolveString(tokens[at].Value) == "[quest type]")
-                return tokens[at + 1].Type == 6 && archive.ResolveString(tokens[at + 1].Value) == "[must be destroyed]";
+            if (tokens[at].Type == 3 && archive.ResolveString(tokens[at].Value) == tag)
+                return tokens[at + 1].Type == 6 && archive.ResolveString(tokens[at + 1].Value) == value;
         return false;
     }
 

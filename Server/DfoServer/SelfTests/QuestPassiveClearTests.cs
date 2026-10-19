@@ -25,6 +25,9 @@ internal static class QuestPassiveClearTests
         DungeonDropRuleCatalog cardRules, DungeonCardPriceCatalog cardPrices)
     {
         int checks = Count;
+        var stone = new DungeonRoomPassiveObject(85176, [], "passiveobject/actionobject/map/cataclysm/metrocenter/tera/85176_tera_quest_2.obj");
+        That(rooms.ReportsQuestItemReward(stone) && !rooms.ReportsQuestDeath(stone),
+            "巨大的泰拉石按任务物品销毁，不是must be destroyed");
         var ids = Enumerable.Range(29000,999).Where(id => !quests.TryGet(id,out _)).Take(2).ToArray();
         var counted = QuestEligibilityTests.Quest(ids[0]) with { Condition="[condition under clear]",SubType=6,IntData=[191,-1],
             CompleteNpc=-1,Attributes=["not give exp quest"],Rewards=[] };

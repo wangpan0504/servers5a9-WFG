@@ -136,6 +136,17 @@ internal static class QuestCatalogTests
             && !stackable.Contains(101010438)
             && new[] { 101010438, 10403, 12403, 14403, 16403, 18403, 20002, 24002, 22002 }.All(equipment.Contains),
             "story rewards stay in stackable or equipment lists");
+        var terra = catalog.Get(3956);
+        Check(terra.Condition == "[seeking]" && terra.DungeonIndex == 310 &&
+            terra.IntData.SequenceEqual([10164805, 20, 10164804, 10]) &&
+            terra.Definition!.Drops.Any(row => row is { TemplateId: 85176, EnemyType: 3, ItemId: 10164805, Count: 2, Rate: 100, MaximumHeld: 20 }) &&
+            terra.Definition.Drops.Any(row => row is { TemplateId: 85176, EnemyType: 3, ItemId: 10164804, Count: 1, Rate: 100, MaximumHeld: 10 }),
+            "避开帝国的耳目从时间广场泰拉石掉两种材料");
+        var awakening = catalog.Get(5154);
+        Check(awakening.RewardType is null && awakening.DeclaredGoldMultiple == 200 && awakening.Condition == "[hunt monster]" &&
+            awakening.Rewards.SequenceEqual([new QuestRewardToken(0, 0, null), new QuestRewardToken(0, 0, null)]) &&
+            QuestCoverage.GoldOnlyReward(awakening) && QuestCoverage.Unconfirmed(awakening).Length == 0,
+            "夜刀神觉醒省略reward type，金币倍率200是奖励");
         Console.WriteLine($"PASS {checks} story quest resource assertions");
     }
 

@@ -35,7 +35,7 @@ internal sealed partial class GameSession
         var same = room.PassiveObjects.Where(source => source.ObjectId == templateId).ToArray();
         if (same.Length == 0) return $"当前房间 {snapshot.CurrentMap.Id} 没有物件模板 {templateId}";
         if (same.Length > 1) return $"当前房间 {snapshot.CurrentMap.Id} 有 {same.Length} 个物件模板 {templateId}，报文只带模板号无法唯一寻址，已拒绝";
-        if (!resources.ReportsQuestDeath(same[0])) return $"物件模板 {templateId} 无 [quest type] [must be destroyed]，仅在任务触发通道或迷宫清图条件下才会记录";
+        if (!resources.ReportsQuestDeath(same[0]) && !resources.ReportsQuestItemReward(same[0])) return $"物件模板 {templateId} 无 [quest type] [must be destroyed] 或 [reward type] [quest item]，仅在任务触发通道或迷宫清图条件下才会记录";
         return "条件未满足（任务未接取/未绑定本次入场/目标不匹配/等待中的事件指纹不同）";
     });
     public QuestLifecycleReceipt? ObserveFormalPassiveTrigger(ushort questId, QuestClientCondition condition,
@@ -80,10 +80,11 @@ internal sealed partial class GameSession
         // maze明确声明的唯一终末物件有独立39来源；精确零击杀结算仍须独立场景清图凭据。
         if (matches.Length != 1) return null;
         bool reportsQuestDeath = resources.ReportsQuestDeath(matches[0].source);
+        bool recordsQuest = reportsQuestDeath || resources.ReportsQuestItemReward(matches[0].source);
         bool mazeClear = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, matches[0].ordinal);
         if (capture.Pending is null && mazeClear && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
             QuestHuntProgress.Bound(active,current.Entry))) return null;
-        if (capture.Pending is null && reportedQuest is null && !reportsQuestDeath &&
+        if (capture.Pending is null && reportedQuest is null && !recordsQuest &&
             (!mazeClear || current.Run.ClearFact is not null || !current.Entry.IsTerminalMap(scene.CurrentMap))) return null;
         var plan = capture.Pending?.Plan;
         if (plan is null)
@@ -92,7 +93,7 @@ internal sealed partial class GameSession
                 checked((int)templateId),matches[0].ordinal,fingerprint);
             bool clearCandidate = owner.Execute(() => ReferenceEquals(Selected,expected) && ReferenceEquals(formalDungeon,current) &&
                 SelectionEpoch == capture.SelectionEpoch && current.Run.CanPreparePassiveClear(scene.Identity,source.TemplateId,source.SourceOrdinal));
-            if (reportedQuest is null && !reportsQuestDeath && !clearCandidate) return null;
+            if (reportedQuest is null && !recordsQuest && !clearCandidate) return null;
             var drops = current.QuestDrops is { } questDrops ? QuestDropPlan.Create(expected,current.Run.Entry,questDrops,
                 source.OperationId,scene.Identity,scene.CurrentMap.Id,checked((int)templateId),3,clearCandidate,current.Draw,DateTimeOffset.UtcNow) : null;
             plan = owner.Execute(() =>
@@ -101,7 +102,7 @@ internal sealed partial class GameSession
                     !ReferenceEquals(formalDungeon,current) || current.Run.Snapshot.Identity != scene.Identity) return null;
                 var prepared = mazeClear ? current.Run.PreparePassiveClear(scene.Identity,source.OperationId,
                     source.TemplateId,source.SourceOrdinal) : null;
-                if (reportedQuest is null && !reportsQuestDeath && prepared is null) return null;
+                if (reportedQuest is null && !recordsQuest && prepared is null) return null;
                 try
                 {
                     var candidate = QuestLifecyclePlan.ObservePassive(expected,questCatalog,current.Run.Entry,source,drops,prepared,current.Run);

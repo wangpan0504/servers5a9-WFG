@@ -94,6 +94,11 @@ internal static class QuestCoverage
 
     static bool SupportedAttribute(string? value) => value is "not give exp quest" or "slot expansion" or "magic stone";
 
+    // 觉醒成就（如5154）省略 [reward type]，奖励数组是 0 0，金币只来自 [gold multiple]。
+    internal static bool GoldOnlyReward(StoryQuest quest) =>
+        quest.RewardType is null && quest.DeclaredGoldMultiple is > 0 &&
+        quest.Rewards.Count > 0 && quest.Rewards.All(row => row.Type == 0 && row.Value == 0);
+
     public static bool HasOrdinaryDisplay(StoryQuest quest) => quest.Definition is { } definition &&
         // Full03 04195F2F读取可见性；clear/delete同样由真实完成投影触发客户端显示，不签发额外进度或奖励。
         definition.NpcVisibility.All(row => row.Condition is "[accept]" or "[clear]" && row.Visibility is "[show]" or "[hide]" ||
@@ -257,11 +262,12 @@ internal static class QuestCoverage
                     QuestCharacterReward.TryHellChallenge(quest);
                 bool creatureReward = QuestCreatureReward.Evolution(quest);
                 bool expertJob = QuestExpertJobReward.Type(quest) is not null;
+                bool goldOnly = GoldOnlyReward(quest);
                 if (access.Entry == QuestResourceEntry.Creature && catalog.Creatures is null) reasons.Add("宠物目录未装配");
-                if (quest.RewardType != "[item]" && !profession && !characterReward && !creatureReward && !expertJob && !QuestRelationProgress.ZeroRewardChild(quest))
+                if (quest.RewardType != "[item]" && !profession && !characterReward && !creatureReward && !expertJob && !QuestRelationProgress.ZeroRewardChild(quest) && !goldOnly)
                     reasons.Add(RewardRestriction(quest));
                 if (!quest.Attributes.Contains("not give exp quest") && !(creatureReward && quest.Difficulty is null) &&
-                    !(QuestExpertJobReward.Chain(quest) && quest.Difficulty is null) &&
+                    !(QuestExpertJobReward.Chain(quest) && quest.Difficulty is null) && !(goldOnly && quest.Difficulty is null) &&
                     (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))
                     reasons.Add("奖励缺少合法difficulty键");
                 if (!HasOrdinaryAttributes(quest)) reasons.Add("attribute包含未确认的值或声明形状");
