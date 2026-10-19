@@ -95,6 +95,7 @@ internal static class AvatarPackageTests
         That(cases[50].SetEquals([1, 140]) && !cases[50].Contains(0) && cases[150].SetEquals([0]) &&
             AvatarPackageCatalog.ParseAvatar(shared, cases).Abilities.SetEquals([1, 140]), "case50不补不存在的0，完整保留大于31和127的选项");
         DuplicateAbilityDeclarations();
+        DuplicateAbilityCaseIndices();
         byte[] body = Body([101, 102], [new(101, 0), new(102, 37)]);
         var request = AvatarPackageRequests.Read(body, 2, 2);
         That(request is { Slot: 73, Count: 1, Category: 1, Subcategory: 3 } && request.ItemIds.SequenceEqual([101, 102]) &&
@@ -157,6 +158,36 @@ internal static class AvatarPackageTests
         That(AvatarPackageCatalog.ParseAvatar("[name]\n`[avatar select ability]文字[/avatar select ability]`") is
             { PendingRule: null, RequiresAbilityChoice: false } noChoice && noChoice.Abilities.SetEquals([0]),
             "字符串伪标签仍不构成能力声明，无声明保留属性0");
+    }
+
+    static void DuplicateAbilityCaseIndices()
+    {
+        const string types = "[avatar type select]\n0 0 0 6000 0 0 0\n[/avatar type select]\n";
+        var cases = new Dictionary<int, ImmutableHashSet<byte>> { [450] = [2, 109], [451] = [140], [452] = [] };
+        static string Index(string value) => "[ability case index]\n" + value + "\n";
+        foreach (string text in new[] {
+            Index("450") + Index(" \t450\r\n"),
+            Index("450") + "[animation job]\n`[priest]`\n" + Index("450") + Index("450"),
+            Index("450"), Index("+450"), Index("0450") })
+        {
+            var actual = AvatarPackageCatalog.ParseAvatar(types + text, cases);
+            That(actual.PendingRule is null && actual.RequiresAbilityChoice && actual.Abilities.SetEquals([2, 109]) &&
+                !actual.Abilities.Contains(0) && actual.Types is [{ Days: 7 }, { Days: 0, Cera: 6000, Sockets: var sockets }] && sockets == default,
+                "完整同token的共享case索引重复保留真实选项及期限价格，不补默认0且保留原单值整数语法");
+        }
+        foreach (string text in new[] {
+            Index("450") + Index("451"), Index("450") + Index("0450"), Index("450") + Index("+450"),
+            Index("450") + Index(""), Index("") + Index("450"), Index("450") + Index("450 450"),
+            Index("450 450") + Index("450"), Index("450") + Index("bad"), Index("450") + Index("450 bad"),
+            Index("450") + Index("450.0"), Index("450") + Index("4.5e2"), Index("450") + Index("`450`"),
+            Index("2147483648"), Index("-450"), Index("453") + Index("453"), Index("452") + Index("452") })
+            That(AvatarPackageCatalog.ParseAvatar(types + text, cases).PendingRule is not null,
+                "任一共享索引冲突、原始词法差异、空段、多token、非法整数、缺case或空case均拒绝");
+        That(AvatarPackageCatalog.ParseAvatar(types + Index("450") + Index("450")).PendingRule is not null,
+            "同值重复不能绕过共享属性表缺失");
+        That(AvatarPackageCatalog.ParseAvatar(types + "[name]\n`[ability case index]文字`\n", cases) is
+            { PendingRule: null, RequiresAbilityChoice: false } noChoice && noChoice.Abilities.SetEquals([0]),
+            "字符串伪共享索引仍不是能力声明");
     }
 
     public static void RunResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)

@@ -220,8 +220,19 @@ internal sealed class AvatarPackageCatalog
         }
         else if (Fields(text, "ability case index").Count != 0)
         {
-            if (!int.TryParse(Scalar(text, "ability case index").Trim(), out int index) ||
-                abilityCases is null || !abilityCases.TryGetValue(index, out abilities!) || abilities.IsEmpty)
+            string? firstToken = null;
+            int index = 0;
+            foreach (Match field in Fields(text, "ability case index"))
+            {
+                var value = field.Groups[1];
+                var tokens = Tokens(text.Substring(value.Index, value.Length));
+                // 仅兼容完整同token的重复索引；逐段验证且不归一化词法，不取首值掩盖冲突或残缺声明。
+                if (tokens.Length != 1 || !int.TryParse(tokens[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out index) ||
+                    firstToken is not null && !string.Equals(firstToken, tokens[0], StringComparison.Ordinal))
+                    return Reject("装扮共用属性索引无效");
+                firstToken ??= tokens[0];
+            }
+            if (abilityCases is null || !abilityCases.TryGetValue(index, out abilities!) || abilities.IsEmpty)
                 return Reject("装扮共用属性资源缺失");
         }
         else abilities = [0];

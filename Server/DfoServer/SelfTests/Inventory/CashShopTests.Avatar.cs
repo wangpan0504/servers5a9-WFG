@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Text.Json;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
@@ -8,6 +10,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Parsers.Inventory;
+using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing.Inventory;
@@ -161,6 +164,47 @@ internal static partial class CashShopTests
 
         InventoryItem Coupon(int id, short slot, int count) => new(77, new(InventoryListType.Main, slot),
             InventoryRewardGrantService.Create(items.Get(id), count, now) with { ExpireTime = 0, SortLockFlag = 1 });
+    }
+
+    static void VerifyRepeatedAbilityCasePurchase(CharacterRepository repository, AccountOwners.Lease owner,
+        TownCatalog towns, ItemResources resources)
+    {
+        var product = resources.CashShop.Product(366100)!;
+        var definition = resources.AvatarPackages.GetAvatar(408500078);
+        That(product is { Section: "avatar", ItemId: 408500078, AvatarType: 3 } && definition.PendingRule is null &&
+            definition.RequiresAbilityChoice && definition.Abilities.Count == 102 && definition.Abilities.Min() == 2 &&
+            definition.Abilities.Max() == 109 && !definition.Abilities.Contains(0),
+            "实际商城装扮的重复case450完整保留102个真实选项，不虚构属性0");
+        var template = resources.Items.Get(408500078);
+        That(!template.AllowsUse(29, 4) && template.AllowsUse(30, 4) &&
+            Enumerable.Range(0, 16).All(job => job == 4 || !template.AllowsUse(60, (byte)job)),
+            "修复资源索引不改变该装扮的30级圣职者穿戴资格");
+        var current = repository.Create(owner, new("CaseBuy", towns.Room, towns.InitialReturn) { Job = 4, Level = 60 });
+        current = InventoryService.Commit(repository, owner, current,
+            new CurrencyService(resources.GoldLimits).Grant(current, CurrencyKind.Cera, 12_000));
+        var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces,
+            resources.Cargo, avatars: resources.AvatarPackages) { IgnoreAbsoluteExpiration = false, IgnoreUsablePeriod = false };
+        foreach (byte option in new byte[] { 2, 109 })
+        {
+            string unchanged = JsonSerializer.Serialize(current.Inventory);
+            That(service.Buy(current, Request(product, 0), out var rejected) is { Accepted: false, Plan: null } && rejected is null &&
+                JsonSerializer.Serialize(current.Inventory) == unchanged,
+                "共享case未声明的0在合法购买前后仍不扣费或改库存");
+            var before = current;
+            var result = service.Buy(current, Request(product, option), out var receipt);
+            var reward = result.Plan?.After.Items.SingleOrDefault(item => item.Core.ItemId == 408500078 && item.Core.Durability == option);
+            That(result.Accepted && receipt!.Products.Single().CeraPrice == 6000 &&
+                reward is { Uid: 0, Core.Kind: ItemKind.Avatar, Core.Attr: 0, ExpireTime: 0 } && reward.Avatar == new AvatarDetail(),
+                "真实商品分别支持首末合法能力、永久无孔及完整新装扮详情 " + option);
+            current = InventoryService.Commit(repository, owner, current, result);
+            var loaded = repository.LoadCharacter(owner, current.Slot);
+            var saved = loaded.Inventory.Items.Single(item => item.Core.ItemId == 408500078 && item.Core.Durability == option);
+            That(saved.Uid > 0 && saved.Core.Value == saved.Uid && saved.Avatar == reward!.Avatar &&
+                loaded.Revision == before.Revision + 1 && loaded.Inventory.AccountWallet.Get(CurrencyKind.Cera) ==
+                    before.Inventory.AccountWallet.Get(CurrencyKind.Cera) - 6000 &&
+                JsonSerializer.Serialize(loaded.Inventory) == JsonSerializer.Serialize(current.Inventory),
+                "正式事务扣6000一次，完整UID、所选能力与详情保存重载不丢失 " + option);
+        }
     }
 
     static CashShopPurchaseRequest Request(CashShopProduct product, byte ability, byte mode = 0) =>

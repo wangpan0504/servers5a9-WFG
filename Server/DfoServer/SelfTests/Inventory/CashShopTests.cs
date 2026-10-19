@@ -218,6 +218,7 @@ internal static partial class CashShopTests
         VerifyFullRewards(repo, owner, character.Slot, towns, resources);
         VerifyUnsupportedPremiumPurchases(character, resources);
         VerifyAvatars(towns, resources);
+        VerifyRepeatedAbilityCasePurchase(repo, owner, towns, resources);
         Console.WriteLine("PASS cash shop purchase parser, Cera charge, reward placement and ACK assertions");
     }
 
