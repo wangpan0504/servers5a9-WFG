@@ -26,7 +26,7 @@ internal sealed class AdventureCapsuleHandler(AdventureCapsuleService service, C
                 dungeon.ProficiencyLevel, dungeon.ProficiencyExperience);
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning, auxiliary,
                 new(0, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0)), "adventure_capsule_experience", Guard);
-            if (SkillPackets.BindingsChanged(previous.Learning, character.Learning))
+            if (previous.Level == character.Level && SkillPackets.BindingsChanged(previous.Learning, character.Learning))
                 await SkillProjection.PublishAsync(context, character, "adventure_capsule_skills", "adventure_capsule_combo", Guard);
             await SkillSwitchInventoryProjection.RefreshStateAsync(
                 context,
@@ -35,7 +35,8 @@ internal sealed class AdventureCapsuleHandler(AdventureCapsuleService service, C
                 character,
                 Guard,
                 "adventure_capsule_skill_switch_inventory");
-            await levels.RefreshAsync(context, character, previous.Level, "adventure_capsule_level", Guard);
+            await levels.RefreshAsync(context, character, previous.Level, "adventure_capsule_level", Guard,
+                previousLearning: previous.Learning);
             await context.Notify(NotiPacketType.ADVENTURE_INFO, AdventurePackets.Information(character.Id, snapshot, service.Catalog,
                 snapshot.Representatives(service.Catalog), context.Channel.ServerIndex), "adventure_capsule_information", Guard);
             await context.Notify(NotiPacketType.ADVENTURE_LV_EXP, AdventurePackets.Refresh(character.Id, snapshot.State, service.Catalog),

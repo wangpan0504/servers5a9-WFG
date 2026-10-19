@@ -341,7 +341,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (result.QuestDropSlots.Count > 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main,[.. result.QuestDropSlots]),"formal_quest_drop_items",Guard);
-        if (previousCharacter is not null && SkillPackets.BindingsChanged(previousCharacter.Learning, receipt.Character.Learning))
+        if (previousCharacter is not null && previousCharacter.Level == receipt.Character.Level &&
+            SkillPackets.BindingsChanged(previousCharacter.Learning, receipt.Character.Learning))
             await SkillProjection.PublishAsync(context, receipt.Character, "formal_growth_skills", "formal_growth_combo", Guard);
         if (previousCharacter is not null)
             await SkillSwitchInventoryProjection.RefreshStateAsync(
@@ -352,7 +353,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                 Guard,
                 "formal_growth_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character,
-            result.PreviousLevel ?? throw new InvalidOperationException("已提交死亡缺少原实际等级"), "formal_level_committed", Guard);
+            result.PreviousLevel ?? throw new InvalidOperationException("已提交死亡缺少原实际等级"), "formal_level_committed", Guard,
+            previousLearning: previousCharacter?.Learning);
         bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);
         if (!closed && result.PreviousQuests is { } previous && receipt.Character.ActiveMainQuests.Any(row => previous.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);

@@ -44,14 +44,9 @@ internal sealed class LevelUpTicketProjection(InventoryProjection inventory, Cha
             state.ProficiencyLevel,state.ProficiencyExperience);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level,character.Learning,auxiliary,
             CharacterExperienceDisplay.Ordinary), "level_up_ticket_growth", Guard);
-        // 完整技能树会重建客户端技能界面；job9即使绑定未变也要补发连招，不依赖下一次技能操作恢复。
-        if (SkillPackets.BindingsChanged(plan.Expected.Learning,character.Learning))
-            await SkillProjection.PublishAsync(context, character, "level_up_ticket_skills", "level_up_ticket_combo", Guard);
-        else
-            await SkillProjection.PublishCombosAsync(context, character, "level_up_ticket_combo", Guard);
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),"level_up_ticket_active",Guard);
         await levels.RefreshAsync(context,character,plan.Expected.Level,"level_up_ticket_level",Guard,
-            previousGrowType:plan.Expected.GrowType,restoreCompletedQuests:false);
+            previousGrowType:plan.Expected.GrowType,restoreCompletedQuests:false,previousLearning:plan.Expected.Learning);
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(character),"level_up_ticket_completed",Guard);
     }
 }

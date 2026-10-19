@@ -257,13 +257,13 @@ internal static class QuestLifecycleTcpTests
                 peer.Expect(0,14); var experience=peer.Expect(0,37).Body;
                 That(experience.Length==91 && experience[0]==3 && BinaryPrimitives.ReadUInt64LittleEndian(experience.AsSpan(1))==targetExperience &&
                     U32(experience,9)==0 && U32(experience,34)==0,"4873真实NOTI37绝对XP，阶段不伪装队伍或契约");
-                var skills=SkillPacketsTests.DecodeInitialized(peer.Expect(0,19).Body);
-                That(skills.Length==2 && skills.Select((tree,index)=>tree.Sp==U16(experience,13+index*2) && tree.Tp==U16(experience,17+index*2)).All(value=>value),
-                    "4873跨级绑定变化的SKILLINFO两树余额与前置EXP一致");
                 var actor=peer.Expect(0,2).Body;
                 var player=peer.Expect(0,2).Body;
                 That(actor[0]==0 && player[0]==1 && BinaryPrimitives.ReadUInt64LittleEndian(player.AsSpan(24))==targetExperience,
-                    "EXP及技能后依次刷新升级Actor/Player实际累计XP");
+                    "EXP后依次刷新升级Actor/Player实际累计XP");
+                var skills=SkillPacketsTests.DecodeInitialized(peer.Expect(0,19).Body);
+                That(skills.Length==2 && skills.Select((tree,index)=>tree.Sp==U16(experience,13+index*2) && tree.Tp==U16(experience,17+index*2)).All(value=>value),
+                    "4873跨级在Player后重装SKILLINFO，两树余额与前置EXP一致");
                 int[] available = List(peer.Expect(0, 21).Body, 3);
                 var completed4873 = peer.Expect(0,356).Body;
                 That(completed4873.Length == 30004 && completed4873[4+4873] == 1,"整次投影最后同步真实4873完成位");
@@ -764,7 +764,8 @@ internal static class QuestLifecycleTcpTests
                         if (point != boss) Move(path[Array.IndexOf(path,point)+1],0);
                     }
                     peer.Send(34,[34,0,36,27,255,255,1,0,255,255]);
-                    var reset = SkillPacketsTests.DecodeInitialized(peer.Expect(0,19).Body);
+                    var resetBody = peer.Expect(0,19).Body;
+                    var reset = SkillPacketsTests.DecodeInitialized(resetBody);
                     byte committedLevel = checked((byte)(long)extra.Query("SELECT level FROM characters WHERE id=$p0",peer.Id)[0][0]!);
                     var free = SkillPointLedger.FreeBaseline(14,3,committedLevel,resources.Learning);
                     That(reset.All(tree => tree.Sp == resources.Learning.TotalSp(committedLevel) + 137 && tree.Tp == resources.Learning.TotalTp(committedLevel) + 11 &&
@@ -777,6 +778,7 @@ internal static class QuestLifecycleTcpTests
                     That(actor[0] == 0 && actor[127+NameWidth("QuestCareer")] == 14 && actor[128+NameWidth("QuestCareer")] == 3,
                         "结算副本内同步实际job/grow的Actor包，不能仅发不含职业字段的Player");
                     That(peer.Expect(0,2).Body[0] == 1,"职业Actor之后同步实际Player属性和两棵技能树");
+                    Bytes(peer.Expect(0,19).Body, resetBody, "职业Player之后重装同一份已提交技能，不改变赠技或点数");
                     peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
                     That(extra.Query("SELECT grow_type FROM characters WHERE name='QuestCareer'") is [[3L]] &&
                         extra.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id=6948") is [[1L]],
@@ -1879,16 +1881,32 @@ internal static class QuestLifecycleTcpTests
     internal static void DrainNotifications(TcpPeer peer, Action<WirePacket>? observe = null)
     {
         peer.SendBarrier();
+        byte[]? growth = null;
+        bool restoreContext = false;
         for (int at = 0; at < 64; at++)
         {
             var packet = peer.Read();
-            if (packet.Kind == 1 && packet.Opcode == 1347) { Bytes(packet.Body,[1],"任务剧情阶段处理完成"); return; }
+            if (packet.Kind == 1 && packet.Opcode == 1347)
+            {
+                Bytes(packet.Body,[1],"任务剧情阶段处理完成");
+                That(!restoreContext,"剧情成长差量结束时已恢复主技能树");
+                return;
+            }
+            if (packet is { Kind: 1, Opcode: 29 })
+            {
+                var change = SkillPacketsTests.DecodeSuccess(packet.Body, allowEmpty: true);
+                That(change.Mode == 0 && (growth is null || change.Sp == U16(growth,13+2*change.Context) &&
+                    change.Tp == U16(growth,17+2*change.Context)),"剧情成长成功差量保持原生结构及绝对SP/TP，不忽略失败ACK");
+                restoreContext = change.Context == 1;
+                continue;
+            }
             if (packet.Kind == 0 && packet.Opcode == 1760)
             {
                 peer.ReadCardMembershipState(packet);
                 continue;
             }
             That(packet.Kind == 0,"剧情事件后只有通知，没有未检查的失败ACK");
+            if (packet.Opcode == 37) growth = packet.Body;
             observe?.Invoke(packet);
         }
         throw new InvalidDataException("任务剧情通知超过有界数量");

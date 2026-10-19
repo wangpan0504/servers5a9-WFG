@@ -172,6 +172,11 @@ internal static class LevelUpTicketTcpTests
         long Revision(Character character)=>Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0",character.Id)[0][0]);
         void Verify(Character before,IReadOnlyList<WirePacket> packets,long revisionBefore)
         {
+            var published = packets.ToList();
+            int player = published.FindLastIndex(packet => packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 1);
+            int skills = published.FindIndex(packet => packet is { Kind: 0, Opcode: 19 });
+            That(player >= 0 && skills > player && packets.Count(packet => packet is { Kind: 0, Opcode: 19 }) == 1,
+                "升级券在Player后只重装一次完整技能，避免后续装备刷新覆盖被动状态");
             var table=packets.Last().Body;
             That(table.Length==30004 && table[4+100]==1 && table[4+101]==1 && table[4+102]==0 && table[4+103]==0 &&
                 fixture.Query("SELECT level,revision FROM characters WHERE id=$p0",before.Id) is [[4L,var revision]] &&

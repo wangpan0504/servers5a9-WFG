@@ -41,6 +41,7 @@ internal static class FormalDungeonPublicationTests
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        await LevelRefreshAsync();
         await EntryRejectionAsync();
         await StorageFailureAsync(false);
         await StorageFailureAsync(true);
@@ -78,6 +79,65 @@ internal static class FormalDungeonPublicationTests
             f.Session.CompleteFormalDungeonLoading();
             var monster = entry.Monsters.Monsters[0];
             return (entry, new(1, 39, Death(monster.ObjectKey, entry.Character.Id, checked((byte)monster.CandidateLevel))));
+        }
+        async Task LevelRefreshAsync()
+        {
+            using var f = new Fixture(towns, characters, learning, quests, false);
+            var selected = f.Session.Selected!;
+            // 只验证投影合同：模拟等级变化但技能绑定完全相同的已提交快照，不运行成长或写库。
+            var committed = selected with { Level = 2, Learning = selected.Learning with { Experience = growth.GetLevelStartExperience(2) } };
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput();
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(83, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            var projection = new CharacterLevelProjection(computer);
+            await projection.RefreshAsync(context, committed, selected.Level, "level_refresh", () => true);
+            Check(!SkillPackets.BindingsChanged(selected.Learning, committed.Learning) &&
+                stream.Opcodes.SequenceEqual(new ushort[] { 2, 2, 19 }) &&
+                stream.Frames[0][16] == 0 && stream.Frames[1][16] == 1,
+                "绑定不变的升级仍在Actor及Player后重装一次完整技能，不依赖技能等级变化");
+            Check(SkillPacketsTests.DecodeInitialized(stream.Frames[2].AsSpan(16)).Length == 2 && Same(selected, f.Read()),
+                "重装投影保留完整双树且不改数据库或派生成长奖励");
+            await projection.RefreshAsync(context, committed, committed.Level, "unchanged", () => true);
+            await projection.RefreshAsync(context, committed, selected.Level, "stale", () => false);
+            Check(stream.Frames.Count == 3, "同等级经验和失效回执不追加Player或被动重装");
+
+            CharacterLearningState baseline = new(0, [
+                new(0, 130, 2, [new(54, 31, 1), new(103, 174, 15), new(10, 200, 1)]),
+                new(1, 100, 3, [new(54, 31, 1), new(103, 174, 15)])]);
+            var updated = committed with { Learning = baseline with { Trees = baseline.Trees.Select(tree => tree with
+            {
+                Sp = checked((ushort)(tree.Sp + 20)),
+                Skills = tree.Skills.Select(skill => skill.Id == 174 ? skill with { Level = 16 } : skill).ToArray()
+            }).ToArray() } };
+            await SkillProjection.PublishGrowthAsync(context, baseline, updated, "growth", "combos", () => true);
+            var deltas = stream.Frames.Skip(3).Select(frame => SkillPacketsTests.DecodeSuccess(frame.AsSpan(16))).ToArray();
+            Check(stream.Frames.Skip(3).All(frame => frame[0] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 29) &&
+                deltas.Select(delta => delta.Context).SequenceEqual(new byte[] { 1, 0 }) &&
+                deltas.All(delta => delta.Mode == 0 && delta.Skills is [{ Id: 174, Level: 16, Slot: 103 }]),
+                "升级只更新两树实际变化的固定技能，不重发技能31或清理无变化运行对象");
+            Check(deltas.All(delta => delta.Sp == updated.Learning.Trees.Single(tree => tree.Context == delta.Context).Sp) &&
+                Same(selected, f.Read()), "成长差量使用真实绝对点数且投影不改库");
+
+            var alternateOnly = updated with { Learning = baseline with { Trees = [baseline.Trees[0], updated.Learning.Trees[1]] } };
+            await SkillProjection.PublishGrowthAsync(context, baseline, alternateOnly, "alternate", "combos", () => true);
+            var restored = SkillPacketsTests.DecodeSuccess(stream.Frames[^1].AsSpan(16), allowEmpty: true);
+            Check(stream.Frames.Count == 7 && restored.Context == 0 && restored.Skills.Length == 0 && restored.Sp == baseline.Trees[0].Sp,
+                "仅备用树变化后用原生零项回复恢复主树，不重复更新未变技能");
+
+            var replacement = updated with { Learning = baseline with { Trees = [baseline.Trees[0] with
+            {
+                Skills = [new(54, 31, 1), new(103, 174, 15), new(10, 511, 1) { Command = "030304" }]
+            }, baseline.Trees[1]] } };
+            await SkillProjection.PublishGrowthAsync(context, baseline, replacement, "replacement", "combos", () => true);
+            var removed = SkillPacketsTests.DecodeSuccess(stream.Frames[^2].AsSpan(16));
+            var added = SkillPacketsTests.DecodeSuccess(stream.Frames[^1].AsSpan(16));
+            Check(stream.Frames.Count == 9 && removed.Skills is [{ Id: 200, Level: 0, Slot: 10 }] &&
+                added.Skills is [{ Id: 511, Level: 1, Slot: 10, Command: "030304" }],
+                "回落删除与新赠技复用槽位先删后增，保留高编号及指令");
+            await SkillProjection.PublishGrowthAsync(context, baseline, committed with { Learning = baseline }, "same", "combos", () => true);
+            await SkillProjection.PublishGrowthAsync(context, baseline, updated, "stale", "combos", () => false);
+            Check(stream.Frames.Count == 9, "绑定未变及过期成长差量不发送技能包");
         }
         async Task EntryRejectionAsync()
         {
@@ -193,8 +253,8 @@ internal static class FormalDungeonPublicationTests
             await RejectAsync(typeof(IOException), () => commands.DispatchAsync(context, death), "末次清图NOTI31写入失败传播");
             var committed = f.Read();
             var expectedOpcodes = new List<ushort> { 38, 37, 574 };
-            if (SkillPackets.BindingsChanged(selected.Learning, committed.Learning)) expectedOpcodes.Add(19);
-            if (committed.Level != selected.Level) expectedOpcodes.Add(2);
+            if (committed.Level != selected.Level) expectedOpcodes.AddRange([2, 19]);
+            else if (SkillPackets.BindingsChanged(selected.Learning, committed.Learning)) expectedOpcodes.Add(19);
             expectedOpcodes.Add(115);
             Check(stop.IsCancellationRequested && f.Count() == 28 && committed.Revision == selected.Revision + 1 &&
                 committed.ActiveMainQuests.Single().ConditionState == 0 && Same(committed, f.Session.Selected!) &&

@@ -10,6 +10,35 @@ internal static class SkillProjection
     // 同批NOTI447会被重建出的默认排列覆盖，必须等重建结束后再回放一次服务端排列。
     static readonly TimeSpan ComboRebuildDelay = TimeSpan.FromMilliseconds(500);
 
+    public static async Task PublishGrowthAsync(GameConnectionContext context, CharacterLearningState before,
+        Character character, string skillAction, string comboAction, Func<bool> canSend)
+    {
+        before.Validate();
+        character.Learning.Validate();
+        if (!before.Initialized || !character.Learning.Initialized)
+            throw new InvalidDataException("成长差量缺少提交前后技能树");
+        bool restoreContext = false;
+        // ACK29会切换当前树；先更新备用树，最后恢复本服当前使用的主树0。
+        foreach (var tree in character.Learning.Trees.OrderByDescending(tree => tree.Context))
+        {
+            var old = before.Trees.Single(value => value.Context == tree.Context).Skills.ToDictionary(skill => skill.Id);
+            var current = tree.Skills.ToDictionary(skill => skill.Id);
+            var removed = old.Values.Where(skill => !current.ContainsKey(skill.Id))
+                .OrderBy(skill => skill.Slot).Select(skill => skill with { Level = 0 }).ToArray();
+            var changed = tree.Skills.Where(skill => !old.TryGetValue(skill.Id, out var previous) || previous != skill)
+                .OrderBy(skill => skill.Slot).ToArray();
+            // 删除和新增可复用同一槽位，分两包而不是把重复槽塞进同一回复。
+            if (removed.Length > 0)
+                await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Growth(tree.Context, character.Learning, removed),
+                    skillAction + "_removed_" + tree.Context, canSend);
+            if (changed.Length > 0 || tree.Context == 0 && restoreContext)
+                await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Growth(tree.Context, character.Learning, changed),
+                    skillAction + "_changed_" + tree.Context, canSend);
+            restoreContext |= tree.Context == 1 && (removed.Length > 0 || changed.Length > 0);
+        }
+        await PublishCombosAsync(context, character, comboAction, canSend);
+    }
+
     public static async Task PublishAsync(GameConnectionContext context, Character character, string skillAction,
         string comboAction, Func<bool>? canSend = null, Func<ushort, string>? defaultCommand = null)
     {

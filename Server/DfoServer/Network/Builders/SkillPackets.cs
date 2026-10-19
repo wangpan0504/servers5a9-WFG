@@ -87,10 +87,17 @@ internal static class SkillPackets
     }
 
     public static byte[] Success(byte context, byte mode, CharacterLearningState state, IReadOnlyList<LearnedSkill> changes)
+        => Changes(context, mode, state, changes, allowEmpty: false);
+
+    // 成长差量沿用ACK29；空列表只恢复当前树及点数，不清理客户端技能运行对象。
+    public static byte[] Growth(byte context, CharacterLearningState state, IReadOnlyList<LearnedSkill> changes)
+        => Changes(context, 0, state, changes, allowEmpty: true);
+
+    private static byte[] Changes(byte context, byte mode, CharacterLearningState state, IReadOnlyList<LearnedSkill> changes, bool allowEmpty)
     {
         Validate(state, requireFullTrees: false);
         ArgumentNullException.ThrowIfNull(changes);
-        if (context > 1 || mode > 1 || changes.Count is < 1 or > 255 ||
+        if (context > 1 || mode > 1 || changes.Count > 255 || (!allowEmpty && changes.Count == 0) ||
             changes.Any(skill => skill is null || skill.Slot == byte.MaxValue) ||
             changes.Select(skill => skill.Slot).Distinct().Count() != changes.Count ||
             changes.Select(skill => skill.Id).Distinct().Count() != changes.Count)

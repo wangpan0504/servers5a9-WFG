@@ -42,6 +42,11 @@ internal static class SkillPacketsTests
         var parsedAck = DecodeSuccess(ack);
         That(parsedAck.Context == 0 && parsedAck.Mode == 0 && parsedAck.Sp == 0 && parsedAck.Tp == 0 && parsedAck.Skills.Single() == new LearnedSkill(0, 5, 1),
             "ACK slot byte is actual binding not a status placeholder");
+        Bytes(SkillPackets.Growth(0, zero, [new(0, 5, 1)]), ack,
+            "成长差量复用原生ACK29布局，不新增协议模式");
+        var restore = DecodeSuccess(SkillPackets.Growth(0, zero, []), allowEmpty: true);
+        That(restore.Context == 0 && restore.Mode == 0 && restore.Skills.Length == 0 && restore.Sp == 0 && restore.Tp == 0,
+            "原生零项更新只恢复主树及绝对点数，不伪造技能改变");
         var rich = State(new(1, 1234, 987, [new(254, 65535, 255), new(7, 300, 128)]),
             new(0, 65535, 65535, [new(0, 128, 1), new(130, 40000, 200)]));
         var richTrees = DecodeInitialized(SkillPackets.Initialized(rich));
@@ -154,7 +159,7 @@ internal static class SkillPacketsTests
         return trees.ToArray();
     }
 
-    internal static WireAck DecodeSuccess(ReadOnlySpan<byte> body)
+    internal static WireAck DecodeSuccess(ReadOnlySpan<byte> body, bool allowEmpty = false)
     {
         var reader = new PbReader(body);
         Require(reader.Byte() == 1);
@@ -162,7 +167,7 @@ internal static class SkillPacketsTests
         ushort sp = reader.Word();
         ushort tp = reader.Word();
         byte count = reader.Byte();
-        Require(context <= 1 && count > 0);
+        Require(context <= 1 && (count > 0 || allowEmpty));
         var skills = new List<LearnedSkill>();
         for (int index = 0; index < count; index++)
         {

@@ -102,6 +102,14 @@ internal static class ExperienceConsumableTcpTests
                     var experience = packets.Single(item => item.Opcode == 37).Body;
                     That(experience[0] == target && BinaryPrimitives.ReadUInt64LittleEndian(experience.AsSpan(1)) == before.Learning.Experience + gain,
                         "NOTI37反映同一笔已提交的绝对经验，不再叠加ACK差额");
+                    if (target > before.Level)
+                    {
+                        int player = packets.FindLastIndex(item => item is { Kind: 0, Opcode: 2 } && item.Body[0] == 1);
+                        bool dungeon = packets.Count(item => item is { Kind: 0, Opcode: 2 }) == 1;
+                        int skills = packets.FindIndex(item => dungeon ? item is { Kind: 1, Opcode: 29 } : item is { Kind: 0, Opcode: 19 });
+                        That(player >= 0 && skills > player && (!dungeon || packets.All(item => item is not { Kind: 0, Opcode: 19 })),
+                            "胶囊升级在Player后同步真实技能；图内采用差量而非清理运行对象的完整19");
+                    }
                     return packets;
                 }
                 packets.Add(packet);

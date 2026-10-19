@@ -40,7 +40,6 @@ internal static partial class FormalDungeonTcpTests
         long completedOrdinaryRevision = 0;
         int completedOrdinaryGoldLimit = 0, expectedOrdinaryGoldLimit = 0;
         bool expectContractOverview = false;
-        byte automaticLevel = resources.Characters.Get(0).Skills.Single(skill => skill.Id == 174).Level;
         using (var peer = Open(fixture))
         {
             peer.Create("FormalTcp");
@@ -402,16 +401,13 @@ internal static partial class FormalDungeonTcpTests
                     That(conditions.Length == 10 && U32(conditions,0) == 1 && U16(conditions,4) == 3145 && U32(conditions,6) == 0,
                         "真实清图和猎杀同样投影已提交活动条件，不给3145省略通知");
                 }
-                if (packet[0] > automaticLevel)
-                {
-                    var skills = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
-                    That(skills.All(tree => tree.Skills.Single(skill => skill.Id == 174).Level == packet[0]) &&
-                        skills[0].Skills.Single(skill => skill.Id == movedSkill).Slot == 6,
-                        "升级固定技能时跟随完整技能同步，战斗换槽保持稳定");
-                    automaticLevel = packet[0];
-                }
                 if (packet[0] != projectedLevel)
-                    ExpectLevelRefresh(peer, packet[0], U64(packet, 1));
+                {
+                    var skills = ExpectLevelRefresh(peer, packet[0], U64(packet, 1));
+                    That(skills.All(tree => tree.Skills.Single(skill => skill.Id == 174).Level == packet[0]) &&
+                        fixture.Query("SELECT slot FROM character_skill_bindings WHERE character_id=$p0 AND context=0 AND skill_id=$p1", peer.Id, movedSkill) is [[6L]],
+                        "Player之后只同步变化技能，升级固定技能且不重置战斗换槽");
+                }
                 projectedLevel = packet[0];
                 return packet;
             }
@@ -500,7 +496,6 @@ internal static partial class FormalDungeonTcpTests
             byte rewardLevel = 1;
             while (experience >= growth.GetCumulativeExperienceBoundary(rewardLevel)) rewardLevel++;
             var questGrowth = peer.Expect(0, 37).Body;
-            if (rewardLevel > previousLevel) peer.Expect(0, 19);
             That(questGrowth.Length == 91 && questGrowth[0] == rewardLevel && U64(questGrowth, 1) == experience &&
                 U32(questGrowth, 9) == 0 && U16(questGrowth, 13) == growth.GetSpDelta(1, rewardLevel) &&
                 U16(questGrowth, 15) == growth.GetSpDelta(1, rewardLevel) &&
@@ -609,7 +604,7 @@ internal static partial class FormalDungeonTcpTests
         await fixture.StopAsync();
     }
 
-    static void ExpectLevelRefresh(TcpPeer peer, byte level, ulong experience, bool town = false, bool completedMainline = false)
+    static SkillPacketsTests.WireTree[] ExpectLevelRefresh(TcpPeer peer, byte level, ulong experience, bool town = false, bool completedMainline = false)
     {
         if (town)
         {
@@ -623,6 +618,17 @@ internal static partial class FormalDungeonTcpTests
             U32(player, 40) == 1400 + 250 * (level - 1) &&
             BinaryPrimitives.ReadInt16LittleEndian(player.AsSpan(44)) == 75 + 48 * (level - 1),
             "副本与结算升级只发Player，当前CHR基础/完整Core/双树来自实际提交角色");
+        SkillPacketsTests.WireTree[] skills;
+        if (town)
+            skills = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
+        else
+        {
+            var alternate = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
+            var current = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
+            That(alternate.Context == 1 && current.Context == 0 && alternate.Mode == 0 && current.Mode == 0,
+                "图内升级依次增量同步备用树和主树，不发送会清运行对象的完整19");
+            skills = [new(current.Sp, current.Tp, current.Skills), new(alternate.Sp, alternate.Tp, alternate.Skills)];
+        }
         if (!town)
         {
             That(QuestLifecycleTcpTests.List(peer.Expect(0, 21).Body, level).Contains(3145) != completedMainline,
@@ -630,6 +636,7 @@ internal static partial class FormalDungeonTcpTests
             if (completedMainline)
                 That(peer.Expect(0,356).Body[4+3145] == 1, "副本升级任务列表刷新后保留已完成主线历史");
         }
+        return skills;
     }
 
     internal static void RefreshedQuests(TcpPeer peer)
@@ -925,10 +932,15 @@ internal static partial class FormalDungeonTcpTests
                 That(notice.Length == 91 && U64(notice, 1) == experience && Experience(fixture, peer.Id) == experience,
                     "普通六图逐怪和通关的完整成长投影对应实际持久提交");
                 if (notice[0] == currentLevel) return;
-                peer.Expect(0, 19);
                 var player = peer.Expect(0, 2).Body;
                 That(player[0] == 1 && U16(player, 22) == peer.Id && U64(player, 24) == experience,
                     "普通六图合法升级后同步本人Player及实际累计经验");
+                var alternate = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
+                var active = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
+                That(alternate.Context == 1 && active.Context == 0 &&
+                    alternate.Skills.Single(skill => skill.Id == 174).Level == notice[0] &&
+                    active.Skills.Single(skill => skill.Id == 174).Level == notice[0],
+                    "普通六图升级只更新真实变化技能，并恢复主树而不重建整个运行状态");
                 RefreshedQuests(peer);
                 currentLevel = notice[0];
             }
@@ -973,7 +985,6 @@ internal static partial class FormalDungeonTcpTests
                 byte[] experience = peer.Expect(0, 37).Body;
                 if (experience[0] != currentLevel)
                 {
-                    peer.Expect(0, 19);
                     ExpectLevelRefresh(peer, experience[0], U64(experience, 1));
                     currentLevel = experience[0];
                 }
@@ -1116,7 +1127,6 @@ internal static partial class FormalDungeonTcpTests
                 "普通死亡和结算的实际完整经验通知与持久累计经验一致");
             if (notice[0] != currentLevel)
             {
-                peer.Expect(0, 19);
                 ExpectLevelRefresh(peer, notice[0], experience, completedMainline: true);
                 currentLevel = notice[0];
             }
