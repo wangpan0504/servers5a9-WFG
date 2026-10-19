@@ -36,4 +36,26 @@ internal sealed partial class GameSession
         SelectCharacter(entry.Slot, goldLimits, entry, resumeTown);
         return true;
     });
+
+    public CharacterSlotChangeResult ChangeCharacterSlots(uint slotA, uint slotB) => owner.Execute(() =>
+    {
+        if (Selected is not null || Phase != SessionPhase.Unselected)
+            return new CharacterSlotChangeResult(null, SelectionEpoch, "selected");
+        if (slotA > ushort.MaxValue || slotB > ushort.MaxValue)
+            return new CharacterSlotChangeResult(new(CaptureRoster()), SelectionEpoch, "slot-invalid");
+        // 同槽请求不写库，仍回复成功和当前名册，避免客户端停在拖动后的本地行序。
+        if (slotA == slotB)
+            return new CharacterSlotChangeResult(new(CaptureRoster()), SelectionEpoch, "same-slot");
+        // 只按最近已发布名册解释两个持久槽位；名册外的请求不能猜归属，回推当前名册重新同步。
+        var roster = publishedRoster;
+        if (roster is null || !MatchesRoster(roster) ||
+            !roster.Entries.Any(entry => entry.Slot == slotA) || !roster.Entries.Any(entry => entry.Slot == slotB))
+            return new CharacterSlotChangeResult(new(CaptureRoster()), SelectionEpoch, "roster-mismatch");
+        repository.SwapSlots(owner, checked((ushort)slotA), checked((ushort)slotB));
+        SelectionEpoch++;
+        return new CharacterSlotChangeResult(new(CaptureRoster()), SelectionEpoch, "committed");
+    });
+
+    public bool CanPublishSlotChange(CharacterSlotChangeReceipt receipt) => owner.Execute(() =>
+        MatchesRoster(receipt.Roster) && Selected is null && Phase == SessionPhase.Unselected);
 }

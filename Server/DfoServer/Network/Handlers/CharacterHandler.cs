@@ -17,6 +17,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         commands.Register(CmdPacketType.CHECK_DOUBLE_CHARACTER_NAME, CheckNameAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CREATE_CHARACTER, CreateAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.DELETE_CHARACTER, DeleteAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CHANGE_CHARAC_SLOT, ChangeSlotAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.GET_USERINFO, RosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHARAC_VIEW_HIDDEN_CHARAC_INFO, HiddenRosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
@@ -97,6 +98,25 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
             context.RosterRequested = true;
             context.SelectionRosterPushed = false;
         }
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ChangeSlotAsync(GameConnectionContext context, Packet request)
+    {
+        var parsed = CharacterRequests.ChangeSlot(request.Body);
+        var result = context.Session.ChangeCharacterSlots(parsed.SlotA, parsed.SlotB);
+        log.Write(result.Accepted ? "character_slot_change" : "character_slot_change_rejected", new
+        {
+            Connection = context.Id, SlotA = parsed.SlotA, SlotB = parsed.SlotB, result.Reason, result.SelectionEpoch,
+            Count = result.Receipt?.Roster.Entries.Length
+        });
+        if (result.Receipt is not { } receipt) return CommandResult.Handled;
+        // 拖动只在选角页发生；成功ACK后必须用本次提交的完整名册覆盖客户端行序。
+        bool CanSend() => context.Session.CanPublishSlotChange(receipt);
+        await context.Reply(CmdPacketType.CHANGE_CHARAC_SLOT, CharacterPackets.SlotChanged(), "character_slot_ack", CanSend);
+        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity),
+            "character_slot_roster", CanSend);
+        context.Session.MarkRosterPublished(receipt.Roster);
         return CommandResult.Handled;
     }
 

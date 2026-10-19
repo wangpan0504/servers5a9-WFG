@@ -31,6 +31,7 @@ internal static class SessionPlanningTests
         DeletionCapacity();
         DeletionRosterMapping();
         PublishedRosterIdentity();
+        SlotChange();
         Initialization();
         Learning();
         Layout();
@@ -262,6 +263,96 @@ internal static class SessionPlanningTests
         Reject<InvalidOperationException>(() => f.Session.DeleteCharacterFromRoster(0, "Unseen"), "删除同样拒绝已发布身份被同槽同名替换");
         TestCheck.That(f.Snapshot() == before && replacement.Id > unseen.Id && f.Session.Selected is null,
             "发布身份失配不会保存出生、删除新角色或安装在线状态");
+    }
+
+    static void SlotChange()
+    {
+        var parsed = CharacterRequests.ChangeSlot([2, 0, 0, 0, 7, 0, 0, 0]);
+        That(parsed.SlotA == 2 && parsed.SlotB == 7, "重排Parser按两个u32持久槽位解读，不是名册行索引");
+        foreach (byte[] invalid in new[] { Array.Empty<byte>(), new byte[] { 1, 0, 0, 0 }, new byte[7], new byte[9] })
+            Reject<InvalidDataException>(() => CharacterRequests.ChangeSlot(invalid), "重排Parser拒绝非8字节正文");
+
+        using var f = new Fixture();
+        var original = f.Read();
+        var second = f.Session.CreateCharacter("Second", Profile);
+        var third = f.Session.CreateCharacter("Third", Profile);
+        f.Session.DeleteCharacter(second.Slot);
+        f.Session.MarkRosterPublished(f.Session.PrepareRoster());
+        long epoch = f.Session.SelectionEpoch;
+        string before = f.Snapshot();
+        var same = f.Session.ChangeCharacterSlots(third.Slot, third.Slot);
+        That(same.Accepted && same.Reason == "same-slot" && same.SelectionEpoch == epoch && f.Snapshot() == before,
+            "同槽重排不写库，仍回带当前名册供客户端复位本地行序");
+        var absent = f.Session.ChangeCharacterSlots(original.Slot, second.Slot);
+        That(absent.Accepted && absent.Reason == "roster-mismatch" && absent.SelectionEpoch == epoch && f.Snapshot() == before,
+            "已删除槽位不在已发布名册，拒绝写库并回推当前名册");
+        var invalidSlot = f.Session.ChangeCharacterSlots(original.Slot, 65536);
+        That(invalidSlot.Accepted && invalidSlot.Reason == "slot-invalid" && invalidSlot.SelectionEpoch == epoch && f.Snapshot() == before,
+            "超出u16的槽位不写库，回报成功并重新同步名册");
+        long originalRevision = Convert.ToInt64(f.Scalar("SELECT revision FROM characters WHERE id=" + original.Id));
+        long thirdRevision = Convert.ToInt64(f.Scalar("SELECT revision FROM characters WHERE id=" + third.Id));
+        var result = f.Session.ChangeCharacterSlots(original.Slot, third.Slot);
+        var receipt = result.Receipt!;
+        That(result.Accepted && result.Reason == "committed" && result.SelectionEpoch == epoch + 1 &&
+            receipt.Roster.SelectionEpoch == epoch + 1 && receipt.Roster.Entries.Select(row => (row.Slot, row.Id))
+                .SequenceEqual(new[] { (original.Slot, third.Id), (third.Slot, original.Id) }) &&
+            f.Session.CanPublishSlotChange(receipt), "间隔槽位互换提交后回执携带最新名册和原owner/epoch");
+        That(f.Scalar("SELECT slot FROM characters WHERE id=" + original.Id) is 2L &&
+            f.Scalar("SELECT slot FROM characters WHERE id=" + third.Id) is 0L &&
+            Convert.ToInt64(f.Scalar("SELECT revision FROM characters WHERE id=" + original.Id)) > originalRevision &&
+            Convert.ToInt64(f.Scalar("SELECT revision FROM characters WHERE id=" + third.Id)) > thirdRevision,
+            "互换后两个角色落到对方持久槽位并使旧revision失效");
+        f.Session.MarkRosterPublished(receipt.Roster);
+        var back = f.Session.ChangeCharacterSlots(third.Slot, original.Slot);
+        var backReceipt = back.Receipt!;
+        That(back.Accepted && back.SelectionEpoch == epoch + 2 && !f.Session.CanPublishSlotChange(receipt) &&
+            backReceipt.Roster.Entries.Select(row => (row.Slot, row.Id)).SequenceEqual(new[] { (original.Slot, original.Id), (third.Slot, third.Id) }) &&
+            f.Session.CanPublishSlotChange(backReceipt), "再次互换推进epoch，旧回执不能覆盖新名册");
+        f.Session.MarkRosterPublished(backReceipt.Roster);
+        f.Session.SelectFromRosterIndex(0);
+        That(f.Session.Selected is { } selected && selected.Id == original.Id && selected.Slot == original.Slot,
+            "重排后选角wire按新名册行序映射回持久槽位");
+        long selectedEpoch = f.Session.SelectionEpoch;
+        before = f.Snapshot();
+        var duringSelection = f.Session.ChangeCharacterSlots(original.Slot, third.Slot);
+        That(!duringSelection.Accepted && duringSelection.Receipt is null && duringSelection.Reason == "selected" &&
+            f.Session.SelectionEpoch == selectedEpoch && f.Snapshot() == before, "已选角会话拒绝重排，不写库也不回包");
+        f.Session.ReturnToRoster();
+        f.Session.MarkRosterPublished(f.Session.PrepareRoster());
+        f.Session.CreateCharacterForClient("Fourth", Profile);
+        long createdEpoch = f.Session.SelectionEpoch;
+        before = f.Snapshot();
+        var stale = f.Session.ChangeCharacterSlots(original.Slot, third.Slot);
+        That(stale.Accepted && stale.Reason == "roster-mismatch" && stale.SelectionEpoch == createdEpoch && f.Snapshot() == before,
+            "建角推进epoch后旧名册请求不写库，只回推新名册");
+
+        using var failed = new Fixture();
+        var added = failed.Session.CreateCharacter("SwapFail", Profile);
+        failed.Session.MarkRosterPublished(failed.Session.PrepareRoster());
+        failed.Sql("CREATE TRIGGER fail_slot_swap BEFORE UPDATE OF slot ON characters BEGIN SELECT RAISE(ABORT,'slot swap rollback'); END");
+        long failEpoch = failed.Session.SelectionEpoch;
+        string snapshot = failed.Snapshot();
+        Reject<SqliteException>(() => failed.Session.ChangeCharacterSlots(0, added.Slot), "重排SQL失败向上传递");
+        That(failed.Snapshot() == snapshot && failed.Session.SelectionEpoch == failEpoch,
+            "重排失败整笔回滚，不推进epoch也不返回成功");
+
+        using var full = new Fixture();
+        full.Sql("INSERT INTO account_wallets(account,character_slots) VALUES('planning',62) ON CONFLICT(account) DO UPDATE SET character_slots=62");
+        for (int slot = 1; slot < 62; slot++) full.Session.CreateCharacter("Full" + slot, Profile);
+        var rows = full.Repository.ListRoster(full.Owner);
+        That(rows.Length == 62 && rows[0].Slot == 0 && rows[^1].Slot == 61, "重排满槽夹具覆盖全部62个合法槽位");
+        full.Session.MarkRosterPublished(full.Session.PrepareRoster());
+        var fullResult = full.Session.ChangeCharacterSlots(0, 61);
+        var fullReceipt = fullResult.Receipt!;
+        ushort[] swappedIds = rows.Select(row => row.Id).ToArray();
+        (swappedIds[0], swappedIds[61]) = (swappedIds[61], swappedIds[0]);
+        That(fullResult.Accepted && fullResult.Reason == "committed" &&
+            fullReceipt.Roster.Entries.Select(row => row.Id).SequenceEqual(swappedIds) &&
+            full.Scalar("SELECT slot FROM characters WHERE id=" + rows[0].Id) is 61L &&
+            full.Scalar("SELECT slot FROM characters WHERE id=" + rows[^1].Id) is 0L &&
+            full.Scalar("SELECT count(*) FROM characters WHERE account='planning' AND slot BETWEEN 0 AND 61") is 62L,
+            "62槽全占时经临时-1槽完成互换，CHECK临时放行后名册无空缺");
+        Reject<SqliteException>(() => full.Sql("UPDATE characters SET slot=99 WHERE id=" + rows[0].Id), "全槽互换后CHECK约束已恢复");
     }
 
     static void Learning()

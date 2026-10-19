@@ -6,6 +6,8 @@ namespace DfoServer.Network.Parsers;
 
 internal sealed record CreateCharacterRequest(byte Job, string Name, byte[] Tail);
 internal sealed record DeleteCharacterRequest(ushort RosterIndex, string ConfirmationName);
+// 重排正文为两个u32持久槽位；客户端名册行携带的slot原样回传，不是UI行索引。
+internal sealed record ChangeCharacterSlotRequest(uint SlotA, uint SlotB);
 internal static class CharacterRequests
 {
     public static void HiddenRoster(ReadOnlySpan<byte> body)
@@ -26,6 +28,13 @@ internal static class CharacterRequests
         if (body.Length != CharacterName.Encoding.GetByteCount(name) + 4)
             throw new InvalidDataException("Name check tail");
         return name;
+    }
+
+    public static ChangeCharacterSlotRequest ChangeSlot(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 8)
+            throw new InvalidDataException("Character slot change body width");
+        return new(BinaryPrimitives.ReadUInt32LittleEndian(body), BinaryPrimitives.ReadUInt32LittleEndian(body[4..]));
     }
 
     public static DeleteCharacterRequest Delete(ReadOnlySpan<byte> body)

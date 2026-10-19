@@ -764,6 +764,7 @@ internal static class FormalDungeonPublicationTests
         public Character Create(AccountOwners.Lease owner, NewCharacter character) => inner.Create(owner, character);
         public CharacterDeletion LoadDeletionTarget(AccountOwners.Lease owner, ushort slot) => inner.LoadDeletionTarget(owner, slot);
         public CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected) => inner.Delete(owner, expected);
+        public void SwapSlots(AccountOwners.Lease owner, ushort slotA, ushort slotB) => inner.SwapSlots(owner, slotA, slotB);
         public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back, InventoryPlan? inventory = null) => inner.Save(owner, expected, position, back, inventory);
         public Character CommitTeleport(AccountOwners.Lease owner, DfoServer.Game.Town.TeleportPlan plan) => inner.CommitTeleport(owner, plan);
         public DfoServer.Game.Dungeons.AssaultDailyCounts LoadAssaultDaily(AccountOwners.Lease owner, ushort characterId, int day) => inner.LoadAssaultDaily(owner, characterId, day);

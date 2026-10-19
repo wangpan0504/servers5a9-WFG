@@ -48,6 +48,7 @@ internal interface ICharacterRepository
     Character Create(AccountOwners.Lease owner, NewCharacter character);
     CharacterDeletion LoadDeletionTarget(AccountOwners.Lease owner, ushort slot);
     CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected);
+    void SwapSlots(AccountOwners.Lease owner, ushort slotA, ushort slotB);
     Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint, InventoryPlan? inventory = null);
     Character CommitTeleport(AccountOwners.Lease owner, DfoServer.Game.Town.TeleportPlan plan);
     Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null);

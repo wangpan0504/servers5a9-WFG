@@ -12,6 +12,8 @@ internal static class CharacterPackets
     // ACK6成功额外读取u8和u16；123仅作为已确认的静默收尾，不表示某个业务错误。
     public static byte[] Deleted(CharacterDeletionResult result) => result.Receipt is { } receipt
         ? [1, 0, (byte)receipt.RosterIndex, (byte)(receipt.RosterIndex >> 8)] : [0, 123, 0];
+    // ACK295成功只需单字节；90CN/S4A21同序：先ACK，再完整roster。失败正文在本版无匹配证据，不猜造。
+    public static byte[] SlotChanged() => [1];
     public static byte[] Created(Character character)
     {
         using var stream = new MemoryStream();

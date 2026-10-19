@@ -51,6 +51,18 @@ internal static class CharacterSlotsTcpTests
         fixture.Sql("CREATE TRIGGER fail_slot_purchase BEFORE UPDATE OF character_slots ON account_wallets WHEN NEW.character_slots>OLD.character_slots BEGIN SELECT RAISE(ABORT,'slots rollback'); END");
         using (var peer = Open(fixture))
         {
+            var loginRows = RosterNames(peer.Roster);
+            That(loginRows.Length == 32 && loginRows[0] == "SlotsTcp" && loginRows[1] == "Fill1" && loginRows[2] == "Fill2",
+                "重排前登录名册按持久槽位排列");
+            peer.Send(295, SwapBody(1, 2));
+            peer.Expect(1, 295, [1]);
+            var swappedRoster = peer.Expect(0, 2).Body;
+            var swappedRows = RosterNames(swappedRoster);
+            That(swappedRows.Length == 32 && swappedRows[0] == "SlotsTcp" && swappedRows[1] == "Fill2" && swappedRows[2] == "Fill1" &&
+                U16(swappedRoster, 3) == 32 && U16(swappedRoster, 5) == 32 &&
+                fixture.Query("SELECT slot FROM characters WHERE name='Fill1'") is [[2L]] &&
+                fixture.Query("SELECT slot FROM characters WHERE name='Fill2'") is [[1L]],
+                "op295互换两个持久槽位，ACK后完整名册按提交行序下发并落库");
             peer.Select(); peer.Barrier(); string before = State(); peer.Send(64, Purchase()); peer.Closed();
             That(State() == before, "容量保存失败不扣点券或推进revision");
         }
@@ -98,5 +110,27 @@ internal static class CharacterSlotsTcpTests
     static byte[] Purchase()
     {
         byte[] body = new byte[19]; body[2] = 1; BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(7), 103660); return body;
+    }
+
+    static byte[] SwapBody(uint slotA, uint slotB)
+    {
+        byte[] body = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, slotA);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), slotB);
+        return body;
+    }
+
+    // 独立解析登录名册行，按行内名字宽度和装备数推进，不借用服务端Builder。
+    static string[] RosterNames(byte[] body)
+    {
+        var result = new string[body[1]];
+        int at = 15;
+        for (int i = 0; i < result.Length; i++)
+        {
+            int width = (int)U32(body, at + 2);
+            result[i] = DecodeName(body, at + 6, width);
+            at += 70 + width + body[at + 21 + width] * 25;
+        }
+        return result;
     }
 }
