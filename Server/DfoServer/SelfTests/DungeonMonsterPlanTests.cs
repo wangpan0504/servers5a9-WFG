@@ -77,10 +77,16 @@ internal static class DungeonMonsterPlanTests
             That(actor.SpawnType == spawn && actor.Team == 7 && actor.IsFriendly && !actor.IsBlocking && !actor.CanReportDeath &&
                 !actor.IsBoss && !actor.IsScriptedBoss, "NPC品级仍来自rank，同阵营排除仍来自本人实际team");
         }
+        var npcDummy = DungeonMonsterPlan.FromRoom(room with
+            { Monsters = [npc with { Modifiers = ["[NPC]", "[dummy]"] }], MonsterTeams = null }, 99, 10).Monsters.Single();
+        That(npcDummy is { SpawnType: 3, Team: 100, IsFriendly: false, IsBlocking: true, CanReportDeath: true,
+                IsBoss: true, IsScriptedBoss: false } &&
+            npcDummy.Source!.Modifiers.SequenceEqual(["[NPC]", "[dummy]"]) && npcDummy.Source.NpcParameter == 1069,
+            "NPC附带dummy仍按原Boss品级生成，不因dummy改成脚本Boss或整行拒绝");
         foreach (var row in new[]
         {
             npc with { NpcParameter = null }, npc with { Modifiers = [] },
-            npc with { Modifiers = ["[NPC]","[dummy]"] }, npc with { Modifiers = ["[NPC]","[displayhuntdummy]"] },
+            npc with { Modifiers = ["[NPC]","[displayhuntdummy]"] },
             npc with { Modifiers = ["[NPC]","[NPC]"] }, npc with { Modifiers = ["[future]"] }
         })
             Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(room with { Monsters = [source,row] },99,10),

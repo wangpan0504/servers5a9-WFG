@@ -106,8 +106,13 @@ internal static class DungeonRoomCatalogTests
         npcMonsterTokens[npcPrefix.Length + 2] = new(0,9);
         That(npcMonsters.Monsters[0].NpcParameter == 0 && npcMonsters.Monsters[0].Modifiers is IList npcModifiers && npcModifiers.IsReadOnly,
             "原NPC参数及修饰独立于输入修改，缺省不会被补成0");
-        TestCheck.Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(npcMonsters,1,100,62),
-            "NPC与dummy组合的解析不授予普通演员生成、战斗或奖励资格");
+        var npcPlan = DungeonMonsterPlan.FromRoom(npcMonsters,1,100,62);
+        That(npcPlan.Monsters.Count == 2 &&
+            npcPlan.Monsters[0] is { MonsterId: 62531, SpawnType: 3, CandidateLevel: 62, IsBlocking: true,
+                CanReportDeath: true, IsBoss: true, IsScriptedBoss: false } &&
+            npcPlan.Monsters[0].Source is { NpcParameter: 0, Modifiers: ["[NPC]", "[dummy]"] } &&
+            npcPlan.Monsters[1] is { MonsterId: 1, SpawnType: 0, IsBlocking: true, IsBoss: false },
+            "NPC与dummy组合按原Boss品级生成，并保留相邻普通怪，房间不再整批拒绝");
         foreach (int parameter in new[] { -1, int.MinValue, int.MaxValue })
             That(fixture.Parse(fixture.Block("monster", [.. npcPrefix, npcMarker, new(0,parameter), bossMarker])).Monsters[0].NpcParameter == parameter,
                 "NPC原整数保留显式负值及边界，不猜编号范围或布尔含义");
@@ -183,8 +188,9 @@ internal static class DungeonRoomCatalogTests
             "Lv8真实76155保留完整八整数及fixed/dummy/boss声明");
         Reject(() => DungeonMonsterPlan.FromRoom(story,1,100), "76155未知dummy/相对等级生成规则仍拒绝，不能补普通Boss冒充剧情");
         var mermanDungeon = dungeons.Get(162);
-        var mermanMap = mermanDungeon.Mazes.Single(candidate => candidate.QuestConnectionTokens.SequenceEqual(
-            [new PvfToken(0,0),new(0,3487),new(0,-1)])).MapSpecification!.Single(map => map.Id == 91548);
+        var mermanMaze = mermanDungeon.Mazes.Single(candidate => candidate.QuestConnectionTokens.SequenceEqual(
+            [new PvfToken(0,0),new(0,3487),new(0,-1)]));
+        var mermanMap = mermanMaze.MapSpecification!.Single(map => map.Id == 91548);
         var merman = catalog.Get(mermanMap,requirePassiveDefinitions: false);
         int[][] mermanRows = [[62531,1,0,912,394,0,1,1], [69022,1,0,662,316,0,1,1],
             [69022,1,0,663,392,0,1,1], [65314,1,0,532,318,0,1,1], [65314,1,0,511,430,0,1,1]];
@@ -196,8 +202,30 @@ internal static class DungeonRoomCatalogTests
         That(merman.AiCharacters is [{ Id: 55430, Faction: "[character]", RankKind: "[normal]" }] &&
             merman.NpcMetadataError is null && merman.Npcs is [{ Id: 1000 }],
             "91548真实APC55430与独立地图NPC1000分别保留，不被monster内NPC参数替代");
-        Reject(() => DungeonMonsterPlan.FromRoom(merman,1,100,mermanDungeon.BasisLevel),
-            "91548真实NPC参数行解析成功仍拒绝未闭合生成资格，不冒充普通Boss或战斗死亡");
+        var mermanPlan = DungeonMonsterPlan.FromRoom(merman,1,100,mermanDungeon.BasisLevel);
+        var plannedRows = mermanPlan.Monsters.Where(monster => monster.AiCharacter is null).ToArray();
+        var mermanApc = mermanPlan.Monsters.Single(monster => monster.AiCharacter is not null);
+        That(plannedRows.Length == 5 &&
+            plannedRows[0] is { MonsterId: 62531, SourceOrdinal: 0, SpawnType: 3, IsBlocking: true,
+                CanReportDeath: true, IsBoss: true, IsScriptedBoss: false } &&
+            plannedRows[0].Source is { NpcParameter: 0, Modifiers: ["[NPC]", "[dummy]"], SpecialChild: null } &&
+            plannedRows.Skip(1).All(monster => monster.SpawnType == 0 && monster.IsBlocking && !monster.IsBoss &&
+                monster.Source is { NpcParameter: null, SpecialChild: null }) &&
+            mermanApc is { MonsterId: 55430, SpawnType: 5, IsFriendly: true, IsBlocking: false, CanReportDeath: false, IsBoss: false },
+            "Q3487/91548 人鱼之王 NPC+dummy 与后续四只普通怪可以生成，友方APC单独保留，房间不再整图拒绝");
+        var mazeFailures = new List<string>();
+        foreach (var map in mermanMaze.MapSpecification!.Concat(mermanMaze.LayeredMaps).Concat(mermanMaze.ConditionalMaps))
+        {
+            try
+            {
+                _ = DungeonMonsterPlan.FromRoom(catalog.Get(map, requirePassiveDefinitions: false), 1, 100, mermanDungeon.BasisLevel);
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException)
+            {
+                mazeFailures.Add($"{map.Id}: {error.Message}");
+            }
+        }
+        That(mazeFailures.Count == 0, "Q3487 整条迷宫可以生成，不再因单房拒绝入场：" + string.Join(" | ", mazeFailures));
         That(room.Map.Id == 76121 && room.Map.Path == "map/cataclysm/granflores/01_mirkwood/3145_76121.map",
             "room resolves the matching task first-map path");
         int[][] expected = [[1, 0, 3, 573, 197, 0, 1, 1], [1, 0, 3, 557, 280, 0, 1, 1],

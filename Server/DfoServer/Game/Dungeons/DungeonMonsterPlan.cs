@@ -110,8 +110,9 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (raw.Count != 8 || raw[0] != source.MonsterId || source.MonsterId < 0
                 || source.PlacementKind != "[fixed]" || source.RankKind is not ("[normal]" or "[named]" or "[champion]" or "[super champion]" or "[boss]") ||
                 source.RankKind == "[named]" && (source.NpcParameter.HasValue || source.Modifiers.Count != 0 || source.RankParameterCount.HasValue) ||
-                !(source.NpcParameter.HasValue ? source.Modifiers is ["[NPC]"] :
-                    source.Modifiers.Count == 0 || source.RankKind == "[boss]" && source.Modifiers is ["[dummy]"] || source.IsDisplayHuntDummy)
+                !(source.NpcParameter.HasValue
+                    ? source.Modifiers is ["[NPC]"] || source.Modifiers is ["[NPC]", "[dummy]"]
+                    : source.Modifiers.Count == 0 || source.RankKind == "[boss]" && source.Modifiers is ["[dummy]"] || source.IsDisplayHuntDummy)
                 || raw[6] is < 0 or > 255 || raw[7] is < 0 or > 255)
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的 monster 资源行 {index} 不是已支持的固定怪物条件");
             // 最后两项是参考资源中的掉落数量声明，不能把数量2误当成怪物创建条件。
