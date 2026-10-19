@@ -75,7 +75,8 @@ internal sealed class QuestLifecyclePlan
             var clear = sceneClear.Result.ClearFact!;
             after = after.Select(row => row.ConditionState > 0 && QuestHuntProgress.Bound(row,entry) &&
                 quests.TryGet(row.QuestId,out var quest) && QuestCoverage.HasOrdinaryDeclarations(quest) &&
-                (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 && quest.IntData[0] == clear.ClearMap!.Id &&
+                (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 &&
+                    QuestClearEligibility.MatchesClearMap(quest, entry, clear) &&
                     (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
                  QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Creature &&
                     QuestDungeonClearProgress.Matches(quest,entry,run) && QuestDungeonClearProgress.ValidScalar(quest,row.ConditionState))

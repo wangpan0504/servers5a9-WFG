@@ -861,6 +861,24 @@ internal static class SinglePlayerDungeonRunTests
         var ordinary = Create(entry with { QuestId = 0, ActiveQuestSlot = byte.MaxValue, QuestAcceptanceId = Guid.Empty }, route);
         That(ordinary.Entry.PassiveClearTerminalMap == last && ordinary.Entry.QuestId == 0 && ordinary.Entry.RouteQuestId == 3205,
             "普通0请求保持原wire身份并通过真实RouteQuest接取冻结同一末层");
+        var explicitNormals = Plan(boss, 20, 21, 22, 23);
+        var declared = Create(entry with { HasExplicitClearMap = true },
+            route with { Rooms = [route.Rooms[0], explicitNormals, route.Rooms[2], end] });
+        That(declared.Entry.PassiveClearTerminalMap == last && declared.Entry.BossMap == boss &&
+            declared.Entry.HasExplicitClearMap && declared.Entry.IsTerminalMap(last) && !declared.Entry.IsTerminalMap(boss),
+            "单地图声明基础Boss格且基础只有普通阻挡时，唯一物件末层仍冻结为领域终点");
+        foreach (ushort key in new ushort[] { 20, 21, 22, 23 })
+            That(declared.AcceptConfirmedDeath(authority.Death(declared.Snapshot.Identity, key, key)).ClearFact is null,
+                "基础四只普通阻挡提交后仍等待物件末层");
+        That(declared.PreparePassiveClear(declared.Snapshot.Identity, Guid.NewGuid(), 80458, 0) is null,
+            "未入末层不能准备物件结算");
+        Last(declared);
+        var declaredPrepared = declared.PreparePassiveClear(declared.Snapshot.Identity, Guid.NewGuid(), 80458, 0)!;
+        That(declaredPrepared.Result.ClearFact is { ClearMap: var declaredMap, ConfirmedDeathEvents.Count: 4 } && declaredMap == last,
+            "真实四只基础死亡后末层物件准备按原集合结算");
+        declared.ConfirmCommittedPassiveClear(declaredPrepared);
+        That(declared.Phase == SinglePlayerDungeonPhase.Settlement && declared.ClearFact!.ClearMap == last,
+            "单地图基础声明经物件末层一次转入结算");
 
         SinglePlayerDungeonRun Create(DungeonEntryPlan planned, DungeonFixedRoute approved)
         {

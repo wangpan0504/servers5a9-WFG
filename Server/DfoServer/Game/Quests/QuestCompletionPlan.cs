@@ -240,7 +240,7 @@ internal sealed class QuestCompletionPlan
             if (quest.Condition == "[clear map]")
             {
                 if (!QuestClearEligibility.IsSingleMap(quest) || clear is null || !MatchesClearedActiveQuest(expected, clear) ||
-                    clear.QuestId != quest.Id || clear.MapId != quest.IntData[0] ||
+                    clear.QuestId != quest.Id || !QuestClearEligibility.MatchesClearMap(quest, clear) ||
                     quest.DungeonIndex is >= 0 && clear.DungeonId != quest.DungeonIndex)
                     throw new InvalidDataException("清图交付必须使用当前接取及目标地图的权威凭据");
             }

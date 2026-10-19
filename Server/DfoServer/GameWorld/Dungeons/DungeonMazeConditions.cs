@@ -106,4 +106,82 @@ internal static class DungeonMazeConditions
         if (inside || source is not null) throw new InvalidDataException("条件传送块未结束");
         return result.AsReadOnly();
     }
+
+    // 畸形块返回空列表，不让未识别的随机对象声明把整条迷宫打成 ResourceError。
+    public static IReadOnlyList<DungeonRandomizedObject> RandomizedObjects(IReadOnlyList<DungeonRawSection> sections)
+    {
+        var result = new List<DungeonRandomizedObject>();
+        bool inside = false, inObject = false, objectOk = true;
+        int? select = null, objectId = null, mapX = null, mapY = null, posX = null, posY = null;
+        string? team = null;
+        foreach (var section in sections)
+        {
+            if (section.Tag == "randomized object creation")
+            {
+                if (inside || section.Tokens.Count != 0) return [];
+                inside = true;
+                continue;
+            }
+            if (section.Tag == "/randomized object creation")
+            {
+                if (!inside || inObject) return [];
+                inside = false;
+                continue;
+            }
+            if (!inside) continue;
+            if (section.Tag == "object")
+            {
+                if (inObject || section.Tokens.Count != 0) return [];
+                inObject = true;
+                objectOk = true;
+                objectId = mapX = mapY = posX = posY = null;
+                team = null;
+                continue;
+            }
+            if (section.Tag == "/object")
+            {
+                if (!inObject) return [];
+                inObject = false;
+                if (objectOk && objectId is > 0 && mapX is int mx and >= 0 && mapY is int my and >= 0 &&
+                    posX is int px and >= 0 && posY is int py and >= 0 &&
+                    team is "neutral" or "monster" or "character")
+                    result.Add(new(new(mx, my), objectId.Value, team, px, py));
+                continue;
+            }
+            if (section.Tag is "select" or "regenerate" or "minimap icon")
+            {
+                if (inObject) objectOk = false;
+                else if (section.Tag == "select" && section.Tokens is [{ Type: 0, Value: > 0 } token])
+                    select = token.Value;
+                continue;
+            }
+            if (!inObject) continue;
+            if (section.Tag == "map" && section.Tokens is [{ Type: 0 } x, { Type: 0 } y] && mapX is null)
+            {
+                mapX = x.Value;
+                mapY = y.Value;
+                continue;
+            }
+            if (section.Tag == "index" && section.Tokens is [{ Type: 0, Value: > 0 } id] && objectId is null)
+            {
+                objectId = id.Value;
+                continue;
+            }
+            if (section.Tag == "team" && section.Tokens.Count == 0) continue;
+            if (section.Tag is "neutral" or "monster" or "character" && section.Tokens.Count == 0 && team is null)
+            {
+                team = section.Tag;
+                continue;
+            }
+            if (section.Tag == "pos" && section.Tokens is [{ Type: 0 } pxToken, { Type: 0 } pyToken] && posX is null)
+            {
+                posX = pxToken.Value;
+                posY = pyToken.Value;
+                continue;
+            }
+            objectOk = false;
+        }
+        if (inside || select is int chosen && chosen < result.Count) return [];
+        return result.AsReadOnly();
+    }
 }

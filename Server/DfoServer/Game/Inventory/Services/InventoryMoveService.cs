@@ -40,7 +40,10 @@ internal static class InventoryMoveService
             (source, destination) = (destination, source);
             (sourceSlot, destinationSlot) = (destinationSlot, sourceSlot);
         }
-        if (source is null || source.IsExpired(utcSeconds) || destination?.IsExpired(utcSeconds) == true)
+        // ACK19 的 23 是「无法移动该物品」。过期实例仍可离开穿戴栏（卸下/替换），
+        // 与契约到期卸装同一口径；背包内过期物不能移动或重新穿戴。
+        if (source is null || ExpiredMoveBlocked(source, sourceSlot, destinationSlot, utcSeconds) ||
+            destination is not null && ExpiredMoveBlocked(destination, destinationSlot, sourceSlot, utcSeconds))
             return InventoryResult.Reject(CannotMoveItem);
         bool movesCreatureSkin = IsCreatureSkin(sourceSlot) || IsCreatureSkin(destinationSlot);
         if (movesCreatureSkin)
@@ -198,6 +201,9 @@ internal static class InventoryMoveService
             (template.Jobs & (1 << character.Job)) != 0 &&
             RequiredSkillSatisfied(character, template);
     }
+
+    static bool ExpiredMoveBlocked(InventoryItem item, InventorySlot from, InventorySlot to, long utcSeconds) =>
+        item.IsExpired(utcSeconds) && (from.List != InventoryListType.Equipment || to.List == InventoryListType.Equipment);
 
     static bool IsCreatureSkin(InventorySlot position) => position.List == InventoryListType.Equipment &&
         position.Index == InventoryCreatureSkinService.TargetSlot;

@@ -10,6 +10,16 @@ internal static class QuestClearEligibility
     public static bool IsSingleMap(StoryQuest quest) => quest.Condition == "[clear map]" && quest.SubType == -1 &&
         quest.IntData is [> 0] or [> 0, -1];
 
+    // 任务声明验证目标可以是基础Boss格；物件末层的物理ClearMap仍记真实层。
+    internal static bool MatchesClearMap(StoryQuest quest, DungeonEntryPlan entry, DungeonClearFact clear) =>
+        IsSingleMap(quest) && clear.ClearMap is { } map &&
+        (quest.IntData[0] == map.Id || entry.PassiveClearTerminalMap == map && quest.IntData[0] == entry.BaseBossMap.Id);
+
+    internal static bool MatchesClearMap(StoryQuest quest, QuestClearReceipt clear) =>
+        IsSingleMap(quest) && (clear.MapId == quest.IntData[0] ||
+            clear.SourceType == QuestClearSourceType.PassiveObject && quest.DungeonIndex is >= 0 &&
+            clear.DungeonId == quest.DungeonIndex && clear.MapId > 0);
+
     // 候选仍须在死亡/成长同事务核验完整事件账本，不使用客户端清图上报生成事实。
     public static bool TryValidate(DungeonEntryPlan entry, PreparedDungeonDeath prepared)
     {

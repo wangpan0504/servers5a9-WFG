@@ -27,6 +27,16 @@ internal static class DungeonRoomCatalogTests
         var unresolvedNpc = fixture.Parse([.. fixture.Monster(),.. npcTokens[..^1]]);
         That(unresolvedNpc.NpcMetadataError is not null && unresolvedNpc.Npcs.Count == 0 && unresolvedNpc.Monsters.Count == 1,
             "未闭合NPC不授予会面来源，同时保留原可用怪物与入场能力");
+        var apcRows = fixture.Block("ai character", [
+            new(0,6001),new(0,410),new(0,308),new(0,0),fixture.String("[character]"),fixture.String("[normal]"),new(0,0),new(0,0),
+            new(0,6000),new(0,1),new(0,2),new(0,0),fixture.String("[character]"),fixture.String("[normal]"),new(0,0),new(0,0)]);
+        DungeonRoomAiCharacter? ResolveApc(PvfAiCharacterSpawn row) => row.Values[0] == 6000
+            ? new(6000,row.Values,row.Faction,row.Rank,"aicharacter/fixture.aic",32) : null;
+        var skippedApc = fixture.Parse([.. fixture.Monster(),.. apcRows],resolveAiCharacter: ResolveApc);
+        That(skippedApc.AiCharacters is [{ Id: 6000, Faction: "[character]", RankKind: "[normal]", Level: 32 }] &&
+            skippedApc.Monsters.Count == 1,
+            "目录缺失的APC不阻断房间，已有定义仍生成");
+        Reject(apcRows, "无APC解析器时仍拒绝，不把缺依赖当成跳过");
         var positions = fixture.Parse(fixture.Block("event monster position", [new(0, 330), new(0, -93), new(0, 0)]));
         That(positions.EventMonsterPositions.SequenceEqual([330, -93, 0]), "事件怪物位置保留三坐标与负值");
         var special = fixture.Block("special passive object", [new(0, 3), new(0, -20), new(0, 150), new(0, 0), new(0, 2),
@@ -327,9 +337,10 @@ internal static class DungeonRoomCatalogTests
         public PvfToken[] Block(string tag, PvfToken[] values) => [Tag(tag), .. values, Tag("/" + tag)];
         public PvfToken[] Monster(int[]? values = null, string placement = "[fixed]", string rank = "[normal]") =>
             Block("monster", [.. (values ?? [1, 0, 3, 573, 197, 0, 1, 1]).Select(value => new PvfToken(0, value)), String(placement), String(rank)]);
-        public DungeonRoomDefinition Parse(PvfToken[] tokens, bool exists = true, bool requirePassiveDefinitions = true) => DungeonRoomCatalog.ParseResource(
+        public DungeonRoomDefinition Parse(PvfToken[] tokens, bool exists = true, bool requirePassiveDefinitions = true,
+            Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter?>? resolveAiCharacter = null) => DungeonRoomCatalog.ParseResource(
             new("map", new(0, 0), 1, "map/fixture.map"), tokens, id => strings[id],
             new Dictionary<int, string> { [1] = "monster/fixture.mob", [62531] = "monster/merman-king-fixture.mob" },
-            new Dictionary<int, string> { [3] = "passiveobject/fixture.obj" }, _ => exists,requirePassiveDefinitions);
+            new Dictionary<int, string> { [3] = "passiveobject/fixture.obj" }, _ => exists,requirePassiveDefinitions,resolveAiCharacter);
     }
 }

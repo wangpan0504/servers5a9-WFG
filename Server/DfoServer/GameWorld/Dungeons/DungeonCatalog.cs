@@ -4,6 +4,8 @@ using PvfLib;
 namespace DfoServer.GameWorld.Dungeons;
 
 internal readonly record struct DungeonPoint(int X, int Y);
+// 迷宫 [randomized object creation] 中已闭合的单对象行。世界坐标来自 [pos]，[map] 只表示所在格。
+internal sealed record DungeonRandomizedObject(DungeonPoint Map, int ObjectId, string Team, int PositionX, int PositionY);
 internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, string Path)
 {
     public int StoryStageIndex { get; init; } = -1;
@@ -47,6 +49,7 @@ internal sealed record DungeonMaze(
     public IReadOnlyList<DungeonWarpMap> WarpMaps { get; init; } = Array.Empty<DungeonWarpMap>();
     public IReadOnlyList<DungeonMap> ConditionalMaps { get; init; } = Array.Empty<DungeonMap>();
     public IReadOnlyList<DungeonClearCondition> ClearConditions { get; init; } = [];
+    public IReadOnlyList<DungeonRandomizedObject> RandomizedObjects { get; init; } = [];
     public string? ResourceError { get; init; }
     public bool IsTrainingRoom { get; init; }
     public bool IsClassExperience { get; init; }
@@ -71,6 +74,7 @@ internal sealed record DungeonMaze(
         SameMaps(MapSpecification, other.MapSpecification) && SameMaps(LayeredMaps, other.LayeredMaps) &&
         SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps) &&
         WarpMaps.SequenceEqual(other.WarpMaps) && ClearConditions.SequenceEqual(other.ClearConditions) &&
+        RandomizedObjects.SequenceEqual(other.RandomizedObjects) &&
         SameEntrance(BossEntrance, other.BossEntrance);
 
     static bool SameEntrance(DungeonBossEntrance? left, DungeonBossEntrance? right) =>
@@ -559,7 +563,9 @@ internal sealed class DungeonCatalog
         }
         var maze = new DungeonMaze(ordinal,width,height,greed,starts,bosses,specification,quest)
             { LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
-                ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve), HellParty = HellParty(), HellPartyPath = HellParty() is { } hellRoom ? mapPaths[hellRoom.MapId] : null,
+                ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve),
+                RandomizedObjects = DungeonMazeConditions.RandomizedObjects(mazeSections),
+                HellParty = HellParty(), HellPartyPath = HellParty() is { } hellRoom ? mapPaths[hellRoom.MapId] : null,
             HellLegendPath = HellParty() is { LegendMapId: > 0 } legendRoom ? mapPaths[legendRoom.LegendMapId] : null };
         return maze with { ConditionalMaps = ConditionalMaps(maze) };
         // 实验性：深渊房间解析失败（缺字段/坐标越界/该坐标没有普通房间/深渊地图文件不存在）一律视为该 maze 无深渊派对，不抛错（不影响现有入场）。

@@ -1,4 +1,5 @@
 using static DfoServer.Testing.TestCheck;
+using System.Buffers.Binary;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
@@ -96,6 +97,8 @@ internal static class DungeonEntryPlanTests
         TournamentEntry(catalog,character,rooms);
         HarlemSeekingRoutes(catalog,quests,character);
         GentSouthGateQuestLevel(catalog,quests,character);
+        NonoraGroznyEntry(catalog,quests,rooms,character,pvf);
+        RecoverAt5tWalkerEntry(catalog,quests,rooms,character);
         foreach (var scenario in new[] { (Quest:3560,Dungeon:82,Level:(byte)65,Target:92247,Boss:92251),
             (Quest:3753,Dungeon:104,Level:(byte)83,Target:76648,Boss:76649) })
         {
@@ -791,4 +794,110 @@ internal static class DungeonEntryPlanTests
             unrelatedReason == "dungeon-level-too-low", "#438 已接取但与南门无关的任务不放行：" + unrelatedReason);
         That(!DungeonEntryPlan.TryCreate(catalog,unrelated,82,3145,0,out _,out var unrelatedQuestReason,quest: quests.Get(3145),quests: quests) &&
             unrelatedQuestReason == "dungeon-level-too-low", "#438 请求无关任务进入南门不放行：" + unrelatedQuestReason);
-    }}
+    }
+
+    // #447：绿都格罗兹尼「把治疗剂交给诺诺拉」。MAP 76331 声明 APC6001，匹配 AIC 目录没有该项；
+    // 客户端缺定义不计创建成功，服务端不得因此整图拒绝入场。
+    static void NonoraGroznyEntry(DungeonCatalog catalog,QuestCatalog quests,DungeonRoomCatalog rooms,Character character,PvfArchive pvf)
+    {
+        var parent = quests.Get(3347);
+        var child = quests.Get(3425);
+        That(parent is { DungeonIndex: 61, SubType: 2, Condition: "[quest clear]" } && parent.IntData.SequenceEqual([3425,3426]) &&
+            QuestRelationProgress.SequentialParent(parent,quests) && child is { DungeonIndex: 61, MainQuest: 3347, Condition: "[hunt enemy]" } &&
+            child.IntData.SequenceEqual([61,-1,109001851,3,1]),
+            "#447 前提：3347 顺序 3425→3426 连接 D61，首子猎杀物件 109001851");
+        var list = pvf.ReadTokens("aicharacter/aicharacter.lst");
+        bool has6000 = false, has6001 = false;
+        for (int at = 0; at + 1 < list.Length; at += 2)
+            if (list[at].Type == 0)
+            {
+                if (list[at].Value == 6000) has6000 = true;
+                else if (list[at].Value == 6001) has6001 = true;
+            }
+        That(has6000 && !has6001, "#447 匹配 AIC 目录有 6000 无 6001，不把缺项改写成相邻编号");
+        uint remaining = QuestRelationProgress.Initial(parent,quests,new HashSet<int> { 3346 });
+        var accepted = character with { Level = 48, CompletedQuests = [3346],
+            ActiveMainQuests = [new(0,3347,remaining) { AcceptanceId = Guid.NewGuid() }] };
+        foreach (uint request in new uint[] { 3347,0 })
+        {
+            That(DungeonEntryPlan.TryCreate(catalog,accepted,61,request,0,out var plan,out var reason,
+                quest: request == 0 ? null : parent,quests: quests) &&
+                plan is { StartMap.Id: 76330, BossMap.Id: 76331, Maze.ConnectionQuestId: 3425 },
+                "#447 父/0 请求选择 3425 的 D61 路线 76330→76331：" + request + "/" + reason);
+            var start = rooms.Get(plan!.StartMap,requirePassiveDefinitions: false);
+            var boss = rooms.Get(plan.BossMap,requirePassiveDefinitions: false);
+            That(start.Monsters.Count == 0 && start.AiCharacters.Count == 0,
+                "#447 起点 76330 无怪物也无 APC，不因缺演员拒绝");
+            That(boss.Monsters.Count == 3 &&
+                boss.Monsters[0] is { MonsterId: 75067, PlacementKind: "[fixed]", RankKind: "[normal]", Modifiers.Count: 0 } &&
+                boss.Monsters[1] is { MonsterId: 75072, PlacementKind: "[fixed]", RankKind: "[normal]", Modifiers.Count: 0 } &&
+                boss.Monsters[2] is { MonsterId: 75099, PlacementKind: "[fixed]", RankKind: "[boss]", Modifiers: ["[dummy]"] } &&
+                boss.Monsters[2].RawValues.SequenceEqual([75099,1,0,-81,-239,0,1,1]) &&
+                boss.AiCharacters.Count == 0 &&
+                boss.PassiveObjects.Any(row => row.ObjectId == 109001851 && row.RawValues.Count == 4) &&
+                boss.Npcs.Select(npc => npc.Id).SequenceEqual([1000]),
+                "#447 76331 保留两只普通怪、dummy Boss 75099 与物件 109001851，缺目录 APC6001 不进入演员表");
+            var failures = new List<string>();
+            foreach (var map in plan.Maze.MapSpecification!.Concat(plan.Maze.LayeredMaps).Concat(plan.Maze.ConditionalMaps))
+            {
+                try
+                {
+                    _ = DungeonMonsterPlan.FromRoom(rooms.Get(map,requirePassiveDefinitions: false),1,100,plan.BasisLevel);
+                }
+                catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException)
+                {
+                    failures.Add($"{map.Id}: {error.Message}");
+                }
+            }
+            That(failures.Count == 0, "#447 整条迷宫可以生成，不再因 APC6001 整图拒绝：" + string.Join(" | ", failures));
+        }
+    }
+
+    static void RecoverAt5tWalkerEntry(DungeonCatalog catalog,QuestCatalog quests,DungeonRoomCatalog rooms,Character character)
+    {
+        var dungeon = catalog.Get(88);
+        var found = quests.Get(3528);
+        var recover = quests.Get(3529);
+        var maze = dungeon.Mazes.Single(row => row.ConnectsQuest(3529));
+        That(dungeon.Path.Equals("dungeon/act7/gentnorthgate_r.dgn", StringComparison.OrdinalIgnoreCase) &&
+            dungeon.MinimumLevel == 66 && dungeon.BasisLevel == 69 &&
+            found is { DungeonIndex: 88, Condition: "[clear map]" } && found.IntData.SequenceEqual([92270]) &&
+            recover is { DungeonIndex: 88, Condition: "[clear map]" } && recover.IntData.SequenceEqual([92279]) &&
+            maze.Starts.SequenceEqual([new DungeonPoint(0,0)]) && maze.Bosses.SequenceEqual([new DungeonPoint(8,0)]) &&
+            maze.MapSpecification!.Select(map => map.Id).SequenceEqual(Enumerable.Range(92271, 9)) &&
+            maze.RandomizedObjects.SequenceEqual([new DungeonRandomizedObject(new(0,0),61235,"neutral",615,244)]),
+            "#444 D88 任务 3529 在起点格声明中立 AT-5T 61235，不把 92271 地图怪物表当成步行者来源");
+        var foundMaze = dungeon.Mazes.Single(row => row.ConnectsQuest(3528));
+        That(foundMaze.RandomizedObjects.Count == 0 && foundMaze.Bosses.SequenceEqual([new DungeonPoint(4,0)]) &&
+            foundMaze.MapSpecification!.Single(map => map.Position == new DungeonPoint(4,0)).Id == 92270,
+            "#444 3528 迷宫没有随机骑乘块，步行者只在 92270 的 monster 行");
+        var accepted = character with { Level = 66, CompletedQuests = [3528],
+            ActiveMainQuests = [new(0,3529,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(catalog,accepted,88,3529,0,out var plan,out var reason,
+            quest: recover,quests: quests) &&
+            plan is { StartMap.Id: 92271, BossMap.Id: 92279, Maze.ConnectionQuestId: 3529, PlayerTeam: 0 },
+            "#444 3529 入场选择 92271→92279：" + reason);
+        var start = rooms.Get(plan!.StartMap, requirePassiveDefinitions: false);
+        var foundBoss = rooms.Get(foundMaze.MapSpecification!.Single(map => map.Id == 92270), requirePassiveDefinitions: false);
+        That(!start.Monsters.Any(row => row.MonsterId == 61235) &&
+            foundBoss.Monsters.Any(row => row.MonsterId == 61235 && row.PlacementKind == "[fixed]" &&
+                row.RankKind == "[normal]" && row.Modifiers.Count == 0 && row.Team == 0),
+            "#444 61235 在 3528 末图是 team0 固定怪，3529 起点地图怪物表没有该行");
+        var monsters = DungeonMonsterPlan.FromRoom(start, accepted.Id, 100, plan.BasisLevel, playerTeam: plan.PlayerTeam);
+        byte[] body = DfoServer.Network.Builders.DungeonPackets.StartMap(plan, monsters, 1);
+        int actors = monsters.Monsters.Count(monster => monster.HellWave is null) + monsters.SpecialObjects.Count + monsters.HellWaves.Count;
+        int tail = 20 + actors * 22;
+        That(body[18] == actors && body[tail] == 0 && body[tail + 1] == 1 && body[tail + 2] == 1 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(tail + 3)) == 615 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(tail + 7)) == 244 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(tail + 11)) == 61235 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(tail + 15)) == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(tail + 19)) == 0 &&
+            body[tail + 23] == 255,
+            "#444 3529 起点 NOTI29 发出 61235 骑乘组，不再写空骑乘计数");
+        var next = plan with { StartMap = maze.MapSpecification!.Single(map => map.Position == new DungeonPoint(1,0)) };
+        byte[] nextBody = DfoServer.Network.Builders.DungeonPackets.StartMap(next, 1);
+        That(nextBody.Length == 23 && nextBody[21] == 0 && nextBody[22] == 255,
+            "#444 未声明骑乘的后续格仍保持空骑乘组，不把起点对象复制进其它房间");
+    }
+}

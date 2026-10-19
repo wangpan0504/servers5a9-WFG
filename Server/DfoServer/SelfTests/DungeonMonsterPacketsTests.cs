@@ -60,6 +60,26 @@ internal static class DungeonMonsterPacketsTests
         That(apcBody.Length == 89 && apcBody[40] == 1 && apcBody[62] == 1 && apcBody[84] == 0 &&
             apcBody[32] == 5 && apcBody[54] == 5 && apcBody[76] == 5,
             "友方/中立APC排除清房记录，敌对APC保留原类型与标记");
+        var walker = new DungeonRandomizedObject(map.Position, 61235, "neutral", 615, 244);
+        var other = walker with { Map = new(1, 0) };
+        var ridingMaze = maze with { RandomizedObjects = [walker, other] };
+        var riding = entry with { Maze = ridingMaze };
+        byte[] emptyRide = DungeonPackets.StartMap(riding, 1);
+        That(emptyRide.Length == 44 && emptyRide[18] == 0 && emptyRide[19] == 0 && emptyRide[20] == 0 &&
+            emptyRide[21] == 1 && emptyRide[22] == 1 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(emptyRide.AsSpan(23)) == 615 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(emptyRide.AsSpan(27)) == 244 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(emptyRide.AsSpan(31)) == 61235 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(emptyRide.AsSpan(35)) == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(emptyRide.AsSpan(39)) == 0 && emptyRide[43] == 255,
+            "当前格中立骑乘对象写入一组 5×u32，其它格声明不进入本包");
+        byte[] cachedRide = DungeonPackets.StartMap(riding, 1, payload: DungeonMapPayload.Cached);
+        That(cachedRide.Length == 16 && cachedRide[14] == 0 && cachedRide[15] == 255,
+            "mode0 缓存正文仍只读空骑乘计数，不附带组体");
+        var ridePlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [source], MonsterTeams = null }, 99, 10);
+        byte[] actorRide = DungeonPackets.StartMap(riding, ridePlan, 1);
+        That(actorRide.Length == 66 && actorRide[18] == 1 && actorRide.AsSpan(41).SequenceEqual(emptyRide.AsSpan(19)),
+            "带演员的入房通知在物品列表之后复用同一骑乘尾");
         Console.WriteLine($"PASS {Count - checks} 阵营清房22B生成通知断言");
     }
 

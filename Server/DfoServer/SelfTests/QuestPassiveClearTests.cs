@@ -176,7 +176,8 @@ internal static class QuestPassiveClearTests
         }
         VerifyZeroKill(towns,characters,items,quests,skills,growth,dungeons,rooms,clears,parameters,cardRules,cardPrices);
         VerifyLayeredPassiveClear(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,clears,parameters);
-        Console.WriteLine($"PASS {Count-checks} 实际3842、3447及3858物件终末、场景事务与结算边界断言（非实机）");
+        VerifyForgottenForest(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,clears,parameters);
+        Console.WriteLine($"PASS {Count-checks} 实际3842、3447、3858及3449物件终末、场景事务与结算边界断言（非实机）");
     }
 
     static void VerifyLayeredPassiveClear(TownCatalog towns, CharacterCatalog characters, ItemResources items, QuestCatalog quests,
@@ -355,6 +356,119 @@ internal static class QuestPassiveClearTests
             }
             FormalDungeonSettlementResult Settle() => f.Session.SettleFormalDungeon(result!.ActorId, result.RankPoint, result.MaximumRankPoint,
                 report, dungeons, clears, growth);
+        }
+    }
+
+    static void VerifyForgottenForest(TownCatalog towns, CharacterCatalog characters, ItemResources items, QuestCatalog quests,
+        SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
+        DungeonKillExperienceCatalog kills, DungeonClearExperienceCatalog clears, QuestRewardParameterCatalog parameters)
+    {
+        var quest = quests.Get(3449);
+        That(quest.Condition == "[clear map]" && quest.SubType == -1 && quest.IntData.SequenceEqual(new[] { 70192 }) &&
+            quest.DungeonIndex == 7157, "真实3449保持单地图清图目标70192，不改写为猎杀或演出");
+        var area = towns.Areas.Values.First(row => row.Level <= 54 && row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 7157));
+        var done = new HashSet<int>(area.Quests) { 3448 };
+        if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)), checked((ushort)(bounds.Y + bounds.Height / 2)));
+        foreach (bool ordinary in new[] { false, true })
+        {
+            using var f = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 54, done.ToArray(),
+                position: position);
+            var accepted = f.Session.ChangeQuest(3449, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces);
+            That(accepted?.Commit is not null, "实际3449按Lv54及前置3448接取：" + accepted?.Reason);
+            var active = f.Read().ActiveMainQuests.Single(row => row.QuestId == 3449);
+            That(active.ConditionState == 1 && active.AcceptanceId != Guid.Empty, "3449沿原接取绑定AcceptanceId并保留未达成scalar1");
+            var opening = f.Session.EnterFormalDungeon(7157, ordinary ? 0u : 3449u, 0, dungeons, rooms)!;
+            That(opening is { Entry.BossMap.Id: 70192, Entry.BaseBossMap.Id: 70192, Entry.PassiveClearTerminalMap.Id: 70350 } &&
+                opening.Entry.HasExplicitClearMap && opening.Entry.QuestClearMap is null &&
+                opening.Entry.RouteQuestId == 3449 && opening.Entry.QuestId == (ordinary ? 0u : 3449u) &&
+                opening.Entry.Maze.ClearConditions is [{ Type: "destroy object", TargetId: 69292, Count: 1 }] &&
+                opening.Entry.QuestAcceptances.Single(row => row.QuestId == 3449).AcceptanceId == active.AcceptanceId,
+                "真实D7157冻结70350物件末层，声明仍是基础70192；普通0保持请求身份");
+            var path = QuestStoryRouteTests.Path(opening!.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, opening.Entry.BossMap.Position);
+            FormalDungeonReceipt receipt = opening;
+            int deathCount = 0;
+            foreach (var point in path)
+            {
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+                That(f.Session.ObserveFormalPassiveDeath(69292, true, new string('A', 64), rooms) is null &&
+                    f.Session.EnableFormalDungeonSettlement() is null, "基础路线加载及未到末层的69292报告不能提前结算");
+                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).ToArray())
+                {
+                    var death = f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);
+                    That(death.Outcome == DungeonRunOutcome.Accepted && death.ClearFact is null,
+                        "真实基础路线阻挡逐个提交成长，无品级Boss死亡仍等待独立末层物件");
+                    deathCount++;
+                }
+                if (point == opening.Entry.BossMap.Position) break;
+                var next = path[Array.IndexOf(path, point) + 1];
+                That(f.Session.MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null,
+                    "3449沿真实拓扑连接进入基础Boss房");
+            }
+            That(receipt.Snapshot.CurrentMap.Id == 70192 &&
+                receipt.Monsters.Monsters.Count(row => row.MonsterId is 61251 or 61254 or 61253 or 61252 && row.IsBlocking && !row.IsBoss) == 4 &&
+                f.Session.Phase == SessionPhase.Dungeon && f.Session.EnableFormalDungeonSettlement() is null &&
+                f.Read().ActiveMainQuests.Single(row => row.QuestId == 3449).ConditionState == 1,
+                "实际70192四只普通精灵已提交仍不能代替末层物件清图");
+            foreach (var layer in opening.Entry.Maze.LayeredMaps.Where(map => map.Position == opening.Entry.BossMap.Position))
+            {
+                That(f.Session.MoveFormalDungeon(checked((byte)layer.Position.X), checked((byte)layer.Position.Y), 1) is not null,
+                    "真实70192同坐标沿批准的叠层顺序进入物件层");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+                That(receipt.Snapshot.CurrentMap == layer && receipt.Entry.BossMap.Id == 70192,
+                    "层加载保留实际地图身份和原Boss投影");
+            }
+            var before = f.Read();
+            var identity = f.Session.DungeonSnapshot!.Identity;
+            That(receipt.Snapshot.CurrentMap.Id == 70350 && receipt.Monsters.Room.PassiveObjects.Count == 46 &&
+                receipt.Monsters.Room.PassiveObjects[34].ObjectId == 69292 &&
+                !rooms.ReportsQuestDeath(receipt.Monsters.Room.PassiveObjects[34]) &&
+                f.Session.Phase == SessionPhase.Dungeon && before.ActiveMainQuests.Single(row => row.QuestId == 3449).ConditionState == 1,
+                "真实末层唯一迷宫目标为普通物件row34，加载不伪造69292死亡或提前归零");
+            byte[] body = QuestPassiveClearTcpTests.PassiveDeath(69292, 74);
+            That(DungeonRequests.TryParsePassiveDeath(body, out var parsed) && parsed!.ChecksumMatches,
+                "合成74B物件正文通过现有Parser，不代表原客户端producer已验证");
+            string fingerprint = Convert.ToHexString(SHA256.HashData(body));
+            That(f.Session.ObserveFormalPassiveDeath(69292, false, fingerprint, rooms) is null &&
+                f.Session.ObserveFormalPassiveDeath(69294, true, fingerprint, rooms) is null &&
+                QuestCompletionRepositoryTests.Same(before, f.Read()), "末层错误摘要和邻接row35演员不能借终点资格推进状态");
+            var progress = Observe()!;
+            var clear = progress.Commit?.Plan.SceneClear?.Result.ClearFact;
+            That(progress.Commit is { ProjectionCurrent: true, Duplicate: false } &&
+                clear is { ClearMap.Id: 70350, PassiveSource.TemplateId: 69292, PassiveSource.SourceOrdinal: 34 } &&
+                clear.ConfirmedDeathEvents.Count == deathCount &&
+                f.Session.Phase == SessionPhase.Settlement &&
+                f.Session.DungeonSnapshot.Identity.Epoch == identity.Epoch + 1 &&
+                f.Read().ActiveMainQuests.Single(row => row.QuestId == 3449).ConditionState == 0 &&
+                f.Repository.LoadQuestClear(f.Owner, f.Read(), 3449) is { SourceType: QuestClearSourceType.PassiveObject, MapId: 70350 },
+                "3449物件末层一次结算并把声明70192归零，凭据记物理70350");
+            var saved = f.Read();
+            That(Observe() is null && QuestCompletionRepositoryTests.Same(saved, f.Read()),
+                "重复末层物件不重复scene、epoch、任务或资产");
+            var enabled = f.Session.EnableFormalDungeonSettlement();
+            That(enabled is { BossKey: null }, "末层物件沿原空31许可结算，不伪造基础Boss的115确认");
+            f.Session.ConfirmFormalDungeonSettlementEnabled(enabled!.Value.Receipt);
+            byte[] report = DungeonSettlementProtocolTests.Report(saved.Id, 99);
+            That(DungeonSettlementRequests.TryParsePlayResult(report, out var result), "真实3449沿既有正式46报告形状");
+            var settled = f.Session.SettleFormalDungeon(result!.ActorId, result.RankPoint, result.MaximumRankPoint, report, dungeons, clears, growth);
+            That(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt is not null &&
+                f.Session.SettleFormalDungeon(result.ActorId, result.RankPoint, result.MaximumRankPoint, report, dungeons, clears, growth).Outcome ==
+                    DungeonRunOutcome.Duplicate,
+                "末层独立来源通过46保存并复用原receipt");
+            var finished = f.Session.FinishQuest(3449, ushort.MaxValue, quests, parameters, items.Items, items.GoldLimits, items.EpicPieces, growth);
+            That(finished.Receipt?.Commit is { ConditionType: 3, Clear.SourceType: QuestClearSourceType.PassiveObject, Clear.MapId: 70350 } complete &&
+                complete.AcceptanceId == active.AcceptanceId && f.Read().CompletedQuests.Contains(3449) &&
+                f.Read().ActiveMainQuests.All(row => row.QuestId != 3449),
+                "3449按清图type3及物理70350物件凭据交付，不要求凭据地图号等于声明70192");
+            f.Session.ReturnFromFormalDungeon();
+            f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
+            That(f.Read().CompletedQuests.Contains(3449) && f.Read().ActiveMainQuests.All(row => row.QuestId != 3449) &&
+                f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id=3449") is 1L &&
+                f.Query("SELECT count(*) FROM character_dungeon_scene_clear_receipts") is 1L,
+                "3449重选恢复实际完成位及物件清图回执");
+            QuestLifecycleReceipt? Observe() => f.Session.ObserveFormalPassiveDeath(69292, true, fingerprint, rooms);
         }
     }
 

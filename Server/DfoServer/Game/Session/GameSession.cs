@@ -23,7 +23,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, GameDebugSettings? debugSettings = null, GameWorld.Channels.ChannelEntry? entry = null,
     DfoServer.Game.Quests.QuestSkipEffects? questEffects = null, PremiumContractCatalog? contracts = null, TimeProvider? timeProvider = null,
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null,
-    Game.Creatures.CreatureService? creatures = null, GameWorld.Quests.QuestStageGraph? stageGraph = null)
+    Game.Creatures.CreatureService? creatures = null, GameWorld.Quests.QuestStageGraph? stageGraph = null,
+    ItemCatalog? items = null)
 {
     public AuthenticatedIdentity? Identity { get; } = identity;
     public GameWorld.Channels.ChannelEntry? ChannelEntry { get; } = entry;
@@ -140,7 +141,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (questCatalog is not null && character.QuestCycleDay != DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow))
                 character = repository.AdvanceQuestCycle(owner, character, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow));
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
-            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumeTown);
+            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumeTown, items);
             character = ReconcileSkillSwitchInventory(character);
             Selected = character;
             completed = quests;

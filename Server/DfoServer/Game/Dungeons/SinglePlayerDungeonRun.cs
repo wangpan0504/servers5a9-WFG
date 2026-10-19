@@ -742,7 +742,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private Room? ResolvePassiveLayerTerminal()
     {
-        if (entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay || entry.HasExplicitClearMap ||
+        if (entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay ||
             entry.QuestClearMap is not null || entry.TerminalLayerMap is not null || entry.BossMap != entry.BaseBossMap ||
             storyRooms.Length != 0 || conditionalRooms.Count != 0 || passiveClearTarget is not { } target || target <= 0 ||
             entry.Maze.ClearConditions is not [{ Type: "destroy object", Count: 1 } condition] || condition.TargetId != target ||
@@ -760,9 +760,12 @@ internal sealed partial class SinglePlayerDungeonRun
             allRooms.Sum(room => room.Plan.Room.PassiveObjects.Count(source => source.ObjectId == target)) != 1 ||
             terminal.Plan.Room.PassiveObjects.Count(source => source.ObjectId == target) != 1) return null;
         var blocking = rooms[entry.BaseBossMap.Position].Plan.Monsters.Where(monster => monster.IsBlocking).ToArray();
-        if (!blocking.Any(monster => monster.IsBoss) || blocking.Any(monster => monster.Source is null ||
+        if (blocking.Length == 0 || blocking.Any(monster => monster.Source is null ||
             monster.AiCharacter is not null || !monster.CanReportDeath || monster.IsFriendly || monster.IsScriptedBoss ||
             monster.IsSpecialChild || monster.IsScriptedRetirement)) return null;
+        // 单地图声明目标就是基础Boss格时，基础无品级Boss才晋升唯一物件末层；有真实Boss的明确基础终点保持原拒绝。
+        if (entry.HasExplicitClearMap ? blocking.Any(monster => monster.IsBoss) : !blocking.Any(monster => monster.IsBoss))
+            return null;
         return terminal;
     }
 

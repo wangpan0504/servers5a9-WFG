@@ -93,6 +93,54 @@ internal static class InventoryBehaviorTests
         Testing.TestCheck.That(InventoryMoveService.WearLevelSatisfied(withContract, broom with { MinimumLevel = 255 }, now, largeAllowance) &&
             InventoryMoveService.WearLevelSatisfied(enchantress with { Level = 255 }, broom with { MinimumLevel = 255 }, now),
             "极大PVF增量用宽整数计算，byte原等级上界仍保留原本合格资格");
+        ExpiredEquipmentMove();
+    }
+
+    // Codeberg #449：过期「先行体验」装备不能卸下/更换。核心自测没有 PVF，用 PrefillTemplates
+    // 写入与 Script.pvf 一致的 100312576（[wrist]、usable period=2）和永久对照 22002。
+    static void ExpiredEquipmentMove()
+    {
+        const int trialId = 100312576;
+        const int replacementId = 22002;
+        var trialTemplate = new ItemTemplate(trialId, ItemKind.Equipment, 20, 1, 20, 1, 0, 0, 0, "[free]", 1, 0, "耀之荣光手镯 (先行体验)")
+        { Expiration = new ItemExpiration(Days: 2) };
+        var replacementTemplate = new ItemTemplate(replacementId, ItemKind.Equipment, 20, 1, 20, 1, 0, 0, 0, "[free]", 1, 0, "纯棉护腕");
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate> { [trialId] = trialTemplate, [replacementId] = replacementTemplate });
+        const long now = 2_000_000_000;
+        var worn = new InventoryItem(1, new(InventoryListType.Equipment, 20),
+            new ItemCore(trialId, ItemKind.Equipment, InventoryRewardGrantService.InitialQuality) { ExpireTime = 1 });
+        var replacement = new InventoryItem(2, Bag(9),
+            new ItemCore(replacementId, ItemKind.Equipment, InventoryRewardGrantService.InitialQuality));
+        var character = new Character(1, 0, "TrialWrist", 0, new(0, 0, 0, 0), null)
+        { Job = 0, Level = 20, Inventory = new([worn]) };
+        var unequip = InventoryMoveService.Plan(character, Request(worn, Bag(9)), catalog, now);
+        Testing.TestCheck.That(unequip.Accepted && unequip.Plan!.After.Find(Bag(9))?.Uid == worn.Uid &&
+            unequip.Plan.After.Find(worn.Position) is null, "expired worn trial equipment can unequip");
+        var reverseUnequip = InventoryMoveService.Plan(character,
+            new(Bag(9), 0, 0, worn.Position, worn.Core.ItemId, 0, -1, 0, 0), catalog, now);
+        Testing.TestCheck.That(reverseUnequip.Accepted && reverseUnequip.Plan!.After.Find(Bag(9))?.Uid == worn.Uid,
+            "expired worn trial equipment can unequip from empty bag slot");
+        var swapRole = character with { Inventory = new([worn, replacement]) };
+        var replace = InventoryMoveService.Plan(swapRole, Request(replacement, worn.Position, worn.Core.ItemId), catalog, now);
+        Testing.TestCheck.That(replace.Accepted && replace.Plan!.After.Find(worn.Position)?.Uid == replacement.Uid &&
+            replace.Plan.After.Find(replacement.Position)?.Uid == worn.Uid, "expired worn trial equipment can be replaced");
+        var bagExpired = worn with { Position = Bag(9) };
+        var bagRole = character with { Inventory = new([bagExpired]) };
+        Testing.TestCheck.That(!InventoryMoveService.Plan(bagRole, Request(bagExpired, Bag(10)), catalog, now).Accepted,
+            "expired bag equipment still cannot move");
+        Testing.TestCheck.That(!InventoryMoveService.Plan(bagRole, Request(bagExpired, worn.Position), catalog, now).Accepted,
+            "expired bag equipment cannot be re-equipped");
+        var zeroPeriod = worn with { Core = worn.Core with { ExpireTime = 0 } };
+        var repaired = InventoryExpiryService.RepairZeroPeriod(new([zeroPeriod]), catalog);
+        Testing.TestCheck.That(repaired.Accepted && repaired.Plan!.After.Find(worn.Position)!.Core.ExpireTime == int.MaxValue,
+            "period template with expire 0 is rewritten to protocol max on select");
+        Testing.TestCheck.That(InventoryExpiryService.RepairZeroPeriod(new([replacement]), catalog).Plan is { Changed: false },
+            "permanent expire 0 stays 0");
+        Testing.TestCheck.That(InventoryExpiryService.Plan(new([worn]), now).Plan!.After.Items.IsEmpty,
+            "real unix-expired instances still purge on select");
+        Testing.TestCheck.That(InventoryExpiryService.RepairZeroPeriod(new([zeroPeriod]), null).Plan is { Changed: false },
+            "without catalog, expire 0 is left untouched");
     }
 
     public static void Run(Character character, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources, Action<bool, string> check)
@@ -217,6 +265,20 @@ internal static class InventoryBehaviorTests
         var levelTemplate = catalog.Get(100050791);
         check(levelTemplate is { Kind: ItemKind.Equipment, EquipmentSlot: 14, MinimumLevel: > 2 },
             "霸王完整规划复用实际资源的普通上衣模板");
+        var trialWrist = catalog.Get(100312576);
+        check(trialWrist is { Kind: ItemKind.Equipment, EquipmentSlot: 20, Expiration.Days: 2 } &&
+            trialWrist.Name.Contains("先行体验", StringComparison.Ordinal),
+            "issue 449 耀之荣光手镯先行体验 keeps PVF wrist slot and 2-day usable period");
+        var trialGranted = InventoryRewardGrantService.Create(trialWrist, utcNow: DateTimeOffset.FromUnixTimeSeconds(wearNow));
+        check(trialGranted.ExpireTime == checked((int)wearNow + 2 * 86400),
+            "trial wrist create writes unix deadline instead of 0");
+        var trialWorn = new InventoryItem(501, new(InventoryListType.Equipment, 20), trialGranted with { ExpireTime = 1 });
+        var trialUnequip = service.Move(character with { Inventory = new([trialWorn]) }, Request(trialWorn, Bag(9)));
+        check(trialUnequip.Accepted && trialUnequip.Plan!.After.Find(Bag(9))?.Uid == trialWorn.Uid,
+            "expired worn trial wrist can unequip");
+        check(InventoryExpiryService.RepairZeroPeriod(new([trialWorn with { Core = trialGranted with { ExpireTime = 0 } }]), catalog)
+            .Plan!.After.Items.Single().Core.ExpireTime == int.MaxValue,
+            "trial wrist expire 0 is rewritten to protocol max");
         var actualContracts = itemResources.Contracts;
         int actualAllowance = actualContracts.EquipmentLevelAllowance(levelTemplate);
         int allowance = Math.Min(3, levelTemplate.MinimumLevel - 2);

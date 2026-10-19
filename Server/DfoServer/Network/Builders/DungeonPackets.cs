@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders.Inventory;
 
@@ -170,8 +171,24 @@ internal static class DungeonPackets
         // it is stored in globals 062EF5AA/0643C40C/062DC504, and the minimap hell icon (03A095A6) is only drawn when 062EF5AA != 0.
         // [22] is the party-member selector (FF = none); the previous experimental value 1 there was wrong.
         if (plan.HellParty is not null) body[20] = 1;
-        body[22] = byte.MaxValue; // 实验性：深渊派对 fog 标志=1（参考项目 HellPartyFogFlag），普通入场保持 FF。
-        return body;
+        var ridables = RoomRidables(plan);
+        if (ridables.Count == 0)
+        {
+            body[22] = byte.MaxValue; // 实验性：深渊派对 fog 标志=1（参考项目 HellPartyFogFlag），普通入场保持 FF。
+            return body;
+        }
+        // NOTI29 0238EFE8：groupCount:u8，每组 innerCount:u8，每项 5×u32，然后成员 byte。
+        // 空组时 [21]=0 后直接读成员；有对象时不能再塞进固定 23B。
+        if (ridables.Count > byte.MaxValue)
+            throw new InvalidDataException("房间骑乘组超过通知数量范围");
+        using var stream = new MemoryStream(21 + 2 + ridables.Count * 20 + 1);
+        stream.Write(body.AsSpan(0, 21));
+        stream.WriteByte(1);
+        stream.WriteByte((byte)ridables.Count);
+        foreach (var row in ridables)
+            WriteRidableRecord(stream, row);
+        stream.WriteByte(byte.MaxValue);
+        return stream.ToArray();
     }
 
     // NOTI29每个已规划monster完整22B；等级和类型由领域确定，不在此解释资源行。
@@ -330,5 +347,29 @@ internal static class DungeonPackets
         }
         writer.Write(new byte[] { 0, 0, 255, 0, 0 });
         return bytes.ToArray();
+    }
+
+    // 0238EFE8 只消费当前格的骑乘记录；其它格的 [map] 声明不进入本包。
+    static IReadOnlyList<DungeonRandomizedObject> RoomRidables(DungeonEntryPlan plan)
+    {
+        var result = new List<DungeonRandomizedObject>();
+        foreach (var row in plan.Maze.RandomizedObjects)
+            if (row.Map == plan.StartMap.Position && row.Team is "neutral" or "monster" or "character")
+                result.Add(row);
+        return result;
+    }
+
+    static void WriteRidableRecord(MemoryStream stream, DungeonRandomizedObject row)
+    {
+        Span<byte> buffer = stackalloc byte[20];
+        // 0238F055 起连续五个 u32，原顺序交给 02A11610。Q1/Q2 为位置分量，Q3 为模板号。
+        // [neutral] 与 92270 步行者 monster team 0 对齐；Q5=0 走 ridable 模式 0，不走 Q5=1 的被动初始化。
+        uint faction = row.Team switch { "monster" => 100, "character" => 200, _ => 0 };
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer, checked((uint)row.PositionX));
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer[4..], checked((uint)row.PositionY));
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer[8..], checked((uint)row.ObjectId));
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer[12..], faction);
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer[16..], 0);
+        stream.Write(buffer);
     }
 }

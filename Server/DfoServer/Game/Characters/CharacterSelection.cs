@@ -9,7 +9,8 @@ namespace DfoServer.Game.Characters;
 internal static class CharacterSelection
 {
     public static Character Prepare(ICharacterRepository repository, AccountOwners.Lease owner, Character character,
-        TownCatalog towns, IReadOnlySet<int> completed, GoldLimitCatalog? goldLimits, bool resumeTown = false) => owner.Execute(() =>
+        TownCatalog towns, IReadOnlySet<int> completed, GoldLimitCatalog? goldLimits, bool resumeTown = false,
+        ItemCatalog? items = null) => owner.Execute(() =>
     {
         if (resumeTown)
         {
@@ -25,6 +26,8 @@ internal static class CharacterSelection
                 character = repository.Save(owner, character, towns.Room, back);
         }
         // 每一步使用上一笔实际提交的快照；无变化不写库，后续失败不重放已提交的清理。
+        character = InventoryService.Commit(repository, owner, character,
+            InventoryExpiryService.RepairZeroPeriod(character.Inventory, items));
         character = InventoryService.Commit(repository, owner, character,
             InventoryExpiryService.Plan(character.Inventory, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         if (goldLimits is not null)

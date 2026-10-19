@@ -248,11 +248,13 @@ internal sealed class DungeonRoomCatalog
         return new(code,[code,1,0,x,y,0,0,0],"[fixed]",boss ? "[boss]" : "[normal]",path);
     }
 
-    DungeonRoomAiCharacter ResolveAiCharacter(PvfAiCharacterSpawn row)
+    DungeonRoomAiCharacter? ResolveAiCharacter(PvfAiCharacterSpawn row)
     {
         int id = row.Values[0];
+        // 匹配客户端 02A0B720：目录不命中返回 al=0，上层不计创建成功，不阻断整图装载。
+        // 已列入且脚本存在的 APC 仍校验最低信息；不把缺项改写成相邻编号。
         if (!aiCharacters.TryGetValue(id,out var path) || !archive.Contains(path))
-            throw new InvalidDataException("房间APC定义不存在: " + id);
+            return null;
         var minimum = PvfAiCharacterScript.MinimumInfo(archive.ReadTokens(path),archive.ResolveString);
         // 匹配AIC：名字后四项角色字段，再是等级；不以角色或副本等级替代APC自身声明。
         if (minimum.Length < 6 || minimum[0].Type != 6 || minimum.Skip(1).Take(5).Any(token => token.Type != 0) ||
@@ -272,7 +274,7 @@ internal sealed class DungeonRoomCatalog
 
     internal static DungeonRoomDefinition ParseResource(DungeonMap map, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve,
         IReadOnlyDictionary<int, string> monsterPaths, IReadOnlyDictionary<int, string> objectPaths, Func<string, bool> exists,
-        bool requirePassiveDefinitions = true, Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter>? resolveAiCharacter = null,
+        bool requirePassiveDefinitions = true, Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter?>? resolveAiCharacter = null,
         bool allowUnresolvedSpecialMetadata = false)
     {
         var sections = new Dictionary<string, IReadOnlyList<PvfToken>>(StringComparer.Ordinal);
@@ -411,8 +413,13 @@ internal sealed class DungeonRoomCatalog
             monsterRows[index] = monsterRows[index] with { Team = teams[index] };
         var actors = new List<DungeonRoomAiCharacter>();
         if (sections.TryGetValue("[ai character]",out var actorTokens))
+        {
+            if (resolveAiCharacter is null)
+                throw new InvalidDataException("房间APC定义解析依赖缺失");
             foreach (var row in PvfAiCharacterScript.MapRows(actorTokens,resolve))
-                actors.Add(resolveAiCharacter?.Invoke(row) ?? throw new InvalidDataException("房间APC定义解析依赖缺失"));
+                if (resolveAiCharacter(row) is { } actor)
+                    actors.Add(actor);
+        }
         var eventPositions = sections.TryGetValue("[event monster position]", out var eventTokens) ? Integers(eventTokens) : Freeze(Array.Empty<int>());
         if (eventPositions.Count % 3 != 0)
             throw new InvalidDataException("事件怪物位置不是完整的三整数坐标");

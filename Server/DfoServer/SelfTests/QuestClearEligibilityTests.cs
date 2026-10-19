@@ -47,6 +47,7 @@ internal static class QuestClearEligibilityTests
         Check(!QuestClearEligibility.MatchesActiveQuest(entry, character with
             { ActiveMainQuests = [character.ActiveMainQuests[0], new(1, 3145, 1) { AcceptanceId = acceptance }] }), "重复任务身份拒绝");
         RoomClear();
+        MatchesClearMap();
         Console.WriteLine($"PASS {checks} 3145清图资格纯规则断言");
 
         void Check(bool value, string name)
@@ -107,6 +108,45 @@ internal static class QuestClearEligibilityTests
                 QuestClearEligibility.TryValidate(roomEntry,terminal),"原Boss仍按原通关资格准备独立终点事实");
             roomRun.ConfirmCommittedDeath(terminal);
             Check(roomRun.HasCommittedRoomClear(clear),"进入后续结算仍保留同Run已提交中途事实");
+        }
+
+        void MatchesClearMap()
+        {
+            var declared = map;
+            var layer = map with { Kind = "layered", Id = 70350, Path = "map/fixture-layer.map" };
+            var quest = QuestEligibilityTests.Quest(3449) with
+            {
+                Condition = "[clear map]", IntData = [declared.Id], DungeonIndex = 25
+            };
+            var frozen = entry with
+            {
+                DungeonId = 25, QuestId = 3449, HasExplicitClearMap = true,
+                BaseBossMap = declared, PassiveClearTerminalMap = layer
+            };
+            var identity = new DungeonRunIdentity(99, 3449, 1, Guid.NewGuid(), 1);
+            var fact = new DungeonClearFact(identity, 25, [Guid.NewGuid()]) { ClearMap = layer };
+            Check(QuestClearEligibility.MatchesClearMap(quest, frozen, fact),
+                "声明基础Boss格时物件末层物理ClearMap仍匹配单地图目标");
+            Check(QuestClearEligibility.MatchesClearMap(quest, frozen,
+                    new DungeonClearFact(identity, 25, [Guid.NewGuid()]) { ClearMap = declared }),
+                "声明地图号与物理ClearMap一致时仍直接匹配");
+            Check(!QuestClearEligibility.MatchesClearMap(quest, frozen, fact with { ClearMap = declared with { Id = 70193 } }),
+                "无关地图不能借末层别名");
+            Check(!QuestClearEligibility.MatchesClearMap(quest, frozen with { PassiveClearTerminalMap = null }, fact),
+                "未冻结物件末层时不能用物理层代替声明目标");
+            var receipt = new QuestClearReceipt(acceptance, 3449, 0, Guid.NewGuid(), identity.InstanceId, 1, 2, 18)
+            {
+                DungeonId = 25, MapId = layer.Id, SourceType = QuestClearSourceType.PassiveObject
+            };
+            Check(QuestClearEligibility.MatchesClearMap(quest, receipt),
+                "物件凭据用物理末层地图号仍核对本副本单地图交付");
+            Check(!QuestClearEligibility.MatchesClearMap(quest,
+                    receipt with { SourceType = QuestClearSourceType.MonsterDeath }),
+                "怪物死亡凭据不能用物理末层地图号代替声明目标");
+            Check(!QuestClearEligibility.MatchesClearMap(quest, receipt with { DungeonId = 26 }),
+                "其他副本的物件凭据不能交付本清图");
+            Check(!QuestClearEligibility.MatchesClearMap(quest with { Condition = "[look cinematic]" }, frozen, fact),
+                "非清图任务不走单地图别名");
         }
     }
 
