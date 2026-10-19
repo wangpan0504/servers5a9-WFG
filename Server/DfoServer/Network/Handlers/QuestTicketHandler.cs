@@ -90,7 +90,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
         }
         // 绝对快照可安全重放；与正常职业领奖一样，先装载真实技能，再由客户端券动作重建职业。
         if (receipt.Commit.Plan.ProfessionGrowType is not null)
-            await context.Notify(NotiPacketType.SKILLINFO,SkillPackets.Initialized(receipt.Character.Learning),"quest_ticket_profession_skills",Guard);
+            await SkillProjection.PublishAsync(context,receipt.Character,"quest_ticket_profession_skills","quest_ticket_profession_combo",Guard);
         if (!receipt.TicketAcknowledged)
         {
             // ACK515的已确认券消费者自行扣一张；不发NOTI14“获得剩余量”，同一操作不重复发送消费ACK。

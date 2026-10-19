@@ -47,11 +47,52 @@ internal sealed partial class GameSession
     public SkillLearningResult CustomizeSkills(IReadOnlyList<SkillCommandChange> changes, bool reset, SkillLearningCatalog catalog) =>
         ApplySkillLearning(character => SkillCustomization.Commands(character.Job, character.Learning, changes, reset, catalog));
 
-    public SkillLearningResult CustomizeCombo(byte context, IReadOnlyList<SkillCombo> combos, SkillLearningCatalog catalog) =>
-        ApplySkillLearning(character => SkillCustomization.Combo(character.Job, character.Learning, context, combos, catalog));
+    // 自动组合排列由客户端本地生成：510只确认开始，随后的第一次508才是客户端提交的排列。
+    // 窗口绑定选择代次，避免之后的手工保存被误判为自动组合。
+    private (byte Context, long ExpiresAt, long SelectionEpoch)? autoComboPending;
 
-    public SkillLearningResult ClearComboQuickSlots(byte context, SkillLearningCatalog catalog) =>
-        ApplySkillLearning(character => SkillCustomization.ClearComboQuickSlots(character.Job, character.Learning, context, catalog));
+    // 完整NOTI19回放后客户端会延迟重建技能界面，重建出的默认连招可能回传C2S508；
+    // 该回传不是玩家编辑，窗口内只确认不提交，避免默认排列覆盖服务端存档。
+    private (long ExpiresAt, long SelectionEpoch)? comboRebuildPending;
+
+    public void MarkComboRebuild()
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        owner.Execute(() => comboRebuildPending = (now + 2, SelectionEpoch));
+    }
+
+    public SkillLearningResult CustomizeCombo(byte context, IReadOnlyList<SkillCombo> combos, SkillLearningCatalog catalog) =>
+        ApplySkillLearning((character, autoCombo) => SkillCustomization.Combo(character.Job, character.Learning, context, combos, catalog, autoCombo), context);
+
+    public SkillLearningResult BeginAutoCombo(byte context, SkillLearningCatalog catalog)
+    {
+        var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
+            SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
+        if (!captured.Allowed || captured.Character.Job != 9 || !captured.Character.Learning.Initialized || context > 1)
+            return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
+        // 目录查询只读，规划放锁外；回锁后按选择代次重新校验。
+        SkillLearningResult planned;
+        try { planned = SkillCustomization.PrepareAutoCombo(captured.Character.Job, captured.Character.Learning, context, catalog); }
+        catch (KeyNotFoundException) { planned = new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>())); }
+        return owner.Execute(() =>
+        {
+            if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext ||
+                Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character))
+                throw new InvalidOperationException("Stale auto combo state");
+            if (!planned.Success)
+                return planned;
+            if (!ReferenceEquals(planned.State, captured.Character.Learning))
+                Selected = repository.CommitSkillLayout(owner, captured.Character, planned.State!);
+            // 实测客户端在收到510回执后立即回传508；5秒窗口足够且不会误伤随后的手工编辑。
+            autoComboPending = (context, DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeSeconds(), captured.SelectionEpoch);
+            return new SkillLearningResult(SkillLearningFailure.None, Selected!.Learning,
+                Array.AsReadOnly(Array.Empty<LearnedSkill>()))
+            {
+                RequiresSynchronization = planned.RequiresSynchronization,
+                Receipt = new(Selected, owner.Generation, captured.SelectionEpoch) { Phase = captured.Phase }
+            };
+        });
+    }
 
     internal SkillLearningResult LearnSkills(SkillLearningCommand request, Func<byte, ushort, SkillLearningDefinition> definition) => ApplySkillLearning(character =>
         SkillLearning.Plan(character.Job, character.GrowType, character.Level, character.Learning, request, definition));
@@ -61,16 +102,45 @@ internal sealed partial class GameSession
         SkillPointLedger.Reset(character.Job, character.GrowType, character.Level, character.Learning, context, catalog,
             DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
 
-    private SkillLearningResult ApplySkillLearning(Func<Character, SkillLearningResult> plan)
+    private SkillLearningResult ApplySkillLearning(Func<Character, SkillLearningResult> plan) =>
+        ApplySkillLearning((character, _) => plan(character), null);
+
+    private SkillLearningResult ApplySkillLearning(Func<Character, bool, SkillLearningResult> plan, byte? comboContext)
     {
         // 返回选角后客户端可能补发迟到的技能写入包：无选中角色属于可拒绝请求，不能抛出关闭连接。
-        var captured = owner.Execute(() => (Character: Selected, SelectionEpoch, Phase,
-            Allowed: Selected is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
+        var captured = owner.Execute(() =>
+        {
+            var character = Selected;
+            bool allowed = character is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext;
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            bool autoCombo = false;
+            if (allowed && comboContext is byte expected && autoComboPending is { } pending)
+            {
+                // 510之后的第一次连招保存就是客户端提交的自动排列；窗口一次性消费。
+                autoComboPending = null;
+                autoCombo = pending.Context == expected && pending.SelectionEpoch == SelectionEpoch && pending.ExpiresAt >= now;
+            }
+            // 自动组合提交优先于重建窗口，否则紧跟在完整回放后的自动排列会被当成回传吞掉。
+            bool echo = allowed && !autoCombo && comboContext is not null &&
+                comboRebuildPending is { } rebuild && rebuild.SelectionEpoch == SelectionEpoch && rebuild.ExpiresAt >= now;
+            return (Character: character, SelectionEpoch, Phase, Allowed: allowed, AutoCombo: autoCombo, Echo: echo);
+        });
         if (!captured.Allowed || captured.Character is not { } character)
             return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
 
+        // 完整技能树重建后的回传只回成功回执，不改变服务端已保存的连招。
+        if (captured.Echo)
+            return owner.Execute(() =>
+            {
+                if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
+                    throw new InvalidOperationException("Stale skill learning state");
+                return new SkillLearningResult(SkillLearningFailure.None, Selected!.Learning, Array.AsReadOnly(Array.Empty<LearnedSkill>()))
+                {
+                    Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase }
+                };
+            });
         SkillLearningResult result;
-        try { result = plan(character); }
+        try { result = plan(character, captured.AutoCombo); }
         catch (NotSupportedException) { return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()); }
         catch (KeyNotFoundException) { return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()); }
         return owner.Execute(() =>

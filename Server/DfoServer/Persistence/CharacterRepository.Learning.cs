@@ -236,7 +236,13 @@ internal sealed partial class CharacterRepository
         if (balances.Count == 0 && experience == 0 && !bonus.HasValue && !tpBonus.HasValue && expires == 0)
             return CharacterLearningState.Uninitialized;
         var state = new CharacterLearningState(experience, Array.AsReadOnly(balances.OrderBy(pair => pair.Key)
-            .Select(pair => new CharacterSkillTree(pair.Key, pair.Value.Sp, pair.Value.Tp, pair.Value.Skills.AsReadOnly()) { Combos = combos.TryGetValue(pair.Key, out var list) ? list.AsReadOnly() : Array.Empty<SkillCombo>() }).ToArray()))
+            .Select(pair => new CharacterSkillTree(pair.Key, pair.Value.Sp, pair.Value.Tp, pair.Value.Skills.AsReadOnly())
+            {
+                // 存储表按root_id主键保存；读档时恢复为根的快捷栏槽位顺序。
+                Combos = combos.TryGetValue(pair.Key, out var list) ? Array.AsReadOnly(list
+                    .OrderBy(combo => pair.Value.Skills.Where(skill => skill.Id == combo.Root).Select(skill => (int)skill.Slot)
+                        .DefaultIfEmpty(int.MaxValue).First()).ToArray()) : Array.Empty<SkillCombo>()
+            }).ToArray()))
         { BonusSp = bonus, BonusTp = tpBonus, ExpertContractExpiresAt = expires };
         state.Validate();
         return state;

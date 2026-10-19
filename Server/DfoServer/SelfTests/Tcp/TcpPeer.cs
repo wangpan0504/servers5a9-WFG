@@ -395,7 +395,11 @@ internal sealed class TcpPeer : IDisposable
     // 从提交的行独立编码预期，不借用服务端 Builder；初始化连招可含资源声明的默认组。
     internal static byte[] StoredCombos(TcpTestFixture fixture, ushort characterId) => Build(writer =>
     {
-        var rows = fixture.Query("SELECT context,root_id,children FROM character_skill_combos WHERE character_id=$p0 ORDER BY context,root_id", characterId);
+        var rows = fixture.Query("""
+            SELECT c.context,c.root_id,c.children FROM character_skill_combos c
+            LEFT JOIN character_skill_bindings b ON b.character_id=c.character_id AND b.context=c.context AND b.skill_id=c.root_id
+            WHERE c.character_id=$p0 ORDER BY c.context,b.slot,c.root_id
+            """, characterId);
         writer.Write((byte)0);
         writer.Write((byte)2);
         for (byte context = 0; context < 2; context++)

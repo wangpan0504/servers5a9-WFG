@@ -60,7 +60,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         // 转职/觉醒先装载已提交技能快照，ACK34会据此重建本地技能；沿S4A21的前置通知顺序。
         bool profession = commit.ProfessionGrowType is not null;
         if (profession)
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "quest_profession_skills", Guard);
+            await SkillProjection.PublishAsync(context, character, "quest_profession_skills", "quest_profession_combo", Guard);
         await context.Reply(CmdPacketType.FINISH_QUEST, acknowledgement, "quest_completion_committed", Guard);
         if (creatures is not null && previous is not null && commit.ChangedSlots.Contains(Game.Creatures.CreatureRules.EquippedSlot))
             await creatures.ChangedAsync(context, previous.Inventory, character, receipt.Phase, Guard);
@@ -93,7 +93,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests), "quest_reward_conditions", Guard);
         if (!profession && (commit.TpAmount != 0 || commit.PreviousLearning is { } previousLearning &&
             SkillPackets.BindingsChanged(previousLearning, character.Learning)))
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "quest_growth_skills", Guard);
+            await SkillProjection.PublishAsync(context, character, "quest_growth_skills", "quest_growth_combo", Guard);
         if (character.EquipmentSlotFlags != commit.PreviousEquipmentSlotFlags)
             await levelProjection.PlayerAsync(context,character,"quest_equipment_slots",Guard);
         await levelProjection.RefreshAsync(context, character, commit.PreviousLevel, "quest_level_committed", Guard, commit.PreviousGrowType,

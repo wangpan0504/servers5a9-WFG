@@ -353,7 +353,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main,[.. result.QuestDropSlots]),"formal_quest_drop_items",Guard);
         if (previousCharacter is not null && SkillPackets.BindingsChanged(previousCharacter.Learning, receipt.Character.Learning))
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_growth_skills", Guard);
+            await SkillProjection.PublishAsync(context, receipt.Character, "formal_growth_skills", "formal_growth_combo", Guard);
         if (previousCharacter is not null)
             await SkillSwitchInventoryProjection.RefreshStateAsync(
                 context,

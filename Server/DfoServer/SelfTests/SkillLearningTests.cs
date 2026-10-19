@@ -216,7 +216,9 @@ internal static class SkillLearningTests
                     source.Skills.Where(skill => !swapped || skill.Slot > 1).All(skill => tree.Skills.Contains(skill)) &&
                     tree.Skills.Select(skill => (skill.Id, skill.Level)).OrderBy(skill => skill.Id)
                         .SequenceEqual(source.Skills.Select(skill => (skill.Id, skill.Level)).OrderBy(skill => skill.Id)) &&
-                    tree.SameCombos(source), "新建角色双树只交换前两个快捷技能，后跳、等级、被动和连招保留：" + job);
+                    tree.Combos.Count == source.Combos.Count && source.Combos.All(combo =>
+                        tree.Combos.Any(value => value.Root == combo.Root && value.Children.SequenceEqual(combo.Children))),
+                    "新建角色双树只交换前两个快捷技能，后跳、等级、被动和连招保留：" + job);
             }
             if (job is 9 or 10)
             {

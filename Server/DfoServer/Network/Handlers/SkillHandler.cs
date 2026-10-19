@@ -3,6 +3,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Projection;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 
@@ -36,8 +37,8 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill commands receipt");
         bool Guard() => context.Session.CanPublishLearning(receipt);
         await context.Reply(opcode, [1], "skill_commands_committed", Guard);
-        await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning,
-            id => catalog.Get(receipt.Character.Job, id).DefaultCommand), "skill_commands_info", Guard);
+        await SkillProjection.PublishAsync(context, receipt.Character, "skill_commands_info", "skill_commands_combo", Guard,
+            id => catalog.Get(receipt.Character.Job, id).DefaultCommand);
         await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
@@ -49,8 +50,10 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
         var result = context.Session.CustomizeCombo(parsed.Context, parsed.Combos, catalog);
         if (!result.Success) { log.Write("skill_combo_rejected", new { context.Id, result.Failure }); return CommandResult.Handled; }
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing combo receipt");
-        await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(receipt.Character.Learning, refresh: true),
-            "skill_combo_committed", () => context.Session.CanPublishLearning(receipt));
+        bool Guard() => context.Session.CanPublishLearning(receipt);
+        // 客户端以同 opcode 的 CMD 回包判定保存完成；只推 NOTI447 会让客户端持续重发 C2S508。
+        await context.Reply(CmdPacketType.COMBO_SKILL_INFO, [1], "skill_combo_committed", Guard);
+        // 自动组合的快捷栏清理已在510阶段完成；这里原样保存客户端排列，不再回放技能树。
         await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
@@ -59,15 +62,17 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
     {
         var parsed = SkillRequests.ParseReset(packet.Body);
         if (parsed.Mode != 0) return CommandResult.Handled;
-        var result = context.Session.ClearComboQuickSlots(parsed.Context, catalog);
+        var result = context.Session.BeginAutoCombo(parsed.Context, catalog);
         if (!result.Success) { log.Write("skill_combo_slots_rejected", new { context.Id, result.Failure }); return CommandResult.Handled; }
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing combo slots receipt");
         bool Guard() => context.Session.CanPublishLearning(receipt);
-        // ACK触发客户端自动编排；先下发清理后的绑定，随后508保存客户端生成的连招。
+        // 先把将要被收进连招列的上排技能移出快捷栏并回放完整技能树：客户端收到回执后才本地生成排列，
+        // 必须在重建面板之前改好槽位，否则重建出的旧槽位会覆盖刚排好的六列。
         if (result.RequiresSynchronization)
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "skill_combo_slots_info", Guard);
+            await SkillProjection.PublishSkillsAsync(context, receipt.Character, "skill_combo_auto_skills", Guard,
+                id => catalog.Get(receipt.Character.Job, id).DefaultCommand);
+        // 自动组合排列由客户端本地生成并显示，随后用C2S508提交；510只确认开始，不改连招存档。
         await context.Reply(CmdPacketType.COMBO_SKILL_EXTENSION_QUICK_SLOT_RESET, [1], "skill_combo_slots_committed", Guard);
-        await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
 
@@ -83,9 +88,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill reset receipt");
         bool Guard() => context.Session.CanPublishLearning(receipt);
         await context.Reply(CmdPacketType.SKILL_INIT, SkillPackets.Reset(parsed.Context), "skill_reset_committed", Guard);
-        await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "skill_reset_info", Guard);
-        if (receipt.Character.Job == 9)
-            await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(receipt.Character.Learning, refresh: true), "skill_reset_combo", Guard);
+        await SkillProjection.PublishAsync(context, receipt.Character, "skill_reset_info", "skill_reset_combo", Guard);
         await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
@@ -130,12 +133,11 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
             var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill commit receipt");
             await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Success(parsed.Context, parsed.Mode, receipt.Character.Learning, result.Changes),
                 "skill_purchase_committed", () => context.Session.CanPublishLearning(receipt));
+            // 普通学习/回退只回ACK29：客户端不会因加点清空连招列，
+            // 额外推送NOTI447会用服务端存档覆盖客户端尚未提交的当前排列。
             if (result.RequiresSynchronization)
-                await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning),
-                    "skill_automatic_synchronized", () => context.Session.CanPublishLearning(receipt));
-            if (receipt.Character.Job == 9)
-                await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(receipt.Character.Learning, refresh: true),
-                    "skill_purchase_combo", () => context.Session.CanPublishLearning(receipt));
+                await SkillProjection.PublishAsync(context, receipt.Character, "skill_automatic_synchronized", "skill_purchase_combo",
+                    () => context.Session.CanPublishLearning(receipt));
             await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
             return CommandResult.Handled;
         }

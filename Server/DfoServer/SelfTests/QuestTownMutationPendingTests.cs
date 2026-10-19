@@ -105,7 +105,7 @@ internal static class QuestTownMutationPendingTests
                 f.Session.ResetSkills(0,0,learning).Failure == SkillLearningFailure.Unsupported &&
                 f.Session.CustomizeSkills([],true,learning).Failure == SkillLearningFailure.Unsupported &&
                 f.Session.CustomizeCombo(0,[],learning).Failure == SkillLearningFailure.Unsupported &&
-                f.Session.ClearComboQuickSlots(0,learning).Failure == SkillLearningFailure.Unsupported,
+                f.Session.BeginAutoCombo(0, learning).Failure == SkillLearningFailure.Unsupported,
                 "技能学习、布局及共用定制入口拒绝未决任务");
             TestCheck.Reject<InvalidOperationException>(() => f.Session.InitializeLearning(learning),"技能初始化提交检查保留异常合同");
             That(f.Session.ChangeEmotion(settings,1) is { Error: 3, Character: null } &&

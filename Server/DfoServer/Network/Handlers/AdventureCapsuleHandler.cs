@@ -27,7 +27,7 @@ internal sealed class AdventureCapsuleHandler(AdventureCapsuleService service, C
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning, auxiliary,
                 new(0, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0)), "adventure_capsule_experience", Guard);
             if (SkillPackets.BindingsChanged(previous.Learning, character.Learning))
-                await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning), "adventure_capsule_skills", Guard);
+                await SkillProjection.PublishAsync(context, character, "adventure_capsule_skills", "adventure_capsule_combo", Guard);
             await SkillSwitchInventoryProjection.RefreshStateAsync(
                 context,
                 previous.SkillSwitchInventory,

@@ -33,7 +33,7 @@ internal static class SkillSlotAllocator
     // 当前可见12栏使用0–11；旧198–203绑定继续限制为主动，但不作为新分配的快捷空位。
     public static bool QuickSlot(byte slot) => slot < 12 || slot is >= 198 and < 204;
 
-    private static int FirstFree(HashSet<byte> occupied, int start, int end)
+    public static int FirstFree(HashSet<byte> occupied, int start, int end)
     {
         for (int slot = start; slot < end; slot++)
         {

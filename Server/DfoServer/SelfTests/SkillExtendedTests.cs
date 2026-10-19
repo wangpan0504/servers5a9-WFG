@@ -71,7 +71,12 @@ internal static class SkillExtendedTests
         Check(!SkillCustomization.Commands(0, state, [new(174, "04")], false, catalog).Success, "被动不能配置施放指令");
         foreach (byte job in new byte[] { 9, 10 })
         {
-            var initialized = SkillLearning.Initialize(job, characters.Get(job).Skills, catalog);
+            // 连招根的槽位按输入顺序分配；把根倒序喂入，使槽位顺序与技能ID相反，
+            // 否则“按槽位排序”与“按技能ID排序”结果相同，回归用例无法区分修复是否生效。
+            var initialSkills = characters.Get(job).Skills;
+            var ordered = initialSkills.Where(skill => catalog.Get(job, skill.Id).HasComboDeclaration).Reverse()
+                .Concat(initialSkills.Where(skill => !catalog.Get(job, skill.Id).HasComboDeclaration)).ToArray();
+            var initialized = SkillLearning.Initialize(job, ordered, catalog);
             Check(initialized.Success, "特殊职业初始化 " + job);
             var special = SkillPointLedger.Synchronize(job, 0, 60, initialized.State!, catalog);
             Check(special.Trees.All(tree => tree.Sp == catalog.TotalSp(60) && tree.Tp == 11), "特殊职业免费基线与双树点数 " + job);
@@ -86,12 +91,65 @@ internal static class SkillExtendedTests
             Check(grown.Success && grown.Plan!.Learning.Trees.All(tree => tree.Tp == 1), "特殊职业49升50正常经验成长 " + job);
             if (job == 9)
             {
+                var replay = SkillPackets.Combos(special);
+                var replayRoots = new List<ushort>();
+                int cursor = 2;
+                for (int page = 0; page < replay[1]; page++)
+                {
+                    byte replayContext = replay[cursor++];
+                    int rootCount = replay[cursor++];
+                    for (int i = 0; i < rootCount; i++)
+                    {
+                        if (replayContext == 0) replayRoots.Add((ushort)(replay[cursor] | replay[cursor + 1] << 8));
+                        cursor += 3 + replay[cursor + 2] * 2;
+                    }
+                }
+                var slotRoots = special.Trees.Single(tree => tree.Context == 0).Skills.OrderBy(skill => skill.Slot)
+                    .Where(skill => catalog.Get(job, skill.Id).HasComboDeclaration).Select(skill => skill.Id).ToArray();
+                Check(!slotRoots.SequenceEqual(slotRoots.OrderBy(id => id)), "连招夹具的槽位顺序与技能ID顺序不同");
+                Check(replayRoots.SequenceEqual(slotRoots), "连招回放按根的快捷栏顺序而非技能ID");
                 var combos = SkillCustomization.Combo(job, special, 0, [new(118, new ushort[] { 46, 8 }), new(119, new ushort[] { 46 })], catalog);
                 Check(combos.Success && combos.State!.Trees[0].Combos.Single(combo => combo.Root == 118).Children.SequenceEqual(new ushort[] { 8 }), "跨组重复子技能保留最后位置");
                 Check(!SkillCustomization.Combo(job, special, 0, [new(118, new ushort[] { 174 })], catalog).Success, "被动不能放连招");
                 Check(SkillPackets.Combos(combos.State!)[0] == 0 && combos.State!.Trees[1].SameCombos(special.Trees[1]), "连招回放和另一树独立");
                 Check(!SkillLayout.Move(job, special, new(0, 0, 198, -1, 0), catalog.Get).Success,
                     "连招根不能移出客户端支持的主六槽，双向交换仍校验根位置");
+                // 自动组合的排列由客户端生成并提交；服务端只按该排列收走对应的上排技能。
+                var quick = Enumerable.Range(7, 5).Select(value => (byte)value)
+                    .Where(slot => special.Trees[0].Skills.All(skill => skill.Slot != slot)).ToArray();
+                Check(quick.Length >= 2, "自动组合夹具存在空闲快捷槽");
+                var arranged = special with { Trees = Array.AsReadOnly(special.Trees.Select(tree => tree.Context == 0
+                    ? tree with { Skills = Array.AsReadOnly(tree.Skills.Select(skill => skill.Id == 46 ? skill with { Slot = quick[0] } :
+                        skill.Id == 8 ? skill with { Slot = quick[1] } : skill).OrderBy(skill => skill.Slot).ToArray()) }
+                    : tree).ToArray()) };
+                var auto = SkillCustomization.Combo(9, arranged, 0, [new(118, new ushort[] { 46 })], catalog, autoCombo: true);
+                Check(auto.Success && auto.RequiresSynchronization &&
+                    auto.State!.Trees[0].Combos.Single(combo => combo.Root == 118).Children.SequenceEqual(new ushort[] { 46 }) &&
+                    auto.State.Trees[0].Skills.Single(skill => skill.Id == 46).Slot is >= 150 and < 198 &&
+                    auto.State.Trees[0].Skills.Single(skill => skill.Id == 8).Slot == quick[1] &&
+                    auto.State.Trees[0].Skills.Count(skill => skill.Slot < 6) == 6,
+                    "自动组合原样保存客户端排列，只收走排列包含的快捷技能并要求回放完整树");
+                // 510阶段先按声明池收走快捷栏技能：客户端要等回执后才生成排列，重建必须提前。
+                var prepared = SkillCustomization.PrepareAutoCombo(9, arranged, 0, catalog);
+                Check(prepared.Success && prepared.RequiresSynchronization &&
+                    prepared.State!.Trees[0].Skills.Single(skill => skill.Id == 46).Slot is >= 150 and < 198 &&
+                    prepared.State.Trees[0].Skills.Single(skill => skill.Id == 8).Slot is >= 150 and < 198 &&
+                    prepared.State.Trees[0].Skills.Where(skill => skill.Id is not (46 or 8))
+                        .All(skill => skill.Slot == arranged.Trees[0].Skills.Single(value => value.Id == skill.Id).Slot),
+                    "自动组合开始前按声明池收走快捷技能，其他槽位不变");
+                var idle = SkillCustomization.PrepareAutoCombo(9, prepared.State!, 0, catalog);
+                Check(idle.Success && !idle.RequiresSynchronization && ReferenceEquals(idle.State, prepared.State),
+                    "快捷技能已全部收走后不重复回放完整树");
+                var manual = SkillCustomization.Combo(9, arranged, 0, [new(118, new ushort[] { 46 })], catalog);
+                Check(manual.Success && !manual.RequiresSynchronization &&
+                    manual.State!.Trees[0].Skills.Single(skill => skill.Id == 46).Slot == quick[0],
+                    "手工保存连招不改变快捷绑定也不触发完整树回放");
+                var repeated = SkillCustomization.Combo(9, manual.State!, 0, [new(118, new ushort[] { 46, 8 })], catalog, autoCombo: true);
+                Check(repeated.Success && repeated.RequiresSynchronization &&
+                    repeated.State!.Trees[0].Combos.Single(combo => combo.Root == 118).Children.SequenceEqual(new ushort[] { 46, 8 }) &&
+                    repeated.State.Trees[0].Skills.Single(skill => skill.Id == 46).Slot is >= 150 and < 198 &&
+                    repeated.State.Trees[0].Skills.Single(skill => skill.Id == 8).Slot is >= 150 and < 198,
+                    "自动组合保持客户端子技能顺序并将新收集的快捷技能移出上排");
             }
             else
             {
@@ -137,11 +195,30 @@ internal static class SkillExtendedTests
             Reject(() => repository.CommitLearning(owner, character, failed.State!), "指令SQL失败不提前成功");
             Check(SkillRepositoryTests.Equal(character, repository.List(owner).Single(value => value.Id == character.Id)), "失败保留技能等级、费用、指令与revision");
             var specialProfile = characters.Get(9);
+            var specialInitial = SkillLearning.Initialize(9, specialProfile.Skills, catalog).State!;
+            // 互换根118/119的快捷槽位，使槽位顺序与root_id相反；存档表按root_id排序，
+            // 读档必须按根槽位恢复，否则六列顺序与客户端不一致。
+            var initialTree = specialInitial.Trees.Single(tree => tree.Context == 0);
+            byte slot118 = initialTree.Skills.Single(skill => skill.Id == 118).Slot;
+            byte slot119 = initialTree.Skills.Single(skill => skill.Id == 119).Slot;
+            Check(slot118 != slot119, "连招根118/119占用不同快捷槽");
+            var swapped = specialInitial with { Trees = Array.AsReadOnly(specialInitial.Trees.Select(tree => tree.Context == 0
+                ? tree with { Skills = Array.AsReadOnly(tree.Skills.Select(skill => skill.Id == 118 ? skill with { Slot = slot119 } :
+                    skill.Id == 119 ? skill with { Slot = slot118 } : skill).OrderBy(skill => skill.Slot).ToArray()) }
+                : tree).ToArray()) };
+            ushort[] slotOrder = swapped.Trees.Single(tree => tree.Context == 0).Skills.OrderBy(skill => skill.Slot)
+                .Where(skill => catalog.Get(9, skill.Id).HasComboDeclaration).Select(skill => skill.Id).ToArray();
+            Check(!slotOrder.SequenceEqual(slotOrder.OrderBy(id => id)), "存档夹具的槽位顺序与技能ID不同");
             var special = repository.Create(owner, new NewCharacter("ComboStore", towns.Room, towns.InitialReturn)
-            { Job = 9, Skills = specialProfile.Skills, InitialLearning = SkillLearning.Initialize(9, specialProfile.Skills, catalog).State! });
+            { Job = 9, Skills = specialProfile.Skills, InitialLearning = swapped });
             var planned = SkillCustomization.Combo(9, special.Learning, 0, [new(118, new ushort[] { 46 }), new(119, new ushort[] { 8 })], catalog);
+            Check(planned.Success && planned.State!.Trees.Single(tree => tree.Context == 0).Combos.Select(combo => combo.Root).SequenceEqual(slotOrder),
+                "保存连招按根的快捷栏槽位排序，不按技能ID");
             special = repository.CommitLearning(owner, special, planned.State!);
-            Check(repository.List(owner).Single(value => value.Id == special.Id).Learning.Trees.Zip(special.Learning.Trees).All(pair => pair.First.SameCombos(pair.Second)),
+            var stored = repository.List(owner).Single(value => value.Id == special.Id);
+            Check(stored.Learning.Trees.Single(tree => tree.Context == 0).Combos.Select(combo => combo.Root).SequenceEqual(slotOrder),
+                "读档按根的快捷栏槽位恢复连招列顺序");
+            Check(stored.Learning.Trees.Zip(special.Learning.Trees).All(pair => pair.First.SameCombos(pair.Second)),
                 "连招BLOB重读两树独立且根顺序稳定");
             trigger.CommandText = "CREATE TRIGGER reject_combo BEFORE INSERT ON character_skill_combos BEGIN SELECT RAISE(ABORT,'fixture'); END";
             trigger.ExecuteNonQuery();

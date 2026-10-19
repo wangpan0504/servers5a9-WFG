@@ -72,7 +72,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
                 "formal_clear_quest_conditions",Guard);
         if (SkillPackets.BindingsChanged(previous.Learning, receipt.Character.Learning))
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(receipt.Character.Learning), "formal_clear_skills", Guard);
+            await SkillProjection.PublishAsync(context, receipt.Character, "formal_clear_skills", "formal_clear_combo", Guard);
         if (result.Inventory is null)
             await SkillSwitchInventoryProjection.RefreshStateAsync(
                 context,

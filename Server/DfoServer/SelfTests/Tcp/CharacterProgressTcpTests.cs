@@ -76,7 +76,7 @@ internal static class CharacterProgressTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1, combos: SkillPackets.Combos(Role(1).Learning));
-            peer.Send(508, [0, 1, 118, 0, 1, 46, 0, 0]); peer.Expect(0, 447);
+            peer.Send(508, [0, 1, 118, 0, 1, 46, 0, 0]); peer.Expect(1, 508, [1]);
             That(Command("grow GmTcp9 0 2").StartsWith("OK "), "特殊职业first0二觉重置");
             var role = Role(1);
             That(role.GrowType == 32 && role.Learning.Trees.All(tree => tree.Skills.All(skill => skill.Command == "") &&

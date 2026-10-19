@@ -40,6 +40,18 @@ internal static class LevelUpTicketTcpTests
                         .Add(new(0,new(Game.Inventory.Models.InventoryListType.Main,66),new(LevelUpTicketTests.TicketId,GameWorld.Items.ItemKind.Consumable,1)))}
                 }));
         }
+        var candidate9=CharacterCreation.Prepare("LevelTicket9",resources.Characters.Get(9),resources.Towns.Room,
+            resources.Towns.InitialReturn,resources.Learning.Get);
+        var state9=SkillPointLedger.Synchronize(9,candidate9.GrowType,3,candidate9.InitialLearning with
+            {Experience=growth.GetLevelStartExperience(3),BonusSp=17,BonusTp=5},resources.Learning);
+        Character job9;
+        using(var owner9=new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{}))
+            job9=repository.Create(owner9,candidate9 with
+            {
+                Level=3,InitialLearning=state9,
+                Inventory=candidate9.Inventory with {Items=candidate9.Inventory.Items.Add(new(0,new(Game.Inventory.Models.InventoryListType.Main,65),
+                    new(LevelUpTicketTests.TicketId,GameWorld.Items.ItemKind.Consumable,1)))}
+            });
         await fixture.StartAsync();
         using(var peer=Open(fixture))
         {
@@ -111,6 +123,25 @@ internal static class LevelUpTicketTcpTests
         {
             peer.Select(created[3].Slot,prepared:true);peer.Send(418,[65,0,0]);ExpectUsed(peer,created[3]);ReadCompleted(peer);
             That(fixture.Query("SELECT level FROM characters WHERE id=$p0",created[3].Id) is [[4L]],"没有可跳过主线仍能正常升级");
+        }
+        using(var peer=Open(fixture))
+        {
+            var stored=StoredCombos(fixture,job9.Id);
+            peer.Select(job9.Slot,combos:stored);
+            peer.Send(418,[65,0,0]);
+            That(peer.Expect(1,418).Body is [1,65,..],"job9升级券消费后ACK确认源槽");
+            var packets=ReadCompleted(peer);
+            // 连招通知首字节与登录初始化一致为0；写1会让客户端重建自动排列。
+            var expected=stored.ToArray();
+            var combos=packets.Where(packet=>packet is {Kind:0,Opcode:447}).ToArray();
+            That(combos.Length==2 && combos.All(packet=>packet.Body.SequenceEqual(expected)),
+                "job9升级后同批补发已存连招，并在客户端重建完成后再次回放");
+            int info=packets.FindIndex(packet=>packet is {Kind:0,Opcode:19});
+            That(info<0 || packets[info+1] is {Kind:0,Opcode:447},"完整技能树回放后紧跟连招通知");
+            // 完整NOTI19后客户端重建六列并自动回传默认排列；重建窗口内的508只确认、不覆盖存档。
+            peer.Send(508,[0,6,118,0,0,119,0,0,120,0,0,121,0,0,122,0,0,123,0,0,0]);
+            peer.Expect(1,508,[1]);
+            That(StoredCombos(fixture,job9.Id).SequenceEqual(stored),"重建回传的自动508不覆盖已存连招");
         }
         await fixture.StopAsync();await fixture.StartAsync();
         using(var peer=Open(fixture))

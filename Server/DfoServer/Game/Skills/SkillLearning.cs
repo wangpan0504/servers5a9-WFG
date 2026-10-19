@@ -93,7 +93,8 @@ internal static class SkillLearning
             bindings.Add(new((byte)slot, skill.Id, skill.Level));
         }
 
-        var combos = bindings.Where(skill => definition(job, skill.Id).HasComboDeclaration).OrderBy(skill => skill.Id).Select(skill =>
+        // 初始连招列同样跟随根的快捷栏槽位，与NOTI19绑定顺序一致。
+        var combos = bindings.Where(skill => definition(job, skill.Id).HasComboDeclaration).OrderBy(skill => skill.Slot).Select(skill =>
             new SkillCombo(skill.Id, Array.AsReadOnly(definition(job, skill.Id).ComboSkills.Where(id => bindings.Any(value => value.Id == id)).ToArray()))).ToArray();
         LearnedSkill[] entries = bindings.OrderBy(skill => skill.Slot).ToArray();
         CharacterSkillTree[] trees =
