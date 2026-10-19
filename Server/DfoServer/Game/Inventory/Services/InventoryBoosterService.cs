@@ -222,6 +222,17 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         // 随机池预检匹配池的有权候选，选择型仅预检实际所选奖励；转职池不预检其他职业行。
         try
         {
+            // 明确类型的随机池先检查全部有效候选，不能靠抽中项校验或钱包/契约快捷入口绕过。
+            foreach (var pool in pools.Where(pool => pool.RequiredKind is not null))
+                foreach (var row in pool.Rewards.Where(row => row.Weight > 0))
+                {
+                    var template = catalog.Get(row.ItemId);
+                    if (template.Kind != pool.RequiredKind || CurrencyWallet.RewardKind(row.ItemId) is not null ||
+                        pieces.ByPiece.ContainsKey(row.ItemId) || template.AcquisitionContract is not null ||
+                        template.IsPremiumService || contracts?.Recognizes(row.ItemId) == true ||
+                        boosters.DirectActivationItems.Contains(row.ItemId))
+                        return InventoryResult.Reject(19);
+                }
             if (choices is not null && choices.Any(row => row.RequiredKind is { } kind && catalog.Get(row.ItemId).Kind != kind))
                 return InventoryResult.Reject(19);
             var ids = choices is not null ? choices.Select(row => row.ItemId) : ceraPackage

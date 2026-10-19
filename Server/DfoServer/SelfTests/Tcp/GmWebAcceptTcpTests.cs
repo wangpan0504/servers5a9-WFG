@@ -325,8 +325,17 @@ internal static class GmWebAcceptTcpTests
             var r = await Post("/api/gold", Body("AccA", new { gold }));
             Check("安全", "越界金币拒绝: " + gold, !Ok(r), Short(r));
         }
-        var big = await Send(HttpMethod.Post, "/api/gold", raw: "{\"account\":\"" + Account + "\",\"name\":\"AccA\",\"gold\":1,\"confirm\":true,\"pad\":\"" + new string('a', 40000) + "\"}");
+        string PaddedBody(int padding) => "{\"account\":\"" + Account + "\",\"name\":\"AccA\",\"gold\":1,\"confirm\":true,\"pad\":\"" + new string('a', padding) + "\"}";
+        var withinLimit = await Send(HttpMethod.Post, "/api/gold", raw: PaddedBody(40000));
+        Check("安全", "128KiB内合法大请求仍可处理", Ok(withinLimit), Short(withinLimit));
+        string oversizedBody = PaddedBody(128 * 1024);
+        Check("安全", "超大请求确实超过128KiB字节限制", Encoding.UTF8.GetByteCount(oversizedBody) > 128 * 1024);
+        string beforeOversized = fixture.Snapshot("SELECT id,gold,revision FROM characters ORDER BY id");
+        string auditBeforeOversized = File.ReadAllText(Path.Combine(fixture.Options.DataDirectory, "gm-audit.jsonl"));
+        var big = await Send(HttpMethod.Post, "/api/gold", raw: oversizedBody);
         Check("安全", "超大请求体被拒绝", big.Status is HttpStatusCode.RequestEntityTooLarge or HttpStatusCode.BadRequest, Short(big));
+        Check("安全", "超大请求拒绝不改变角色金币或revision", beforeOversized == fixture.Snapshot("SELECT id,gold,revision FROM characters ORDER BY id"));
+        Check("安全", "超大请求在命令执行前拒绝且不写GM审计", auditBeforeOversized == File.ReadAllText(Path.Combine(fixture.Options.DataDirectory, "gm-audit.jsonl")));
         var broken = await Send(HttpMethod.Post, "/api/gold", raw: "{not json");
         Check("安全", "畸形 JSON 返回 4xx 而非 500", (int)broken.Status is >= 400 and < 500, Short(broken));
         var wrongMethod = await Send(HttpMethod.Get, "/api/gold");

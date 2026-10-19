@@ -737,7 +737,14 @@ internal static partial class FormalDungeonTcpTests
             peer.Create("PromotedTcp");
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "grow PromotedTcp 37", out string reply) && reply.StartsWith("OK "),
                 "独立测试服务通过正式GM存储用例更新转职字节");
-            peer.Select(slot);
+            var completed = fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", peer.Id)
+                .Select(row => Convert.ToInt32(row[0])).ToHashSet();
+            That(completed.Count > 0 && completed.All(id => id is > 0 and < 30000), "GM转职已保存当前分支完整的合法任务历史");
+            peer.Select(slot, prepared: true);
+            var history = peer.CompletedQuestHistory;
+            That(history.Length == 30004 && U32(history) == 30000 &&
+                Enumerable.Range(0, 30000).All(id => history[4 + id] == (completed.Contains(id) ? 1 : 0)),
+                "GM转职后选角严格恢复持久完成历史，逐项核对全部30000位");
             EntryTown(peer);
             Enter(peer);
             Load(peer);

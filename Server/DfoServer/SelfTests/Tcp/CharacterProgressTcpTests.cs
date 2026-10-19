@@ -32,6 +32,7 @@ internal static class CharacterProgressTcpTests
                 Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(profile) });
         }
         Character Role(ushort slot) => repository.LoadCharacter(owner, slot);
+        int[] completedAfterGrow = [];
         Directory.CreateDirectory(Path.GetDirectoryName(fixture.Options.PvfPath)!);
         File.Copy(source.PvfPath, fixture.Options.PvfPath);
         var offline = await fixture.CliAsync(null, "--gm", "level", "GmTcp0", "50");
@@ -66,6 +67,9 @@ internal static class CharacterProgressTcpTests
             peer.Select();
             Bytes(peer.SkillInfo, SkillPackets.Initialized(Role(0).Learning), "重登收到改等级后的技能和点数");
             That(Command("grow GmTcp0 1 2").StartsWith("OK ") && Role(0).GrowType == 33, "分支和二觉命令闭合");
+            completedAfterGrow = Role(0).CompletedQuests;
+            That(completedAfterGrow.Length > 0 && Role(0).AccountCompletedQuests.Length == 0,
+                "GM转职觉醒已持久对应角色完成历史，重登应使用有历史的严格包序");
             long revision = Role(0).Revision;
             That(Command("grow GmTcp0 0 1").StartsWith("ERR ") && Role(0).Revision == revision, "非法未转职觉醒不写库");
             using var options = JsonDocument.Parse(Command("grow-options GmTcp0")[3..]);
@@ -87,12 +91,23 @@ internal static class CharacterProgressTcpTests
         await fixture.StartAsync("gm-progress-restart");
         using (var peer = Open(fixture))
         {
-            peer.Select(); Bytes(peer.SkillInfo, SkillPackets.Initialized(Role(0).Learning), "服务重启保留职业、技能和点数");
+            That(Role(0).CompletedQuests.SequenceEqual(completedAfterGrow), "服务重建前后转职觉醒完成账本不变");
+            peer.Select(prepared: true);
+            var history = peer.CompletedQuestHistory;
+            var completed = completedAfterGrow.ToHashSet();
+            That(history.Length == 30004 && U32(history) == 30000 && completed.All(id => id is > 0 and < 30000),
+                "重启选角的完成历史使用完整30000项表，持久任务编号合法");
+            That(Enumerable.Range(0, 30000).All(id => history[4 + id] == (completed.Contains(id) ? 1 : 0)),
+                "重启选角逐项恢复已提交转职觉醒历史，不漏报也不增加完成位");
+            Bytes(peer.SkillInfo, SkillPackets.Initialized(Role(0).Learning), "服务重启保留职业、技能和点数");
         }
         using (var peer = Open(fixture))
         {
             var role = Role(1);
+            That(role.CompletedQuests.Length == 0 && role.AccountCompletedQuests.Length == 0,
+                "特殊职业未产生完成任务时仍沿无356的严格入城包序");
             peer.Select(1, combos: SkillPackets.Combos(role.Learning));
+            That(peer.CompletedQuestHistory.Length == 0, "空账本重启选角不伪造完成历史通知");
             Bytes(peer.SkillInfo, SkillPackets.Initialized(role.Learning), "特殊职业重启回放默认连招、觉醒与点数");
         }
         await fixture.StopAsync();

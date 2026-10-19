@@ -15,6 +15,7 @@ internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewa
     public int MinimumLevel { get; init; }
     public int MaximumLevel { get; init; } = int.MaxValue;
     public int GrowType { get; init; } = -1;
+    public ItemKind? RequiredKind { get; init; }
 
     public bool Matches(byte job, byte growType, byte level) => JobTag is null ||
         (string.Equals(JobTag, ItemCatalog.JobTag(job), StringComparison.OrdinalIgnoreCase) &&
@@ -158,7 +159,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     pools.Add(growPool);
                 continue;
             }
-            if (kind is not ("etc" or "cera" or "equipment" or "stackable" or "booster" or "emblem"))
+            if (kind is not ("etc" or "cera" or "equipment" or "stackable" or "booster" or "emblem" or "creature"))
                 return new([], kind);
             string[] tokens = match.Groups["data"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             if (tokens.Length == 0 || (tokens.Length - 1) % 3 != 0 || !int.TryParse(tokens[0], out int draws) || draws <= 0)
@@ -182,7 +183,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     factor = checked(factor * 10);
                 var rewards = rows.Select(row => new BoosterReward(row.Id, checked((long)(row.Weight * factor)), row.Count)).ToImmutableArray();
                 if (rewards.Sum(row => row.Weight) > 0)
-                    pools.Add(new(draws, rewards));
+                    pools.Add(new(draws, rewards) { RequiredKind = kind == "creature" ? ItemKind.Creature : null });
             }
             catch (OverflowException)
             {

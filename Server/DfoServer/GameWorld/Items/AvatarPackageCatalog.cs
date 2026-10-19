@@ -102,16 +102,22 @@ internal sealed class AvatarPackageCatalog
         if (!int.TryParse(Scalar(text, "booster selection num").Trim(), out int selection) || selection < 0)
             return Reject("装扮选择数量无效");
         var dimensions = Tokens(Scalar(text, "booster category num"));
-        if (dimensions.Length is not (2 or 3) || !int.TryParse(dimensions[0], out int rank) || rank != dimensions.Length - 1)
+        bool rankZero = dimensions is ["0"];
+        int rank = rankZero ? 1 : 0;
+        if (Fields(text, "booster category num").Count != 1 || !rankZero &&
+            (dimensions.Length is not (2 or 3) || !int.TryParse(dimensions[0], out rank) || rank != dimensions.Length - 1))
             return Reject("装扮分类维数无效");
         var sizes = ImmutableArray.CreateBuilder<int>();
+        // 无分类选择格式只有一个0声明，奖励仍须完整归属于唯一坐标0/0。
+        if (rankZero) sizes.Add(1);
         foreach (string token in dimensions.Skip(1))
         {
             if (!int.TryParse(token, out int size) || size is < 0 or > 256) return Reject("装扮分类范围无效");
             // 零维度表示不展示分类选择，仍使用唯一的坐标0；不能放宽为任意分类。
             sizes.Add(Math.Max(1, size));
         }
-        if (blocks.Count == 0 || blocks.Count != Fields(text, "booster select category").Count)
+        if (blocks.Count == 0 || blocks.Count != Fields(text, "booster select category").Count ||
+            rankZero && (blocks.Count != 1 || Fields(text, "/booster select category").Count != 1))
             return Reject("装扮分类缺失或未闭合");
         var categories = ImmutableArray.CreateBuilder<AvatarPackageCategory>();
         var keys = new HashSet<(byte, byte)>();

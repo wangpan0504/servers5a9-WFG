@@ -226,6 +226,7 @@ internal static class TcpRegressionTests
         {
             Inventory.AvatarPackageTests.RunResources(resources.Towns, resources.ItemResources, resources.ItemResources.AvatarPackages);
             Inventory.BoosterSelectionTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
+            Inventory.BoosterCreatureTests.RunResources(resources.Towns, resources.ItemResources);
             return Task.CompletedTask;
         }),
         ("creature-system", CreatureSystemTcpTests.RunAsync),

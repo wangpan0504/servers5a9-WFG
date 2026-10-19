@@ -37,6 +37,20 @@ internal static class AvatarPackageTests
             implicitDefinition.Categories.Single().Category == 0, "零分类维度只开放隐式坐标0");
         That(!AvatarPackageCatalog.Parse(implicitCategory.Replace("0 0\n[avatar]", "1 0\n[avatar]")).Available,
             "零分类不能接受非零分类坐标");
+        string rankZero = implicitCategory.Replace("[booster category num]\n1 0", "[booster category num]\n0");
+        var rankZeroDefinition = AvatarPackageCatalog.Parse(rankZero);
+        That(rankZeroDefinition.Available && rankZeroDefinition.Dimensions.SequenceEqual(new[] { 1 }) &&
+            rankZeroDefinition.Categories is [{ Category: 0, Subcategory: 0 }], "无分类选择礼盒唯一的0声明归一为坐标0/0");
+        foreach (string invalid in new[] {
+            rankZero.Replace("[booster category num]\n0", "[booster category num]\n"),
+            rankZero.Replace("[booster category num]\n0", "[booster category num]\n1"),
+            rankZero.Replace("[booster category num]\n0", "[booster category num]\n0 0"),
+            rankZero + "\n[booster category num]\n0",
+            rankZero + "\n[/booster select category]",
+            rankZero.Replace("0 0\n[avatar]", "0 1\n[avatar]"),
+            rankZero.Replace("0 0\n[avatar]", "1 0\n[avatar]"),
+            rankZero + "\n[booster select category]\n0 0\n[avatar]\n102 1 3 0\n[/avatar]\n[/booster select category]" })
+            That(!AvatarPackageCatalog.Parse(invalid).Available, "无分类格式拒绝缺失、非零、额外token、重复声明及多余分类");
         That(InventoryAvatarPackageService.TrySelect(full, category, [102, 101], out var rows) && rows.SequenceEqual(category.Rows),
             "全领分类按资源顺序生成完整奖励，不依赖客户端回显顺序");
         foreach (int[] ids in new int[][] { [], [101], [101, 101], [101, 103] })
@@ -147,6 +161,7 @@ internal static class AvatarPackageTests
 
     public static void RunResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
     {
+        RankZeroResources(towns, resources, packages);
         var items = resources.Items;
         var service = new InventoryAvatarPackageService(items, packages, resources.GoldLimits, resources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
@@ -271,6 +286,49 @@ internal static class AvatarPackageTests
                 request with { Choices = [new(1, 0)] }, request with { Category = 255 } })
                 That(!service.Open(character, bad, out _, now).Accepted, "省略属性兼容不放行伪造属性、外来编号或非法分类");
         }
+    }
+
+    static void RankZeroResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        int[] ids = [2683028, .. Enumerable.Range(2683229, 10), .. Enumerable.Range(2683789, 10), .. Enumerable.Range(2683883, 10)];
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces,
+            new() { IgnoreCashShopAbsoluteExpiration = true });
+        var rewards = new HashSet<int>();
+        foreach (int id in ids)
+        {
+            var definition = packages.Get(id);
+            That(definition.Available && definition.Categories is [{ Category: 0, Subcategory: 0 }] && definition.SelectionCount == 1,
+                "实际无分类自选礼盒完整解析 " + id);
+            foreach (var row in definition.Categories.Single().Rows)
+            {
+                var template = resources.Items.Get(row.ItemId);
+                var avatar = packages.GetAvatar(row.ItemId);
+                That(template.Kind == ItemKind.Avatar && avatar.PendingRule is null && (avatar.Types.IsEmpty || row.Type < avatar.Types.Length) &&
+                    avatar.Abilities.Contains(row.DefaultAbility), "全部实际无分类奖励的类型、期限及默认属性有效 " + row.ItemId);
+                var source = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(resources.Items.Get(id), 2, shopExpiration: true));
+                var role = new Character(1, 0, "RankZero", 0, towns.Room, towns.InitialReturn) { Job = template.Jobs == 0 ? (byte)0 :
+                    (byte)Enumerable.Range(0, 16).First(job => (template.Jobs & (1 << job)) != 0), Level = 95, Inventory = new([source]) };
+                var request = new AvatarPackageOpenRequest(73, 1, 0, 0, [row.ItemId], avatar.RequiresAbilityChoice ? [new(row.ItemId, row.DefaultAbility)] : []);
+                var result = service.Open(role, request, out var receipt);
+                That(result.Accepted && result.Plan!.After.Find(Bag())!.Core.Count == 1 &&
+                    result.Plan.After.Items.Single(item => item.Core.Kind == ItemKind.Avatar) is { Avatar: not null } &&
+                    receipt!.Rewards.Single().ItemId == row.ItemId && role.Inventory.Items.Single() == source,
+                    "实际无分类自选奖励保留完整详情及源数量，提交前不改背包 " + id + "/" + row.ItemId);
+                That(!service.Open(role, request with { Category = 1 }, out _).Accepted &&
+                    !service.Open(role, request with { Subcategory = 1 }, out _).Accepted,
+                    "无分类礼盒不能伪造非零坐标");
+                var sourceTemplate = resources.Items.Get(id);
+                for (byte job = 0; job < 16; job++)
+                {
+                    var candidate = role with { Job = job };
+                    That(service.Open(candidate, request, out _).Accepted ==
+                        InventoryAvatarPackageService.SourceEligible(candidate, source, sourceTemplate),
+                        "无分类礼盒对全部职业沿源资格判断，不把奖励穿戴职业当成领取资格 " + id + "/" + job);
+                }
+                rewards.Add(row.ItemId);
+            }
+        }
+        That(ids.Length == 31 && rewards.Count == 83, "31个无分类礼盒的83种实际奖励全量覆盖");
     }
 
     static void QualificationAndDeadlines()

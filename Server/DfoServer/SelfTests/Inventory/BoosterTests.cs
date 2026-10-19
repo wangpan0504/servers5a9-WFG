@@ -35,6 +35,7 @@ internal static class BoosterTests
         var catalog = itemResources.Items;
         BoosterBatchRandomTests.Run(That);
         BoosterGrowTypeTests.Run(towns, itemResources);
+        BoosterCreatureTests.RunResources(towns, itemResources);
         var random = new EdgeRandom();
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces, random);
         var now = DateTimeOffset.UtcNow;
