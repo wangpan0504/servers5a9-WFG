@@ -250,6 +250,7 @@ internal static class DungeonEntryPlanTests
                     "真实五房保留全部源怪物，不用空房替代任务路线");
             }
         }
+        PreyIsysSinQuestTests.RunResources(pvf, quests);
         var hero = character with { Job = 13, GrowType = 36, Level = 90, ActiveMainQuests = [new(3,3240,1) { AcceptanceId = Guid.NewGuid() }] };
         That(DungeonEntryPlan.TryCreate(catalog,hero,151,3240,0,out var heroPlan,out string heroReason,quest: quests.Get(3240),quests: quests),
             "向暗黑城前进可进入英雄冢：" + heroReason);

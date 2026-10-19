@@ -124,6 +124,11 @@ internal static class DungeonMonsterPlanTests
             ReferenceEquals(plan.Monsters[1].Source, room.Monsters[1]), "friendly actor keeps its source ordinal key level and spawn type");
         That(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [0] }, 99, 10, playerTeam: 0).Monsters.Select(monster => monster.IsBlocking)
             .SequenceEqual([false, true]), "missing trailing team defaults to blocking by its source ordinal");
+        var scripted = source with { RankKind = "[boss]", Modifiers = ["[dummy]"], Team = 0 };
+        var scriptedPlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [scripted, source with { Team = 0 }] }, 99, 10, playerTeam: 0);
+        That(scriptedPlan.Monsters[0] is { IsScriptedBoss: true, IsFriendly: false, IsBlocking: true, CanReportDeath: true, IsBoss: true, Team: 0 } &&
+            scriptedPlan.Monsters[1] is { IsScriptedBoss: false, IsFriendly: true, IsBlocking: false, CanReportDeath: false, Team: 0 },
+            "同team0的精确dummy Boss仍可报告死亡，普通同阵营演员继续排除");
         That(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [-1, int.MaxValue] }, 99, 10).Monsters.All(monster => monster.IsBlocking),
             "all nonzero team values remain blocking without guessed team enums");
         bool rejected = false;

@@ -1074,7 +1074,7 @@ internal static class SinglePlayerDungeonRunTests
         {
             terminal.Room with { DeclaredType = null }, terminal.Room with { DeclaredType = "[normal]" },
             terminal.Room with { Monsters = [source with { RankKind = "[normal]", Modifiers = [] }] },
-            terminal.Room with { Monsters = [source with { Team = 0 }] }
+            terminal.Room with { Monsters = [source with { Modifiers = ["[displayhuntdummy]"], Team = 0 }] }
         })
         {
             var invalid = DungeonMonsterPlan.FromRoom(invalidRoom,99,40,playerTeam:0);

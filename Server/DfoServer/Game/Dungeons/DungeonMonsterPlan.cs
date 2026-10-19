@@ -137,7 +137,9 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             int? rawTeam = room.MonsterTeams is { } monsterTeams && index < monsterTeams.Count
                 ? monsterTeams[index] : source.Team;
             int team = rawTeam is >= 0 ? rawTeam.Value : 100;
-            bool friendly = playerTeam is { } actualTeam && team == actualTeam;
+            // 精确 [boss]+[dummy] 是猎杀/脚本39目标（夜之摩天楼中心107009977），不因与本人同team0变成友军。
+            bool scriptedBoss = source.RankKind == "[boss]" && source.Modifiers.SequenceEqual(new[] { "[dummy]" });
+            bool friendly = playerTeam is { } actualTeam && team == actualTeam && !scriptedBoss;
             result.Add(new(index, (ushort)nextKey, source.MonsterId, level, source)
             {
                 SpawnType = source.RankKind switch { "[named]" => 0, "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => (byte)0 },
