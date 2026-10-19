@@ -67,7 +67,8 @@ internal sealed partial class GameSession
         bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
         if ((quest.Condition == "[clear map]" || dungeonClear) && captured.Clear is null &&
             QuestRelationProgress.CompletedParentChild(expected,quest,quests) is null)
-            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "缺少本次接取的通关凭据" };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
         if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RewardSelector != selector ||

@@ -579,7 +579,9 @@ internal static class QuestLifecycleTcpTests
                 That(f.Snapshot() == before,"装备槽重复交付不再扣费、解锁或新增回执");
             }
 
+            var verifyGriefDiagnostics = GriefTowerAcceptanceTcpTests.Verify(f, resources);
             await f.StopAsync();
+            verifyGriefDiagnostics();
             string State() => f.Snapshot("SELECT revision FROM characters") + f.Snapshot("SELECT * FROM character_active_main_quests") +
                 f.Snapshot("SELECT * FROM character_quest_lifecycle_receipts ORDER BY revision");
         }
