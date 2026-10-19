@@ -95,6 +95,7 @@ internal static class DungeonEntryPlanTests
         AwakeningDungeonRoutes(catalog,quests,rooms,character);
         TournamentEntry(catalog,character,rooms);
         HarlemSeekingRoutes(catalog,quests,character);
+        GentSouthGateQuestLevel(catalog,quests,character);
         foreach (var scenario in new[] { (Quest:3560,Dungeon:82,Level:(byte)65,Target:92247,Boss:92251),
             (Quest:3753,Dungeon:104,Level:(byte)83,Target:76648,Boss:76649) })
         {
@@ -764,4 +765,30 @@ internal static class DungeonEntryPlanTests
                 "比赛副本非指定难度被拒绝：" + scenario.Dungeon);
         }
         That(!catalog.Get(3).IsTournament && !catalog.Get(3).AllowsDifficulty(2,false),"非比赛副本的难度规则不变");
+    }
+
+    // #438：根特南门(82)最低等级65，任务3524“夺取弹药”最低等级64；已接取该任务的64级角色应能进入，其余情形保持原拒绝。
+    static void GentSouthGateQuestLevel(DungeonCatalog catalog,QuestCatalog quests,Character character)
+    {
+        var quest = quests.Get(3524);
+        var accepted = character with { Level = 64,
+            ActiveMainQuests = [new(0,3524,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(catalog.Get(82).MinimumLevel == 65 && quest.MinimumLevel == 64, "#438 前提：副本82最低65、任务3524最低64");
+        That(DungeonEntryPlan.TryCreate(catalog,accepted,82,3524,0,out var direct,out var directReason,quest: quest,quests: quests) &&
+            direct is { QuestId: 3524 }, "#438 64级已接取3524按任务进入南门放行：" + directReason);
+        That(DungeonEntryPlan.TryCreate(catalog,accepted,82,0,0,out var selected,out var selectedReason,quests: quests) &&
+            selected is { RouteQuestId: 3524 }, "#438 64级已接取3524按普通选图进入南门放行：" + selectedReason);
+        var low = accepted with { Level = 63 };
+        That(!DungeonEntryPlan.TryCreate(catalog,low,82,3524,0,out _,out var lowReason,quest: quest,quests: quests) &&
+            lowReason == "dungeon-level-too-low", "#438 63级低于任务最低等级仍拒绝：" + lowReason);
+        That(!DungeonEntryPlan.TryCreate(catalog,low,82,0,0,out _,out var lowSelectedReason,quests: quests) &&
+            lowSelectedReason == "dungeon-level-too-low", "#438 63级普通选图仍拒绝：" + lowSelectedReason);
+        var none = accepted with { ActiveMainQuests = [] };
+        That(!DungeonEntryPlan.TryCreate(catalog,none,82,0,0,out _,out var noneReason,quests: quests) &&
+            noneReason == "dungeon-level-too-low", "#438 无任务64级进南门仍拒绝：" + noneReason);
+        var unrelated = accepted with { ActiveMainQuests = [new(0,3145,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(!DungeonEntryPlan.TryCreate(catalog,unrelated,82,0,0,out _,out var unrelatedReason,quests: quests) &&
+            unrelatedReason == "dungeon-level-too-low", "#438 已接取但与南门无关的任务不放行：" + unrelatedReason);
+        That(!DungeonEntryPlan.TryCreate(catalog,unrelated,82,3145,0,out _,out var unrelatedQuestReason,quest: quests.Get(3145),quests: quests) &&
+            unrelatedQuestReason == "dungeon-level-too-low", "#438 请求无关任务进入南门不放行：" + unrelatedQuestReason);
     }}

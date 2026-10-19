@@ -140,7 +140,8 @@ internal sealed record DungeonEntryPlan(
             return false;
         }
 
-        if (character.Level < definition.MinimumLevel)
+        // #438: 剧情副本最低等级可能高于关联任务最低等级（根特南门65/任务3524为64）；仅当角色已接取关联本副本的任务且等级达到任务最低等级才放行。
+        if (character.Level < definition.MinimumLevel && !QuestEntryWaivesDungeonLevel(definition,character,dungeonId,questId,difficulty,quest,quests,isReplay))
         {
             reason = "dungeon-level-too-low";
             return false;
@@ -465,6 +466,24 @@ internal sealed record DungeonEntryPlan(
                 existing.QuestConnectionTokens.SequenceEqual(maze.QuestConnectionTokens) && existing.SameLayout(maze)))
                 routes.Add(maze);
         return routes.ToArray();
+    }
+
+    // #438: 任务驱动进入放宽副本最低等级。仅限：任务已接取、与本副本关联（迷宫 quest connection 或 dungeon info）、角色等级不低于任务最低等级。
+    private static bool QuestEntryWaivesDungeonLevel(DungeonDefinition definition,Character character,uint dungeonId,uint questId,byte difficulty,
+        StoryQuest? quest,QuestCatalog? quests,bool isReplay)
+    {
+        if (isReplay) return false;
+        uint[] ids = questId != 0 ? new[] { questId } : character.ActiveMainQuests.Select(active => (uint)active.QuestId).ToArray();
+        foreach (var id in ids)
+        {
+            if (!character.ActiveMainQuests.Any(active => active.QuestId == id)) continue;
+            StoryQuest? candidate = quest is not null && quest.Id == id ? quest : null;
+            if (candidate is null && (quests is null || !quests.TryGet((int)id,out candidate))) continue;
+            bool related = definition.Mazes.Any(maze => maze.ConnectsQuest(id,difficulty)) ||
+                candidate.Definition is { Diagnostics.Length: 0 } declared && declared.Dungeons.Any(row => row.DungeonId == dungeonId);
+            if (related && character.Level >= candidate.MinimumLevel) return true;
+        }
+        return false;
     }
 
     private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty, bool allowClearedQuest, StoryQuest? quest,bool isReplay = false)

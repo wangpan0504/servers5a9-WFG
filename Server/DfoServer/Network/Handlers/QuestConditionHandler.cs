@@ -35,6 +35,10 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
             var condition = new QuestClientCondition(request.Channel,request.Value,request.Reserved);
             if (rooms is not null) changed = context.Session.ObserveFormalPassiveTrigger(request.QuestId,condition,
                 Convert.ToHexString(SHA256.HashData(packet.Body)),rooms);
+            if (changed is null && rooms is not null && quests.TryGet(request.QuestId,out var hunt) && QuestHuntProgress.TryTargets(hunt,out var huntTargets) &&
+                condition.Channel is 0x10 or 0x20 or 0x40 && (condition.Channel == 0x10 ? 0 : condition.Channel == 0x20 ? 1 : 2) is var slot && slot < huntTargets.Length && huntTargets[slot].EnemyType == 3)
+                log.Write("formal_passive_trigger_rejected", new { Connection = context.Id, request.QuestId, Template = huntTargets[slot].MonsterId,
+                    Reason = context.Session.DiagnosePassiveEvent(checked((uint)huntTargets[slot].MonsterId),rooms) });
             changed ??= context.Session.ChangeQuest(request.QuestId, QuestLifecycleAction.Condition, quests, items, goldLimits, pieces,condition);
             if (changed is null) return CommandResult.Unhandled;
             if (changed.Commit is { ProjectionCurrent: false }) return CommandResult.CloseConnection;

@@ -22,6 +22,22 @@ internal sealed partial class GameSession
         return ObserveFormalPassiveEvent(templateId,fingerprint,resources);
     }
 
+    // 诊断用：被动物件死亡/任务触发被拒时说明原因，不改变任何状态。#436 救出冒险家(3519)的牢笼 8824 在同一房间会出现多个，
+    // 而客户端报文只带模板号，服务端无法唯一寻址，现在会静默拒绝；这里把原因写进日志。
+    public string DiagnosePassiveEvent(uint templateId, DungeonRoomCatalog resources) => owner.Execute(() =>
+    {
+        var dungeon = formalDungeon;
+        if (dungeon is null || !Ready) return "无正式副本或会话未就绪";
+        if (dungeon.Entry.IsClassExperience || dungeon.Entry.IsPractice) return "体验/练习副本不记录任务物件";
+        if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || pendingQuestCompletion is not null) return "存在未完成的死亡/结算/任务完成操作";
+        var snapshot = dungeon.Run.Snapshot;
+        var room = dungeon.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;
+        var same = room.PassiveObjects.Where(source => source.ObjectId == templateId).ToArray();
+        if (same.Length == 0) return $"当前房间 {snapshot.CurrentMap.Id} 没有物件模板 {templateId}";
+        if (same.Length > 1) return $"当前房间 {snapshot.CurrentMap.Id} 有 {same.Length} 个物件模板 {templateId}，报文只带模板号无法唯一寻址，已拒绝";
+        if (!resources.ReportsQuestDeath(same[0])) return $"物件模板 {templateId} 无 [quest type] [must be destroyed]，仅在任务触发通道或迷宫清图条件下才会记录";
+        return "条件未满足（任务未接取/未绑定本次入场/目标不匹配/等待中的事件指纹不同）";
+    });
     public QuestLifecycleReceipt? ObserveFormalPassiveTrigger(ushort questId, QuestClientCondition condition,
         string fingerprint, DungeonRoomCatalog resources)
     {

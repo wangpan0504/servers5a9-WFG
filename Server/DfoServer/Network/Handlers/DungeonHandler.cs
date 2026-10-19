@@ -258,7 +258,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             var progress = context.Session.ObserveFormalPassiveDeath(passive!.ObjectIdentifier,
                 passive.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body)),rooms);
             log.Write("formal_passive_death", new { Connection = context.Id, Accepted = progress?.Commit is { ProjectionCurrent: true },
-                progress?.Phase, progress?.DungeonIdentity, Request = passive });
+                progress?.Phase, progress?.DungeonIdentity, Request = passive,
+                Reason = progress is null ? context.Session.DiagnosePassiveEvent(passive.ObjectIdentifier,rooms) : null });
             if (progress?.Commit is { ProjectionCurrent: false }) return CommandResult.CloseConnection;
             if (progress?.Commit is not null)
             {
