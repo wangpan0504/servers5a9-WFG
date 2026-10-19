@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Items;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Inventory.Models;
 
@@ -7,4 +8,14 @@ internal sealed record EnhancementRequest(EnhancementMode Mode, InventorySlot Ta
     short MaterialSlot, short ProtectionSlot, ReadOnlyMemory<byte> TargetText, short AuxiliarySlot0, short AuxiliarySlot1);
 
 internal sealed record EnhancementReceipt(EnhancementMode Mode, InventorySlot Target, short MaterialSlot,
-    int MaterialRemaining, byte OldLevel, byte NewLevel, bool Succeeded);
+    int MaterialRemaining, byte OldLevel, byte NewLevel, bool Succeeded)
+{
+    public byte? OutcomeCode { get; init; }
+    public byte Path { get; init; }
+    public int GoldCost { get; init; }
+    public short TerminalSlot { get; init; } = -1;
+    public int TerminalRemaining { get; init; }
+    public bool InPlace { get; init; }
+    public ImmutableArray<EnhancementRefund> Refunds { get; init; } = [];
+}
+internal readonly record struct EnhancementRefund(short Slot, int ItemId, int Count);

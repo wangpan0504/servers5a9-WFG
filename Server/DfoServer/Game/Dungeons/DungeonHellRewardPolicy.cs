@@ -28,6 +28,6 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
         if (epicFragments is { TotalWeight: > 0 } && epicFragmentPermille > 0)
             trials = trials.Append(new DungeonDropTrial(Math.Min(epicFragmentPermille, 1000), epicFragments, 1, 1, ProbabilityDenominator: 1000,
                 Attempts: EpicFragmentRolls(mode, dungeonDifficulty)));
-        return new(plan.ResourceSource, trials, plan.ReferenceQuality);
+        return new(plan.ResourceSource, trials, plan.ReferenceQuality, plan.Amplification);
     }
 }

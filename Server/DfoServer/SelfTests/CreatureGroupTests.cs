@@ -21,6 +21,8 @@ internal static class CreatureGroupTests
         var book = CreatureGrowthItemDefinition.Parse(raw, CreatureChangeTests.Book)!;
         That(book is { ViewMode: 0, GroupId: 1, TownOnly: false } && book.Types.SequenceEqual(new[] { 1,2,3 }),
             "STK保留界面模式、分组与转换类型优先级，缺省地点不收窄为城镇");
+        That(CreatureGrowthItemDefinition.Parse(raw with { DeclaredNeededMaterials = [9001,30] }, CreatureChangeTests.Book)
+            is { GroupId:1, TownOnly:false }, "STK的商店兑换价格不改变宠物转换资格和分组成本");
         foreach (var action in new int[][] { [3,1], [5,1,4], [0,0,1], [0,1,0], [0,1,5] })
             That(CreatureGrowthItemDefinition.Parse(raw with { ActionDeclaration = new("[creature growth]", action) }, CreatureChangeTests.Book) is null,
                 "缺失分组和未知界面或转换类型拒绝");
@@ -62,8 +64,7 @@ internal static class CreatureGroupTests
             { EnchantCardId = 1234, EnchantUpgrade = 2, Extension27 = 99 }) { Creature = new() { Level = 1, Name = "keep" } };
         var source = new InventoryItem(72,new(InventoryListType.Main,65),new(9000,ItemKind.Consumable,29));
         Character character = new(1,0,"Group",1,new(1,0,1,1),null) { Inventory = new([pet,source]) };
-        var pieces = new EpicPieceCatalog("[piece list]\n1 2\n[/piece list]");
-        var service = new CreatureChangeService(Item,_=>null,CreatureSystemTests.Synthetic(),pieces, random:_=>0,
+        var service = new CreatureChangeService(Item,_=>null,CreatureSystemTests.Synthetic(), random:_=>0,
             groups:groups,growthItems:_=>book);
         That(!service.PlanGroup(character,source.Position,pet.Position,0,true).Accepted, "29个不能被普通丢弃的数量归一规则当作足额30个");
         source = source with { Core = source.Core with { Value = 30 } };
@@ -72,11 +73,11 @@ internal static class CreatureGroupTests
         That(result.Accepted && result.Plan!.After.Find(source.Position) is null &&
             result.Plan.After.Find(pet.Position) == pet with { Core = pet.Core with { ItemId = 7002 } },
             "一级宠物也可按30个成本转换；默认地点允许正式副本，保留完整UID附魔及详情");
-        var limited = new CreatureChangeService(Item,_=>null,CreatureSystemTests.Synthetic(),pieces, groups:groups,
+        var limited = new CreatureChangeService(Item,_=>null,CreatureSystemTests.Synthetic(), groups:groups,
             growthItems:_=>book with { TownOnly = true });
         That(!limited.PlanGroup(character,source.Position,pet.Position,0,false).Accepted,
             "资源显式仅城镇时仍按地点门禁拒绝");
-        var same = new CreatureChangeService(Item,_=>null,CreatureSystemTests.Synthetic(),pieces, groups:groups,growthItems:_=>selection)
+        var same = new CreatureChangeService(Item,_=>null,CreatureSystemTests.Synthetic(), groups:groups,growthItems:_=>selection)
             .PlanGroup(character,source.Position,pet.Position,1,true);
         That(!same.Accepted && same.Plan is null && character.Inventory.Find(source.Position)!.Core.Count == 30,
             "原生选择窗排除当前属性，重复选择当前模板不消费源道具");

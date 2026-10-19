@@ -38,11 +38,12 @@ internal static class LevelUpTicketTests
             ActionDeclaration=new("[level up ticket]",[]),DeclaredLevelUpRange=1,HasMaximumLevel=true,DeclaredMaximumLevel=94,
             DeclaredNeededMaterials=[],DeclaredUsableJobs=["[all]"],HasUsableJobs=true
         };
-        That(LevelUpTicketDefinition.Parse(raw,template) is { MinimumLevel:1,MaximumLevel:94,Materials.IsEmpty:true } parsed &&
+        That(LevelUpTicketDefinition.Parse(raw,template) is { MinimumLevel:1,MaximumLevel:94 } parsed &&
             parsed.Allows(94,15) && !parsed.Allows(95,0),"固定一级券按实际声明解释等级和职业");
+        That(LevelUpTicketDefinition.Parse(raw with { DeclaredNeededMaterials=[177,5] },template) == LevelUpTicketDefinition.Parse(raw,template),
+            "商店兑换价格不改变升级券的使用规则");
         foreach (var invalid in new[] { raw with { DeclaredLevelUpRange=null },raw with { DeclaredLevelUpRange=2 },
-            raw with { HasBoosterInfo=true },raw with { DeclaredNeededMaterials=[177] },
-            raw with { DeclaredNeededMaterials=[177,0] },raw with { DeclaredMaximumLevel=null },
+            raw with { HasBoosterInfo=true },raw with { DeclaredMaximumLevel=null },
             raw with { ActionDeclaration=new("[quest clear]",[]) } })
             That(LevelUpTicketDefinition.Parse(invalid,template) is null,"未知、随机或坏定义不被降级为固定一级券");
         That(LevelUpTicketDefinition.Parse(raw with {DeclaredMinimumLevel=null},template)!.MinimumLevel==template.MinimumLevel &&
@@ -56,13 +57,13 @@ internal static class LevelUpTicketTests
         int checks = Count;
         var growth = SelfTestCatalogs.Growth(pvf,skills);
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
-        var service = new LevelUpTicketService(items.Items,growth,items.EpicPieces);
+        var service = new LevelUpTicketService(items.Items,growth);
         That(items.Items.LevelUpTicket(TicketId) is { MinimumLevel:1,MaximumLevel:85,Jobs:ushort.MaxValue } &&
             items.Items.LevelUpTicket(490705250) is { MinimumLevel:85,MaximumLevel:94 } &&
             items.Items.LevelUpTicket(490008526) is { Jobs:32768 } &&
-            items.Items.LevelUpTicket(490001017) is { MinimumLevel:0,MaximumLevel:84,Materials:[{ItemId:490001023,Count:20}] } &&
-            items.Items.LevelUpTicket(10004716) is { Jobs:16,Materials:[{ItemId:10004713,Count:5}] },
-            "真实PVF全职业、枪剑士、圣职者和附加材料声明均按LST解析");
+            items.Items.LevelUpTicket(490001017) is { MinimumLevel:0,MaximumLevel:84 } &&
+            items.Items.LevelUpTicket(10004716) is { Jobs:16 },
+            "真实PVF全职业、枪剑士、圣职者和商店兑换券均按LST解析");
         using (var f = Make())
         {
             var before = f.Read();
@@ -127,14 +128,18 @@ internal static class LevelUpTicketTests
         {
             var result=f.Session.UseLevelUpTicket(Slot,service,f.Catalog)!;
             That(result.Commit is not null && result.Character.Level==62 && result.Character.Inventory.Find(Slot) is null &&
-                result.Character.Inventory.Items.Single(row=>row.Core.ItemId==10004713).Core.Count==1 && Same(result.Character,f.Read()),
-                "职业券附加五份材料与升级和扣券同事务提交");
+                result.Character.Inventory.Items.Single(row=>row.Core.ItemId==10004713).Core.Count==6 && Same(result.Character,f.Read()),
+                "职业券只消费源券，商店兑换代币保持原数量");
         }
-        foreach(var (job,count) in new (byte,int)[] {(0,6),(4,4)})
-        using(var f=Make(61,10004716,job:job,materialCount:count))
+        using(var f=Make(61,10004716,job:4))
+        {
+            That(f.Session.UseLevelUpTicket(Slot,service,f.Catalog)!.Commit is { Character.Level:62 } && f.Read().Inventory.Find(Slot) is null,
+                "不持有兑换代币仍可使用已经获得的职业升级券");
+        }
+        using(var f=Make(61,10004716,job:0,materialCount:6))
         {
             var before=f.Read();
-            TestCheck.Reject<InvalidDataException>(()=>service.Prepare(before,Slot),"职业不符或附加材料不足拒绝");
+            TestCheck.Reject<InvalidDataException>(()=>service.Prepare(before,Slot),"职业不符仍然拒绝");
             That(Same(before,f.Read()),"失败不消耗源或材料");
         }
         using (var f=Make())

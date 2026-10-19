@@ -35,9 +35,11 @@ internal static class TeleportTests
         Reject<InvalidDataException>(() => TeleportRequests.Solo(new byte[16]), "470未知追加字段拒绝");
         That(TeleportCatalog.ReadPotion(new(PotionText)) is { MinimumLevel: 60, CoolTime: 10000 } &&
             TeleportCatalog.ReadAura(new(AuraText)) == new SoloTeleportDefinition(420), "资源药剂毫秒与光环秒分别保留");
-        That(TeleportCatalog.ReadAura(new(AuraText.Replace("[solo teleport]", "[none]"))) is null &&
-            TeleportCatalog.ReadPotion(new(PotionText + "\n[need material]\n1 2")) is null,
-            "无能力光环和附加费用未恢复的药剂不能获得传送资格");
+        That(TeleportCatalog.ReadAura(new(AuraText.Replace("[solo teleport]", "[none]"))) is null,
+            "无传送能力的光环不能获得传送资格");
+        That(TeleportCatalog.ReadPotion(new(PotionText + "\n[need material]\n1 2")) is { MinimumLevel:60, CoolTime:10000 } exchangePotion &&
+            exchangePotion.DungeonMaps.SetEquals([1,2]),
+            "商店兑换材料不构成瞬移药的使用门禁");
         using var fixture = new Fixture();
         var session = fixture.Session;
         That(!session.TeleportPotion(fixture.Request, fixture.Service).Accepted, "未选角不能消费");

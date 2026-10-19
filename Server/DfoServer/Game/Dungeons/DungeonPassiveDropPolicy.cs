@@ -10,7 +10,7 @@ internal sealed record DungeonPassiveDropPreparation(DungeonPlannedSpecialObject
 
 // 规则与物品创建在入场owner锁外完成；一个MAP父对象的多个[item]共享关联槽，而不是使用掉落组号。
 internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> resolveDungeon, Func<int, ItemTemplate> resolveItem,
-    DungeonDropRuleCatalog? objectRules = null, DungeonItemDropCatalog? candidates = null)
+    DungeonDropRuleCatalog? objectRules = null, DungeonItemDropCatalog? candidates = null, EquipmentAmplificationDropPolicy? amplification = null)
 {
     public const string Rule = "pvf-special-passive-item-v1";
     public IReadOnlyList<DungeonPassiveDropPreparation> Prepare(DungeonEntryPlan entry, DungeonMonsterPlan room,
@@ -59,7 +59,7 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
                     if (roll is < 0 or > 10000)
                         throw new InvalidDataException("特殊指定掉落随机数越界");
                     if (roll < pool.TotalWeight)
-                        contents.Add(new(DungeonDropCreation.Create(pool.Select(roll), 1, draw, now, referenceQuality: true)));
+                        contents.Add(new(DungeonDropCreation.Create(pool.Select(roll), 1, draw, now, referenceQuality: true, amplification)));
                 }
                 result.Add(new(parent, new(parent.Source.SourceOrdinal, checked((byte)association), action.SourceOrdinal, group.Index),
                     room.Room.Map, contents.ToImmutable(), Rule + ":" + definition.Path));
@@ -99,6 +99,6 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
                 trials.Add(new(threshold, null, 1, 1, RarityPools: pools));
             }
         }
-        return new(Rule + ":etc/itemdropinfo_object.etc", trials, referenceQuality: true);
+        return new(Rule + ":etc/itemdropinfo_object.etc", trials, referenceQuality: true, amplification);
     }
 }

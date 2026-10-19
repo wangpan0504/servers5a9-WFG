@@ -43,14 +43,16 @@ internal static class ClassChangeTests
             DeclaredNeededMaterials = [1000, 2], DeclaredDontChangeGrowTypes = [0, 5], DeclaredUsableFirstGrowTypes = [1, 2]
         };
         var template = new ItemTemplate(500, ItemKind.Consumable, 0, 15, 0, 1, 0, 3, 1, "account", 1, 0, "Class", "waste");
-        That(ClassChangeTicketDefinition.Parse(raw, template) is { Materials.Length: 1, FixedTarget: null } definition &&
-            definition.Forbidden.Contains((0, 5)) && definition.SourceGrowTypes.SetEquals([1, 2]), "完整动作、等级、职业、材料及禁转声明共同解释");
+        That(ClassChangeTicketDefinition.Parse(raw, template) is { FixedTarget: null } definition &&
+            definition.Forbidden.Contains((0, 5)) && definition.SourceGrowTypes.SetEquals([1, 2]) &&
+            ClassChangeTicketDefinition.Parse(raw with { DeclaredNeededMaterials = [] }, template) is { FixedTarget: null } noCosts &&
+            noCosts.Forbidden.SetEquals(definition.Forbidden) && noCosts.SourceGrowTypes.SetEquals(definition.SourceGrowTypes),
+            "动作、等级、职业及禁转声明共同解释，兑换材料不属于使用资格");
         That(ClassChangeTicketDefinition.Parse(raw with { ActionDeclaration = new("[class change]", [4]) }, template)?.FixedTarget == 4,
             "固定目标参数不是未确认字段，不收窄已有回转券");
         foreach (var invalid in new[]
         {
             raw with { ActionDeclaration = new("[class change]", [1, 2]) }, raw with { ActionDeclaration = new("[quest clear]", []) },
-            raw with { DeclaredNeededMaterials = [1000] }, raw with { DeclaredNeededMaterials = [1000, 0] },
             raw with { DeclaredDontChangeGrowTypes = [0] }, raw with { DeclaredDontChangeGrowTypes = [16, 1] },
             raw with { DeclaredUsableFirstGrowTypes = [6] }, raw with { DeclaredActionUsableServerTypes = null },
             raw with { DeclaredActionUsablePlaces = null }, raw with { HasMaximumLevel = true, DeclaredMaximumLevel = null }
@@ -94,7 +96,7 @@ internal static class ClassChangeTests
         int checks = Count;
         var now = DateTimeOffset.UtcNow;
         var items = resources.ItemResources;
-        var service = new ClassChangeService(items.Items, resources.Characters, resources.Learning, resources.Quests, items.EpicPieces);
+        var service = new ClassChangeService(items.Items, resources.Characters, resources.Learning, resources.Quests);
         var fixture = CharacterFixture(resources);
         var path = Path.Combine(Path.GetTempPath(), "class-change-" + Guid.NewGuid().ToString("N"), "game.db");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -148,7 +150,7 @@ internal static class ClassChangeTests
             var unrelated = endpoint with { Id = 21002, Definition = endpoint.Definition! with
                 { TargetCharacters = [new("[gunner]",0,0)] } };
             var scopedService = new ClassChangeService(items.Items, resources.Characters, resources.Learning,
-                new(new[] { endpoint, shared, unrelated }.ToDictionary(quest => quest.Id)), items.EpicPieces);
+                new(new[] { endpoint, shared, unrelated }.ToDictionary(quest => quest.Id)));
             That(scopedService.Prepare(before, new(65, 2, false), now).Plan!.Completed.SequenceEqual([21000,21001]),
                 "职业完成位按本版target character匹配基础职业，不替其他职业清任务");
             That(plan.GrowType == 0x12 && plan.Learning.Experience == before.Learning.Experience &&
@@ -163,12 +165,13 @@ internal static class ClassChangeTests
                 "过期或安全锁定的原券不能消费");
             That(service.Prepare(Source(source.Core with { SortLockFlag = 1 }), new(65, 2, false), now).Plan is not null,
                 "排序锁不被扩大为禁止使用");
-            var paidTicket = items.Items.ClassChangeTicket(2660702)!;
+            var exchangeCosts = items.Items.Get(2660702).ShopPrice.Materials;
             var costly = Source(InventoryRewardGrantService.Create(items.Items.Get(2660702)));
-            That(paidTicket.Materials.Length > 0 && service.Prepare(costly, new(65, 2, false), now).Plan is null,
-                "真实材料券材料不足时不消费源或改变职业");
+            That(exchangeCosts.Length > 0 && service.Prepare(costly, new(65, 2, false), now).Plan is { } free &&
+                free.Inventory.After.Find(source.Position) is null,
+                "真实兑换转职书无需持有购买材料，使用只消费源书");
             var used = costly.Inventory.Items.Select(item => item.Position).ToHashSet();
-            var costs = paidTicket.Materials.Select((cost, index) =>
+            var costs = exchangeCosts.Select((cost, index) =>
             {
                 var template = items.Items.Get(cost.ItemId);
                 var range = ItemSlotBoundService.Range(template.Kind, costly.Inventory.Expansion);
@@ -179,8 +182,8 @@ internal static class ClassChangeTests
             costly = costly with { Inventory = costly.Inventory with { Items = costly.Inventory.Items.AddRange(costs) } };
             var withMaterials = service.Prepare(costly, new(65, 2, false), now);
             That(withMaterials.Plan is { } charged && charged.Inventory.After.Find(source.Position) is null &&
-                costs.All(cost => charged.Inventory.After.Find(cost.Position) is null),
-                "材料券保留STK全部材料费用，书与材料整批规划");
+                costs.All(cost => charged.Inventory.After.Find(cost.Position) == cost),
+                "持有购买材料时也不重复扣除，原UID和数量保持不变");
             Sql("CREATE TRIGGER class_change_late BEFORE INSERT ON character_skill_bindings BEGIN SELECT RAISE(ABORT,'class rollback'); END");
             Reject<SqliteException>(() => repository.CommitClassChange(owner, plan), "技能末段失败必须回滚已经规划的扣物");
             That(JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == JsonSerializer.Serialize(before),

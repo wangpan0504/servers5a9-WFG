@@ -11,7 +11,7 @@ namespace DfoServer;
 
 internal static class CreatureSystemTests
 {
-    internal static CreatureCatalog Synthetic()
+    internal static CreatureCatalog Synthetic(bool itemGrowth = false)
     {
         var files = new Dictionary<string, string>
         {
@@ -20,12 +20,15 @@ internal static class CreatureSystemTests
             ["creature/pet.cre"] = "[max level]\n4\n[evolution level]\n2\n[evolution creature id]\n11\n[evolution quest]\n0",
             ["creature/evolved.cre"] = "[max level]\n4",
             ["stackable/feed.stk"] = "[stackable type]\n`[feed]` 1\n[creature minimum level]\n1\n[cool time]\n10000\n[int data]\n300 -20 30\n[/int data]",
-            ["stackable/rename.stk"] = "[stackable type]\n`[creature]` 1"
+            ["stackable/rename.stk"] = "[stackable type]\n`[creature]` 1",
+            ["stackable/growth.stk"] = "[stackable type]\n`[creature expitem]` 0\n[need material]\n100 3\n[/need material]"
         };
         return new(path => files[path], path => path == "creature/pet.cre" ?
+            itemGrowth ? new PvfLib.CreatureFile { MaximumLevel = 4, ItemsPerLevel = 25,
+                SelectiveGrowth = new() { UsingExperienceItem = 1, ItemA = 100, SelectLevel = -1 } } :
             new PvfLib.CreatureFile { MaximumLevel = 4, EvolutionLevel = 2, EvolutionSpecies = 11 } : new PvfLib.CreatureFile { MaximumLevel = 4 },
             new Dictionary<int, string> { [7001] = "test/pet.equ", [7002] = "test/evolved.equ" },
-            new Dictionary<int, string> { [24] = "feed.stk", [25] = "rename.stk" },
+            new Dictionary<int, string> { [24] = "feed.stk", [25] = "rename.stk", [100] = "growth.stk" },
             new Dictionary<int, string> { [10] = "pet.cre", [11] = "evolved.cre" }, "#PVF_File\n2\n5\n9");
     }
 
@@ -110,6 +113,12 @@ internal static class CreatureSystemTests
         var expGrowth = growth with { SelectiveGrowth = growth.SelectiveGrowth! with { ExperienceItem = 102, ExperienceValue = 5 } };
         That(CreatureRules.GainItemExperience(growing, expGrowth, catalog, 102) is { Experience: 34, Level: 2, Mode1Field1: 5 },
             "EXP类成长增量来自CRE，不改变A/B亲密度");
+        var growthSource = new InventoryItem(65, new(InventoryListType.Main,65), new(100,ItemKind.Consumable,1));
+        var growthRole = character with { Inventory = new([pet with { Creature = new() { Mode = 1, Mode1Field1 = 5 } }, growthSource]) };
+        var growthResult = new CreatureService(Synthetic(itemGrowth:true)).Feed(growthRole, new(growthSource.Position,1,100,0),1000);
+        That(growthResult.Accepted && growthResult.Plan!.After.Find(growthSource.Position) is null &&
+            growthResult.Plan.After.Find(pet.Position)?.Creature is { Mode:1, Experience:1, Mode1Field1:6 },
+            "宠物经验道具只消费一件，兑换材料与源同ID时也不重复扣除或要求额外数量");
         var limited = character with { Inventory = character.Inventory with { Items =
             [pet with { Creature = detail with { ExpireTime = 1020 } }, food with { Core = food.Core with { ExpireTime = 1010 } }] } };
         var timely = service.Feed(limited, new(food.Position, 1, 24, 0), 1000);

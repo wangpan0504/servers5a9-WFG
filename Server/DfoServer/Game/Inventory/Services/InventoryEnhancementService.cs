@@ -4,7 +4,8 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryEnhancementService(ItemCatalog items, EnhancementCatalog enhancements, Random? random = null, TimeProvider? clock = null)
+internal sealed class InventoryEnhancementService(ItemCatalog items, EnhancementCatalog enhancements, Random? random = null, TimeProvider? clock = null,
+    InventoryAmplifyUpgradeService? amplification = null)
 {
     internal const ushort Rejection = 23;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
@@ -15,7 +16,11 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         var source = character.Inventory.Find(new(InventoryListType.Main, request.MaterialSlot));
         var target = character.Inventory.Find(request.Target);
         if (source is null || target is null) return InventoryResult.Reject(Rejection);
+        if (request.Mode == EnhancementMode.LuckyAmplify)
+            return amplification?.Plan(character, request, out receipt) ?? InventoryResult.Reject(Rejection);
         var definition = enhancements.Get(source.Core.ItemId);
+        if (definition is null && request.Mode == EnhancementMode.Amplify)
+            return amplification?.Plan(character, request, out receipt) ?? InventoryResult.Reject(Rejection);
         if (definition is null || !definition.Available || !enhancements.Allows(target.Core.ItemId, request.Mode)) return InventoryResult.Reject(Rejection);
         return Plan(character, request, Clock.GetUtcNow().ToUnixTimeSeconds(), definition,
             items.Get(source.Core.ItemId), items.Get(target.Core.ItemId), () => (random ?? Random.Shared).Next(10000), out receipt);

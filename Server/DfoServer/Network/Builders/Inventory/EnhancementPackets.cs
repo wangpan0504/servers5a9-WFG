@@ -14,17 +14,26 @@ internal static class EnhancementPackets
         writer.Write((byte)receipt.Mode);
         writer.Write(receipt.MaterialSlot);
         writer.Write(receipt.MaterialRemaining);
-        writer.Write((short)-1); // 本入口不消费独立保护券。
-        writer.Write((byte)0);
+        writer.Write((short)-1); // 附加券槽未启用；自动毁装保护使用后面的独立末端槽。
+        writer.Write(receipt.Path);
         writer.Write(receipt.OldLevel);
-        writer.Write(receipt.Succeeded ? (byte)0 : (byte)1);
+        byte outcome = receipt.OutcomeCode ?? (receipt.Succeeded ? (byte)0 : (byte)1);
+        writer.Write(outcome);
         writer.Write(receipt.NewLevel);
         writer.Write((byte)receipt.Target.List);
         writer.Write(receipt.Target.Index);
         writer.Write((short)-1);
+        if (outcome == 3)
+        {
+            writer.Write(checked((byte)receipt.Refunds.Length));
+            foreach (var row in receipt.Refunds)
+            {
+                writer.Write(row.Slot); writer.Write(row.ItemId); writer.Write(row.Count);
+            }
+        }
         // 02374932/0237493E必读额外库存槽及绝对余量；不虚构第二次消费。
-        writer.Write((short)-1);
-        writer.Write(0);
+        writer.Write(receipt.TerminalSlot);
+        writer.Write(receipt.TerminalRemaining);
         writer.Write((byte)0); // 023749A4/023749B2继续读取两项状态，不沿旧25B合同截断。
         writer.Write((byte)0);
         return stream.ToArray();

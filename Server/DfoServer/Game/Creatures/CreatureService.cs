@@ -6,7 +6,7 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Creatures;
 
-internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? time = null, EpicPieceCatalog? pieces = null)
+internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? time = null)
 {
     public CreatureCatalog Catalog { get; } = catalog;
     public TimeProvider Clock { get; } = time ?? TimeProvider.System;
@@ -38,14 +38,12 @@ internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? tim
             Catalog.Get(creature.Core.ItemId) is not { } definition)
             return InventoryResult.Reject(123);
         InventoryItem fed;
-        CreatureGrowthFood? growthFood = null;
         if (definition.UsesExperienceItems && definition.SelectiveGrowth is { } growth &&
             (request.ItemId == growth.ItemA || request.ItemId == growth.ItemB || request.ItemId == growth.ExperienceItem))
         {
             if (Catalog.GrowthFood(request.ItemId) is not { } food || detail.Level < food.MinimumLevel ||
                 detail.Level >= definition.MaximumLevel || definition.SelectEvolutionLevel >= 0 && detail.Level >= definition.SelectEvolutionLevel)
                 return InventoryResult.Reject(123);
-            growthFood = food;
             fed = creature with { Creature = CreatureRules.GainItemExperience(detail, definition, Catalog, request.ItemId) };
             if (fed.Creature.Level > detail.Level && !definition.EvolutionQuest && growth.SelectLevel > 0 &&
                 fed.Creature.Level >= growth.SelectLevel)
@@ -65,13 +63,6 @@ internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? tim
         var consumed = InventoryDeleteService.Plan(character.Inventory, source.Position, request.ItemId, 1);
         if (!consumed.Accepted || consumed.Plan is null) return InventoryResult.Reject(123);
         var after = consumed.Plan.After;
-        if (growthFood is { Materials.IsEmpty: false })
-        {
-            if (pieces is null) return InventoryResult.Reject(123);
-            var materials = InventoryMaterialConsumptionService.Plan(after, growthFood.Materials, pieces, DateTimeOffset.FromUnixTimeSeconds(now));
-            if (!materials.Accepted || materials.Plan is null) return InventoryResult.Reject(123);
-            after = materials.Plan.After;
-        }
         after = after with { Items = after.Items.Replace(creature, fed) };
         var plan = new InventoryPlan(character.Inventory, after, "creature_feed");
         long? deadline = plan.ChangedSlots.Select(plan.BeforeIndex.Find).OfType<InventoryItem>()

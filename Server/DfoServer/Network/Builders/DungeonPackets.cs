@@ -278,8 +278,7 @@ internal static class DungeonPackets
             writer.Write(ground.Content.Item?.Value ?? ground.GoldAmount);
             writer.Write(ground.Content.Item?.Durability ?? (ushort)0);
             // 两字段沿ARAD的u8/u16读取与共同记录构造器，不混入Attr的强化位。
-            writer.Write(ground.Content.Item?.AmplifyType ?? (byte)0);
-            writer.Write(ground.Content.Item?.AmplifyValue ?? (ushort)0);
+            ItemListProtocolWriter.WriteAmplification(writer, ground.Content.Item);
             writer.Write((ushort)0); // 创建可见性过滤为0；不将父序号或坐标塞进该字段。
             writer.Write((byte)0);
         }

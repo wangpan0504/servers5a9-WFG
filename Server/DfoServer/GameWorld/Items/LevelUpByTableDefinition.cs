@@ -25,7 +25,6 @@ internal sealed record LevelUpByTableDefinition(ItemTemplate Item, ImmutableArra
             raw.HasActionUsablePlace && (raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
                 places.Any(place => place is not ("[village]" or "[seria room]"))) ||
             raw.DeclaredActionUsableServerTypes is { Count: > 0 } || !file.ExcludedJobs.IsEmpty ||
-            raw.DeclaredNeededMaterials is not { } materials || materials.Count % 2 != 0 ||
             raw.DeclaredUsableFirstGrowTypes is not { } growTypes || growTypes.Any(value => value is < 0 or > 5) ||
             raw.DeclaredDontChangeGrowTypes is not { Count: 0 } ||
             file.DeclaredFields.Any(field => field is "booster info" or "hp recovery" or "mp recovery" or "exp up level limit"))
@@ -37,10 +36,6 @@ internal sealed record LevelUpByTableDefinition(ItemTemplate Item, ImmutableArra
             if (minimum < 1 || maximum < minimum || maximum > byte.MaxValue ||
                 target is < 2 or > CharacterGrowthCatalog.MaximumSupportedLevel) return null;
             ranges.Add(new(minimum, maximum, (byte)target));
-        }
-        for (int i = 0; i < materials.Count; i += 2)
-        {
-            if (materials[i] <= 0 || materials[i + 1] <= 0) return null;
         }
         bool village = raw.DeclaredActionUsablePlaces?.Contains("[village]") == true;
         bool room = raw.DeclaredActionUsablePlaces?.Contains("[seria room]") == true;

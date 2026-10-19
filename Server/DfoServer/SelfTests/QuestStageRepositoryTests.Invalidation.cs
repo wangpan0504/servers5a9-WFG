@@ -208,7 +208,7 @@ internal static partial class QuestStageRepositoryTests
                 r.ItemResources.EpicPieces,growth,DateTimeOffset.UtcNow,stageGraph:highGraph,stageState:f.Repository.LoadQuestStageState(f.Owner,beforeA));
             f.Repository.CommitQuestCompletion(f.Owner,finish.Plan!); Status(f,QuestStageStatus.Deferred);
             var before = f.Read();
-            var service = new ClassChangeService(r.ItemResources.Items,r.Characters,r.Learning,r.Quests,r.ItemResources.EpicPieces);
+            var service = new ClassChangeService(r.ItemResources.Items,r.Characters,r.Learning,r.Quests);
             var plan = service.Prepare(before,new(65,2,false),DateTimeOffset.UtcNow).Plan!;
             That(plan is not null,"已有真实资源互转fixture可规划");
             f.Sql("CREATE TRIGGER abort_invalidation BEFORE UPDATE OF status ON character_quest_stage_witnesses BEGIN SELECT RAISE(ABORT,'class rollback'); END");

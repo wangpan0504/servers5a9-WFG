@@ -129,9 +129,9 @@ internal static class QuestProtocolTests
             for (int index = 0; index < fixedItems.Length; index++)
             {
                 Check(reader.ReadUInt16() == fixedRewards[index].Item.Position.Index && reader.ReadUInt32() == fixedItems[index] &&
-                    reader.ReadUInt32() == (uint)(index == 0 ? 1 : 999_999_998) && reader.ReadByte() == 0x81 &&
-                    reader.ReadUInt16() == 0xABCD && reader.ReadUInt32() == 0x12345678 && reader.ReadByte() == 1 && reader.ReadByte() == 0x92,
-                    "独立读器逐项消费实际槽/Core与资源原序 " + index);
+                    reader.ReadUInt32() == (uint)(index == 0 ? 1 : 999_999_998) && reader.ReadByte() == 0x80 &&
+                    reader.ReadUInt16() == 0 && reader.ReadUInt32() == 0x12345678 && reader.ReadByte() == 1 && reader.ReadByte() == 0x92,
+                    "独立读器逐项消费实际槽/Core与资源原序，隐藏未净化属性 " + index);
             }
             Check(stream.Position == stream.Length, "完整奖励数组后没有猜造金币或额外收尾字段");
         }

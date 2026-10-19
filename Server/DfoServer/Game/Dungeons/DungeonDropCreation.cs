@@ -11,7 +11,7 @@ internal static class DungeonDropCreation
     // 使用既有物品创建合同，掉落装备参考端采用完整非负int随机种子，不沿用初始装备满品级。
     // count、耐久、封装与期限在死亡冻结时确定，拾取和SQL重试不重新创建。
     public static ItemCore Create(ItemTemplate template, int count, Func<int, int> draw, DateTimeOffset now,
-        bool referenceQuality = false)
+        bool referenceQuality = false, EquipmentAmplificationDropPolicy? amplification = null)
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(draw);
@@ -25,6 +25,7 @@ internal static class DungeonDropCreation
             if (quality < 0 || quality >= bound)
                 throw new InvalidDataException("掉落装备随机种子不在声明的均匀区间");
             core = core with { Value = quality + (referenceQuality ? 1 : 0) };
+            if (amplification is not null) core = amplification.Apply(template, core, draw);
         }
         core.Validate();
         if (core.IsExpired(now.ToUnixTimeSeconds()))

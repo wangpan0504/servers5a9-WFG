@@ -18,6 +18,7 @@ ArchiveBoundaryTests.Run();
 ScriptTests.Run();
 ItemModelTests.Run();
 RandomOptionFileTests.Run();
+AmplificationFileTests.Run();
 AvatarTypeSelectionTests.Run();
 TutorialFileTests.Run();
 RecoveryConsumableTests.Run();

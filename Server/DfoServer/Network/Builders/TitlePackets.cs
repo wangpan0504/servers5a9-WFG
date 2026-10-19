@@ -2,6 +2,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Titles;
 using DfoServer.GameWorld.Quests;
+using DfoServer.Network.Builders.Inventory;
 
 namespace DfoServer.Network.Builders;
 
@@ -19,7 +20,7 @@ internal static class TitlePackets
             var core = item.Core;
             writer.Write(item.Position.Index); writer.Write(core.ItemId); writer.Write(core.Value); writer.Write(core.Attr);
             writer.Write(core.Durability); writer.Write(core.SealFlag); writer.Write(core.EnchantCardId); writer.Write(core.EnchantUpgrade);
-            writer.Write(core.AmplifyType); writer.Write(core.AmplifyValue);
+            ItemListProtocolWriter.WriteAmplification(writer, core);
             // 023C32C6的RAW块写入两个u16；随后023C32D5读取独立i32。
             writer.Write(4u); writer.Write(core.Extension97); writer.Write(core.Marker16);
         }

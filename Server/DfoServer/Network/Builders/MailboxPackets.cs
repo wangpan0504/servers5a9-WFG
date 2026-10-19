@@ -138,8 +138,7 @@ internal static class MailboxPackets
         writer.Write(core?.Attr ?? 0);
         writer.Write(core?.IsStackable == true ? core.Count : core?.EnchantCardId ?? 0);
         writer.Write(core?.EnchantUpgrade ?? 0);
-        writer.Write(core?.AmplifyType ?? 0);
-        writer.Write(core?.AmplifyValue ?? 0);
+        ItemListProtocolWriter.WriteAmplification(writer, core);
         if (item?.Creature is not null)
         {
             // 本版 type26 在固定核心前读 i32 + flag；flag0 不消费三个成长扩展。

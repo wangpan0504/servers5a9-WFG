@@ -7,8 +7,7 @@ namespace DfoServer.GameWorld.Creatures;
 internal sealed record CreatureChangeCandidate(int ItemId, int Weight);
 
 internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, int MinimumLevel, int MaximumLevel,
-    int CreatureMinimumLevel, ImmutableHashSet<int> AllowedItems, ImmutableArray<CreatureChangeCandidate> Candidates,
-    ImmutableArray<ItemMaterialCost> Materials)
+    int CreatureMinimumLevel, ImmutableHashSet<int> AllowedItems, ImmutableArray<CreatureChangeCandidate> Candidates)
 {
     public const uint Action = 64;
     public int ConsumeCount { get; init; } = 1;
@@ -27,8 +26,7 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
             raw.DeclaredActionUsablePlaces is not ["[village]"] ||
             raw.DeclaredActionLimitIndexes is not { } limits || limits.Any(id => id <= 0) ||
-            raw.DeclaredActionResultLimitIndexes is not { } results || results.Count % 3 != 0 ||
-            raw.DeclaredNeededMaterials is not { } materials || materials.Count % 2 != 0)
+            raw.DeclaredActionResultLimitIndexes is not { } results || results.Count % 3 != 0)
             return null;
 
         int source = action.Parameters[0], target = action.Parameters[1];
@@ -47,14 +45,8 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
         else return null;
         if (candidates.Sum(row => (long)row.Weight) <= 0) return null;
 
-        var costs = ImmutableArray.CreateBuilder<ItemMaterialCost>();
-        for (int i = 0; i < materials.Count; i += 2)
-        {
-            if (materials[i] <= 0 || materials[i + 1] <= 0) return null;
-            costs.Add(new(materials[i], materials[i + 1]));
-        }
         return new(template.Id, source, raw.DeclaredMinimumLevel.Value, raw.DeclaredMaximumLevel ?? int.MaxValue,
-            raw.DeclaredCreatureMinimumLevel ?? 1, limits.ToImmutableHashSet(), candidates.ToImmutable(), costs.ToImmutable());
+            raw.DeclaredCreatureMinimumLevel ?? 1, limits.ToImmutableHashSet(), candidates.ToImmutable());
     }
 
     public int Select(long roll)

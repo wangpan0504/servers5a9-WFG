@@ -42,8 +42,7 @@ internal static class CreatureChangeTests
             Raw with { ActionDeclaration = new("[change creature]", [-1,0,1,15]) },
             Raw with { ActionDeclaration = new("[change creature]", [-1,-1,2]) },
             Raw with { HasMaximumLevel = true }, Raw with { HasCreatureMinimumLevel = true },
-            Raw with { HasUsableJobs = true }, Raw with { DeclaredNeededMaterials = [100,0] },
-            Raw with { DeclaredNeededMaterials = null }, Raw with { DeclaredActionUsablePlaces = null }
+            Raw with { HasUsableJobs = true }, Raw with { DeclaredActionUsablePlaces = null }
         }) That(CreatureChangeDefinition.Parse(raw, Book) is null, "畸形声明和未确认参数变体不猜测成功语义");
         var fixedDefinition = CreatureChangeDefinition.Parse(Raw with { ActionDeclaration = new("[change creature]", [7001,7002,1,-1]),
             DeclaredActionLimitIndexes = [], DeclaredActionResultLimitIndexes = [] }, Book);
@@ -56,10 +55,9 @@ internal static class CreatureChangeTests
         }) { Creature = new() { Level = 2, Experience = 3, Name = "pet", Satiety = 78, ExpireTime = 2000000000 } };
         var book = new InventoryItem(12, new(InventoryListType.Main, 74), new(9000, ItemKind.Consumable, 2) { SortLockFlag = 1 });
         Character character = new(1,0,"Change",1,new(1,0,1,1),null) { Inventory = new([pet,book]) };
-        var pieces = new EpicPieceCatalog("[piece list]\n1 2\n[/piece list]");
         ItemTemplate Item(int id) => id == 9000 ? Book : new(id, ItemKind.Creature, 26, 1, 0, 1, 0, 0, 0, "[trade]", 65535, 0, "pet") { CreatureSubType = 0 };
         int draws = 0;
-        var service = new CreatureChangeService(Item, _ => definition, CreatureSystemTests.Synthetic(), pieces,
+        var service = new CreatureChangeService(Item, _ => definition, CreatureSystemTests.Synthetic(),
             new ConsumableUseSessionTests.FakeClock(), total => { draws++; return total-1; });
         var result = service.Plan(character, book.Position, pet.Position);
         That(result.Accepted && result.Plan!.After.Find(book.Position)!.Core.Count == 1 && draws == 1 &&
@@ -84,26 +82,28 @@ internal static class CreatureChangeTests
         }) That(!service.Plan(character with { Inventory = new([pet,invalid]) }, book.Position, pet.Position).Accepted,
             "源书缺UID、锁定、数量无效或过期均拒绝");
         foreach (var restriction in new[] { definition with { MinimumLevel = 2 }, definition with { CreatureMinimumLevel = 3 } })
-            That(!new CreatureChangeService(Item, _ => restriction, CreatureSystemTests.Synthetic(), pieces)
+            That(!new CreatureChangeService(Item, _ => restriction, CreatureSystemTests.Synthetic())
                 .Plan(character, book.Position, pet.Position).Accepted, "角色与宠物最低等级独立校验");
         foreach (var forbiddenBook in new[] { Book with { Jobs = 2 }, Book with { RequiredSkill = 123 }, Book with { UseForbidden = true } })
             That(!new CreatureChangeService(id => id == 9000 ? forbiddenBook : Item(id), _ => definition,
-                CreatureSystemTests.Synthetic(), pieces).Plan(character, book.Position, pet.Position).Accepted,
+                CreatureSystemTests.Synthetic()).Plan(character, book.Position, pet.Position).Accepted,
                 "职业、所需技能及使用禁令不能因进入515而绕过");
         That(!new CreatureChangeService(id => Item(id) with { CreatureSubType = 1 }, _ => definition,
-            CreatureSystemTests.Synthetic(), pieces).Plan(character, book.Position, pet.Position).Accepted, "宠物蛋不参加原UID成宠转换");
+            CreatureSystemTests.Synthetic()).Plan(character, book.Position, pet.Position).Accepted, "宠物蛋不参加原UID成宠转换");
         var missing = new CreatureChangeService(Item, _ => definition with { Candidates = [new(7002,1),new(9999,1)] },
-            CreatureSystemTests.Synthetic(), pieces, random: _ => throw new Exception("不应抽取"));
+            CreatureSystemTests.Synthetic(), random: _ => throw new Exception("不应抽取"));
         That(!missing.Plan(character, book.Position, pet.Position).Accepted, "完整候选核对先于随机，不删除缺失候选改变概率");
-        var withMaterials = new CreatureChangeService(Item, _ => definition with { Materials = [new(9000,1)] },
-            CreatureSystemTests.Synthetic(), pieces, new ConsumableUseSessionTests.FakeClock(), _ => 0);
-        That(withMaterials.Plan(character, book.Position, pet.Position).Plan!.After.Find(book.Position) is null &&
-            !withMaterials.Plan(last, book.Position, pet.Position).Accepted, "源与材料同ID先扣书再足额扣材料，缺材料整笔拒绝");
+        var exchangeBook = CreatureChangeDefinition.Parse(Raw with { DeclaredNeededMaterials = [9000,1] }, Book)!;
+        var fromShop = new CreatureChangeService(Item, _ => exchangeBook,
+            CreatureSystemTests.Synthetic(), new ConsumableUseSessionTests.FakeClock(), _ => 0);
+        That(fromShop.Plan(character, book.Position, pet.Position).Plan!.After.Find(book.Position)!.Core.Count == 1 &&
+            fromShop.Plan(last, book.Position, pet.Position).Plan!.After.Find(book.Position) is null,
+            "兑换材料即使与源同ID也不重复扣除，最后一本仍可正常使用");
         var precondition = result.Plan!.CharacterPrecondition!;
         That(precondition.Matches(character,1999999999) && !precondition.Matches(character,2000000000) &&
             !precondition.Matches(character with { Revision = character.Revision + 1 },1900000000), "提交复验实际到期时刻与角色revision");
         var unchangedTarget = new CreatureChangeService(Item, _ => definition with { Candidates = [new(7001,1)] },
-            CreatureSystemTests.Synthetic(), pieces, new ConsumableUseSessionTests.FakeClock(), _ => 0)
+            CreatureSystemTests.Synthetic(), new ConsumableUseSessionTests.FakeClock(), _ => 0)
             .Plan(character, book.Position, pet.Position);
         That(unchangedTarget.Accepted && !unchangedTarget.Plan!.CharacterPrecondition!.Matches(character,2000000000),
             "随机结果同原模板时仍消耗书，并复验没有变化的目标期限");

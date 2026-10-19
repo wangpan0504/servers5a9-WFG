@@ -6,7 +6,7 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-internal enum EnhancementMode : byte { Reinforce, Amplify }
+internal enum EnhancementMode : byte { Reinforce, Amplify, LuckyAmplify = 5 }
 
 internal sealed record EnhancementDefinition(int ItemId, EnhancementMode Mode, byte Level, int SuccessWeight,
     bool Additional, int RawLevelLimit, int MinimumItemLevel, int MaximumItemLevel,
@@ -84,7 +84,7 @@ internal sealed class EnhancementCatalog
         if (match.Groups[3].Value == "fixed" && maximum != -1)
             return new(id, reinforce.Count == 1 ? EnhancementMode.Reinforce : EnhancementMode.Amplify,
                 level, chance * 100, false, maximum, 0, byte.MaxValue, [], "固定券第四原始参数的限制语义尚未闭合");
-        foreach (string name in new[] { "enchant random", "need material", "target item id", "cooltime maintenance", "effect maintenance",
+        foreach (string name in new[] { "enchant random", "target item id", "cooltime maintenance", "effect maintenance",
             "total usable count", "total weekly usable count", "total accumulated usable count", "use count limit all server item",
             "usable datetime", "usable first growtype", "action usable server type", "usable game server type", "usable server type",
             "reinforcement usable rarity", "reinforcement usable equipment type" })

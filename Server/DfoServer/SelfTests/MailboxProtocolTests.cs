@@ -198,12 +198,18 @@ internal static class MailboxProtocolTests
                 TestCheck.That(sender == mail.SenderId && name == mail.SenderName && seconds == mail.RemainingSeconds(now) && gold <= mail.Gold,
                     "摘要的发送者、金币和期限独立核对");
                 if (attachment is not null)
+                {
+                    var core = attachment.Item.Core;
+                    byte visibleType = (core.AmplifyType & 0x80) != 0 ? (byte)128 : core.AmplifyType;
+                    ushort visibleValue = core.AmplifyType == 0 || (core.AmplifyType & 0x80) != 0 ? (ushort)0 : core.AmplifyValue;
                     TestCheck.That(id == attachment.Item.Core.ItemId && has == 1 && value == (attachment.Item.Avatar is null ? attachment.Item.Core.Value : attachment.Item.RemainingSeconds(now)) &&
                         durability == attachment.Item.Core.Durability && attr == attachment.Item.Core.Attr &&
                         enchant == (attachment.Item.Core.IsStackable ? attachment.Item.Core.Count : attachment.Item.Core.EnchantCardId) &&
-                        upgrade == attachment.Item.Core.EnchantUpgrade && amplify == attachment.Item.Core.AmplifyType && amplifyValue == attachment.Item.Core.AmplifyValue &&
+                        upgrade == attachment.Item.Core.EnchantUpgrade && amplify == visibleType && amplifyValue == visibleValue &&
+                        raw[19] == visibleType && BitConverter.ToUInt16(raw, 20) == visibleValue &&
                         BitConverter.ToInt32(raw, 2) == id && BitConverter.ToUInt16(raw, 69) == attachment.Item.Core.Rune && raw[89] == attachment.Item.Core.TradeRestriction,
                         "摘要头与核心关键属性独立偏移对照");
+                }
             }
             TestCheck.That(reader.ReadUInt16() == Math.Min(short.MaxValue, notLoaded), "剩余未装载数量");
             int details = reader.ReadUInt16();

@@ -23,7 +23,7 @@ internal sealed record CreatureDefinition(int ItemId, int Species, bool Egg, int
 
 internal sealed record CreatureFeedDefinition(int ItemId, int MinimumLevel, int CoolTime,
     int Satiety, int EffectSeconds, int SkillRecoveryRate);
-internal sealed record CreatureGrowthFood(int MinimumLevel, int CoolTime, ImmutableArray<Items.ItemMaterialCost> Materials);
+internal sealed record CreatureGrowthFood(int MinimumLevel, int CoolTime);
 
 internal sealed class CreatureCatalog
 {
@@ -177,10 +177,7 @@ internal sealed class CreatureCatalog
         if (!Regex.IsMatch(script.Section("stackable type"), @"^\s*`\[creature expitem\]`\s+0\s*$", RegexOptions.CultureInvariant)) return null;
         int minimum = Integer(script, "creature minimum level", 1), cool = Integer(script, "cool time", 0);
         if (minimum < 0 || cool < 0) throw new InvalidDataException("宠物成长道具的等级或冷却无效");
-        int[] material = PvfScript.Integers(script.Block("need material"));
-        if (material.Length % 2 != 0 || material.Any(value => value <= 0)) throw new InvalidDataException("宠物成长材料必须为正编号/数量对");
-        return new(minimum, cool, Enumerable.Range(0, material.Length / 2)
-            .Select(at => new Items.ItemMaterialCost(material[2 * at], material[2 * at + 1])).ToImmutableArray());
+        return new(minimum, cool);
     }
 
     public int FoodConsumptionRate(int itemId)

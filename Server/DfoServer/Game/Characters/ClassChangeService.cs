@@ -14,7 +14,7 @@ internal sealed record ClassChangePlan(Character Expected, ClassChangeRequest Re
 internal sealed record ClassChangePreparation(ushort Error, string Reason, ClassChangePlan? Plan = null);
 
 internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog characters, SkillLearningCatalog skills,
-    QuestCatalog quests, EpicPieceCatalog pieces)
+    QuestCatalog quests)
 {
     public ClassChangePreparation Prepare(Character before, ClassChangeRequest request, DateTimeOffset now)
     {
@@ -59,9 +59,7 @@ internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog cha
             return Reject(23, "source-consumption");
         var afterBook = before.Inventory with { Items = before.Inventory.Items
             .Select(item => item.Position == source.Position ? remaining : item).OfType<InventoryItem>().ToImmutableArray() };
-        var materials = InventoryMaterialConsumptionService.Plan(afterBook, ticket.Materials, pieces, now);
-        if (!materials.Accepted) return Reject(23, "insufficient-materials");
-        var inventory = new InventoryPlan(before.Inventory, materials.Plan!.After, "class_change");
+        var inventory = new InventoryPlan(before.Inventory, afterBook, "class_change");
         return new(0, "prepared", new(before, request, target, inventory, learning, CompletionHistory(candidate), source.Uid));
     }
 

@@ -25,14 +25,32 @@ internal sealed class EnhancementHandler(InventoryEnhancementService service, In
             return CommandResult.Handled;
         }
         EnhancementReceipt? receipt = null;
+        bool resourceInvalid = false;
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(InventoryEnhancementService.Rejection) :
-            context.Session.PlanAndCommitInventory(character => service.Plan(character, request, out receipt), InventoryEnhancementService.Rejection);
+            context.Session.PlanAndCommitInventory(character =>
+            {
+                try { return service.Plan(character, request, out receipt); }
+                catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or OverflowException)
+                {
+                    resourceInvalid = true;
+                    return InventoryResult.Reject(InventoryEnhancementService.Rejection);
+                }
+            }, InventoryEnhancementService.Rejection);
         bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) : SameSelection();
         log.Write("enhancement", new { Connection = context.Id, request.Mode, TargetList = request.Target.List,
-            TargetSlot = request.Target.Index, request.MaterialSlot, result.Accepted, Revision = result.Receipt?.Character.Revision });
+            TargetSlot = request.Target.Index, request.MaterialSlot, result.Accepted, result.Error,
+            Reason = resourceInvalid ? "resource_invalid" : result.Accepted ? "committed" : "rejected",
+            receipt?.OldLevel, receipt?.NewLevel, receipt?.OutcomeCode, receipt?.GoldCost, Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.UPGRADE_ITEM, EnhancementPackets.Ack(result, result.Accepted ? receipt : null),
             result.Accepted ? "enhancement_committed" : "enhancement_rejected", Guard);
-        await projection.RefreshAsync(context, result);
+        HashSet<InventorySlot>? acknowledged = null;
+        if (result.Accepted && receipt is { InPlace: true })
+        {
+            acknowledged = [new(InventoryListType.Main, receipt.MaterialSlot)];
+            if (receipt.OutcomeCode != 3 || result.Plan!.After.Find(receipt.Target) is null) acknowledged.Add(receipt.Target);
+            if (receipt.TerminalSlot >= 0) acknowledged.Add(new(InventoryListType.Main, receipt.TerminalSlot));
+        }
+        await projection.RefreshAsync(context, result, acknowledged);
         return CommandResult.Handled;
     }
 }

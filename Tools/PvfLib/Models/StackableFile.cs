@@ -21,6 +21,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public IReadOnlyList<string>? DeclaredActionUsablePlaces { get; init; }
     public bool HasActionUsablePlace { get; init; }
     public IReadOnlyList<string>? DeclaredActionUsableServerTypes { get; init; }
+    // 商店兑换价格，不是使用道具时的附加成本。
     public IReadOnlyList<int>? DeclaredNeededMaterials { get; init; }
     public IReadOnlyList<int>? DeclaredDontChangeGrowTypes { get; init; }
     public IReadOnlyList<int>? DeclaredUsableFirstGrowTypes { get; init; }

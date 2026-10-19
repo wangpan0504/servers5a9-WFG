@@ -7,7 +7,7 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Creatures;
 
 internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<int, CreatureChangeDefinition?> definitions,
-    CreatureCatalog creatures, EpicPieceCatalog pieces, TimeProvider? clock = null, Func<long, long>? random = null,
+    CreatureCatalog creatures, TimeProvider? clock = null, Func<long, long>? random = null,
     CreatureGroupCatalog? groups = null, Func<int, CreatureGrowthItemDefinition?>? growthItems = null)
 {
     readonly TimeProvider clock = clock ?? TimeProvider.System;
@@ -60,13 +60,10 @@ internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<
         }
         var consumed = InventoryDeleteService.Plan(before, sourceSlot, source.Core.ItemId, definition.ConsumeCount);
         if (!consumed.Accepted || consumed.Plan is null) return InventoryResult.Reject(0);
-        var materials = InventoryMaterialConsumptionService.Plan(consumed.Plan.After, definition.Materials, pieces,
-            DateTimeOffset.FromUnixTimeSeconds(now));
-        if (!materials.Accepted || materials.Plan is null) return InventoryResult.Reject(0);
         int resultId = definition.Select(random(definition.TotalWeight));
         // 只换模板；原实例、附魔、扩展、名称、等级、经验及期限均不重新创建。
         var changed = target with { Core = target.Core with { ItemId = resultId } };
-        var after = materials.Plan.After with { Items = materials.Plan.After.Items.Replace(target, changed) };
+        var after = consumed.Plan.After with { Items = consumed.Plan.After.Items.Replace(target, changed) };
         var plan = new InventoryPlan(before, after, reason);
         long? deadline = plan.ChangedSlots.Select(plan.BeforeIndex.Find).OfType<InventoryItem>().Append(target)
             .Where(item => item.ExpireTime > 0).Select(item => (long?)item.ExpireTime).Min();

@@ -30,6 +30,7 @@ internal static class CreatureSystemTcpTests
             clock: new ConsumableUseSessionTests.FakeClock());
         var repository = new CharacterRepository(fixture.Database);
         ushort id;
+        InventoryItem exchangeMaterial;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var candidate = CharacterCreation.Prepare("PetTcp", resources.Characters.Get(0), resources.Towns.Room,
@@ -39,12 +40,13 @@ internal static class CreatureSystemTcpTests
                 .Add(new(0, new(InventoryListType.Pet, 189), new(24, ItemKind.CreatureConsumable, 2)))
                 .Add(new(0, new(InventoryListType.Pet, 190), new(25, ItemKind.CreatureConsumable, 1))) } });
             id = created.Id;
-            repository.Create(owner, candidate with { Name = "PetGrow", Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
+            var grow = repository.Create(owner, candidate with { Name = "PetGrow", Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(new(0, CreatureRules.EquippedSlot, new(63407, ItemKind.Creature, 0))
                     { Creature = new() { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5, Experience = 199, Level = 20 } })
                 .Add(new(0, new(InventoryListType.Main, 65), new(10098003, ItemKind.Consumable, 1)))
                 .Add(new(0, new(InventoryListType.Main, 66), new(10098004, ItemKind.Consumable, 1)))
                 .Add(new(0, new(InventoryListType.Main, 67), new(10098002, ItemKind.Consumable, 3))) } });
+            exchangeMaterial = grow.Inventory.Find(new(InventoryListType.Main,67))!;
             repository.Create(owner, candidate with { Name = "PetExp", Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(new(0, CreatureRules.EquippedSlot, new(63407, ItemKind.Creature, 0))
                     { Creature = new() { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5, Experience = 195, Level = 20 } })
@@ -96,9 +98,6 @@ internal static class CreatureSystemTcpTests
             peer.Expect(0, 102, [21, 1, 200, 0, 0, 0, 10, 6]);
             peer.Expect(0, 106, [131, 1, (byte)peer.Id, (byte)(peer.Id >> 8)]);
             peer.Expect(0, 105); peer.Expect(0, 14);
-            var materialUpdate = peer.Expect(0, 14).Body;
-            That(materialUpdate[0] == 0 && U16(materialUpdate, 3) == 67 && U32(materialUpdate, 5) == uint.MaxValue,
-                "成长饲料资源额外要求的三份材料同事务扣除，ACK后投影实际材料槽");
             peer.Barrier();
             using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             {
@@ -106,8 +105,8 @@ internal static class CreatureSystemTcpTests
                 var evolved = saved.Inventory.Find(CreatureRules.EquippedSlot)!;
                 That(catalog.Get(evolved.Core.ItemId) is { Species: 387, UsesExperienceItems: true } &&
                     evolved.Creature is { Level: 21, Experience: 200, Mode1Field1: 6 } && saved.Inventory.Find(new(InventoryListType.Main, 65)) is null &&
-                    saved.Inventory.Find(new(InventoryListType.Main, 67)) is null,
-                    "原版PVF A类成长到21级，按亲密度进化387并消费实际Main源，不使用旧版25次常量");
+                    saved.Inventory.Find(new(InventoryListType.Main, 67)) == exchangeMaterial,
+                    "原版PVF A类成长到21级，按亲密度进化387，只消费实际Main源，兑换材料UID与三份数量不变");
             }
         }
         using (var peer = Open(fixture))

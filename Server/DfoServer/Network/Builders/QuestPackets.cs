@@ -2,6 +2,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Quests;
+using DfoServer.Network.Builders.Inventory;
 
 namespace DfoServer.Network.Builders;
 
@@ -200,8 +201,7 @@ internal static class QuestPackets
             writer.Write(checked((ushort)item.Position.Index));
             writer.Write(checked((uint)item.Core.ItemId));
             writer.Write(checked((uint)(item.Core.IsStackable ? reward.GrantedCount : item.Core.Value)));
-            writer.Write(item.Core.AmplifyType);
-            writer.Write(item.Core.AmplifyValue);
+            ItemListProtocolWriter.WriteAmplification(writer, item.Core);
             writer.Write(unchecked((uint)DfoServer.GameWorld.Items.ItemExpiration.ForClient(item.Core.ExpireTime)));
             writer.Write(item.Core.SortLockFlag);
             writer.Write(item.Core.RemainUseCount);

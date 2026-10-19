@@ -6,7 +6,8 @@ namespace DfoServer.Game.Dungeons;
 
 // 当前PVF提供候选、权重与概率，本服采用90参考业务算法；不声称是原版抽样。
 internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, DungeonItemDropCatalog candidates,
-    Func<int, DungeonMonsterDropDeclaration> resolveMonster, Func<int, ItemTemplate> resolveItem, DungeonSpecialDropCatalog? special = null)
+    Func<int, DungeonMonsterDropDeclaration> resolveMonster, Func<int, ItemTemplate> resolveItem, DungeonSpecialDropCatalog? special = null,
+    EquipmentAmplificationDropPolicy? amplification = null)
 {
     public const string Rule = "pvf-monster-reference-v1";
     public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity rows[1..3]", "party member drop bonusrate",
@@ -69,7 +70,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             if (pool.TotalWeight > 0)
                 trials.Add(new(Math.Min(pool.TotalWeight, 100000), pool, 1, 1, ProbabilityDenominator: 100000));
         }
-        return new(Rule, trials, referenceQuality: true);
+        return new(Rule, trials, referenceQuality: true, amplification);
 
         DungeonItemDropPool SpecialPool(IEnumerable<DungeonSpecialDropItem> source) => new(source
             .Where(row => row.ItemId > 0 && row.Weight > 0).Select(row => new DungeonWeightedDropItem(resolveItem(row.ItemId), row.Weight)));

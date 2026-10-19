@@ -19,20 +19,23 @@ internal sealed class DungeonDropGenerationPlan
     public ImmutableArray<DungeonDropTrial> Trials { get; }
     public int MaximumObjects { get; }
     public bool ReferenceQuality { get; }
+    public EquipmentAmplificationDropPolicy? Amplification { get; }
     public DungeonDropGenerationPlan WithGrowthContract(int percent)
     {
         if (percent < 0) throw new InvalidDataException("成长契约掉落加成不能为负");
         if (percent == 0 || !Trials.Any(trial => trial.GrowthContractEligible)) return this;
         return new(ResourceSource, Trials.Select(trial => !trial.GrowthContractEligible ? trial : trial with
-        { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality);
+        { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality, Amplification);
     }
 
-    public DungeonDropGenerationPlan(string resourceSource, IEnumerable<DungeonDropTrial> trials, bool referenceQuality = false)
+    public DungeonDropGenerationPlan(string resourceSource, IEnumerable<DungeonDropTrial> trials, bool referenceQuality = false,
+        EquipmentAmplificationDropPolicy? amplification = null)
     {
         if (string.IsNullOrWhiteSpace(resourceSource))
             throw new InvalidDataException("掉落生成计划必须有明确来源");
         ResourceSource = resourceSource;
         ReferenceQuality = referenceQuality;
+        Amplification = amplification;
         Trials = trials.ToImmutableArray();
         int maximum = 0;
         foreach (var trial in Trials)
@@ -103,7 +106,7 @@ internal sealed class DungeonDropGenerationPlan
             if (template.Kind == ItemKind.Equipment)
             {
                 for (int index = 0; index < count; index++)
-                    result.Add(new(DungeonDropCreation.Create(template, 1, Sample, now, ReferenceQuality)));
+                    result.Add(new(DungeonDropCreation.Create(template, 1, Sample, now, ReferenceQuality, Amplification)));
             }
             else
             {

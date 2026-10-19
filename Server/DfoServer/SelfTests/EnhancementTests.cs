@@ -67,9 +67,11 @@ internal static class EnhancementTests
             "名称文字中的伪标签不能覆盖真实券模式");
         foreach (string value in new[] { "0 100 `fixed` -1", "32 100 `fixed` -1", "11 101 `fixed` -1", "11 100 `random` -1", "11 100 `fixed` -2", "1 100 `additional` 128", "11 100 `fixed` -1 999" })
             That(EnhancementCatalog.Parse(coupon, "[equipment reinforcement ticket]\n" + value) is { Available: false }, "未知或溢出券参数不夹紧成成功");
-        foreach (string suffix in new[] { "[enchant random]\n1\n", "[need material]\n10007110 5\n[/need material]\n",
+        foreach (string suffix in new[] { "[enchant random]\n1\n",
             "[total usable count]\n1\n", "[reinforcement usable item list]\n123\n", "[equipment amplify reinforcement ticket]\n10 100 `fixed` -1\n" })
-            That(EnhancementCatalog.Parse(coupon, fixedText + suffix) is { Available: false }, "额外未闭合资格、附加材料及混合模式不被忽略");
+            That(EnhancementCatalog.Parse(coupon, fixedText + suffix) is { Available: false }, "额外未闭合资格及混合模式不被忽略");
+        That(EnhancementCatalog.Parse(coupon, fixedText + "[need material]\n10007110 5\n[/need material]\n") is { Available: true },
+            "商店兑换价格不是强化券的使用成本或拒绝门禁");
         That(EnhancementCatalog.Parse(coupon, "[lucky enchant deed]\n1\n") is { Available: false } &&
             EnhancementCatalog.Parse(coupon, "[stackable type]\n`[material]` 0\n") is null, "幸运未闭合和普通材料不能降级到券成功");
         var restricted = EnhancementCatalog.Parse(coupon, fixedText + $"[reinforcement usable item list]\n{gear}\n[/reinforcement usable item list]\n")!;
@@ -96,6 +98,8 @@ internal static class EnhancementTests
             InventoryEnhancementService.Plan(owner, request, now, definition ?? fixedRule, couponTemplate, template ?? gearTemplate,
                 () => { calls++; return 2999; }, out receipt);
         var applied = Plan(role, use, out var receipt);
+        That(Plan(role, use, out _, EnhancementCatalog.Parse(coupon, fixedText + "[need material]\n10007110 5\n[/need material]\n"))
+            .Accepted, "已获得的券无需持有商店兑换材料即可使用");
         var after = applied.Plan!.After;
         That(applied.Accepted && receipt is { OldLevel: 14, NewLevel: 11, MaterialRemaining: 1, Succeeded: true } &&
             after.Find(target.Position) == target with { Core = target.Core with { Attr = 0xEB } } &&
@@ -149,8 +153,9 @@ internal static class EnhancementTests
         var sword = resources.Items.Get(27308);
         That(sword.EquipmentSlot == 12 && sword.MinimumLevel == 10 && enhancements.Allows(sword.Id, EnhancementMode.Reinforce),
             "用户真实步兵巨剑按匹配资源取得模板资格");
-        That(enhancements.Get(10007133) is { Available: false, PendingRule: not null },
-            "真实+10增幅券额外need material未闭合，保留明确拒绝而非少扣材料成功");
+        That(enhancements.Get(10007133) is { Available: true, Mode: EnhancementMode.Amplify, Level: 10, SuccessWeight: 10000 } &&
+            resources.Items.Get(10007133).ShopPrice.Materials is [{ ItemId: 10007110, Count: 5 }],
+            "真实+10增幅券正常可用，五份邀请函仅保留在商店兑换价格中");
     }
 
     internal static byte[] Request(byte mode, byte list, short slot, int item, short material, byte[] text)

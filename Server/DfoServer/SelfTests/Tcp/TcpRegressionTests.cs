@@ -61,6 +61,11 @@ internal static class TcpRegressionTests
         }),
         ("quest-ticket", (_, _, resources) => QuestTicketTests.RunAsync(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning)),
         ("levelup-ticket", LevelUpTicketTcpTests.RunAsync),
+        ("levelup-ticket-rules", (_, _, resources) =>
+        {
+            LevelUpTicketTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning);
+            return Task.CompletedTask;
+        }),
         ("levelup-table-rules", (_, _, resources) =>
         {
             LevelUpByTableTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning,resources.Quests);
@@ -153,6 +158,7 @@ internal static class TcpRegressionTests
         }),
         ("dungeon-drop-storage", (_, _, resources) =>
         {
+            EquipmentAmplificationDropTests.RunResources(resources.ItemResources);
             DungeonDropCollectionRepositoryTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             return Task.CompletedTask;
         }),
@@ -216,6 +222,8 @@ internal static class TcpRegressionTests
         ("growth-cube-contract", GrowthCubeContractTcpTests.RunAsync),
         ("enchantment", EnchantmentTcpTests.RunAsync),
         ("enhancement", EnhancementTcpTests.RunAsync),
+        ("amplification-options", AmplificationTcpTests.RunAsync),
+        ("amplification-upgrade", AmplifyUpgradeTcpTests.RunAsync),
         ("creature-egg", CreatureEggTcpTests.RunAsync),
         ("creature-skin", CreatureSkinTcpTests.RunAsync),
         ("aura-skin", AuraSkinTcpTests.RunAsync),
@@ -277,6 +285,7 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "class-change-rules",
+        "levelup-ticket-rules",
         "levelup-table-rules",
         "experience-consumable-rules",
         "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",

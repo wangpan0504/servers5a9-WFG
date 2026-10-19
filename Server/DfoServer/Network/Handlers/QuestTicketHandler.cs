@@ -197,7 +197,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
         if (result.Accepted)
         {
             var source = new InventorySlot(InventoryListType.Main, (short)request.Slot);
-            // ACK先消费一本；同槽另被材料消费时仍需在ACK之后同步绝对剩余量。
+            // action64的ACK消费一本；转换组按表消费，由库存差量同步实际数量。
             var acknowledged = !grouped && result.Plan!.BeforeIndex.Find(source)!.Core.Count -
                 (result.Receipt!.Index.Find(source)?.Core.Count ?? 0) == 1;
             await inventoryProjection!.RefreshAsync(context, result, acknowledged ? new HashSet<InventorySlot> { source } : null);

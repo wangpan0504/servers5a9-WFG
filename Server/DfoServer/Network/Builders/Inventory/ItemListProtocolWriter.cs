@@ -53,6 +53,15 @@ internal static class ItemListProtocolWriter
         writer.Write(detail?.Color1 ?? 0);
         writer.Write(detail?.Color2 ?? 0);
     }
+
+    public static void WriteAmplification(BinaryWriter writer, ItemCore? core)
+    {
+        byte type = core?.AmplifyType ?? 0;
+        bool unidentified = (type & 0x80) != 0;
+        // 存档保留隐藏的类型/数值；客户端只识别独立的128标记，不能把0x81–0x84当作属性索引。
+        writer.Write(unidentified ? (byte)0x80 : type);
+        writer.Write(type == 0 || unidentified ? (ushort)0 : core!.AmplifyValue);
+    }
     public static void Write(BinaryWriter writer, short slot, ItemCore? core)
     {
         long begin = writer.BaseStream.Position;
@@ -71,8 +80,7 @@ internal static class ItemListProtocolWriter
         writer.Write(core.SealFlag);
         writer.Write(core.EnchantCardId);
         writer.Write(core.EnchantUpgrade);
-        writer.Write(core.AmplifyType);
-        writer.Write(core.AmplifyValue);
+        WriteAmplification(writer, core);
         writer.Write(core.Marker16);
         writer.Write(core.Extension26);
         writer.Write(core.Extension27);

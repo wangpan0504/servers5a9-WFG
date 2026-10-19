@@ -32,7 +32,7 @@ internal sealed class CreatureGroupCatalog
                 }
                 else if (choice != 0) return null;
                 return new(item.ItemId, sourceItemId, item.MinimumLevel, item.MaximumLevel, item.CreatureMinimumLevel,
-                    [sourceItemId], candidates, item.Materials) { ConsumeCount = row.Cost, TownOnly = item.TownOnly };
+                    [sourceItemId], candidates) { ConsumeCount = row.Cost, TownOnly = item.TownOnly };
             }
         }
         return null;

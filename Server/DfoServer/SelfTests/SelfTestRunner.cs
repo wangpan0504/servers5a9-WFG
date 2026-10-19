@@ -27,6 +27,8 @@ internal static class SelfTestRunner
         LimitCubeTests.RunCore();
         EnchantmentTests.RunCore();
         EnhancementTests.RunCore();
+        AmplificationTests.RunCore();
+        AmplifyUpgradeTests.RunCore();
         CreatureSkinTests.RunCore();
         CreatureEggTests.RunCore();
         BoosterCreatureTests.RunCore();
@@ -168,6 +170,7 @@ internal static class SelfTestRunner
         DungeonSpecialDropCatalogTests.RunCore();
         DungeonItemDropCatalogTests.RunCore();
         DungeonDropGenerationPlanTests.RunCore();
+        EquipmentAmplificationDropTests.RunCore();
         GrowthPacketsTests.Run();
         SkillRequestTests.Run();
         ClassChangeTests.RunCore();
@@ -212,6 +215,8 @@ internal static class SelfTestRunner
         LimitCubeTests.RunResources(itemResources);
         EnchantmentTests.RunResources(itemResources, itemResources.Enchantments);
         EnhancementTests.RunResources(itemResources, itemResources.Enhancements);
+        AmplificationTests.RunResources(itemResources);
+        EquipmentAmplificationDropTests.RunResources(itemResources);
         CreatureEggTests.RunResources(itemResources.CreatureEggs, itemResources.Items);
         CreatureSkinMoveTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);

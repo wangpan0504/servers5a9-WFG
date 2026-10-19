@@ -24,7 +24,7 @@ internal sealed class TeleportCatalog(Func<string, string> read, IReadOnlyDictio
     internal static TeleportPotionDefinition? ReadPotion(PvfDocument document)
     {
         if (document.Section("stackable type").Trim() != "`[teleport potion]` 0" ||
-            document.Has("need material") || document.Has("expiration date") || document.Has("npc teleport potion"))
+            document.Has("expiration date") || document.Has("npc teleport potion"))
             return null;
         int[] minimum = PvfScript.Integers(document.Section("minimum level")), cool = PvfScript.Integers(document.Section("cool time"));
         int[] maps = PvfScript.Integers(document.Section("int data"));

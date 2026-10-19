@@ -59,7 +59,9 @@ internal static class DungeonDropCollectionRepositoryTests
             var now = DateTimeOffset.UtcNow;
             DungeonGroundContent[] contents = [new(InventoryRewardGrantService.Create(resources.Items.Get(1000), 3, now)),
                 new(InventoryRewardGrantService.Create(resources.Items.Get(3037), 7, now)), new(null, 25),
-                new(DungeonDropCreation.Create(resources.Items.Get(101010912), 1, _ => 0, now))];
+                new(DungeonDropCreation.Create(resources.Items.Get(31440), 1, _ => 0, now,
+                    amplification: new EquipmentAmplificationDropPolicy(resources.Amplifications.Rules)))];
+            That(contents[3].Item is { AmplifyType: 0x81, AmplifyValue: > 0 }, "仓储用例使用真实PVF生成的未净化装备，而不是手写标志位");
             int draws = 0;
             var loot = ground.GetOrFreezeAssets(pending, () => { draws++; return contents; });
             var reward = new DungeonExperienceReward("fixture-only", DungeonKillExperienceCatalog.ResourcePath, 1, 3, 1);
@@ -134,9 +136,9 @@ internal static class DungeonDropCollectionRepositoryTests
             That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 4 && current.Inventory.Gold == reserved.Inventory.Gold + 25 &&
                 current.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 7 &&
                 current.Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 3 &&
-                current.Inventory.Items.Single(item => item.Core.ItemId == 101010912 && item.Position.List == InventoryListType.Main).Core.Value == 0 &&
+                current.Inventory.Items.Single(item => item.Core.ItemId == contents[3].Item!.ItemId && item.Position.List == InventoryListType.Main).Core == contents[3].Item &&
                 current.Revision == committed.Character.Revision + 5,
-                "同死亡四个key各一次提交，道具、账号材料、金币和零品级装备均正确");
+                "同死亡四个key各一次提交，道具、账号材料、金币及未净化装备完整隐藏核心均正确");
             That(SkillRepositoryTests.Equal(new CharacterRepository(path).LoadCharacter(owner, current.Slot), current),
                 "重新打开原仓储保留全部集合资产和逐件去重账本，不重建在线状态");
             // 旧掉落v18和v19均接管现有集合；真实到账资产和逐件结果须原样保留。

@@ -36,7 +36,7 @@ internal sealed record LevelUpTicketSource(InventoryItem Item, InventoryPlan Inv
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 }
 
-internal sealed class LevelUpTicketService(ItemCatalog items, CharacterGrowthCatalog growth, EpicPieceCatalog pieces,
+internal sealed class LevelUpTicketService(ItemCatalog items, CharacterGrowthCatalog growth,
     TimeProvider? time = null, CharacterCatalog? characters = null, SkillLearningCatalog? skills = null)
 {
     public TimeProvider Clock { get; } = time ?? TimeProvider.System;
@@ -48,7 +48,7 @@ internal sealed class LevelUpTicketService(ItemCatalog items, CharacterGrowthCat
         var definition = items.LevelUpTicket(item.Core.ItemId);
         if (definition is null || !definition.Allows(expected.Level, expected.Job))
             throw new InvalidDataException("升级券等级、职业或资源资格不符");
-        return PrepareGrowth(expected, item, checked((byte)(expected.Level + 1)), definition.Materials, now) with { Definition = definition };
+        return PrepareGrowth(expected, item, checked((byte)(expected.Level + 1)), now) with { Definition = definition };
     }
 
     public bool IsTableSource(Character? character, InventorySlot position) => character?.Inventory.Find(position) is { } item &&
@@ -62,8 +62,7 @@ internal sealed class LevelUpTicketService(ItemCatalog items, CharacterGrowthCat
         if (definition is null || !definition.Allows(expected.Level, expected.Job, expected.GrowType) ||
             kind != (definition.Jumping ? LevelUpConsumableKind.JumpingTable : LevelUpConsumableKind.StatusTable))
             throw new InvalidDataException("等级表道具的职业、区间或使用入口不符");
-        // 等级表胶囊的 need material 属于商店兑换价格，使用时不能再次扣除购买代币。
-        var source = PrepareGrowth(expected, item, definition.TargetLevel(expected.Level), [], now) with { ByTable = definition };
+        var source = PrepareGrowth(expected, item, definition.TargetLevel(expected.Level), now) with { ByTable = definition };
         bool chooseProfession = definition.Jumping && expected.GrowType == 0 && expected.Job is not (9 or 10);
         if (!chooseProfession)
         {
@@ -89,15 +88,13 @@ internal sealed class LevelUpTicketService(ItemCatalog items, CharacterGrowthCat
         return item;
     }
 
-    LevelUpTicketSource PrepareGrowth(Character expected, InventoryItem item, byte target, IReadOnlyList<ItemMaterialCost> costs, DateTimeOffset now)
+    LevelUpTicketSource PrepareGrowth(Character expected, InventoryItem item, byte target, DateTimeOffset now)
     {
         var result = CharacterGrowthPlan.Create(expected, target, growth.GetLevelStartExperience(target), growth);
         if (!result.Success || result.Plan!.GainedExperience > uint.MaxValue)
             throw new InvalidDataException("升级券成长规划失败: " + result.Failure);
         var deletion = InventoryDeleteService.Plan(expected.Inventory, item.Position, item.Core.Value, 1);
         if (!deletion.Accepted) throw new InvalidDataException("升级券不能消费一张");
-        var materials = InventoryMaterialConsumptionService.Plan(deletion.Plan!.After, costs, pieces, now);
-        if (!materials.Accepted) throw new InvalidDataException("升级券附加材料不足");
-        return new(item, new(expected.Inventory, materials.Plan!.After, "level_up_ticket"), result.Plan, now.ToUnixTimeSeconds()) { Clock=Clock };
+        return new(item, new(expected.Inventory, deletion.Plan!.After, "level_up_ticket"), result.Plan, now.ToUnixTimeSeconds()) { Clock=Clock };
     }
 }

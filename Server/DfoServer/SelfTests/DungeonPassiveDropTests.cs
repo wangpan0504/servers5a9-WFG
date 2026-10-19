@@ -76,10 +76,15 @@ internal static partial class DungeonPassiveDropTests
         var gearPacket = DungeonPackets.StartMap(f.Entry, f.Plan, 7, passiveItems: [gear]);
         That(gearPacket.AsSpan(at + 14, 8).SequenceEqual(new byte[] { 41, 0, 3, 1, 2, 0, 0, 0 }),
             "编码器按独立预期传耐久及增幅类型/数值，不把Attr、角色ID或强化挪入；不代替客户端验收");
-        var unsignedGear = gear with { Content = new(gear.Core with { AmplifyType = 128, AmplifyValue = 65535 }) };
+        var unsignedGear = gear with { Content = new(gear.Core with { AmplifyType = 4, AmplifyValue = 65535 }) };
         var unsignedPacket = DungeonPackets.StartMap(f.Entry, f.Plan, 7, passiveItems: [unsignedGear]);
-        That(unsignedPacket.AsSpan(at + 16, 3).SequenceEqual(new byte[] { 128, 255, 255 }),
-            "编码器保留u8/u16高位，不做有符号截断；该边界不证明增幅枚举128具有业务资格");
+        That(unsignedPacket.AsSpan(at + 16, 3).SequenceEqual(new byte[] { 4, 255, 255 }),
+            "已净化属性的u16基础值保留高位，不做有符号截断");
+        var hiddenGear = gear with { Content = new(gear.Core with { AmplifyType = 0x83, AmplifyValue = 65535 }) };
+        var hiddenPacket = DungeonPackets.StartMap(f.Entry, f.Plan, 7, passiveItems: [hiddenGear]);
+        That(hiddenPacket.AsSpan(at + 16, 3).SequenceEqual(new byte[] { 128, 0, 0 }) &&
+            hiddenGear.Core.AmplifyType == 0x83 && hiddenGear.Core.AmplifyValue == 65535,
+            "入房短行隐藏未净化类型和数值，不改写内部隐藏核心");
         That(BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(at + 2)) == 400 &&
             DungeonPackets.StartMap(f.Entry, f.Plan, 7, payload: DungeonMapPayload.Cached, passiveItems: [ground]).Length == 16,
             "缓存回访仍保持16B，不重发或重抽物品列表");

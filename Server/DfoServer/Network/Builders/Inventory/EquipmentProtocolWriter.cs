@@ -51,8 +51,7 @@ internal static class EquipmentProtocolWriter
                 ItemListProtocolWriter.WriteAvatarSockets(writer, item.Avatar);
             writer.Write(core.EnchantCardId);
             writer.Write(core.EnchantUpgrade);
-            writer.Write(core.AmplifyType);
-            writer.Write(core.AmplifyValue);
+            ItemListProtocolWriter.WriteAmplification(writer, core);
             if (item.Avatar is not null)
             {
                 ItemListProtocolWriter.WriteAvatarSockets(writer, item.Avatar);

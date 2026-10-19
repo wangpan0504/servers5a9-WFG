@@ -43,6 +43,8 @@ internal static class ExperienceConsumableTests
         { DeclaredNeededMaterials = [], DeclaredMaximumLevel = 94, HasMaximumLevel = true };
         var file = new ExperienceConsumableFile(raw, new("[expPercentUp]", [10]), null, [], ["increase status type"], []);
         That(ExperienceConsumableDefinition.Parse(file, template) is { Percent: true, Amount: 10 }, "百分比和数值型声明按标签区分");
+        That(ExperienceConsumableDefinition.Parse(file with { Stackable = raw with { DeclaredNeededMaterials = [1000,6] } }, template)
+            is { Percent: true, Amount: 10 }, "商店兑换材料不影响经验胶囊的使用解析");
         foreach (var bad in new[] { file with { Effect = new("[expUpByPercent]", [10]) }, file with { Effect = new("[expUp]", [0]) },
             file with { Effect = new("[expUp]", [1, 2]) }, file with { Diagnostics = ["duplicate"] },
             file with { DeclaredFields = ["increase status type", "action type"] } })
@@ -62,12 +64,12 @@ internal static class ExperienceConsumableTests
         var growth = SelfTestCatalogs.Growth(pvf, skills);
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
         var clock = new ConsumableUseSessionTests.FakeClock();
-        var service = new ExperienceConsumableService(items.Items, growth, items.EpicPieces, clock);
+        var service = new ExperienceConsumableService(items.Items, growth, clock);
         That(items.Items.ExperienceConsumable(PercentItem) is { Percent: true, Amount: 10 } &&
             items.Items.ExperienceConsumable(FixedItem) is { Percent: false, Amount: 500000 } &&
-            items.Items.ExperienceConsumable(10005107) is { Percent: true, Amount: 10, Materials: [{ ItemId: 10005066, Count: 6 }] } &&
+            items.Items.ExperienceConsumable(10005107) is { Percent: true, Amount: 10 } &&
             items.Items.ExperienceConsumable(LevelUpTicketTests.TicketId) is null,
-            "真实LST覆盖固定、百分比、附加材料并与升级券分开");
+            "真实LST覆盖固定、百分比和商店兑换胶囊并与升级券分开");
         That(items.Items.ExperienceConsumable(10092765) is { Percent: false, Amount: 1000000 } bareJob &&
             bareJob.Allows(17, 3) && !bareJob.Allows(17, 12), "真实经验胶囊的裸knight排除只限制守护者，不误拒绝其他职业");
         using (var f = Make(49, PercentItem, nearLevel: true))
@@ -134,22 +136,24 @@ internal static class ExperienceConsumableTests
         using (var f = Make(60, 10005107))
         {
             var before = f.Read();
-            That(f.Session.UseExperienceConsumable(Slot, service).Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()),
-                "缺少胶囊父亲材料不能只扣胶囊加经验");
+            That(f.Session.UseExperienceConsumable(Slot, service).Outcome == ConsumableUseOutcome.Committed &&
+                f.Read().Inventory.Find(Slot)!.Core.Count == 1 &&
+                f.Read().Learning.Experience == before.Learning.Experience + growth.GetLevelExperienceSpan(60) * 10 / 100,
+                "已获得的兑换胶囊不要求再次持有购买材料，只消费一件并发放经验");
         }
         using (var f = Make(60, 10005107, materialCount: 7))
         {
             var before = f.Read();
             var result = f.Session.UseExperienceConsumable(Slot, service);
             That(result.Outcome == ConsumableUseOutcome.Committed && f.Read().Inventory.Find(Slot)!.Core.Count == 1 &&
-                f.Read().Inventory.Items.Single(item => item.Core.ItemId == 10005066).Core.Count == 1 &&
+                f.Read().Inventory.Items.Single(item => item.Core.ItemId == 10005066).Core.Count == 7 &&
                 f.Read().Learning.Experience == before.Learning.Experience + growth.GetLevelExperienceSpan(60) * 10 / 100,
-                "胶囊父亲所需六份材料与一张胶囊和百分比经验同事务提交");
+                "胶囊使用不重复扣除商店兑换材料，已有材料余额不变");
         }
         using (var f = Make(60, FixedItem))
         {
             var expiryClock = new ConsumableUseSessionTests.FakeClock();
-            var expiryService = new ExperienceConsumableService(items.Items, growth, items.EpicPieces, expiryClock);
+            var expiryService = new ExperienceConsumableService(items.Items, growth, expiryClock);
             f.Session.MutateInventory(character => new(true, 0, new(character.Inventory, character.Inventory with
             {
                 Items = character.Inventory.Items.Select(item => item.Position == Slot ? item with

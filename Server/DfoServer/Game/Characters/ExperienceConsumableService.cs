@@ -8,7 +8,7 @@ namespace DfoServer.Game.Characters;
 internal sealed record ExperienceConsumablePlan(Character Expected, InventoryItem Source,
     ExperienceConsumableDefinition Definition, InventoryPlan Inventory, CharacterGrowthPlan Growth);
 
-internal sealed class ExperienceConsumableService(ItemCatalog items, CharacterGrowthCatalog growth, EpicPieceCatalog pieces,
+internal sealed class ExperienceConsumableService(ItemCatalog items, CharacterGrowthCatalog growth,
     TimeProvider? clock = null)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
@@ -30,9 +30,7 @@ internal sealed class ExperienceConsumableService(ItemCatalog items, CharacterGr
             throw new InvalidDataException("经验物品没有可到账经验或成长规划无效");
         var deletion = InventoryDeleteService.Plan(expected.Inventory, slot, source.Core.Value, 1);
         if (!deletion.Accepted) throw new InvalidDataException("经验物品不能消费一件");
-        var materials = InventoryMaterialConsumptionService.Plan(deletion.Plan!.After, definition.Materials, pieces, now);
-        if (!materials.Accepted) throw new InvalidDataException("经验物品附加材料不足");
-        return new(expected, source, definition, new(expected.Inventory, materials.Plan!.After, "use_experience_consumable", new(expected)), result.Plan);
+        return new(expected, source, definition, new(expected.Inventory, deletion.Plan!.After, "use_experience_consumable", new(expected)), result.Plan);
     }
 
     internal static ulong Calculate(bool percent, int amount, ulong levelSpan)

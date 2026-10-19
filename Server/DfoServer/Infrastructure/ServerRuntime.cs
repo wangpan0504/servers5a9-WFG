@@ -99,7 +99,7 @@ internal static class ServerRuntime
         var devil = new DevilContractService(itemResources.DevilContracts, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var collectBoxProjection = new CollectBoxProjection(itemResources.CollectBoxes, clock);
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection);
-        var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, itemResources.EpicPieces);
+        var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
@@ -162,8 +162,9 @@ internal static class ServerRuntime
             var dropRules = DungeonDropRuleCatalog.Load(pvf);
             var dropCandidates = itemResources.DungeonDropItems;
             var specialDrops = itemResources.DungeonSpecialDrops;
-            var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get, specialDrops);
-            passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates);
+            var amplificationDrops = new EquipmentAmplificationDropPolicy(itemResources.Amplifications.Rules);
+            var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get, specialDrops, amplificationDrops);
+            passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = int.TryParse(Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE"), out int configuredPermille) ? Math.Clamp(configuredPermille, 0, 1000) : 0;
             DungeonItemDropPool? epicPool = null;
             if (epicPermille > 0)
@@ -182,7 +183,7 @@ internal static class ServerRuntime
                 // APC 波次（spawn type 5..8）没有怪物掉落表。最后一波的深渊装备只走 hellparty 骰，不套普通怪概率。
                 if (monster.SpawnType > 3)
                 {
-                    var apc = new DungeonDropGenerationPlan("hell-party-apc", []);
+                    var apc = new DungeonDropGenerationPlan("hell-party-apc", [], amplification: amplificationDrops);
                     return monster.HellRewardRolls > 0 && hellRewards is not null
                         ? hellRewards.Extend(apc, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : apc;
                 }
@@ -214,7 +215,7 @@ internal static class ServerRuntime
         }
         var skinService = new InventoryCreatureSkinService(itemResources.Items, clock);
         var levelUpItems = new LevelUpTicketHandler(
-            new Game.Characters.LevelUpTicketService(itemResources.Items,growth,itemResources.EpicPieces,clock,characters,learning),
+            new Game.Characters.LevelUpTicketService(itemResources.Items,growth,clock,characters,learning),
             quests,levelUpProjection,log);
         IGameCommandModule[] modules =
         [
@@ -262,7 +263,11 @@ internal static class ServerRuntime
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),
-            new EnhancementHandler(new InventoryEnhancementService(itemResources.Items, itemResources.Enhancements, clock: clock), inventoryProjection, log),
+            new EnhancementHandler(new InventoryEnhancementService(itemResources.Items, itemResources.Enhancements, clock: clock,
+                amplification: new InventoryAmplifyUpgradeService(itemResources.Items, itemResources.AmplifyUpgrades, itemResources.Enhancements,
+                    itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, towns, clock: clock)), inventoryProjection, log),
+            new AmplificationHandler(new InventoryAmplificationService(itemResources.Items, itemResources.Amplifications,
+                itemResources.Enhancements, towns, clock), inventoryProjection, log),
             new CreatureSkinHandler(skinService, inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             new CreatureHandler(creatures, creatureProjection, log),
@@ -283,18 +288,18 @@ internal static class ServerRuntime
             new ImageCommunicationHandler(imageCommunication, quests, log),
             new QuestHiddenHandler(quests,log),
             levelUpItems,
-            new ExperienceConsumableHandler(new Game.Characters.ExperienceConsumableService(itemResources.Items, growth, itemResources.EpicPieces, clock),
+            new ExperienceConsumableHandler(new Game.Characters.ExperienceConsumableService(itemResources.Items, growth, clock),
                 inventoryProjection, levelProjection, log, levelUpItems),
             new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning,levelUpProjection),
             new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,skinService,inventoryProjection,
                 new Game.Creatures.CreatureChangeService(itemResources.Items.Get, itemResources.Items.CreatureChange,
-                    itemResources.Creatures, itemResources.EpicPieces, clock, groups: itemResources.CreatureGroups,
+                    itemResources.Creatures, clock, groups: itemResources.CreatureGroups,
                     growthItems: itemResources.Items.CreatureGrowthItem),levelUpItems),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs),
-            new ClassChangeHandler(new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests,
-                itemResources.EpicPieces), levelProjection, inventoryProjection, questProjection, projection, log, clock),
+            new ClassChangeHandler(new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests),
+                levelProjection, inventoryProjection, questProjection, projection, log, clock),
             dungeon,
             new AgitWarHandler(),
             // 公会：创建窗口的两次查重（CMD 0x9C / 0x9D）、介绍校验（0x2E3）与建会认证链路（0x2E5 / 0x2E6 / 0x2E7）。

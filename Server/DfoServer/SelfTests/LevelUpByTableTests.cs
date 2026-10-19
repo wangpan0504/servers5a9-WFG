@@ -41,9 +41,8 @@ internal static class LevelUpByTableTests
         foreach (var invalid in new[] { file with { Effect=new("[levelUpByTable]",[1,28]) },
             file with { Effect=new("[levelUpByTable]",[28,1,80]) },file with { Effect=new("[levelUpByTable]",[1,28,96]) },
             file with { Effect=new("[expUpByTable]",[1,28,80]) },file with { Diagnostics=["duplicate"] },
-            file with { Stackable=raw with { DeclaredNeededMaterials=[177] } },
             file with { Stackable=raw with { ActionDeclaration=new("[jumping lv]",[1]) },DeclaredFields=["action type"] } })
-            That(LevelUpByTableDefinition.Parse(invalid,template) is null,"畸形区间、未知等级、额外动作和材料声明不能忽略后消费");
+            That(LevelUpByTableDefinition.Parse(invalid,template) is null,"畸形区间、未知等级和额外动作不能忽略后消费");
         That(LevelUpByTableDefinition.Parse(file with { Stackable=raw with { HasActionUsablePlace=true,
             DeclaredActionUsablePlaces=["[seria room]"] } },template) is { TownOnly:true,SeriaRoomOnly:true } &&
             LevelUpByTableDefinition.Parse(file with { Stackable=raw with { HasActionUsablePlace=true,
@@ -64,7 +63,7 @@ internal static class LevelUpByTableTests
         var growth = SelfTestCatalogs.Growth(pvf,skills);
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
         var clock = new ConsumableUseSessionTests.FakeClock();
-        var service = new LevelUpTicketService(items.Items,growth,items.EpicPieces,clock,characters,skills);
+        var service = new LevelUpTicketService(items.Items,growth,clock,characters,skills);
         foreach (int id in new[] { Segmented,Plain,WithMaterials,490704541,490704508,490703949,490703678,490703677,490702738 })
             That(items.Items.LevelUpByTable(id) is not null && items.Items.LevelUpTicket(id) is null &&
                 items.Items.ExperienceConsumable(id) is null,"真实名册按表升级不会误入418或普通经验增量: "+id);
