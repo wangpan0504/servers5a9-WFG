@@ -411,10 +411,11 @@ internal sealed class SkillLearningCatalog
         {
             if (tokens[i * 2].Type != 5)
                 throw new InvalidDataException("技能默认指令按键不是类型5的字符串引用");
+            // 匹配客户端线上键码：X(ATTACK)=5、C(JUMP)=6；写反会让服务端默认键在重进后互换。
             keys[i] = resolve(tokens[i * 2].Value) switch
             {
                 "(UP)" => 0, "(DOWN)" => 1, "(LEFT)" => 2, "(RIGHT)" => 3,
-                "(SKILL)" => 4, "(JUMP)" => 5, "(ATTACK)" => 6, "(BUFF)" => 8,
+                "(SKILL)" => 4, "(ATTACK)" => 5, "(JUMP)" => 6, "(BUFF)" => 8,
                 _ => throw new InvalidDataException("技能默认指令包含未知按键")
             };
             if (i == 0) continue;

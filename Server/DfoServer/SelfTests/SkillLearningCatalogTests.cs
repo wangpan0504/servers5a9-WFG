@@ -23,8 +23,8 @@ internal static class SkillLearningCatalogTests
                 "四方向按住编码9..12，不是普通方向重复 " + direction);
         That(Command([new(5, 3), new(7, 9), new(5, 3), new(7, 9), new(5, 4)]) == "030304",
             "连续右右Z与按住右Z的0C04明确分开");
-        That(Command([new(5, 1), new(7, 8), new(5, 5)]) == "0A05" &&
-            Command([new(5, 1), new(7, 8), new(5, 6)]) == "0A06" && Command([new(5, 7)]) == "08",
+        That(Command([new(5, 1), new(7, 8), new(5, 5)]) == "0A06" &&
+            Command([new(5, 1), new(7, 8), new(5, 6)]) == "0A05" && Command([new(5, 7)]) == "08",
             "按住方向加跳跃/攻击和BUFF操作键分别保留");
         That(Command([]) == "" && Command([new(5, 5)]) == "" && Command([new(5, 6)]) == "",
             "空声明和固有单跳跃/攻击不冒充可安装的自定义指令");
@@ -144,10 +144,13 @@ internal static class SkillLearningCatalogTests
 
         ushort[] ids = [5, 5, 4, 11, 1, 4, 1, 5, 1, 5, 250, 1, 1, 2, 1, 1];
         That(catalog.Get(0, 8).DefaultCommand == "0C04" && catalog.Get(0, 5).DefaultCommand == "0904" &&
-            catalog.Get(0, 46).DefaultCommand == "04" && catalog.Get(0, 1).DefaultCommand == "010106" &&
+            catalog.Get(0, 46).DefaultCommand == "04" && catalog.Get(0, 1).DefaultCommand == "010105" &&
             catalog.Get(0, 3).DefaultCommand == "010008" && catalog.Get(0, 169).DefaultCommand == "" &&
             !catalog.Get(0, 169).CommandCustomizing,
             "三段斩/鬼斩按住方向、上挑Z、顺序攻击/BUFF取真实资源，禁止自定义的固有输入保持");
+        That(catalog.Get(4, 56).DefaultCommand == "0C05" && catalog.Get(4, 57).DefaultCommand == "0A05" &&
+            catalog.Get(4, 58).DefaultCommand == "0905" && catalog.Get(4, 3).DefaultCommand == "010106",
+            "客户端线上 X(ATTACK)=5、C(JUMP)=6：蓝拳俯冲系以攻击键结束，摆动以跳跃键结束");
         string[] commandLists = ["swordmanskill.lst", "fighterskill.lst", "gunnerskill.lst", "mageskill.lst", "priestskill.lst",
             "atgunnerskill.lst", "thiefskill.lst", "atfighterskill.lst", "atmageskill.lst", "dsswordmanskill.lst",
             "creatormageskill.lst", "atswordmanskill.lst", "knight.lst", "demoniclancerskill.lst", "atpriestskill.lst", "gunbladerskill.lst"];
