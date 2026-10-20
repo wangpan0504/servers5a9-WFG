@@ -13,6 +13,7 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        WorldMapHoverTests.Run();
         DailyBoosterProjectionTests.RunCore();
         DailyBoosterUsageTests.RunCore();
         CreatureSystemTests.RunCore();
@@ -142,6 +143,7 @@ internal static class SelfTestRunner
         TownSelectionTests.Run();
         TeleportTests.RunCore();
         TownDungeonMapTests.Run();
+        WorldMapHoverTests.Run();
         InventoryChangeTests.Run();
         InventoryBehaviorTests.RunCore();
         InventoryProjectionTests.Run();
@@ -197,6 +199,7 @@ internal static class SelfTestRunner
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
+        WorldMapHoverTests.RunResources(towns, pvf);
         await RunCoreAsync();
         var sharedQuests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         var sharedSkills = SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels);

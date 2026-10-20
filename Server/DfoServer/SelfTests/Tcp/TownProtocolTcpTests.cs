@@ -24,6 +24,7 @@ internal static partial class TownProtocolTcpTests
                 peer.Send(opcode);
             peer.Create("DoorTest", variant: 1);
             peer.Select();
+            DfoServer.WorldMapHoverTests.AssertPermissionBody(peer.DungeonPermission, towns);
             peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
             peer.Travel(38, 1, 873, 253, 38, 0, returnTown: 38);
             peer.Travel(38, 0, 645, 251, 38, 1, kind: 6);

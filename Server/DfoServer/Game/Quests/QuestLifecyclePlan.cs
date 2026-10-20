@@ -123,6 +123,7 @@ internal sealed class QuestLifecyclePlan
             "[meet npc]" when QuestStateProgress.Type(quest) == 4 => 0,
             "[reach the range]" when QuestClientSceneProgress.TownRange(quest) => 1,
             "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest) => 1,
+            "[custom multi condition]" when QuestDazzlementStorage.Matches(quest) => 1,
             "[question]" when QuestQuestionProgress.TryCount(quest,out _) => QuestQuestionProgress.Unanswered,
             "[seeking]" when SeekingSubtype(quest) && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
             "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u | MaterialState(expected.Inventory, quest, now.ToUnixTimeSeconds()),
@@ -265,12 +266,13 @@ internal sealed class QuestLifecyclePlan
             QuestRelationProgress.ThresholdShape(quest) && scalar == QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected));
         bool scene = scalar <= 1 && (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _) ||
             QuestClientSceneProgress.DungeonCinematic(quest));
+        bool storage = QuestDazzlementStorage.Matches(quest) && scalar == 0;
         bool question = QuestQuestionProgress.TryCount(quest,out int answers) && scalar < answers;
         bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest);
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
         bool observedRental = QuestRentalProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
         bool observedExpert = QuestExpertJobProgress.Tutorial(quest) && scalar == 0 && active.ConditionState == 0;
-        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !question && !state && !observedClear && !observedRental && !observedExpert && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
+        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !storage && !question && !state && !observedClear && !observedRental && !observedExpert && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
             throw new InvalidDataException("条件类型或接取身份不符");
         return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
             expected.ActiveMainQuests.Select(value => value.AcceptanceId == active.AcceptanceId ? value with { ConditionState = scalar } : value).ToImmutableArray(),

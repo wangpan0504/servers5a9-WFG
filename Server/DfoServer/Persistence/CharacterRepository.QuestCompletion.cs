@@ -40,7 +40,7 @@ internal sealed partial class CharacterRepository
             !plan.AccountCompletedAfter.SequenceEqual((plan.AccountQuest ? expected.AccountCompletedQuests.Append((int)plan.QuestId) : expected.AccountCompletedQuests)
                 .Concat(plan.SyncedQuestIds).Distinct().Order()))
             throw new InvalidDataException("领奖必须使用原接取、完整资产和成长规划");
-            if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 64 or 65 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
+            if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
             plan.Snapshot is null || plan.MailedGoldAmount != 0 && plan.MailedGoldAmount != plan.GoldAmount ||
             plan.ConditionType is not (0 or 42) && active.ConditionState != 0 ||
             plan.TotalRequestedExperience == 0 && plan.GrowthPlan is not null || plan.TotalRequestedExperience != 0 && plan.GrowthPlan is null ||

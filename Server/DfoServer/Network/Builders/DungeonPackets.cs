@@ -50,6 +50,27 @@ internal static class DungeonPackets
     // 顺序是 u32、u32、u8、u32、u8、u8、u8、u32、u16、u16、u32、u8、u8、u32、u32、u8、u16、u8。
     public static byte[] EmptySelectNotice() => new byte[42];
 
+    // NOTI5 DUNGEON_PERMISSION：u16 count + 每项 u32 dungeonId、u8 state。
+    // 布局与参考实现 buildCurrentDungeonResourceStateEntriesBody 一致；state=0 不会进入快照。
+    // 这里只写世界地图悬浮需要开通的地下城编号，不写名称字符串。
+    public static byte[] Permission(IReadOnlyList<int> dungeonIds)
+    {
+        ArgumentNullException.ThrowIfNull(dungeonIds);
+        int count = dungeonIds.Count;
+        if (count > ushort.MaxValue)
+            count = ushort.MaxValue;
+        byte[] body = new byte[2 + count * 5];
+        BinaryPrimitives.WriteUInt16LittleEndian(body, (ushort)count);
+        int at = 2;
+        for (int index = 0; index < count; index++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at), checked((uint)dungeonIds[index]));
+            body[at + 4] = 1;
+            at += 5;
+        }
+        return body;
+    }
+
     // ACK16 成功标志为 1 时，0233B36D 不再读后续字段。这只确认导航房间已建立，不代替地图或怪物初始化。
     public static byte[] SelectionAccepted() => [1];
 

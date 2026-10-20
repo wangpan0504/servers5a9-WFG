@@ -151,6 +151,7 @@ internal static class SqliteMigrations
         new(59, "副职业熟练度", AddExpertJobExperience),
         new(60, "副职业放弃阶与分解机", static (db, tx) => Execute(db, tx, ExpertJobMetaSchema)),
         new(61, "异次元裂缝每日通关奖励", static (db, tx) => Execute(db, tx, CrackDailySchema)),
+        new(62, "眩惑贮藏箱领奖类型60", UpgradeDazzlementQuestCompletion),
     ];
 
     static void AddExpertJobExperience(SqliteConnection db, SqliteTransaction tx)
@@ -265,6 +266,39 @@ internal static class SqliteMigrations
     internal static string QuestCompletionSchemaV58 => QuestCompletionSchemaV46
         .Replace("12,19,25", "12,17,19,25", StringComparison.Ordinal);
 
+    internal static string QuestCompletionSchemaV62 => QuestCompletionSchemaV58
+        .Replace("64,65,67,70", "60,64,65,67,70", StringComparison.Ordinal);
+
+    static void UpgradeDazzlementQuestCompletion(SqliteConnection db, SqliteTransaction tx)
+    {
+        const string table = "character_quest_completion_receipts";
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.Parameters.AddWithValue("$table", table);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+        string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("眩惑贮藏箱领奖迁移缺少原领奖账本");
+        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV62, table)) return;
+        if (NormalizeTable(actual, table) != NormalizeTable(QuestCompletionSchemaV58, table))
+            throw new InvalidDataException("眩惑贮藏箱领奖迁移不是已确认的 v58 领奖结构");
+        string updated = actual.Replace("64,65,67,70", "60,64,65,67,70", StringComparison.Ordinal);
+        if (NormalizeTable(updated, table) != NormalizeTable(QuestCompletionSchemaV62, table))
+            throw new InvalidDataException("眩惑贮藏箱领奖迁移不能得到已确认的 v62 领奖结构");
+        query.CommandText = "PRAGMA schema_version";
+        long schemaVersion = (long)query.ExecuteScalar()!;
+        Execute(db, tx, "PRAGMA writable_schema=ON");
+        try
+        {
+            query.CommandText = "UPDATE sqlite_schema SET sql=$sql WHERE type='table' AND name=$table";
+            query.Parameters.AddWithValue("$sql", updated);
+            if (query.ExecuteNonQuery() != 1) throw new InvalidDataException("眩惑贮藏箱领奖约束更新失败");
+            Execute(db, tx, $"PRAGMA schema_version={checked(schemaVersion + 1)}");
+        }
+        finally { Execute(db, tx, "PRAGMA writable_schema=OFF"); }
+        Execute(db, tx, $"SELECT * FROM {table} LIMIT 0");
+        query.CommandText = "PRAGMA foreign_key_check";
+        using var failures = query.ExecuteReader();
+        if (failures.Read()) throw new InvalidDataException("眩惑贮藏箱领奖迁移不能保全旧完成外键");
+    }
+
     static void UpgradeExpertJobTutorialCompletion(SqliteConnection db, SqliteTransaction tx)
     {
         const string table = "character_quest_completion_receipts";
@@ -272,7 +306,8 @@ internal static class SqliteMigrations
         query.Parameters.AddWithValue("$table", table);
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("副职业教程领奖迁移缺少原领奖账本");
-        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV58, table)) return;
+        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV58, table) ||
+            NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV62, table)) return;
         if (NormalizeTable(actual, table) != NormalizeTable(QuestCompletionSchemaV46, table))
             throw new InvalidDataException("副职业教程领奖迁移不是已确认的 v46 领奖结构");
         // v53 阶段旁表已外键指向领奖账本，不能 DROP 重建；只把已确认的 IN 列表扩到原生类型 17。
@@ -1338,7 +1373,7 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
-        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV58),
+        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
             ("character_dungeon_settlement_receipts",DungeonSceneSettlementSchema.SettlementSql),

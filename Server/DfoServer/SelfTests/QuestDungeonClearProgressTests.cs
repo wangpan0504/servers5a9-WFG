@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
+using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
@@ -186,8 +187,57 @@ internal static class QuestDungeonClearProgressTests
                 That(QuestCompletionRepositoryTests.Same(accepted!.Character,restored),"重开保存原接取及实际赠品资产："+id);
             }
             foreach (int id in new[] { 6401,6402,6403 })
-                That(quests.Get(id).Condition == "[custom multi condition]" && !QuestDungeonClearProgress.Supports(quests.Get(id)),
-                    "炫目后续多条件任务不能冒充type45列表通关："+id);
+                That(quests.Get(id).Condition == "[custom multi condition]" && !QuestDungeonClearProgress.Supports(quests.Get(id)) &&
+                    QuestDazzlementStorage.Matches(quests.Get(id)),
+                    "炫目后续是贮藏箱多条件，不能冒充type45列表通关："+id);
+            var box = quests.Get(6401);
+            var host = towns.Areas.Values.SelectMany(area => area.Phases.Prepend(area.Default).Select(map => (area,map)))
+                .First(row => row.map.Npcs.Any(npc => npc.Id == (uint)box.Npc));
+            var done = new HashSet<int>(box.Prerequisites);
+            if (!host.area.Map(done).Npcs.Any(npc => npc.Id == (uint)box.Npc))
+            {
+                foreach (var shift in host.area.Shifts)
+                {
+                    var trial = done.Append(shift.Quest).ToHashSet();
+                    if (!host.area.Map(trial).Npcs.Any(npc => npc.Id == (uint)box.Npc)) continue;
+                    done = trial;
+                    break;
+                }
+            }
+            That(host.area.Map(done).Npcs.Any(npc => npc.Id == (uint)box.Npc),"希莫娜所在城镇地图能打开贮藏箱菜单");
+            var away = repository.Create(owner,SkillRepositoryTests.Fixture("List6401away",towns,characters,skills) with
+            {
+                Level = checked((byte)box.MinimumLevel), CompletedQuests = box.Prerequisites.ToArray()
+            });
+            var awaySession = new GameSession(repository,towns,owner); awaySession.Select(away.Slot); awaySession.MarkReady();
+            That(awaySession.ChangeQuest(6401,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces) is
+                { Outcome: QuestLifecycleOutcome.Committed, Character.ActiveMainQuests: [{ QuestId: 6401, ConditionState: 1 }] },
+                "6400完成后可以接贮藏箱，初值保持未开启");
+            That(awaySession.ChangeQuest(6401,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0))?.Commit is null,
+                "不在希莫娜地图时，33不能开启贮藏箱");
+            var npc = host.map.Npcs.First(row => row.Id == (uint)box.Npc);
+            byte level = checked((byte)box.MinimumLevel);
+            var draft = SkillRepositoryTests.Fixture("List6401here",towns,characters,skills);
+            var learning = SkillPointLedger.Synchronize(draft.Job,draft.GrowType,level,
+                draft.InitialLearning with { Experience = growth.GetLevelStartExperience(level) },skills);
+            var here = repository.Create(owner,draft with
+            {
+                Level = level,
+                CompletedQuests = done.ToArray(),
+                DungeonState = new(10,0,0,0,0),
+                InitialLearning = learning,
+                Position = new Location(host.area.Town,host.area.Area,checked((ushort)Math.Clamp(npc.X,0,ushort.MaxValue)),checked((ushort)Math.Clamp(npc.Y,0,ushort.MaxValue)))
+            });
+            var hereSession = new GameSession(repository,towns,owner); hereSession.Select(here.Slot,resumeTown:true); hereSession.MarkReady();
+            var acceptedHere = hereSession.ChangeQuest(6401,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces);
+            That(acceptedHere?.Commit is not null,"希莫娜地图可以接贮藏箱："+acceptedHere?.Reason);
+            var opened = hereSession.ChangeQuest(6401,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
+            That(opened is { Outcome: QuestLifecycleOutcome.Committed } &&
+                opened.Character.ActiveMainQuests.Single(row => row.QuestId == 6401).ConditionState == 0,
+                "希莫娜地图上的终末33归零："+opened?.Outcome+" "+opened?.Reason);
+            var finished = hereSession.FinishQuest(6401,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
+            That(finished.Receipt?.Commit.Character.CompletedQuests.Contains(6401) == true,
+                "34交付贮藏箱奖励："+finished.Outcome+" "+finished.Reason);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
         Console.WriteLine($"PASS {Count-checks} 真实外传资源接取与未清图拒绝断言；不证明专用塔准入或客户端通关");

@@ -487,6 +487,20 @@ internal sealed partial class GameSession
         return true;
     });
 
+    // 3984 的 CMT 2843 末段是 CHANGE MAP。两个 CharacterView 都发 kind1，Boss 死亡后阶段已是结算。
+    bool CinematicSettlementLayer(FormalDungeon dungeon, DungeonPoint target)
+    {
+        var snapshot = dungeon.Run.Snapshot;
+        if (dungeon.Run.ClearFact is null || snapshot.CurrentMap.Position != target || snapshot.CurrentMap.Kind == "layered" ||
+            dungeon.Entry.RouteQuestId is 0 or >= 30000 || questCatalog is null || Selected is null ||
+            !questCatalog.TryGet((int)dungeon.Entry.RouteQuestId,out var quest) ||
+            !QuestClientSceneProgress.DungeonCinematic(quest) || quest.CinematicMapId != snapshot.CurrentMap.Id ||
+            !quest.Definition!.Dungeons.Any(row => row.DungeonId == dungeon.Entry.DungeonId) ||
+            !Selected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,dungeon.Entry)))
+            return false;
+        return dungeon.Entry.Maze.LayeredMaps.Count(map => map.Position == target) == 1;
+    }
+
     public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
         if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.CharacterDead ||
@@ -504,9 +518,10 @@ internal sealed partial class GameSession
                 NavigationReplay = presentation.Outcome == DungeonRunOutcome.Duplicate
             };
         }
-        if (Phase != SessionPhase.Dungeon) return null;
+        bool settlementLayer = Phase == SessionPhase.Settlement && moveKind == 1 && CinematicSettlementLayer(dungeon,target);
+        if (Phase != SessionPhase.Dungeon && !settlementLayer) return null;
         var result = moveKind == 1 || target == dungeon.Run.Snapshot.CurrentMap.Position && dungeon.Run.Snapshot.CurrentMap.Kind == "layered"
-            ? dungeon.Run.MoveLayer(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target,moveKind == 1)
+            ? dungeon.Run.MoveLayer(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target,moveKind == 1,settlementLayer)
             : dungeon.Run.Move(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target);
         if (result.Outcome != DungeonRunOutcome.Accepted) return null;
         SetState(SessionPhase.Loading);

@@ -39,6 +39,7 @@ internal sealed class QuestCompletionPlan
             "[custom quest]" when QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest) => 19,
             "[self disjoint item]" when QuestExpertJobProgress.SelfDisjoint(quest) => 17,
             "[quest clear]" => 44, "[clear multi quest]" => 70, "[question]" => 42, "[reach the range]" => 64, "[look cinematic]" => 65,
+            "[custom multi condition]" when QuestDazzlementStorage.Matches(quest) => 60,
             _ => QuestStateProgress.Type(quest) ?? (byte)4 };
         // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
         if (completedParentId is not null && ConditionType is 1 or 3 or 45) ConditionType = 4;
@@ -231,7 +232,7 @@ internal sealed class QuestCompletionPlan
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
             bool rental = QuestRentalProgress.Supports(quest);
             bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
-            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && !expertTutorial && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) || quest.RewardType != "[item]" && profession is null && expertJob is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) && !QuestCoverage.GoldOnlyReward(quest) ||
+            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && !expertTutorial && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) && !QuestDazzlementStorage.Matches(quest) || quest.RewardType != "[item]" && profession is null && expertJob is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) && !QuestCoverage.GoldOnlyReward(quest) ||
                 !QuestCoverage.HasOrdinaryAttributes(quest) ||
                 quest.Definition!.Has("send postal"))
                 throw new NotSupportedException("任务需要尚未具备的周期、特殊奖励或附属交付规则");
@@ -281,6 +282,10 @@ internal sealed class QuestCompletionPlan
                 if (!threshold || active.ConditionState != 0 ||
                     QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)) != 0)
                     throw new InvalidDataException("阈值父任务必须达到真实子任务完成数量");
+            }
+            else if (QuestDazzlementStorage.Matches(quest))
+            {
+                if (active.ConditionState != 0) throw new InvalidDataException("贮藏箱尚未在任务NPC所在城镇开启");
             }
             else if (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _) ||
                 QuestClientSceneProgress.DungeonCinematic(quest))

@@ -417,13 +417,16 @@ internal sealed partial class SinglePlayerDungeonRun
         return Result(DungeonRunOutcome.Accepted);
     }
 
-    public DungeonRunResult MoveLayer(DungeonRunIdentity expected, Guid actionId, DungeonPoint target, bool nextLayer)
+    public DungeonRunResult MoveLayer(DungeonRunIdentity expected, Guid actionId, DungeonPoint target, bool nextLayer,
+        bool allowSettlementEntry = false)
     {
         if (scriptedReturn is not null) return Result(DungeonRunOutcome.Rejected);
         string kind = nextLayer ? "layer" : "base";
         if (Replay(expected,actionId,kind,target) is { } replay) return replay;
-        if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
-            HasPendingDeath || pendingSettlement is not null || current.Elevator is { Completed: false } || current.Plan.Room.Map.Position != target)
+        bool settlementLayer = allowSettlementEntry && nextLayer && Phase == SinglePlayerDungeonPhase.Settlement && ClearFact is not null;
+        if (!Matches(expected) || actionId == Guid.Empty || !CanAdvance() ||
+            HasPendingDeath || pendingSettlement is not null || current.Elevator is { Completed: false } || current.Plan.Room.Map.Position != target ||
+            Phase != SinglePlayerDungeonPhase.Dungeon && !settlementLayer)
             return Result(DungeonRunOutcome.Rejected);
         Room next;
         var layers = entry.Maze.LayeredMaps.Where(map => map.Position == target).ToArray();

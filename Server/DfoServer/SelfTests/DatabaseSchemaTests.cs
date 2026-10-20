@@ -413,7 +413,8 @@ internal static class DatabaseSchemaTests
             throw new InvalidOperationException("旧版本夹具不能丢弃真实类型17领奖");
         long schemaVersion = (long)Query(db, "PRAGMA schema_version")!;
         Execute(db, "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql='" +
-            sql.Replace("'", "''", StringComparison.Ordinal).Replace("12,17,19,25", "12,19,25", StringComparison.Ordinal) +
+            sql.Replace("'", "''", StringComparison.Ordinal).Replace("12,17,19,25", "12,19,25", StringComparison.Ordinal)
+                .Replace("60,64,65,67,70", "64,65,67,70", StringComparison.Ordinal) +
             "' WHERE type='table' AND name='" + table + "'; PRAGMA schema_version=" + (schemaVersion + 1) +
             "; PRAGMA writable_schema=OFF; SELECT * FROM " + table + " LIMIT 0");
     }

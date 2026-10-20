@@ -55,6 +55,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] CardMembershipInformation { get; private set; } = [];
     public byte[] DevilService0 { get; private set; } = [];
     public Dictionary<byte, long> PremiumServices { get; private set; } = [];
+    public byte[] DungeonPermission { get; private set; } = [];
 
     static readonly Encoding names;
     static TcpPeer()
@@ -431,7 +432,20 @@ internal sealed class TcpPeer : IDisposable
                 .. (room ? new (byte Kind, ushort Opcode)[] { (0, 1379) } : []), (0, 124), (0, 24)];
         int afterCargo = prepared ? 9 : 8;
         // 保留普通入城断言的返回索引，特殊容器单独暴露；线上顺序仍逐包严格验证。
-        var prefix = Batch(expected[..2]);
+        var ack = Expect(expected[0].Kind, expected[0].Opcode);
+        var permission = Expect(0, 5);
+        DungeonPermission = permission.Body;
+        TestCheck.That(permission.Body.Length >= 2 &&
+            permission.Body.Length == 2 + BinaryPrimitives.ReadUInt16LittleEndian(permission.Body) * 5 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(permission.Body) > 0,
+            "选角 ACK 后立即下发 NOTI5 世界地图悬浮开通表");
+        for (int index = 0, count = BinaryPrimitives.ReadUInt16LittleEndian(permission.Body); index < count; index++)
+        {
+            uint dungeonId = BinaryPrimitives.ReadUInt32LittleEndian(permission.Body.AsSpan(2 + index * 5));
+            TestCheck.That(dungeonId != 0 && permission.Body[2 + index * 5 + 4] == 1,
+                "开通表每项为非零地下城编号且 state=1");
+        }
+        var prefix = new[] { ack, Expect(expected[1].Kind, expected[1].Opcode) };
         var creatures = Expect(0, 105);
         byte[]? initialGameOptions = (settings ?? []).FirstOrDefault(option => option.Opcode == 173).Body;
         // 无存档也必须先初始化客户端模型；期望值独立于服务端 Builder。

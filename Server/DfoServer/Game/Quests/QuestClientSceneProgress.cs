@@ -1,4 +1,6 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using System.Text.RegularExpressions;
@@ -36,6 +38,15 @@ internal static class QuestClientSceneProgress
     public static bool DungeonCinematic(StoryQuest quest) => quest.Condition == "[look cinematic]" && quest.SubType == -1 &&
         quest.IntData is [> 0] && quest.CinematicPath is not null && quest.CinematicMapId is > 0 &&
         quest.Definition is { Dungeons.Length: > 0 } && !Cinematic(quest, out _, out _);
+
+    // 演出文件末段 CHANGE MAP 的两个 CharacterView 都发 kind1。同坐标层加载后，终末 33 仍属于这场演出。
+    public static bool OnDungeonCinematicMap(StoryQuest quest, DungeonEntryPlan entry, DungeonMap map)
+    {
+        if (!DungeonCinematic(quest) || quest.CinematicMapId is not int cinematicId) return false;
+        if (map.Id == cinematicId) return true;
+        return map.Kind == "layered" && entry.Maze.MapSpecification is { } maps &&
+            maps.Any(row => row.Id == cinematicId && row.Position == map.Position);
+    }
 
     public static bool Matches(Character character, StoryQuest quest, TownCatalog towns)
     {

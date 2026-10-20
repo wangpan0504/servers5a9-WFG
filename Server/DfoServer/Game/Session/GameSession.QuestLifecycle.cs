@@ -167,9 +167,13 @@ internal sealed partial class GameSession
             if (condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 QuestClientSceneProgress.DungeonCinematic(quest) && capture.Loaded &&
                 capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && capture.Entry is { } cinematicEntry &&
-                capture.Room?.Map.Id == quest.CinematicMapId &&
+                capture.Room is { } cinematicRoom && QuestClientSceneProgress.OnDungeonCinematicMap(quest,cinematicEntry,cinematicRoom.Map) &&
                 quest.Definition!.Dungeons.Any(row => row.DungeonId == cinematicEntry.DungeonId) &&
                 expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,cinematicEntry)))
+                return QuestLifecyclePlan.SetCondition(expected,quest,0);
+            // 6401 的条件文案是在希莫娜菜单开启贮藏箱。33 只在该任务 NPC 所在城镇地图上归零。
+            if (condition is { Channel: null, Value: 0, Reserved: 0 } && QuestDazzlementStorage.Matches(quest) &&
+                capture.Phase == SessionPhase.Town && HasDialogueNpc(quest.Npc))
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
             if (condition is not { Channel: null, Value: 0, Reserved: 0 } ||
                 capture.Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||

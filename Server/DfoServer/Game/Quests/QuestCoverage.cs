@@ -197,6 +197,7 @@ internal static class QuestCoverage
         "[condition under clear]" or "[clear a dungeon]" => QuestDungeonClearProgress.Supports(quest),
         "[reach the range]" => QuestClientSceneProgress.TownRange(quest),
         "[look cinematic]" => QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest),
+        "[custom multi condition]" => QuestDazzlementStorage.Matches(quest),
         "[question]" => QuestQuestionProgress.TryCount(quest,out _),
         _ => QuestStateProgress.Type(quest) is not null
     };
@@ -246,7 +247,7 @@ internal static class QuestCoverage
                 bool state = QuestStateProgress.Type(quest) is not null;
                 bool rental = QuestRentalProgress.Supports(quest);
                 bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
-                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental && !expertTutorial && !QuestLifecyclePlan.SeekingSubtype(quest)) reasons.Add("目标子类型尚未接入");
+                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental && !expertTutorial && !QuestLifecyclePlan.SeekingSubtype(quest) && !QuestDazzlementStorage.Matches(quest)) reasons.Add("目标子类型尚未接入");
                 if (quest.MainQuest is not null && !QuestRelationProgress.DialogueChild(quest,catalog))
                     reasons.Add("隐藏子任务的实际对话及交付入口未接入");
                 bool target = HasSupportedTarget(quest,catalog);
