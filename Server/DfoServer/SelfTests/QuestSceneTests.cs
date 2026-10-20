@@ -31,6 +31,7 @@ internal static class QuestSceneTests
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
         VerifyRepeatedPassiveHunt(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
+        VerifyOuterGentCages(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         VerifyBossRoomAntNests(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         foreach (var mode in new[] { "normal","lost","completedParent" })
         {
@@ -743,6 +744,70 @@ internal static class QuestSceneTests
         That(f.Session.ObserveFormalPassiveTrigger((ushort)questId, new(channel, 0, 0), fingerprint, rooms) is null &&
             f.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == after.ConditionState,
             "超过本图放置份数的相同 33 不再减少");
+    }
+
+    // #436：根特外围 3519「冒险家被抓」的牢笼 8824 在 92191/92195 各放两份。客户端猎杀 33 不带实例号，
+    // 实机旧构建在这两房都拒绝。双笼房按放置份数各计一次、第三次拒绝；单笼房只计一次；重新入场是新实例，放置行重新可用。
+    // 房间资源与正式入场同样不强制每个物件定义可解析，避免无关房间的缺失物件中断取数。
+    static void VerifyOuterGentCages(TownCatalog towns, CharacterCatalog characters, ItemResources items,
+        QuestCatalog quests, SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons,
+        DungeonRoomCatalog rooms, DungeonKillExperienceCatalog kills)
+    {
+        const int questId = 3519, cage = 8824;
+        var quest = quests.Get(questId);
+        That(QuestHuntProgress.TryTargets(quest, out var targets) && targets.Length == 1 &&
+            targets[0] is { EnemyType: 3, MonsterId: cage, DungeonId: 80, Count: 15 }, "3519 是地下城 80 牢笼 8824 的 15 次被动物件猎杀");
+        var entrance = MiddleQuestEntryTests.Entrance(towns, quest, 80);
+        using var f = new Fixture(towns, characters, skills, growth, quests, false, checked((byte)quest.MinimumLevel),
+            entrance.Completed, position: entrance.Position);
+        That(f.Session.ChangeQuest(questId, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces)?.Commit is not null,
+            "3519 按真实前置接取");
+        That(Remaining() == 15, "接取后剩余 15 个，scalar 是剩余数");
+        var receipt = Enter();
+        var rows = receipt.Entry.Maze.MapSpecification!.Select(map => (Map: map,
+            Copies: rooms.Get(map, requirePassiveDefinitions: false).PassiveObjects.Count(row => row.ObjectId == cage))).ToArray();
+        That(rows.Count(row => row.Map.Id is 92191 or 92195 && row.Copies == 2) == 2, "实机被拒的 92191/92195 各放两份牢笼");
+        var single = rows.First(row => row.Copies == 1).Map;
+        var twin = rows.First(row => row.Map.Id == 92191).Map;
+        var killed = new HashSet<ushort>();
+        Go(single.Position);
+        That(Observe() is { Commit.ProjectionCurrent: true } && Remaining() == 14, "单笼房第一次 33 计一次");
+        That(Observe() is null && Remaining() == 14, "单笼房重复 33 不再计数");
+        Go(twin.Position);
+        That(Observe() is { Commit.ProjectionCurrent: true } && Remaining() == 13, "92191 第一份牢笼计入");
+        That(Observe() is { Commit.ProjectionCurrent: true } && Remaining() == 12, "92191 第二份牢笼也计入");
+        That(Observe() is null && Remaining() == 12, "92191 两份用完后第三次 33 拒绝");
+        That(f.Session.ReturnFromFormalDungeon() is not null, "未完成的 3519 可回城");
+        f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
+        That(Remaining() == 12, "回城与重选保留已计进度");
+        receipt = Enter();
+        killed.Clear();
+        Go(twin.Position);
+        That(Observe() is { Commit.ProjectionCurrent: true } && Observe() is { Commit.ProjectionCurrent: true } &&
+            Observe() is null && Remaining() == 10, "重新入场后 92191 两份放置行重新可用，仍以两份为上限");
+
+        FormalDungeonReceipt Enter()
+        {
+            var opening = f.Session.EnterFormalDungeon(80, questId, 0, dungeons, rooms);
+            That(opening is not null && opening.Entry.DungeonId == 80, "3519 进入根特外围：" + f.Session.LastFormalDungeonRejection);
+            return f.Session.CompleteFormalDungeonLoading()!;
+        }
+        void Go(DungeonPoint target)
+        {
+            var path = QuestStoryRouteTests.Path(receipt.Entry.Maze.StaticTopology, receipt.Snapshot.CurrentMap.Position, target);
+            foreach (var point in path.Skip(1))
+            {
+                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking && killed.Add(row.ObjectKey)).ToArray())
+                    That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth).Outcome ==
+                        DungeonRunOutcome.Accepted, "前往牢笼房间时清除阻挡");
+                That(f.Session.MoveFormalDungeon(checked((byte)point.X), checked((byte)point.Y)) is not null, "按迷宫连接进入下一房间");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+            }
+            That(receipt.Snapshot.CurrentMap.Position == target, "已到达目标牢笼房间");
+        }
+        QuestLifecycleReceipt? Observe() =>
+            f.Session.ObserveFormalPassiveTrigger(questId, new(0x10, 0, 0), new string('D', 64), rooms);
+        uint Remaining() => f.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState & 511;
     }
 
     // #441：3455 的目标是物件 18568。boss 房 70229 放了两份。死亡日志里的 65641 是同图蚂蚁，不是蚁穴。
