@@ -70,13 +70,15 @@ internal static class SkillLearningCatalogTests
         Reject<InvalidDataException>(() => Parse([.. passive, new(3, 15), new(2, 4)]));
         Reject<InvalidDataException>(() => Parse([.. passive, new(3, 16), new(0, -1)]));
         var repeatedClass = Parse([.. passive, new(3, 15), new(0, 4), new(3, 15), new(0, 4)]);
-        That(repeatedClass.SlotGroup is null && repeatedClass.SupportsOrdinarySpLearning && repeatedClass.GetOrdinaryResourceSpCost(0, 0) == 7,
-            "重复class不猜被动组，保留原费用和已绑定技能升级资格");
+        That(repeatedClass.SlotGroup == 2 && repeatedClass.UnsupportedFields.Contains("skill class") &&
+            repeatedClass.SupportsOrdinarySpLearning && repeatedClass.GetOrdinaryResourceSpCost(0, 0) == 7,
+            "重复class按首段取分组，重复事实登记诊断且不影响费用和升级资格");
         PvfToken[] repeatedFitness = [new(3, 15), new(0, 0), new(3, 16), new(0, 0), new(3, 16), new(0, 1)];
         That(Parse([.. active, .. repeatedFitness]).SlotGroup == 3 && Parse([.. active, .. repeatedFitness]).SupportsOrdinarySpLearning,
             "重复方向元数据不影响主动学习和主动组");
-        That(Parse([.. passive, .. repeatedFitness]).SlotGroup is null && Parse([.. passive, .. repeatedFitness]).SupportsOrdinarySpLearning,
-            "重复方向元数据的被动新分组未知，原有普通学习字段继续读取");
+        That(Parse([.. passive, .. repeatedFitness]).SlotGroup == 1 && Parse([.. passive, .. repeatedFitness]).SkillFitnessGrowtypeCount == 1 &&
+            Parse([.. passive, .. repeatedFitness]).SupportsOrdinarySpLearning,
+            "重复方向元数据的被动按首段一项归转职组，后续同名段不覆盖");
         var repeatedFields = Parse([.. active, new(3, 0), new(6, 14), new(3, 1), new(0, 40), new(3, 7),
             new(3, 4), new(0, 35), new(3, 6), new(0, 12), new(0, 1), new(3, 8),
             new(3, 12), new(0, 1), new(3, 12), new(0, 0)]);
@@ -114,6 +116,10 @@ internal static class SkillLearningCatalogTests
         That(catalog.Get(0, 113).Type == SkillType.Active && catalog.Get(0, 113).SlotGroup == 3 &&
             catalog.Get(0, 113).SupportsOrdinarySpLearning && catalog.Get(0, 113).UnsupportedFields.Contains("skill fitness growtype"),
             "真实资源的重复分组声明不连带拒绝原有主动学习字段");
+        That(catalog.Get(0, 239) is { Type: SkillType.Passive, SlotGroup: 1 } swordGod &&
+            swordGod.SkillFitnessGrowtypeCount == 0 && swordGod.SupportsPointLearning &&
+            swordGod.GetOrdinaryResourceSpCost(0, 1) == 80,
+            "真实极·神剑术首段方向为空归转职组，二觉被动可分配新槽");
         That(ghost.Path == "skill/swordman/hardattack.skl" && ghost.PointCostLevelCount == 60 &&
             ghost.GetBasePointCost(0) == 15 && ghost.GetBasePointCost(1) == 15 && ghost.GetBasePointCost(59) == 15,
             "鬼斩费用15重复末项至60级，索引为当前已学等级");
