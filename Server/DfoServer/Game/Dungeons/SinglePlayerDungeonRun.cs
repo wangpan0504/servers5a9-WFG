@@ -434,7 +434,7 @@ internal sealed partial class SinglePlayerDungeonRun
         // 原生kind1同时表示下一层和末层返回；不能把末层结束当作越界请求。
         if (nextLayer && at < layers.Length)
         {
-            if (at > 0 && !current.Cleared || enteredLayers.Contains(layers[at]))
+            if ((at > 0 && !current.Cleared && !CanAdvanceFromCinematicLayer()) || enteredLayers.Contains(layers[at]))
                 return Result(DungeonRunOutcome.Rejected);
             if (at == 0) layerSources[target] = current;
             enteredLayers.Add(layers[at]); next = layeredRooms[layers[at]];
@@ -463,12 +463,21 @@ internal sealed partial class SinglePlayerDungeonRun
         return true;
     }
 
+    private bool CanAdvanceFromCinematicLayer()
+    {
+        // 只把已核对的非战斗 CHANGE MAP 叠层当成换下层，不清当前层阻挡；返回基础格仍走 CanReturnFromCinematic。
+        if (entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay) return false;
+        return current.Plan.Room.CinematicLayerReturn is { CinematicId: > 0, ActorId: null } movie &&
+            movie.MapId == current.Plan.Room.Map.Id && movie.MapPath == current.Plan.Room.Map.Path &&
+            movie.ActionPath.Length > 0 && movie.CinematicPath.Length > 0;
+    }
+
     private bool CanReturnFromCinematic(DungeonPoint target)
     {
         if (entry.IsTutorial || entry.IsClassExperience || entry.RouteQuestId is 0 or >= 30000 ||
             entry.BossMap.Kind == "layered" || entry.BaseBossMap != entry.BossMap ||
             !layerSources.TryGetValue(target,out var source) || source.Plan.Room.Map != entry.BossMap ||
-            current.Plan.Room.CinematicLayerReturn is not { CinematicId: > 0 } movie || movie.MapId != current.Plan.Room.Map.Id ||
+            current.Plan.Room.CinematicLayerReturn is not { CinematicId: > 0, IsOnStartMap: false } movie || movie.MapId != current.Plan.Room.Map.Id ||
             movie.MapPath != current.Plan.Room.Map.Path || movie.ActionPath.Length == 0 || movie.CinematicPath.Length == 0) return false;
         // 演出任务不是clear-map任务；APC来源改由原迷宫任务连接限定，不能伪造HasExplicitClearMap。
         if (movie.ActorId is { } actor)

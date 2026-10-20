@@ -143,6 +143,12 @@ internal static class QuestSceneTests
         VerifyMetroCages(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
         QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters,global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
+        Issue153CinematicLayerTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,
+            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+        Issue153RemainingTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,
+            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+        Issue153MermaidClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
+            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
     }
 

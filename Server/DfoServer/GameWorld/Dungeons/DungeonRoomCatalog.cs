@@ -201,7 +201,9 @@ internal sealed class DungeonRoomCatalog
         bool navigation = actorId is not null
             ? DungeonCinematicLayerReturnRules.IsActorMapChange(map.Id,cinematicTokens,archive.ResolveString)
             : DungeonCinematicLayerReturnRules.IsNonCombatMapChange(map.Id,cinematicTokens,archive.ResolveString);
-        return navigation ? new(map.Id,map.Path,path,movie,file) { ActorId=actorId } : null;
+        // 严格匹配后的10 token为无APC绑定的ON START MAP，不继承末层返回基础格资格。
+        return navigation ? new(map.Id,map.Path,path,movie,file)
+            { ActorId=actorId, IsOnStartMap=actionTokens.Length == 10 } : null;
         }
     }
 

@@ -4,6 +4,8 @@ namespace DfoServer.GameWorld.Dungeons;
 
 internal sealed record DungeonCinematicLayerReturn(int MapId, string MapPath, string ActionPath, int CinematicId, string CinematicPath)
 {
+    // 仅指无APC绑定的10 token进图动作；APC动作沿ActorId的独立资格处理。
+    public bool IsOnStartMap { get; init; }
     // 原ACT选择的APC模板，与网络对象key不同。
     public int? ActorId { get; init; }
 }
@@ -27,11 +29,16 @@ internal static class DungeonCinematicLayerReturnRules
 
     public static int? OneShotCinematic(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
     {
-        if (tokens.Count != 11 || !Tag(0,"trigger") || !Tag(1,"limit") || !Number(2,1) ||
-            !Tag(3,"do behavior") || !Tag(4,"me") || !Number(5,0) || !Tag(6,"/trigger") ||
-            !Tag(7,"behavior") || !Tag(8,"cinematic") || tokens[9].Type != 0 || tokens[9].Value <= 0 || !Tag(10,"/behavior"))
-            return null;
-        return tokens[9].Value;
+        // LIMIT 1 是末层返回用的一次性动作；ON START MAP 是进图即播、随后 CHANGE MAP 换下层。
+        if (tokens.Count == 11 && Tag(0,"trigger") && Tag(1,"limit") && Number(2,1) &&
+            Tag(3,"do behavior") && Tag(4,"me") && Number(5,0) && Tag(6,"/trigger") &&
+            Tag(7,"behavior") && Tag(8,"cinematic") && tokens[9].Type == 0 && tokens[9].Value > 0 && Tag(10,"/behavior"))
+            return tokens[9].Value;
+        if (tokens.Count == 10 && Tag(0,"trigger") && Tag(1,"on start map") &&
+            Tag(2,"do behavior") && Tag(3,"me") && Number(4,0) && Tag(5,"/trigger") &&
+            Tag(6,"behavior") && Tag(7,"cinematic") && tokens[8].Type == 0 && tokens[8].Value > 0 && Tag(9,"/behavior"))
+            return tokens[8].Value;
+        return null;
 
         bool Tag(int at, string expected) => Text(tokens[at],resolve) == expected;
         bool Number(int at, int expected) => tokens[at].Type == 0 && tokens[at].Value == expected;
