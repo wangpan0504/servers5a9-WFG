@@ -37,6 +37,30 @@ internal static class DungeonCinematicLayerReturnTests
         That(!DungeonCinematicLayerReturnRules.IsNonCombatMapChange(53662,nested,Resolve),"嵌套actor命令不能冒充独立CHANGE MAP行为");
         PvfToken[] Change(int at,int value) { var copy = movie.ToArray(); copy[at] = new(0,value); return copy; }
 
+        strings.Add("none.ai");
+        var noAi = new PvfToken(6,strings.Count-1);
+        PvfToken[] actorAction = [Tag("TRIGGER"),Tag("ON START MAP"),Tag("WHICH"),Tag("AI CHARACTER"),Tag("IS INDEX"),new(0,2000),
+            Tag("/IS INDEX"),Tag("DO BEHAVIOR"),Tag("CHECKUP OBJECT"),new(0,1),Tag("DO BEHAVIOR"),Tag("ME"),new(0,0),Tag("/TRIGGER"),
+            Tag("BEHAVIOR"),Tag("CINEMATIC"),new(0,2405),Tag("/BEHAVIOR"),Tag("BEHAVIOR"),
+            Tag("CHANGE AI"),Tag("NORMAL"),new(0,0),noAi,Tag("CHANGE AI"),Tag("NORMAL"),new(0,1),noAi,
+            Tag("CHANGE AI"),Tag("NORMAL"),new(0,2),noAi,Tag("CHANGE AI"),Tag("NORMAL"),new(0,3),noAi,Tag("/BEHAVIOR")];
+        That(DungeonCinematicLayerReturnRules.ActorCinematic(actorAction,Resolve) == (2000,2405),"完整APC触发声明保留演员模板及演出身份");
+        foreach (var invalid in new[] { actorAction[..^1],actorAction.Concat(action).ToArray(),
+            actorAction.Select((token,at) => at == 9 ? new PvfToken(0,0) : token).ToArray(),
+            actorAction.Select((token,at) => at == 25 ? new PvfToken(0,0) : token).ToArray() })
+            That(DungeonCinematicLayerReturnRules.ActorCinematic(invalid,Resolve) is null,"条件或AI行为不完整、重复时不解释为APC返回来源");
+        PvfToken[] positionActor = [Tag("ACTOR"),Tag("TYPE"),Tag("POS"),Tag("INDEX"),new(0,0),Tag("POS"),new(0,0),new(0,0),Tag("/ACTOR")];
+        var actorMovie = movie.Take(10).Concat(positionActor).Concat(movie.Skip(10)).ToArray();
+        actorMovie[8] = new(0,1);
+        That(DungeonCinematicLayerReturnRules.IsActorMapChange(53662,actorMovie,Resolve) &&
+            !DungeonCinematicLayerReturnRules.IsNonCombatMapChange(53662,actorMovie,Resolve),
+            "APC演出的末段导航允许布尔伤害场，原非战斗谓词保持拒绝");
+        foreach (var invalid in new[] { actorMovie[..^1],actorMovie.Concat(actorMovie).ToArray(),
+            actorMovie.Select((token,at) => at == 8 ? new PvfToken(0,2) : token).ToArray(),
+            actorMovie.Select((token,at) => at == 12 ? Tag("CHARACTER") : token).ToArray(),
+            actorMovie.Select((token,at) => at == 1 ? new PvfToken(0,53654) : token).ToArray() })
+            That(!DungeonCinematicLayerReturnRules.IsActorMapChange(53662,invalid,Resolve),"异图、非布尔伤害、错误导航演员或非末段行为不授予APC返回");
+
         var start = new DungeonMap("map",new(0,0),100,"map/base.map");
         var boss = new DungeonMap("boss",new(1,0),53654,"map/boss.map");
         var layer = boss with { Kind="layered",Id=53662,Path="map/layer.map" };
@@ -80,28 +104,56 @@ internal static class DungeonCinematicLayerReturnTests
             That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),boss.Position,true).Outcome == DungeonRunOutcome.Rejected,
                 "缺失或歧义原接取、回放及非显式终点不能借用演出返回");
         }
-        foreach (var invalid in new DungeonCinematicLayerReturn?[] { null,evidence with { MapId=53654 },evidence with { MapPath="map/other.map" } })
+        foreach (var invalid in new DungeonCinematicLayerReturn?[] { null,evidence with { MapId=53654 },evidence with { MapPath="map/other.map" },
+            evidence with { ActorId=2000 } })
         {
             var (run,_) = Create(entry,invalid);
             That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),boss.Position,true).Outcome == DungeonRunOutcome.Rejected,
                 "普通或错绑叠层保留真实清怪门禁");
         }
 
-        (SinglePlayerDungeonRun Run,Authority Authority) Create(DungeonEntryPlan selected,DungeonCinematicLayerReturn? movieEvidence)
+        var actorEntry = entry with { HasExplicitClearMap=false,Maze=maze with
+            { QuestConnectionTokens=[new(0,0),new(0,3444),new(0,-1)] } };
+        var actorEvidence = evidence with { ActorId=2000 };
+        foreach (bool replay in new[] { false,true })
+        {
+            var selected = replay ? actorEntry with { IsQuestReplay=true,QuestId=0,ActiveQuestSlot=255,QuestAcceptanceId=Guid.Empty } : actorEntry;
+            var (run,_) = Create(selected,actorEvidence,actorRoom:true);
+            var result = run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),boss.Position,true);
+            That(result.Outcome == DungeonRunOutcome.Accepted && result.ClearFact is null && result.CulledMonsterKeys.Count == 0 &&
+                result.Snapshot.CurrentMap == boss,"APC任务连接与正式回放可导航，不冒充clear-map任务或签发死亡");
+        }
+        foreach (var invalid in new[] { actorEntry with { Maze=maze },actorEntry with { RouteQuestId=3445 },
+            actorEntry with { QuestAcceptances=[] },actorEntry with { IsQuestReplay=true } })
+        {
+            var (run,_) = Create(invalid,actorEvidence,actorRoom:true);
+            That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),boss.Position,true).Outcome == DungeonRunOutcome.Rejected,
+                "APC来源不能借用缺失任务连接、异路线、缺接取或错误回放实例身份");
+        }
+
+        (SinglePlayerDungeonRun Run,Authority Authority) Create(DungeonEntryPlan selected,DungeonCinematicLayerReturn? movieEvidence,bool actorRoom = false)
         {
             DungeonMonsterPlan Plan(DungeonMap map,ushort key) => DungeonMonsterPlan.FromRoom(new(map,
                 [new(1,[1,0,20,0,0,0,1,1],"[fixed]","[boss]","monster/fixture.mob")],[],[])
-                { CinematicLayerReturn=map == layer ? movieEvidence : null },99,key);
+                {
+                    CinematicLayerReturn=map == layer ? movieEvidence : null,
+                    AiCharacters=actorRoom && map == layer ? [new(2000,[2000,177,2144,0,0,0],"[character]","[normal]","aicharacter/fixture.chr",20)] : []
+                },99,key);
             var plans = new[] { DungeonMonsterPlan.FromRoom(new(start,[],[],[]),99,10),Plan(boss,20),Plan(layer,30) };
             var authority = new Authority();
-            That(SinglePlayerDungeonRun.TryCreate(selected,1,100,new(plans,[new(start.Position,boss.Position)]),authority,out var run,out _),
+            var approved = new DungeonFixedRoute(plans,[new(start.Position,boss.Position)]);
+            if (actorRoom && selected.IsQuestReplay && selected.QuestId == 0)
+                That(!SinglePlayerDungeonRun.TryCreate(selected with { QuestAcceptanceId=Guid.NewGuid() },1,100,approved,authority,out _,out string invalidReason) &&
+                    invalidReason == "invalid: 实例身份或任务尝试无效","带伪造接取的回放在Run准入即拒绝，不能假定已经进入演出层");
+            That(SinglePlayerDungeonRun.TryCreate(selected,1,100,approved,authority,out var run,out _),
                 "演出导航用例通过正式Run准入，不另建剧情状态");
             run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
             run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position);
             run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
             run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),boss.Position,true);
             run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
-            That(run.Snapshot.CurrentMap == layer && run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 30 }),"进入仍有真实演员的末层");
+            That(run.Snapshot.CurrentMap == layer && run.Snapshot.LivingMonsters.SequenceEqual(actorRoom ? new ushort[] {30,31} : [30]),
+                "进入仍有真实演员的末层");
             return (run,authority);
         }
     }

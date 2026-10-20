@@ -465,11 +465,21 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool CanReturnFromCinematic(DungeonPoint target)
     {
-        if (entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay || entry.RouteQuestId is 0 or >= 30000 ||
-            !entry.HasExplicitClearMap || entry.BossMap.Kind == "layered" || entry.BaseBossMap != entry.BossMap ||
+        if (entry.IsTutorial || entry.IsClassExperience || entry.RouteQuestId is 0 or >= 30000 ||
+            entry.BossMap.Kind == "layered" || entry.BaseBossMap != entry.BossMap ||
             !layerSources.TryGetValue(target,out var source) || source.Plan.Room.Map != entry.BossMap ||
             current.Plan.Room.CinematicLayerReturn is not { CinematicId: > 0 } movie || movie.MapId != current.Plan.Room.Map.Id ||
             movie.MapPath != current.Plan.Room.Map.Path || movie.ActionPath.Length == 0 || movie.CinematicPath.Length == 0) return false;
+        // 演出任务不是clear-map任务；APC来源改由原迷宫任务连接限定，不能伪造HasExplicitClearMap。
+        if (movie.ActorId is { } actor)
+        {
+            if (actor <= 0 || current.Plan.Room.AiCharacters.Count(row => row.Id == actor) != 1 ||
+                !entry.Maze.ConnectsQuest(entry.RouteQuestId,entry.Difficulty)) return false;
+        }
+        else if (!entry.HasExplicitClearMap) return false;
+        // 回放使用正式入场已冻结的原路线，不伪造接取；只复用绑定APC的演出返回，原非战斗资格保持不变。
+        if (entry.IsQuestReplay) return movie.ActorId is > 0 && entry.QuestId == 0 && entry.ActiveQuestSlot == byte.MaxValue &&
+            entry.QuestAcceptanceId == Guid.Empty;
         var acceptances = entry.QuestAcceptances.Where(row => row.QuestId == entry.RouteQuestId).ToArray();
         return acceptances is [{ Slot: <= 29 } accepted] && accepted.AcceptanceId != Guid.Empty &&
             entry.QuestAcceptances.Count(row => row.Slot == accepted.Slot) == 1 &&
