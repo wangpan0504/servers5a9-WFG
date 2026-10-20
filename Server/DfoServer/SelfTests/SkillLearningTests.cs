@@ -3,6 +3,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
+using DfoServer.Network.Builders;
 using PvfLib;
 
 namespace DfoServer;
@@ -179,6 +180,20 @@ internal static class SkillLearningTests
         SkillLearningResult frozen = SkillLearning.Plan(0, 0, 10, State(30, mutable), Request(), Resolve);
         mutable.Clear();
         That(frozen.State!.Trees.All(tree => tree.Skills.Any(skill => skill.Id == 7)), "result copies both context collections into read-only snapshots");
+
+        // 同一批先退满再新学：退点释放的槽位仍要出现在回执中，不能分配给新技能，否则成功回包因槽位重复抛异常断线。
+        // 匹配资源的 TP 技能按被动组 1（54–101）绑定，这里同样使用被动声明。
+        SkillLearningDefinition TpDefinition(ushort id) => new(0, id, "skill/slot-reuse-fixture.skl", SkillType.Passive,
+            [0], Enumerable.Repeat(5, 6).ToArray(), Enumerable.Repeat(5, 6).ToArray(), 1, 0, [], new int[6], true, false, [],
+            skillClass: 3, skillFitnessGrowtypeCount: 2, tpCosts: [1]);
+        var tpDefinitions = new Dictionary<ushort, SkillLearningDefinition> { [31] = TpDefinition(31), [32] = TpDefinition(32) };
+        SkillLearningDefinition TpResolve(byte job, ushort id) => job == 0 ? tpDefinitions[id] : throw new KeyNotFoundException();
+        var refundThenLearn = SkillLearning.Plan(0, 0, 10, State(0, [new(54, 31, 5)]),
+            new(0, 0, [new(31, true, 5), new(32, false, 5)]), TpResolve, new Dictionary<ushort, byte>(), totalTp: 10);
+        SkillPackets.Success(0, 0, refundThenLearn.State!, refundThenLearn.Changes);
+        That(refundThenLearn.Success &&
+            refundThenLearn.Changes.SequenceEqual(new[] { new LearnedSkill(54, 31, 0), new LearnedSkill(55, 32, 5) }),
+            "同批退满再新学：被释放的槽位不再分配，新技能落到下一个空槽且成功回包不抛异常");
         Console.WriteLine($"PASS {Count - checks} pure skill learning planning assertions");
     }
 

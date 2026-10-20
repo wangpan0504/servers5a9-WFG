@@ -217,6 +217,10 @@ internal static class SkillLearning
                 if (resource.SlotGroup is null)
                     return Fail(SkillLearningFailure.Unsupported);
                 var used = working.Values.Select(skill => skill.Slot).ToHashSet();
+                // 同批前序退点释放的槽位仍要出现在本次成功回执的变更列表中，不能再分配给新技能，否则槽位重复。
+                foreach (LearnedSkill change in changes)
+                    if (change.Level == 0)
+                        used.Add(change.Slot);
                 int vacant = SkillSlotAllocator.Allocate(resource, used);
                 if (vacant < 0)
                     return Fail(SkillLearningFailure.Capacity);
