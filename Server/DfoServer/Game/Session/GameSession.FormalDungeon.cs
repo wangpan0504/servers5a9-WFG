@@ -34,7 +34,7 @@ internal sealed partial class GameSession
         public bool SettlementEnabled { get; set; }
         public bool PracticeOtherSelectionRequested { get; set; }
         public FormalSettlement? Settlement { get; set; }
-        public Dictionary<(DungeonMap Map, int Template), PendingQuestScene> QuestSceneEvents { get; } = [];
+        public Dictionary<(DungeonMap Map, int Template, int Ordinal), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
         public (PreparedDungeonDeath Death, DungeonExperienceReward Reward, DateTimeOffset At)? PendingDeathReward { get; set; }

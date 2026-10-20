@@ -30,6 +30,7 @@ internal static class QuestSceneTests
         var quests = sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        VerifyRepeatedPassiveHunt(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         foreach (var mode in new[] { "normal","lost","completedParent" })
         {
             bool lost = mode == "lost";
@@ -655,6 +656,92 @@ internal static class QuestSceneTests
                     "末层重入回归复用合成死亡与原成长提交入口");
         }
         void Reselect() { f.Session.ReturnToRoster(); f.Session.Select(0,resumeTown:true); f.Session.MarkReady(); }
+    }
+
+    // #496：夺回西部线的摩托车/GT-9600 是同图多份被动物件。客户端 33 不带实例，按本图放置行逐次计入。
+    static void VerifyRepeatedPassiveHunt(TownCatalog towns, CharacterCatalog characters, ItemResources items,
+        QuestCatalog quests, SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons,
+        DungeonRoomCatalog rooms, DungeonKillExperienceCatalog kills)
+    {
+        const int questId = 3577;
+        var quest = quests.Get(questId);
+        That(QuestHuntProgress.TryTargets(quest, out var targets) &&
+            targets.Length == 3 && targets.All(row => row.EnemyType == 3 && row.DungeonId == 87 && row.Count > 1),
+            "Q3577 是地下城 87 的三个被动物件猎杀通道");
+        var area = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps.TryGetValue(world, out var selection) && selection.Error is null &&
+            selection.Options.Any(option => option.DungeonId == 87));
+        var done = new HashSet<int>(quest.Prerequisites);
+        var group = quest.Definition?.PrerequisiteGroups.FirstOrDefault(row => row.Length > 0);
+        if (group is not null) done.UnionWith(group);
+        done.UnionWith(area.Quests);
+        if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+        if (towns.DungeonMaps.TryGetValue(area.DungeonWorldMap!.Value, out var worldMap))
+            foreach (var option in worldMap.Options.Where(option => option.DungeonId == 87 && option.QuestId > 0 && !option.InProgress))
+                done.Add(option.QuestId);
+        var townMap = area.Map(done);
+        foreach (var gate in townMap.DungeonGates.Where(gate => gate.Conditions.Length == 0))
+            done.UnionWith(gate.Quests);
+        townMap = area.Map(done);
+        var bounds = townMap.Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)),
+            checked((ushort)(bounds.Y + bounds.Height / 2)));
+        byte job = 0;
+        if (quest.Definition?.Job is { } required && required != "[all]")
+        {
+            string[] names = ["[swordman]", "[fighter]", "[gunner]", "[mage]", "[priest]", "[at gunner]", "[thief]", "[at fighter]",
+                "[at mage]", "[demonic swordman]", "[creator mage]", "[at swordman]", "[knight]", "[demonic lancer]", "[at priest]", "[gun blader]"];
+            job = checked((byte)Array.IndexOf(names, required));
+        }
+        using var f = new Fixture(towns, characters, skills, growth, quests, false, checked((byte)quest.MinimumLevel),
+            done.Order().ToArray(), job: job, position: position);
+        var accepted = f.Session.ChangeQuest((ushort)questId, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces);
+        That(accepted?.Commit is not null, "Q3577 按真实前置接取：" + accepted?.Reason);
+        var opening = f.Session.EnterFormalDungeon(87, (uint)questId, 0, dungeons, rooms);
+        That(opening is not null && opening.Entry.DungeonId == 87, "Q3577 进入夺回西部线：" + f.Session.LastFormalDungeonRejection);
+        var maps = opening!.Entry.Maze.MapSpecification ?? [];
+        var placed = maps.SelectMany(map => targets.Select((target, index) => (
+            Map: map, Index: index, Target: target,
+            Copies: rooms.Get(map).PassiveObjects.Count(row => row.ObjectId == target.MonsterId))))
+            .Where(row => row.Copies >= 2).OrderByDescending(row => row.Copies).First();
+        That(placed.Copies >= 2, "任务路线上至少有一个房间放置了两份以上的猎杀物件");
+        var receipt = f.Session.CompleteFormalDungeonLoading()!;
+        if (receipt.Snapshot.CurrentMap.Position != placed.Map.Position)
+        {
+            var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology, receipt.Snapshot.CurrentMap.Position, placed.Map.Position);
+            for (int step = 0; step < path.Length - 1; step++)
+            {
+                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).ToArray())
+                    That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth).Outcome ==
+                        DungeonRunOutcome.Accepted, "前往多份物件房间时清除阻挡");
+                That(f.Session.MoveFormalDungeon(checked((byte)path[step + 1].X), checked((byte)path[step + 1].Y)) is not null,
+                    "按迷宫连接进入下一房间");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+            }
+        }
+        That(receipt.Snapshot.CurrentMap.Id == placed.Map.Id &&
+            receipt.Snapshot.CurrentMap.Position == placed.Map.Position, "当前房间就是多份猎杀物件所在地图");
+        var before = f.Read();
+        var active = before.ActiveMainQuests.Single(row => row.QuestId == questId);
+        uint beforeChannel = (active.ConditionState >> (placed.Index * 9)) & 511;
+        That(beforeChannel >= (uint)placed.Copies, "接取后的剩余数量不少于本图放置份数");
+        string fingerprint = new string('B', 64);
+        byte channel = placed.Index == 0 ? (byte)0x10 : placed.Index == 1 ? (byte)0x20 : (byte)0x40;
+        That(f.Session.ObserveFormalPassiveDeath(checked((uint)placed.Target.MonsterId), true, fingerprint, rooms) is null &&
+            f.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == active.ConditionState,
+            "同模板多份时 39 不计数，也不消耗放置行");
+        for (int copy = 0; copy < placed.Copies; copy++)
+        {
+            var progress = f.Session.ObserveFormalPassiveTrigger((ushort)questId, new(channel, 0, 0), fingerprint, rooms);
+            That(progress?.Commit is { ProjectionCurrent: true }, "相同 33 第 " + (copy + 1) + " 次计入本图的一份物件");
+        }
+        var after = f.Read().ActiveMainQuests.Single(row => row.QuestId == questId);
+        That(((after.ConditionState >> (placed.Index * 9)) & 511) == beforeChannel - (uint)placed.Copies &&
+            f.Read().Learning.Experience == before.Learning.Experience && f.Read().Inventory.Gold == before.Inventory.Gold,
+            "本图放置份数全部计入对应通道，不发经验和金币");
+        That(f.Session.ObserveFormalPassiveTrigger((ushort)questId, new(channel, 0, 0), fingerprint, rooms) is null &&
+            f.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == after.ConditionState,
+            "超过本图放置份数的相同 33 不再减少");
     }
 
     internal sealed class Fixture : IDisposable
