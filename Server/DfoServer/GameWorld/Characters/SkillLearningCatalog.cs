@@ -276,7 +276,8 @@ internal sealed class SkillLearningCatalog
                 i++;
             if (!fields.TryAdd(name, tokens[start..i]))
             {
-                // 部分资源重复声明分组元数据；含义未闭合，只禁猜新被动组，不影响原有学习字段。
+                // 部分资源重复声明分组元数据；与其它重复标签一致按下方首段语义读取，仅登记供诊断。
+                // 若据此把分组判为未知，极·神剑术等9个被动会因 SlotGroup 为空而永远学不了。
                 if (name is "skill class" or "skill fitness growtype")
                     unsupported.Add(name);
                 // external 的 Document.Section 读取首段；后续同名段不合并、不覆盖，空首段也有效。
@@ -296,11 +297,10 @@ internal sealed class SkillLearningCatalog
         if (type == SkillType.Unknown)
             unsupported.Add("type");
         // 04231EF2..04231F4B 将 class 编码标量 +110 初始化为0；只有标签缺失时沿用。
-        int? skillClass = unsupported.Contains("skill class") ? null : fields.ContainsKey("skill class") ? Scalar("skill class") : 0;
-        int? skillFitnessGrowtypeCount = unsupported.Contains("skill fitness growtype") ? null :
-            fields.ContainsKey("skill fitness growtype") ? Integers("skill fitness growtype")?.Length : 0;
-        int[]? skillFitness = fields.ContainsKey("skill fitness growtype") && !unsupported.Contains("skill fitness growtype")
-            ? Integers("skill fitness growtype") : [];
+        // 重复声明的分组元数据同样取首段：客户端按首段读取，禁用分组会让这些被动无法学习。
+        int? skillClass = fields.ContainsKey("skill class") ? Scalar("skill class") : 0;
+        int? skillFitnessGrowtypeCount = fields.ContainsKey("skill fitness growtype") ? Integers("skill fitness growtype")?.Length : 0;
+        int[]? skillFitness = fields.ContainsKey("skill fitness growtype") ? Integers("skill fitness growtype") : [];
         int[]? secondFitness = fields.ContainsKey("skill fitness second growtype") ? Integers("skill fitness second growtype") : [];
         int[]? costs = Integers("purchase cost");
         if (costs is { Length: 0 })
