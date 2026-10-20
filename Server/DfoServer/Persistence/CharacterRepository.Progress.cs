@@ -63,17 +63,22 @@ internal sealed partial class CharacterRepository
                     throw new InvalidOperationException("角色 revision 或所有者已变化");
                 break;
             case CharacterProgressField.QuestAdd:
-                cmd.CommandText = "INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($id,$quest)";
+                // 完成标记与进行中槽同一事务：只写 completed 会让手册同时显示进行中和已完成，交付再被 AlreadyCompleted 拒绝。
                 var quest = cmd.Parameters.Add("$quest", SqliteType.Integer);
                 foreach (int id in request.QuestIds)
                 {
                     quest.Value = id;
+                    cmd.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND quest_id=$quest";
+                    cmd.ExecuteNonQuery();
+                    cmd.CommandText = "INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($id,$quest)";
                     cmd.ExecuteNonQuery();
                 }
                 break;
             case CharacterProgressField.QuestRemove:
-                cmd.CommandText = "DELETE FROM character_completed_quests WHERE character_id=$id AND quest_id=$quest";
                 cmd.Parameters.AddWithValue("$quest", request.Primary);
+                cmd.CommandText = "DELETE FROM character_completed_quests WHERE character_id=$id AND quest_id=$quest";
+                cmd.ExecuteNonQuery();
+                cmd.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND quest_id=$quest";
                 cmd.ExecuteNonQuery();
                 break;
             case CharacterProgressField.QuestClear:

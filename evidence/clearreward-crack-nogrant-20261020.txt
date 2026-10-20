@@ -1,7 +1,7 @@
 itemdropinfo_clearreward.etc and crackofdimensionlist.etc grant audit, 2026-10-20
 
-Server tree: D:\dnf90\95\build\rift-daily, branch fix/rift-daily-count, baseline 37f50a80.
-Resource: D:\dnf90\95\server\Data\Pvf\Script.pvf.
+Server tree: isolated rift-daily worktree, branch fix/rift-daily-count, baseline 37f50a80.
+Resource: user-provided Script.pvf.
 
 etc/itemdropinfo_clearreward.etc
 - [gold card cost table] is already read by DungeonCardPriceCatalog as level/price pairs. Not reimplemented.
