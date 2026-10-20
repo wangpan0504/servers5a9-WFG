@@ -1,8 +1,11 @@
 using System.Text.Json;
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
+using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Management;
 using static DfoServer.Testing.BoosterTcpTests;
 using static DfoServer.Testing.TcpPeer;
@@ -183,6 +186,7 @@ internal static class BoosterSelectionTcpTests
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters") is [[12345L]], "selection does not add a gold or purchase-material fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "selection database integrity");
+        await RunRealTemplateSelectionsAsync(source, root, resources);
 
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(itemResources.Items.Get(id), count);
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +
@@ -190,6 +194,115 @@ internal static class BoosterSelectionTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT list_type,slot_index,item_uid FROM character_inventory_slots ORDER BY slot_index")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+    }
+    static async Task RunRealTemplateSelectionsAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        int[] sourceIds = [10007539, 10007726, 10007992, 10007993, 10007996, 490700181,
+            490700184, 490700980, 490701127, 490701129, 490702047];
+        var items = resources.ItemResources.Items;
+        var definitions = sourceIds.Select(id => (Id: id, Category: resources.ItemResources.Boosters.Get(id).Selection!.Categories.Single())).ToArray();
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "real-template-selection"), gm: true, resources: resources);
+        var repo = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repo.Create(owner, new("RealSel", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
+                Inventory = new(definitions.Select((entry, index) => new InventoryItem(0, Bag((short)(65 + index)),
+                    InventoryRewardGrantService.Create(items.Get(entry.Id), entry.Category.Rewards.Length, shopExpiration: true))).ToImmutableArray())
+            });
+        await fixture.StartAsync();
+        SetExpirationDebug(fixture, true);
+        using (var peer = Open(fixture))
+        {
+            using var readOwner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            peer.Select();
+            foreach (var (id, category) in definitions)
+            {
+                short slot = (short)(65 + Array.FindIndex(sourceIds, sourceId => sourceId == id));
+                foreach (var choice in category.Rewards)
+                {
+                    SendSelect(peer, slot, [choice.ItemId], category.Category, category.Subcategory);
+                    ExpectAck(peer, id, slot, [(choice.ItemId, choice.Count)]);
+                    var template = items.Get(choice.ItemId);
+                    byte[] changed = peer.Expect(0, 14).Body;
+                    byte[] sourceChanged = changed;
+                    if (template.Kind == ItemKind.Avatar)
+                        changed = peer.Expect(0, 14).Body;
+                    var committed = repo.List(readOwner).Single();
+                    var reward = committed.Inventory.Items.Single(item => item.Core.ItemId == choice.ItemId);
+                    That(changed.SequenceEqual(InventoryPackets.Delta(committed.Inventory, reward.Position.List,
+                            [Bag(slot), reward.Position])) &&
+                        (template.Kind != ItemKind.Avatar || sourceChanged.SequenceEqual(
+                            InventoryPackets.Delta(committed.Inventory, InventoryListType.Main, [Bag(slot)]))),
+                        "CMD160成功通知逐字匹配已提交实例的正式投影 " + choice.ItemId);
+                    int width = template.Kind == ItemKind.Avatar ? 165 : 123;
+                    int count = U16(changed, 1);
+                    That(changed[0] == (template.Kind == ItemKind.Avatar ? 1 : 0) && changed.Length == 3 + width * count &&
+                        Enumerable.Range(0, count).Any(index => U32(changed, 3 + index * width + 2) == choice.ItemId),
+                        "CMD160已提交真实候选的对应容器完整通知 " + id + ":" + choice.ItemId);
+                    peer.Barrier();
+                }
+            }
+            string before = JsonSerializer.Serialize(fixture.Query("SELECT revision FROM characters")) +
+                JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid"));
+            SendSelect(peer, 65, [definitions[0].Category.Rewards[0].ItemId]);
+            peer.Expect(1, 160, [0, 19, 0]);
+            peer.Barrier();
+            That(before == JsonSerializer.Serialize(fixture.Query("SELECT revision FROM characters")) +
+                JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")),
+                "源耗尽后再次提交选择不会额外发奖或推进版本");
+        }
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var saved = repo.List(owner).Single();
+            var selectedIds = definitions.SelectMany(entry => entry.Category.Rewards.Select(row => row.ItemId)).ToArray();
+            That(saved.Inventory.Items.Length == 33 && saved.Inventory.Items.Select(item => item.Core.ItemId).Order().SequenceEqual(selectedIds.Order()),
+                "11盒33项均完整扣源并在数据库中各保存一个真实模板实例");
+            foreach (var reward in saved.Inventory.Items)
+            {
+                var template = items.Get(reward.Core.ItemId);
+                var expected = InventoryRewardGrantService.CreateItem(template, reward.Position,
+                    InventoryRewardGrantService.Create(template, utcNow: DateTimeOffset.UtcNow, shopExpiration: true));
+                if (template.Kind == ItemKind.Avatar)
+                    expected = expected with { Core = expected.Core with { Value = checked((int)reward.Uid) } };
+                That(reward == expected with { Uid = reward.Uid },
+                    "保存重读的完整核心、耐久、封装、品质、期限与全部详情等于真实模板默认实例 " + reward.Core.ItemId);
+                That(reward.Core.Kind == template.Kind && reward.Core.Count == 1 && reward.Uid > 0 &&
+                    (template.Kind == ItemKind.Avatar
+                        ? reward.Position.List == InventoryListType.Avatar && reward.Avatar is not null &&
+                            reward.Core.Durability == 0 &&
+                            reward.Avatar.Socket0 == AvatarSocket.Empty(template.AvatarSockets.First) &&
+                            reward.Avatar.Socket1 == AvatarSocket.Empty(template.AvatarSockets.Second) &&
+                            reward.Avatar.Socket2 == AvatarSocket.Empty(template.AvatarSockets.Third) &&
+                            reward.Avatar.Socket3 == AvatarSocket.Empty(template.AvatarSockets.Fourth) &&
+                            reward.Avatar.Socket4 == AvatarSocket.Empty(template.AvatarSockets.Fifth)
+                        : reward.Position.List == InventoryListType.Main && reward.Avatar is null),
+                    "保存重读保留真实Kind、UID、容器和模板孔位详情 " + reward.Core.ItemId);
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select()[4].Body;
+            int[] titles = definitions.SelectMany(entry => entry.Category.Rewards.Select(row => row.ItemId))
+                .Where(id => items.Get(id).Kind == ItemKind.Equipment).Order().ToArray();
+            int fullCount = U16(full, 3);
+            int[] fullIds = Enumerable.Range(0, fullCount).Select(index => (int)U32(full, 5 + index * 123 + 2)).Order().ToArray();
+            That(full.Length == 5 + fullCount * 123 &&
+                titles.All(id => fullIds.Count(actual => actual == id) == 1),
+                "重连完整123B装备表中各恢复一件21项称号");
+            byte[] avatars = peer.SpecialContainers[1].Body;
+            int[] auras = definitions.SelectMany(entry => entry.Category.Rewards.Select(row => row.ItemId))
+                .Where(id => items.Get(id).Kind == ItemKind.Avatar).Order().ToArray();
+            That(avatars[0] == 1 && U16(avatars, 3) == auras.Length && avatars.Length == 5 + auras.Length * 165 &&
+                Enumerable.Range(0, auras.Length).Select(index => (int)U32(avatars, 5 + index * 165 + 2)).Order().SequenceEqual(auras),
+                "重连恢复12件光环的完整165B条目与真实ID");
+            peer.Barrier();
+        }
+        await fixture.StopAsync();
+        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[12L]] &&
+            fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[33L, 33L]] &&
+            fixture.Query("PRAGMA integrity_check") is [["ok"]], "33件真实选择奖励及12条光环详情一次持久化");
     }
     internal static byte[] EquipmentEntry(byte[] body, short slot, bool full = false)
     {
