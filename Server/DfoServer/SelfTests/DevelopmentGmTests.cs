@@ -139,6 +139,43 @@ internal static class DevelopmentGmTests
 
             string Level(string name, int level) => DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("level " + name + " " + level, "gm"), progress: progress);
 
+            void SyncActiveQuests()
+            {
+                using (var owner = owners.Acquire("active", () => { }))
+                {
+                    repo.Create(owner, new("GmActive", towns.Room, towns.InitialReturn)
+                    {
+                        ActiveMainQuests = [new(0, 3147, 1), new(1, 3265, 0), new(2, 3455, 0)]
+                    });
+                    var session = new GameSession(repo, towns, owner);
+                    session.Select(0);
+                    DevelopmentGm.Execute(repo, owners, account => account == "active" ? session : null, DevelopmentRequest.Parse("quest-add GmActive 3147", "active"), progress: progress);
+                    That(session.Selected!.CompletedQuests.Contains(3147) && session.Selected.ActiveMainQuests.All(quest => quest.QuestId != 3147),
+                        "在线 quest-add 同时更新完成表和接取槽");
+                }
+                Character Active() => Read("active", "GmActive");
+                static ushort[] Ids(Character character) => [.. character.ActiveMainQuests.Select(quest => quest.QuestId)];
+                That(Active().CompletedQuests.SequenceEqual([3147]) && Ids(Active()).SequenceEqual([(ushort)3265, (ushort)3455]),
+                    "quest-add 把进行中的任务移出接取槽，完成表与接取表不再同时持有");
+                DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-add GmActive 3147", "active"), progress: progress);
+                That(Active().CompletedQuests.SequenceEqual([3147]) && Ids(Active()).SequenceEqual([(ushort)3265, (ushort)3455]),
+                    "重复 quest-add 保持幂等，不删其他进行中任务");
+                using (var owner = owners.Acquire("active", () => { }))
+                {
+                    var batch = new CharacterProgressEdit(CharacterProgressField.QuestAdd, "active", "GmActive", 3265, 0) { Quests = [3265, 3449] };
+                    var after = repo.UpdateProgress(owner, batch);
+                    That(after.CompletedQuests.SequenceEqual([3147, 3265, 3449]) && after.ActiveMainQuests.Select(quest => quest.QuestId).SequenceEqual([(ushort)3455]),
+                        "quest-chain 与 quest-batch 共用的批量完成只摘掉本批接取槽");
+                }
+                DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-del GmActive 3147", "active"), progress: progress);
+                That(!Active().CompletedQuests.Contains(3147) && Ids(Active()).SequenceEqual([(ushort)3455]),
+                    "quest-del 去掉完成标记，接取槽里本来就没有的任务保持空");
+                DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-del GmActive 3455", "active"), progress: progress);
+                DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-del GmActive 3455", "active"), progress: progress);
+                That(Active().ActiveMainQuests.Length == 0 && Active().CompletedQuests.SequenceEqual([3265, 3449]),
+                    "quest-del 能清掉只留在接取槽里的残留，重复执行仍幂等");
+            }
+
             void KeepSkillsOnLevel()
             {
                 using (var owner = owners.Acquire("keep", () => { }))
@@ -203,6 +240,7 @@ internal static class DevelopmentGmTests
             DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-add GmHero 10100", "gm"), progress: progress);
             DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-add GmHero 12", "gm"), progress: progress);
             That(DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quests GmHero", "gm"), progress: progress) == "OK GmHero quests=12,10100", "duplicate quest add stays idempotent and ordered");
+            SyncActiveQuests();
             DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-del GmHero 12", "gm"), progress: progress);
             DevelopmentGm.Execute(repo, owners, _ => null, DevelopmentRequest.Parse("quest-del GmHero 12", "gm"), progress: progress);
             That(Read("gm", "GmHero").CompletedQuests.SequenceEqual([10100]), "missing quest delete is idempotent");
@@ -322,8 +360,13 @@ internal static class DevelopmentGmTests
                 cmd.ExecuteNonQuery();
                 cmd.CommandText = "CREATE TRIGGER reject_gm_quest BEFORE INSERT ON character_completed_quests BEGIN SELECT RAISE(ABORT,'quest rejected');END";
                 cmd.ExecuteNonQuery();
+                cmd.CommandText = "INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES($id,3,12,0,'abcdefabcdefabcdefabcdefabcdefab')";
+                cmd.Parameters.AddWithValue("$id", before.Id);
+                cmd.ExecuteNonQuery();
                 Reject(() => repo.UpdateProgress(owner, DevelopmentRequest.Parse("quest-add GmHero 12", "gm").ToProgressEdit()), "failed quest insert aborts");
-                That(repo.List(owner).Single(c => c.Name == "GmHero").CompletedQuests.SequenceEqual(before.CompletedQuests), "aborted quest insert leaves the quest table unchanged");
+                var rolled = repo.List(owner).Single(c => c.Name == "GmHero");
+                That(rolled.CompletedQuests.SequenceEqual(before.CompletedQuests) && rolled.ActiveMainQuests.Any(quest => quest.QuestId == 12),
+                    "aborted quest insert leaves the quest table unchanged");
                 cmd.CommandText = "DROP TRIGGER reject_gm_quest";
                 cmd.ExecuteNonQuery();
             }
