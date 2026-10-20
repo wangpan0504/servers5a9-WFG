@@ -528,7 +528,7 @@ internal static class QuestSceneTests
                 f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
             uint ExpectedExperience(DungeonPlannedMonster monster) => DungeonKillExperiencePolicy.Calculate(
                 kills.GetExperience(monster.CandidateLevel),entry.ExperienceWeight,kills.GetDifficultyRate(entry.Difficulty),
-                kills.GetMonsterRate(monster.ExperienceType,monster.AiCharacter is null && entry.NamedMonsters.Contains(monster.MonsterId)),
+                kills.GetMonsterRate(monster.RewardType,monster.AiCharacter is null && entry.NamedMonsters.Contains(monster.MonsterId)),
                 f.Session.Selected!.Level,monster.CandidateLevel);
             void Kill(DungeonPlannedMonster monster)
             {

@@ -5,10 +5,11 @@ namespace DfoServer.Network.Builders;
 
 internal static class ExclusiveDropPackets
 {
-    public static byte[] MonsterDeath(ushort monsterKey, IReadOnlyList<DungeonDropPacketItem> ordinary, int? enteredDungeonId)
+    public static byte[] MonsterDeath(ushort monsterKey, IReadOnlyList<DungeonDropPacketItem> ordinary, int? enteredDungeonId,
+        DungeonPoint? bossPositionUpdate = null)
     {
         ExclusiveTableNotice.RejectUnproven(ExclusiveNotice.Death, enteredDungeonId);
-        return DungeonPackets.MonsterDeath(monsterKey, ordinary);
+        return DungeonPackets.MonsterDeath(monsterKey, ordinary, bossPositionUpdate);
     }
 
     public static byte[] ClearCard(DungeonClearExperienceReward reward, uint monsterExperience, DungeonCardReward? card,

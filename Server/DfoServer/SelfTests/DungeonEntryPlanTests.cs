@@ -495,6 +495,7 @@ internal static class DungeonEntryPlanTests
             !DungeonEntryPlan.TryCreate(childDefinition with { Mazes = [childMaze with { QuestConnectionTokens = [new(0,0),new(0,102),new(0,1)] }] },
                 sequence,17,100,0,out _,out _,quest: parent,quests: sequentialCatalog),
             "当前子任务等级和迷宫难度不符仍拒绝，不以父请求绕过资格");
+        DummyAndHellLayouts(catalog,global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf),character);
         Console.WriteLine($"PASS {Count - checks} dungeon entry plan assertions");
 
         void Reject(Character input, uint dungeonId, uint questId, byte difficulty, string expected)
@@ -518,6 +519,41 @@ internal static class DungeonEntryPlanTests
             new("story mode",[]),new("difficulty size",[new(0,3)]),new("quest list",[new(0,secondQuest)]),
             new("/quest list",[]),new("/story mode",[])
         ];
+    }
+
+    static void DummyAndHellLayouts(DungeonCatalog catalog,DungeonRoomCatalog rooms,Character basis)
+    {
+        var character = basis with { Level = 95,ActiveMainQuests = [] };
+        var definition = catalog.Get(51);
+        var raw = definition.Mazes.Single(maze => maze.QuestConnectionTokens.Count == 0);
+        That(definition.DummyAppearCount == 2 && raw.Bosses.Count == 3 && raw.MapAlternatives.Count == 3,
+            "D51保留两个dummy声明、三个Boss候选及同格普通图，不误判为覆盖");
+        foreach (bool explicitMaps in new[] { true,false })
+        {
+            var source = explicitMaps ? raw : raw with { MapSpecification = null,MapAlternatives = [] };
+            var maze = catalog.ResolveOrdinaryMaze(definition,source,_ => 0);
+            That(maze.StaticTopology.Supported && maze.Starts.Count == 1 && maze.Bosses.Count == 1 && maze.DummyStages.Count == 3 &&
+                maze.DummyStages.Take(2).All(map => rooms.Get(map,requirePassiveDefinitions:false).DeclaredType == "[dummy]") &&
+                rooms.Get(maze.DummyStages[^1],requirePassiveDefinitions:false) is { DeclaredType: "[boss]" } boss &&
+                boss.Monsters.Any(monster => monster.MonsterId == 1077 && monster.RankKind == "[boss]"),
+                "D51显式/反向地图池均生成两次假Boss及1077真Boss：" + explicitMaps);
+            That(maze.DummyStages.Take(2).All(map => DungeonMonsterPlan.FromRoom(rooms.Get(map,requirePassiveDefinitions:false),
+                character.Id,10,definition.BasisLevel,playerTeam:0).Monsters.Any(monster =>
+                    monster.MonsterId == 1078 && monster.IsDummyMapBoss && monster.SpawnType == 3 && monster.RewardType == 1 && !monster.IsBoss)),
+                "真实D51每个dummy阶段按Boss3下发1078并保留目标更新资格，不提前结算或改变奖励品级");
+            That(ReferenceEquals(catalog.ResolveOrdinaryMaze(definition,maze,_ => throw new InvalidOperationException()),maze),
+                "已冻结dummy路线不再次随机或改变阶段对象");
+            That(DungeonEntryPlan.TryCreate(definition,character,51,0,0,out var plan,out var reason,resolveMaze:_ => maze) &&
+                !plan!.IsTerminalMap(maze.DummyStages[0]) && plan.IsTerminalMap(maze.DummyStages[^1]),"D51准入与真实终点：" + reason);
+        }
+        foreach (int pick in new[] { 0,1 })
+        {
+            That(DungeonEntryPlan.TryCreate(catalog,character,291100319,0,4,out var plan,out var reason,
+                draw:count => Math.Min(pick,count-1),hellParty:true) && plan is { HellParty: not null } &&
+                plan.Maze.Starts.Count == 1 && plan.Maze.Bosses.Count == 1 && plan.Maze.StaticTopology.Supported &&
+                plan.Maze.MapSpecification!.Single(map => map.Position == plan.HellParty.Room).Id == plan.HellParty.MapId,
+                "真实深渊多组迷宫与起终点候选完成组格并替换密门：" + reason);
+        }
     }
 
     static void AuxiliaryEquipmentHuntRoutes(DungeonCatalog catalog, QuestCatalog quests, Character basis)

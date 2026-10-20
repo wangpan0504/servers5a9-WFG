@@ -189,7 +189,7 @@ internal static class ServerRuntime
                     return monster.HellRewardRolls > 0 && hellRewards is not null
                         ? hellRewards.Extend(apc, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : apc;
                 }
-                var plan = resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.SpawnType, entry.Difficulty, entry.BasisLevel);
+                var plan = resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel);
                 // 深渊装备骰只挂在最后一波；前面的恶魔波次保持各自的普通掉落。
                 return monster.HellRewardRolls > 0 && hellRewards is not null
                     ? hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : plan;

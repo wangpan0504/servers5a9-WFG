@@ -6,6 +6,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using PvfLib;
+using System.Buffers.Binary;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -25,7 +26,7 @@ internal static class DungeonStoryFlowTests
         }
         foreach (byte[] invalid in new byte[][] { [],[0],[0,0,0],[2,0],[0,3] })
             That(!DungeonRequests.TryParseStoryPause(invalid,out _),"无效暂停正文不转成成功应答");
-        Layers(); LayerBaseRestore(); DungeonCinematicLayerReturnTests.Run(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects();
+        Layers(); LayerBaseRestore(); DungeonCinematicLayerReturnTests.Run(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects(); DummyBosses(); DummyLinearRoute();
         Console.WriteLine($"PASS {Count-before} 剧情暂停、层叠、重复坐标阶段和动态任务物件断言（合成）");
     }
 
@@ -383,9 +384,141 @@ internal static class DungeonStoryFlowTests
         Reject<InvalidDataException>(() => DungeonMazeConditions.Warps(raw[..2]),"不完整传送声明保留资源错误");
     }
 
+    static void DummyBosses()
+    {
+        var start = new DungeonMap("map",new(0,0),100,"map/start.map");
+        var first = new DungeonMap("boss",new(1,0),101,"map/dummy.map") { DummyStageIndex = 0 };
+        var second = first with { Position = new(1,1),DummyStageIndex = 1 };
+        var terminal = first with { Id = 102,Path = "map/boss.map",DummyStageIndex = 2 };
+        var normal = second with { Kind = "map",Id = 103,Path = "map/normal.map",DummyStageIndex = -1 };
+        var side = start with { Position = new(0,1),Id = 105,Path = "map/side.map" };
+        var conditional = first with { Id = 104,Path = "map/conditional.map",IsConditional = true,DummyStageIndex = -1 };
+        var maze = new DungeonMaze(0,2,2,"JJMMDDGG",[start.Position],[first.Position],[start,first,normal,side],[])
+            { DummyStages = [first,second,terminal],BossEntrance = new(0,0,[new(1,0,1)]),ConditionalMaps = [conditional] };
+        var entry = new DungeonEntryPlan(99,0,777,0,byte.MaxValue,0,maze,start,first);
+        var authority = new Authority();
+        var route = new DungeonFixedRoute([Empty(start),Monster(first,20,"[dummy]"),Monster(normal,23,"[dummy]"),Empty(side),
+            Monster(second,21,"[dummy]"),Monster(terminal,22),Empty(conditional)],
+            [new(start.Position,first.Position),new(start.Position,side.Position),new(side.Position,second.Position),new(first.Position,second.Position)]);
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,route,authority,out var run,out _),"dummy阶段在同一实例预留独立演员，不新建任务或存档");
+        void Load(DungeonPoint target)
+        {
+            That(run!.Move(run.Snapshot.Identity,Guid.NewGuid(),target).Outcome == DungeonRunOutcome.Accepted,"dummy路线允许已清房后的合法邻接");
+            run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        }
+        run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        Load(side.Position); Load(second.Position);
+        That(run.Snapshot.CurrentMap == normal && run.Snapshot.BossPosition == first.Position,
+            "提前进入未标记的未来候选格仍加载普通房间，不激活后继dummy阶段");
+        That(run.Snapshot.LivingMonsters.Count == 0 &&
+            run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,23,10)).Outcome == DungeonRunOutcome.Rejected &&
+            run.Snapshot.BossPosition == first.Position,
+            "未标记格借用dummy场景时不生成假Boss，伪造其死亡既不受理也不发布坐标更新");
+        Load(side.Position); Load(start.Position);
+        Load(first.Position);
+        That(run.Snapshot.BossPosition == first.Position,"进入当前dummy不提前发布下一Boss标记");
+        var original = run.Snapshot.Identity;
+        var firstDeath = authority.Death(original,20,1);
+        var pending = run.PrepareConfirmedDeath(firstDeath).Pending!;
+        That(pending.Result.BossPositionUpdate == second.Position && pending.Result.Snapshot.BossPosition == second.Position &&
+            run.Snapshot.BossPosition == first.Position && run.Move(original,Guid.NewGuid(),second.Position).Outcome == DungeonRunOutcome.Rejected,
+            "死亡待提交只规划下一目标，不提前改当前标记或放行后继阶段");
+        That(run.CancelUncommittedDeath(pending) && run.Snapshot.BossPosition == first.Position,"死亡回滚保留当前Boss目标");
+        var firstResult = run.AcceptConfirmedDeath(firstDeath);
+        That(firstResult.ClearFact is null && run.Phase == SinglePlayerDungeonPhase.Dungeon &&
+            firstResult.BossPositionUpdate == second.Position && run.Snapshot.BossPosition == second.Position &&
+            run.Snapshot.Identity.Epoch == original.Epoch+1,"首次dummy死亡提交后才切换唯一Boss目标，不结算");
+        That(run.AcceptConfirmedDeath(firstDeath) is { Outcome:DungeonRunOutcome.Duplicate,BossPositionUpdate:null } &&
+            run.Snapshot.BossPosition == second.Position,"死亡重放不重复移动标记或跳过阶段");
+        That(run.ConfirmBossEntranceOpen(),"猎杀开门可以与dummy阶段并存，不替代阶段地图");
+        Load(start.Position); Load(first.Position);
+        That(run.Snapshot.MapPayload == DungeonMapPayload.Cached && run.Snapshot.LivingMonsters.Count == 0,
+            "非目标假Boss房回访复用缓存，不重生演员或被动物件");
+        var identity = run.Snapshot.Identity; var action = Guid.NewGuid();
+        That(run.Move(identity,action,second.Position).Outcome == DungeonRunOutcome.Accepted &&
+            run.Move(identity,action,second.Position).Outcome == DungeonRunOutcome.Duplicate && run.Snapshot.MapPayload == DungeonMapPayload.Refresh,
+            "候选格激活后替换已清普通缓存，重复过房不多推进一个dummy阶段");
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        var secondResult = run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,21,2));
+        That(secondResult.ClearFact is null && secondResult.BossPositionUpdate == terminal.Position &&
+            run.Snapshot.BossPosition == terminal.Position,"第二假Boss死亡公布最终Boss位置，但不提前通关");
+        Load(first.Position);
+        That(run.Snapshot.MapPayload == DungeonMapPayload.Refresh && run.Snapshot.CurrentMap == terminal &&
+            run.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 22 }),"目标再次落到已清假Boss格时显式Refresh为真Boss，不沿用旧死亡集合");
+        That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,20,3)).Outcome == DungeonRunOutcome.Rejected,
+            "上一阶段的死亡key不能清除当前真Boss");
+        That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,22,4)).ClearFact?.ClearMap == terminal &&
+            run.ClearFact!.ConfirmedDeathEvents.Count == 3,"只在最终真Boss实际死亡后产生一次通关事实");
+    }
+
+    static void DummyLinearRoute()
+    {
+        var start = new DungeonMap("map",new(0,0),2000,"map/linear-start.map");
+        var stages = Enumerable.Range(1,5).Select(x => new DungeonMap("boss",new(x,0),2000+x,"map/linear-"+x+".map")
+            { DummyStageIndex = x-1 }).ToArray();
+        var maps = new[] { start,stages[0] }.Concat(stages.Skip(1).Select(map => map with { Kind = "map",DummyStageIndex = -1 })).ToArray();
+        var maze = new DungeonMaze(0,6,1,"BBFFFFFFFFEE",[start.Position],[stages[0].Position],maps,[]) { DummyStages = stages };
+        var plans = maps.Concat(stages).Distinct().Select((map,index) => map.Position.X == 0
+            ? DungeonMonsterPlan.FromRoom(new(map,[],[],[]) { DeclaredType = "[normal]" },99,10)
+            : Monster(map,checked((ushort)(30+index)),map.Position.X < 5 ? "[dummy]" : "[boss]")).ToArray();
+        var route = new DungeonFixedRoute(plans,Enumerable.Range(0,5).Select(x => new DungeonRouteConnection(new(x,0),new(x+1,0))).ToArray());
+        var entry = new DungeonEntryPlan(99,0,778,0,byte.MaxValue,0,maze,start,stages[0]);
+        var authority = new Authority();
+        That(maze.StaticTopology is { Supported:true,Rooms.Count:6,Links.Count:5 },"六房直线使用五条真实相邻连接");
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,route,authority,out var run,out _),
+            "六房直线固定normal→四个dummy→boss，只有一个当前目标");
+        run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        for (int x = 1; x <= 5; x++)
+        {
+            var position = new DungeonPoint(x,0);
+            That(run.Snapshot.BossPosition == position && run.Move(run.Snapshot.Identity,Guid.NewGuid(),position).Outcome == DungeonRunOutcome.Accepted &&
+                run.Snapshot.CurrentMap == stages[x-1],"直线第"+x+"房只安装当前标记对应的阶段");
+            run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+            var currentPlan = plans.Single(plan => plan.Room.Map == stages[x-1]);
+            var monster = currentPlan.Monsters.Single();
+            byte[] mapBody = DungeonPackets.StartMap(entry with { StartMap = run.Snapshot.CurrentMap },currentPlan,1);
+            That(currentPlan.Room.DeclaredType == (x < 5 ? "[dummy]" : "[boss]") && run.Snapshot.CurrentMap.Kind == "boss" &&
+                BinaryPrimitives.ReadUInt32LittleEndian(mapBody.AsSpan(14)) == 2000+x,
+                "前四个当前目标始终下发对应dummy地图，不能被普通房间候选覆盖；最后才是真Boss地图");
+            That(monster.SpawnType == 3 && mapBody[32] == 3 && monster.RewardType == (x < 5 ? 1 : 3) && monster.IsDummyMapBoss == (x < 5) &&
+                run.Snapshot.BossPosition == position,"四个dummy与末房都下发Boss3，假Boss仍保持独立奖励品级和不提前结算资格");
+            if (x < 5)
+                That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),new(x+1,0)).Outcome == DungeonRunOutcome.Rejected,
+                    "当前dummy未死亡不能进入下一阶段");
+            var result = run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,monster.ObjectKey,x));
+            if (x < 5)
+            {
+                That(result.ClearFact is null && run.Phase == SinglePlayerDungeonPhase.Dungeon &&
+                    result.BossPositionUpdate == new DungeonPoint(x+1,0) && run.Snapshot.BossPosition == new DungeonPoint(x+1,0),
+                    "第"+x+"个dummy死亡独立触发下一Boss目标，不提前通关");
+                Bytes(DungeonPackets.MonsterDeath(monster.ObjectKey,[],result.BossPositionUpdate),
+                    [(byte)monster.ObjectKey,(byte)(monster.ObjectKey>>8),0,0,0,0,255,1,(byte)(x+1),0,0],
+                    "四次dummy死亡各有完整38坐标更新正文");
+            }
+            else That(result.BossPositionUpdate is null && result.ClearFact?.ClearMap == stages[4] &&
+                run.Phase == SinglePlayerDungeonPhase.Settlement && run.ClearFact!.ConfirmedDeathEvents.Count == 5,
+                "四个dummy全部推进后，最后真Boss死亡才产生一次通关事实");
+        }
+        That(SinglePlayerDungeonRun.TryCreate(entry with { StartFatigue = 3 },2,100,route,authority,out var prepaid,out _),
+            "连续dummy路线保留上游入场一次性疲劳合同");
+        prepaid!.CompleteLoading(prepaid.Snapshot.Identity,Guid.NewGuid());
+        That(prepaid.Snapshot.ConsumedFatigue == 3,"一次性疲劳只在首次加载计入应耗统计");
+        foreach (var stage in stages)
+        {
+            That(prepaid.Move(prepaid.Snapshot.Identity,Guid.NewGuid(),stage.Position).Outcome == DungeonRunOutcome.Accepted,
+                "一次性疲劳模式仍逐次进入当前dummy或真Boss目标");
+            prepaid.CompleteLoading(prepaid.Snapshot.Identity,Guid.NewGuid());
+            That(prepaid.Snapshot.ConsumedFatigue == 3,"dummy刷新和后继房间不重复累计入场一次性疲劳");
+            ushort key = plans.Single(plan => plan.Room.Map == stage).Monsters.Single().ObjectKey;
+            prepaid.AcceptConfirmedDeath(authority.Death(prepaid.Snapshot.Identity,key,stage.DummyStageIndex+1));
+        }
+        That(prepaid.Phase == SinglePlayerDungeonPhase.Settlement && prepaid.Snapshot.ConsumedFatigue == 3,
+            "一次性疲劳保留全部四次dummy和最终通关，不改变已冻结入场费用");
+    }
+
     static DungeonMonsterPlan Empty(DungeonMap map) => DungeonMonsterPlan.FromRoom(new(map,[],[],[]),99,10);
-    static DungeonMonsterPlan Monster(DungeonMap map,ushort key) => DungeonMonsterPlan.FromRoom(new(map,
-        [new(1,[1,0,20,0,0,0,1,1],"[fixed]","[boss]","monster/fixture.mob")],[],[]),99,key);
+    static DungeonMonsterPlan Monster(DungeonMap map,ushort key,string? type = null) => DungeonMonsterPlan.FromRoom(new(map,
+        [new(1,[1,0,20,0,0,0,1,1],"[fixed]","[boss]","monster/fixture.mob")],[],[]) { DeclaredType = type },99,key);
     sealed class Authority : DungeonCombatAuthority
     {
         public ConfirmedDungeonMonsterDeath Death(DungeonRunIdentity identity,ushort key,long sequence) => ConfirmDeath(identity,Guid.NewGuid(),key,sequence);

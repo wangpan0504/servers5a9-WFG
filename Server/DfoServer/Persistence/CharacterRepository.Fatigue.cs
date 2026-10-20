@@ -84,7 +84,7 @@ internal sealed partial class CharacterRepository
         bool ordinary = run.Entry.UsesRoomFatigue;
         string rule = CharacterFatigueState.NormalRoomRuleId;
         if (!ordinary || run.Entry.Maze.QuestConnectionTokens.Count != 0 ||
-            run.Entry.Maze.MapSpecification?.Contains(snapshot.CurrentMap) != true ||
+            run.Entry.Maze.MapSpecification?.Contains(snapshot.CurrentMap) != true && !run.Entry.Maze.DummyStages.Contains(snapshot.CurrentMap) ||
             snapshot.Phase != SinglePlayerDungeonPhase.Loading || identity.CharacterId != expected.Id ||
             identity.InstanceId == Guid.Empty || identity.TaskAttempt != expected.DungeonState?.LastAttempt)
             throw new InvalidDataException("疲劳扣点需要本服已准入实例的真实首次房间加载");

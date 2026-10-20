@@ -341,11 +341,13 @@ internal static class DungeonPackets
 
     // NOTI38普通路径：monster key/count，每条u32地面对象key、123B物品核心、两个u16创建上下文，再接死亡尾部。
     // 只投影调用方已经确定的地面身份和完整资产；这里不抽奖、不确认死亡、不创建物品或写库。
-    public static byte[] MonsterDeath(ushort monsterKey, IReadOnlyList<DungeonDropPacketItem> drops)
+    public static byte[] MonsterDeath(ushort monsterKey, IReadOnlyList<DungeonDropPacketItem> drops, DungeonPoint? bossPositionUpdate = null)
     {
         ArgumentNullException.ThrowIfNull(drops);
         const int dropSize = 4 + ItemListProtocolWriter.EntrySize + 4;
-        if (drops.Count > (65520 - 9) / dropSize)
+        if (bossPositionUpdate is { } point && (point.X is < 0 or > byte.MaxValue || point.Y is < 0 or > byte.MaxValue))
+            throw new InvalidDataException("死亡通知的Boss目标坐标超出单字节范围");
+        if (drops.Count > (65520 - 9 - (bossPositionUpdate is null ? 0 : 2)) / dropSize)
             throw new InvalidDataException("死亡掉落通知超过本版帧容量");
         var keys = new HashSet<uint>();
         using var bytes = new MemoryStream();
@@ -368,7 +370,15 @@ internal static class DungeonPackets
             writer.Write(drop.ContextValue);
             writer.Write(drop.VisibilityFilter);
         }
-        writer.Write(new byte[] { 0, 0, 255, 0, 0 });
+        writer.Write(new byte[] { 0, 0, 255 });
+        // ARAD 02395C8E读取更新标志，02395CAC/5CBA读取新目标X/Y，末尾仍保留死亡标志。
+        writer.Write(bossPositionUpdate is null ? (byte)0 : (byte)1);
+        if (bossPositionUpdate is { } boss)
+        {
+            writer.Write(checked((byte)boss.X));
+            writer.Write(checked((byte)boss.Y));
+        }
+        writer.Write((byte)0);
         return bytes.ToArray();
     }
 

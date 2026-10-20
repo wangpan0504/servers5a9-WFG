@@ -16,6 +16,19 @@ internal static class DungeonMonsterPlanTests
         var room = new DungeonRoomDefinition(new("boss", new(0, 0), 1, "map/fixture.map"),
             Array.AsReadOnly(new[] { source with { RankKind = "[boss]" }, source }), [], []);
         var defaultPlan = DungeonMonsterPlan.FromRoom(room, 99, 10);
+        var dummyPlan = DungeonMonsterPlan.FromRoom(room with { DeclaredType = "[dummy]" },99,10);
+        That(dummyPlan.Monsters[0] is { SpawnType:3,RewardType:1,IsDummyMapBoss:true,IsBoss:false,IsBlocking:true } &&
+            ReferenceEquals(dummyPlan.Monsters[0].Source,room.Monsters[0]) && dummyPlan.Monsters[1] is { SpawnType:0,IsDummyMapBoss:false } &&
+            defaultPlan.Monsters[0] is { SpawnType:3,RewardType:3,IsBoss:true,IsDummyMapBoss:false },
+            "MAP级dummy按类型3生成并保留目标更新资格，奖励维持品级1；原行、普通怪及真Boss不变");
+        var ordinaryDummy = DungeonMonsterPlan.FromRoom(room with
+            { Map = room.Map with { Kind = "map" },DeclaredType = "[dummy]",MonsterTeams = [7,8] },99,10);
+        That(ordinaryDummy.Monsters is [{ SourceOrdinal:1,ObjectKey:10,SpawnType:0,IsDummyMapBoss:false,Team:8 }] &&
+            ReferenceEquals(ordinaryDummy.Monsters[0].Source,source),
+            "无Boss标记借用dummy场景时不创建假Boss，普通怪保留原资源行号和对应阵营，不留下幽灵阻挡key");
+        foreach (var active in new[] { room.Map with { Kind = "map",StoryStageIndex = 0 },room.Map with { Kind = "map",IsConditional = true } })
+            That(DungeonMonsterPlan.FromRoom(room with { Map = active,DeclaredType = "[dummy]" },99,10).Monsters[0] is
+                { ObjectKey:10,SpawnType:3,RewardType:1,IsDummyMapBoss:true },"有序剧情阶段或已批准的条件替换不是未标记普通候选，保留实际dummy Boss演员");
         var relative = source with { RawValues = [1, 1, 2, 100, 100, 0, 2, 1], RankKind = "[champion]", RankParameterCount = 0 };
         var ordinaryRoom = room with { Monsters = [relative, source] };
         var ordinaryPlan = DungeonMonsterPlan.FromRoom(ordinaryRoom, 99, 10, 5);
@@ -28,7 +41,7 @@ internal static class DungeonMonsterPlanTests
             "断头谷精英率只把普通怪升成类型1，Boss保持类型3");
         var named = relative with { RankKind = "[named]", RankParameterCount = null };
         var namedPlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [source,named] },99,98,5,playerTeam:0);
-        That(namedPlan.Monsters[1] is { SourceOrdinal:1, ObjectKey:100, CandidateLevel:7, SpawnType:0, ExperienceType:0,
+        That(namedPlan.Monsters[1] is { SourceOrdinal:1, ObjectKey:100, CandidateLevel:7, SpawnType:0, RewardType:0,
                 IsFriendly:false, IsBlocking:true, CanReportDeath:true, IsBoss:false, IsScriptedBoss:false } &&
             ReferenceEquals(namedPlan.Monsters[1].Source,named) && named.RankKind == "[named]",
             "裸named按匹配原生默认类型0规划，保留真实原行、等级、ordinal及跳过角色的独立key");
@@ -162,7 +175,7 @@ internal static class DungeonMonsterPlanTests
             mixed.Monsters.Select(row => row.ObjectKey).SequenceEqual(new ushort[] { 10,11,12,13,14,15 }),
             "APC独立资源行索引和四种类型保留，全部演员共享唯一对象key空间");
         That(mixed.Monsters.Skip(2).All(row => row.Source is null && row.AiCharacter is not null && row.CanReportDeath && !row.IsBlocking) &&
-            mixed.Monsters.Skip(2).Select(row => row.ExperienceType).SequenceEqual(new byte[] { 0,1,2,3 }) && mixed.Monsters[^1].IsBoss,
+            mixed.Monsters.Skip(2).Select(row => row.RewardType).SequenceEqual(new byte[] { 0,1,2,3 }) && mixed.Monsters[^1].IsBoss,
             "敌对APC拥有真实死亡资格和自身经验品级，同时保持普通门不阻塞合同");
         foreach (string faction in new[] { "[character]", "[neutral]" })
             That(!DungeonMonsterPlan.FromRoom(room with { AiCharacters = [apcs[^1] with { Faction = faction }] },99,10).Monsters[^1].CanReportDeath,

@@ -331,7 +331,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         DungeonDropPacketItem[] dropRows = grounds.Select(drop => new DungeonDropPacketItem(drop.Reservation.GroundKey,
             drop.Reservation.RecordSlot, drop.Content.Item, 0, 0) { GoldAmount = drop.GoldAmount }).ToArray();
         int enteredDungeon = checked((int)receipt.Entry.DungeonId);
-        await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(result.MonsterKey, dropRows, enteredDungeon), "formal_monster_death", Guard);
+        await context.Notify(NotiPacketType.DIE_MONSTER,
+            ExclusiveDropPackets.MonsterDeath(result.MonsterKey, dropRows, enteredDungeon, result.BossPositionUpdate), "formal_monster_death", Guard);
         if (context.Session.PendingDungeonBossEntrance() is { } entrance)
         {
             bool sent = false;

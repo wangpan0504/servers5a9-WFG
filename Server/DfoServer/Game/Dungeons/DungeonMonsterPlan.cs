@@ -14,12 +14,14 @@ internal sealed record DungeonPlannedMonster(
     public bool IsBlocking { get; init; } = true;
     public int Team { get; init; } = Source?.Team is >= 0 ? Source.Team.Value : 100;
     public bool IsFriendly { get; init; }
+    public bool IsDummyMapBoss { get; init; }
     public bool IsSpecialChild => Source?.SpecialChild is not null;
     public bool IsScriptedRetirement => Source?.ScriptedRetirement == true;
     public int EnemyType => AiCharacter is null ? 1 : 2;
     public bool CanReportDeath => AiCharacter is null ? IsBlocking : AiCharacter.Faction == "[monster]";
-    public bool IsBoss => CanReportDeath && (Source?.RankKind == "[boss]" || AiCharacter?.RankKind == "[boss]");
-    public byte ExperienceType => AiCharacter is null ? SpawnType : checked((byte)(SpawnType - 5));
+    public bool IsBoss => !IsDummyMapBoss && CanReportDeath && (Source?.RankKind == "[boss]" || AiCharacter?.RankKind == "[boss]");
+    // 本版dummy按Boss生成；经验与掉落仍沿旧端的精英品级，不把显示修复变成奖励调整。
+    public byte RewardType => IsDummyMapBoss ? (byte)1 : AiCharacter is null ? SpawnType : checked((byte)(SpawnType - 5));
     public bool IsScriptedBoss => Source?.RankKind == "[boss]" && Source.Modifiers.SequenceEqual(new[] { "[dummy]" });
     // 实验性：深渊派对波次怪（真实敌对怪：阻挡清房/开门，给经验与掉落）。非空即由 WithHellWaves 产生，START_MAP 里按"隐藏模板行"发，不进普通怪行。
     public DungeonHellWaveMonster? HellWave { get; init; }
@@ -125,6 +127,11 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (raw[1] == 1 && level is < 1 or > 255)
                 throw new InvalidDataException("怪物相对等级超出创建范围");
 
+            bool dummyMapBoss = room.DeclaredType == "[dummy]" && source.RankKind == "[boss]" && source.SpecialChild is null;
+            // 无当前Boss标记的候选格只借用场景，不创建假Boss；原行索引和其他怪物保持不变。
+            if (dummyMapBoss && room.Map.Kind == "map" && room.Map.DummyStageIndex < 0 &&
+                room.Map.StoryStageIndex < 0 && !room.Map.IsConditional) continue;
+
             // 对象 key 与模板 ID、资源行索引独立；跳过当前角色，耗尽后拒绝而不回绕。
             if (nextKey == characterId)
                 nextKey++;
@@ -142,9 +149,11 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             bool scriptedBoss = source.RankKind == "[boss]" && source.Modifiers.SequenceEqual(new[] { "[dummy]" });
             bool cinematicFriend = scriptedBoss && source.MonsterId == 62959;
             bool friendly = playerTeam is { } actualTeam && team == actualTeam && (!scriptedBoss || cinematicFriend);
+            // 02A15E46要求类型3，随后才由MAP类型2进入原生dummy Boss初始化。
             result.Add(new(index, (ushort)nextKey, source.MonsterId, level, source)
             {
-                SpawnType = source.RankKind switch { "[named]" => 0, "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => (byte)0 },
+                SpawnType = (byte)(source.RankKind switch { "[named]" => 0, "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => 0 }),
+                IsDummyMapBoss = dummyMapBoss,
                 // 02A15E31保留显式team；02C9F43C相对本人比较，不把0或非100统一当作友军。
                 Team = team,
                 IsFriendly = friendly,

@@ -349,23 +349,39 @@ internal static class FormalDungeonSessionTests
         void OrdinaryRoutes()
         {
             var clearRewards = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
-            foreach (int dungeonId in new[] { 5, 6, 7, 8, 9, 1000 })
+            foreach (int dungeonId in new[] { 5, 6, 7, 8, 9, 1000, 51 })
             {
                 using var f = new Fixture("Map" + dungeonId, towns, characters, learning, quests);
                 var definition = catalog.Get(dungeonId);
                 byte level = checked((byte)definition.MinimumLevel!.Value);
                 f.Sql($"DELETE FROM character_active_main_quests; UPDATE characters SET level={level},experience={growth.GetLevelStartExperience(level)}; " +
                     $"UPDATE character_skill_points SET sp=sp+{growth.GetSpDelta(1, level)}");
-                f.SelectEntry();
+                if (dungeonId == 51)
+                {
+                    var area = towns.Areas.Values.First(area => area.DungeonWorldMap is { } world &&
+                        towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeonId && option.QuestId == -1));
+                    var done = area.Quests.Concat(area.AnyQuests.Take(1)).ToHashSet();
+                    done.UnionWith(area.Map(done).DungeonGates.Where(gate => gate.Conditions.Length == 0).SelectMany(gate => gate.Quests));
+                    foreach (int quest in done) f.Sql($"INSERT INTO character_completed_quests(character_id,quest_id) VALUES({f.Created.Id},{quest})");
+                    var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+                    var position = new Location(area.Town,area.Area,checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+                    f.Repository.Save(f.Owner,f.Read(),position,position);
+                    f.Session.Select(f.Created.Slot,resumeTown:true); f.Session.MarkReady();
+                }
+                else f.SelectEntry();
                 var entry = f.Session.EnterFormalDungeon(checked((uint)dungeonId), 0, 0, catalog, rooms);
                 Check(entry is not null && entry.Entry.Maze.SourceOrdinal == 0 && entry.Entry.Maze.QuestConnectionTokens.Count == 0,
-                    "全部普通路线使用各自完整资源maze，不被客户端本地缺失装饰阻断");
+                    "普通路线使用完整资源maze D" + dungeonId + ": " + f.Session.LastFormalDungeonRejection);
                 var current = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("普通路线不能首次加载");
+                var loadedMaps = new HashSet<DungeonMap>();
+                bool checkedDummyRollback = false;
+                int bossMoves = 0;
                 ClearCurrent();
                 var maze = entry!.Entry.Maze;
                 foreach (var target in maze.MapSpecification!.Where(map => map != entry.Entry.StartMap && map != entry.Entry.BossMap)
-                    .Concat([entry.Entry.BossMap]))
+                    .Concat([entry.Entry.BossMap]).Concat(maze.DummyStages))
                 {
+                    if (current.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement) break;
                     var queue = new Queue<DungeonPoint>();
                     var from = new Dictionary<DungeonPoint, DungeonPoint?> { [current.Snapshot.CurrentMap.Position] = null };
                     queue.Enqueue(current.Snapshot.CurrentMap.Position);
@@ -373,7 +389,8 @@ internal static class FormalDungeonSessionTests
                     foreach (var link in maze.StaticTopology.Links!)
                     {
                         DungeonPoint? next = link.First == point ? link.Second : link.Second == point ? link.First : null;
-                        if (next is not { } adjacent || from.ContainsKey(adjacent) || adjacent == entry.Entry.BossMap.Position && adjacent != target.Position) continue;
+                        if (next is not { } adjacent || from.ContainsKey(adjacent) ||
+                            maze.DummyStages.Count == 0 && adjacent == entry.Entry.BossMap.Position && adjacent != target.Position) continue;
                         from.Add(adjacent, point); queue.Enqueue(adjacent);
                     }
                     var path = new Stack<DungeonPoint>();
@@ -384,23 +401,49 @@ internal static class FormalDungeonSessionTests
                             "普通路线每次过房沿资源真实连接且前房阻塞目标已清");
                         current = f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("普通路线过房不能加载");
                         ClearCurrent();
+                        if (current.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement) break;
                     }
                 }
+                Check(maze.DummyStages.All(loadedMaps.Contains),"dummy路线必须实际加载全部假Boss阶段后才允许真Boss结算");
+                Check(maze.DummyStages.Count == 0 || checkedDummyRollback && bossMoves == 2,
+                    "真实dummy死亡覆盖SQL回滚、原候选恢复及两次唯一目标推进");
                 var settled = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [1, 2, 3, 4], catalog, clearRewards, growth);
-                Check(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt!.Snapshot.CurrentMap == entry.Entry.BossMap &&
-                    Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts")) == maze.MapSpecification!.Count &&
+                Check(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt!.Snapshot.CurrentMap ==
+                    (maze.DummyStages.LastOrDefault() ?? entry.Entry.BossMap) &&
+                    Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts")) == loadedMaps.Select(map => map.Id).Distinct().Count() &&
+                    current.Snapshot.ConsumedFatigue == loadedMaps.Select(map => map.Id).Distinct().Count() &&
                     f.Session.ReturnFromFormalDungeon() is not null, "各普通地图完整静态敌人、资源房间费用、通关与返回通过真实SQL调用");
 
                 void ClearCurrent()
                 {
+                    loadedMaps.Add(current.Snapshot.CurrentMap);
                     foreach (var monster in current.Monsters.Monsters.Where(monster => monster.IsBlocking).OrderBy(monster => monster.SpawnType == 3).ToArray())
                     {
                         var observation = Observation(current, monster);
                         if (monster.SpawnType == 3) observation = observation with { RewriteFlag = 1, Unknown18 = 9000, Unknown26 = 30 };
+                        var oldBoss = current.Snapshot.BossPosition;
+                        if (monster.IsDummyMapBoss && current.Snapshot.CurrentMap.DummyStageIndex == 0 && !checkedDummyRollback)
+                        {
+                            var before = f.Read(); var beforeSnapshot = current.Snapshot;
+                            f.Sql("CREATE TRIGGER fail_dummy_death BEFORE INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'dummy rollback'); END");
+                            Reject<SqliteException>(()=>f.Session.ObserveFormalDungeonDeath(observation,kills,growth),
+                                "当前dummy死亡的奖励事务失败不能发布下一目标");
+                            Check(Same(before,f.Read()) && f.Session.DungeonSnapshot!.BossPosition == oldBoss &&
+                                f.Session.DungeonSnapshot.Identity == beforeSnapshot.Identity,
+                                "dummy死亡回滚保留完整原资产、当前目标和原epoch");
+                            f.Sql("DROP TRIGGER fail_dummy_death");
+                            checkedDummyRollback = true;
+                        }
                         var killed = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
                         Check(killed.Outcome == DungeonRunOutcome.Accepted && killed.Receipt is not null && killed.Reward is not null,
                             "全房普通资源怪物使用实际计划等级和原生Boss统计核验授予成长");
                         current = killed.Receipt!;
+                        if (monster.IsDummyMapBoss)
+                        {
+                            Check(killed.BossPositionUpdate == current.Snapshot.BossPosition,
+                                "Session发布原死亡提交结果的Boss坐标，不借下一次移动时重算");
+                            if (oldBoss != current.Snapshot.BossPosition) bossMoves++;
+                        }
                     }
                 }
             }

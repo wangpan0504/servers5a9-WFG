@@ -236,7 +236,8 @@ internal sealed partial class GameSession
         uint mapSeed = checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue));
         try
         {
-            foreach (var map in entry.Maze.MapSpecification!.Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps))
+            foreach (var map in entry.Maze.MapSpecification!.Concat(entry.Maze.DummyStages)
+                .Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps).Distinct())
             {
                 if (next > ushort.MaxValue) return RejectFormal("object-key-overflow");
                 var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
@@ -661,7 +662,8 @@ internal sealed partial class GameSession
             if (death.ClearFact is not null)
                 dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
             return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey)
-                { ReportedTarget = target, ClearFact = death.ClearFact, CulledMonsterKeys = death.CulledMonsterKeys };
+                { ReportedTarget = target, ClearFact = death.ClearFact, CulledMonsterKeys = death.CulledMonsterKeys,
+                    BossPositionUpdate = death.BossPositionUpdate };
         }
         // 契约跨到期或提交返回丢失时仍恢复原死亡的奖励与规划时刻，不重算已冻结额度。
         if (dungeon.PendingDeathReward is null)
@@ -724,6 +726,7 @@ internal sealed partial class GameSession
             PreviousQuests = previousQuests,
             QuestDropSlots = questDrop?.Inventory.ChangedSlots ?? [],
             RoomClearFact = committed.Death.RoomClearFact,
+            BossPositionUpdate = committed.Death.BossPositionUpdate,
             CulledMonsterKeys = committed.Death.CulledMonsterKeys
         };
     });

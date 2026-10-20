@@ -36,6 +36,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];
     public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
     public DungeonRoomClearFact? RoomClearFact { get; init; }
+    public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }
 }
 internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
     bool ProjectionCurrent, CurrencyKind? Currency = null, int Amount = 0);

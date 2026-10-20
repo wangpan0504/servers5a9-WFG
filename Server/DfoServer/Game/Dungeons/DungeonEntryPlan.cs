@@ -69,7 +69,8 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
-    public bool IsTerminalMap(DungeonMap map) => PassiveClearTerminalMap is { } passive ? map == passive :
+    public bool IsTerminalMap(DungeonMap map) => Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
+        PassiveClearTerminalMap is { } passive ? map == passive :
         TerminalLayerMap is { } layer ? map == layer :
         map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
         map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map);
@@ -106,7 +107,7 @@ internal sealed record DungeonEntryPlan(
         }
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
-            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest,
+            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty),allowClearedTerminalQuest:allowClearedTerminalQuest,
             hellParty:hellParty,hellLegend:hellLegend,practice:practice);
     }
 
@@ -288,13 +289,10 @@ internal sealed record DungeonEntryPlan(
         { reason = "dungeon-resource-unavailable"; return false; }
         if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0,maze.ConnectionQuestId))
         { reason = "difficulty-unsupported"; return false; }
-        // 深渊派对只替换 seal-door 格，不改起点/Boss 几何。雾都/迷之觉悟等普通 maze 声明了多个 start/boss，
-        // 仍用资源第一项（与 StaticTopology 从 Starts[0] 可达性扫描一致），普通入场继续要求恰好各 1 个。
-        bool hellPartyLayout = hellParty && maze.HellParty is not null && maze.StoryStages.Count == 0;
-        if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count == 0 ||
-            (!hellPartyLayout && maze.Starts.Count != 1) ||
+        // 多起点、多Boss是候选集合，由资源装配选择本次实际路线；深渊沿用同一组格入口。
+        if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 ||
             (maze.StoryStages.Count == 0
-                ? maze.Bosses.Count == 0 || (!hellPartyLayout && maze.Bosses.Count != 1)
+                ? maze.Bosses.Count != 1
                 : maze.StoryStages.Count != maze.Bosses.Count)
             || maze.MapSpecification is not { Count: > 0 } maps)
         {
@@ -394,6 +392,7 @@ internal sealed record DungeonEntryPlan(
         if (hellParty && activeHell is { } hellRoom && activeHellPath is { } hellMapPath && maze.MapSpecification is { } hellSpec)
         {
             if (starts[0].Position == hellRoom.Room || bosses.Any(boss => boss.Position == hellRoom.Room) ||
+                maze.DummyStages.Any(stage => stage.Position == hellRoom.Room) ||
                 maze.LayeredMaps.Concat(maze.ConditionalMaps).Concat(maze.StoryStages).Any(map => map.Position == hellRoom.Room))
             { reason = "hell-party-room-conflict"; return false; }
             planMaze = maze with { MapSpecification = hellSpec.Select(map => map.Position == hellRoom.Room && map.Kind == "map"
