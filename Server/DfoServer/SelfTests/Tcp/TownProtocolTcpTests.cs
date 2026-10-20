@@ -15,9 +15,10 @@ internal static partial class TownProtocolTcpTests
         ChannelTcpTests.Run(fixture);
         using (var peer = Open(fixture))
         {
+            peer.Send(1723);
+            peer.Expect(1, 1723, []);
             foreach (ushort opcode in new ushort[]
             {
-                1723,
                 1748,
                 65535
             })
@@ -125,7 +126,6 @@ internal static partial class TownProtocolTcpTests
         That(sent.Any(p => p.GetProperty("Kind").GetInt32() == 0 && p.GetProperty("Opcode").GetInt32() == 3 && p.GetProperty("Name").GetString() == "USER_STATE"), "NOTI3 log name");
         foreach (var (opcode, name) in new[]
         {
-            (1723, "PING"),
             (1748, "END"),
             (65535, "65535")
         })

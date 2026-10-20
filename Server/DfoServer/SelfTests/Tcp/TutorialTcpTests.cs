@@ -104,6 +104,7 @@ internal static class TutorialTcpTests
         }
         Battle(0, 2, false);
         Battle(8, 3, true);
+        Battle(15, 4, false);
         await fixture.StopAsync();
 
         void Battle(byte job, ushort slot, bool cinematic)
@@ -123,6 +124,20 @@ internal static class TutorialTcpTests
                 var room = scenes.Apply(rooms.Get(expectedMap, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: true));
                 var actors = DungeonMonsterPlan.FromRoom(room, peer.Id, map[18] == 0 ? (ushort)1 : U16(map, 25), definition.BasisLevel,
                     includeSpecial: false, playerTeam: 0);
+                if (job == 15 && expectedMap.Id == 70577)
+                {
+                    That(actors.Monsters.Where(actor => actor.IsBlocking).Select(actor => actor.MonsterId).Order()
+                            .SequenceEqual(new[] { 70229, 70229, 70235 }) &&
+                        actors.Monsters.Single(actor => actor.MonsterId == 70216) is { IsScriptedRetirement: true, IsBlocking: false },
+                        "枪剑士第二图保留两只同模板怪的独立身份，脚本退场演员不充当战斗阻挡");
+                    That(map[18] == 4 && actors.Monsters.All(actor =>
+                    {
+                        int offset = 19 + actor.SourceOrdinal * 22;
+                        return U16(map, offset + 6) == actor.ObjectKey && U32(map, offset + 8) == actor.MonsterId &&
+                            map[offset + 21] == (actor.MonsterId == 70216 ? 1 : 0);
+                    }), "枪剑士第二图实收生成行保留四个原身份，只排除70216的客户端清房阻挡，不排除三只战斗怪");
+                    MoveBeforeClear();
+                }
                 if (cinematic && expectedMap == ordered[^1])
                 {
                     var movie = room.TutorialCinematics.Where(row => row.DestroyTargets.Count > 0).MaxBy(row => row.MonsterActors.Count)!;
@@ -144,12 +159,23 @@ internal static class TutorialTcpTests
                 else foreach (var actor in actors.Monsters.Where(row => row.IsBlocking && row.AiCharacter is null))
                 {
                     Kill(actor);
+                    if (job == 15 && expectedMap.Id == 70577 && actor == actors.Monsters.First(row => row.IsBlocking))
+                        MoveBeforeClear();
                 }
                 if (expectedMap != ordered[^1])
                 {
                     var next = ordered[Array.IndexOf(ordered, expectedMap) + 1];
                     var move = new byte[100]; move[0] = checked((byte)next.Position.X); move[1] = checked((byte)next.Position.Y);
                     peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
+                }
+
+                void MoveBeforeClear()
+                {
+                    // 同模板第一只死亡不能替代第二只；无效过图后仍须在原房间处理真实死亡。
+                    var move = new byte[100]; move[0] = 2;
+                    peer.Send(45, move); peer.Barrier();
+                    That(fixture.Query("SELECT completed FROM character_tutorial_state WHERE character_id=$p0", peer.Id) is [[0L]],
+                        "枪剑士第二图未清怪不提前完成训练或进入第三图");
                 }
             }
             That(cleared && (!cinematic || cinematicCompleted) && fixture.Query("SELECT completed FROM character_tutorial_state WHERE character_id=$p0", peer.Id) is [[1L]],
