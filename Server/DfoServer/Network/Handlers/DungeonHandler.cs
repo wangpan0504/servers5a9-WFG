@@ -339,6 +339,11 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             PotionExperience = ExpBonusPolicy.Shown(plainKill, reward.GrowthContractExperience, reward.PotionExperience, result.GainedExperience) };
         foreach (ushort key in result.CulledMonsterKeys)
             await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
+        // 秘药分量非 0 时，客户端会先拼出经验明细。31 若排在这条 NOTI37 之后，02D23170 看到明细窗口仍在就跳过结算锁存。
+        // 普通击杀仍保持 37 然后 115/31。只有带秘药的通关击杀把许可提前到经验通知之前。
+        bool potionClear = result.ClearFact is not null && display.PotionExperience > 0;
+        if (potionClear)
+            await DungeonSettlementProjection.EnableAsync(context, result.MonsterKey);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
         if (result.QuestDropSlots.Count > 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
@@ -360,7 +365,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);
         if (!closed && result.PreviousQuests is { } previous && receipt.Character.ActiveMainQuests.Any(row => previous.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
-        if (result.ClearFact is not null)
+        if (result.ClearFact is not null && !potionClear)
             await DungeonSettlementProjection.EnableAsync(context, result.MonsterKey);
         return CommandResult.Handled;
     }
