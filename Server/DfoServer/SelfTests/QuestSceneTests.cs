@@ -31,6 +31,7 @@ internal static class QuestSceneTests
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
         VerifyRepeatedPassiveHunt(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
+        VerifyBossRoomAntNests(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         foreach (var mode in new[] { "normal","lost","completedParent" })
         {
             bool lost = mode == "lost";
@@ -742,6 +743,75 @@ internal static class QuestSceneTests
         That(f.Session.ObserveFormalPassiveTrigger((ushort)questId, new(channel, 0, 0), fingerprint, rooms) is null &&
             f.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == after.ConditionState,
             "超过本图放置份数的相同 33 不再减少");
+    }
+
+    // #441：3455 的目标是物件 18568。boss 房 70229 放了两份。死亡日志里的 65641 是同图蚂蚁，不是蚁穴。
+    // 39 仍不计数；两次猎杀 33 各消耗一份放置行。
+    static void VerifyBossRoomAntNests(TownCatalog towns, CharacterCatalog characters, ItemResources items,
+        QuestCatalog quests, SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons,
+        DungeonRoomCatalog rooms, DungeonKillExperienceCatalog kills)
+    {
+        const int questId = 3455;
+        const int mapId = 70229;
+        const int nest = 18568;
+        var quest = quests.Get(questId);
+        That(QuestHuntProgress.TryTargets(quest, out var targets) &&
+            targets.Select((target, index) => (target, index)).Any(row => row.target.EnemyType == 3 && row.target.MonsterId == nest && row.target.Count == 5),
+            "3455 是副本 157 的被动物件 18568，数量 5");
+        int channelIndex = targets.Select((target, index) => (target, index)).First(row => row.target.MonsterId == nest).index;
+        var area = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps.TryGetValue(world, out var selection) && selection.Error is null &&
+            selection.Options.Any(option => option.DungeonId == quest.DungeonIndex));
+        var done = new HashSet<int>(quest.Prerequisites);
+        var group = quest.Definition?.PrerequisiteGroups.FirstOrDefault(row => row.Length > 0);
+        if (group is not null) done.UnionWith(group);
+        done.UnionWith(area.Quests);
+        if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+        if (towns.DungeonMaps.TryGetValue(area.DungeonWorldMap!.Value, out var worldMap))
+            foreach (var option in worldMap.Options.Where(option => option.DungeonId == quest.DungeonIndex && option.QuestId > 0 && !option.InProgress))
+                done.Add(option.QuestId);
+        var townMap = area.Map(done);
+        foreach (var gate in townMap.DungeonGates.Where(gate => gate.Conditions.Length == 0))
+            done.UnionWith(gate.Quests);
+        townMap = area.Map(done);
+        var bounds = townMap.Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)),
+            checked((ushort)(bounds.Y + bounds.Height / 2)));
+        using var f = new Fixture(towns, characters, skills, growth, quests, false, checked((byte)quest.MinimumLevel),
+            done.Order().ToArray(), position: position);
+        That(f.Session.ChangeQuest((ushort)questId, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces)?.Commit is not null,
+            "3455 按真实前置接取");
+        var opening = f.Session.EnterFormalDungeon(checked((uint)quest.DungeonIndex!.Value), (uint)questId, 0, dungeons, rooms);
+        That(opening is not null, "3455 进入副本：" + f.Session.LastFormalDungeonRejection);
+        var boss = opening!.Entry.Maze.MapSpecification!.Single(map => map.Id == mapId);
+        That(rooms.Get(boss).PassiveObjects.Count(row => row.ObjectId == nest) == 2, "70229 正好放置两份蚁穴 18568");
+        var receipt = f.Session.CompleteFormalDungeonLoading()!;
+        if (receipt.Snapshot.CurrentMap.Position != boss.Position)
+        {
+            var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology, receipt.Snapshot.CurrentMap.Position, boss.Position);
+            for (int step = 0; step < path.Length - 1; step++)
+            {
+                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).ToArray())
+                    That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth).Outcome ==
+                        DungeonRunOutcome.Accepted, "前往 70229 时清除阻挡");
+                That(f.Session.MoveFormalDungeon(checked((byte)path[step + 1].X), checked((byte)path[step + 1].Y)) is not null, "进入下一房间");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+            }
+        }
+        That(receipt.Snapshot.CurrentMap.Id == mapId, "当前房间是 boss 房 70229");
+        var before = f.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState;
+        uint beforeChannel = (before >> (channelIndex * 9)) & 511;
+        string fingerprint = new string('N', 64);
+        byte channel = channelIndex == 0 ? (byte)0x10 : channelIndex == 1 ? (byte)0x20 : (byte)0x40;
+        That(f.Session.ObserveFormalPassiveDeath((uint)nest, true, fingerprint, rooms) is null &&
+            f.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == before,
+            "70229 两份 18568 的 39 不计数");
+        That(f.Session.ObserveFormalPassiveTrigger((ushort)questId, new(channel, 0, 0), fingerprint, rooms)?.Commit is { ProjectionCurrent: true } &&
+            f.Session.ObserveFormalPassiveTrigger((ushort)questId, new(channel, 0, 0), fingerprint, rooms)?.Commit is { ProjectionCurrent: true },
+            "70229 两次猎杀 33 各计入一份蚁穴");
+        uint afterChannel = (f.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState >> (channelIndex * 9)) & 511;
+        That(beforeChannel >= 2 && afterChannel == beforeChannel - 2, "两份蚁穴都从 3455 的对应通道扣掉");
+        That(f.Session.ObserveFormalPassiveTrigger((ushort)questId, new(channel, 0, 0), fingerprint, rooms) is null, "第三份 33 不再消耗 70229 的放置行");
     }
 
     internal sealed class Fixture : IDisposable
