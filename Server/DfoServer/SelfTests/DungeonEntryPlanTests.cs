@@ -17,6 +17,23 @@ internal static class DungeonEntryPlanTests
         int checks = Count;
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var ekern = new Character(17, 0, "Ekern", 1, new Location(35, 1, 0, 0, 0), null) { Level = 90 };
+        var noQuests = new QuestCatalog(new());
+        foreach (uint ekernDungeon in new uint[] { 5097, 5098 })
+        {
+            That(DungeonEntryPlan.TryCreate(catalog, ekern, ekernDungeon, 0, 2, out var opened, out var openedReason, draw: _ => 0, quests: noQuests) &&
+                opened is { Difficulty: 2, IsOrdinary: true, DisableFatigueConsumption: true, QuestId: 0 } &&
+                opened.Maze.StaticTopology.Supported && openedReason == "resource-plan-ready",
+                "魔界集结地等待区的艾肯副本按难度 2 进入：" + ekernDungeon + " " + openedReason);
+            int mazes = catalog.Get(checked((int)ekernDungeon)).Mazes.Count;
+            if (mazes > 1)
+                That(DungeonEntryPlan.TryCreate(catalog, ekern, ekernDungeon, 0, 2, out var second, out _, draw: _ => 1, quests: noQuests) &&
+                    second!.Maze.SourceOrdinal == 1, "5097 第二条迷宫同样可进入");
+            That(!DungeonEntryPlan.TryCreate(catalog, ekern, ekernDungeon, 0, 0, out _, out var wrongDifficulty, quests: noQuests) &&
+                wrongDifficulty == "difficulty-unsupported", "艾肯副本不接受难度 0：" + ekernDungeon);
+        }
+        That(!DungeonEntryPlan.TryCreate(catalog, ekern with { Level = 89 }, 5097, 0, 2, out _, out var tooLow, quests: noQuests) &&
+            tooLow == "dungeon-level-too-low", "89 级不能进入遗落的神殿");
         var character = new Character(17, 0, "Plan", 42, new Location(38, 2, 100, 200, 0), null)
         {
             Level = 1,

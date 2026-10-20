@@ -76,6 +76,14 @@ internal static class DungeonCatalogTests
         var riftDifficulty = Definition(new DungeonRawSection("difficulty",[new(0,3)]), designated with { Tokens = [new(0,3)] });
         That(Enumerable.Range(0,5).All(value => riftDifficulty.AllowsDifficulty((byte)value,false) == (value == 3)),
             "difficulty 与 designate dungeon difficulty 同为 3 且没有难度表时只放行难度 3");
+        var repeatedLock = Definition(new DungeonRawSection("difficulty",[new(0,2)]), designated, designated);
+        That(Enumerable.Range(0,5).All(value => repeatedLock.AllowsDifficulty((byte)value,false) == (value == 2)),
+            "相同指定难度重复书写且没有难度表时只放行该难度");
+        var conflictingLock = Definition(new DungeonRawSection("difficulty",[new(0,2)]), designated, designated with { Tokens = [new(0,1)] });
+        That(Enumerable.Range(0,5).All(value => !conflictingLock.AllowsDifficulty((byte)value,false)),
+            "互相冲突的重复指定难度仍然全部拒绝");
+        That(Enumerable.Range(0,5).All(value => !Definition(designated, designated, levels).AllowsDifficulty((byte)value,false)),
+            "重复指定难度旁边还有难度表时不把它们折成一条");
         var fixture = new Fixture();
         var beastTokens = new List<PvfToken>();
         for (int variant = 0; variant < 3; variant++)
@@ -248,6 +256,16 @@ internal static class DungeonCatalogTests
         foreach (int rift in new[] { 316, 530 })
             That(catalog.Get(rift).AllowsDifficulty(3, false) && !catalog.Get(rift).AllowsDifficulty(0, false),
                 "裂缝副本只放行资源声明的难度 3：" + rift);
+        foreach (int ekern in new[] { 5097, 5098 })
+        {
+            var legend = catalog.Get(ekern);
+            That(legend.MinimumLevel == 90 && legend.DisableFatigueConsumption &&
+                legend.Mazes.Count > 0 && legend.Mazes.All(maze => maze.ResourceError is null && maze.StaticTopology.Supported) &&
+                Enumerable.Range(0, 5).All(value => legend.AllowsDifficulty((byte)value, false) == (value == 2)),
+                "艾肯传奇副本只放行重复声明的难度 2：" + ekern);
+        }
+        That(Enumerable.Range(0, 5).All(value => !catalog.Get(1).AllowsDifficulty((byte)value, false)),
+            "洛兰同时声明指定难度 0 和 1 时普通路线仍全部拒绝");
         Reject(() => catalog.Get(-1), "negative dungeon index rejected");
         Reject(() => catalog.Get(int.MaxValue), "unlisted dungeon index rejected");
         var dungeon = catalog.Get(3);

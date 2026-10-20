@@ -195,9 +195,15 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             }
         }
         var designated = RawSections.Where(section => section.Tag == "designate dungeon difficulty").ToArray();
+        var levels = RawSections.Where(section => section.Tag == "difficulty level").ToArray();
+        // 同一副本在迷宫后再写一遍相同的指定难度（5097、5098 都是 2）。没有难度表时按一条处理。
+        // 数值不一致，或同时还写了难度表，仍然整段拒绝。
+        if (designated.Length > 1 && levels.Length == 0 &&
+            designated.All(section => section.Tokens.SequenceEqual(designated[0].Tokens)) &&
+            designated[0].Tokens is [{ Type: 0, Value: >= -1 and <= 4 }])
+            designated = [designated[0]];
         if (designated.Length > 1 || designated.Length == 1 && (designated[0].Tokens is not [{ Type: 0, Value: >= -1 and <= 4 }] ||
             designated[0].Tokens[0].Value >= 0 && designated[0].Tokens[0].Value != difficulty)) return false;
-        var levels = RawSections.Where(section => section.Tag == "difficulty level").ToArray();
         // 无难度表时：比赛副本沿用唯一指定难度；[difficulty] 与 [designate dungeon difficulty] 写成同一个 0–4 时只放行该难度
         // （魔界裂缝、黎明裂缝都是 3，客户端入场参数也是 3）。其余仍只放行难度 0。
         if (levels.Length == 0)
