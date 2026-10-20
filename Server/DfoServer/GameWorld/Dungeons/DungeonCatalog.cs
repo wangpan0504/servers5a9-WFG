@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using PvfLib;
 
 namespace DfoServer.GameWorld.Dungeons;
 
 internal readonly record struct DungeonPoint(int X, int Y);
+// 0409B7E0 按物品编号写入定义 +0xDCC，后两个整数落在节点 +0x10 和 +0x14。
+// Third 只保留资源原值；消耗、免费、AND/OR 都还没有消费者证明。
+internal readonly record struct DungeonRequiredItemRow(int ItemId, int Count, int Third);
 // 迷宫 [randomized object creation] 中已闭合的单对象行。世界坐标来自 [pos]，[map] 只表示所在格。
 internal sealed record DungeonRandomizedObject(DungeonPoint Map, int ObjectId, string Team, int PositionX, int PositionY);
 internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, string Path)
@@ -115,6 +119,29 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool IsTournament => RawSections.Where(row => row.Tag == "tournament dungeon").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
     // 资源识别与正式准入分开；畸形声明也不能落回普通入场。
     public bool RequiresGriefEntryContract => Id == 5115;
+    public bool IsBossRushDungeon => string.Equals(DungeonType?.Trim(), "boss rush dungeon", StringComparison.OrdinalIgnoreCase);
+    public bool IsDazzlementTower => string.Equals(DungeonType?.Trim(), "tower of dazzlement", StringComparison.OrdinalIgnoreCase);
+    // 0409EC16 把唯一整数收成非零字节；本资源里合法形状是单独的 1。
+    public bool EnterWithoutFatigue => RawSections.Where(row => row.Tag == "enter without fatigue").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: 1 }] }];
+    public ImmutableArray<DungeonRequiredItemRow> RequiredItemRows
+    {
+        get
+        {
+            var rows = RawSections.Where(row => row.Tag == "required item").ToArray();
+            if (rows.Length != 1 || rows[0].Tokens.Count == 0 || rows[0].Tokens.Count % 3 != 0 ||
+                rows[0].Tokens.Any(token => token.Type != 0))
+                return [];
+            var result = ImmutableArray.CreateBuilder<DungeonRequiredItemRow>(rows[0].Tokens.Count / 3);
+            for (int i = 0; i < rows[0].Tokens.Count; i += 3)
+            {
+                int item = rows[0].Tokens[i].Value, count = rows[0].Tokens[i + 1].Value, third = rows[0].Tokens[i + 2].Value;
+                if (item <= 0 || count <= 0) return [];
+                result.Add(new(item, count, third));
+            }
+            return result.MoveToImmutable();
+        }
+    }
     public bool IsGriefTower => Id == 5115 &&
         Path.Equals("dungeon/towers/grief/5115_001.dgn", StringComparison.OrdinalIgnoreCase) &&
         RawSections.Where(row => row.Tag == "tower of grief").ToArray() is [{ Tokens.Count: 0 }];

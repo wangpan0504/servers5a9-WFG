@@ -119,10 +119,33 @@ internal sealed record DungeonEntryPlan(
             reason = "dungeon-resource-mismatch";
             return false;
         }
-        // 几何支持不代表票据与零疲劳准入合同已经实现；共享入口同时覆盖普通、显式和回放。
+        // 几何支持不代表票据、扣费和楼层已经实现。疲劳标记先按客户端谓词核对，其余字段继续拒绝。
         if (definition.RequiresGriefEntryContract)
         {
+            // 029FFAA0 在定义 +0x619（[no fatigue]）非零时返回不要求疲劳。
+            // 0409EC16 / 02A37134 另把 [enter without fatigue] 的非零值抄到实例 +0x84C。
+            // 两条都出现但不一致时单独拒绝；都没有时仍走原来的整包拒绝，避免把几何当成准入。
+            bool fatigueDeclared = definition.RawSections.Any(row => row.Tag is "no fatigue" or "enter without fatigue");
+            if (fatigueDeclared && (!definition.DisableFatigueConsumption || !definition.EnterWithoutFatigue))
+            {
+                reason = "grief-tower-fatigue-mismatch";
+                return false;
+            }
             reason = "grief-tower-entry-contract-unsupported";
+            return false;
+        }
+        // 02A00360 只识别类型码 0x54。5×5 网格和把 6,6 搬进格子都不是这条房间合同。
+        if (definition.IsBossRushDungeon)
+        {
+            reason = "boss-rush-room-contract-unproven";
+            return false;
+        }
+        // 实例 +0x7BC 与 0x4A 的唯一比较在 029FFAA0：该类型返回不要求疲劳。
+        // 定义 +0x760 只在解析时写成 0x4A，没有第二道类型准入。有票据或疲劳声明对不上时仍拒绝。
+        if (definition.IsDazzlementTower &&
+            (!definition.DisableFatigueConsumption || !definition.EnterWithoutFatigue || !definition.RequiredItemRows.IsEmpty))
+        {
+            reason = "dazzlement-tower-entry-unproven";
             return false;
         }
         if (practice && (!definition.AllowsPractice || questId != 0 || isReplay || hellParty || hellLegend || quest is not null))

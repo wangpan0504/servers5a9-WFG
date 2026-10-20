@@ -213,8 +213,8 @@ internal static class QuestDungeonClearProgressTests
             That(awaySession.ChangeQuest(6401,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces) is
                 { Outcome: QuestLifecycleOutcome.Committed, Character.ActiveMainQuests: [{ QuestId: 6401, ConditionState: 1 }] },
                 "6400完成后可以接贮藏箱，初值保持未开启");
-            That(awaySession.ChangeQuest(6401,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0))?.Commit is null,
-                "不在希莫娜地图时，33不能开启贮藏箱");
+            That(awaySession.ChangeQuest(6401,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(0x10,0,0))?.Commit is null,
+                "不在希莫娜地图时，通道0x10的33不能开启贮藏箱");
             var npc = host.map.Npcs.First(row => row.Id == (uint)box.Npc);
             byte level = checked((byte)box.MinimumLevel);
             var draft = SkillRepositoryTests.Fixture("List6401here",towns,characters,skills);
@@ -231,10 +231,16 @@ internal static class QuestDungeonClearProgressTests
             var hereSession = new GameSession(repository,towns,owner); hereSession.Select(here.Slot,resumeTown:true); hereSession.MarkReady();
             var acceptedHere = hereSession.ChangeQuest(6401,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces);
             That(acceptedHere?.Commit is not null,"希莫娜地图可以接贮藏箱："+acceptedHere?.Reason);
-            var opened = hereSession.ChangeQuest(6401,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
+            // 客户端贮藏箱事件经 0200EE50 只发通道 0x10 的 7 字节 33；无通道 33 没有这条来源。
+            That(hereSession.ChangeQuest(6401,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0))?.Commit is null &&
+                hereSession.Selected!.ActiveMainQuests.Single(row => row.QuestId == 6401).ConditionState == 1,
+                "无通道33不是贮藏箱事件，不能归零");
+            That(hereSession.ChangeQuest(6401,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(0x20,0,0))?.Commit is null,
+                "通道0x20不是贮藏箱载荷的通道0");
+            var opened = hereSession.ChangeQuest(6401,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(0x10,0,0));
             That(opened is { Outcome: QuestLifecycleOutcome.Committed } &&
                 opened.Character.ActiveMainQuests.Single(row => row.QuestId == 6401).ConditionState == 0,
-                "希莫娜地图上的终末33归零："+opened?.Outcome+" "+opened?.Reason);
+                "希莫娜地图上通道0x10的33归零："+opened?.Outcome+" "+opened?.Reason);
             var finished = hereSession.FinishQuest(6401,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
             That(finished.Receipt?.Commit.Character.CompletedQuests.Contains(6401) == true,
                 "34交付贮藏箱奖励："+finished.Outcome+" "+finished.Reason);

@@ -172,7 +172,9 @@ internal sealed partial class GameSession
                 expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,cinematicEntry)))
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
             // 6401 的条件文案是在希莫娜菜单开启贮藏箱。33 只在该任务 NPC 所在城镇地图上归零。
-            if (condition is { Channel: null, Value: 0, Reserved: 0 } && QuestDazzlementStorage.Matches(quest) &&
+            // 0155C6F8 发事件 0x28（载荷 6401,0），02011CB0 按通道 0 的低 9 位次数调用 0200EE50；
+            // kind 0 时 0200F0BB 写通道 0x10、value 归 0，02280690 发 7 字节 33。无通道形状不是这条路径。
+            if (condition is { Channel: 0x10, Value: 0, Reserved: 0 } && QuestDazzlementStorage.Matches(quest) &&
                 capture.Phase == SessionPhase.Town && HasDialogueNpc(quest.Npc))
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
             if (condition is not { Channel: null, Value: 0, Reserved: 0 } ||

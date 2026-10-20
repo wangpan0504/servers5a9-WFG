@@ -221,6 +221,56 @@ internal static class DungeonMapPoolTests
         var eligible = new Character(99,0,"GriefResource",0,new(38,2,1085,249),null) { Level = 90 };
         That(!DungeonEntryPlan.TryCreate(catalog,eligible,5115,0,0,out var entry,out string reason) && entry is null &&
             reason == "grief-tower-entry-contract-unsupported","真实目录正式入口仍明确拒绝，资源成功不创建Run");
+        That(griefDefinition.DisableFatigueConsumption && griefDefinition.EnterWithoutFatigue &&
+            griefDefinition.RequiredItemRows.SequenceEqual([new(10161065,1,1), new(4473,1,1)]),
+            "5115 同时声明无疲劳、enter without fatigue=1，以及两行票据三元组");
+        var fatigueGap = griefDefinition with { DisableFatigueConsumption = false };
+        That(!DungeonEntryPlan.TryCreate(fatigueGap,eligible,5115,0,0,out _,out string fatigueReason) &&
+            fatigueReason == "grief-tower-fatigue-mismatch","无疲劳标记未成立时不能再走零疲劳准入");
+        var soul = catalog.Get(337);
+        var soulMaze = soul.Mazes.Single();
+        That(soul.IsBossRushDungeon && soulMaze is { Width: 0, Height: 0, ResourceError: not null } &&
+            soulMaze.ResourceError!.Contains("maze 坐标超出 size", StringComparison.Ordinal) &&
+            !DungeonEntryPlan.TryCreate(catalog,eligible with { Level = 95 },337,0,0,out var soulEntry,out string soulReason) &&
+            soulEntry is null && soulReason == "boss-rush-room-contract-unproven",
+            "337 保持解析失败后的 0×0，不改成 5×5，也不把 Boss 6,6 搬进格子");
+        var fake = soulMaze with { MapSpecification = [new("boss", new(0,0), 1, "map/fake.map")] };
+        That(!DungeonEntryPlan.TryCreate(soul with { Mazes = [fake] }, eligible with { Level = 95 }, 337, 0, 0, out _, out string fakeReason) &&
+            fakeReason == "boss-rush-room-contract-unproven","宽高为 0 时补一张假地图也不能进灵魂之冢");
+        var dazzlement = catalog.Get(7601);
+        var dazzleCharacter = eligible with { Level = 95 };
+        That(dazzlement.IsDazzlementTower && !dazzlement.RequiresGriefEntryContract && dazzlement.RequiredItemRows.IsEmpty &&
+            dazzlement.DisableFatigueConsumption && dazzlement.EnterWithoutFatigue &&
+            DungeonEntryPlan.TryCreate(catalog, dazzleCharacter, 7601, 0, 0, out var dazzleEntry, out string dazzleReason) &&
+            dazzleReason == "resource-plan-ready" && dazzleEntry is { UsesFatigue: false, DisableFatigueConsumption: true } &&
+            dazzleEntry.StartMap.Id == 450001 && dazzleEntry.BossMap.Id == 450002 && dazzleEntry.BossMap.Kind == "boss",
+            "7601 按类型 0x4A 的零疲劳合同进入，房间是 450001/450002，不套 5115 的票据");
+        That(!DungeonEntryPlan.TryCreate(catalog, eligible with { Level = 94 }, 7601, 0, 0, out _, out string lowLevel) &&
+            lowLevel == "dungeon-level-too-low","7601 低于资源最低等级 95 时拒绝");
+        var ticketed = dazzlement with { RawSections = [..dazzlement.RawSections, new DungeonRawSection("required item",
+            [new(0,10161065), new(0,1), new(0,1)])] };
+        That(!DungeonEntryPlan.TryCreate(ticketed, dazzleCharacter, 7601, 0, 0, out _, out string ticketReason) &&
+            ticketReason == "dazzlement-tower-entry-unproven","7601 一旦带上未证明的票据行就不能进");
+        That(!DungeonEntryPlan.TryCreate(dazzlement with { DisableFatigueConsumption = false }, dazzleCharacter, 7601, 0, 0, out _, out string dazzleFatigue) &&
+            dazzleFatigue == "dazzlement-tower-entry-unproven","7601 的无疲劳标记不成立时不能进");
+        var lukePhase = catalog.Get(5054);
+        var lukeNormal = catalog.Get(5101);
+        That(lukePhase.DungeonType == "dungeon" && lukeNormal.DungeonType == "dungeon" &&
+            !lukePhase.IsBossRushDungeon && !lukeNormal.IsDazzlementTower &&
+            lukePhase.Mazes.Count == 15 && lukeNormal.Mazes.Count == 1,
+            "卢克 phase 与普通图仍是 dungeon 类型；5054 有 15 张迷宫，5101 只有一张");
+        That(!DungeonEntryPlan.TryCreate(catalog, eligible, 5054, 0, 0, out _, out string lukePhaseReason) &&
+            lukePhaseReason == "route-maze-ambiguous",
+            "5054 没有证明过的迷宫选择器，15 张无任务连接的迷宫不能猜一张进去");
+        That(!DungeonEntryPlan.TryCreate(catalog, eligible, 5101, 0, 0, out _, out string lukeNormalReason) &&
+            lukeNormalReason == "difficulty-unsupported" &&
+            !DungeonEntryPlan.TryCreate(catalog, eligible, 5101, 0, 2, out _, out string lukeDesignated) &&
+            lukeDesignated == "difficulty-unsupported",
+            "5101 指定难度 2，但没有难度表或成对的 difficulty 标记，现有合同拒绝难度 0 和 2");
+        var lukeChannel = Infrastructure.ServerRuntime.LoadChannels(Path.Combine(Path.GetTempPath(), "no-such-channel-" + Guid.NewGuid().ToString("N")))
+            .Channels.Single(row => row.Number == 20);
+        That(lukeChannel.Type == 32 && lukeChannel.Group == "[luke_raid]" && lukeChannel.NameReference == "<chn_channel_info_037>",
+            "频道 20 仍是类型 32、分组 [luke_raid]，没有另造频道类型");
         Console.WriteLine($"PASS {Count-checks} 匹配PVF普通地图池与显式路线资源断言（合成布局，非实机）");
     }
 }
