@@ -269,7 +269,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         return new(values.Contains("[village]"), values.Contains("[seria room]"));
     }
 
-    static bool IsRootDeclaration(string tags, int declarationIndex)
+    internal static bool IsRootDeclaration(string tags, int declarationIndex)
     {
         var boundaries = Regex.Matches(tags, @"\[(?<close>/?)(?<name>[^/\]\r\n]+)\]");
         // PVF标量字段通常没有闭合标签；仅跟踪实际出现闭合的名字，不把标量误当外层。

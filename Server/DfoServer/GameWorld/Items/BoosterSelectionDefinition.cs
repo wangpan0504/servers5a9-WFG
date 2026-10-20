@@ -28,17 +28,68 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
         if (matches.Count == 0 || matches.Count != Regex.Matches(text, @"\[booster select category\]").Count)
             return new([], "选择分类缺失或嵌套无效");
         var categories = ImmutableArray.CreateBuilder<BoosterSelectionCategory>();
-        var keys = new HashSet<(byte, byte)>();
+        var firstByKey = new Dictionary<(byte, byte), (BoosterSelectionCategory Parsed, string Body)>();
+        bool duplicated = false;
         foreach (Match match in matches)
         {
             string body = match.Groups[1].Value;
             var header = Regex.Match(body, @"^\s*(\d+)\s+(\d+)\s*");
             if (!header.Success || !byte.TryParse(header.Groups[1].Value, out byte category) ||
-                !byte.TryParse(header.Groups[2].Value, out byte subcategory) || !keys.Add((category, subcategory)))
+                !byte.TryParse(header.Groups[2].Value, out byte subcategory))
                 return new([], "选择分类索引无效或重复");
-            categories.Add(ParseCategory(category, subcategory, body[header.Length..]));
+            var parsed = ParseCategory(category, subcategory, body[header.Length..]);
+            if (firstByKey.TryGetValue((category, subcategory), out var first))
+            {
+                duplicated = true;
+                // 只兼容完整token等价的重复；保留原块，按原单份分类选择，不能拼接奖励或绕过语法校验。
+                if (parsed.PendingRule is not null || first.Parsed.PendingRule is not null ||
+                    !CategoryTokens(first.Body).SequenceEqual(CategoryTokens(body), StringComparer.Ordinal))
+                    return new([], "选择分类索引无效或重复");
+            }
+            else
+                firstByKey.Add((category, subcategory), (parsed, body));
+            categories.Add(parsed);
         }
+        if (duplicated && (count == 0 || Regex.Matches(text, @"\[/booster select category\]").Count != matches.Count ||
+            categories.Any(category => category.PendingRule is not null) ||
+            !HasDuplicateCategoryBounds(text, count, matches, categories)))
+            return new([], "重复分类的类型、维数或坐标无效");
         return new([], Selection: new(count, categories.ToImmutable()));
+    }
+
+    static IEnumerable<string> CategoryTokens(string body) =>
+        Regex.Matches(body, @"`[^`]*`|\[[^\]\r\n]*\]|[^\s\[\]`]+|[^\s]").Select(match => match.Value);
+
+    static bool HasDuplicateCategoryBounds(string text, int count, MatchCollection blocks,
+        IEnumerable<BoosterSelectionCategory> categories)
+    {
+        string masked = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
+        string? RootField(string name)
+        {
+            var fields = Regex.Matches(masked, @"\[" + Regex.Escape(name) + @"\]");
+            if (fields.Count != 1 || !BoosterCatalog.IsRootDeclaration(masked, fields[0].Index))
+                return null;
+            int start = fields[0].Index + fields[0].Length;
+            int end = masked.IndexOf('[', start);
+            return text[start..(end < 0 ? text.Length : end)].Trim();
+        }
+        if (blocks.Any(block => !BoosterCatalog.IsRootDeclaration(masked, block.Index)))
+            return false;
+        string? type = RootField("stackable type");
+        if (type is null || !Regex.IsMatch(type, @"^`\[booster selection\]`\s+0$"))
+            return false;
+        if (!int.TryParse(RootField("booster selection num"), out int rootCount) || rootCount != count)
+            return false;
+        string[]? dimensions = RootField("booster category num")?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (dimensions is null || dimensions.Length is not (2 or 3) ||
+            !int.TryParse(dimensions[0], out int rank) || rank != dimensions.Length - 1 ||
+            !int.TryParse(dimensions[1], out int size) || size is < 1 or > 256)
+            return false;
+        int subsize = 1;
+        if (rank == 2 && (!int.TryParse(dimensions[2], out subsize) || subsize is < 1 or > 256))
+            return false;
+        return categories.All(category => category.Category <= 127 && category.Subcategory <= 127 &&
+            category.Category < size && category.Subcategory < subsize);
     }
 
     static BoosterSelectionCategory ParseCategory(byte category, byte subcategory, string body)
