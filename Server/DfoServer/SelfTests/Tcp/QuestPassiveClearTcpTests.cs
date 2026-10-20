@@ -27,12 +27,16 @@ internal static class QuestPassiveClearTcpTests
             [0,0,7,5,4,6,5,15],[76532,76533,76534]);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,5964,291100308,109022849,59594,
             [2,1,1,7,1,1,2,1,2,1],[59598,59600,59601,59602,59603,59599,59595,59594,59596,59597]);
+        VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,3646,74,10624,91901,
+            [0,8,0,3,3,5,6,0,2],[91902,91904,91909,91905],
+            [91901,91908,91902,91903,91909,91904,91905,91906,91907],expectedStartMap:91901);
     }
 
-    // #218/#240：准确任务复用同一热服务；单份、多份及跨房回访通过合成33驱动，不把消费槽解释成实例号。
+    // #181/#218/#240：准确任务复用同一热服务；单份、多份及跨房回访通过合成33驱动，不把消费槽解释成实例号。
     static void VerifyPassiveHunt(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain,DungeonCatalog dungeons,
-        ushort questId,uint dungeonId,int templateId,int firstMap,int[] copies,int[] targetMaps)
+        ushort questId,uint dungeonId,int templateId,int firstMap,int[] copies,int[] targetMaps,int[]? mapOrder=null,
+        int? expectedStartMap=null)
     {
         string account = "passive-hunt-"+questId;
         var quest = resources.Quests.Get(questId);
@@ -62,9 +66,15 @@ internal static class QuestPassiveClearTcpTests
             var map = FormalDungeonTcpTests.Enter(peer,questId,dungeonId,row => information=row);
             var maze = dungeons.Get(checked((int)dungeonId)).Mazes.Single(row => row.SourceOrdinal == information[7]);
             var route = maze.MapSpecification!;
-            That(route.Select(row => row.Id).SequenceEqual(Enumerable.Range(firstMap,copies.Length)) &&
-                route.Select(row => rooms.Get(row).PassiveObjects.Count(source => source.ObjectId == templateId)).SequenceEqual(copies),
+            var actualRooms = route.Select(row => rooms.Get(row,requirePassiveDefinitions:false)).ToArray();
+            That(route.Select(row => row.Id).SequenceEqual(mapOrder ?? Enumerable.Range(firstMap,copies.Length).ToArray()) &&
+                actualRooms.All(row => row.PassiveObjects.Count(source => source.ObjectId == templateId) == copies[row.Map.Id-firstMap] &&
+                    row.PassiveObjects.Where(source => source.ObjectId == templateId).All(source =>
+                        source.Path is { Length:>0 } path && resources.Archive.Contains(path))),
                 "准确任务地图集合和各房实际目标放置数保持原资源");
+            if (expectedStartMap is { } start)
+                That(map.Length >= 19 && map[13] != 0 && U32(map,14) == start,
+                    "准确任务实际入场保持声明起点，不跳过无目标房验证");
             FormalDungeonTcpTests.Load(peer); Drain();
             acceptance = (string)fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)[0][0];
             That(Scalar() == 15,$"{questId}真实31初始化剩余15，入场和加载不推进");
@@ -78,6 +88,7 @@ internal static class QuestPassiveClearTcpTests
             That(State() == before,$"{questId}进度未完成时34拒绝且不产生奖励");
             uint remaining = 15;
             var consumed = new HashSet<int>();
+            var expectedPerMap = new Dictionary<int,int>();
             foreach (int id in targetMaps)
             {
                 var target = route.Single(row => row.Id == id);
@@ -111,6 +122,7 @@ internal static class QuestPassiveClearTcpTests
                 }
                 var assets = fixture.Snapshot("SELECT experience,gold FROM characters WHERE id=$p0",peer.Id);
                 int count = Math.Min(copies[id-firstMap],checked((int)remaining));
+                expectedPerMap.Add(id,count);
                 for (int at=0;at<count;at++) Trigger(--remaining);
                 That(fixture.Snapshot("SELECT experience,gold FROM characters WHERE id=$p0",peer.Id) == assets,
                     $"{questId}物件33只推进任务，不伪造普通怪物经验和金币");
@@ -122,6 +134,7 @@ internal static class QuestPassiveClearTcpTests
             var sources = events.Select(row => JsonSerializer.Deserialize<QuestSceneEvent>((string)row[1])!).ToArray();
             That(remaining == 0 && events.Length == 15 && events.All(row => (string)row[0] == acceptance) &&
                 sources.All(row => row.DungeonId == dungeonId && row.TemplateId == templateId) &&
+                sources.GroupBy(row => row.MapId).All(group => expectedPerMap.GetValueOrDefault(group.Key) == group.Count()) &&
                 sources.Select(row => row.OperationId).Distinct().Count() == 15 &&
                 sources.Select(row => (row.MapId,row.SourceOrdinal)).Distinct().Count() == 15 &&
                 sources.Select(row => row.Identity.InstanceId).Distinct().Count() == 1,
