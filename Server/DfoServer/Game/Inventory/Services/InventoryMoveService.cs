@@ -25,12 +25,20 @@ internal static class InventoryMoveService
         var before = character.Inventory;
         var source = before.Find(request.Source);
         var destination = before.Find(request.Destination);
-        // 当前客户端存入空个人金库格时允许把目标格号作为别名，非空格仍核对模板。
-        bool emptyCargoLocator = source is not null && destination is null &&
-            request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.PersonalCargo &&
-            request.Destination.Index >= 0 && request.DestinationItemId == request.Destination.Index;
+        // 当前客户端把个人金库格号写进物品编号：空格存入、从该格取出，以及丢到已占用格（编号为 0 或格号）。
+        // 0 仍是空格哨兵，不能把 0 号格的真实物品当成别名。已占用格只在编号对不上模板时改投空格，避免盖掉原物品。
+        bool sourceMatches = source is not null && PersonalCargoCell(request.Source, request.SourceItemId) ||
+            (source?.Core.ItemId ?? 0) == request.SourceItemId;
+        bool destinationMatches = destination is null && PersonalCargoCell(request.Destination, request.DestinationItemId) ||
+            (destination?.Core.ItemId ?? 0) == request.DestinationItemId ||
+            destination is not null && request.Destination.List == InventoryListType.PersonalCargo &&
+            (request.DestinationItemId == 0 || PersonalCargoCell(request.Destination, request.DestinationItemId));
+        bool throwOntoOccupied = destination is not null && destinationMatches &&
+            request.Destination.List == InventoryListType.PersonalCargo &&
+            destination.Core.ItemId != request.DestinationItemId &&
+            (request.DestinationItemId == 0 || PersonalCargoCell(request.Destination, request.DestinationItemId));
         if (request.Actor is not (-1 or 0) || request.Flag0 != 0 || request.Flag1 != 0 || request.DestinationCount != 0 ||
-            (source?.Core.ItemId ?? 0) != request.SourceItemId || !emptyCargoLocator && (destination?.Core.ItemId ?? 0) != request.DestinationItemId)
+            !sourceMatches || !destinationMatches)
             return InventoryResult.Reject(CannotMoveItem);
         // 029DA4CE/029DA611 写入模板编号，空格写0；先按原顺序校验，避免重复穿戴请求被反向解释为卸装。
         var sourceSlot = request.Source;
@@ -45,6 +53,15 @@ internal static class InventoryMoveService
         if (source is null || ExpiredMoveBlocked(source, sourceSlot, destinationSlot, utcSeconds) ||
             destination is not null && ExpiredMoveBlocked(destination, destinationSlot, sourceSlot, utcSeconds))
             return InventoryResult.Reject(CannotMoveItem);
+        if (throwOntoOccupied && sourceSlot.List != InventoryListType.PersonalCargo &&
+            !(source.Core.IsStackable && destination!.Core.IsStackable && source.Core.ItemId == destination.Core.ItemId))
+        {
+            var emptyCargo = FindEmptyDestination(character, source.Core, destinationSlot.List, catalog, utcSeconds, contracts);
+            if (emptyCargo is null)
+                return InventoryResult.Reject(CannotMoveItem);
+            destinationSlot = emptyCargo.Value;
+            destination = null;
+        }
         bool movesCreatureSkin = IsCreatureSkin(sourceSlot) || IsCreatureSkin(destinationSlot);
         if (movesCreatureSkin)
         {
@@ -156,6 +173,9 @@ internal static class InventoryMoveService
                 planned[sourceSlot] = source with { Core = source.Core with { Value = source.Core.Value - count } };
         }
     }
+
+    static bool PersonalCargoCell(InventorySlot slot, int requestedId) =>
+        slot.List == InventoryListType.PersonalCargo && slot.Index > 0 && requestedId == slot.Index;
 
     static InventorySlot? FindEmptyDestination(Character character, ItemCore core, InventoryListType list, ItemCatalog catalog, long utcSeconds,
         PremiumContractCatalog? contracts)

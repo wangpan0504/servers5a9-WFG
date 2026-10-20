@@ -40,7 +40,29 @@ internal static class CargoTests
             !InventoryMoveService.Plan(role, move with { Destination = new(InventoryListType.PersonalCargo, 8), DestinationItemId = 8 }, catalog, 0).Accepted,
             "目标别名不放宽源模板、错误格号或容量");
         var occupied = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Add(source with { Uid = 2, Position = move.Destination }) } };
-        That(!InventoryMoveService.Plan(occupied, move, catalog, 0).Accepted, "非空目标仍严格核对物品编号");
+        var merged = InventoryMoveService.Plan(occupied, move, catalog, 0);
+        That(merged.Accepted && merged.Plan!.After.Find(move.Destination)!.Core.Count == 3 &&
+            merged.Plan.After.Find(source.Position)!.Core.Count == 1,
+            "丢到同模板的已占用金库格时按格号别名并入，不覆盖原堆");
+        var other = new DfoServer.GameWorld.Items.ItemTemplate(51, DfoServer.GameWorld.Items.ItemKind.Material,
+            0, 1, 0, 100, 0, 0, 0, "[free]", 1, 0, "另一格材料");
+        catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = template, [51] = other });
+        var blocker = new InventoryItem(9, move.Destination, new ItemCore(51, other.Kind, 4));
+        var blocked = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Add(blocker) } };
+        var relocated = InventoryMoveService.Plan(blocked, move, catalog, 0);
+        That(relocated.Accepted && relocated.Plan!.After.Find(move.Destination) == blocker &&
+            relocated.Plan.After.Find(new(InventoryListType.PersonalCargo, 0))!.Core.ItemId == 50,
+            "直接丢到已占用金库格时改放空格，不替换原物品");
+        That(!InventoryMoveService.Plan(blocked, move with { DestinationItemId = 99 }, catalog, 0).Accepted,
+            "既不是格号也不是目标模板的编号仍然拒绝");
+        var stored = new InventoryItem(3, new(InventoryListType.PersonalCargo, 4), new ItemCore(50, template.Kind, 6));
+        var withdraw = new InventoryMoveRequest(stored.Position, 4, 2, new(InventoryListType.Main, 65), 0, 0, -1, 0, 0);
+        var taken = InventoryMoveService.Plan(role with { Inventory = new([stored]) }, withdraw, catalog, 0);
+        That(taken.Accepted && taken.Plan!.After.Find(withdraw.Destination)!.Core is { ItemId: 50, Value: 2 } &&
+            taken.Plan.After.Find(stored.Position)!.Core.Count == 4,
+            "从个人金库取出时接受格号作为源物品编号");
+        That(!InventoryMoveService.Plan(role with { Inventory = new([stored]) }, withdraw with { SourceItemId = 51 }, catalog, 0).Accepted,
+            "错误的源模板不能借格号别名取出");
         var sortRequest = InventoryRequests.Sort(Convert.FromHexString("06000000100218142000"));
         That(sortRequest.List == InventoryListType.PersonalCargo && (byte)sortRequest.Kind == 20 && sortRequest.Condition == 0,
             "本版实收整理请求为个人仓库category20，非物品模板类别");
