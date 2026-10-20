@@ -326,7 +326,7 @@ internal static class DungeonSettlementSessionTests
             Enter(f);
             Check(!f.Session.SellAtShop(new(new(InventoryListType.Equipment,12),1,1000,1000,0),
                 new(itemResources.Items,itemResources.Shops,itemResources.GoldLimits,itemResources.EpicPieces)).Accepted,
-                "德利拉出售不能绕过未结算副本阶段");
+                "商店出售不能绕过副本加载阶段");
             ClearRun(f);
             var previous = f.Session.Selected!;
             int draws = 0;
@@ -372,11 +372,15 @@ internal static class DungeonSettlementSessionTests
             Check(f.Session.ScheduleFormalDungeonCard(cards) && !f.Session.ScheduleFormalDungeonCard(cards),
                 "同一实例只能安排一次自动翻牌，重复70不能重置计时");
             var shop = new InventoryShopService(itemResources.Items,itemResources.Shops,itemResources.GoldLimits,itemResources.EpicPieces);
-            Check(!f.Session.SellAtShop(new(new(InventoryListType.Equipment,12),1,317,95,0),shop).Accepted,
-                "结算阶段不开放任意城镇商店或伪造NPC窗口");
+            var beforeQuery = f.Session.Selected!;
+            Check(f.Session.ReadShopPurchaseCounts(1000,shop,out var quotaSnapshot) is not null &&
+                quotaSnapshot is { Phase: SessionPhase.Settlement } && f.Session.CanPublishInventory(quotaSnapshot) &&
+                ReferenceEquals(beforeQuery,f.Session.Selected) && Same(beforeQuery,f.Read()),
+                "结算阶段限购查询读取当前库存，不修改资产或选角上下文");
             var sold = f.Session.SellAtShop(new(new(InventoryListType.Equipment,12),1,1000,1000,0),shop);
             Check(sold.Accepted && sold.Receipt?.Phase == SessionPhase.Settlement &&
-                f.Session.Selected!.Inventory.Find(new(InventoryListType.Equipment,12)) is null && Same(f.Session.Selected,f.Read()),
+                f.Session.Selected!.Inventory.Find(new(InventoryListType.Equipment,12)) is null && Same(f.Session.Selected,f.Read()) &&
+                !f.Session.CanPublishInventory(quotaSnapshot!),
                 "德利拉1000/1000结算窗口实际扣除物品并同事务增加金币");
             var beforeFlip = f.Session.Selected!;
             f.Sql("CREATE TRIGGER free_claim_fail BEFORE UPDATE OF claimed ON character_dungeon_card_rewards BEGIN SELECT RAISE(ABORT,'claim rollback'); END");

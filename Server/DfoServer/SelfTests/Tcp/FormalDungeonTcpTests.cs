@@ -56,6 +56,7 @@ internal static partial class FormalDungeonTcpTests
             EntryTown(peer);
             var map = Enter(peer);
             RejectDelilahServices(fixture,peer,"Loading");
+            RejectDungeonShop(fixture,peer);
             var target = new (byte X, byte Y)[] { (1, 1), (2, 1), (2, 0), (3, 0), (4, 0) };
             int[] ids = [76121, 76122, 76123, 76124, 76125, 76126];
             int movedSkill = -1;
@@ -80,6 +81,7 @@ internal static partial class FormalDungeonTcpTests
                 {
                     movedSkill = VerifyDungeonActions(fixture, peer);
                     RejectDelilahServices(fixture,peer,"Dungeon");
+                    VerifyDungeonShop(fixture,peer,"Dungeon");
                 }
                 if (room == 0)
                 {
@@ -228,6 +230,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(46, changedResult); peer.Barrier();
             That(Experience(fixture, peer.Id) == experience, "改变评分的46不能替换冻结报告");
             VerifyDelilahServices(fixture,peer,resources);
+            VerifyDungeonShop(fixture,peer,"Settlement");
             assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(69); peer.Expect(1, 69, [1]);
             peer.Send(70); That(peer.Expect(1, 70).Body.Length == 17, "70普通八槽完整ACK");

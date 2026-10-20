@@ -390,14 +390,6 @@ internal sealed partial class GameSession
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         pendingQuestCompletion is null && !HasPendingQuestScene;
 
-    public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop) => owner.Execute(() =>
-    {
-        if (!Ready || Selected is null || HasPendingQuestScene ||
-            Phase != SessionPhase.Town && !(request.NpcContext == 1000 && request.WindowState == 1000 && CanUseSettlementNpcServices()))
-            return InventoryResult.Reject();
-        return CommitInventory(Selected, shop.Sell(Selected, request));
-    });
-
     public FormalDungeonReceipt? FormalDungeonResultFocus() => owner.Execute(() =>
         Ready && !HasPendingFormalCard && Phase == SessionPhase.Settlement && HasFinishedDungeon(formalDungeon) ? FormalReceipt() : null);
 

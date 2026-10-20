@@ -70,6 +70,23 @@ internal sealed partial class GameSession
     public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1,
         bool requireTown = true, SessionPhase? requiredPhase = null) => PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase);
 
+    public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop) =>
+        PlanAndCommitInventory(character => shop.Sell(character, request), requireTown: false);
+
+    public ShopPurchaseCount[]? ReadShopPurchaseCounts(int npcId, InventoryShopService shop, out InventoryCommitReceipt? snapshot)
+    {
+        snapshot = owner.Execute<InventoryCommitReceipt?>(() =>
+            Ready && Selected is not null && (Phase == SessionPhase.Town ||
+                Phase is SessionPhase.Dungeon or SessionPhase.Settlement && formalDungeon is not null)
+                ? new(Selected, owner.Generation, SelectionEpoch)
+                {
+                    Phase = Phase,
+                    DungeonIdentity = formalDungeon?.Run.Snapshot.Identity
+                } : null);
+        // 只读当前已安装的库存快照，限购资源解析不占用账号锁。
+        return snapshot is null ? null : shop.PurchaseCounts(snapshot.Character, npcId);
+    }
+
     public InventoryResult PlanAndCommitBooster(Func<Character, InventoryResult> plan,
         DfoServer.GameWorld.Items.BoosterUsePlacesDefinition places) =>
         PlanAndCommitInventory(plan, 19, requireTown: false, allowSettlement: false, additionalGuard: () =>

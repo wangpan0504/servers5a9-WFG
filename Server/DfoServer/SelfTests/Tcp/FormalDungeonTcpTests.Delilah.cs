@@ -28,7 +28,61 @@ internal static partial class FormalDungeonTcpTests
                 .Add(new(0,new(InventoryListType.Main,11),low))
                 .Add(new(0,new(InventoryListType.Main,66),InventoryRewardGrantService.Create(items.Get(2600468),2)))
         };
+        after = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = after }, [new(3037,41)],
+            items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces).Plan!.After;
         repository.CommitInventory(owner,character,new(character.Inventory,after,"delilah_tcp_fixture"));
+    }
+
+    static void RejectDungeonShop(TcpTestFixture fixture, TcpPeer peer)
+    {
+        string before = fixture.Snapshot();
+        peer.Send(21,Convert.FromHexString("CFAE270001000000E8030000E8030000"));
+        peer.Expect(1,21,[0,17,0]);
+        peer.Send(22,Build(w => { w.Write((byte)0);w.Write((short)10);w.Write(1);w.Write(1000);w.Write(1000);w.Write(0u); }));
+        peer.Expect(1,22,[0,1,0]);
+        peer.Send(715,Build(w => w.Write(1000)));
+        peer.Expect(1,715,[0,17,0]);
+        peer.Barrier();
+        That(fixture.Snapshot() == before,"Loading rejects shop buy, sell and quota query without modifying assets");
+    }
+
+    static void VerifyDungeonShop(TcpTestFixture fixture, TcpPeer peer, string phase)
+    {
+        long gold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]);
+        long cubes = Convert.ToInt64(fixture.Query("SELECT balance FROM account_currency_balances WHERE account=$p0 AND currency_kind=7",
+            fixture.Options.DevelopmentAccount)[0][0]);
+        // 现场CMD21：勇士之吼秘药一瓶，NPC和shop均为1000，费用为20个无色小晶块。
+        peer.Send(21,Convert.FromHexString("CFAE270001000000E8030000E8030000"));
+        byte[] ack = peer.Expect(1,21).Body;
+        short slot = checked((short)U16(ack,17));
+        That(ack.Length == 149 && ack[0] == 1 && U32(ack,1) == gold && U32(ack,19) == 2600655 &&
+            U32(ack,23) == 1 && ack[140] == 1 && U32(ack,141) == 3037 && U32(ack,145) == cubes-20,
+            phase+" captured shop request returns one reward increment and the absolute remaining material balance");
+        byte[] delta = peer.Expect(0,14).Body;
+        That(U32(delta,DelilahDeltaEntry(delta,slot)+2) == 2600655 && U32(delta,DelilahDeltaEntry(delta,slot)+6) == 1 &&
+            U32(delta,DelilahDeltaEntry(delta,358)+6) == cubes-20 &&
+            Convert.ToInt64(fixture.Query("SELECT balance FROM account_currency_balances WHERE account=$p0 AND currency_kind=7",
+                fixture.Options.DevelopmentAccount)[0][0]) == cubes-20,
+            phase+" buy ACK precedes complete committed item and cube-wallet deltas");
+
+        string before = fixture.Snapshot();
+        peer.Send(21,Build(w => { w.Write(2600655);w.Write(checked((int)(cubes/20+1)));w.Write(1000);w.Write(1000); }));
+        peer.Expect(1,21,[0,10,0]);
+        peer.Send(715,Build(w => w.Write(1000)));
+        peer.Expect(1,715,[1,..new byte[16]]);
+        peer.Barrier();
+        That(fixture.Snapshot() == before,phase+" insufficient materials and read-only quota queries preserve all assets and audits");
+
+        // 出售不借用1000/1000的结算特例，同一条有效请求也适用于战斗阶段。
+        peer.Send(22,Build(w => { w.Write((byte)0);w.Write(slot);w.Write(1);w.Write(1);w.Write(2);w.Write(0u); }));
+        byte[] sold = peer.Expect(1,22).Body;
+        That(sold.Length == 12 && sold[0] == 1 && sold[5] == 0 && U16(sold,6) == slot && U32(sold,8) == 1,
+            phase+" sale succeeds without requiring a town or the Delilah window sentinel");
+        delta = peer.Expect(0,14).Body;
+        That(U32(delta,DelilahDeltaEntry(delta,slot)+2) == uint.MaxValue &&
+            Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]) == U32(sold,1),
+            phase+" sale ACK matches persisted gold and clears the actual source slot");
+        peer.Barrier();
     }
 
     static void RejectDelilahServices(TcpTestFixture fixture, TcpPeer peer, string phase)
