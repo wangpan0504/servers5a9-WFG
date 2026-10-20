@@ -9,6 +9,7 @@ internal sealed record BoosterChoice(int ItemId, int Count, byte Upgrade = 0, by
 {
     public ImmutableArray<BoosterUpgradeChance> UpgradeChances { get; init; } = [];
     public ItemKind? RequiredKind { get; init; }
+    public bool NativeCreatureSelectionRow { get; init; }
 }
 internal sealed record BoosterSelectionCategory(byte Category, byte Subcategory, ImmutableArray<BoosterChoice> Rewards,
     string? PendingRule = null)
@@ -171,7 +172,7 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
                     });
                 }
                 else
-                    rewards.Add(new(id, amount) { RequiredKind = kind == "creature" ? ItemKind.Creature : null });
+                    rewards.Add(new(id, amount) { NativeCreatureSelectionRow = kind == "creature" });
             }
         }
         return !string.IsNullOrWhiteSpace(body[at..]) ? new(category, subcategory, [], "未识别的分类尾段") :
