@@ -22,8 +22,7 @@ internal sealed partial class GameSession
         return ObserveFormalPassiveEvent(templateId,fingerprint,resources);
     }
 
-    // 诊断用：被动物件死亡/任务触发被拒时说明原因，不改变任何状态。#436 救出冒险家(3519)的牢笼 8824 在同一房间会出现多个，
-    // 而客户端报文只带模板号，服务端无法唯一寻址，现在会静默拒绝；这里把原因写进日志。
+    // 诊断用：被动物件死亡/任务触发被拒时说明原因，不改变任何状态。
     public string DiagnosePassiveEvent(uint templateId, DungeonRoomCatalog resources) => owner.Execute(() =>
     {
         var dungeon = formalDungeon;
@@ -34,7 +33,7 @@ internal sealed partial class GameSession
         var room = dungeon.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;
         var same = room.PassiveObjects.Where(source => source.ObjectId == templateId).ToArray();
         if (same.Length == 0) return $"当前房间 {snapshot.CurrentMap.Id} 没有物件模板 {templateId}";
-        if (same.Length > 1) return $"当前房间 {snapshot.CurrentMap.Id} 有 {same.Length} 个物件模板 {templateId}，报文只带模板号无法唯一寻址，已拒绝";
+        if (same.Length > 1) return $"当前房间 {snapshot.CurrentMap.Id} 有 {same.Length} 份物件模板 {templateId}。39 与迷宫终末仍要求唯一行；猎杀 33 只消费尚未使用的放置行，已满、未接取或目标不匹配时拒绝";
         if (!resources.ReportsQuestDeath(same[0]) && !resources.ReportsQuestItemReward(same[0])) return $"物件模板 {templateId} 无 [quest type] [must be destroyed] 或 [reward type] [quest item]，仅在任务触发通道或迷宫清图条件下才会记录";
         return "条件未满足（任务未接取/未绑定本次入场/目标不匹配/等待中的事件指纹不同）";
     });
@@ -60,37 +59,64 @@ internal sealed partial class GameSession
             var character = Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement && dungeon is not null &&
                 !dungeon.Entry.IsClassExperience && !dungeon.Entry.IsPractice &&
                 !dungeon.Ground.HasPendingOperation && (!dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingPassiveClear &&
-                    dungeon.QuestSceneEvents.TryGetValue((dungeon.Run.Snapshot.CurrentMap,(int)templateId),out var retry) && !retry.Committed) &&
+                    dungeon.QuestSceneEvents.Any(pair => pair.Key.Map == dungeon.Run.Snapshot.CurrentMap &&
+                        pair.Key.Template == (int)templateId && !pair.Value.Committed)) &&
                 !dungeon.Run.HasPendingSettlement && pendingQuestCompletion is null
                 ? Selected : null;
             var snapshot = dungeon?.Run.Snapshot;
             var room = snapshot is null ? null : dungeon!.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;
-            var key = (snapshot?.CurrentMap!, (int)templateId);
-            return (Character: character, SelectionEpoch, Phase, Dungeon: dungeon, Snapshot: snapshot, Room: room,
-                Pending: dungeon?.QuestSceneEvents.GetValueOrDefault(key), Key: key);
+            return (Character: character, SelectionEpoch, Phase, Dungeon: dungeon, Snapshot: snapshot, Room: room);
         });
         if (capture.Character is not { } expected || capture.Dungeon is not { } current || capture.Snapshot is not { } scene || capture.Room is null)
             return null;
         if (reportedQuest is { } questId && !expected.ActiveMainQuests.Any(active => active.QuestId == questId &&
             QuestHuntProgress.Bound(active,current.Entry))) return null;
-        if (capture.Pending is { } observed && (observed.Plan.SceneEvent!.Fingerprint != fingerprint || observed.Committed)) return null;
         var matches = capture.Room.PassiveObjects.Select((source,ordinal) => (source,ordinal))
             .Where(row => row.source.ObjectId == templateId).ToArray();
-        // 标识只有模板时，重复模板行无法唯一寻址；不按接取目标或数量反猜物件身份。
-        // maze明确声明的唯一终末物件有独立39来源；精确零击杀结算仍须独立场景清图凭据。
-        if (matches.Length != 1) return null;
-        bool reportsQuestDeath = resources.ReportsQuestDeath(matches[0].source);
-        bool recordsQuest = reportsQuestDeath || resources.ReportsQuestItemReward(matches[0].source);
-        bool mazeClear = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, matches[0].ordinal);
-        if (capture.Pending is null && mazeClear && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
+        if (matches.Length == 0) return null;
+        // 39 与迷宫终末仍要求本图唯一模板行。猎杀 33 不带实例；0200F950 在活动 scalar 非 0 时，每次匹配销毁都发送同一条通道 33。
+        // 按本图放置行逐次消费，不超过放置份数。序号是服务端消费槽，不是报文里的实例号。
+        PendingQuestScene? pending = null;
+        int selected;
+        if (matches.Length == 1)
+            selected = matches[0].ordinal;
+        else if (reportedQuest is null)
+            return null;
+        else
+        {
+            var rows = current.QuestSceneEvents.Where(pair => pair.Key.Map == scene.CurrentMap && pair.Key.Template == (int)templateId).ToArray();
+            var open = rows.Where(pair => !pair.Value.Committed && pair.Value.Plan.SceneEvent?.Fingerprint == fingerprint).ToArray();
+            if (open.Length == 1)
+            {
+                selected = open[0].Key.Ordinal;
+                pending = open[0].Value;
+            }
+            else if (rows.Any(pair => !pair.Value.Committed))
+                return null;
+            else
+            {
+                var used = rows.Select(pair => pair.Key.Ordinal).ToHashSet();
+                selected = matches.Select(row => row.ordinal).FirstOrDefault(ordinal => !used.Contains(ordinal), -1);
+                if (selected < 0) return null;
+            }
+        }
+        if (matches.Length == 1)
+            current.QuestSceneEvents.TryGetValue((scene.CurrentMap, (int)templateId, selected), out pending);
+        if (pending is { } observed && (observed.Plan.SceneEvent!.Fingerprint != fingerprint || observed.Committed)) return null;
+        var chosen = matches.Single(row => row.ordinal == selected);
+        var key = (scene.CurrentMap, (int)templateId, selected);
+        bool reportsQuestDeath = resources.ReportsQuestDeath(chosen.source);
+        bool recordsQuest = reportsQuestDeath || resources.ReportsQuestItemReward(chosen.source);
+        bool mazeClear = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, chosen.ordinal);
+        if (pending is null && mazeClear && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
             QuestHuntProgress.Bound(active,current.Entry))) return null;
-        if (capture.Pending is null && reportedQuest is null && !recordsQuest &&
+        if (pending is null && reportedQuest is null && !recordsQuest &&
             (!mazeClear || current.Run.ClearFact is not null || !current.Entry.IsTerminalMap(scene.CurrentMap))) return null;
-        var plan = capture.Pending?.Plan;
+        var plan = pending?.Plan;
         if (plan is null)
         {
             var source = new QuestSceneEvent(Guid.NewGuid(),scene.Identity,checked((int)current.Entry.DungeonId),scene.CurrentMap.Id,
-                checked((int)templateId),matches[0].ordinal,fingerprint);
+                checked((int)templateId),chosen.ordinal,fingerprint);
             bool clearCandidate = owner.Execute(() => ReferenceEquals(Selected,expected) && ReferenceEquals(formalDungeon,current) &&
                 SelectionEpoch == capture.SelectionEpoch && current.Run.CanPreparePassiveClear(scene.Identity,source.TemplateId,source.SourceOrdinal));
             if (reportedQuest is null && !recordsQuest && !clearCandidate) return null;
@@ -124,14 +150,14 @@ internal sealed partial class GameSession
                 !ReferenceEquals(formalDungeon,current) || current.Run.Snapshot.Identity != scene.Identity ||
                 !ReferenceEquals(Selected,expected) || !ReferenceEquals(plan.Expected,expected))
                 throw new InvalidOperationException("被动物件规划的原角色或实际房间已失效");
-            var pending = capture.Pending ?? new PendingQuestScene(plan);
-            current.QuestSceneEvents[capture.Key] = pending;
+            var stored = pending ?? new PendingQuestScene(plan);
+            current.QuestSceneEvents[key] = stored;
             bool clearCondition = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, plan.SceneEvent!.SourceOrdinal);
             var commit = repository.CommitQuestLifecycle(owner,plan);
             if (commit.ProjectionCurrent)
             {
                 Selected = commit.Character;
-                pending.Committed = true;
+                stored.Committed = true;
                 if (plan.SceneClear is { } prepared)
                 {
                     var result = current.Run.ConfirmCommittedPassiveClear(prepared);

@@ -1,7 +1,7 @@
 particularhellparty.etc item trigger, static pass, 2026-10-20
 
 Executable
-- Path: D:\dnf90\95_V31.0.24.0\DNF_SEASON4_OB_V31.0.24.0_Full\ARAD.exe
+- File: DNF_SEASON4_OB_V31.0.24.0_Full/ARAD.exe
 - SHA256: 7560188D4BAC4A33690FE3B37069F365885F7F57E14CEE868B64103852F28471
 - Size: 107003904
 - PE32, image base 0x400000. .text and .rdata have PointerToRawData == VirtualAddress, so file offset = VA - 0x400000 in those sections.

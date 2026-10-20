@@ -916,11 +916,21 @@ internal static class QuestLifecycleTcpTests
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
             That(Materials(created.Id) == 4 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id)
                 is [[3458L,1L]],"真实3472 ACK34只发碎片2、父2→1，未自动接或交付3473");
+            string held = State(created.Id);
+            peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
+            peer.Expect(0,574,Convert.FromHexString("01000000820D01000000"));
+            History(peer.Expect(0,356).Body,3472); peer.Barrier();
+            That(State(created.Id) == held,"重接已完成3472只回放父活动槽和356，不接3473、不改碎片");
             string once = State(created.Id);
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(State(created.Id) == once,"3472重复34拒绝且不重复奖励");
             peer.Send(31,[31,0,145,13]); peer.Expect(1,31,Convert.FromHexString("01910D0000000000")); peer.Expect(0,21);
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
+            held = State(created.Id);
+            peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
+            peer.Expect(0,574,Convert.FromHexString("02000000820D01000000910D00000000"));
+            History(peer.Expect(0,356).Body,3472); peer.Barrier();
+            That(State(created.Id) == held,"3473条件0且碎片4时重接3472只回放父子活动槽和356，不扣3也不交付");
             peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,Reward(3473,0,3,4));
             Balance(peer,5);
             peer.Expect(0,574,Convert.FromHexString("01000000820D00000000")); peer.Expect(0,21);
