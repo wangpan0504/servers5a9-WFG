@@ -159,6 +159,13 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     pools.Add(growPool);
                 continue;
             }
+            if (kind == "avatar")
+            {
+                if (!TryParseAvatarPool(match.Groups["data"].Value, out var avatarPool, out string? pending))
+                    return new([], pending ?? "装扮奖池无效");
+                pools.Add(avatarPool);
+                continue;
+            }
             if (kind is not ("etc" or "cera" or "equipment" or "stackable" or "booster" or "emblem" or "creature"))
                 return new([], kind);
             string[] tokens = match.Groups["data"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
@@ -194,6 +201,55 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         return !string.IsNullOrWhiteSpace(tail) &&
             !Regex.IsMatch(tail, @"^(?:\s*\[hide booster info\](?:\s*\[/hide booster info\])?)+\s*$")
             ? new([], "未识别的奖池尾段") : new(pools.ToImmutable()) { DailyRetainedLimit = dailyLimit };
+    }
+
+    // 普通装扮礼包的 [avatar] 段把外观写成 (物品, 权重, 数量) 加资源特定的尾部整数列，
+    // 与选择型 [booster select category] 的四列行不同。单行奖池没有选择语义，尾部列只校验为
+    // 整数、不参与发奖；多行或行宽有歧义时保持拒绝，避免把随机外观误发成固定一件。
+    static bool TryParseAvatarPool(string data, out BoosterPool pool, out string? pending)
+    {
+        pool = null!;
+        pending = null;
+        string[] tokens = data.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 4 || !int.TryParse(tokens[0], out int draws) || draws <= 0)
+        {
+            pending = "装扮奖池抽取次数或行宽无效";
+            return false;
+        }
+        int rest = tokens.Length - 1;
+        int width = rest % 5 == 0 && rest % 4 != 0 ? 5 : rest % 4 == 0 && rest % 5 != 0 ? 4 : 0;
+        if (width == 0)
+        {
+            pending = "装扮奖池行宽有歧义";
+            return false;
+        }
+        if (rest != width)
+        {
+            pending = "装扮奖池多行选择待确认";
+            return false;
+        }
+        if (!int.TryParse(tokens[1], out int id) || id <= 0 || !int.TryParse(tokens[3], out int count) || count <= 0 ||
+            !decimal.TryParse(tokens[2], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal weight) ||
+            weight <= 0 || tokens[4..].Any(value => !int.TryParse(value, out _)))
+        {
+            pending = "装扮奖池物品、数量或权重无效";
+            return false;
+        }
+        // 小数位权重与随机池保持同一缩放约定，单行权重恒为正。
+        int scale = Math.Max(0, (decimal.GetBits(weight)[3] >> 16) & 0xff);
+        decimal factor = 1;
+        for (int digit = 0; digit < scale; digit++)
+            factor = checked(factor * 10);
+        try
+        {
+            pool = new(draws, [new(id, checked((long)(weight * factor)), count)]);
+        }
+        catch (OverflowException)
+        {
+            pending = "装扮奖池权重溢出";
+            return false;
+        }
+        return true;
     }
 
     internal static BoosterUsePlacesDefinition ParseUsePlaces(string text)

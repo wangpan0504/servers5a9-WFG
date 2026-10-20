@@ -49,13 +49,24 @@ internal static class BoosterTests
             parsed.Pools[0].Rewards.SequenceEqual(new BoosterReward[] { new(1106, 25, 7), new(1112, 75, 9) }),
             "fractional weights retain exact proportions and all declared quantities");
         foreach (string bad in new[] { "[etc]\n0 1106 1 1\n[/etc]", "[etc]\n1 1106 -1 1\n[/etc]", "[etc]\n1 1106 1 0\n[/etc]",
-            "[etc]\n1 1106 1\n[/etc]", "[etc]\n1 1106 1 1\n[/etc]\n99", "[etc]\n1 1106 1 1\n[/etc]\n[avatar]\n1 1 1 1 1 1\n[/avatar]" })
+            "[etc]\n1 1106 1\n[/etc]", "[etc]\n1 1106 1 1\n[/etc]\n99" })
             That(!Parse(bad).Available, "malformed or unsupported reward pool rejects whole definition");
         That(Parse("[etc]\n1\n[/etc]\n[etc]\n1 1106 100 1\n[/etc]").Pools.Length == 1, "empty PVF placeholder is not a fake reward");
+        var transferAura = Parse("[avatar]\n1 113590008 10000 1 2 0\n[/avatar]");
+        That(transferAura.Available && transferAura.Pools.Length == 1 &&
+            transferAura.Pools[0].Rewards.SequenceEqual(new BoosterReward[] { new(113590008, 10000, 1) }),
+            "单行装扮奖池按物品、权重和数量发奖，资源特定的尾部整数列不参与");
+        foreach (string bad in new[] { "[avatar]\n1 113590008 1 3 0 101580138 1 3 0\n[/avatar]",
+            "[avatar]\n1 113590008 1 3\n[/avatar]", "[avatar]\n0 113590008 1 3 0\n[/avatar]",
+            "[avatar]\n1 113590008 1 0 0\n[/avatar]", "[avatar]\n1 113590008 1 3 x 0\n[/avatar]" })
+            That(!Parse(bad).Available, "装扮奖池多行、缺列或非法值保持未确认，不随机发外观");
         That(!itemResources.Boosters.Get(10162064).Available && !itemResources.Boosters.Get(1106).Available,
             "quota and ordinary consumables are not silently treated as simple boxes");
         That(itemResources.Boosters.Get(490704415).Available && itemResources.Boosters.Get(490704415).Pools.All(pool => pool.JobTag is not null),
             "转职奖池已解析，不能当成无过滤普通盒抽取");
+        That(itemResources.Boosters.Get(490004995) is { Available: true } auraGift &&
+            auraGift.Pools.Single().Rewards.Single() is { ItemId: 113590008, Count: 1 },
+            "转职光环装扮礼盒读取真实单行装扮奖池，不再落成未知附件");
         var package = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[/stackable type]\n[package data]\n1106 2 1112 1\n[/package data]");
         That(package.Available && package.PackageRewards.SequenceEqual(new BoosterReward[] { new(1106, 1, 2), new(1112, 1, 1) }),
             "fixed CERA packages expose every PVF package reward without dropping rows");
