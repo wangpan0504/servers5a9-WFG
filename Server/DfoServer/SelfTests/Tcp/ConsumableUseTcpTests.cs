@@ -10,7 +10,7 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class ConsumableUseTcpTests
+internal static partial class ConsumableUseTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
@@ -125,11 +125,12 @@ internal static class ConsumableUseTcpTests
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id");
         int Count(short slot) => fixture.Query("SELECT item_core FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.list_type=0 AND s.slot_index=$p0 AND s.character_id=$p1", slot, activeId)
             is [var row] ? System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)row[0])!.Count : 0;
-        static void Use(TcpPeer peer, ushort slot, uint check, int id, int argument = 0) => peer.Send(44, Build(w =>
-        { w.Write(slot); w.Write((byte)0); w.Write(check); w.Write(id); w.Write(argument); }));
-        static void Accepted(TcpPeer peer, ushort slot, uint check, int id) => peer.Expect(1, 44, Build(w =>
-        { w.Write((byte)1); w.Write(slot); w.Write((byte)0); w.Write(check); w.Write(id); }));
-        static void Refused(TcpPeer peer, uint check, int id) => peer.Expect(1, 44, Build(w =>
-        { w.Write((byte)0); w.Write((ushort)123); w.Write((byte)0); w.Write(check); w.Write(id); }));
     }
+
+    static void Use(TcpPeer peer, ushort slot, uint check, int id, int argument = 0) => peer.Send(44, Build(w =>
+        { w.Write(slot); w.Write((byte)0); w.Write(check); w.Write(id); w.Write(argument); }));
+    static void Accepted(TcpPeer peer, ushort slot, uint check, int id) => peer.Expect(1, 44, Build(w =>
+        { w.Write((byte)1); w.Write(slot); w.Write((byte)0); w.Write(check); w.Write(id); }));
+    static void Refused(TcpPeer peer, uint check, int id) => peer.Expect(1, 44, Build(w =>
+        { w.Write((byte)0); w.Write((ushort)123); w.Write((byte)0); w.Write(check); w.Write(id); }));
 }

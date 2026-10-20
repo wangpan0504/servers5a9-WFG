@@ -34,6 +34,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] CompletedQuestHistory { get; private set; } = [];
     public ushort Id { get; private set; }
     public WirePacket[] SpecialContainers { get; private set; } = [];
+    public List<WirePacket> RestoredConsumableStates { get; } = [];
     public byte[] CloneAvatarSources { get; private set; } = [];
     public byte[][] Mailbox { get; private set; } = [];
     public byte[] TitleProgress { get; private set; } = [];
@@ -262,6 +263,26 @@ internal sealed class TcpPeer : IDisposable
         lastBarrierCompleted = UnixTime;
     }
 
+    void ValidateConsumableStates(WirePacket packet, ushort character, long earliest)
+    {
+        TestCheck.That(fixture is not null && packet.Body.Length >= 9 && packet.Body[0] > 0 &&
+            packet.Body.Length == 1 + packet.Body[0] * 8, "持续状态通知有完整独立条目，不恢复空列表或短包");
+        var rows = fixture!.Query("SELECT item_id,until_ms FROM character_consumable_states WHERE character_id=$p0 AND kind=$p1 ORDER BY item_id",
+            character, packet.Opcode == 174 ? 0 : 1).ToDictionary(row => Convert.ToInt32(row[0]), row => Convert.ToInt64(row[1]));
+        var seen = new HashSet<int>();
+        for (int i = 0; i < packet.Body[0]; i++)
+        {
+            int id = checked((int)U32(packet.Body,1+i*8));
+            long remaining = U32(packet.Body,5+i*8);
+            TestCheck.That(rows.TryGetValue(id, out long until) && seen.Add(id) && remaining > 0 &&
+                remaining <= int.MaxValue/1000 && remaining <= (until-earliest*1000)/1000 &&
+                remaining >= Math.Max(0,(until-(UnixTime+1)*1000)/1000),
+                "状态来源为本人已提交账本，使用倒计时，不续期或重复授予效果");
+        }
+        TestCheck.That(rows.Where(row => row.Value >= (UnixTime+1)*1000).All(row => seen.Contains(row.Key)),
+            "仍有效的完整状态集合不能被截断");
+    }
+
     void ValidateStamina(WirePacket packet, ushort character, long earliest)
     {
         TestCheck.That(packet is { Kind: 0, Opcode: 4, Body.Length: 1 } && fixture is not null,
@@ -458,6 +479,7 @@ internal sealed class TcpPeer : IDisposable
         });
         InitialGameOptions = Expect(0, 173, initialGameOptions).Body;
         var middle = new List<WirePacket>();
+        RestoredConsumableStates.Clear();
         SkillInfo = [];
         SceneSkillInfo = [];
         CompletedQuestHistory = [];
@@ -467,6 +489,14 @@ internal sealed class TcpPeer : IDisposable
             var packet = Read();
             if (index == 5)
             {
+                while (packet is { Kind: 0, Opcode: 172 or 174 })
+                {
+                    TestCheck.That(RestoredConsumableStates.Count < 2 && (RestoredConsumableStates.Count == 0 ||
+                        RestoredConsumableStates[^1].Opcode < packet.Opcode), "持续状态仅172再174，各一次，不跳过其他通知");
+                    ValidateConsumableStates(packet, U16(prefix[0].Body,9), selectionStarted);
+                    RestoredConsumableStates.Add(packet);
+                    packet = Read();
+                }
                 // Main全量之后严格接收完整541分片，保持Entry返回索引和后续988顺序。
                 var daily = new List<byte[]>();
                 int lastId = 0;

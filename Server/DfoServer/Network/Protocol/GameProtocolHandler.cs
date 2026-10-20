@@ -28,7 +28,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             return;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsAuthentication(opcode) ? "[login-redacted]" : Convert.ToHexString(body.Span) }), connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
-            passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items);
+            timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
@@ -44,6 +44,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         context.Elevator = elevator;
         var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
+        var revival = new DungeonRevivalProjection(context, log, time);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -92,6 +93,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 await context.CommandGate.WaitAsync(connection.Stop);
                 try
                 {
+                    await revival.RefreshAsync();
                     if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
                     if (context.Premiums is { } premiums) await premiums.RefreshAsync();
                     if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
@@ -106,6 +108,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         finally
         {
             nativeRegistration?.Dispose();
+            await revival.DisposeAsync();
             if (context.BoosterUses is { } boosterUses) await boosterUses.DisposeAsync();
             if (context.Creatures is { } creatureClock) await creatureClock.DisposeAsync();
             if (cubeConsumption is not null) await cubeConsumption.DisposeAsync();

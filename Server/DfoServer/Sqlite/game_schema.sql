@@ -7,6 +7,17 @@ CREATE TABLE character_assault_daily(
   hidden_count INTEGER NOT NULL CHECK(hidden_count BETWEEN 0 AND 255),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_consumable_states(
+  character_id INTEGER NOT NULL,
+  account TEXT NOT NULL,
+  kind INTEGER NOT NULL CHECK(kind IN(0,1)),
+  item_id INTEGER NOT NULL CHECK(item_id>0),
+  until_ms INTEGER NOT NULL CHECK(until_ms>0),
+  maintenance INTEGER NOT NULL CHECK(maintenance BETWEEN 0 AND 15 AND (kind=0 OR maintenance<=7)),
+  cool_group INTEGER NOT NULL,
+  PRIMARY KEY(character_id,kind,item_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TABLE character_crack_daily(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,

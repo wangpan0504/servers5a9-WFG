@@ -359,6 +359,8 @@ internal sealed partial class CharacterRepository
             exp.Parameters.AddWithValue("$permille", bonus.Permille);
             exp.ExecuteNonQuery();
         }
+        if (!plan.Before.ConsumableStates.SequenceEqual(plan.After.ConsumableStates))
+            WriteConsumableStates(db, transaction, owner.Account, current.Id, inventory.ConsumableStates);
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
         return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning,
             EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags, SkillSwitchInventory = skillSwitch,
@@ -389,7 +391,7 @@ internal sealed partial class CharacterRepository
         var right = plan.Before;
         if (ReferenceEquals(left, right))
             return true;
-        if (left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
+        if (!left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
             !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || !DailyBoosterUsage.Same(left.DailyBoosterUses, right.DailyBoosterUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
@@ -447,7 +449,8 @@ internal sealed partial class CharacterRepository
         {
             ReviveCoins = coins, WinPoints = wins, GoldCarryLimit = carry, AuctionGoldLimit = auction,
             AccountWallet = shared.Wallet, CubeContract = cubeContract, AvatarExpansion = avatarExpansion, DevilUses = devilUses, StaminaUntil = staminaUntil, CargoCapacity = capacity, AccountCargo = shared.Cargo,
-            ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses
+            ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses,
+            ConsumableStates = ReadConsumableStates(db, transaction, characterId, account)
         };
         inventory.Validate();
         return inventory;

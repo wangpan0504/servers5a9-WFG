@@ -10,7 +10,7 @@ internal static class CharacterSelection
 {
     public static Character Prepare(ICharacterRepository repository, AccountOwners.Lease owner, Character character,
         TownCatalog towns, IReadOnlySet<int> completed, GoldLimitCatalog? goldLimits, bool resumeTown = false,
-        ItemCatalog? items = null) => owner.Execute(() =>
+        ItemCatalog? items = null, TimeProvider? clock = null) => owner.Execute(() =>
     {
         if (resumeTown)
         {
@@ -30,6 +30,14 @@ internal static class CharacterSelection
             InventoryExpiryService.RepairZeroPeriod(character.Inventory, items));
         character = InventoryService.Commit(repository, owner, character,
             InventoryExpiryService.Plan(character.Inventory, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        if (!character.Inventory.ConsumableStates.IsEmpty)
+        {
+            var restored = ConsumableStatePolicy.CrossBoundary(character.Inventory,
+                DfoServer.Game.Inventory.Models.ConsumableMaintenance.Reselect, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds());
+            if (restored != character.Inventory)
+                character = InventoryService.Commit(repository, owner, character, new(true, 0,
+                    new(character.Inventory, restored, "consumable_reselect", new(character))));
+        }
         if (goldLimits is not null)
             character = InventoryService.Commit(repository, owner, character, new CurrencyService(goldLimits).Initialize(character));
         return character;

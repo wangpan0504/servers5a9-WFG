@@ -113,11 +113,11 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
         });
     }
 
-    public async Task StaminaAsync(Character character, Func<bool>? guard = null)
+    public async Task StaminaAsync(Character character, Func<bool>? guard = null, bool force = false)
     {
-        if (character.Inventory.StaminaUntil <= 0 && announcedStamina is not { Percent: < 100 }) return;
+        if (!force && character.Inventory.StaminaUntil <= 0 && announcedStamina is not { Percent: < 100 }) return;
         var stamina = (context.Session.SelectionEpoch, StaminaRecoveryService.Percent(character.Inventory, clock.GetUtcNow()));
-        if (announcedStamina == stamina) return;
+        if (!force && announcedStamina == stamina) return;
         bool sent = false;
         await context.Notify(NotiPacketType.STAMINA, [stamina.Item2], "stamina_natural_recovery", () => sent = guard?.Invoke() ?? true);
         if (sent) announcedStamina = stamina;

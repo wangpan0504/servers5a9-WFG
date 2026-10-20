@@ -59,6 +59,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public ImmutableArray<DevilServiceUsage> DevilUses { get; init; } = [];
     public ImmutableArray<DailyBoosterUsage> DailyBoosterUses { get; init; } = [];
     public long StaminaUntil { get; init; }
+    public ImmutableArray<ConsumableState> ConsumableStates { get; init; } = [];
     public ushort CargoCapacity { get; init; } = 8;
     public AccountCargoState AccountCargo { get; init; } = new();
     public ImmutableArray<ShopPurchaseCount> ShopPurchases { get; init; } = [];
@@ -70,6 +71,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
         AccountWallet.Validate();
         CubeContract.Validate();
         DailyBoosterUsage.Validate(DailyBoosterUses);
+        ConsumableState.Validate(ConsumableStates);
         if (StaminaUntil < 0 || DevilUses.IsDefault || DevilUses.Any(row => row.Slot > 7 || row.Day < 0 || row.Allowance > 30) ||
             DevilUses.Select(row => row.Slot).Distinct().Count() != DevilUses.Length)
             throw new InvalidDataException("魔王契约次数账本无效");

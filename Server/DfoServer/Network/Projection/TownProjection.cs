@@ -45,6 +45,11 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (c.Guild is { } membership)
             await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
+        long consumableNow = timer.GetUtcNow().ToUnixTimeMilliseconds();
+        if (ConsumableStatePackets.Restore(c.Inventory, DfoServer.Game.Inventory.Models.ConsumableStateKind.Cooldown, consumableNow) is { } cooldowns)
+            await context.Notify(NotiPacketType.LOAD_COOLTIME_ITEM_INFO, cooldowns, "consumable_cooldowns_initialize");
+        if (ConsumableStatePackets.Restore(c.Inventory, DfoServer.Game.Inventory.Models.ConsumableStateKind.Effect, consumableNow) is { } effects)
+            await context.Notify(NotiPacketType.LOAD_EFFECT_ITEM_INFO, effects, "consumable_effects_initialize");
         if (context.BoosterUses is { } boosterUses) await boosterUses.InitializeAsync(c);
         await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
         if (c.CompletedQuests.Length > 0 || c.AccountCompletedQuests.Length > 0)
@@ -222,6 +227,17 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             if (CanSend()) Join(context);
             return true;
         });
+    }
+
+    public async Task GiftEffectAsync(GameConnectionContext context, int itemId, Func<bool> guard)
+    {
+        if (!guard()) return;
+        byte[] body = ConsumableStatePackets.Grant(itemId, ConsumableSpecialItems.TownGiftSeconds);
+        presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.ADD_EFFECT_ITEM_INFO, body,
+            "town_gift_effect", DfoServer.Game.Inventory.Services.ConsumableStatePolicy.AllowsTownGift);
+        byte[] visual = ConsumableStatePackets.ItemEffect(context.Session.Selected!.Id, itemId);
+        await context.Notify(NotiPacketType.ITEM_EFFECT, visual, "town_gift_visual", guard);
+        if (guard()) presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.ITEM_EFFECT, visual, "town_gift_visual");
     }
 
     public void Move(GameConnectionContext context)

@@ -134,7 +134,9 @@ internal static class FormalDungeonSessionTests
             Check(f.Session.ReviveFormalCharacter(f.Created.Id) is null, "活角色不能消费复活币");
             var dead = f.Session.ReportFormalCharacterDeath()!;
             var before = f.Session.Selected!;
-            Check(f.Session.ReportFormalCharacterDeath() is not null && Same(before, f.Read()), "重复死亡不写角色或钱包");
+            var firstDeath = f.Session.CurrentDungeonDeathReturn();
+            Check(f.Session.ReportFormalCharacterDeath() is null && Same(before, f.Read()) &&
+                f.Session.CurrentDungeonDeathReturn() == firstDeath, "重复死亡不回包、不写角色或钱包，也不推进死亡计时身份");
             Check(f.Session.ReviveFormalCharacter(unchecked((ushort)(f.Created.Id + 1))) is null, "只能复活本实例本人key");
             f.Sql("CREATE TRIGGER revive_late_failure BEFORE INSERT ON currency_audit_log BEGIN SELECT RAISE(ABORT,'revive failure'); END;");
             bool failed = false;
@@ -170,7 +172,7 @@ internal static class FormalDungeonSessionTests
             var empty = f.Session.Selected!;
             Check(f.Session.ReviveFormalCharacter(f.Created.Id) is { Accepted: false } && ReferenceEquals(empty, f.Session.Selected) &&
                 Same(empty, f.Read()), "零余额不复活、不写revision、不生成免费币");
-            Check(f.Session.ReportFormalCharacterDeath() is not null && f.Session.ReturnFromFormalDungeon() is not null &&
+            Check(f.Session.ReportFormalCharacterDeath() is null && f.Session.ReturnFromFormalDungeon() is not null &&
                 f.Session.ReviveFormalCharacter(f.Created.Id) is null, "死亡仍可放弃返回城镇，旧Run不能再扣币");
             Enter(f);
             f.Session.CompleteFormalDungeonLoading();
@@ -200,9 +202,9 @@ internal static class FormalDungeonSessionTests
             f.Session.CompleteFormalDungeonLoading();
             f.Session.ReportFormalCharacterDeath();
             var previous = f.Session.CurrentDungeonDeathReturn()!;
-            f.Session.ReportFormalCharacterDeath();
+            Check(f.Session.ReportFormalCharacterDeath() is null, "重复死亡报告不再次发布死亡状态");
             var scheduled = f.Session.CurrentDungeonDeathReturn()!;
-            Check(previous != scheduled && f.Session.ReturnFromFormalDungeonOnDeath(previous) is null, "重复死亡重置计时，旧回调不能提前回城");
+            Check(previous == scheduled, "重复死亡保留原计时，不能借重放不断延长回城等待");
             var before = f.Read();
             f.Sql("CREATE TRIGGER death_shop_late_failure BEFORE INSERT ON currency_audit_log WHEN NEW.action_name='cash_shop_buy' BEGIN SELECT RAISE(ABORT,'death shop failure'); END");
             Reject<SqliteException>(() => Buy(), "死亡现场购买真实晚SQL失败");

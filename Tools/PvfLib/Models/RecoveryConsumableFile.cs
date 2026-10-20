@@ -4,6 +4,7 @@ namespace PvfLib;
 
 // 恢复四元组只保留原值，第三项不推断为治疗时间或倍率。
 public sealed record RecoveryDeclaration(string Operation, int Amount, int Auxiliary, string Target);
+public sealed record StatChangeDurationDeclaration(int Milliseconds, string Target, int? Parameter);
 
 public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, StackableFile Stackable,
     int? CoolTime, int? CoolGroup, RecoveryDeclaration? HpRecovery, RecoveryDeclaration? MpRecovery,
@@ -12,6 +13,10 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     public int? SubType { get; init; }
     public int? ExpBonusPermille { get; init; }
     public int? ExpBonusMilliseconds { get; init; }
+    public StatChangeDurationDeclaration? StatChangeDuration { get; init; }
+    public byte? EffectMaintenance { get; init; }
+    public byte? CooltimeMaintenance { get; init; }
+    public ImmutableArray<int> LimitDungeons { get; init; } = [];
 
     public static RecoveryConsumableFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -44,9 +49,17 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         }
         int? coolTime = Scalar("cool time"), group = Scalar("cooltime group"), subType = Scalar("sub type");
         var hp = Recovery("hp recovery"); var mp = Recovery("mp recovery");
+        var duration = Duration(document, resolve, errors);
+        byte? effects = Maintenance(document, "effect maintenance", 4, errors);
+        byte? cooldowns = Maintenance(document, "cooltime maintenance", 3, errors);
+        int? bonus = ExpBonus(document, resolve, errors);
+        var limits = document.Sections.Where(section => section.Name == "limit dungeon")
+            .SelectMany(section => section.Values).Where(token => token.Type == 0).Select(token => token.Value).ToImmutableArray();
         return new(id, path, StackableFile.Parse(id, path, tokens, resolve), coolTime, group, hp, mp,
             document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray())
-        { SubType = subType, ExpBonusPermille = ExpBonus(document, resolve, errors), ExpBonusMilliseconds = ExpDuration(document, resolve, errors) };
+        { SubType = subType, ExpBonusPermille = bonus,
+            ExpBonusMilliseconds = duration is { Target: "myself" } ? duration.Milliseconds : null,
+            StatChangeDuration = duration, EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits };
     }
 
     static int? ExpBonus(PvfTokenDocument document, Func<int, string> resolve, List<string> errors)
@@ -63,14 +76,30 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         return null;
     }
 
-    static int? ExpDuration(PvfTokenDocument document, Func<int, string> resolve, List<string> errors)
+    static StatChangeDurationDeclaration? Duration(PvfTokenDocument document, Func<int, string> resolve, List<string> errors)
     {
         var sections = document.Sections.Where(section => section.Name == "stat change duration").ToArray();
         if (sections.Length == 0) return null;
-        if (sections is [{ Children.Length: 0, Values: [{ Type: 0, Value: > 0 and <= 86_400_000 } duration, { Type: 6 } target] }] &&
-            resolve(target.Value) == "myself")
-            return duration.Value;
-        errors.Add("经验加成持续时间不完整");
+        if (sections is [{ Children.Length: 0 } section] && section.Values.Length is 2 or 3 &&
+            section.Values[0] is { Type: 0, Value: > 0 } duration && section.Values[1] is { Type: 6 } target &&
+            (section.Values.Length == 2 || section.Values[2].Type == 0))
+            return new(duration.Value, resolve(target.Value), section.Values.Length == 3 ? section.Values[2].Value : null);
+        errors.Add("持续效果时间声明不完整");
+        return null;
+    }
+
+    static byte? Maintenance(PvfTokenDocument document, string name, int count, List<string> errors)
+    {
+        var sections = document.Sections.Where(section => section.Name == name).ToArray();
+        if (sections.Length == 0) return null;
+        if (sections is [{ Children.Length: 0 } section] && section.Values.Length == count &&
+            section.Values.All(token => token.Type == 0 && token.Value is 0 or 1))
+        {
+            byte mask = 0;
+            for (int i = 0; i < count; i++) mask |= checked((byte)(section.Values[i].Value << i));
+            return mask;
+        }
+        errors.Add("持续效果保留声明不完整：" + name);
         return null;
     }
 }

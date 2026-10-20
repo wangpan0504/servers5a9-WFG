@@ -185,6 +185,7 @@ internal static class SelfTestRunner
         SkillLayoutTests.Run();
         ItemRequestTests.Run();
         ConsumableUseTests.RunCore();
+        ConsumableStateTests.RunCore();
         RandomOptionTests.RunCore();
         EquipmentRandomOptionChangeTests.RunCore();
         MailboxProtocolTests.Run();

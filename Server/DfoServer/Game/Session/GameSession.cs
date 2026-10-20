@@ -141,7 +141,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (questCatalog is not null && character.QuestCycleDay != DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow))
                 character = repository.AdvanceQuestCycle(owner, character, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow));
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
-            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumeTown, items);
+            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumeTown, items, timeProvider);
             character = ReconcileSkillSwitchInventory(character);
             Selected = character;
             completed = quests;
