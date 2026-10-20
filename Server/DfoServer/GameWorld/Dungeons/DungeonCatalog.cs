@@ -14,6 +14,7 @@ internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, st
 {
     public int StoryStageIndex { get; init; } = -1;
     public int LayerIndex { get; init; } = -1;
+    public int DummyStageIndex { get; init; } = -1;
     public bool IsConditional { get; init; }
     public IReadOnlyList<int> CandidateIds { get; init; } = Array.Empty<int>();
 }
@@ -46,8 +47,12 @@ internal sealed record DungeonMaze(
     public string? HellPartyPath { get; init; }
     public string? HellLegendPath { get; init; }
     public IReadOnlyList<DungeonMap> LayeredMaps { get; init; } = Array.Empty<DungeonMap>();
-    // 保留覆盖前来源供任务地图池排除；不参与有效路线、候选抽取或演员准备。
+    // 保留覆盖前来源供资源诊断；不作为当前显式行的候选或演员准备输入。
     public IReadOnlyList<DungeonMap> OverriddenMaps { get; init; } = Array.Empty<DungeonMap>();
+    // 同格普通图与Boss图在客户端有独立候选容器，不属于覆盖历史。
+    public IReadOnlyList<DungeonMap> MapAlternatives { get; init; } = [];
+    // 入场冻结的假Boss及最终真Boss；阶段身份区分同坐标、同模板的再次生成。
+    public IReadOnlyList<DungeonMap> DummyStages { get; init; } = [];
     public IReadOnlyList<DungeonMap> StoryStages { get; init; } = Array.Empty<DungeonMap>();
     public DungeonBossEntrance? BossEntrance { get; init; }
     public IReadOnlyList<DungeonWarpMap> WarpMaps { get; init; } = Array.Empty<DungeonWarpMap>();
@@ -76,6 +81,7 @@ internal sealed record DungeonMaze(
         Width == other.Width && Height == other.Height && Greed == other.Greed && ResourceError == other.ResourceError &&
         Starts.SequenceEqual(other.Starts) && Bosses.SequenceEqual(other.Bosses) &&
         SameMaps(MapSpecification, other.MapSpecification) && SameMaps(LayeredMaps, other.LayeredMaps) &&
+        SameMaps(MapAlternatives, other.MapAlternatives) && SameMaps(DummyStages, other.DummyStages) &&
         SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps) &&
         WarpMaps.SequenceEqual(other.WarpMaps) && ClearConditions.SequenceEqual(other.ClearConditions) &&
         RandomizedObjects.SequenceEqual(other.RandomizedObjects) &&
@@ -97,6 +103,7 @@ internal sealed record DungeonMaze(
     static bool SameMap(DungeonMap left, DungeonMap right) =>
         left.Kind == right.Kind && left.Position == right.Position && left.Id == right.Id && left.Path == right.Path &&
         left.StoryStageIndex == right.StoryStageIndex && left.LayerIndex == right.LayerIndex && left.IsConditional == right.IsConditional &&
+        left.DummyStageIndex == right.DummyStageIndex &&
         left.CandidateIds.SequenceEqual(right.CandidateIds);
 
     // 只描述资源结构，不表示准入通过或可以向客户端发布初始化通知。
@@ -109,6 +116,8 @@ internal sealed record DungeonMaze(
 
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
+    public int DummyAppearCount => RawSections.Where(row => row.Tag == "dummy appear count").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: >= 0 and < ushort.MaxValue } count] }] ? count.Value : 0;
     public string? DungeonType { get; init; }
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
@@ -142,6 +151,13 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             return result.MoveToImmutable();
         }
     }
+    public bool DeclaresRequiredItem => RawSections.Any(row => row.Tag == "required item");
+    // #510/#511 普通入场票：只认唯一一段 [required item] 且恰为一行「物品 1 1」。第三列含义未证明，其他形状不当作入场票。
+    public DungeonRequiredItemRow? OrdinaryEntryTicket => RequiredItemRows is [{ Count: 1, Third: 1 } ticket] ? ticket : null;
+    public bool DeclaresStartFatigue => RawSections.Any(row => row.Tag == "use fatigue only start dungeon");
+    // #511 [use fatigue only start dungeon] N：只认唯一一段且恰为一个 1..65535 的整数；其他形状返回 null（保持逐房扣点）。
+    public ushort? StartFatigue => RawSections.Where(row => row.Tag == "use fatigue only start dungeon").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } amount] }] ? (ushort)amount.Value : null;
     public bool IsGriefTower => Id == 5115 &&
         Path.Equals("dungeon/towers/grief/5115_001.dgn", StringComparison.OrdinalIgnoreCase) &&
         RawSections.Where(row => row.Tag == "tower of grief").ToArray() is [{ Tokens.Count: 0 }];
@@ -287,13 +303,15 @@ internal sealed class DungeonCatalog
         return definitions.GetOrAdd(id, _ => new(() => ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 
-    public DungeonMaze ResolveOrdinaryMaze(DungeonDefinition definition, DungeonMaze maze, Func<int,int>? draw = null)
+    public DungeonMaze ResolveOrdinaryMaze(DungeonDefinition definition, DungeonMaze maze, Func<int,int>? draw = null, bool hellParty = false)
     {
         var choose = draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32;
-        maze = ResolveMapCandidates(maze,maps,archive.Contains,choose);
-        // 显式候选只在入场规划抽取；剧情缺图仍不能套普通地图池。
-        if (maze.ResourceError is not null || maze.QuestConnectionTokens.Count != 0 || maze.StaticTopology.Supported) return maze;
-        return mapPool.Value.Resolve(definition,maze,choose);
+        // 先按当前房间用途区分普通、dummy和Boss候选，不能提前将混合候选随机压成单图。
+        if (maze.ResourceError is null && maze.QuestConnectionTokens.Count == 0 &&
+            (!maze.StaticTopology.Supported || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
+             maze.MapAlternatives.Count != 0 || definition.DummyAppearCount > 0))
+            maze = mapPool.Value.Resolve(definition,maze,choose,hellParty);
+        return ResolveMapCandidates(maze,maps,archive.Contains,choose);
     }
 
     internal static DungeonMaze ResolveMapCandidates(DungeonMaze maze, IReadOnlyDictionary<int,string> paths,
@@ -321,14 +339,22 @@ internal sealed class DungeonCatalog
                 layers.Add(layer);
             }
         }
-        if ((maps is null || maps.SequenceEqual(maze.MapSpecification!)) && layers.SequenceEqual(maze.LayeredMaps))
+        if ((maps is null || maps.SequenceEqual(maze.MapSpecification!)) && layers.SequenceEqual(maze.LayeredMaps) && maze.MapAlternatives.Count == 0)
         {
             if (maze.BossEntrance is null || maze.WarpMaps.Count == 0) return maze;
             // 候选未变化仍复验实际Boss入口声明；直接调用或with后的迷宫不能绕过来源唯一性。
             var conditional = ConditionalMaps(maze);
             return maze.ConditionalMaps.SequenceEqual(conditional) ? maze : maze with { ConditionalMaps = conditional };
         }
+        var alternatives = maze.MapAlternatives.Select(map =>
+        {
+            var ids = map.CandidateIds.Count == 0 ? new[] { map.Id } : map.CandidateIds.Distinct().ToArray();
+            int index = ids.Length == 1 ? 0 : draw(ids.Length);
+            if (index < 0 || index >= ids.Length) throw new InvalidDataException("地图备选随机索引越界");
+            return Resolve(map,ids[index],ids.Length > 1);
+        }).ToArray();
         var resolved = maze with { MapSpecification = maps is null ? null : Freeze(maps), LayeredMaps = Freeze(layers),
+            MapAlternatives = Freeze(alternatives),
             StoryStages = maps is null ? maze.StoryStages : Freeze(maps.Where(map => map.StoryStageIndex >= 0).OrderBy(map => map.StoryStageIndex)) };
         return resolved with { ConditionalMaps = ConditionalMaps(resolved) };
 
@@ -579,19 +605,21 @@ internal sealed class DungeonCatalog
             specification = Freeze(bases.Concat(stages));
         }
         var overridden = new List<DungeonMap>();
+        var alternatives = new List<DungeonMap>();
         if (stages.Count == 0 && specification is not null)
         {
             var effective = new List<DungeonMap>();
             foreach (var group in specification.GroupBy(map => map.Position))
             {
-                // Full03 0409C98C按坐标取同一格，0409C9B9先清普通map候选再追加本行。
-                // 同格同种普通 map 与同格混合 map+boss 都 last-wins；两行同种 boss 仍留给下面的坐标重复诊断。
-                if (group.All(map => map.Kind == "map") || group.Select(map => map.Kind).Distinct().Count() > 1)
+                // 0409C9B9清普通候选(+4)，0409CA2A另清Boss候选(+18)。只有同种重复行才覆盖。
+                var kinds = group.GroupBy(map => map.Kind).Select(rows =>
                 {
-                    effective.Add(group.Last());
-                    overridden.AddRange(group.SkipLast(1));
-                }
-                else effective.AddRange(group);
+                    overridden.AddRange(rows.SkipLast(1));
+                    return rows.Last();
+                }).ToArray();
+                var selected = kinds.FirstOrDefault(map => map.Kind == (bosses.Contains(group.Key) ? "boss" : "map")) ?? kinds[0];
+                effective.Add(selected);
+                alternatives.AddRange(kinds.Where(map => map != selected));
             }
             specification = Freeze(effective);
         }
@@ -607,7 +635,7 @@ internal sealed class DungeonCatalog
             }
         }
         var maze = new DungeonMaze(ordinal,width,height,greed,starts,bosses,specification,quest)
-            { LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
+            { LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),MapAlternatives = Freeze(alternatives),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
                 ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve),
                 RandomizedObjects = DungeonMazeConditions.RandomizedObjects(mazeSections),
                 HellParty = HellParty(), HellPartyPath = HellParty() is { } hellRoom ? mapPaths[hellRoom.MapId] : null,
@@ -622,13 +650,13 @@ internal sealed class DungeonCatalog
             bool mazeHell = flags.Length == 1 && flags[0].Tokens is [{ Type: 0, Value: 1 }];
             // maze 内 [hell dungeon] 1，或副本头（第一条 maze info 之前）的 [hell dungeon] 1 + 本 maze 密门。
             // 时空裂缝一类只有副本头标记、没有 seal door 的 Inferno maze 仍返回 null，不编造深渊房间。
-            if (quest.Count != 0 || specification is null || maps.Length != 1 || positions.Length != 1 ||
+            if (quest.Count != 0 || maps.Length != 1 || positions.Length != 1 ||
                 !(mazeHell || flags.Length == 0 && dungeonHell) ||
                 maps[0].Tokens is not [{ Type: 0, Value: > 0 } mapToken] ||
                 positions[0].Tokens is not [{ Type: 0 } x, { Type: 0 } y]) return null;
             var room = new DungeonPoint(x.Value, y.Value);
             if (room.X < 0 || room.Y < 0 || room.X >= width || room.Y >= height ||
-                !specification.Any(map => map.Position == room && map.Kind == "map") ||
+                DungeonGreedGrid.Read(width,height,greed) is not { Supported: true, Cells: { } cells } || cells[room.Y*width+room.X].Index == 0 ||
                 !mapPaths.TryGetValue(mapToken.Value, out var hellPath) || !exists(hellPath)) return null;
             int Single(string tag) => mazeSections.Where(s => s.Tag == tag).ToArray() is [{ Tokens: [{ Type: 0, Value: >= 0 } value] }] ? value.Value : 0;
             return new(mapToken.Value, room) { RequiredItemCount = Single("hell party required item count"), AppearRate = Single("seal door appear rate"),

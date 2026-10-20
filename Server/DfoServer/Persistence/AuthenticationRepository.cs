@@ -23,30 +23,40 @@ public sealed class AuthenticationRepository(string path) : IAccountCredentialSt
     public bool TryCreate(string accountId, PasswordCredential password)
     {
         using var db = database.Open();
+        // 单语句写也要走写闸门：自动提交同样会占住 writer，绕过闸门就仍有撞锁的可能。
+        using var write = db.BeginWrite("AuthenticationRepository.TryCreate");
         using var cmd = db.CreateCommand();
+        cmd.Transaction = write.Transaction;
         // 只忽略账号唯一键冲突，其他约束或 I/O 故障不能伪装成已有账号。
         cmd.CommandText = "INSERT INTO accounts(account_id,salt,password_hash,iterations) VALUES($account,$salt,$hash,$iterations) ON CONFLICT(account_id) DO NOTHING";
         cmd.Parameters.AddWithValue("$account", accountId);
         cmd.Parameters.AddWithValue("$salt", password.Salt.ToArray());
         cmd.Parameters.AddWithValue("$hash", password.Hash.ToArray());
         cmd.Parameters.AddWithValue("$iterations", password.Iterations);
-        return cmd.ExecuteNonQuery() == 1;
+        bool created = cmd.ExecuteNonQuery() == 1;
+        write.Transaction.Commit();
+        return created;
     }
 
     public bool SetDisabled(string accountId, bool disabled)
     {
         using var db = database.Open();
+        using var write = db.BeginWrite("AuthenticationRepository.SetDisabled");
         using var cmd = db.CreateCommand();
+        cmd.Transaction = write.Transaction;
         cmd.CommandText = "UPDATE accounts SET disabled=$disabled,revision=revision+1 WHERE account_id=$account";
         cmd.Parameters.AddWithValue("$disabled", disabled ? 1 : 0);
         cmd.Parameters.AddWithValue("$account", accountId);
-        return cmd.ExecuteNonQuery() == 1;
+        bool changed = cmd.ExecuteNonQuery() == 1;
+        write.Transaction.Commit();
+        return changed;
     }
 
     public bool ChangePassword(string accountId, PasswordCredential password)
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction();
+        using var write = db.BeginWrite("AuthenticationRepository.ChangePassword");
+        using var tx = write.Transaction;
         using var cmd = db.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = "UPDATE accounts SET salt=$salt,password_hash=$hash,iterations=$iterations,revision=revision+1 WHERE account_id=$account";

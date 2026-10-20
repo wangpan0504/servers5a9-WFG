@@ -12,7 +12,8 @@ internal sealed partial class CharacterRepository
         AdventureCatalog catalog, DateTimeOffset now) => owner.Execute(() =>
     {
         if (plan.ActorId == 0) throw new InvalidDataException("冒险团代表操作缺少真实角色上下文");
-        using var db = database.Open(); using var tx = db.BeginTransaction(deferred: true);
+        using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitAdventureRepresentative", deferred: true);
+        using var tx = write.Transaction;
         var current = ReadAdventure(db, tx, owner.Account, catalog, now);
         if (!current.Members.Any(member => member.Id == plan.ActorId) || !current.Members.SequenceEqual(plan.Before.Members) ||
             JsonSerializer.Serialize(current.State) != JsonSerializer.Serialize(plan.Before.State))

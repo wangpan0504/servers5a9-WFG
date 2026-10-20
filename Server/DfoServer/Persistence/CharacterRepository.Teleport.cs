@@ -53,7 +53,8 @@ internal sealed partial class CharacterRepository
     public Character CommitTeleport(AccountOwners.Lease owner, TeleportPlan plan) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.CommitTeleport");
+        using var tx = write.Transaction;
         var expected = plan.Expected;
         // 提交器返回同一事务内实读角色；不在其前后重复加载完整资产。
         var current = CommitInventoryInTransaction(db, tx, owner, expected, plan.Inventory);

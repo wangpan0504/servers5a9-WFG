@@ -13,7 +13,7 @@ internal sealed partial class CharacterRepository
     {
         using var db = database.Open();
         // 延迟只读事务保证身份与外观属于同一数据库快照，不占用 writer。
-        using var transaction = db.BeginTransaction(deferred: true);
+        using var transaction = db.BeginRead();
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$account", owner.Account);
@@ -54,7 +54,7 @@ internal sealed partial class CharacterRepository
     public Character LoadCharacter(AccountOwners.Lease owner, ushort slot) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var transaction = db.BeginTransaction(deferred: true);
+        using var transaction = db.BeginRead();
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "SELECT * FROM characters WHERE account=$account AND slot=$slot";

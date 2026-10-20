@@ -73,7 +73,7 @@ internal sealed partial class CharacterRepository : IGuildDirectoryStore
     public Character? LoadCharacterById(AccountOwners.Lease owner, ushort characterId) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var transaction = db.BeginTransaction(deferred: true);
+        using var transaction = db.BeginRead();
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "SELECT * FROM characters WHERE account=$account AND id=$id";
@@ -104,7 +104,8 @@ internal sealed partial class CharacterRepository : IGuildDirectoryStore
         owner.Execute(() =>
         {
             using var db = database.Open();
-            using var transaction = db.BeginTransaction(deferred: false);
+            using var write = db.BeginWrite("CharacterRepository.CreateGuild");
+            using var transaction = write.Transaction;
             if (GuildTextTaken(db, transaction, "SELECT 1 FROM guilds WHERE name=$text LIMIT 1", plan.Name))
                 return new GuildCreateResult(GuildCreateError.NameTaken, null, 0);
             if (GuildTextTaken(db, transaction, "SELECT 1 FROM guilds WHERE address=$text LIMIT 1", plan.Address))

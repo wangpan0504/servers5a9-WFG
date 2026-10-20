@@ -16,7 +16,8 @@ internal sealed partial class CharacterRepository
         if (!plan.Changed)
             return plan.Before;
         using var db = database.Open();
-        using var tx = db.BeginTransaction();
+        using var write = db.BeginWrite("CharacterRepository.CommitSkillSwitchInventory");
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, plan.Before.Name);
         if (current.Id != plan.Before.Id || current.Revision != plan.Before.Revision ||
             !current.SkillSwitchInventory.Same(plan.Before.SkillSwitchInventory))

@@ -6,8 +6,10 @@ namespace DfoServer.GameWorld.Dungeons;
 internal sealed record DungeonMapPoolEntry(int Id, string Path, ImmutableArray<int> Dungeons, string Kind, ushort Layouts);
 
 // 原始MAP的归属、type及greed决定候选，不以相似文件名猜测缺失剧情地图。
-internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries)
+internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries, IReadOnlyDictionary<int,string>? paths = null)
 {
+    private readonly IReadOnlyDictionary<int,DungeonMapPoolEntry> byId = entries.ToDictionary(row => row.Id);
+
     public static DungeonMapPool Load(PvfArchive archive, IReadOnlyDictionary<int,string> paths)
     {
         var rows = ImmutableArray.CreateBuilder<DungeonMapPoolEntry>();
@@ -20,7 +22,7 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             }
             catch (Exception error) when (error is InvalidDataException or FileNotFoundException or NotSupportedException) { }
         }
-        return new(rows.ToImmutable());
+        return new(rows.ToImmutable(),paths);
     }
 
     internal static DungeonMapPoolEntry? Parse(int id, string path, IReadOnlyList<PvfToken> tokens, Func<int,string> resolve)
@@ -37,7 +39,7 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             !fields.TryGetValue("[type]",out var kind) || kind is not [{ Type: 6 }] ||
             !fields.TryGetValue("[greed]",out var greed) || greed is not [{ Type: 6 }]) return null;
         string type = resolve(kind[0].Value);
-        if (type is not ("[normal]" or "[boss]")) return null;
+        if (type is not ("[normal]" or "[boss]" or "[dummy]")) return null;
         string raw = resolve(greed[0].Value);
         int count = raw.Count(ch => ch is not (' ' or '\r' or '\n')) / 2;
         var grid = DungeonGreedGrid.Read(count,1,raw);
@@ -51,17 +53,18 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
         return layouts == 0 ? null : new(id,path,owned.Select(token => token.Value).Distinct().ToImmutableArray(),type,layouts);
     }
 
-    public DungeonMaze Resolve(DungeonDefinition definition, DungeonMaze maze, Func<int,int> draw)
+    public DungeonMaze Resolve(DungeonDefinition definition, DungeonMaze maze, Func<int,int> draw, bool hellParty = false)
     {
         if (maze.QuestConnectionTokens.Count != 0 || maze.ResourceError is not null || !maze.GreedGrid.Supported ||
             maze.Starts.Count == 0 || maze.Bosses.Count == 0) return maze;
+        if (maze.DummyStages.Count != 0) return maze;
         var maps = (maze.MapSpecification ?? []).ToDictionary(row => row.Position);
-        var excluded = definition.Mazes.Where(row => row.QuestConnectionTokens.Count != 0)
-            .SelectMany(row => (row.MapSpecification ?? []).Concat(row.LayeredMaps).Concat(row.OverriddenMaps))
-            .Concat(definition.Mazes.SelectMany(row => row.LayeredMaps))
-            .SelectMany(row => row.CandidateIds.Count == 0 ? new[] { row.Id } : row.CandidateIds).ToHashSet();
-        var pool = entries.Where(row => row.Dungeons.Contains(definition.Id) && !excluded.Contains(row.Id)).ToArray();
-        var start = Choose(maze.Starts); var boss = Choose(maze.Bosses);
+        // 原端按MAP自身归属注册；被任务maze引用不等于任务专用，不能从普通池排除共享模板。
+        var pool = entries.Where(row => row.Dungeons.Contains(definition.Id)).ToArray();
+        var starts = maze.Starts.Where(point => !hellParty || point != maze.HellParty?.Room).ToArray();
+        var bosses = maze.Bosses.Where(point => !hellParty || point != maze.HellParty?.Room).Distinct().ToArray();
+        if (starts.Length == 0 || bosses.Length == 0) return maze;
+        var start = starts[0]; var boss = bosses[0];
         // 悲叹之塔的原始BB是单房声明，不把右出口补成网格外房间。
         if (definition.RequiresGriefEntryContract)
         {
@@ -103,20 +106,81 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             if (tournament.Length != 1) return maze;
             return maze with { IsTournament = true, MapSpecification = [new("boss",start,tournament[0].Id,tournament[0].Path)] };
         }
-        if (maps.Values.Any(row => row.Kind == "boss" && row.Position != boss)) return maze;
+        var specified = maps.Values.Concat(maze.MapAlternatives).ToDictionary(row => (row.Position,row.Kind));
+        int dummyCount = definition.DummyAppearCount;
+        bool dummy = dummyCount > 0 && pool.Any(row => row.Kind == "[dummy]");
+        var points = maze.GreedGrid.Cells!.Where(cell => cell.Index != 0)
+            .Select(cell => new DungeonPoint(cell.SourceOrdinal % maze.Width,cell.SourceOrdinal / maze.Width)).ToHashSet();
+        var missingNormal = points.Where(point => !Available(point,"map")).ToArray();
+        var stageTargets = bosses.Where(point => points.Contains(point) && Available(point,"boss") && (!dummy || Available(point,"dummy"))).ToArray();
+        var initialTargets = stageTargets.Where(point => missingNormal.All(missing => missing == point)).ToArray();
+        starts = starts.Where(points.Contains).ToArray();
+        if (starts.Length == 0 || initialTargets.Length == 0) return maze;
+        start = Choose(starts); boss = Choose(initialTargets);
+        var stages = new List<DungeonMap>();
+        if (dummy)
+        {
+            var target = boss;
+            for (int index = 0; index <= dummyCount; index++)
+            {
+                if (index > 0)
+                {
+                    var remaining = stageTargets.Where(point => point != target).ToArray();
+                    target = remaining.Length == 0 ? target : Choose(remaining);
+                }
+                var stage = Select(target,index == dummyCount ? "boss" : "dummy");
+                if (stage is null) return maze;
+                stages.Add(stage with { Kind = "boss",DummyStageIndex = index });
+            }
+        }
+        maps.Clear();
         foreach (var cell in maze.GreedGrid.Cells!)
         {
             if (cell.Index == 0) continue;
             var point = new DungeonPoint(cell.SourceOrdinal % maze.Width,cell.SourceOrdinal / maze.Width);
-            if (maps.ContainsKey(point)) continue;
-            string kind = point == boss ? "[boss]" : "[normal]";
-            var candidates = pool.Where(row => row.Kind == kind && (row.Layouts & (1 << cell.Index)) != 0).ToArray();
-            if (candidates.Length == 0) return maze;
-            var selected = Choose(candidates);
-            maps.Add(point,new(point == boss ? "boss" : "map",point,selected.Id,selected.Path));
+            var selected = dummy && point == boss ? stages[0] : Select(point,point == boss ? "boss" : "map");
+            if (selected is null) return maze;
+            maps.Add(point,selected);
         }
-        var result = maze with { Starts = [start], Bosses = [boss], MapSpecification = maps.Values.OrderBy(row => row.Position.Y).ThenBy(row => row.Position.X).ToImmutableArray() };
+        var result = maze with { Starts = [start], Bosses = [boss],DummyStages = stages.ToImmutableArray(),MapAlternatives = [],
+            MapSpecification = maps.Values.OrderBy(row => row.Position.Y).ThenBy(row => row.Position.X).ToImmutableArray() };
         return result.StaticTopology.Supported ? result : maze;
+
+        DungeonMap? Select(DungeonPoint point,string kind)
+        {
+            if (point.X < 0 || point.Y < 0 || point.X >= maze.Width || point.Y >= maze.Height) return null;
+            var explicitMaps = Explicit(point,kind);
+            if (explicitMaps.Length > 0) return Choose(explicitMaps);
+            int layout = maze.GreedGrid.Cells![point.Y*maze.Width+point.X].Index;
+            string type = kind == "map" ? "[normal]" : kind == "boss" ? "[boss]" : "[dummy]";
+            var candidates = pool.Where(row => row.Kind == type && (row.Layouts & (1 << layout)) != 0).ToArray();
+            if (candidates.Length == 0)
+            {
+                // 没有普通模板时复用dummy场景，但普通身份不创建其中的假Boss演员。
+                if (!dummy || kind != "map") return null;
+                var fallback = Select(point,"dummy");
+                return fallback is null ? null : fallback with { Kind = "map" };
+            }
+            var selected = Choose(candidates);
+            return new(kind,point,selected.Id,selected.Path);
+        }
+
+        DungeonMap[] Explicit(DungeonPoint point,string kind)
+        {
+            if (!specified.TryGetValue((point,kind == "dummy" ? "map" : kind),out var source)) return [];
+            var ids = source.CandidateIds.Count == 0 ? new[] { source.Id } : source.CandidateIds.Distinct().ToArray();
+            return ids.Where(id => kind == "dummy" ? byId.TryGetValue(id,out var dummyRow) && dummyRow.Kind == "[dummy]" :
+                    !dummy || kind != "map" || !byId.TryGetValue(id,out var normalRow) || normalRow.Kind == "[normal]")
+                .Select(id => source with { Kind = kind,Id = id,
+                    Path = byId.TryGetValue(id,out var row) ? row.Path : paths?.GetValueOrDefault(id) ?? (id == source.Id ? source.Path : ""),
+                    CandidateIds = source.CandidateIds.Count > 1 ? ImmutableArray.Create(id) : source.CandidateIds }).ToArray();
+        }
+
+        bool Available(DungeonPoint point,string kind) => Explicit(point,kind).Length > 0 ||
+            pool.Any(row => row.Kind == (kind == "map" ? "[normal]" : kind == "boss" ? "[boss]" : "[dummy]") &&
+                point.X >= 0 && point.Y >= 0 && point.X < maze.Width && point.Y < maze.Height &&
+                (row.Layouts & (1 << maze.GreedGrid.Cells![point.Y*maze.Width+point.X].Index)) != 0) ||
+            dummy && kind == "map" && Available(point,"dummy");
 
         T Choose<T>(IReadOnlyList<T> rows)
         {

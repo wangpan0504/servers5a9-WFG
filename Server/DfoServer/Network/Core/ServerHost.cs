@@ -149,6 +149,13 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             await protocol.RunAsync(new(id, peer.Address, client.GetStream(), lifetime, channel, capture, endpoint,
                 localAddress: (client.Client.LocalEndPoint as IPEndPoint)?.Address));
         }
+        catch (Exception ex) when (DfoServer.Persistence.SqliteBusyRetry.IsBusy(ex))
+        {
+            // 忙锁不是连接故障：分发层已按包做过有界重试，漏网至此也只记录诊断，不再写成 closed 断线原因。
+            log.Write("db_busy", new { Connection = id, Channel = channel,
+                Protocol = protocol is Protocol.NativeChannel ? "NATIVE" : channel ? "CHANNEL" : "GAME", Stage = "connection",
+                Attempts = 0, Message = ex.Message });
+        }
         catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException or InvalidDataException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
         {
             log.Write("closed", new { Connection = id, Channel = channel, Reason = ex.GetType().Name, ex.Message });

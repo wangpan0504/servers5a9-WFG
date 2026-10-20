@@ -30,8 +30,10 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     long serial;
     Scene SceneOf(AccountOwners.Lease owner, Character character, ChannelIdentity identity)
     {
-        var map = towns.Areas[(character.Position.Town, character.Position.Area)].Map(character.CompletedQuests.ToHashSet());
-        return new(identity, character.Position.Town, character.Position.Area, map.Path, map.IsRoom ? owner.Account : null);
+        // 与聊天共用 TownCatalog.Scene 的场景定位（PVF 地图阶段 + 房间判定），避免两处各算一份；
+        // 频道与房间账号在这里补齐。
+        var town = towns.Scene(character.Position, character.CompletedQuests.ToHashSet());
+        return new(identity, town.Town, town.Area, town.Map, town.IsRoom ? owner.Account : null);
     }
 
     bool Visible(Member source, Member target, Func<Character, Character, bool>? recipient = null)

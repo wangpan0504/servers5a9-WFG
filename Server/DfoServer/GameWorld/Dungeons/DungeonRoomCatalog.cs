@@ -105,7 +105,7 @@ internal sealed class DungeonRoomCatalog
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
         return room.Map.Kind == "layered" ? room with
         {
-            CinematicLayerReturn = ReadCinematicLayerReturn(room.Map,tokens),
+            CinematicLayerReturn = ReadCinematicLayerReturn(room,tokens),
             ScriptedLayerReturn = ReadScriptedLayerReturn(room)
         } : room;
     }
@@ -172,7 +172,7 @@ internal sealed class DungeonRoomCatalog
         return Array.AsReadOnly(result.ToArray());
     }
 
-    DungeonCinematicLayerReturn? ReadCinematicLayerReturn(DungeonMap map, IReadOnlyList<PvfToken> tokens)
+    DungeonCinematicLayerReturn? ReadCinematicLayerReturn(DungeonRoomDefinition room, IReadOnlyList<PvfToken> tokens)
     {
         try { return Read(); }
         // 可选演出元数据不支持时保留正常清怪路线；MAP及演员主资源仍在Get中严格校验。
@@ -180,16 +180,30 @@ internal sealed class DungeonRoomCatalog
 
         DungeonCinematicLayerReturn? Read()
         {
+        var map = room.Map;
         string? action = DungeonCinematicLayerReturnRules.BasicAction(tokens,archive.ResolveString);
         if (string.IsNullOrEmpty(action)) return null;
         string path = PvfArchive.NormalizePath(action.StartsWith("map/",StringComparison.OrdinalIgnoreCase) ? action :
             map.Path[..(map.Path.LastIndexOf('/') + 1)] + action);
         if (!path.StartsWith("map/",StringComparison.Ordinal) || !archive.Contains(path)) return null;
-        int? id = DungeonCinematicLayerReturnRules.OneShotCinematic(archive.ReadTokens(path),archive.ResolveString);
+        var actionTokens = archive.ReadTokens(path);
+        int? id = DungeonCinematicLayerReturnRules.OneShotCinematic(actionTokens,archive.ResolveString);
+        int? actorId = null;
+        if (id is null && DungeonCinematicLayerReturnRules.ActorCinematic(actionTokens,archive.ResolveString) is { } actor &&
+            room.AiCharacters.Count(row => row.Id == actor.ActorId) == 1)
+        {
+            id = actor.CinematicId;
+            actorId = actor.ActorId;
+        }
         if (id is not { } movie || !archive.Contains("cinematic/cinematic.lst") || !cinematics.Value.TryGetValue(movie,out string? file) ||
             !archive.Contains(file)) return null;
-        return DungeonCinematicLayerReturnRules.IsNonCombatMapChange(map.Id,archive.ReadTokens(file),archive.ResolveString)
-            ? new(map.Id,map.Path,path,movie,file) : null;
+        var cinematicTokens = archive.ReadTokens(file);
+        bool navigation = actorId is not null
+            ? DungeonCinematicLayerReturnRules.IsActorMapChange(map.Id,cinematicTokens,archive.ResolveString)
+            : DungeonCinematicLayerReturnRules.IsNonCombatMapChange(map.Id,cinematicTokens,archive.ResolveString);
+        // 严格匹配后的10 token为无APC绑定的ON START MAP，不继承末层返回基础格资格。
+        return navigation ? new(map.Id,map.Path,path,movie,file)
+            { ActorId=actorId, IsOnStartMap=actionTokens.Length == 10 } : null;
         }
     }
 

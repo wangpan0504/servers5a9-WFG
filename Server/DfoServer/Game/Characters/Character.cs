@@ -13,6 +13,8 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     // 来自角色设置的场景显示位，不改写位置、进度或资产revision。
     public byte VisibilityFlags { get; init; } = 6;
     public ushort Emotion { get; init; }
+    // 被其他角色拉黑后的有效计分，不是本人黑名单条目数；客户端据此选择惩罚称号。
+    public int BlacklistCount { get; init; }
     public byte Level { get; init; } = 1;
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public DfoServer.Game.Guild.GuildMembership? Guild { get; init; }

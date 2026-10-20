@@ -65,6 +65,8 @@ internal interface ICharacterRepository
     Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance);
     Character CommitExperienceConsumable(AccountOwners.Lease owner, ExperienceConsumablePlan plan, DateTimeOffset now);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
+    // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务提交。
+    Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge);
     QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);
     QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan);
     QuestLifecycleCommit CommitQuestLifecycle(AccountOwners.Lease owner, QuestLifecyclePlan plan);

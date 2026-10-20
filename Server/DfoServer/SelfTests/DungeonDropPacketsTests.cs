@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using DfoServer.Development.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.Network;
 using DfoServer.Network.Builders;
 
@@ -24,6 +25,14 @@ internal static class DungeonDropPacketsTests
         }, 65000, 63000);
         var one = DungeonPackets.MonsterDeath(257, [first]);
         var two = DungeonPackets.MonsterDeath(258, [first, second]);
+        Bytes(DungeonPackets.MonsterDeath(256,[],new(2,3)),[0,1,0,0,0,0,255,1,2,3,0],
+            "dummy死亡在本版38尾部插入更新标志及两个坐标，死亡标志仍在最后");
+        var movedBoss = ExclusiveDropPackets.MonsterDeath(258,[first,second],51,new(2,3));
+        That(movedBoss.AsSpan(0,two.Length-5).SequenceEqual(two.AsSpan(0,two.Length-5)) &&
+            movedBoss.AsSpan(two.Length-5).SequenceEqual(new byte[] { 0,0,255,1,2,3,0 }),
+            "有掉落的dummy死亡保留完整物品列表和游标，独占表包装不吞掉目标坐标");
+        foreach (var invalid in new[] { new DungeonPoint(-1,0),new(0,-1),new(256,0),new(0,256) })
+            Reject<InvalidDataException>(()=>DungeonPackets.MonsterDeath(256,[],invalid),"目标坐标不截断到错误格子");
         var gold = DungeonPackets.MonsterDeath(259, [new(1234, 0, null, 0, 0) { GoldAmount = 321 }]);
         That(gold.Length == 140 && BinaryPrimitives.ReadUInt32LittleEndian(gold.AsSpan(4)) == 1234 &&
             BinaryPrimitives.ReadInt32LittleEndian(gold.AsSpan(10)) == 0 && BinaryPrimitives.ReadInt32LittleEndian(gold.AsSpan(14)) == 321 &&

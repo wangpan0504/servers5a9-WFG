@@ -85,6 +85,17 @@ internal static class SinglePlayerDungeonRunTests
         That(fatigueClear.Result.Snapshot.ConsumedFatigue == 3 &&
             fatigue.ConfirmCommittedDeath(fatigueClear).Snapshot.ConsumedFatigue == 3,
             "Boss死亡的待提交与已提交结算快照都保留当局应耗疲劳");
+        // #511 入场一次性疲劳：首次加载计 N，之后的首次房间不再逐房计点。
+        That(SinglePlayerDungeonRun.TryCreate(fatigue.Entry with { StartFatigue = 10 },3,300,fatigueRoute,authority,out var startFatigueRun,out _) &&
+            startFatigueRun!.Entry.UsesFatigue && !startFatigueRun.Entry.UsesRoomFatigue && startFatigueRun.Snapshot.ConsumedFatigue == 0,
+            "入场一次性疲劳的普通Run加载前不计应耗疲劳");
+        startFatigueRun!.CompleteLoading(startFatigueRun.Snapshot.Identity,Guid.NewGuid());
+        That(startFatigueRun.Snapshot.ConsumedFatigue == 10,"入场一次性疲劳首次加载计 N");
+        startFatigueRun.Move(startFatigueRun.Snapshot.Identity,Guid.NewGuid(),friendly.Position);
+        startFatigueRun.CompleteLoading(startFatigueRun.Snapshot.Identity,Guid.NewGuid());
+        startFatigueRun.Move(startFatigueRun.Snapshot.Identity,Guid.NewGuid(),boss.Position);
+        startFatigueRun.CompleteLoading(startFatigueRun.Snapshot.Identity,Guid.NewGuid());
+        That(startFatigueRun.Snapshot.ConsumedFatigue == 10,"入场一次性疲劳之后的首次房间不再逐房计点");
         var original = run.Snapshot;
         That(original.LivingMonsters.SequenceEqual(new ushort[] { 10, 11 }) && run.CurrentLivingMonster(10) is { IsBlocking: true } &&
             run.CurrentLivingMonster(11) is null, "snapshot retains the friendly actor while combat qualification excludes it");

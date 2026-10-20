@@ -15,8 +15,8 @@ internal static class QuestCinematicSettlementTcpTests
     internal static void Verify(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
-        foreach (var scenario in new[] { (Request:(ushort)3599,FinishFirst:false),(Request:(ushort)0,FinishFirst:false),
-            (Request:(ushort)3599,FinishFirst:true) })
+        foreach (var scenario in new[] { (Request:(ushort)3599,FinishFirst:false,AllEnemies:true),(Request:(ushort)0,FinishFirst:false,AllEnemies:false),
+            (Request:(ushort)3599,FinishFirst:true,AllEnemies:false) })
         {
             var area = resources.Towns.Areas.Values.First(row => row.Level <= 74 && row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 96 &&
@@ -55,13 +55,18 @@ internal static class QuestCinematicSettlementTcpTests
                 Move(1); Load(76113);
                 var enemies = Enumerable.Range(0,map[18]).Where(at => map[40+22*at] == 0).ToArray();
                 That(enemies.Length == 9,"TCP76113下发全部九个敌对演员");
-                foreach (int at in enemies)
+                // 第二、三条只提交一个实际下发对象的合成39，验证其余八敌存活时的导航。
+                var reported = scenario.AllEnemies ? enemies : [enemies[^1]];
+                foreach (int at in reported)
                 {
                     peer.Send(39,ScriptDeath(U16(map,25+22*at),peer.Id));
                     Drain();
                 }
                 That(enabled == 0,"真实叠层击杀不能提前许可非战斗终点结算");
                 Move(1); Load(76114,cached:true);
+                That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",peer.Id)
+                    is [[long deathCount]] && deathCount == reported.Length,
+                    "APC演出返回只保留实际39回执，不替其余八敌创建死亡或经验");
                 That(enabled == 0 && fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3599",peer.Id)
                     is [[1L]],"返回原演出终点仍等待本次接取33");
                 RejectDummy();

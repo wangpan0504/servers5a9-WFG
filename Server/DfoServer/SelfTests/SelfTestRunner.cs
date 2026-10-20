@@ -54,6 +54,7 @@ internal static class SelfTestRunner
         await PacketCaptureTests.RunAsync();
         await PacketHttpTests.RunAsync();
         ClientNoticeTests.Run();
+        ChatServiceTests.Run();
         AuctionNoticeTests.Run();
         AuctionReplyTests.Run();
         DungeonRequestTests.Run();
@@ -131,6 +132,8 @@ internal static class SelfTestRunner
         await AccountConcurrencyTests.RunAsync();
         await UserStateTests.RunCoreAsync();
         await AccountDatabaseConcurrencyTests.RunAsync();
+        await SqliteBusyRetryTests.RunAsync();
+        await SqliteWriteGateTests.RunAsync();
         await TownPresenceConcurrencyTests.RunAsync();
         DatabaseSchemaTests.Run();
         TutorialTests.RunCore();
@@ -298,6 +301,7 @@ internal static class SelfTestRunner
         MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HellPartyEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        DungeonEntryCostTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         StadiumQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestScriptedSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         FriendlyAiCharacterDeathTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);

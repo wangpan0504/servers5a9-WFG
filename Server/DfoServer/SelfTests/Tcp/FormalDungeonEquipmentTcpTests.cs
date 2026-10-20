@@ -21,6 +21,7 @@ internal static partial class FormalDungeonTcpTests
             ("宠物", InventoryListType.Pet, 26, 63000, 63001),
             ("宠物幻化", InventoryListType.Pet, 33, 63000, 63023),
             ("武器", InventoryListType.Main, 12, profile.Equipment.Single(item => item.Slot == 12).Template.Id, 101010438),
+            ("称号", InventoryListType.Main, 13, 26596, 26597),
             ("防具", InventoryListType.Main, 17, profile.Equipment.Single(item => item.Slot == 17).Template.Id, profile.Equipment.Single(item => item.Slot == 17).Template.Id),
             ("装扮", InventoryListType.Avatar, 0, 101550507, 101550507),
             ("真实光环", InventoryListType.Avatar, 9, 401590036, 401590037),
@@ -75,6 +76,32 @@ internal static partial class FormalDungeonTcpTests
                 var first = FindBag(family.First);
                 var second = FindBag(family.Second, first.Uid);
                 Move(first.Slot, family.First, 0);
+                if (family.Worn == 13)
+                {
+                    string progress = fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id);
+                    foreach (bool take in new[] { false, true })
+                    {
+                        ushort opcode = take ? (ushort)413 : (ushort)412;
+                        peer.Send(opcode, Build(writer =>
+                        { writer.Write(3); writer.Write(13); writer.Write(family.First); writer.Write(4); writer.Write(10); }));
+                        peer.Expect(1, opcode, Build(writer =>
+                        { writer.Write((byte)1); writer.Write(3); writer.Write(13); writer.Write(4); writer.Write(10); }));
+                        byte[] actor = peer.Expect(0, 2).Body;
+                        int count = checked(133 + (int)U32(actor, 123));
+                        That(actor[0] == 0 && U16(actor, 121) == peer.Id && actor[count - 1] == 1 && peer.Expect(0, 2).Body[0] == 1,
+                            "副本称号簿ACK后发送成员状态1的本人Actor及Player，不改为城镇状态");
+                        for (int category = 0; category < 5; category++)
+                        {
+                            var book = peer.Expect(0, 358).Body;
+                            That(U16(book, 1) == 0 && U32(book, 3) == category, "副本称号簿仍完整刷新本人五类列表");
+                        }
+                        peer.Barrier();
+                        That(fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id) == progress &&
+                            fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=13", peer.Id)
+                                .Select(row => Convert.ToInt64(row[0])).SequenceEqual(take ? [first.Uid] : []),
+                            "副本内称号簿穿脱安装实际UID并保持房间，回复后不因误用城镇成员广播断线");
+                    }
+                }
                 if (family.Worn == 26)
                 {
                     string unchanged = Assets();
@@ -163,7 +190,7 @@ internal static partial class FormalDungeonTcpTests
                                 "副本普通穿脱保留图标装载和完整返回装备，关闭获得通知但不重置房间");
                     }
                     byte[] player = peer.Expect(0, 2).Body;
-                    if (family.Worn is 9 or 11 or 26 or 33)
+                    if (family.Worn is 9 or 11 or 13 or 26 or 33)
                     {
                         if (player[0] != 0)
                             missingCreatureDeclarations.Add($"{fromId}/{toId}");
@@ -174,7 +201,7 @@ internal static partial class FormalDungeonTcpTests
                             // 0267DF0B读取Level后第三字节到成员DTO+1C；原生45要求该状态非零。
                             byte memberState = actor[132 + nameWidth];
                             That(memberState == 1, "副本外观Actor须保留已加载成员状态1，不能关闭客户端45发送门禁");
-                            if (family.Worn is 9 or 11)
+                            if (family.Worn is 9 or 11 or 13)
                             {
                                 int count = actor[133 + nameWidth];
                                 int start = 134 + nameWidth;
@@ -183,7 +210,7 @@ internal static partial class FormalDungeonTcpTests
                                     .ToArray();
                                 That(auraEntries.Where(entry => entry.Slot == family.Worn)
                                     .Select(entry => entry.Id).SequenceEqual(fromId == 0 ? [] : [(uint)fromId]),
-                                    "副本Actor中9/11仅投影本次实际穿戴模板，卸下清对应外观槽");
+                                    "副本Actor中9/11/13仅投影本次实际穿戴模板，卸下清对应外观槽");
                                 if (family.Worn == 11)
                                 {
                                     uint realAura = Convert.ToUInt32(fixture.Query("""

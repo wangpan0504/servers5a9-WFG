@@ -41,8 +41,8 @@ internal static class QuestCinematicSettlementTests
         done.UnionWith(area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0 && !gate.Quests.Contains(3599)).Quests);
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town,area.Area,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
-        foreach (var scenario in new[] { (Request:3599u,Finish:false,Replay:false),(Request:0u,Finish:false,Replay:false),
-            (Request:3599u,Finish:true,Replay:false),(Request:3599u,Finish:false,Replay:true) })
+        foreach (var scenario in new[] { (Request:3599u,Finish:false,Replay:false,AllEnemies:true),(Request:0u,Finish:false,Replay:false,AllEnemies:false),
+            (Request:3599u,Finish:true,Replay:false,AllEnemies:false),(Request:3599u,Finish:false,Replay:true,AllEnemies:false) })
         {
             using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,74,
                 scenario.Replay ? done.Append(3599).ToArray() : done.ToArray(),position:position);
@@ -72,15 +72,22 @@ internal static class QuestCinematicSettlementTests
             That(f.Session.MoveFormalDungeon(1,0,1) is not null,"沿实际叠层身份进入76113");
             loaded = f.Session.CompleteFormalDungeonLoading()!;
             var enemies = loaded.Monsters.Monsters.Where(row => row.IsBlocking).ToArray();
-            That(loaded.Snapshot.CurrentMap.Id == 76113 && enemies.Length == 9 &&
+            That(loaded.Snapshot.CurrentMap.Id == 76113 && enemies.Length == 9 && loaded.Monsters.Room.CinematicLayerReturn is { ActorId:2000,CinematicId:2405 } &&
+                !opening.Entry.HasExplicitClearMap && opening.Entry.Maze.ConnectsQuest(3599,opening.Entry.Difficulty) &&
                 f.Session.EnableFormalDungeonSettlement() is null,"76113保留九个真实敌对演员，层内未清不能结算");
-            foreach (var enemy in enemies)
+            // 仅合成一个真实对象的39，不把CMT的INDEX直接作为网络对象key；保留一条原全清路径。
+            var reported = scenario.AllEnemies ? enemies : [enemies[^1]];
+            foreach (var enemy in reported)
                 That(f.Session.ObserveFormalDungeonScriptedDeath(new(enemy.ObjectKey,0x22,true,new string('A',64)),kills,growth).Outcome == DungeonRunOutcome.Accepted,
                     "合成脚本39只对真实层内敌人提交原死亡事务");
+            That(f.Session.DungeonSnapshot!.LivingMonsters.Intersect(enemies.Select(row => row.ObjectKey)).Count() == enemies.Length-reported.Length,
+                "未报告的层内演员保持存活，不因演出补杀或清退");
             That(f.Session.Phase == SessionPhase.Dungeon && f.Session.MoveFormalDungeon(1,0,1) is not null,
-                "清完76113后返回原基础76114而非替换地图");
+                "原全清或APC演出未全清均只导航返回原基础76114");
             That(f.Session.EnableFormalDungeonSettlement() is null,"返回加载中仍不能发布结算");
             loaded = f.Session.CompleteFormalDungeonLoading()!;
+            That(f.Query("SELECT count(*) FROM character_dungeon_growth_receipts") is long deathCount && deathCount == reported.Length,
+                "导航不伪造未报告演员的死亡或成长回执");
             That(loaded.Snapshot.CurrentMap.Id == 76114 && f.Session.Phase == SessionPhase.Settlement &&
                 loaded.Monsters.Monsters.All(row => !row.CanReportDeath),
                 "真实叠层死亡后加载全非战斗终点产生合法ClearFact，不把62959当死亡Boss");

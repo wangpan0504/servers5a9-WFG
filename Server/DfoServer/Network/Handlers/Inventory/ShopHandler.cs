@@ -58,10 +58,13 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     {
         var request = ShopRequests.Buy(packet.Body);
         ShopPurchaseReceipt? receipt = null;
-        var result = context.BlocksTownActions ? InventoryResult.Reject(17) :
-            context.Session.MutateInventory(character => shop.Buy(character, request, out receipt), 17);
+        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(17) :
+            context.Session.PlanAndCommitInventory(character => shop.Buy(character, request, out receipt), 17, requireTown: false);
+        var committed = result.Receipt;
         // ACK先扣客户端材料、再增加获得量；不能在其前面推送已经叠好的最终奖励数量。
-        await context.Reply(CmdPacketType.BUY_ITEM, ShopPackets.Bought(result, receipt, context.Session.Selected?.Inventory), result.Accepted ? "npc_shop_bought" : "npc_shop_buy_rejected");
+        await context.Reply(CmdPacketType.BUY_ITEM, ShopPackets.Bought(result, receipt, committed?.Character.Inventory),
+            result.Accepted ? "npc_shop_bought" : "npc_shop_buy_rejected",
+            () => committed is null || context.Session.CanPublishInventory(committed));
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }
@@ -69,10 +72,10 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     async Task<CommandResult> PurchaseCounts(GameConnectionContext context, Packet packet)
     {
         int npc = ShopRequests.PurchaseCounts(packet.Body);
-        var rows = context.Owner.Execute(() => context.BlocksTownActions || !context.Session.Ready ||
-            context.Session.Phase != Game.Session.SessionPhase.Town || context.Session.Selected is not { } character ?
-            null : shop.PurchaseCounts(character, npc));
-        await context.Reply(CmdPacketType.SHOP_PURCHASE_COUNT, ShopPackets.PurchaseCounts(rows), "npc_shop_purchase_counts");
+        InventoryCommitReceipt? snapshot = null;
+        var rows = context.Activity?.BlocksTownActions == true ? null : context.Session.ReadShopPurchaseCounts(npc, shop, out snapshot);
+        await context.Reply(CmdPacketType.SHOP_PURCHASE_COUNT, ShopPackets.PurchaseCounts(rows), "npc_shop_purchase_counts",
+            () => snapshot is null || context.Session.CanPublishInventory(snapshot));
         return CommandResult.Handled;
     }
 
@@ -80,7 +83,9 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     {
         var request = ShopRequests.Sell(packet.Body);
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject() : context.Session.SellAtShop(request, shop);
-        await context.Reply(CmdPacketType.SELL_ITEM, ShopPackets.Sold(result, request), result.Accepted ? "npc_shop_sold" : "npc_shop_sell_rejected");
+        var committed = result.Receipt;
+        await context.Reply(CmdPacketType.SELL_ITEM, ShopPackets.Sold(result, request), result.Accepted ? "npc_shop_sold" : "npc_shop_sell_rejected",
+            () => committed is null || context.Session.CanPublishInventory(committed));
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }

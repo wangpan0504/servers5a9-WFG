@@ -12,7 +12,7 @@ internal sealed partial class CharacterRepository
     public QuestStageState LoadQuestStageState(AccountOwners.Lease owner, Character expected) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var tx = db.BeginRead();
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id || current.Revision != expected.Revision)
             throw new InvalidOperationException("阶段资格原角色或revision已变化");

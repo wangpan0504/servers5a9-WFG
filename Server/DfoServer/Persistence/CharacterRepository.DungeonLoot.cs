@@ -125,7 +125,8 @@ internal sealed partial class CharacterRepository
             prepared.Identity.TaskAttempt != ground.DeathIdentity.TaskAttempt)
             throw new InvalidDataException("拾取准备不属于本角色实例");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitDungeonPickup", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id) throw new InvalidOperationException("拾取角色归属变化");
         // 存储的原掉落是资格来源，网络坐标/token不在资产判断中。

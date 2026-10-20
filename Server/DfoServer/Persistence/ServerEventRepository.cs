@@ -26,7 +26,8 @@ internal sealed class ServerEventRepository(string path) : IServerEventStore
             return expected;
         if (expected.Revision == long.MaxValue)
             throw new InvalidDataException("活动配置版本已耗尽");
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("ServerEventRepository.Save", deferred: true);
+        using var tx = write.Transaction;
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.EventId);

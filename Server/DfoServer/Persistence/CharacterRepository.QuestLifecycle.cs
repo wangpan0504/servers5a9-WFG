@@ -25,7 +25,8 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("任务生命周期不能改变无关账号完成位");
         ValidateInventoryPlan(expected, plan.Inventory);
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitQuestLifecycle", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         using var command = db.CreateCommand();
         command.Transaction = tx;
@@ -147,7 +148,8 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("游戏日不能逆向切换");
         if (day == expected.QuestCycleDay) return expected;
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.AdvanceQuestCycle", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id || current.Revision != expected.Revision || !QuestCycle.Same(current, expected) ||
             !current.CompletedQuests.SequenceEqual(expected.CompletedQuests) || !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests))

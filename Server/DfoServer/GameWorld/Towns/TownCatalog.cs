@@ -22,6 +22,11 @@ internal sealed record TownMap(string Path, WalkRegion[] Bounds, Link[] Links, b
 }
 internal sealed record TownPhase(int Index, int Quest);
 internal sealed record RoomPortal(byte Town, byte Area, Rectangle Bounds, int Level, int Quest);
+/// <summary>
+/// 城镇场景定位结果：<paramref name="Map"/> 是按已完成任务解析出的当前 PVF 地图路径，
+/// <paramref name="IsRoom"/> 是房间判定。频道与房间账号由调用方补齐（同屏与聊天共用这套定位，不各算一份）。
+/// </summary>
+internal readonly record struct TownScene(byte Town, byte Area, string Map, bool IsRoom);
 internal sealed record TownArea(byte Town, byte Area, int Level, int[] Quests, int[] AnyQuests, int[] ExceptQuests, Location? Gate, TownMap Default, TownMap[] Phases, TownPhase[] Shifts)
 {
     public int? DungeonWorldMap { get; init; }
@@ -72,6 +77,18 @@ internal sealed class TownCatalog
 
     static bool Allowed(int[] required, int[] conditions, IReadOnlySet<int> completed) => required.All(completed.Contains) && conditions.Length == 0;
     public bool IsRoom(Location p, IReadOnlySet<int>? completed = null) => Areas.TryGetValue((p.Town, p.Area), out var area) && area.Map(completed ?? NoQuests).IsRoom;
+
+    /// <summary>
+    /// 城镇场景定位（同屏与聊天共用）：区域 PVF 地图按已完成任务解析阶段，房间单独标记。
+    /// 副本/选图阶段的坐标可能不在城镇区域表里，此时返回空地图而不是抛异常，由调用方补副本实例身份。
+    /// </summary>
+    public TownScene Scene(Location position, IReadOnlySet<int> completed)
+    {
+        if (!Areas.TryGetValue((position.Town, position.Area), out var area))
+            return new(position.Town, position.Area, "", false);
+        var map = area.Map(completed);
+        return new(position.Town, position.Area, map.Path, map.IsRoom);
+    }
     public bool IsPosition(Location p, IReadOnlySet<int>? completed = null)
     {
         completed ??= NoQuests;

@@ -53,9 +53,20 @@ internal static class ServerLogTests
                 log.Write("avatar_dye", new { Connection = 1, SourceSlot = 74, AvatarSlot = 0, Accepted = true, Reason = "committed", Revision = 4, Color1 = 1, Color2 = 0 });
                 log.Write("avatar_dye", new { Connection = 1, SourceSlot = 74, AvatarSlot = 0, Accepted = false, Reason = "source-qualification" });
                 log.Write("resource_warning", new { MissingMaps = new[] { new { Path = "maps/with spaces/map.map", Error = "missing" } } });
+                log.Write("db_busy", new { Connection = 1, Phase = "Town", Kind = 1, Opcode = 0, Name = "0", Stage = "dispatch", Attempts = 5,
+                    Message = "SQLite Error 5: 'database is locked'." });
+                log.Write("db_slow", new { Stage = "write_transaction", Action = "CharacterRepository.Save", ElapsedMs = 1523,
+                    SqlHead = "UPDATE characters SET revision=revision+1", Connection = 7 });
                 string text = output.ToString();
                 TestCheck.That(text.Contains("[INFO] [server_ready] Server ready") && text.Contains("[WARN] [auth_rejected]") &&
                     text.Contains("[WARN] [formal_dungeon_entry]"), "English events expose readiness and rejection severity");
+                TestCheck.That(text.Contains("[WARN] [db_busy] Database busy") && text.Contains("Stage=dispatch Attempts=5") &&
+                    text.Contains("Message=SQLite Error 5: 'database is locked'."),
+                    "忙锁耗尽降级为 WARN 诊断，保留阶段、尝试次数与原始消息");
+                TestCheck.That(text.Contains("[WARN] [db_slow] Database slow") &&
+                    text.Contains("Stage=write_transaction Action=CharacterRepository.Save ElapsedMs=1523") &&
+                    text.Contains("SqlHead=UPDATE characters SET revision=revision+1 Connection=7"),
+                    "慢数据库操作按 WARN 输出实际阶段、动作、耗时、SQL 头与连接");
                 TestCheck.That(text.Contains("[INFO] [formal_quest_continuation_selection] Quest continuation selection") &&
                     text.Contains("DungeonIndex=6 Opened=True SelectionId=2"),
                     "连图选择日志保留英文阶段及选择身份，不将选图准备标为副本入场成功");
@@ -109,7 +120,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 94,
+            TestCheck.That(fileLines.Length == 96,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&

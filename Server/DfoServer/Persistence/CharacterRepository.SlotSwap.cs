@@ -10,7 +10,8 @@ internal sealed partial class CharacterRepository
     {
         if (slotA == slotB) return true;
         using var db = database.Open();
-        using var transaction = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.SwapSlots");
+        using var transaction = write.Transaction;
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "SELECT slot FROM characters WHERE account=$account ORDER BY slot";

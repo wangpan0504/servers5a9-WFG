@@ -54,7 +54,8 @@ internal sealed partial class CharacterRepository
                 plan.TargetEquipmentSlotFlags != expected.EquipmentSlotFlags || plan.TpAmount != 0 || plan.CascadeMarkerQuestId is not null))
             throw new InvalidDataException("任务交付需要已确认类型、权威条件与一致成长规划");
         ValidateInventoryPlan(expected, plan.Inventory);
-        using var db = database.Open(); using var tx = db.BeginTransaction(deferred: true);
+        using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitQuestCompletion", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id) throw new InvalidOperationException("领奖角色或账号已变化");
         using var command = db.CreateCommand(); command.Transaction = tx;

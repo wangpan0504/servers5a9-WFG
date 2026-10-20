@@ -21,7 +21,8 @@ internal static class DungeonMapPoolTests
         That(Parse("[normal]","BB BB") is { Layouts: 2 } && Parse("[boss]","EE EE") is { Layouts: 16 },"MAP pair按真实资源方向建立普通与Boss候选");
         That(Parse("[normal]","BB BB\r\nEE EE") is { Layouts: 18 } && Parse("[normal]","B B BB") is null && Parse("[normal]","BB\tBB") is null,
             "入口编码多行有效，字符对内部空格及未知空白不被修补");
-        That(Parse("[normal]","NN BB") is null && Parse("[dummy]","BB BB") is null && Parse("[normal]","BB BB",-1) is null,
+        That(Parse("[dummy]","BB BB") is { Kind: "[dummy]",Layouts: 2 },"MAP级dummy有独立反向注册池，不混入普通或真Boss");
+        That(Parse("[normal]","NN BB") is null && Parse("[unknown]","BB BB") is null && Parse("[normal]","BB BB",-1) is null,
             "异值pair、未知地图种类和失效归属不变成正常候选");
         var maze = new DungeonMaze(7,2,1,"BBEE",[new(0,0)],[new(1,0)],null,[]);
         var story = maze with { QuestConnectionTokens = [new(0,0),new(0,100),new(0,-1)],
@@ -30,8 +31,8 @@ internal static class DungeonMapPoolTests
         var pool = new DungeonMapPool([new(100,"map/story.map",[10],"[normal]",2),new(101,"map/start.map",[10],"[normal]",2),
             new(201,"map/boss.map",[10],"[boss]",16),new(202,"map/wrong-owner.map",[11],"[boss]",16)]);
         var result = pool.Resolve(definition,maze,_ => 0);
-        That(result.StaticTopology.Supported && result.MapSpecification!.Select(row => row.Id).SequenceEqual([101,201]) && result.SourceOrdinal == 7,
-            "普通生成匹配归属、类型和双向出口，排除剧情专属地图，保持原maze索引");
+        That(result.StaticTopology.Supported && result.MapSpecification!.Select(row => row.Id).SequenceEqual([100,201]) && result.SourceOrdinal == 7,
+            "普通生成按MAP归属、类型和出口注册，共享图不因被任务maze引用而排除");
         That(ReferenceEquals(pool.Resolve(definition,story,_ => 0),story),"缺失剧情定义不能由普通地图池猜测替代");
         var explicitMap = new DungeonMap("map",new(0,0),300,"map/explicit.map");
         var partial = maze with { MapSpecification = [explicitMap] };
@@ -47,7 +48,7 @@ internal static class DungeonMapPoolTests
             new(106,"map/layer2.map",[10],"[normal]",2),new(101,"map/start.map",[10],"[normal]",2),
             new(201,"map/boss.map",[10],"[boss]",16)]);
         That(protectedPool.Resolve(definition with { Mazes = [maze,protectedStory] },maze,_ => 0).MapSpecification!
-            .Select(map => map.Id).SequenceEqual([101,201]),"普通池排除剧情和叠层全部候选，不只排除首张地图");
+            .Select(map => map.Id).SequenceEqual([104,201]),"任务候选和叠层引用不覆盖MAP本身的普通注册资格");
         var overriddenStory = protectedStory with
         {
             OverriddenMaps = [explicitMap with { CandidateIds = [107,108] },explicitMap with { CandidateIds = [109] }]
@@ -57,8 +58,10 @@ internal static class DungeonMapPoolTests
             new(101,"map/start.map",[10],"[normal]",2),new(201,"map/boss.map",[10],"[boss]",16)]);
         That(protectedStory.SameLayout(overriddenStory) &&
             historyPool.Resolve(definition with { Mazes = [maze,overriddenStory] },maze,_ => 0).MapSpecification!
-                .Select(map => map.Id).SequenceEqual([101,201]),
-            "覆盖历史不改变有效路线等价性，任务专用历史的全部候选仍不能进入普通池");
+                .Select(map => map.Id).SequenceEqual([107,201]),
+            "覆盖历史不改变布局等价性，也不把有效反向注册的共享模板逐出地图池");
+        OrdinaryCandidates();
+        MixedDummyCandidates();
         ExplicitCandidates();
         GriefResource();
         var trainingMaze = new DungeonMaze(0,1,1,"BB",[new(0,0)],[new(0,0)],null,[]);
@@ -72,6 +75,82 @@ internal static class DungeonMapPoolTests
             ReferenceEquals(trainingPool.Resolve(trainingDefinition,invalidTrainingMaze,_ => 0),invalidTrainingMaze),
             "修炼场资源放行不扩大到别的副本或不匹配坐标");
         Console.WriteLine($"PASS {Count-checks} 普通地图池归属、方向、随机与剧情隔离断言");
+    }
+
+    static void OrdinaryCandidates()
+    {
+        var a = new DungeonPoint(0,0); var b = new DungeonPoint(1,0); var c = new DungeonPoint(2,0);
+        var maze = new DungeonMaze(0,3,1,"BBFFEE",[a,c],[a,c],null,[]);
+        var definition = new DungeonDefinition(777,"dungeon/maze.dgn",1,1,[maze],[]);
+        var pool = new DungeonMapPool([new(100,"map/right.map",[777],"[normal]",2),new(101,"map/both.map",[777],"[normal]",32),
+            new(102,"map/left.map",[777],"[normal]",16),new(200,"map/boss-right.map",[777],"[boss]",2),
+            new(202,"map/boss-left.map",[777],"[boss]",16),new(300,"map/dummy-right.map",[777],"[dummy]",2),
+            new(302,"map/dummy-left.map",[777],"[dummy]",16)]);
+        var selected = pool.Resolve(definition,maze,_ => 0);
+        That(selected.StaticTopology.Supported && selected.Starts.SequenceEqual([a]) && selected.Bosses.SequenceEqual([a]) &&
+            selected.MapSpecification!.Select(map => map.Id).SequenceEqual([200,101,102]),"普通候选起点与Boss在同一轮组格，未选Boss点使用普通图");
+        var forced = new DungeonMapPool([new(100,"map/right.map",[777],"[normal]",2),new(101,"map/both.map",[777],"[normal]",32),
+            new(200,"map/boss-right.map",[777],"[boss]",2),new(202,"map/boss-left.map",[777],"[boss]",16)])
+            .Resolve(definition,maze,_ => 0);
+        That(forced.StaticTopology.Supported && forced.Bosses.SequenceEqual([c]),"优先从能补齐全图的Boss候选中抽签，不因先抽到缺普通图的组合而拒绝");
+        var dummy = pool.Resolve(definition with { RawSections = [new("dummy appear count",[new(0,2)])] },maze,_ => 0);
+        That(dummy.StaticTopology.Supported && dummy.DummyStages.Select(map => map.Position).SequenceEqual([a,c,a]) &&
+            dummy.DummyStages.Select(map => map.Id).SequenceEqual([300,302,200]) &&
+            dummy.DummyStages.Select(map => map.DummyStageIndex).SequenceEqual([0,1,2]),
+            "无显式DGN地图表也按反向dummy池构成两次假Boss与最终真Boss，非相邻阶段可重用坐标");
+        var hell = maze with { HellParty = new(400,b),HellPartyPath = "map/hell.map" };
+        var hellSelected = pool.Resolve(definition,hell,_ => 1,true);
+        That(hellSelected.StaticTopology.Supported && hellSelected.Starts.SequenceEqual([c]) && hellSelected.Bosses.SequenceEqual([c]),
+            "深渊与普通共用随机组格，不固定取第一起点或Boss");
+        var conflicting = hell with { Starts = [b,a],Bosses = [b,c] };
+        var safeHell = pool.Resolve(definition,conflicting,_ => 0,true);
+        That(safeHell.Starts.SequenceEqual([a]) && safeHell.Bosses.SequenceEqual([c]),"深渊有合法候选时避开密门占位，不因抽到冲突点直接拒绝");
+        var character = new Character(99,0,"MazeFixture",0,new(38,2,1085,249),null) { Level = 90 };
+        That(DungeonEntryPlan.TryCreate(definition with { Mazes = [hell] },character,777,0,0,out var plan,out _,hellParty:true,
+            resolveMaze: value => pool.Resolve(definition,value,_ => 0,true)) && plan!.HellParty?.Room == b &&
+            plan.Maze.MapSpecification!.Single(map => map.Position == b).Id == 400,"反向生成深渊路线保留密门图替换及原maze身份");
+    }
+
+    static void MixedDummyCandidates()
+    {
+        var start = new DungeonMap("map",new(0,0),100,"map/start.map");
+        var middle = new DungeonMap("map",new(1,0),101,"map/middle.map") { CandidateIds = [101,301] };
+        var end = new DungeonMap("map",new(2,0),302,"map/end-dummy.map") { CandidateIds = [302,102] };
+        var bosses = new[] { new DungeonMap("boss",middle.Position,201,"map/middle-boss.map"),
+            new DungeonMap("boss",end.Position,202,"map/end-boss.map") };
+        var maze = new DungeonMaze(0,3,1,"BBFFEE",[start.Position],[middle.Position,end.Position],[start,..bosses],[])
+            { MapAlternatives = [middle,end] };
+        var definition = new DungeonDefinition(778,"dungeon/mixed-dummy.dgn",1,1,[maze],
+            [new("dummy appear count",[new(0,2)])]);
+        ImmutableArray<DungeonMapPoolEntry> rows = [new(999,"map/unrelated-dummy.map",[778],"[dummy]",48),
+            new(100,start.Path,[778],"[normal]",2),new(101,middle.Path,[778],"[normal]",32),new(102,"map/end.map",[778],"[normal]",16),
+            new(201,bosses[0].Path,[778],"[boss]",32),new(202,bosses[1].Path,[778],"[boss]",16),
+            new(301,"map/middle-dummy.map",[778],"[dummy]",32),new(302,end.Path,[778],"[dummy]",16)];
+        var pool = new DungeonMapPool(rows);
+        foreach (bool last in new[] { false,true })
+        {
+            var selected = pool.Resolve(definition,maze,count => last ? count-1 : 0);
+            var initial = last ? end.Position : middle.Position;
+            var other = last ? middle.Position : end.Position;
+            That(selected.StaticTopology.Supported && selected.Bosses.SequenceEqual([initial]) &&
+                selected.DummyStages.Select(map => map.Id).SequenceEqual(last ? new[] { 302,301,202 } : new[] { 301,302,201 }),
+                "混合候选按当前用途选择对应槽位的dummy和最终Boss，不从同出口的其他任务模板抽取");
+            That(selected.MapSpecification!.Single(map => map.Position == other).Id == (last ? 101 : 102) &&
+                selected.MapSpecification!.Single(map => map.Position == other).Kind == "map",
+                "未标记格只抽本位置normal候选，普通图与dummy在原列表的前后顺序不影响结果");
+        }
+        That(middle.CandidateIds.SequenceEqual([101,301]) && end.CandidateIds.SequenceEqual([302,102]) &&
+            maze.MapAlternatives.SequenceEqual([middle,end]),"选图不修改共享原始候选或其他账号的规划输入");
+        var fallbackMaze = maze with { MapAlternatives = [middle with { CandidateIds = [301] },end] };
+        var fallback = new DungeonMapPool(rows.Where(row => row.Id != 101).ToImmutableArray()).Resolve(definition,fallbackMaze,count => count-1);
+        That(fallback.StaticTopology.Supported && fallback.MapSpecification!.Single(map => map.Position == middle.Position) is
+            { Kind:"map",Id:301,DummyStageIndex:-1 } && fallback.DummyStages[0].Id == 302,
+            "没有普通模板时保留dummy场景的普通身份，由演员规划排除假Boss，不拒绝整条可通关路线");
+        var hellMaze = maze with { HellParty = new(400,middle.Position),HellPartyPath = "map/hell.map" };
+        var hell = pool.Resolve(definition,hellMaze,_ => 0,true);
+        That(hell.StaticTopology.Supported && hell.Bosses.SequenceEqual([end.Position]) &&
+            hell.DummyStages.All(map => map.Position == end.Position) && hell.MapSpecification!.Single(map => map.Position == middle.Position).Id == 101,
+            "深渊密门不成为dummy目标，密门替换前仍使用普通模板");
     }
 
     static void GriefResource()
@@ -193,6 +272,12 @@ internal static class DungeonMapPoolTests
         var parsedChoice = DungeonCatalog.ResolveMapCandidates(parsed,paths,_ => true,_ => 1);
         That(parsedChoice.MapSpecification![0].Id == 100 && parsedChoice.LayeredMaps.Count == 2,
             "实际入场解析只发布有效选图和全部有序层，不替换失败地图");
+        var hellTokens = new PvfToken[] { Tag("maze info"),Tag("size"),new(0,2),new(0,1),Tag("greed"),Text("BBEE"),
+            Tag("start map"),new(0,0),new(0,0),Tag("/start map"),Tag("boss map"),new(0,1),new(0,0),Tag("/boss map"),
+            Tag("hell dungeon"),new(0,1),Tag("seal door map index"),new(0,200),Tag("seal door pos"),new(0,1),new(0,0) };
+        That(DungeonCatalog.ParseResource(777,"dungeon/hell-pool.dgn",hellTokens,id => strings[id],paths,_ => true).Mazes.Single() is
+            { ResourceError: null,MapSpecification: null,HellParty.MapId: 200 },
+            "深渊密门声明不依赖DGN显式地图表，后续仍可通过反向池组格");
     }
 
     public static void Run(PvfArchive pvf)
@@ -202,11 +287,11 @@ internal static class DungeonMapPoolTests
         var actual = definition.Mazes.Single(maze => maze.QuestConnectionTokens.Count == 0);
         That(ReferenceEquals(catalog.ResolveOrdinaryMaze(definition,actual,_ => throw new InvalidOperationException()),actual),
             "实际龙人之塔完整显式普通路线不进入地图池或重新抽图");
-        // 仅将布局改为合成二房fixture，MAP归属、greed、type和剧情排除仍取实际PVF。
+        // 仅将布局改为合成二房fixture，MAP归属、greed和type仍取实际PVF。
         var maze = new DungeonMaze(0,2,1,"BBEE",[new(0,0)],[new(1,0)],null,[]);
         var resolved = catalog.ResolveOrdinaryMaze(definition with { Mazes = [maze,..definition.Mazes.Where(row => row.QuestConnectionTokens.Count != 0)] },maze,_ => 0);
         That(resolved.StaticTopology.Supported && resolved.MapSpecification!.Select(row => row.Id).SequenceEqual([58597,58605]),
-            "实际PVF普通MAP池选择龙人之塔58597/58605，排除任务7984专用地图");
+            "实际PVF按MAP归属、类型及出口选择龙人之塔58597/58605，不依赖DGN显式地图表");
         var griefDefinition = catalog.Get(5115);
         var griefMaze = griefDefinition.Mazes.Single();
         var grief = catalog.ResolveOrdinaryMaze(griefDefinition,griefMaze,_ => throw new InvalidOperationException());

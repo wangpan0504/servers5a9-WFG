@@ -217,8 +217,12 @@ internal static class DungeonCatalogTests
         var mixed = fixture.Parse(fixture.Maze(mapRows: [fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1),
             fixture.String("boss"),fixture.Int(0),fixture.Int(0),fixture.Int(2)]));
         That(mixed.Mazes.Single() is { ResourceError: null, MapSpecification: [{ Kind: "boss", Id: 2 }] } &&
-            mixed.Mazes[0].OverriddenMaps is [{ Kind: "map", Id: 1 }],
-            "同格 map 后跟 boss 按 0409C9B9 last-wins，保留末行 Boss 身份");
+            mixed.Mazes[0].MapAlternatives is [{ Kind: "map", Id: 1 }] && mixed.Mazes[0].OverriddenMaps.Count == 0,
+            "同格map与boss独立保留，固定Boss格投影Boss而不丢失普通候选");
+        var reverseMixed = fixture.Parse(fixture.Maze(mapRows: [fixture.String("boss"),fixture.Int(0),fixture.Int(0),fixture.Int(2),
+            fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1)]));
+        That(reverseMixed.Mazes.Single().MapSpecification is [{ Kind: "boss", Id: 2 }] &&
+            reverseMixed.Mazes[0].MapAlternatives is [{ Kind: "map", Id: 1 }],"普通行写在Boss行后也不清除独立Boss候选");
         var repeated = fixture.Parse(fixture.Maze(mapRows: [fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(1),
             fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(2),
             fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(3)]));
@@ -362,7 +366,8 @@ internal static class DungeonCatalogTests
         Unsupported(fixture.Maze(mapId: 99),"地图不存在: 99","未列入目录的地图引用保留诊断");
         Unsupported(fixture.Maze(),"地图不存在: 1","缺失地图文件保留诊断",exists: false);
         Reject(() => fixture.Parse(fixture.Maze().Concat(fixture.Tag("size", fixture.Int(1), fixture.Int(1))).ToArray()), "duplicate size in same maze rejected");
-        Unsupported(fixture.Maze(duplicateMap: true),"重复 map specification 坐标","重复地图坐标保留诊断");
+        That(fixture.Parse(fixture.Maze(duplicateMap: true)).Mazes[0] is { ResourceError: null,MapSpecification.Count: 1,OverriddenMaps.Count: 1 },
+            "同种重复候选行按客户端清空后覆盖，不以重复坐标拒绝");
         Unsupported(fixture.Maze(duplicateStart: true),"重复 start/boss map 坐标","重复起点坐标保留诊断");
         Reject(() => fixture.Parse(fixture.Maze(closeMap: false)), "unclosed map specification rejected");
         Reject(() => fixture.Parse(fixture.Tag("minimum required level", fixture.Int(1)).Concat(fixture.Tag("minimum required level", fixture.Int(2))).Concat(fixture.Maze()).ToArray()), "duplicate minimum level rejected");

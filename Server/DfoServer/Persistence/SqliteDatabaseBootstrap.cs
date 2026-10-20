@@ -9,9 +9,11 @@ internal static class SqliteDatabaseBootstrap
     public static string Initialize(string path, string? schemaPath = null)
     {
         path = Path.GetFullPath(path);
+        // 命令超时与连接上的 busy_timeout 一致：Microsoft.Data.Sqlite 按该值重试 SQLITE_BUSY，
+        // 因此连接串与 PRAGMA 必须同步，否则先到的 5 秒会盖掉新的忙等上限。
         string connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = path, Pooling = false, ForeignKeys = true, DefaultTimeout = 5
+            DataSource = path, Pooling = false, ForeignKeys = true, DefaultTimeout = 30
         }.ToString();
         lock (Gate)
         {
@@ -28,7 +30,8 @@ internal static class SqliteDatabaseBootstrap
                 else
                 {
                     string sql = ReadSchema(schemaPath);
-                    using var tx = db.BeginTransaction();
+                    using var write = db.BeginWrite("SqliteDatabaseBootstrap.Initialize");
+                    using var tx = write.Transaction;
                     // SQLite负责SQL语句边界，不能按分号拆开触发器的BEGIN/END块。
                     SqliteMigrations.Execute(db, tx, sql);
                     SqliteMigrations.MarkCurrent(db, tx);

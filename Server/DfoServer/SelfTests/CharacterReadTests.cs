@@ -67,6 +67,18 @@ internal static class CharacterReadTests
             using var external = new SqliteConnection("Data Source=" + path + ";Pooling=False");
             external.Open();
             using var command = external.CreateCommand();
+            TestCheck.That(first.BlacklistCount == 0 && second.BlacklistCount == 0 && outsider.BlacklistCount == 0,
+                "新角色被拉黑计分默认为0，不从账号或装备称号推导");
+            command.CommandText = "UPDATE characters SET blacklist_count=201 WHERE id=$blackId";
+            command.Parameters.AddWithValue("$blackId", first.Id);
+            command.ExecuteNonQuery();
+            var counted = repository.LoadCharacter(owner, first.Slot);
+            TestCheck.That(counted.BlacklistCount == 201 && repository.List(owner).Single(row => row.Id == first.Id).BlacklistCount == 201 &&
+                repository.LoadCharacter(owner, second.Slot).BlacklistCount == 0 && repository.LoadCharacter(other, outsider.Slot).BlacklistCount == 0,
+                "完整角色和按需加载读取各自有效计分，不跨角色或账号共享");
+            var moved = repository.Save(owner, counted, counted.Position with { X = 11 }, counted.Return);
+            TestCheck.That(moved.BlacklistCount == 201 && new CharacterRepository(path).LoadCharacter(owner, first.Slot).BlacklistCount == 201,
+                "无关位置保存及重开库保留被拉黑计分");
             using (var writer = external.BeginTransaction(deferred: false))
             {
                 command.Transaction = writer;

@@ -143,6 +143,12 @@ internal static class QuestSceneTests
         VerifyMetroCages(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
         QuestPassiveClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters,global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
+        Issue153CinematicLayerTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,
+            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+        Issue153RemainingTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,
+            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+        Issue153MermaidClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
+            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
     }
 
@@ -522,7 +528,7 @@ internal static class QuestSceneTests
                 f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
             uint ExpectedExperience(DungeonPlannedMonster monster) => DungeonKillExperiencePolicy.Calculate(
                 kills.GetExperience(monster.CandidateLevel),entry.ExperienceWeight,kills.GetDifficultyRate(entry.Difficulty),
-                kills.GetMonsterRate(monster.ExperienceType,monster.AiCharacter is null && entry.NamedMonsters.Contains(monster.MonsterId)),
+                kills.GetMonsterRate(monster.RewardType,monster.AiCharacter is null && entry.NamedMonsters.Contains(monster.MonsterId)),
                 f.Session.Selected!.Level,monster.CandidateLevel);
             void Kill(DungeonPlannedMonster monster)
             {
@@ -890,7 +896,7 @@ internal static class QuestSceneTests
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
             byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
-            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null)
+            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null,ushort? fatigueRemaining = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
@@ -912,6 +918,8 @@ internal static class QuestSceneTests
             if (growthContractExpiresAt is { } expiry)
                 Repository.CommitInventory(Owner,created,new(created.Inventory,created.Inventory with
                     { AccountWallet = created.Inventory.AccountWallet.SetContractExpiry(84,expiry) },"test_growth_contract"));
+            // 选角前改写库内疲劳余额（入场一次性疲劳不足测试用）。
+            if (fatigueRemaining is { } remaining) Sql("UPDATE character_fatigue SET remaining=$p0", (int)remaining);
             ICharacterRepository repository = lost || loseGrowth ? new LostResultRepository(Repository) { LoseSceneResult = lost, LoseCompletionResult = false,
                 LoseGrowthResult = loseGrowth,GrowthLossCondition = growthLossCondition } : Repository;
             if (loseSettlement)

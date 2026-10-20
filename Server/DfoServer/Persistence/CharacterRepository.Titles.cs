@@ -54,7 +54,8 @@ internal sealed partial class CharacterRepository
     {
         if (!plan.Changed) return plan.Before;
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.CommitTitleAchievement");
+        using var tx = write.Transaction;
         var expected = plan.Before;
         var current = Require(db, tx, owner.Account, expected.Name);
         ValidateInventoryPlan(current, plan.Inventory);

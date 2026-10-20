@@ -174,7 +174,8 @@ internal sealed partial class CharacterRepository
             prepared.Identity.QuestId != ground.DeathIdentity.QuestId || prepared.Identity.TaskAttempt != ground.DeathIdentity.TaskAttempt)
             throw new InvalidDataException("集合拾取准备不属于本角色原实例");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitDropCollectionPickup", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, dbOwner.Account, expected.Name);
         if (current.Id != expected.Id)
             throw new InvalidOperationException("集合拾取的角色归属变化");

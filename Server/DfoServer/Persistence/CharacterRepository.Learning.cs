@@ -43,7 +43,8 @@ internal sealed partial class CharacterRepository
                 (!totalTp.HasValue && tree.Tp != expected.Learning.Trees.Single(old => old.Context == tree.Context).Tp))))
             throw new InvalidDataException("普通技能事务不能修改额外来源或TP；未知来源不允许退点");
         using var db = database.Open();
-        using var transaction = db.BeginTransaction();
+        using var write = db.BeginWrite("CharacterRepository.CommitLearning");
+        using var transaction = write.Transaction;
         Character current;
         try
         {

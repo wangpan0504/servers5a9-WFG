@@ -60,7 +60,8 @@ internal sealed partial class CharacterRepository
             return plan.Before;
 
         using var db = database.Open();
-        using var transaction = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.CommitCollectBox");
+        using var transaction = write.Transaction;
         var expected = plan.Before;
         var current = Require(db, transaction, owner.Account, expected.Name);
         if (current.Id != expected.Id || current.Revision != expected.Revision ||

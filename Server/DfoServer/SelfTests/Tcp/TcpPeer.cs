@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Net;
 using System.Text;
@@ -295,6 +296,31 @@ internal sealed class TcpPeer : IDisposable
         long last = Math.Clamp(100 - ((Math.Max(0, until-finished)+59)/60)*9, 10, 100);
         TestCheck.That(packet.Body[0] >= first && packet.Body[0] <= last && (100-packet.Body[0]) % 9 == 0,
             "虚弱百分比符合本人落库期限及本版每分钟恢复规则");
+    }
+
+    /// <summary>
+    /// 负向断言：窗口内不得出现指定的下行业务帧。窗口内的无关通知照常读出并消费，序号与后续断言保持连续；
+    /// 对端关闭不算静默通过。用于"只记录不发包"这类必须证明线上没有该帧的场景。
+    /// </summary>
+    public void NoFrame(int milliseconds, string note, params (byte Kind, ushort Opcode)[] forbidden)
+    {
+        var watch = Stopwatch.StartNew();
+        while (true)
+        {
+            int remaining = milliseconds - (int)watch.ElapsedMilliseconds;
+            if (remaining <= 0)
+                break;
+            if (!client.Client.Poll(remaining * 1000, SelectMode.SelectRead))
+                break;
+            // Poll 可读还可能是对端已关闭：此时没有帧可读，不能当作静默。
+            if (client.Client.Available == 0)
+                TestCheck.That(false, note + ": 等待静默时连接被对端关闭");
+            var packet = Read();
+            TestCheck.That(!forbidden.Contains((packet.Kind, packet.Opcode)),
+                $"{note}: 窗口 {milliseconds}ms 内不应出现 ({packet.Kind},{packet.Opcode})，实际正文 {Convert.ToHexString(packet.Body)}");
+        }
+
+        TestCheck.That(true, note);
     }
 
     public void Closed()

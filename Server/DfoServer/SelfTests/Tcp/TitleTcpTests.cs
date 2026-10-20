@@ -122,6 +122,7 @@ internal static class TitleTcpTests
             That(retained.Accepted && retained.Plan!.After.Find(new(InventoryListType.Equipment, 13))!.Core == nonSealing,
                 "非sealing模板的既有标记保持，不对所有称号无条件清零");
         }
+        fixture.Sql("UPDATE characters SET blacklist_count=201 WHERE name='TitleSwap'");
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
@@ -165,9 +166,10 @@ internal static class TitleTcpTests
                 "取出保留附魔、强化、期限、扩展字段及UID，不按模板重建");
             peer.Send(413, Book(0, 11, 26596, 0, 0)); peer.Expect(1, 413, [0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
             peer.Send(413, Book(17, 13, 26596, 0, 0)); peer.Expect(1, 413, [0, 2, 0, 17, 0, 0, 0, 0, 0, 0, 0]);
-            peer.Send(413, Book(3, 13, 26596, 0, 0)); peer.Expect(1, 413, Ack(3, 13, 0, 0)); ReadBooks(peer); peer.Barrier();
+            peer.Send(413, Book(3, 13, 26596, 0, 0)); peer.Expect(1, 413, Ack(3, 13, 0, 0));
+            ReadAppearance(peer, 26596); ReadBooks(peer); peer.Barrier();
             That(Read(InventoryListType.Equipment, 13)?.Core.ItemId == 26596 && fixture.Query("SELECT count(*) FROM character_title_book_slots WHERE list_type=18 AND slot_index=0") is [[0L]],
-                "成就称号可以穿戴但不能取包，ACK先移动客户端对象，不发送完整Actor重建");
+                "成就称号可以穿戴但不能取包，ACK先移动已有对象，再同步本人外观与完整穿戴");
         }
         for (ushort slot = 2; slot <= 4; slot++)
         {
@@ -199,7 +201,8 @@ internal static class TitleTcpTests
             peer.Send(412, Book(0, 9, 26059, 4, 10)); peer.Expect(1, 412, Ack(0, 9, 4, 10)); peer.Expect(0, 14); ReadBooks(peer); peer.Barrier();
             That(Read(InventoryListType.TitleEvent, 10, 5) is { Uid: var storedUid, Core: var storedCore } &&
                 storedUid == sealedUid && storedCore == sealedCore, "封装称号放入自由格不提前消封且保留UID及完整核心");
-            peer.Send(412, Book(3, 13, 26597, 4, 10)); peer.Expect(1, 412, Ack(3, 13, 4, 10)); ReadBooks(peer); peer.Barrier();
+            peer.Send(412, Book(3, 13, 26597, 4, 10)); peer.Expect(1, 412, Ack(3, 13, 4, 10));
+            ReadAppearance(peer, 26059, 201); ReadBooks(peer); peer.Barrier();
             That(Read(InventoryListType.Equipment, 13, 5) is { Uid: var equippedUid, Core: var equippedCore } &&
                 equippedUid == sealedUid && equippedCore == sealedCore with { SealFlag = 0 } &&
                 Read(InventoryListType.TitleEvent, 10, 5) is { Uid: var oldUid, Core: var oldCore } && oldUid == wornUid && oldCore == wornCore,
@@ -210,6 +213,12 @@ internal static class TitleTcpTests
             peer.Send(413, Book(0, 9, 26597, 4, 10)); peer.Expect(1, 413, Ack(0, 9, 4, 10)); peer.Expect(0, 14); ReadBooks(peer); peer.Barrier();
             That(Read(InventoryListType.Main, 9, 5) is { Uid: var returnedUid, Core: var returnedCore } &&
                 returnedUid == wornUid && returnedCore == wornCore, "交换后的原穿戴称号可完整取回背包，不复制实例");
+            peer.Send(412, Book(3, 13, 26059, 4, 10)); peer.Expect(1, 412, Ack(3, 13, 4, 10));
+            ReadAppearance(peer, null, 201); ReadBooks(peer); peer.Barrier();
+            That(Read(InventoryListType.Equipment, 13, 5) is null && Read(InventoryListType.TitleEvent, 10, 5)?.Uid == sealedUid,
+                "卸下称号也立即发送无称号外观，不依赖重新选角或复制实例");
+            peer.Send(413, Book(3, 13, 26059, 4, 10)); peer.Expect(1, 413, Ack(3, 13, 4, 10));
+            ReadAppearance(peer, 26059, 201); ReadBooks(peer); peer.Barrier();
         }
         await fixture.StopAsync();
         await fixture.StartAsync("titles-restarted");
@@ -228,7 +237,8 @@ internal static class TitleTcpTests
             That(Read(InventoryListType.Main, 10)?.Core == core && Read(InventoryListType.Equipment, 13)?.Core.ItemId == 26596 &&
                 fixture.Query("SELECT count(*) FROM character_title_progress WHERE quest_id=6501 AND remaining1+remaining2+remaining3=0") is [[1L]],
                 "服务重启恢复已穿戴/取出称号及完成计数，不重发奖励");
-            peer.Send(413, Book(3, 13, 26597, 0, 1)); peer.Expect(1, 413, Ack(3, 13, 0, 1)); peer.Expect(0, 14); ReadBooks(peer); peer.Barrier();
+            peer.Send(413, Book(3, 13, 26597, 0, 1)); peer.Expect(1, 413, Ack(3, 13, 0, 1)); peer.Expect(0, 14);
+            ReadAppearance(peer, 26597); ReadBooks(peer); peer.Barrier();
             That(Read(InventoryListType.Equipment, 13)?.Core.ItemId == 26597 && Read(InventoryListType.Main, 9)?.Core.ItemId == 26596 &&
                 fixture.Query("SELECT count(*) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=26596") is [[2L]],
                 "替换穿戴的旧称号完整回包，两个既有物理实例不因穿戴多一份");
@@ -269,6 +279,22 @@ internal static class TitleTcpTests
             { writer.Write(list); writer.Write(slot); writer.Write(item); writer.Write(category); writer.Write(index); });
         static byte[] Ack(int list, int slot, int category, int index) => Build(writer =>
             { writer.Write((byte)1); writer.Write(list); writer.Write(slot); writer.Write(category); writer.Write(index); });
+        static void ReadAppearance(TcpPeer peer, int? title, int blacklistCount = 0)
+        {
+            byte[] actor = peer.Expect(0, 2).Body;
+            int count = checked(133 + (int)U32(actor, 123));
+            That(actor[0] == 0 && U16(actor, 121) == peer.Id && actor[count - 1] == 0 && actor[count] == (title is null ? 0 : 1),
+                "称号簿穿脱使用同一角色和城镇状态刷新本人，不靠切图重建");
+            if (title is { } item)
+                That(actor[count + 1] == 13 && U32(actor, count + 2) == item, "Actor实际外观表包含本次已提交的13槽称号");
+            int pet = count + 1 + actor[count] * 25 + 22;
+            int score = checked(pet + 11 + (int)U32(actor, pet + 4));
+            That(U32(actor, score) == blacklistCount, "称号刷新保留独立被拉黑计分，不用装备ID覆盖惩罚字段");
+            byte[] player = peer.Expect(0, 2).Body;
+            That(player[0] == 1 && U16(player, 22) == peer.Id && player[126] == (title is null ? 0 : 1) &&
+                (title is null || player[127] == 13 && U32(player, 128) == title),
+                "Actor后补完整Player穿戴，不发送列表3重复创建已由ACK移动的称号");
+        }
         static void ReadBooks(TcpPeer peer)
         {
             for (int category = 0; category < 5; category++)

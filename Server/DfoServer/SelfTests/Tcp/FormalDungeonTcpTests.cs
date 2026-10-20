@@ -56,6 +56,7 @@ internal static partial class FormalDungeonTcpTests
             EntryTown(peer);
             var map = Enter(peer);
             RejectDelilahServices(fixture,peer,"Loading");
+            RejectDungeonShop(fixture,peer);
             var target = new (byte X, byte Y)[] { (1, 1), (2, 1), (2, 0), (3, 0), (4, 0) };
             int[] ids = [76121, 76122, 76123, 76124, 76125, 76126];
             int movedSkill = -1;
@@ -80,6 +81,7 @@ internal static partial class FormalDungeonTcpTests
                 {
                     movedSkill = VerifyDungeonActions(fixture, peer);
                     RejectDelilahServices(fixture,peer,"Dungeon");
+                    VerifyDungeonShop(fixture,peer,"Dungeon");
                 }
                 if (room == 0)
                 {
@@ -228,6 +230,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(46, changedResult); peer.Barrier();
             That(Experience(fixture, peer.Id) == experience, "改变评分的46不能替换冻结报告");
             VerifyDelilahServices(fixture,peer,resources);
+            VerifyDungeonShop(fixture,peer,"Settlement");
             assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(69); peer.Expect(1, 69, [1]);
             peer.Send(70); That(peer.Expect(1, 70).Body.Length == 17, "70普通八槽完整ACK");
@@ -418,6 +421,7 @@ internal static partial class FormalDungeonTcpTests
         VerifyOrdinaryEntry(fixture);
         VerifyDungeonEquipmentMoves(fixture, resources);
         VerifyOrdinaryRoutes(fixture, resources);
+        VerifyDummyBossEntry(fixture,resources,growth);
         string persisted = fixture.Snapshot("SELECT level,experience FROM characters");
         string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
         string inventory = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
@@ -1320,6 +1324,127 @@ internal static partial class FormalDungeonTcpTests
         That(entered.Length == 36, "正式NOTI28完整36B"); information?.Invoke(entered);
         return peer.Expect(0, 29).Body;
     }
+    static void VerifyDummyBossEntry(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
+    {
+        var area = resources.Towns.Areas.Values.First(area => area.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 51 && option.QuestId == -1));
+        var done = area.Quests.Concat(area.AnyQuests.Take(1)).ToHashSet();
+        done.UnionWith(area.Map(done).DungeonGates.Where(gate => gate.Conditions.Length == 0).SelectMany(gate => gate.Quests));
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
+            checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
+        DfoServer.Game.Characters.Character created;
+        using (var owner = new DfoServer.Game.Accounts.AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            var candidate = DfoServer.Game.Characters.CharacterCreation.Prepare("DummyMaze",resources.Characters.Get(0),position,position,resources.Learning.Get);
+            created = new DfoServer.Persistence.CharacterRepository(fixture.Database).Create(owner,candidate with
+            {
+                Level = 75,AcceptedStoryLevel = 75,CompletedQuests = done.ToArray(),
+                InitialLearning = DfoServer.Game.Skills.SkillPointLedger.Synchronize(0,0,75,candidate.InitialLearning with
+                    { Experience = growth.GetLevelStartExperience(75) },resources.Learning)
+            });
+        }
+        using var peer = Open(fixture);
+        peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+        SelectMap(peer);
+        byte[] request = Selection();
+        BinaryPrimitives.WriteUInt32LittleEndian(request,51);
+        BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),0);
+        peer.Send(16,request);
+        byte[] information = peer.Expect(0,28).Body; byte[] map = peer.Expect(0,29).Body;
+        That(information.Length == 36 && U32(information,0) == 51 && information[7] == 0 &&
+            (information[8],information[9]) is (1,0) or (1,1) or (2,0) && U32(map,14) == 58901 && map[18] > 0,
+            "D51原始普通请求不再ACK16错误9，按原生28/29进入起点并下发实际演员");
+        var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(51).Mazes[information[7]];
+        var goal = new DungeonPoint(information[8],information[9]);
+        var current = new DungeonPoint(map[0],map[1]);
+        var seen = new HashSet<ushort>();
+        var cache = new Dictionary<DungeonPoint,uint>();
+        var normalVisits = new HashSet<DungeonPoint>();
+        var candidates = new Dictionary<DungeonPoint,(uint Normal,uint Dummy,uint Boss)>
+        {
+            [new(1,1)] = (58952,58908,58911),[new(2,0)] = (58953,58909,58912),[new(1,0)] = (58954,58910,58913)
+        };
+        int advances = 0; bool finished = false;
+        for (int moves = 0; moves < 64 && !finished; moves++)
+        {
+            Load(peer); peer.Expect(0,36);
+            if (map[13] == 0)
+                That(cache.ContainsKey(current),"dummy路线普通回访只能安装已有房间缓存");
+            else
+            {
+                cache[current] = U32(map,14);
+                if (candidates.TryGetValue(current,out var expected))
+                {
+                    That(U32(map,14) == (current != goal ? expected.Normal : advances < 2 ? expected.Dummy : expected.Boss),
+                        "D51按本位置普通/dummy/Boss候选下发真实ID，不提前使用dummy或抽取其他任务地图");
+                    if (current != goal) normalVisits.Add(current);
+                }
+                var actors = Enumerable.Range(0,map[18]).Select(index => 19+22*index)
+                    .Where(at => map[at+13] <= 3 && map[at+21] == 0).OrderBy(at => map[at+13] == 3).ToArray();
+                foreach (int at in actors)
+                {
+                    ushort key = U16(map,at+6); uint template = U32(map,at+8);
+                    if (current != goal)
+                        That(template is not (1078 or 1077) && map[at+13] != 3,
+                            "没有当前Boss标记的真实D51候选房不创建假Boss或真Boss，不仅是降低演员类型");
+                    That(seen.Add(key),"阶段替换与普通房间使用独立对象key，不复用已死亡演员");
+                    if (template == 1078) That(map[at+13] == 3,"真实D51的MAP级dummy演员下发Boss3，进入本版原生假Boss初始化");
+                    var oldGoal = goal;
+                    peer.Send(39,Death(key,peer.Id,map[at+12]));
+                    byte[] death = peer.Expect(0,38).Body;
+                    int tail = 4+U16(death,2)*131;
+                    That(U16(death,0) == key,"dummy路线死亡通知绑定实际演员");
+                    if (template == 1078)
+                    {
+                        That(death.Length == tail+7 && death.AsSpan(tail,4).SequenceEqual(new byte[] { 0,0,255,1 }) && death[^1] == 0,
+                            "dummy死亡通过本版38完整掉落尾部同步唯一Boss目标");
+                        goal = new(death[tail+4],death[tail+5]);
+                        That(maze.Bosses.Contains(goal) && current == oldGoal && goal != oldGoal,
+                            "只有当前目标格实际生成的dummy死亡才推进下一标记");
+                        if (goal != oldGoal) advances++;
+                    }
+                    else Bytes(death.AsSpan(tail).ToArray(),[0,0,255,0,0],"普通死亡不混入Boss坐标更新");
+                    peer.Expect(0,37);
+                    if (template == 1077)
+                    {
+                        That(map[at+13] == 3 && current == goal && advances == 2,"两次dummy标记推进后才抵达唯一真Boss");
+                        peer.Expect(0,115,[1,1,(byte)key,(byte)(key>>8)]); peer.Expect(0,31,[]);
+                        finished = true;
+                    }
+                }
+            }
+            peer.Barrier();
+            if (finished) break;
+            // 有的候选在当前Boss后方，只提前访问无需穿过未清目标的普通格。
+            var parents = Paths(false);
+            var destination = maze.Bosses.Where(point => point != goal && !cache.ContainsKey(point) && parents.ContainsKey(point))
+                .Select(point => (DungeonPoint?)point).FirstOrDefault() ?? goal;
+            if (destination == goal) parents = Paths(true);
+            That(parents.ContainsKey(destination) && current != destination,"先访问未标记普通候选，再按已公布目标推进可达路线");
+            var target = destination;
+            while (parents[target] is { } parent && parent != current) target = parent;
+            byte[] move = new byte[100]; move[0] = checked((byte)target.X); move[1] = checked((byte)target.Y);
+            peer.Send(45,move);
+            peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body; current = target;
+        }
+        That(finished && advances == 2 && normalVisits.Count > 0,
+            "真实D51生产TCP先验证可达未标记候选不生Boss，再完成两次dummy目标更新及真Boss许可");
+
+        Dictionary<DungeonPoint,DungeonPoint?> Paths(bool includeGoal)
+        {
+            var parents = new Dictionary<DungeonPoint,DungeonPoint?> { [current] = null };
+            var queue = new Queue<DungeonPoint>(); queue.Enqueue(current);
+            while (queue.TryDequeue(out var point))
+            foreach (var link in maze.StaticTopology.Links!)
+            {
+                DungeonPoint? next = link.First == point ? link.Second : link.Second == point ? link.First : null;
+                if (next is { } adjacent && (includeGoal || adjacent != goal) && parents.TryAdd(adjacent,point)) queue.Enqueue(adjacent);
+            }
+            return parents;
+        }
+    }
+
     static void SelectMap(TcpPeer peer)
     {
         peer.Send(15, new byte[4]);

@@ -6,6 +6,8 @@ using DfoServer.Network.Handlers;
 using DfoServer.Network.Projection;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Settings;
+using DfoServer.Persistence;
+using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Network.Protocol;
 
@@ -26,7 +28,13 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         using var login = await loginHandler.AuthenticateAsync(connection);
         if (login is null)
             return;
-        await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) => log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsAuthentication(opcode) ? "[login-redacted]" : Convert.ToHexString(body.Span) }), connection.CaptureSent);
+        await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) =>
+        {
+            // 保活回包不逐条记 send；连接心跳由 KeepaliveHandler 的 keepalive 汇总覆盖。
+            if (KeepaliveHandler.IsKeepalive(opcode))
+                return;
+            log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsAuthentication(opcode) ? "[login-redacted]" : Convert.ToHexString(body.Span) });
+        }, connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
@@ -59,10 +67,16 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             session.GuildPermitNoticeArrived = notice => guild.Notice(context, notice);
             session.GuildPermitResolved = outcome => guild.ResolvedAsync(context, outcome);
         }
+        // 聊天投递入口绑定本条连接：服务端从在线会话目录按快照选中本会话后，由这里把 0x0C/0x76 入本连接队列。
+        session.ChatNoticeArrived = notice => ChatProjection.Notice(context, notice);
         NativeChannel.Registration? nativeRegistration = null;
         try
         {
             online.Register(login.Owner, session);
+            // GM 聊天帧注入按连接号定位：回调只把候选 opcode/正文入本连接队列，就绪与角色守卫在发送泵内复核。
+            online.RegisterConnection(connection.Id, session, (opcode, body, action) =>
+                sender.Post(0, opcode, body, action,
+                    () => session.Ready && session.Selected is not null));
             nativeRegistration = native?.Register(context);
             adventure?.Prepare(context);
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options),
@@ -71,6 +85,11 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "roster",
                 () => session.CanPublishRoster(roster));
             session.MarkRosterPublished(roster);
+            // 忙锁重试耗尽只记录诊断并丢弃当前包；记录阶段、opcode 与尝试次数，便于和同连接其它包关联。
+            void LogBusy(string stage, Packet request, string name, int attempts, SqliteException error) =>
+                log.Write("db_busy", new { Connection = connection.Id, Phase = session.Phase.ToString(), request.Kind, request.Opcode,
+                    Name = name, Stage = stage, Attempts = attempts, Message = error.Message });
+
             while (!connection.Stop.IsCancellationRequested)
             {
                 var request = GameFrame.ParseClient(await connection.ReadAsync());
@@ -78,28 +97,46 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 if (loginPacket)
                     throw new InvalidDataException("Login already completed on this connection");
                 string name = ((CmdPacketType)request.Opcode).ToString();
-                if (session.AdvanceQuestCycle(DateTimeOffset.UtcNow) is { } cycle)
-                {
-                    bool Guard() => session.CanPublishQuestCycle(cycle);
-                    await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(cycle.Character), "quest_daily_cycle", Guard);
-                    if (cycle.Phase == SessionPhase.Town && quests is not null)
-                        await new QuestProjection(quests).RefreshAsync(context, cycle.Character, Guard);
-                }
                 string body = PacketCapture.IsAuthentication(request.Opcode) ? "[login-redacted]" : Convert.ToHexString(request.Body);
-                log.Write("recv", new { Connection = connection.Id, request.Kind, request.Opcode, Name = name, Body = body });
-                var result = await commands.DispatchAsync(context, request);
+                // 收包只记录一次：忙锁重试重放的是本包分派与刷新，不重复收包日志。
+                // 保活包每 10 秒一次，逐包 recv/send 会刷屏：由 KeepaliveHandler 每连接每 60 秒汇总一条 keepalive。
+                if (!KeepaliveHandler.IsKeepalive(request.Opcode))
+                    log.Write("recv", new { Connection = connection.Id, request.Kind, request.Opcode, Name = name, Body = body });
+                // 任务日周期与命令分派作为同一个重试单元：忙锁表示本次写事务未提交，重放不会把已提交结果记成成功；
+                // 成功应答在提交之后才发送，重试期间客户端不会先收到成功。
+                var (dispatched, result) = await SqliteBusyRetry.TryExecuteAsync(async () =>
+                {
+                    if (session.AdvanceQuestCycle(DateTimeOffset.UtcNow) is { } cycle)
+                    {
+                        bool Guard() => session.CanPublishQuestCycle(cycle);
+                        await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(cycle.Character), "quest_daily_cycle", Guard);
+                        if (cycle.Phase == SessionPhase.Town && quests is not null)
+                            await new QuestProjection(quests).RefreshAsync(context, cycle.Character, Guard);
+                    }
+                    return await commands.DispatchAsync(context, request);
+                }, connection.Stop, (error, attempts) => LogBusy("dispatch", request, name, attempts, error));
+                // 瞬时忙锁不是连接故障：丢掉这一包继续读下一帧，会话保持在线；其它数据库错误仍按原语义关闭连接。
+                if (!dispatched)
+                    continue;
                 if (result == CommandResult.CloseConnection)
                     return;
-                await context.CommandGate.WaitAsync(connection.Stop);
-                try
+                // 提交后的自动刷新单独重试，不与已完成的命令一起重放。
+                var (refreshed, _) = await SqliteBusyRetry.TryExecuteAsync(async () =>
                 {
-                    await revival.RefreshAsync();
-                    if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
-                    if (context.Premiums is { } premiums) await premiums.RefreshAsync();
-                    if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
-                    if (context.Creatures is { } creatureClock) await creatureClock.RefreshAsync();
-                }
-                finally { context.CommandGate.Release(); }
+                    await context.CommandGate.WaitAsync(connection.Stop);
+                    try
+                    {
+                        await revival.RefreshAsync();
+                        if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
+                        if (context.Premiums is { } premiums) await premiums.RefreshAsync();
+                        if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
+                        if (context.Creatures is { } creatureClock) await creatureClock.RefreshAsync();
+                    }
+                    finally { context.CommandGate.Release(); }
+                    return true;
+                }, connection.Stop, (error, attempts) => LogBusy("refresh", request, name, attempts, error));
+                if (!refreshed)
+                    continue;
                 if (result == CommandResult.Unhandled)
                     log.Write("unimplemented", new { Connection = connection.Id, Phase = session.Phase.ToString(), request.Kind,
                         request.Opcode, Name = name, Length = request.Body.Length, Body = body });
@@ -115,6 +152,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await death.DisposeAsync();
             if (context.Cards is not null) await context.Cards.DisposeAsync();
             await elevator.DisposeAsync();
+            online.RemoveConnection(connection.Id, session);
             online.Remove(login.Owner.Account, session);
             projection.Remove(context);
             context.Activity?.Reset();

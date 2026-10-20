@@ -14,6 +14,9 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     // 实验性：深渊派对入场票在入场提交时扣掉的背包格与票据（日志 + UPDATE_ITEM_LIST 用）。
     public ImmutableArray<InventorySlot> HellConsumedSlots { get; init; } = [];
     public HellPartyTicket? HellTicket { get; init; }
+    // #510/#511 普通入场票在入场提交时扣掉的背包格，与实际扣掉的入场一次性疲劳（无限疲劳时为 0）。
+    public ImmutableArray<InventorySlot> EntryItemConsumedSlots { get; init; } = [];
+    public ushort EntryFatigueCharged { get; init; }
     // 演出返回只确认缓存呈现，不重新执行业务装载或授权基础图演员。
     public Guid ScriptedReturnId { get; init; }
     public bool NavigationReplay { get; init; }
@@ -33,6 +36,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];
     public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
     public DungeonRoomClearFact? RoomClearFact { get; init; }
+    public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }
 }
 internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
     bool ProjectionCurrent, CurrencyKind? Currency = null, int Amount = 0);

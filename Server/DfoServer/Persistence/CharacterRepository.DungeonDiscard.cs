@@ -36,7 +36,8 @@ internal sealed partial class CharacterRepository
         if (!SameInventory(plan.Inventory.After with { Items = plan.Inventory.Before.Items }, plan.Inventory))
             throw new InvalidDataException("地面丢弃包含无关资产变化");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitDungeonDiscard", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         string action = InventoryGroundAction("discard", ground);
         if (current.Revision != expected.Revision && HasInventoryGroundCommit(db, tx, owner, expected.Id, action))
@@ -105,7 +106,8 @@ internal sealed partial class CharacterRepository
                 (before.Core with { Value = ground.Core.Value, SortLockFlag = ground.Core.SortLockFlag }) != ground.Core))
             throw new InvalidDataException("丢弃拾取没有保留完整核心或正确数量");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitDiscardPickup", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         string action = InventoryGroundAction("pickup", ground);
         if (current.Revision != expected.Revision && HasInventoryGroundCommit(db, tx, owner, expected.Id, action))

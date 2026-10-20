@@ -17,7 +17,8 @@ internal sealed partial class CharacterRepository
         var options = prepared.Options ?? throw new InvalidDataException("本次通关没有付费牌计划");
         if (prepared.Fact.Identity.CharacterId != expected.Id) throw new InvalidDataException("付费牌不是当前角色实例");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred:true);
+        using var write = db.BeginWrite("CharacterRepository.CommitPaidDungeonCard", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db,tx,owner.Account,expected.Name);
         using var query = db.CreateCommand();
         query.Transaction = tx;

@@ -22,7 +22,8 @@ internal sealed partial class CharacterRepository
         // 重复接受或GM降低角色等级不回退剧情，也不申请写事务。
         if (expected.AcceptedStoryLevel >= expected.Level) return expected;
         var updated = expected with { AcceptedStoryLevel = expected.Level, Revision = checked(expected.Revision + 1) };
-        using var transaction = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.AdvanceAcceptedStoryLevel");
+        using var transaction = write.Transaction;
         command.Transaction = transaction;
         command.CommandText = """
             UPDATE characters SET accepted_story_level=$level,revision=revision+1

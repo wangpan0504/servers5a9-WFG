@@ -32,7 +32,8 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("任务掉落不是原死亡、角色和地图的冻结规划");
         using var db = database.Open();
         // 精确重放只读receipt，不申请writer；新事实升级写事务失败时由原ID恢复。
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitDungeonGrowth", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id)
             throw new InvalidOperationException("成长角色或账号已变化");

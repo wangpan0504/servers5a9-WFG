@@ -60,6 +60,8 @@ internal static class ServerRuntime
             ElapsedMs = Math.Round(boosterTimer.Elapsed.TotalMilliseconds, 3) });
         var owners = new AccountOwners();
         var online = new OnlineSessionDirectory();
+        // GM notice 的公告出口：与 GM 聊天帧注入共用在线连接目录，帧内编码由 ServerNoticePackets 负责。
+        var noticeSender = new GmNoticeSender(online);
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
         accounts.EnsureDevelopmentAccount();
         var debugSettings = new GameDebugSettings();
@@ -187,7 +189,7 @@ internal static class ServerRuntime
                     return monster.HellRewardRolls > 0 && hellRewards is not null
                         ? hellRewards.Extend(apc, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : apc;
                 }
-                var plan = resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.SpawnType, entry.Difficulty, entry.BasisLevel);
+                var plan = resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel);
                 // 深渊装备骰只挂在最后一波；前面的恶魔波次保持各自的普通掉落。
                 return monster.HellRewardRolls > 0 && hellRewards is not null
                     ? hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : plan;
@@ -224,6 +226,8 @@ internal static class ServerRuntime
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
+            // 客户端保活：0x04FE/0x06BB 每 10 秒一次，服务端必须回同 opcode 帧（见 KeepaliveHandler）。
+            new KeepaliveHandler(log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
@@ -240,7 +244,7 @@ internal static class ServerRuntime
                 options.TeleportPotionGates), projection, inventoryProjection, presence, log),
             new SettingsHandler(settings, log, projection),
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
-            new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, projection, online),
+            new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online),
             new CollectBoxHandler(new Game.CollectBox.CollectBoxService(itemResources.CollectBoxes, itemResources.Items,
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
             new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, characters), inventoryProjection),
@@ -314,7 +318,11 @@ internal static class ServerRuntime
             new GuildHandler(new Game.Guild.GuildDirectory(repository, guildParameters), guildPermits, online, owners, log, guildProjection),
             new AuctionHandler(itemResources.Items, auctions, inventoryProjection, auctionProbe.NextSearch, auctionProbe.NextAverage,
                 auctionProbe.NextMyList, log),
-            new ClientNoticeHandler(log)
+            new ClientNoticeHandler(log),
+            // 聊天：0x0011 入站按 CP936 解析；普通/公会/悄悄话投 0x0C（正文带 CP936 文本，客户端按长度读取），
+            // 两种喇叭投已实测可见的 0x76 喇叭页签（见 Docs/模块/聊天.md）。
+            // 成员/目标查询走只读存储合同（repository），在线定位与投递走 OnlineSessionDirectory，不另建在线状态。
+            new ChatHandler(new Game.Chat.ChatService(repository, new Game.Chat.ChatDelivery(online)), inventoryProjection, log)
         ];
         foreach (var module in modules)
             module.Register(commands);
@@ -393,7 +401,8 @@ internal static class ServerRuntime
         string DevelopmentCommand(string line)
         {
             string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
-                mailbox, itemResources.Items, progress, cashShop, debugSettings, events, developmentCatalog);
+                mailbox, itemResources.Items, progress, cashShop, debugSettings, events, developmentCatalog,
+                online.FindConnection, log, noticeSender);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });
             return result;
         }

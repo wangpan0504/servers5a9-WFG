@@ -48,7 +48,8 @@ internal sealed partial class CharacterRepository
         if (expected.BlackDiamondExpiresAt <= now.ToUnixTimeSeconds() ||
             !expand && expected.Inventory.StaminaUntil == 0) return expected;
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.GrantBlackDiamondFatigue", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id || current.Revision != expected.Revision || current.Fatigue != expected.Fatigue ||
             current.BlackDiamondExpiresAt != expected.BlackDiamondExpiresAt || current.Inventory.StaminaUntil != expected.Inventory.StaminaUntil)
@@ -80,15 +81,16 @@ internal sealed partial class CharacterRepository
         var identity = snapshot.Identity;
         var state = expected.Fatigue ?? throw new InvalidOperationException("普通副本疲劳owner未初始化");
         state.Validate();
-        bool ordinary = run.Entry.UsesFatigue;
+        bool ordinary = run.Entry.UsesRoomFatigue;
         string rule = CharacterFatigueState.NormalRoomRuleId;
         if (!ordinary || run.Entry.Maze.QuestConnectionTokens.Count != 0 ||
-            run.Entry.Maze.MapSpecification?.Contains(snapshot.CurrentMap) != true ||
+            run.Entry.Maze.MapSpecification?.Contains(snapshot.CurrentMap) != true && !run.Entry.Maze.DummyStages.Contains(snapshot.CurrentMap) ||
             snapshot.Phase != SinglePlayerDungeonPhase.Loading || identity.CharacterId != expected.Id ||
             identity.InstanceId == Guid.Empty || identity.TaskAttempt != expected.DungeonState?.LastAttempt)
             throw new InvalidDataException("疲劳扣点需要本服已准入实例的真实首次房间加载");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.ConsumeDungeonRoomFatigue", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id || current.DungeonState != expected.DungeonState)
             throw new InvalidOperationException("扣点实例或角色已变化");

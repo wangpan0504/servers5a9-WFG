@@ -41,6 +41,13 @@ internal sealed record DungeonEntryPlan(
     public bool IsTournament => Maze.IsTournament;
     public bool RequiresFatigueOwner => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
+    // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
+    public ushort StartFatigue { get; init; }
+    public bool UsesRoomFatigue => UsesFatigue && StartFatigue == 0;
+    // #510/#511 普通入场的 [required item]「物品 1 1」：入场提交时与疲劳、尝试号同事务扣除。
+    public DungeonRequiredItemRow? EntryItem { get; init; }
+    // 资源声明了入场票或入场疲劳但形状未确认时的诊断，只写日志，不改变行为。
+    public string? EntryCostNote { get; init; }
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public bool HasExplicitClearMap { get; init; }
@@ -62,7 +69,8 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
-    public bool IsTerminalMap(DungeonMap map) => PassiveClearTerminalMap is { } passive ? map == passive :
+    public bool IsTerminalMap(DungeonMap map) => Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
+        PassiveClearTerminalMap is { } passive ? map == passive :
         TerminalLayerMap is { } layer ? map == layer :
         map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
         map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map);
@@ -99,7 +107,7 @@ internal sealed record DungeonEntryPlan(
         }
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
-            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw),allowClearedTerminalQuest:allowClearedTerminalQuest,
+            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty),allowClearedTerminalQuest:allowClearedTerminalQuest,
             hellParty:hellParty,hellLegend:hellLegend,practice:practice);
     }
 
@@ -281,13 +289,10 @@ internal sealed record DungeonEntryPlan(
         { reason = "dungeon-resource-unavailable"; return false; }
         if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0,maze.ConnectionQuestId))
         { reason = "difficulty-unsupported"; return false; }
-        // 深渊派对只替换 seal-door 格，不改起点/Boss 几何。雾都/迷之觉悟等普通 maze 声明了多个 start/boss，
-        // 仍用资源第一项（与 StaticTopology 从 Starts[0] 可达性扫描一致），普通入场继续要求恰好各 1 个。
-        bool hellPartyLayout = hellParty && maze.HellParty is not null && maze.StoryStages.Count == 0;
-        if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count == 0 ||
-            (!hellPartyLayout && maze.Starts.Count != 1) ||
+        // 多起点、多Boss是候选集合，由资源装配选择本次实际路线；深渊沿用同一组格入口。
+        if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 ||
             (maze.StoryStages.Count == 0
-                ? maze.Bosses.Count == 0 || (!hellPartyLayout && maze.Bosses.Count != 1)
+                ? maze.Bosses.Count != 1
                 : maze.StoryStages.Count != maze.Bosses.Count)
             || maze.MapSpecification is not { Count: > 0 } maps)
         {
@@ -387,6 +392,7 @@ internal sealed record DungeonEntryPlan(
         if (hellParty && activeHell is { } hellRoom && activeHellPath is { } hellMapPath && maze.MapSpecification is { } hellSpec)
         {
             if (starts[0].Position == hellRoom.Room || bosses.Any(boss => boss.Position == hellRoom.Room) ||
+                maze.DummyStages.Any(stage => stage.Position == hellRoom.Room) ||
                 maze.LayeredMaps.Concat(maze.ConditionalMaps).Concat(maze.StoryStages).Any(map => map.Position == hellRoom.Room))
             { reason = "hell-party-room-conflict"; return false; }
             planMaze = maze with { MapSpecification = hellSpec.Select(map => map.Position == hellRoom.Room && map.Kind == "map"
@@ -427,8 +433,26 @@ internal sealed record DungeonEntryPlan(
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
+        plan = WithEntryCost(plan, definition, hellParty || isReplay);
         reason = "resource-plan-ready";
         return true;
+    }
+
+    // #510/#511 入场票与入场一次性疲劳只用于普通入场；深渊派对、练习、比赛、回放、修炼场、职业体验及任务路线保持各自规则。
+    static DungeonEntryPlan WithEntryCost(DungeonEntryPlan plan, DungeonDefinition definition, bool excluded)
+    {
+        if (excluded || !plan.IsOrdinary || plan.IsPractice || plan.IsTrainingRoom || plan.IsClassExperience || plan.IsTournament)
+            return plan;
+        var notes = new List<string>();
+        var ticket = definition.OrdinaryEntryTicket;
+        if (ticket is null && definition.DeclaresRequiredItem) notes.Add("required-item-shape-unsupported");
+        ushort start = 0;
+        if (plan.UsesFatigue && definition.DeclaresStartFatigue)
+        {
+            if (definition.StartFatigue is { } amount) start = amount;
+            else notes.Add("start-fatigue-shape-unsupported");
+        }
+        return plan with { EntryItem = ticket, StartFatigue = start, EntryCostNote = notes.Count == 0 ? null : string.Join(',', notes) };
     }
 
     static bool CanUseOrdinaryHuntRoute(DungeonDefinition definition, Character character, StoryQuest quest,

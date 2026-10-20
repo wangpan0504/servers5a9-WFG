@@ -14,7 +14,7 @@ internal sealed partial class CharacterRepository
 {
     public AdventureSnapshot ReadAdventure(AccountOwners.Lease owner, AdventureCatalog catalog, DateTimeOffset now) => owner.Execute(() =>
     {
-        using var db = database.Open(); using var tx = db.BeginTransaction(deferred: true);
+        using var db = database.Open(); using var tx = db.BeginRead();
         return ReadAdventure(db, tx, owner.Account, catalog, now);
     });
 
@@ -24,7 +24,8 @@ internal sealed partial class CharacterRepository
         using var query = db.CreateCommand(); query.Parameters.AddWithValue("$account", owner.Account);
         query.CommandText = "SELECT count(*) FROM account_adventures WHERE account=$account";
         if ((long)query.ExecuteScalar()! != 0) return true;
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.InitializeAdventure");
+        using var tx = write.Transaction;
         var state = AdventureState.Initial(owner.Account, now);
         state.Validate(catalog);
         using var command = db.CreateCommand(); command.Transaction = tx;

@@ -167,7 +167,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             Training = training, ClassExperience = experience, Practice = practice, HellParty = hell, HellLegend = legend,
             SealDoor = sealDoor && receipt?.Entry.HellParty is not null, Request = selection, receipt?.Snapshot.Identity,
             RejectReason = receipt is null && !continuation && !replay ? context.Session.LastFormalDungeonRejection : null,
-            HellTicket = receipt?.HellTicket,
+            HellTicket = receipt?.HellTicket, EntryItem = receipt?.Entry.EntryItem, StartFatigue = receipt?.Entry.StartFatigue,
+            EntryFatigueCharged = receipt?.EntryFatigueCharged, EntryCostNote = receipt?.Entry.EntryCostNote,
             CharacterId = character.Id, CharacterName = character.Name });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
@@ -197,6 +198,15 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                 Slots = receipt.HellConsumedSlots.Select(slot => slot.Index).ToArray(), CharacterId = character.Id, CharacterName = character.Name });
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main, [.. receipt.HellConsumedSlots]), "hell_party_entry_items", Guard);
+        }
+        if (!receipt.EntryItemConsumedSlots.IsDefaultOrEmpty && receipt.Entry.EntryItem is { } entryItem)
+        {
+            // #510/#511 普通入场票已在入场提交时与疲劳、尝试号同事务扣除；把背包变化投给客户端并留日志。
+            log.Write("dungeon_entry_item_consumed", new { Connection = context.Id, receipt.Entry.DungeonId, entryItem.ItemId, entryItem.Count,
+                Slots = receipt.EntryItemConsumedSlots.Select(slot => slot.Index).ToArray(), receipt.EntryFatigueCharged,
+                CharacterId = character.Id, CharacterName = character.Name });
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, [.. receipt.EntryItemConsumedSlots]), "dungeon_entry_items", Guard);
         }
         if (!receipt.AssaultConsumedSlots.IsDefaultOrEmpty)
         {
@@ -321,7 +331,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         DungeonDropPacketItem[] dropRows = grounds.Select(drop => new DungeonDropPacketItem(drop.Reservation.GroundKey,
             drop.Reservation.RecordSlot, drop.Content.Item, 0, 0) { GoldAmount = drop.GoldAmount }).ToArray();
         int enteredDungeon = checked((int)receipt.Entry.DungeonId);
-        await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(result.MonsterKey, dropRows, enteredDungeon), "formal_monster_death", Guard);
+        await context.Notify(NotiPacketType.DIE_MONSTER,
+            ExclusiveDropPackets.MonsterDeath(result.MonsterKey, dropRows, enteredDungeon, result.BossPositionUpdate), "formal_monster_death", Guard);
         if (context.Session.PendingDungeonBossEntrance() is { } entrance)
         {
             bool sent = false;

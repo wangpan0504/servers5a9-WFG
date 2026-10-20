@@ -276,7 +276,9 @@ internal static class TcpRegressionTests
         ("native-login", NativeLoginTcpTests.RunAsync),
         ("native-channel", NativeChannelTcpTests.RunAsync),
         ("settings", ClientSettingsTcpTests.RunAsync),
+        ("keepalive", KeepaliveTcpTests.RunAsync),
         ("emotion", EmotionTcpTests.RunAsync),
+        ("chat", ChatTcpTests.RunAsync),
         ("presence", TownPresenceTcpTests.RunAsync),
         ("gm-web-accept", GmWebAcceptTcpTests.RunAsync)
     ];

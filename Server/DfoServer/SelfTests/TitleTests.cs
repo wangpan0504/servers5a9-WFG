@@ -41,10 +41,39 @@ internal static class TitleTests
             "精确到期、模板身份不符及非宠物不能计入成宠数量");
     }
 
+    static void CheckAppearance()
+    {
+        var title = new InventoryItem(1, new(InventoryListType.Equipment, 13), new(26071, ItemKind.Equipment, 1));
+        var creature = new InventoryItem(2, new(InventoryListType.Equipment, 26), new(63000, ItemKind.Creature, 2))
+        { Creature = new() { Name = "宠物" } };
+        foreach (string name in new[] { "Title", "称号测试" })
+        foreach (bool withCreature in new[] { false, true })
+        {
+            var character = new Character(1, 0, name, 0, new(1, 0, 10, 10), null)
+            { Inventory = new(withCreature ? [title, creature] : [title]) };
+            byte[] baseline = TownPackets.Actor(character, utcSeconds: 1700000000);
+            int count = 133 + NameWidth(name);
+            That(baseline[count + 1] == 13 && U32(baseline, count + 2) == 26071,
+                "装备称号始终位于外观表13槽，不误用旧端10槽或惩罚计分字段");
+            int pet = count + 1 + baseline[count] * 25 + 22;
+            int score = checked(pet + 11 + (int)U32(baseline, pet + 4));
+            foreach (int value in new[] { 0, 99, 100, 199, 200, 299, 300, int.MaxValue })
+            {
+                var expected = (byte[])baseline.Clone();
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(score), value);
+                Bytes(TownPackets.Actor(character with { BlacklistCount = value }, utcSeconds: 1700000000), expected,
+                    "被拉黑计分完整投影u32，阈值选择归客户端，不改装备、宠物、网吧或黑钻字段");
+            }
+            Reject<InvalidDataException>(() => TownPackets.Actor(character with { BlacklistCount = -1 }),
+                "负数计分不能进入客户端的有符号阈值判断");
+        }
+    }
+
     public static void RunCore()
     {
         int start = Count;
         CheckHatchedCreature();
+        CheckAppearance();
         var characterLevel = new Character(1, 0, "TitleLevel", 0, new(1, 0, 10, 10), null) { Level = 4 };
         var titleLevel = QuestEligibilityTests.Quest(6501) with { Grade = "[title]", MaximumLevel = 3 };
         var levelCatalog = new QuestCatalog(new[] { titleLevel }.ToDictionary(quest => quest.Id));
