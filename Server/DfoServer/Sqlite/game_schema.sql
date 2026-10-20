@@ -7,6 +7,14 @@ CREATE TABLE character_assault_daily(
   hidden_count INTEGER NOT NULL CHECK(hidden_count BETWEEN 0 AND 255),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_crack_daily(
+  character_id INTEGER PRIMARY KEY,
+  account TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  clear_count INTEGER NOT NULL CHECK(clear_count BETWEEN 0 AND 1000000),
+  daily_reward INTEGER NOT NULL CHECK(daily_reward IN (0,1)),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TABLE character_exp_bonus(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,

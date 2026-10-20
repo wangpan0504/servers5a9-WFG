@@ -701,6 +701,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_expert_job VALUES({{id}},'planning',1,0);
                 INSERT INTO character_expert_meta VALUES({{id}},'planning',0,1,300);
                 INSERT INTO character_assault_daily VALUES({{id}},'planning',740000,2,1);
+                INSERT INTO character_crack_daily(character_id,account,day,clear_count,daily_reward) VALUES({{id}},'planning',740000,1,0);
                 INSERT INTO character_dungeon_fatigue_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,1,1,1,'test',0,1,'{}','{}');
                 INSERT INTO character_gold_card_uses VALUES({{id}},'planning',20261011,2);
                 INSERT INTO mailbox_sent_gold VALUES({{id}},20261011,12);

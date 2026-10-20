@@ -15,6 +15,8 @@ internal sealed record AssaultModeRewardServices(AssaultModeCatalog Catalog, Ite
 // 强袭通关提交结果：新计数、实际发放的奖励行（未发放时为 null 且 RewardIssue 说明原因）、库存刷新。
 internal sealed record AssaultClearResult(AssaultDailyCounts Counts, AssaultModeClearReward? Reward, string? RewardIssue, InventoryResult? Inventory);
 
+internal sealed record CrackClearResult(CrackDailyState State, IReadOnlyList<CrackItemReward> Granted, string? Issue, InventoryResult? Inventory);
+
 internal sealed partial class GameSession
 {
     // ACK1547 成功到 C2S16 入场之间的一次性授权，只允许同一角色进入被选中的任务副本。
@@ -79,5 +81,42 @@ internal sealed partial class GameSession
             }
         };
         return new(saved.Counts, granted, issue, inventory);
+    }
+
+    // 异次元裂缝通关：等级段物品每次通关发放，每日奖励在达到次数后发放一次。
+    // 与主结算不在同一事务。发放失败仍记下本次通关，每日奖励留到下一次再试。
+    CrackClearResult CommitCrackClear(CrackDimensionRewardServices services)
+    {
+        var character = Selected ?? throw new InvalidOperationException("次元裂缝结算缺少角色");
+        int day = AssaultModeEntryPolicy.DayKey(DateTimeOffset.Now);
+        var prior = repository.LoadCrackDaily(owner, character.Id, day);
+        var decision = services.Table.Decide(character.Level, prior.Clears, prior.DailyGranted);
+        InventoryPlan? plan = null;
+        string? issue = null;
+        bool dailyGranted = decision.DailyGranted;
+        if (decision.Granted.Length > 0)
+        {
+            var grant = InventoryRewardGrantService.TryGrantBatch(character,
+                decision.Granted.Select(row => new InventoryReward(row.ItemId, row.Count)).ToArray(),
+                services.Items, services.GoldLimits, services.Pieces, DateTimeOffset.UtcNow, allowOverflowMail: true);
+            if (grant.Accepted && grant.Plan is { } accepted) plan = accepted;
+            else
+            {
+                issue = "grant-rejected:" + grant.Error;
+                dailyGranted = prior.DailyGranted;
+            }
+        }
+        var saved = repository.CommitCrackClear(owner, character, day, new(decision.ClearsAfter, dailyGranted), plan);
+        Selected = saved.Character;
+        InventoryResult? inventory = plan is null ? null : new InventoryResult(true, 0, plan)
+        {
+            Receipt = new(Selected, owner.Generation, SelectionEpoch)
+            {
+                Phase = Phase,
+                DungeonIdentity = formalDungeon?.Run.Snapshot.Identity,
+                PreviousSkillSwitchInventory = character.SkillSwitchInventory
+            }
+        };
+        return new(saved.State, plan is null ? [] : decision.Granted, issue, inventory);
     }
 }

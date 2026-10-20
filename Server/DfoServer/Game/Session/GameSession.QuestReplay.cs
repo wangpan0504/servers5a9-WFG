@@ -17,7 +17,8 @@ internal sealed partial class GameSession
 
     public QuestReplayReceipt? PrepareQuestReplay(uint questId,QuestConnectionCatalog connections,DungeonCatalog dungeons,
         DungeonRoomCatalog rooms,DungeonMonsterDropCatalog? drops = null,ItemCatalog? items = null,EpicPieceCatalog? pieces = null,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null)
+        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+        CrackDimensionRewardServices? crackRewards = null)
     {
         var (expected,epoch,phase,pending) = owner.Execute(() =>
             (Ready && CanEnterFormalDungeon(null) ? Selected : null,SelectionEpoch,Phase,pendingQuestReplay));
@@ -30,7 +31,8 @@ internal sealed partial class GameSession
         {
             var replay = QuestReplayPlan.Prepare(expected,questId,questCatalog,connections);
             if (replay is null || !DungeonEntryPlan.TryCreateReplay(dungeons,replay,out var entry,out _)) return null;
-            prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,null,pieces,prepareDrops);
+            prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,null,pieces,prepareDrops,
+                crackRewards: crackRewards);
         }
         if (prepared is null) return null;
         return owner.Execute(() =>

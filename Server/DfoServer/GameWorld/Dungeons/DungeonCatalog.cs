@@ -108,6 +108,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public string? DungeonType { get; init; }
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
+    // [crack of dimension dungeon] 正数：异次元裂缝副本，通关奖励读 etc/crackofdimensionlist.etc。
+    public bool IsCrackOfDimension => RawSections.Where(row => row.Tag == "crack of dimension dungeon").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 }] }];
     // [tournament dungeon] 1：魂·黄龙/青龙大会等比赛副本（实验性，依据来自 Go 项目反汇编）。
     public bool IsTournament => RawSections.Where(row => row.Tag == "tournament dungeon").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
     // 资源识别与正式准入分开；畸形声明也不能落回普通入场。
@@ -168,8 +171,17 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         if (designated.Length > 1 || designated.Length == 1 && (designated[0].Tokens is not [{ Type: 0, Value: >= -1 and <= 4 }] ||
             designated[0].Tokens[0].Value >= 0 && designated[0].Tokens[0].Value != difficulty)) return false;
         var levels = RawSections.Where(section => section.Tag == "difficulty level").ToArray();
-        // 实验性（#259）：比赛副本声明唯一指定难度且无难度表时，放行该指定难度；其他副本仍只放行难度 0。
-        if (levels.Length == 0) return IsTournament && designated.Length == 1 || difficulty == 0;
+        // 无难度表时：比赛副本沿用唯一指定难度；[difficulty] 与 [designate dungeon difficulty] 写成同一个 0–4 时只放行该难度
+        // （魔界裂缝、黎明裂缝都是 3，客户端入场参数也是 3）。其余仍只放行难度 0。
+        if (levels.Length == 0)
+        {
+            var plain = RawSections.Where(section => section.Tag == "difficulty").ToArray();
+            if (designated.Length == 1 && plain.Length == 1 &&
+                designated[0].Tokens is [{ Type: 0, Value: >= 0 and <= 4 } locked] &&
+                plain[0].Tokens is [{ Type: 0, Value: >= 0 and <= 4 } shown] && locked.Value == shown.Value)
+                return difficulty == locked.Value;
+            return IsTournament && designated.Length == 1 || difficulty == 0;
+        }
         // 部分副本重复声明同一难度表；内容相同不构成冲突，未知或不一致声明仍拒绝。
         return levels[0].Tokens.Count == 5 && levels[0].Tokens.All(token => token.Type == 0 && token.Value is 0 or 1) &&
             levels.All(section => section.Tokens.SequenceEqual(levels[0].Tokens)) &&

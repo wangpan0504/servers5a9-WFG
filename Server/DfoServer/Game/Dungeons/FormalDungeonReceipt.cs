@@ -56,6 +56,7 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     public InventoryResult? Inventory { get; init; }
     public uint? MailId { get; init; }
     public DfoServer.Game.Session.AssaultClearResult? AssaultClear { get; init; }
+    public DfoServer.Game.Session.CrackClearResult? CrackClear { get; init; }
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
 }

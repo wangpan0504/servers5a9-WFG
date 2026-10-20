@@ -23,7 +23,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
     DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null,
     GoldLimitCatalog? goldLimits = null, QuestProjection? quests = null,
     Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
-    TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null) : IGameCommandModule
+    TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
+    CrackDimensionRewardServices? crackRewards = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -150,10 +151,10 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
             (sealDoor ? context.Session.EnterFormalDungeon(selection.DungeonIndex, 0, selection.Parameter, dungeons, rooms,
                 drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
-                hellParty: true, sealDoor: true) : null) ??
+                hellParty: true, sealDoor: true, crackRewards: crackRewards) : null) ??
             context.Session.EnterFormalDungeon(selection.DungeonIndex, hell || legend ? 0u : selection.Unknown16, selection.Parameter, dungeons, rooms,
                 drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
-                classExperience: experience, hellParty: hell || legend, hellLegend: legend, practice: practice);
+                classExperience: experience, hellParty: hell || legend, hellLegend: legend, practice: practice, crackRewards: crackRewards);
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Continuation = continuation,
             Training = training, ClassExperience = experience, Practice = practice, HellParty = hell, HellLegend = legend,
             SealDoor = sealDoor && receipt?.Entry.HellParty is not null, Request = selection, receipt?.Snapshot.Identity,
@@ -300,7 +301,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             if (result.Elevator is { } elevator)
                 await context.Notify(NotiPacketType.ELEVATOR_CLEAR_TIME_CHECK, DungeonPackets.Elevator(elevator.Notice!),
                     "formal_elevator_completed", () => context.Session.CanPublishDungeonElevator(elevator));
-            await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, []),
+            await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(result.MonsterKey, [], checked((int)receipt.Entry.DungeonId)),
                 "formal_special_child_retired", () => context.Session.CanPublishFormalDungeon(receipt));
             return CommandResult.Handled;
         }
@@ -311,7 +312,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             grounds = [single];
         DungeonDropPacketItem[] dropRows = grounds.Select(drop => new DungeonDropPacketItem(drop.Reservation.GroundKey,
             drop.Reservation.RecordSlot, drop.Content.Item, 0, 0) { GoldAmount = drop.GoldAmount }).ToArray();
-        await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(result.MonsterKey, dropRows), "formal_monster_death", Guard);
+        int enteredDungeon = checked((int)receipt.Entry.DungeonId);
+        await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(result.MonsterKey, dropRows, enteredDungeon), "formal_monster_death", Guard);
         if (context.Session.PendingDungeonBossEntrance() is { } entrance)
         {
             bool sent = false;
@@ -323,7 +325,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (result.Reward is not { } reward)
         {
             foreach (ushort key in result.CulledMonsterKeys)
-                await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(key, []), "formal_clear_room_cull", Guard);
+                await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
             if (result.ClearFact is not null)
                 await DungeonSettlementProjection.EnableAsync(context, result.MonsterKey);
             return CommandResult.Handled;
@@ -336,7 +338,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainKill, reward.GrowthContractExperience, result.GainedExperience),
             PotionExperience = ExpBonusPolicy.Shown(plainKill, reward.GrowthContractExperience, reward.PotionExperience, result.GainedExperience) };
         foreach (ushort key in result.CulledMonsterKeys)
-            await context.Notify(NotiPacketType.DIE_MONSTER, DungeonPackets.MonsterDeath(key, []), "formal_clear_room_cull", Guard);
+            await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
         await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
         if (result.QuestDropSlots.Count > 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,

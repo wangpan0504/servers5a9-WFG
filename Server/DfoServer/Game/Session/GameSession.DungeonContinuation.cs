@@ -56,7 +56,8 @@ internal sealed partial class GameSession
         try
         {
             if (next is { DungeonId: > 0 }) prepared = PrepareFormalDungeon(next.DungeonId,next.Quest.QuestId,next.Difficulty,
-                dungeons,rooms,drops,items,original.Draw,pieces,character,current,original.PrepareDrops);
+                dungeons,rooms,drops,items,original.Draw,pieces,character,current,original.PrepareDrops,
+                crackRewards: original.CrackRewards);
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException)
         { reason = "successor-entry-unavailable"; }

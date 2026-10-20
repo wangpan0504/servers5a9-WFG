@@ -1,0 +1,20 @@
+Crack of dimension reward columns, identified from Script.pvf and granted on settlement, 2026-10-20.
+
+etc/crackofdimensionlist.etc
+- [reward data] min level 55, max level 200, [reward int data] 10100301 1.
+- stackable/stackable.lst maps 10100301 to stackable/10100001/10100301.stk.
+- That script name is 异次元裂缝任务奖励礼盒. Its [booster info] draws one each of 10099397 强烈的气息袖珍罐, 10099398 无尽的永恒袖珍罐, and 10100300 异次元裂缝成长胶囊.
+- [daily clear count] 5. [daily reward info] 5 3037 10.
+- 3037 is stackable/material/cubepiece_clear.stk, name 无色小晶块.
+- The same tag [daily reward info] occurs only in this etc file.
+- [daily enter count] 10 is a separate field and is not used as an entry reject.
+
+Grant path in build/rift-daily, branch fix/rift-daily-count, baseline 37f50a80:
+- Dungeons with exactly one [crack of dimension dungeon] positive integer, including dungeon 1 and excluding dungeon 3, receive the table on an accepted formal clear.
+- Practice, tutorial, class-experience, and [disable clear reward] clears do not.
+- Level inside a reward band and at or above [limit min level] grants that band's item/count pairs through InventoryRewardGrantService, then the existing inventory refresh.
+- The daily triple grants once when the day's clear count reaches its first integer. A failed grant leaves the daily flag unset so a later clear retries it.
+- DIE_MONSTER and CLEAR_DUNGEON_REWARD stay unchanged and do not carry these item ids.
+- Isolated --selftest exit 0 printed: crack-dimension grant reward int data item 10100301 count 1 levels 55-200; crack-dimension grant daily reward info clears 5 item 3037 count 10.
+
+This does not prove a client reader for the reward packet, and it does not grant particularhellparty or the unread itemdropinfo_clearreward sections.

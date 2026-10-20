@@ -1,3 +1,4 @@
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Protocol;
@@ -20,6 +21,7 @@ internal sealed partial class InventoryHandler
         var ground = result.Ground ?? throw new InvalidOperationException("已提交丢弃缺少地面对象");
         bool Guard() => context.Session.CanPublishInventory(receipt);
         await context.Reply(CmdPacketType.DROP_ITEM, InventoryDiscardPackets.Accepted(request), "inventory_discard_committed", Guard);
+        ExclusiveTableNotice.RejectUnproven(ExclusiveNotice.Discard, context.Session.FormalEnteredDungeonId);
         await context.Notify(NotiPacketType.DROP_ITEM, InventoryDiscardPackets.Ground(receipt.Character.Id, ground), "inventory_discard_ground", Guard);
         await projection.RefreshAsync(context, committed);
         return CommandResult.Handled;

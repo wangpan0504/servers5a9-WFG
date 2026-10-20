@@ -92,8 +92,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 DungeonSettlementPackets.TournamentReward(DungeonTournamentPlan.RoundCount, result.GainedExperience), "formal_tournament_clear_reward", Guard);
         }
         else
-        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, DungeonSettlementPackets.CardReward(reward.Applied(result.GainedExperience),
-            result.Presentation!.MonsterExperience, result.Card,result.Options,result.BlackDiamond,
+        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(result.GainedExperience),
+            result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
             result.Presentation.MonsterGrowthContractExperience), "formal_clear_reward", Guard);
         if (result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
@@ -109,6 +109,13 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 await (inventoryProjection ?? throw new InvalidOperationException("assault reward projection unavailable")).RefreshAsync(context, assaultInventory);
             await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, assaultClear.Counts),
                 "assault_mode_daily_info", Guard);
+        }
+        if (result.CrackClear is { } crackClear)
+        {
+            log.Write("crack_dimension_clear_committed", new { Connection = context.Id, crackClear.State.Clears,
+                crackClear.State.DailyGranted, Granted = crackClear.Granted.Count, crackClear.Issue });
+            if (crackClear.Inventory is { } crackInventory)
+                await (inventoryProjection ?? throw new InvalidOperationException("次元裂缝奖励缺少库存投影")).RefreshAsync(context, crackInventory);
         }
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
         return CommandResult.Handled;

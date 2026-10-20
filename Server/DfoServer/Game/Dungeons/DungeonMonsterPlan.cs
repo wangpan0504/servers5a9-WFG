@@ -137,9 +137,11 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             int? rawTeam = room.MonsterTeams is { } monsterTeams && index < monsterTeams.Count
                 ? monsterTeams[index] : source.Team;
             int team = rawTeam is >= 0 ? rawTeam.Value : 100;
-            // 精确 [boss]+[dummy] 是猎杀/脚本39目标（夜之摩天楼中心107009977），不因与本人同team0变成友军。
+            // 精确 [boss]+[dummy] 是猎杀/脚本39目标（夜之摩天楼中心107009977、3987 的 75099），不因与本人同 team 变成友军。
+            // 76114 的 62959 是同一形状的演出演员，同阵营时仍不开放普通死亡。
             bool scriptedBoss = source.RankKind == "[boss]" && source.Modifiers.SequenceEqual(new[] { "[dummy]" });
-            bool friendly = playerTeam is { } actualTeam && team == actualTeam && !scriptedBoss;
+            bool cinematicFriend = scriptedBoss && source.MonsterId == 62959;
+            bool friendly = playerTeam is { } actualTeam && team == actualTeam && (!scriptedBoss || cinematicFriend);
             result.Add(new(index, (ushort)nextKey, source.MonsterId, level, source)
             {
                 SpawnType = source.RankKind switch { "[named]" => 0, "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => (byte)0 },

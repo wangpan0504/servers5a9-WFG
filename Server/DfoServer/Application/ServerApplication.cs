@@ -142,6 +142,12 @@ public static class ServerApplication
             if (command.Kind == ServerCommandKind.Gm)
                 return DevelopmentCommands.RunGm(command.Arguments, options, pvf);
             var itemResources = Load("Item resources", () => new ItemResources(pvf));
+            var particularHell = Load("Particular hell party table", () => ParticularHellPartyCatalog.Load(pvf, itemResources.Items.Contains));
+            if (particularHell.ItemsByDungeon.Count == 0)
+                throw new InvalidDataException("particularhellparty 表是空的");
+            var crackDimension = Load("Crack of dimension rewards", () => CrackDimensionCatalog.Load(pvf, itemResources.Items.Contains));
+            if (crackDimension.Bands.Length == 0)
+                throw new InvalidDataException("次元裂缝奖励表是空的");
             foreach (var warning in itemResources.Contracts.ResourceWarnings)
                 log?.Write("resource_warning", new { Stage = "Premium contract STK", warning.Type, warning.ConfiguredItems, warning.Reason });
             var characters = Load("Character resources", () => CharacterCatalog.Load(pvf, itemResources.Items));

@@ -129,6 +129,10 @@ internal static class DungeonMonsterPlanTests
         That(scriptedPlan.Monsters[0] is { IsScriptedBoss: true, IsFriendly: false, IsBlocking: true, CanReportDeath: true, IsBoss: true, Team: 0 } &&
             scriptedPlan.Monsters[1] is { IsScriptedBoss: false, IsFriendly: true, IsBlocking: false, CanReportDeath: false, Team: 0 },
             "同team0的精确dummy Boss仍可报告死亡，普通同阵营演员继续排除");
+        var cinematic = scripted with { MonsterId = 62959, RawValues = [62959, 0, 3, 100, 100, 0, 1, 1] };
+        That(DungeonMonsterPlan.FromRoom(room with { Monsters = [cinematic] }, 99, 10, playerTeam: 0).Monsters.Single() is
+            { IsScriptedBoss: true, IsFriendly: true, IsBlocking: false, CanReportDeath: false, Team: 0 },
+            "76114 的 62959 同阵营时仍排除普通死亡");
         That(DungeonMonsterPlan.FromRoom(room with { MonsterTeams = [-1, int.MaxValue] }, 99, 10).Monsters.All(monster => monster.IsBlocking),
             "all nonzero team values remain blocking without guessed team enums");
         bool rejected = false;

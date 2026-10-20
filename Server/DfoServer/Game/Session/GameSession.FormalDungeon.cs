@@ -42,6 +42,7 @@ internal sealed partial class GameSession
         public ushort? TutorialClearTarget { get; set; }
         public AssaultModeSelection? Assault { get; init; }
         public AssaultModeRewardServices? AssaultRewards { get; init; }
+        public CrackDimensionRewardServices? CrackRewards { get; init; }
         // 实验性：深渊派对入场票；入场提交（InstallFormalDungeon）时按当前背包重算并扣除。
         public HellPartyTicket? HellTicket { get; init; }
         public EpicPieceCatalog? HellPieces { get; init; }
@@ -49,6 +50,7 @@ internal sealed partial class GameSession
         public ImmutableDictionary<ushort, DungeonDropGenerationPlan> HellRewardPlans { get; init; } = ImmutableDictionary<ushort, DungeonDropGenerationPlan>.Empty;
     }
     FormalDungeon? formalDungeon;
+    internal int? FormalEnteredDungeonId => formalDungeon is null ? null : checked((int)formalDungeon.Entry.DungeonId);
     bool PreservesDungeonConsumables => Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon?.Entry.HasFreeCombatConsumption == true;
     sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey)
@@ -63,11 +65,12 @@ internal sealed partial class GameSession
         FormalDungeonReceipt? retry = null,
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false,
-        bool hellParty = false, bool hellLegend = false, bool sealDoor = false, bool practice = false)
+        bool hellParty = false, bool hellLegend = false, bool sealDoor = false, bool practice = false,
+        CrackDimensionRewardServices? crackRewards = null)
     {
         LastFormalDungeonRejection = null;
         var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,
-            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice);
+            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice,crackRewards);
         if (prepared is null) { LastFormalDungeonRejection ??= "prepare-returned-null"; return null; }
         var installed = owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
         if (installed is null) LastFormalDungeonRejection = "state-changed-before-install";
@@ -84,7 +87,8 @@ internal sealed partial class GameSession
         Func<int, int>? draw, EpicPieceCatalog? pieces, Character? requiredCharacter, FormalDungeonReceipt? retry,
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false, bool hellParty = false,
-        bool hellLegend = false, bool sealDoor = false, bool practice = false)
+        bool hellLegend = false, bool sealDoor = false, bool practice = false,
+        CrackDimensionRewardServices? crackRewards = null)
     {
         var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) && CanEnterFormalDungeon(retry) &&
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
@@ -179,7 +183,7 @@ internal sealed partial class GameSession
             !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
                 questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return RejectFormal("route-quest-not-eligible");
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
-            training ? flow!.Destination : null,tutorialScenes);
+            training ? flow!.Destination : null,tutorialScenes,crackRewards);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null,
             Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, HellPieces = pieces } };
 
@@ -194,7 +198,8 @@ internal sealed partial class GameSession
     PreparedFormalDungeon? PrepareFormalDungeonResources(Character expected,long epoch,DungeonEntryPlan entry,
         DungeonRoomCatalog rooms,DungeonMonsterDropCatalog? drops,ItemCatalog? items,Func<int,int>? draw,EpicPieceCatalog? pieces,
         Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
-        Location? tutorialReturn = null, TutorialScenes? tutorialScenes = null)
+        Location? tutorialReturn = null, TutorialScenes? tutorialScenes = null,
+        CrackDimensionRewardServices? crackRewards = null)
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
@@ -337,7 +342,8 @@ internal sealed partial class GameSession
         var ground = new DungeonGroundState(run!, route.Rooms, groundReservations, drops is null ? "" : "monster/monster.lst", passiveGrounds);
         var dungeon = new FormalDungeon(run!.Entry, route, run, authority, mapSeed,
             ground, pools, draw ?? RandomNumberGenerator.GetInt32, prepareDrops, dropPlans.ToImmutable())
-            { QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, HellRewardPlans = hellRewardPlans.ToImmutable() };
+            { QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, HellRewardPlans = hellRewardPlans.ToImmutable(),
+                CrackRewards = crackRewards };
         return new(expected,epoch,dungeon,next);
     }
 

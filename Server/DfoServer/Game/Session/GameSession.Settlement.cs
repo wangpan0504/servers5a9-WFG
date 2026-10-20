@@ -20,6 +20,7 @@ internal sealed partial class GameSession
         public Character Expected { get; } = expected;
         public bool Committed { get; set; }
         public bool AssaultSettled { get; set; }
+        public bool CrackSettled { get; set; }
         public bool ScoreScrolled { get; set; }
         public bool CardsShown { get; set; }
         public byte? SelectedCard { get; set; }
@@ -219,9 +220,18 @@ internal sealed partial class GameSession
             settlement.AssaultSettled = true;
             assaultClear = CommitAssaultClear(assault, assaultServices);
         }
+        CrackClearResult? crackClear = null;
+        if (settlement.Committed && !settlement.CrackSettled && dungeon.CrackRewards is { } crackRewards &&
+            !dungeon.Entry.IsTutorial && !dungeon.Entry.IsPractice && !dungeon.Entry.IsClassExperience &&
+            !dungeon.Entry.DisableClearReward &&
+            dungeons.Get(checked((int)dungeon.Entry.DungeonId)).IsCrackOfDimension)
+        {
+            settlement.CrackSettled = true;
+            crackClear = CommitCrackClear(crackRewards);
+        }
         return new FormalDungeonSettlementResult(prepared.Outcome, FormalReceipt(), settlement.Pending.Reward,
             settlement.Presentation, previous) { Card = settlement.Card, Inventory = inventory, MailId = settlement.MailId,
-                AssaultClear = assaultClear,
+                AssaultClear = assaultClear, CrackClear = crackClear,
                 GainedExperience = settlement.GainedExperience,
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
@@ -416,6 +426,6 @@ internal sealed partial class GameSession
         // 复用不可变生成规则和随机源；新Run独立冻结结果，不继承旧地面对象。
         return EnterFormalDungeon(expected.Entry.DungeonId,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,
             draw: original.Draw, pieces: pieces, requiredCharacter: expected.Character,retry: expected,
-            prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice);
+            prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards);
     }
 }

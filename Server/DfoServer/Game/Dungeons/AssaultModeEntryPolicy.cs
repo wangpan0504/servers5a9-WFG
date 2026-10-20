@@ -32,6 +32,8 @@ internal sealed record AssaultModeSelection(uint Parent, uint Mission, AssaultMo
 // 当日强袭计数：Clears=NOTI1536 b0（普通任务通关次数），Hidden=b1（隐藏关卡通关次数）。
 internal readonly record struct AssaultDailyCounts(int Clears, int Hidden);
 internal sealed record AssaultDailyCommit(Character Character, AssaultDailyCounts Counts);
+internal readonly record struct CrackDailyState(int Clears, bool DailyGranted);
+internal sealed record CrackDailyCommit(Character Character, CrackDailyState State);
 
 internal sealed record AssaultModeDecision(AssaultModeSelection? Selection, AssaultModeRejection Reason, string? Detail = null)
 {

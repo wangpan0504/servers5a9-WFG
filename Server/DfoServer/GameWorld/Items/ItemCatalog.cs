@@ -100,6 +100,8 @@ internal sealed class ItemCatalog
 
     public bool ContainsEquipment(int id) => equipment.ContainsKey(id);
 
+    public bool Contains(int id) => equipment.ContainsKey(id) || stackable.ContainsKey(id);
+
     // 在资源装配阶段枚举；正creation rate的普通道具完整解析，失败不得静默删除候选。
     // 逐项解析互不依赖（PVF 按位置读取、缓存与模板表均线程安全），有序并行后结果与串行一致；
     // 原先串行约占服务启动 4 秒。任一项失败仍以原异常终止装配。

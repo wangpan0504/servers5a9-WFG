@@ -73,6 +73,9 @@ internal static class DungeonCatalogTests
             !Definition(designated,levels,levels with { Tokens = [new(0,0),new(0,0),new(0,0),new(0,0),new(0,0)] }).AllowsDifficulty(2,false) &&
             !Definition(designated).AllowsDifficulty(2,false),
             "普通重复指定、冲突难度表和缺省难度边界保持原规则");
+        var riftDifficulty = Definition(new DungeonRawSection("difficulty",[new(0,3)]), designated with { Tokens = [new(0,3)] });
+        That(Enumerable.Range(0,5).All(value => riftDifficulty.AllowsDifficulty((byte)value,false) == (value == 3)),
+            "difficulty 与 designate dungeon difficulty 同为 3 且没有难度表时只放行难度 3");
         var fixture = new Fixture();
         var beastTokens = new List<PvfToken>();
         for (int variant = 0; variant < 3; variant++)
@@ -242,6 +245,9 @@ internal static class DungeonCatalogTests
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         That(catalog.DungeonCount == 1372, "matching dungeon index contains 1372 entries");
+        foreach (int rift in new[] { 316, 530 })
+            That(catalog.Get(rift).AllowsDifficulty(3, false) && !catalog.Get(rift).AllowsDifficulty(0, false),
+                "裂缝副本只放行资源声明的难度 3：" + rift);
         Reject(() => catalog.Get(-1), "negative dungeon index rejected");
         Reject(() => catalog.Get(int.MaxValue), "unlisted dungeon index rejected");
         var dungeon = catalog.Get(3);

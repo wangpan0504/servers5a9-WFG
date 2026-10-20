@@ -1,0 +1,18 @@
+itemdropinfo_clearreward.etc and crackofdimensionlist.etc grant audit, 2026-10-20
+
+Server tree: D:\dnf90\95\build\rift-daily, branch fix/rift-daily-count, baseline 37f50a80.
+Resource: D:\dnf90\95\server\Data\Pvf\Script.pvf.
+
+etc/itemdropinfo_clearreward.etc
+- [gold card cost table] is already read by DungeonCardPriceCatalog as level/price pairs. Not reimplemented.
+- [dungeon index privilege service reward rate] is already read by AssaultModeCatalog for assault mission dungeons. Not reimplemented.
+- Every other tag in this file is not granted. The same tag names in etc/itemdropinfo_monseter.etc, etc/itemdropinfo_common.etc, etc/itemdropinfo_object.etc, and etc/itemdropinfo_monster_hell.etc are different files. Those loaders do not read this clear-reward file.
+- Not granted from this file: drop prob count, drop prob, drop kind prob, drop item type prob, dungeon difficulty drop bonusrate, basis of rarity dicision, party member drop bonusrate, dungeon type outside the privilege section, dungeon difficulty gold drop bonusrate, reward item rate per map max count, gold card create rate, gold card blank item, pcroom card blank item, item drop ref table, item drop rarity control, chronicle set reward rate, specific goldcard group, reward group, reward dungeon type list, reward item list, dungeon_index specific reward rate, special dungeon clear reward, mail message, dungeon index, clear reward, special clear reward, special clear reward item list, static table, table, clear reward gold, special clear reward item, group, dungeon, reward item, cardslot specific reward table.
+- Semantics and the applicable dungeons for those tags are not proven from the named ARAD.exe or from a path this server already sends. No item ids are hardcoded and none of those sections are granted.
+
+etc/crackofdimensionlist.etc
+- [reward int data] is two integers. [daily reward info] is three integers.
+- Quest scripts also have a field named reward int data. That reader does not apply to this file.
+- These columns are not proven to be item id plus count. ItemGrants stays empty.
+
+PARTICULAR_HELL and CRACK_OF_DAYBREAK_INFO stay unsent. The count builders remain test-only. This note does not supersede KB-20261019T151538-7e45dbe9a1.

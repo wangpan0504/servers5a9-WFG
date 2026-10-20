@@ -56,6 +56,8 @@ internal static class SelfTestRunner
         AuctionReplyTests.Run();
         DungeonRequestTests.Run();
         AssaultModePacketTests.Run();
+        RiftDailyPacketTests.Run();
+        ParticularHellPartyTests.Run();
         DungeonSettlementProtocolTests.Run();
         BlackDiamondTests.RunCore();
         ServerEventTests.RunCore();
@@ -257,6 +259,8 @@ internal static class SelfTestRunner
         await TownPresenceIndexTests.RunAsync(towns);
         DungeonCatalogTests.Run(pvf);
         AssaultModePacketTests.RunResources(pvf);
+        RiftDailyPacketTests.RunResources(pvf);
+        ParticularHellPartyTests.RunResources(pvf);
         AssaultHuntQuestTests.RunResources(pvf, sharedQuests);
         DungeonGreedGridTests.Run(pvf);
         DungeonRoomCatalogTests.Run(pvf);

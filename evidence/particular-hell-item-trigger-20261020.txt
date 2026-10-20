@@ -1,0 +1,33 @@
+particularhellparty.etc item trigger, static pass, 2026-10-20
+
+Executable
+- Path: D:\dnf90\95_V31.0.24.0\DNF_SEASON4_OB_V31.0.24.0_Full\ARAD.exe
+- SHA256: 7560188D4BAC4A33690FE3B37069F365885F7F57E14CEE868B64103852F28471
+- Size: 107003904
+- PE32, image base 0x400000. .text and .rdata have PointerToRawData == VirtualAddress, so file offset = VA - 0x400000 in those sections.
+- rabin2 5.9.8 reports baddr 0x400000. Absolute displacements still need relocs. The registrations and function bounds below are relative-call and immediate-operand facts read from the file bytes.
+
+What is not in the image
+- ASCII and UTF-16 particularhellparty, crackofdaybreak, itemdropinfo_clearreward, crackofdimensionlist: absent from ARAD.exe, ARADbase.dll, and 95JP.dll.
+- Single-byte XOR of the ASCII prefix particularh: absent across the whole ARAD.exe.
+- Little-endian item ids 100190058 and 104000594: absent from those three binaries.
+- Script.pvf ansi-pool indexes (particularhellparty.etc 0xFC52D0, required item weight 0xFC51B2, inferno weapon creation rate 0xFC5294, daily open chance 0xFC518A, crackofdaybreak.etc 0xA4790A, itemdropinfo_clearreward.etc 0xF8D0A0, crackofdimensionlist.etc 0xA47F02): absent as immediates in ARAD.exe.
+- RTTI hits are only HellPartyDungeonEventUI and CNRDHellPartyBooster. Those names are the ordinary hell-party UI and booster, not this etc table.
+- 95JP.dll is a codec and rift-count hook. It does not contain the item table.
+
+Existing notice readers
+- Registration shape for low opcodes: push 0; push handler; push imm8 opcode; mov ecx, esi; call.
+- Opcode 0x23 CLEAR_DUNGEON_REWARD registers 0x02393C80 at file site VA 0x02398163.
+- Opcode 0x26 DIE_MONSTER registers 0x02395310 at VA 0x02398173. Function bounds from analysis: 0x02395310-0x02396B4A. First bytes 55 8B EC match the file at offset 0x1F95310.
+- Opcode 0x28 DROP_ITEM registers 0x023C0D10 and 0x046D14A0.
+- Those three function spans do not contain immediates 316, 530, 6063, 6064, 6065, 100190058, or 104000594.
+- PARTICULAR_HELL opcode 0x340 reader 0x023D63C0 and CRACK_OF_DAYBREAK_INFO opcode 0x609 reader 0x023D6BF0 are the daily-count packets already recorded in KB-20261019T151538-7e45dbe9a1. They copy a count and then look up 32 map pairs. They do not read item ids. They are not the item carrier. This note does not supersede that entry.
+
+Conclusion
+- This static pass does not show an existing notification, or a condition on that notification, that places particularhellparty.etc item ids on the wire.
+- DIE_MONSTER (NOTI 38) remains the ground-drop notice. DROP_ITEM (NOTI 40) remains discard. CLEAR_DUNGEON_REWARD remains the clear card. None of those readers consults this table.
+- The server therefore loads every [dungeon] item list and does not append those ids on death, discard, or the clear card.
+- The task's 316 HellParty=false clear (gold, material 3052, generic card 108020415) was not re-run here. It is not an observation that this table dropped.
+- etc/itemdropinfo_clearreward.etc: [gold card cost table] and [dungeon index privilege service reward rate] stay on their existing readers. Every other tag in that file, including [special dungeon clear reward], [dungeon_index specific reward rate], [specific goldcard group], [chronicle set reward rate], [reward dungeon type list], and [reward item list], is not granted.
+- etc/crackofdimensionlist.etc [reward int data] is two integers and [daily reward info] is three integers. They are not proven to be item id plus count, so they are not granted.
+- etc/crackofdaybreak.etc still has only [daily enter count] 2 and [dungeon list] 530. It is not 530's equipment table. Daily-count packets stay 3 and 2.

@@ -15,7 +15,7 @@ internal enum DungeonEntryProbeMode
 internal static class DungeonEntryProbe
 {
     // 诊断只委托共用纯Builder；发送候选不建立正式事实，默认seed1仅保留可重复诊断行为。
-    internal static byte[] BuildDeath(ushort key) => DungeonPackets.MonsterDeath(key, []);
+    internal static byte[] BuildDeath(ushort key) => ExclusiveDropPackets.MonsterDeath(key, [], null);
     internal static byte[] BuildFinishLoading() => DungeonPackets.LoadingNotice();
     internal static byte[] BuildPlayerState(ushort characterId) => DungeonPackets.DungeonPlayerState(characterId);
     internal static byte[] BuildInformation(DungeonEntryPlan plan) => DungeonPackets.Information(plan);
