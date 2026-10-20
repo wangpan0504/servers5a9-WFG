@@ -240,6 +240,23 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 : pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
             foreach (int id in ids.Distinct())
             {
+                if (choices?.Any(row => row.ItemId == id && row.NativeCreatureSelectionRow) == true)
+                {
+                    // 选择行的[creature]只有编号和数量；实体类型由真实模板决定，特殊owner不可走快捷发奖。
+                    var selectedTemplate = catalog.Get(id);
+                    if (selectedTemplate.Kind is not (ItemKind.Equipment or ItemKind.Creature or ItemKind.Avatar) ||
+                        CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
+                        selectedTemplate.AcquisitionContract is not null || selectedTemplate.IsPremiumService ||
+                        contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id))
+                        return InventoryResult.Reject(19);
+                    if (selectedTemplate.Kind == ItemKind.Avatar)
+                    {
+                        var avatar = avatars?.GetAvatar(id);
+                        if (avatar is null || avatar.PendingRule is not null || !avatar.Types.IsEmpty ||
+                            avatar.RequiresAbilityChoice || !avatar.Abilities.Contains(0))
+                            return InventoryResult.Reject(19);
+                    }
+                }
                 // 只兼容模板自身已禁分解的装备，不能猜写未知实例位，也不能被钱包等快捷发奖绕过。
                 if (definition.SetsDisjointInstanceType && catalog.Get(id) is not { Kind: ItemKind.Equipment, DisjointForbidden: true })
                     return InventoryResult.Reject(19);
@@ -434,6 +451,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             var entries = category.Rewards.Where(row => row.ItemId == id).ToArray();
             if (entries.Length == 0 || entries.Any(row => row.Count != entries[0].Count || row.Upgrade != entries[0].Upgrade ||
                 row.Refinement != entries[0].Refinement || row.RequiredKind != entries[0].RequiredKind ||
+                row.NativeCreatureSelectionRow != entries[0].NativeCreatureSelectionRow ||
                 !row.UpgradeChances.SequenceEqual(entries[0].UpgradeChances)))
                 return false;
             selected.Add(entries[0]);

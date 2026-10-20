@@ -35,10 +35,12 @@ internal static class BoosterSelectionTests
         LegacyExpiryFixture.Restore(catalog, (10002064, "2013-09-24 06:00:00"));
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
+        RunRealTemplateSelection(towns, itemResources, now);
         RunDisjointInstanceSelection(towns, itemResources, now);
         var creatureCategory = Parse("0 0\n[creature]\n400990444 1 400990445 1\n[/creature]").Selection!.Categories.Single();
-        That(creatureCategory.PendingRule is null && creatureCategory.Rewards.All(row => row.RequiredKind == ItemKind.Creature),
-            "宠物自选段保留完整候选并约束实际产物类型");
+        That(creatureCategory.PendingRule is null && creatureCategory.Rewards.All(row =>
+                row.NativeCreatureSelectionRow && row.RequiredKind is null),
+            "选择段保留原生来源和完整候选，由真实模板决定产物类型");
         foreach (var rewardId in new[] { 400990444, 400990445 })
         {
             var petService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -250,8 +252,32 @@ internal static class BoosterSelectionTests
             snapshot = Snapshot();
             That(!rookieSession.MutateInventory(role => service.Open(role, Select(3, rookieSet), out _, now)).Accepted && Snapshot() == snapshot,
                 "新秀整套成功后的耗尽重放不再发奖或记审计");
+            repo.Create(owner, new("NativeAura", towns.Room, towns.InitialReturn)
+            {
+                Inventory = new([new(0, Bag(70), InventoryRewardGrantService.Create(catalog.Get(10007996), 2, now, shopExpiration: true))])
+            });
+            var auraSaved = repo.List(owner).Single(role => role.Name == "NativeAura");
+            var nativeService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
+                itemResources.EpicPieces, debugSettings: new() { IgnoreCashShopAbsoluteExpiration = true }, avatars: itemResources.AvatarPackages);
+            var auraPlan = nativeService.Open(auraSaved, Select(70, [101590027]), out _, now).Plan!;
+            snapshot = Snapshot();
+            Query("CREATE TRIGGER fail_native_aura BEFORE INSERT ON inventory_audit_log WHEN NEW.item_kind_after=8 BEGIN SELECT RAISE(ABORT,'native aura rollback'); END");
+            Reject(() => repo.CommitInventory(owner, auraSaved, auraPlan), "光环详情及槽位已写入后，末段审计故障仍传播失败");
+            That(Snapshot() == snapshot && Query("SELECT count(*) FROM inventory_avatar_details") is 0L,
+                "光环末段故障完整回滚源、核心、槽、详情、UID、revision及审计");
+            Query("DROP TRIGGER fail_native_aura");
+            var auraCommitted = repo.CommitInventory(owner, auraSaved, auraPlan);
+            That(JsonSerializer.Serialize(repo.List(owner).Single(role => role.Name == "NativeAura")) == JsonSerializer.Serialize(auraCommitted) &&
+                auraCommitted.Inventory.Find(Bag(70)) is { Core.Count: 1 } &&
+                auraCommitted.Inventory.Items.Single(item => item.Core.Kind == ItemKind.Avatar) is { Uid: > 0, Avatar: not null },
+                "确定回滚后原合法光环计划可完整提交一次，保存重读保留详情与剩余源");
+            snapshot = Snapshot();
+            Reject(() => repo.CommitInventory(owner, auraSaved, auraPlan), "已提交的旧光环计划不可再次提交");
+            That(Snapshot() == snapshot, "光环旧revision拒绝不修改详情、UID或资产");
+            var nextAuraPlan = nativeService.Open(auraCommitted, Select(70, [101590028]), out _, now).Plan!;
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject(() => session.MutateInventory(role => service.Open(role, Select(4, [10000871]), out _)), "old generation cannot open or replay a selection");
+            Reject(() => repo.CommitInventory(owner, auraCommitted, nextAuraPlan), "旧owner不能提交带光环详情的新合法计划");
             That(Query("PRAGMA integrity_check") is "ok", "selection database integrity");
 
             object? Query(string sql)
@@ -268,6 +294,135 @@ internal static class BoosterSelectionTests
         finally { Directory.Delete(root, true); }
         Console.WriteLine($"PASS {Count - checks} booster selection assertions");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(catalog.Get(id), count, now);
+    }
+
+    static void RunRealTemplateSelection(TownCatalog towns, ItemResources resources, DateTimeOffset now)
+    {
+        int[] sourceIds = [10007539, 10007726, 10007992, 10007993, 10007996, 490700181,
+            490700184, 490700980, 490701127, 490701129, 490702047];
+        var catalog = resources.Items;
+        var service = new InventoryBoosterService(catalog, resources.Boosters, resources.GoldLimits, resources.EpicPieces,
+            debugSettings: new() { IgnoreCashShopAbsoluteExpiration = true }, avatars: resources.AvatarPackages);
+        var failures = new List<string>();
+        int rows = 0, titles = 0, auras = 0;
+        foreach (int sourceId in sourceIds)
+        {
+            var definition = resources.Boosters.Get(sourceId);
+            That(definition.Available && definition.Selection is { SelectionCount: 1, Categories.Length: 1 },
+                "真实称号和光环盒保持单分类单选 " + sourceId);
+            foreach (var category in definition.Selection!.Categories)
+                foreach (var choice in category.Rewards)
+                {
+                    rows++;
+                    var template = catalog.Get(choice.ItemId);
+                    if (template.Kind == ItemKind.Equipment) titles++;
+                    if (template.Kind == ItemKind.Avatar) auras++;
+                    var source = new InventoryItem(1000, Bag(70),
+                        InventoryRewardGrantService.Create(catalog.Get(sourceId), 2, shopExpiration: true));
+                    Character role = new(1, 0, "RealSelection", 0, towns.Room, towns.InitialReturn)
+                    {
+                        Inventory = new([source])
+                    };
+                    var opened = service.Open(role, Select(70, [choice.ItemId], category.Category, category.Subcategory),
+                        out var receipt, now);
+                    if (!opened.Accepted)
+                    {
+                        failures.Add(sourceId + ":" + choice.ItemId + ":" + opened.Error + ":" + opened.RejectReason);
+                        continue;
+                    }
+                    var reward = opened.Plan!.After.Items.Single(item => item.Core.ItemId == choice.ItemId);
+                    That(receipt!.Rewards.Single() == new BoosterGrantedItem(choice.ItemId, choice.Count) &&
+                        reward.Core.ItemId == choice.ItemId && reward.Core.Count == choice.Count &&
+                        reward.Core.Kind == template.Kind && role.Inventory.Items.Single() == source &&
+                        opened.Plan.After.Find(source.Position) is { Core.Count: 1 },
+                        "真实选择按模板完整发奖且规划不提前扣源 " + sourceId + ":" + choice.ItemId);
+                    var expected = InventoryRewardGrantService.CreateItem(template, reward.Position,
+                        InventoryRewardGrantService.Create(template, choice.Count, now, shopExpiration: true));
+                    That(reward == expected, "真实候选完整核心、封装、耐久、品质、期限及详情沿统一创建规则 " + choice.ItemId);
+                    That(template.Kind switch
+                    {
+                        ItemKind.Equipment => reward.Position.List == InventoryListType.Main && reward.Avatar is null && reward.Creature is null,
+                        ItemKind.Avatar => reward.Position.List == InventoryListType.Avatar && reward.Avatar is not null &&
+                            reward.Creature is null && reward.Core.Durability == 0,
+                        _ => false
+                    }, "真实称号与光环进入模板所属容器并带完整详情 " + sourceId + ":" + choice.ItemId);
+                }
+        }
+        That(rows == 33 && titles == 21 && auras == 12, "正式Catalog中11盒仍声明33个真实称号与光环候选");
+        That(failures.Count == 0, "真实选择发奖失败：" + string.Join(", ", failures));
+        RunRealTemplateRejections(towns, resources, now);
+    }
+
+    static void RunRealTemplateRejections(TownCatalog towns, ItemResources resources, DateTimeOffset now)
+    {
+        const int sourceId = 10007539;
+        var catalog = resources.Items;
+        var archive = (PvfLib.PvfArchive)typeof(ItemCatalog).GetField("pvf", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(catalog)!;
+        var isolated = new BoosterCatalog(archive, new Dictionary<int, string>());
+        var definitions = (ConcurrentDictionary<int, BoosterDefinition>)typeof(BoosterCatalog)
+            .GetField("definitions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(isolated)!;
+        var service = new InventoryBoosterService(catalog, isolated, resources.GoldLimits, resources.EpicPieces,
+            debugSettings: new() { IgnoreCashShopAbsoluteExpiration = true },
+            contracts: resources.Contracts, avatars: resources.AvatarPackages);
+        var source = new InventoryItem(1000, Bag(70), InventoryRewardGrantService.Create(catalog.Get(sourceId), shopExpiration: true));
+        Character role = new(1, 0, "RealReject", 0, towns.Room, towns.InitialReturn) { Inventory = new([source]) };
+        InventoryResult Open(int id, string body, int selectionCount = 1)
+        {
+            definitions[sourceId] = BoosterCatalog.Parse("[stackable type]\n`[booster selection]` 0\n" +
+                "[booster selection num]\n" + selectionCount + "\n[booster select category]\n0 0\n" + body + "\n[/booster select category]");
+            int[] ids = selectionCount == 0 ? definitions[sourceId].Selection!.Categories[0].Rewards.Select(row => row.ItemId).ToArray() : [id];
+            return service.Open(role, Select(70, ids), out _, now);
+        }
+        int optionAvatar = resources.AvatarPackages.Get(490705387).Categories.SelectMany(category => category.Rows)
+            .Select(row => row.ItemId).First(id => resources.AvatarPackages.GetAvatar(id).RequiresAbilityChoice);
+        That(catalog.Get(optionAvatar).Kind == ItemKind.Avatar &&
+            resources.AvatarPackages.GetAvatar(optionAvatar).RequiresAbilityChoice,
+            "额外属性装扮反例使用正式资源声明");
+        foreach (int unsafeId in new[] { optionAvatar, 1, resources.EpicPieces.ByPiece.Keys.First(),
+            resources.Boosters.DirectActivationItems.First(), int.MaxValue })
+        {
+            var result = Open(unsafeId, "[creature]\n" + unsafeId + " 1\n[/creature]");
+            That(!result.Accepted && role.Inventory.Items.Single() == source,
+                "选择段不能把需额外选项、特殊owner或失效模板当默认实体发奖 " + unsafeId);
+        }
+        That(!Open(400330019, "[equipment]\n400330019 1\n[/equipment]\n[creature]\n400330019 1\n[/creature]").Accepted,
+            "同ID不同选择来源不能靠第一行覆盖分组语义");
+        const string repeatedTitle = "[creature]\n400330019 1 400330019 1\n[/creature]";
+        var repeatedChoice = Open(400330019, repeatedTitle);
+        var repeatedAll = Open(400330019, repeatedTitle, 0);
+        That(repeatedChoice.Accepted && repeatedChoice.Plan!.After.Items.Length == 1 &&
+            repeatedAll.Accepted && repeatedAll.Plan!.After.Items.Length == 2,
+            "相同来源等价行在选择模式只发一行，全领模式保留每行独立实例");
+        That(!Open(1, "[etc]\n1 1\n[/etc]\n[creature]\n1 1\n[/creature]", 0).Accepted,
+            "全领逐来源保留门槛，钱包行不能通过同ID普通行绕过creature来源实体限制");
+        That(Open(63220, "[creature]\n63220 1\n[/creature]").Accepted,
+            "真实宠物模板仍按原生选择来源生成宠物实体");
+        const int auraId = 101590027;
+        Open(auraId, "[creature]\n" + auraId + " 1\n[/creature]");
+        foreach (string? avatarText in new string?[] { null, "[import script]\n`equipment/base.equ`",
+            "[avatar type select]\n0 0 0 6000 0 0 0\n[/avatar type select]",
+            "[avatar select ability]\n0 `[HP MAX]` `+` 100\n[/avatar select ability]",
+            "[avatar select ability]\n1 `[HP MAX]` `+` 100\n[/avatar select ability]" })
+        {
+            var avatarCatalog = new AvatarPackageCatalog(_ => avatarText ?? "",
+                avatarText is null ? new Dictionary<int, string>() : new() { [auraId] = "aura.equ" }, new Dictionary<int, string>());
+            var guarded = new InventoryBoosterService(catalog, isolated, resources.GoldLimits, resources.EpicPieces,
+                debugSettings: new() { IgnoreCashShopAbsoluteExpiration = true }, avatars: avatarCatalog);
+            var rejected = guarded.Open(role, Select(70, [auraId]), out var receipt, now);
+            That(!rejected.Accepted && rejected.Plan is null && receipt is null && role.Inventory.Items.Single() == source,
+                "缺失、挂起、期限类型表及显式能力选择（含0）不能猜默认光环实例");
+        }
+        var aura = catalog.Get(auraId);
+        var range = ItemSlotBoundService.Range(ItemKind.Avatar, role.Inventory);
+        var full = role with { Inventory = new([source, .. Enumerable.Range(range.Start, range.End - range.Start + 1)
+            .Select(slot => InventoryRewardGrantService.CreateItem(aura, new(InventoryListType.Avatar, (short)slot),
+                InventoryRewardGrantService.Create(aura, utcNow: now, shopExpiration: true)))]) };
+        That(!service.Open(full, Select(70, [auraId]), out _, now).Accepted && full.Inventory.Find(source.Position) == source,
+            "光环页满不能借用Main源槽或丢弃奖励，整次规划保留源");
+        definitions[sourceId] = BoosterCatalog.Parse("[stackable type]\n`[booster]` 0\n[booster info]\n" +
+            "[creature]\n1 400330019 1 1\n[/creature]\n[/booster info]");
+        That(!service.Open(role, new(70, 1), out _, now).Accepted,
+            "随机宠物池继续拒绝真实称号模板，不受选择来源修复影响");
     }
 
     static void RunDisjointInstanceSelection(TownCatalog towns, ItemResources resources, DateTimeOffset now)
