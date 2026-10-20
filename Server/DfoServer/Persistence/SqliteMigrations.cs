@@ -154,7 +154,22 @@ internal static class SqliteMigrations
         new(62, "眩惑贮藏箱领奖类型60", UpgradeDazzlementQuestCompletion),
         new(63, "技能窗职业变更次数", static (db, tx) => Execute(db, tx, GrowUpChangeSchema)),
         new(64, "消耗品持续效果与冷却", static (db, tx) => Execute(db, tx, ConsumableStatesSchema)),
+        new(65, "角色被拉黑有效计分", AddBlacklistCountColumn),
     ];
+
+    const string BlacklistCountColumn = "blacklist_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(blacklist_count)='integer' AND blacklist_count BETWEEN 0 AND 2147483647)";
+
+    static void AddBlacklistCountColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='blacklist_count'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE characters ADD COLUMN " + BlacklistCountColumn);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains(BlacklistCountColumn, StringComparison.Ordinal))
+            throw new InvalidDataException("角色被拉黑计分列结构不兼容");
+    }
 
     static void AddExpertJobExperience(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1452,6 +1467,7 @@ internal static class SqliteMigrations
         "SELECT account,job,grow,character_id FROM account_adventure_representatives LIMIT 0",
         "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month,name_initialized FROM account_adventures LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",
+        "SELECT blacklist_count FROM characters LIMIT 0",
         "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",

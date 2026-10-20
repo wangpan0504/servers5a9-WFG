@@ -98,6 +98,7 @@ internal static class DatabaseSchemaTests
             PassiveItemsUpgrade(root);
             PickupUidUpgrade(root);
             ConsumableStatesUpgrade(root);
+            BlacklistCountUpgrade(root);
             string path = Path.Combine(root, "game.db");
             var characters = new CharacterRepository(path);
             var accounts = new AuthenticationService(new AuthenticationRepository(path));
@@ -139,6 +140,7 @@ internal static class DatabaseSchemaTests
             {
                 "DROP TABLE schema_metadata", "UPDATE schema_metadata SET value='another-database'",
                 "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
+                "ALTER TABLE characters DROP COLUMN blacklist_count",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
                 "DROP TABLE character_game_settings",
                 "DROP TABLE cube_premium", "ALTER TABLE cube_premium DROP COLUMN cube_type",
@@ -237,6 +239,49 @@ internal static class DatabaseSchemaTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
+    }
+
+    static void BlacklistCountUpgrade(string root)
+    {
+        root = Path.Combine(root, "blacklist-upgrade");
+        Directory.CreateDirectory(root);
+        foreach (string scenario in new[] { "ordinary", "conflict", "late-failure" })
+        {
+            string path = Path.Combine(root, "blacklist-" + scenario + ".db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('blacklist',0,'BlacklistOld',7,38,1,450,234,0,123)");
+                Check(Query(db, "SELECT blacklist_count FROM characters") is 0L, "完整建库为角色建立零计分列");
+                Execute(db, "ALTER TABLE characters DROP COLUMN blacklist_count; PRAGMA user_version=64");
+                if (scenario == "conflict")
+                    Execute(db, "ALTER TABLE characters ADD COLUMN blacklist_count TEXT NOT NULL DEFAULT '0'");
+                if (scenario == "late-failure")
+                    Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
+            }
+            if (scenario != "ordinary")
+            {
+                string before = Snapshot(path);
+                RejectDatabase(() => new CharacterRepository(path));
+                Check(Snapshot(path) == before, "计分迁移遇到未知同名列或晚期结构错误整笔回滚，不推进版本");
+                continue;
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                    Query(db, "SELECT blacklist_count||':'||revision||':'||gold FROM characters") is "0:7:123",
+                    "真实v64旧结构增量加入零计分，不改角色版本和资产");
+                foreach (string value in new[] { "-1", "2147483648", "1.5", "NULL", "'invalid'" })
+                    Reject<SqliteException>(() => Execute(db, "UPDATE characters SET blacklist_count=" + value),
+                        "计分列拒绝负数、越界、非整数及空值");
+                Execute(db, "UPDATE characters SET blacklist_count=2147483647");
+                Check(Query(db, "SELECT blacklist_count FROM characters") is 2147483647L, "保留客户端有符号比较的最大合法计分");
+            }
+            string current = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == current, "迁移重开不清零既有计分或重复改变结构");
+        }
     }
 
     static void ConsumableStatesUpgrade(string root)

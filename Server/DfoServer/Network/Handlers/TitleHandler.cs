@@ -9,7 +9,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class TitleHandler(TitleAchievementService achievements, TitleBookService books, TitleProjection titles,
-    InventoryProjection inventory, TownProjection town, DfoServer.Game.Session.OnlineSessionDirectory online) : IGameCommandModule
+    InventoryProjection inventory, DfoServer.Game.Session.OnlineSessionDirectory online) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -49,19 +49,14 @@ internal sealed class TitleHandler(TitleAchievementService achievements, TitleBo
         var result = context.Session.PlanAndCommitInventory(character => put ? books.Put(character, request, DateTimeOffset.UtcNow.ToUnixTimeSeconds()) :
             books.Get(character, request, DateTimeOffset.UtcNow.ToUnixTimeSeconds()), 2, requireTown: false);
         var opcode = put ? CmdPacketType.TITLE_BOOK_PUT : CmdPacketType.TITLE_BOOK_GET;
-        // ACK的消费者直接移动已有物品对象；不能先清空源槽或刷新完整Actor。
+        // ACK先移动已有物品对象；源槽不能提前清空，之后再投影本人及同屏的实际穿戴。
         await context.Reply(opcode, TitlePackets.BookAck(request, result), put ? "title_book_put" : "title_book_get",
             result.Receipt is { } receipt ? () => context.Session.CanPublishInventory(receipt) : null);
         if (result.Accepted && result.Receipt is { } committed)
         {
             var acknowledged = result.Plan!.ChangedSlots.Where(slot => TitleBookService.IsBook(slot.List) || slot.List == InventoryListType.Equipment).ToHashSet();
-            await inventory.RefreshAsync(context, result, acknowledged, refreshEquipment: false);
+            await inventory.RefreshAsync(context, result, acknowledged);
             await TitleProjection.BooksAsync(context, committed.Character.Inventory, () => context.Session.CanPublishInventory(committed));
-            context.Owner.Execute(() =>
-            {
-                if (context.Session.CanPublishInventory(committed)) town.Refresh(context);
-                return true;
-            });
         }
         return CommandResult.Handled;
     }

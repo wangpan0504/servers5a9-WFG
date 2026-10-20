@@ -115,8 +115,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         if (refreshEquipment && (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null))
         {
             bool appearanceChanged = plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&
-                slot.Index is 9 or 11 or 26 or 33 && plan.BeforeIndex.Find(slot) != receipt.Index.Find(slot));
-            // 光环与宠物真槽/外观槽变化都刷新同屏Actor；副本沿用真实场景状态和既有过房Ready流程。
+                slot.Index is 9 or 11 or 13 or 26 or 33 && plan.BeforeIndex.Find(slot) != receipt.Index.Find(slot));
+            // 称号、光环与宠物真槽/外观槽变化都刷新Actor；副本保留当前场景状态，不重新入城。
             if (equipmentChanged && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
                 appearanceChanged && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
                 await context.Notify(NotiPacketType.USERINFO,

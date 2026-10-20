@@ -70,6 +70,8 @@ internal static class TownPackets
     public static byte[] Actor(Character character, ChannelIdentity channel = default, long? utcSeconds = null,
         string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false)
     {
+        if (character.BlacklistCount < 0)
+            throw new InvalidDataException("角色被拉黑计分不能为负数");
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
@@ -115,7 +117,8 @@ internal static class TownPackets
             writer.Write(premiumPcRoom ? (byte)1 : (byte)0);
             // 02677430写Data+344；02AA1A60独立绘制index3，两种身份同时有效时保留两张图标。
             writer.Write(blackDiamond ? (byte)1 : (byte)0);
-            writer.Write(0u);
+            // 0267E030读取u32到Data+350；02AA7BFC起按100/200/300选择GradeB/C/D，不能写装备称号ID。
+            writer.Write(character.BlacklistCount);
             PacketEncoding.WriteString(writer, character.Guild?.Name ?? "");
             writer.Write(0u);
             writer.Write((ushort)0); // 026775E3 / 026775F9: mandatory fields after the name.
