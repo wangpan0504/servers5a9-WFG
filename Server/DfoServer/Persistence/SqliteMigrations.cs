@@ -1331,7 +1331,8 @@ internal static class SqliteMigrations
             if (steps[i].Version != BaselineVersion + i + 1 || string.IsNullOrWhiteSpace(steps[i].Name) || steps[i].Upgrade is null)
                 throw new InvalidOperationException("数据库迁移必须从 v2 开始连续编号并提供名称和实现");
         int current = steps.Count == 0 ? BaselineVersion : steps[^1].Version;
-        using var tx = db.BeginTransaction();
+        using var write = db.BeginWrite("SqliteMigrations.Apply");
+        using var tx = write.Transaction;
         using var query = db.CreateCommand();
         query.Transaction = tx;
         query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='schema_metadata'";

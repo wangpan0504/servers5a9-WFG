@@ -60,7 +60,7 @@ internal sealed partial class CharacterRepository
     public MailboxPage LoadMailbox(AccountOwners.Lease owner, ushort characterId, long now) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var tx = db.BeginRead();
         RequireMailOwner(db, tx, owner, characterId);
         using var command = db.CreateCommand();
         command.Transaction = tx;
@@ -137,7 +137,7 @@ internal sealed partial class CharacterRepository
     public ImmutableArray<MailboxClaim> LoadMailClaims(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, long now) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var tx = db.BeginRead();
         RequireMailOwner(db, tx, owner, characterId);
         var claims = ReadClaims(db, tx, characterId, ids, now);
         tx.Commit();
@@ -185,7 +185,8 @@ internal sealed partial class CharacterRepository
     public MailboxResult SendMail(AccountOwners.Lease owner, Character expected, MailboxSendPlan plan) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.SendMail");
+        using var tx = write.Transaction;
         var recipient = FindMailRecipient(db, tx, plan.Request.Recipient);
         if (recipient is null || recipient.Id != plan.Recipient.Id || recipient.Account != plan.Recipient.Account)
             return MailboxResult.Reject(MailboxError.RecipientMissing);
@@ -239,7 +240,8 @@ internal sealed partial class CharacterRepository
     public MailboxResult ClaimMail(AccountOwners.Lease owner, Character expected, MailboxClaimPlan plan) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.ClaimMail");
+        using var tx = write.Transaction;
         RequireMailOwner(db, tx, owner, expected.Id);
         var ids = plan.Claims.Select(claim => claim.ClaimId).ToImmutableArray();
         long now = Math.Max(plan.Now, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -296,7 +298,7 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         RequireMailOwner(db, null, owner, characterId);
         // 已读的重复请求保持只读，不为相同状态申请 writer。
-        using (var read = db.BeginTransaction(deferred: true))
+        using (var read = db.BeginRead())
         {
             var entries = ids.Select(id => ReadMail(db, read, characterId, id)).ToArray();
             if (entries.All(mail => mail is not null && (state == 0 && mail.State == 0 || mail.Available(now) &&
@@ -306,7 +308,8 @@ internal sealed partial class CharacterRepository
                 return new() { Changes = entries.Select(mail => new MailboxStateChange(mail!.Id, mail.State)).ToImmutableArray() };
             }
         }
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.ChangeMailState");
+        using var tx = write.Transaction;
         var mails = ids.Select(id => ReadMail(db, tx, characterId, id)).ToArray();
         if (mails.Any(mail => mail is null || !(state == 0 && mail.State == 0) && !mail.Available(now)))
             return MailboxResult.Reject(MailboxError.MailMissing);
@@ -351,7 +354,8 @@ internal sealed partial class CharacterRepository
                 ids.Add(checked((uint)reader.GetInt64(0)));
         if (ids.Count == 0)
             return true;
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.ExpireMailbox");
+        using var tx = write.Transaction;
         command.Transaction = tx;
         foreach (uint id in ids)
         {
@@ -378,7 +382,8 @@ internal sealed partial class CharacterRepository
         if (!ValidDelivery(delivery))
             return MailboxResult.Reject(MailboxError.InvalidRequest);
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.DeliverMail");
+        using var tx = write.Transaction;
         var (error, mailId) = DeliverMailInTransaction(db, tx, delivery);
         if (error != MailboxError.None)
             return MailboxResult.Reject(error);  // 未提交：using 释放事务即回滚，不留半封邮件

@@ -57,7 +57,8 @@ internal sealed partial class CharacterRepository
     public CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.Delete");
+        using var tx = write.Transaction;
         if (ReadDeletionTarget(db, tx, owner.Account, expected.Slot) != expected)
             throw new InvalidOperationException("Character deletion identity or revision changed");
         if (expected.AdventureBusy) throw new InvalidDataException("Character participates in an adventure expedition");

@@ -28,7 +28,7 @@ internal sealed class AuctionListingRepository(string path)
     {
         // 计数与分页放在同一读事务里，避免两批挂牌在两次查询之间到期导致「总数」与「本批」互相对不上。
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var tx = db.BeginRead();
         int total;
         using (var count = db.CreateCommand())
         {
@@ -161,7 +161,8 @@ internal sealed class AuctionListingRepository(string path)
         if (listings.IsDefaultOrEmpty)
             return;
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("AuctionListingRepository.InsertListings");
+        using var tx = write.Transaction;
         // 一条挂牌一行，整批一次提交：种子要么全在要么全不在，不留半批数据。
         // 任一行非法 → 抛异常 → 事务未提交 → 已插入的行全部回滚。
         foreach (var listing in listings)

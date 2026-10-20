@@ -29,7 +29,8 @@ internal sealed partial class CharacterRepository
         owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.CommitAssaultClear");
+        using var tx = write.Transaction;
         var counts = AssaultModeEntryPolicy.AfterClear(ReadAssaultDaily(db, tx, expected.Id, owner.Account, day), hidden);
         var character = reward is null ? expected : CommitInventoryInTransaction(db, tx, owner, expected, reward);
         using var command = db.CreateCommand(); command.Transaction = tx;

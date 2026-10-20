@@ -73,7 +73,8 @@ internal sealed partial class CharacterRepository
                 throw new InvalidDataException("升级券必须绑定原角色的一次成长、两树点数和消费计划");
         }
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitQuestQuickClear", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db,tx,owner.Account,expected.Name);
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$id",expected.Id);

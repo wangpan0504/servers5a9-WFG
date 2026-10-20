@@ -11,7 +11,8 @@ internal sealed partial class CharacterRepository
         if (List(owner).Length != 0)
             throw new InvalidOperationException("Import requires an empty account");
         using var db = database.Open();
-        using var transaction = db.BeginTransaction();
+        using var write = db.BeginWrite("CharacterRepository.Import");
+        using var transaction = write.Transaction;
         foreach (var row in rows)
         {
             using var command = db.CreateCommand();

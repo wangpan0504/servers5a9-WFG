@@ -44,7 +44,8 @@ internal sealed partial class CharacterRepository
         bool changed = plan.After != plan.Before.State;
         using var db = database.Open();
         // 名称占用复验与写入共享同一writer；先查询再独立提交会允许两个账号抢到相同名称。
-        using var tx = db.BeginTransaction(deferred: !changed);
+        using var write = db.BeginWrite("CharacterRepository.CommitAdventureName", deferred: !changed);
+        using var tx = write.Transaction;
         var current = ReadAdventure(db, tx, owner.Account, catalog, now);
         if (JsonSerializer.Serialize(current.State) != JsonSerializer.Serialize(plan.Before.State)) return new(false, 19);
         if (!changed) return new(true, 0, current, plan.Expected);

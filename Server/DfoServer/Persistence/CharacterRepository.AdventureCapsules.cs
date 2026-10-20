@@ -21,7 +21,8 @@ internal sealed partial class CharacterRepository
             plan.Before.State.CapsuleExperience < catalog.Capsule.MinimumExperience ||
             plan.After.CapsuleExperience != plan.Before.State.CapsuleExperience - catalog.Capsule.MinimumExperience)
             throw new InvalidDataException("胶囊计划的账号扣除或角色成长越界");
-        using var db = database.Open(); using var tx = db.BeginTransaction(deferred: true);
+        using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitAdventureCapsule", deferred: true);
+        using var tx = write.Transaction;
         var current = ReadAdventure(db, tx, owner.Account, catalog, now);
         if (!current.Members.SequenceEqual(plan.Before.Members) || JsonSerializer.Serialize(current.State) != JsonSerializer.Serialize(plan.Before.State))
             throw new InvalidOperationException("胶囊规划后账号或角色名册已变化");

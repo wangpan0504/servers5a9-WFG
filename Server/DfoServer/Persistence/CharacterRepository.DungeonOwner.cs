@@ -53,7 +53,8 @@ internal sealed partial class CharacterRepository
     {
         var state = ReservationState(expected, nextObjectKey);
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.ReserveDungeonAttempt");
+        using var tx = write.Transaction;
         ReserveInTransaction(db, tx, owner, expected, expected.Revision, state, nextObjectKey);
         var committed = Require(db, tx, owner.Account, expected.Name);
         tx.Commit();
@@ -76,7 +77,8 @@ internal sealed partial class CharacterRepository
             fatigueAfter = fatigueBefore.ConsumeAtEntry(charge.Fatigue);
         }
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.CommitDungeonEntry");
+        using var tx = write.Transaction;
         long revision = charge.Items is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore);
         if (fatigueBefore is not null && fatigueAfter is not null)

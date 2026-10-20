@@ -20,7 +20,8 @@ internal sealed partial class CharacterRepository
             growth.GainedExperience is 0 or > uint.MaxValue || !SameLearning(growth.Before, expected.Learning))
             throw new InvalidDataException("经验物品必须绑定原角色、成长及消费计划");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitExperienceConsumable", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Level != expected.Level || current.Job != expected.Job || current.GrowType != expected.GrowType ||
             current.DungeonState != expected.DungeonState || !SameLearning(current.Learning, expected.Learning) ||

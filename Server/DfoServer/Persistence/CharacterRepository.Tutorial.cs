@@ -79,7 +79,8 @@ internal sealed partial class CharacterRepository
             })
         });
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitTutorialCheckpoint", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id); command.Parameters.AddWithValue("$account", owner.Account);

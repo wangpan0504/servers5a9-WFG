@@ -33,7 +33,8 @@ internal sealed partial class CharacterRepository
         string? sceneOperation = prepared.Fact.PassiveSource?.OperationId.ToString("N");
         using var db = database.Open();
         // 同份冻结报告的恢复只读账本；新报告在同一事务保存经验、双树SP和receipt。
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitDungeonSettlement", deferred: true);
+        using var tx = write.Transaction;
         VerifySettlementSceneClear(db,tx,owner,prepared.Fact);
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id || current.DungeonState?.LastAttempt != identity.TaskAttempt)

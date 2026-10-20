@@ -17,7 +17,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var transaction = db.BeginTransaction(deferred: true);
+        using var transaction = db.BeginRead();
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "SELECT * FROM characters WHERE account=$account ORDER BY slot";
@@ -50,7 +50,8 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         if (!character.Inventory.DailyBoosterUses.IsEmpty)
             throw new InvalidDataException("新角色不能携带历史每日礼盒次数");
         using var db = database.Open();
-        using var transaction = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.Create");
+        using var transaction = write.Transaction;
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "SELECT slot FROM characters WHERE account=$account ORDER BY slot";
@@ -161,7 +162,8 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
     public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint, InventoryPlan? inventory = null) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var transaction = db.BeginTransaction();
+        using var write = db.BeginWrite("CharacterRepository.Save");
+        using var transaction = write.Transaction;
         if (inventory is not null) expected = CommitInventoryInTransaction(db, transaction, owner, expected, inventory);
         using var command = db.CreateCommand();
         command.Transaction = transaction;

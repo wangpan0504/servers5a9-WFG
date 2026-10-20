@@ -12,7 +12,8 @@ internal sealed partial class CharacterRepository : ICharacterRenamer
     {
         if (!CharacterName.IsValid(newName)) throw new InvalidDataException("新角色名无效");
         using (var db = database.Open())
-        using (var tx = db.BeginTransaction(deferred: false))
+        using (var write = db.BeginWrite("CharacterRepository.Rename"))
+        using (var tx = write.Transaction)
         {
             using var command = db.CreateCommand();
             command.Transaction = tx;

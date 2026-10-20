@@ -16,7 +16,8 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         command.Parameters.AddWithValue("$id", characterId); command.Parameters.AddWithValue("$account", owner.Account);
         if (command.ExecuteScalar() is not long previous) throw new InvalidDataException("心情角色不属于当前账号");
         if (previous == emotion) return false;
-        using var tx = db.BeginTransaction(deferred: false); command.Transaction = tx;
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveEmotion");
+        using var tx = write.Transaction; command.Transaction = tx;
         command.CommandText = "UPDATE characters SET emotion=$emotion WHERE id=$id AND account=$account AND emotion=$previous";
         command.Parameters.AddWithValue("$emotion", emotion); command.Parameters.AddWithValue("$previous", previous);
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("心情保存快照已变化");
@@ -26,7 +27,7 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
     public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort characterId) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var tx = db.BeginRead();
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
@@ -48,7 +49,7 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
     public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using (var read = db.BeginTransaction(deferred: true))
+        using (var read = db.BeginRead())
         using (var query = db.CreateCommand())
         {
             query.Transaction = read;
@@ -59,7 +60,8 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
             if (!reader.Read()) throw new InvalidDataException("键位账号不存在");
             if (!reader.IsDBNull(0) && text.AsSpan().SequenceEqual((byte[])reader.GetValue(0))) return false;
         }
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveHotkeys");
+        using var tx = write.Transaction;
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
@@ -81,7 +83,7 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         var characterPayload = characterGameOptions.IsDefault ? payload : characterGameOptions;
         bool accountChanged, characterChanged;
         // 先读取已提交值；相同设置不申请 writer，也不补写默认行。
-        using (var read = db.BeginTransaction(deferred: true))
+        using (var read = db.BeginRead())
         using (var command = db.CreateCommand())
         {
             command.Transaction = read;
@@ -104,7 +106,8 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         }
         if (!accountChanged && !characterChanged)
             return false;
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveGameOptions");
+        using var tx = write.Transaction;
         using var update = db.CreateCommand();
         update.Transaction = tx;
         update.Parameters.AddWithValue("$account", owner.Account);
@@ -137,7 +140,7 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
     public bool SaveCharacterOptions(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> payload) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using (var read = db.BeginTransaction(deferred: true))
+        using (var read = db.BeginRead())
         using (var command = db.CreateCommand())
         {
             command.Transaction = read;
@@ -154,7 +157,8 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
             if (!reader.IsDBNull(0) && payload.AsSpan().SequenceEqual((byte[])reader.GetValue(0)))
                 return false;
         }
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveCharacterOptions");
+        using var tx = write.Transaction;
         using var update = db.CreateCommand();
         update.Transaction = tx;
         update.CommandText = """

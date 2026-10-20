@@ -8,6 +8,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Settings;
 using System.Text.Json;
 using DfoServer.Game.Dungeons;
+using DfoServer.Infrastructure;
 
 namespace DfoServer.Development;
 
@@ -17,11 +18,12 @@ internal static partial class DevelopmentGm
     public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find,
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
         InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
-        Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null)
+        Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null,
+        Func<int, ChatProbeConnection?>? findConnection = null, ServerLog? log = null, GmNoticeSender? noticeSender = null)
     {
         try
         {
-            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events, catalog);
+            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events, catalog, findConnection, log, noticeSender);
         }
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
         {
@@ -32,11 +34,18 @@ internal static partial class DevelopmentGm
     public static string Execute(ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find, DevelopmentRequest request,
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
         InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
-        Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null)
+        Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null,
+        Func<int, ChatProbeConnection?>? findConnection = null, ServerLog? log = null, GmNoticeSender? noticeSender = null)
     {
         try
         {
             request.Validate();
+            if (request.Action == DevelopmentAction.ChatInject)
+                return InjectChatProbe(request, findConnection, log);
+            if (request.Action == DevelopmentAction.InjectRaw)
+                return InjectRaw(request, findConnection, log);
+            if (request.Action == DevelopmentAction.Notice)
+                return SendNotice(request, noticeSender, log);
             if (request.Action >= DevelopmentAction.Wallet)
                 return ExecuteExtended(repository, owners, find(request.Account), request, mailbox,
                     catalog ?? throw new InvalidOperationException("开发GM资源目录未装配"));

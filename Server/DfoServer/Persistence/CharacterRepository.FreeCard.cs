@@ -13,7 +13,8 @@ internal sealed partial class CharacterRepository
     {
         var frozen = prepared.Card ?? throw new InvalidDataException("本实例没有免费牌计划");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var write = db.BeginWrite("CharacterRepository.CommitFreeDungeonCard", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id || prepared.Fact.Identity.CharacterId != expected.Id ||
             current.DungeonState?.LastAttempt != prepared.Fact.Identity.TaskAttempt)

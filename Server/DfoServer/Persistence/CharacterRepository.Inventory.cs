@@ -38,7 +38,8 @@ internal sealed partial class CharacterRepository
         owner.Execute(() =>
         {
             using var db = database.Open();
-            using var transaction = db.BeginTransaction(deferred: false);
+            using var write = db.BeginWrite("CharacterRepository.RegisterListing");
+            using var transaction = write.Transaction;
             var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
             AuctionListingRepository.InsertListing(db, transaction, plan, character);
             transaction.Commit();
@@ -57,7 +58,8 @@ internal sealed partial class CharacterRepository
         owner.Execute(() =>
         {
             using var db = database.Open();
-            using var transaction = db.BeginTransaction(deferred: false);
+            using var write = db.BeginWrite("CharacterRepository.CancelListing");
+            using var transaction = write.Transaction;
             var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
             AuctionListingRepository.MarkCancelled(db, transaction, plan.ListingId, character.Id);
             transaction.Commit();
@@ -83,7 +85,8 @@ internal sealed partial class CharacterRepository
             if (expected.Id != plan.SellerCharacterId)
                 throw new InvalidOperationException($"到期结算的卖家 {plan.SellerCharacterId} 与计划不一致（当前角色 {expected.Id}）");
             using var db = database.Open();
-            using var transaction = db.BeginTransaction(deferred: false);
+            using var write = db.BeginWrite("CharacterRepository.SettleExpiredListings");
+            using var transaction = write.Transaction;
             var receipts = ImmutableArray.CreateBuilder<AuctionExpiryRow>(plan.Rows.Length);
             foreach (var row in plan.Rows)
             {
@@ -131,7 +134,8 @@ internal sealed partial class CharacterRepository
         owner.Execute(() =>
         {
             using var db = database.Open();
-            using var transaction = db.BeginTransaction(deferred: false);
+            using var write = db.BeginWrite("CharacterRepository.BuyListing");
+            using var transaction = write.Transaction;
 
             // ① 事务内重读挂牌：只复核内容与过期；**状态竞态留给 ② 的条件更新**——
             //    在这里先判一次 state 会让「影响行数必须为 1」那条唯一幂等判据永远走不到。
@@ -226,7 +230,7 @@ internal sealed partial class CharacterRepository
         {
             // 时间自然推进不能掩盖已陈旧的库存/角色；到期拒绝前仍读真实当前快照。
             using var expiredDb = database.Open();
-            using var read = expiredDb.BeginTransaction(deferred: true);
+            using var read = expiredDb.BeginRead();
             ValidateCurrentInventoryPlan(Require(expiredDb, read, owner.Account, expected.Name), expected, plan);
             throw new InventoryQualificationExpiredException();
         }
@@ -234,14 +238,15 @@ internal sealed partial class CharacterRepository
         {
             // 免费保留源等零资产变化计划仍需验证真实角色与当前期限，不启动writer。
             using var unchangedDb = database.Open();
-            using var read = unchangedDb.BeginTransaction(deferred: true);
+            using var read = unchangedDb.BeginRead();
             var current = Require(unchangedDb, read, owner.Account, expected.Name);
             ValidateCurrentInventoryPlan(current, expected, plan);
             if (plan.CharacterPrecondition?.IsExpired() == true) throw new InventoryQualificationExpiredException();
             return expected;
         }
         using var db = database.Open();
-        using var transaction = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.CommitInventory");
+        using var transaction = write.Transaction;
         var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan);
         transaction.Commit();
         return character;

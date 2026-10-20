@@ -20,7 +20,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         using var json = JsonDocument.Parse(line);
         var fields = json.RootElement.GetProperty("Detail");
         string level = kind is "server_failed" or "listener_failed" ? "ERROR" :
-            kind is "unimplemented" or "resource_warning" or "closed" or "auth_rejected" or "owner_rejected" ||
+            kind is "unimplemented" or "resource_warning" or "closed" or "auth_rejected" or "owner_rejected" or "db_busy" or "db_slow" ||
             kind.EndsWith("_rejected", StringComparison.Ordinal) || kind.EndsWith("_failed", StringComparison.Ordinal) ||
             fields.TryGetProperty("Accepted", out var accepted) && accepted.ValueKind == JsonValueKind.False ? "WARN" : "INFO";
         string message = ConsoleMessage(kind, fields);
@@ -83,7 +83,8 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "selected" => "Character selected", "authenticated" => "Authentication accepted",
             "character_deleted" => "Character deleted", "character_delete_rejected" => "Character deletion rejected",
             "auth_rejected" => "Authentication rejected", "owner_rejected" => "Account owner rejected",
-            "closed" => "Connection closed", "channel" => "Channel handshake completed",
+            "closed" => "Connection closed", "db_busy" => "Database busy", "db_slow" => "Database slow",
+            "channel" => "Channel handshake completed",
             "resource_warning" => "Resource warning", "exit" => "Exit request", "travel" => "Town travel",
             "room_exit" => "Room exit", "dungeon_entry" => "Dungeon selection",
             "formal_dungeon_entry" => "Dungeon entry", "formal_dungeon_settlement" => "Dungeon settlement",
@@ -91,7 +92,12 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "formal_character_death" => "Dungeon character death", "formal_character_revive" => "Dungeon character revive",
             "dungeon_selection_return" => "Dungeon selection return", "formal_dungeon_return" => "Returned to town",
             "quest_lifecycle" => "Quest update", "quest_completion" => "Quest completion", "gm" => "GM command",
+            "gm_notice" => "GM notice",
             "consumable_use" => "Consumable use",
+            "chat_send" => "Chat message", "chat_delivered" => "Chat delivered", "chat_throttled" => "Chat throttled",
+            "chat_whisper_offline" => "Whisper target offline", "chat_megaphone_rejected" => "Megaphone rejected",
+            "chat_rejected" => "Chat rejected", "chat_blocked" => "Chat blocked",
+            "item_hyperlink" => "Item hyperlink",
             "class_change" => "Class change",
             "growup_change" => "Grow up change",
             "creature_hatch" => "Creature egg hatch", "enhancement" => "Equipment enhancement",
@@ -141,7 +147,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
 
     static bool ShowsOnConsole(string kind) => kind is
         "startup" or "server_failed" or "listener_failed" or "listening" or "server_ready" or "stopped" or "resource_warning" or
-        "connected" or "disconnected" or "closed" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
+        "connected" or "disconnected" or "closed" or "db_busy" or "db_slow" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
         "selected" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
         "formal_dungeon_settlement" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_selection" or "dungeon_entry_probe" or "dungeon_probe_return" or

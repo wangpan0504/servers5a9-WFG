@@ -19,7 +19,8 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteScalar() is not long revision || revision != expected.Revision)
             throw new InvalidOperationException("放弃副职业的角色快照已变化");
         var updated = expected with { ExpertJobType = 0, ExpertJobExperience = 0, Revision = checked(expected.Revision + 1) };
-        using var transaction = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.CommitExpertJobClear");
+        using var transaction = write.Transaction;
         command.Transaction = transaction;
         command.CommandText = """
             DELETE FROM character_expert_job WHERE character_id=$id AND account=$account AND job_type=$type
@@ -46,7 +47,8 @@ internal sealed partial class CharacterRepository
             command.Parameters.AddWithValue("$type", expected.ExpertJobType);
             command.Parameters.AddWithValue("$exp", experience);
             command.Parameters.AddWithValue("$revision", expected.Revision);
-            using var transaction = db.BeginTransaction(deferred: false);
+            using var write = db.BeginWrite("CharacterRepository.CommitExpertJobExperience");
+            using var transaction = write.Transaction;
             command.Transaction = transaction;
             command.CommandText = """
                 UPDATE character_expert_job SET expertness=$exp
@@ -67,7 +69,8 @@ internal sealed partial class CharacterRepository
         return owner.Execute(() =>
         {
             using var db = database.Open();
-            using var transaction = db.BeginTransaction(deferred: false);
+            using var write = db.BeginWrite("CharacterRepository.CommitExpertJobGiveUp");
+            using var transaction = write.Transaction;
             var committed = CommitInventoryInTransaction(db, transaction, owner, expected, wallet);
             using var command = db.CreateCommand();
             command.Transaction = transaction;
@@ -97,7 +100,8 @@ internal sealed partial class CharacterRepository
         return owner.Execute(() =>
         {
             using var db = database.Open();
-            using var transaction = db.BeginTransaction(deferred: false);
+            using var write = db.BeginWrite("CharacterRepository.CommitExpertJobMachine");
+            using var transaction = write.Transaction;
             var committed = CommitInventoryInTransaction(db, transaction, owner, expected, wallet);
             using var command = db.CreateCommand();
             command.Transaction = transaction;

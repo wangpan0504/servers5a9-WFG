@@ -16,7 +16,7 @@ internal sealed partial class CharacterRepository
         if (active is not { ConditionState: 0 } || active.AcceptanceId == Guid.Empty)
             return null;
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: true);
+        using var tx = db.BeginRead();
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id || current.Revision != expected.Revision ||
             !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) ||

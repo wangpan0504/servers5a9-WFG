@@ -16,7 +16,8 @@ internal sealed partial class CharacterRepository
         var allowed = plan.Before.State with { Points = plan.After.Points, Purchases = plan.After.Purchases };
         if (!plan.Inventory.Accepted || plan.Inventory.Plan is not { } inventory ||
             JsonSerializer.Serialize(allowed) != JsonSerializer.Serialize(plan.After)) throw new InvalidDataException("冒险团购买计划越界");
-        using var db = database.Open(); using var tx = db.BeginTransaction(deferred: true);
+        using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitAdventureShop", deferred: true);
+        using var tx = write.Transaction;
         var current = ReadAdventure(db, tx, owner.Account, catalog, now);
         if (!current.Members.Any(member => member.Id == plan.Expected.Id) || !current.Members.SequenceEqual(plan.Before.Members) ||
             JsonSerializer.Serialize(current.State) != JsonSerializer.Serialize(plan.Before.State))

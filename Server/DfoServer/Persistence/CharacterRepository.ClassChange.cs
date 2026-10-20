@@ -18,7 +18,8 @@ internal sealed partial class CharacterRepository
             plan.Completed.Any(id => id is <= 0 or >= 30000) || plan.Completed.Distinct().Count() != plan.Completed.Length)
             throw new InvalidDataException("职业互转计划改变了未授权字段");
         using var db = database.Open();
-        using var tx = db.BeginTransaction();
+        using var write = db.BeginWrite("CharacterRepository.CommitClassChange");
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
         var source = current.Inventory.Find(new(DfoServer.Game.Inventory.Models.InventoryListType.Main, plan.Request.Slot));
         if (current.Id != expected.Id || current.Revision != expected.Revision || current.Job != expected.Job ||

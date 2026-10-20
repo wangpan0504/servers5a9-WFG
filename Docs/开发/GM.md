@@ -60,6 +60,9 @@
 | `item <角色> <道具ID> <数量> [强化]` | 是 | 发到该角色系统邮箱；装备及其他非堆叠物品按件创建，单封最多10件；堆叠数量不超过模板上限。可选强化0–31仅用于普通装备，其他种类拒绝 |
 | `item-info <道具ID>` | 否 | 当前PVF模板的名称、种类、等级、稀有度、堆叠上限及能否强化；未知或无法解析的ID返回错误 |
 | `items <角色>` | 否 | 只读JSON：金币、复活币、胜点、栏位扩展及全部容器实例（容器、位置、UID、道具、名称、数量、强化、封装、期限） |
+| `chat-inject <连接号> <L1\|L2\|L3\|P3E\|AAS\|AAS8\|AASU> <文本>` | 否 | 诊断工具：向指定在线连接注入一帧测试通知，不需要玩家在客户端打字；只发这一条连接，不进入正式投递、不改喇叭扣减。`L1`/`L2`/`L3` 是 `NOTI 0x000C`，正文 `[u8 type][u16 层 id][u8 v=0][u32 CP936 字节数][CP936 文本]`（长度 `1..255`，超限按字符边界截断并在回复标注 `(truncated)`），与正式投递共用同一段编码，约定分别传 ASCII / 中文 / 超长文本，用于核对聊天行文本显示与截断；`P3E` 换成 `NOTI 0x03E2` 制裁弹窗（正文 `[u32 A=1][u32 B=1][字符数][UTF-16LE 文本][CP936 字节数][CP936 文本]`，A/B 必须非 0 才走制裁分支），`AAS`/`AAS8`/`AASU` 换成 `NOTI 0x06AD` 弹框（布局相同：标题固定「系统公告」、正文取命令文本，上限为编码后标题 24 字节、正文 600 字节，超长按字符边界截断并在回复标注 `(truncated)`；三者只换这两段文本的编码——`AAS` 用 CP936、`AAS8` 用 UTF-8、`AASU` 用 UTF-16LE，长度字段都是字节数，`AASU` 不带 BOM、不加结尾 `\0`），用于验证这两个通知能否让客户端显示任意文本及客户端期望的文本编码（实测结论：`NOTI 0x06AD` + `AAS8` 的 UTF-8 文本可正常显示，已成为正式公告通道，见 `notice`；`AAS`/`AASU` 只保留为编码对照，`P3E` 仍只是探针）。层 id 只对 `L1`/`L2`/`L3` 有意义，取该连接最近一次聊天上报值，没有则用0并在回复里标注`(fallback)`；当前移动包没有层 id 字段，不能作为来源 |
+| `inject-raw <连接号> <opcode> <body-hex\|->` | 否 | 诊断工具：把命令行给出的字节原样发送成一帧 `NOTI`（`Kind=0`），服务端不构造、不解析、不校验、不重试，用于客户端解析失败时逐个变体试长度字段、编码与结尾字节。`opcode` 支持十进制或 `0x` 十六进制（不超过 `0xFFFF`）；`body-hex` 允许内含空格、必须偶数长度且只含 `0-9a-f`、上限 4096 字节，`-` 表示空 body。只发这一条连接，不进入正式投递、不写库；连接不存在或未进入世界返回 `ERR`。示例：`inject-raw 3 12 0304000006000000544553542D41`（`NOTI 0x000C`，正文 `TEST-A`）、`inject-raw 3 0x0C 03040000 06000000 544553542D41`（同一帧分段书写）、`inject-raw 3 0x0C -`（空 body）。回复给出实际 `opcode`、字节数与规范化 `hex`，日志 `inject_raw` 记录 `Connection`/`Opcode`/`Body` |
+| `notice <all\|角色名> <文本>` | 否 | 正式公告：用已实测可见的 `NOTI 0x06AD` 弹框向在线连接发公告。标题固定「系统公告」，正文取命令文本，均按 UTF-8 编码，标题 ≤24、正文 ≤600 字节，超长按字符边界截断并在回执标注 `(truncated)`。`all` 广播给所有已进入世界的在线连接（回执 `recipients` 为入队连接数）；角色名只投该角色当前连接，角色不在线返回 `ERR`。不接受 `account` 前缀，不写库、不改喇叭扣减 |
 
 默认账号是 `10000`，与原生登录的开发账号一致。其他账号在命令前加 `account <账号>`。账号只允许字母、数字、`_` 和 `-`，最长 64。角色名沿用 CP936 名称合同。
 
@@ -106,6 +109,7 @@
 dotnet run --project Server/DfoServer -- --gm help
 dotnet run --project Server/DfoServer -- --gm list
 dotnet run --project Server/DfoServer -- --gm show 测试角色
+dotnet run --project Server/DfoServer -- --gm-port 23102 --gm chat-inject 7 L2 TEST
 dotnet run --project Server/DfoServer -- --gm level 测试角色 50
 dotnet run --project Server/DfoServer -- --gm story 测试角色 50
 dotnet run --project Server/DfoServer -- --gm grow-options 测试角色

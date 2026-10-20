@@ -81,7 +81,17 @@ public static class ServerApplication
             return 0;
         }
         using var log = command.Kind == ServerCommandKind.Serve ? new ServerLog(options.LogDirectory, Console.Out) : null;
-        return await RunWithResourcesAsync(command, options, log);
+        // 数据库慢操作（>1000ms）诊断出口：由装配入口把统一日志交给 Persistence，仓储不持有 ServerLog 实例。
+        // 只在本入口生命周期内有效，日志释放后不保留全局引用。
+        SqliteDbDiagnostics.Sink = log is null ? null : log.Write;
+        try
+        {
+            return await RunWithResourcesAsync(command, options, log);
+        }
+        finally
+        {
+            SqliteDbDiagnostics.Sink = null;
+        }
     }
 
     static async Task<int> RunWithResourcesAsync(ServerCommand command, ServerOptions options, ServerLog? log)

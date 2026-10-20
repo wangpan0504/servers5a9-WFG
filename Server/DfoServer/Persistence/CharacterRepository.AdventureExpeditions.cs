@@ -18,7 +18,8 @@ internal sealed partial class CharacterRepository
             _ => throw new InvalidDataException("未定义的远征操作")
         };
         if (JsonSerializer.Serialize(allowed) != JsonSerializer.Serialize(plan.After)) throw new InvalidDataException("远征修改了未参与的账号状态");
-        using var db = database.Open(); using var tx = db.BeginTransaction(deferred: true);
+        using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitAdventureExpedition", deferred: true);
+        using var tx = write.Transaction;
         var current = ReadAdventure(db, tx, owner.Account, catalog, now);
         if (!current.Members.Any(member => member.Id == plan.ActorId) || !current.Members.SequenceEqual(plan.Before.Members) ||
             JsonSerializer.Serialize(current.State) != JsonSerializer.Serialize(plan.Before.State))

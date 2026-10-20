@@ -11,7 +11,7 @@ internal sealed partial class CharacterRepository
     public CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort characterId,DateTimeOffset now) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred:true);
+        using var tx = db.BeginRead();
         VerifyCardCharacter(db,tx,owner.Account,characterId);
         var result = ReadCardMembership(db,tx,owner.Account,characterId,now);
         tx.Commit();
@@ -22,7 +22,8 @@ internal sealed partial class CharacterRepository
     {
         if (expires < 0 || !Enum.IsDefined(kind)) throw new InvalidDataException("会员类型或到期时间无效");
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred:true);
+        using var write = db.BeginWrite("CharacterRepository.SetCardMembership", deferred: true);
+        using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, name);
         int type = kind == CardMembershipKind.BlackDiamond ? CardMembership.BlackDiamondType : CardMembership.DevilContractType;
         var before = current.Inventory;
