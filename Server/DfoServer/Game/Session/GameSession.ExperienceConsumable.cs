@@ -24,7 +24,7 @@ internal sealed partial class GameSession
             if (!CanUseConsumable() || !CanPublishConsumable(capture.Guard))
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed", Guard: capture.Guard);
             if (plan.Definition.VillageOnly && Phase != SessionPhase.Town) return Reject("village-only");
-            if (usedConsumables.TryGetValue(plan.Definition.CoolGroup, out var previous) &&
+            if (usedConsumables.TryGetValue(plan.Definition.CoolGroup, out var previous) && previous.EnforceCooldown &&
                 previous.Clock.GetElapsedTime(previous.Timestamp).TotalMilliseconds < plan.Definition.CoolTime)
                 return Reject("cooldown");
             if (plan.Inventory.ChangedSlots.Any(position => plan.Inventory.Before.Find(position) is { } item && item.IsExpired(now.ToUnixTimeSeconds())))

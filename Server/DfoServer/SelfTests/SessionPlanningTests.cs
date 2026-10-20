@@ -698,6 +698,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_fatigue VALUES({{id}},'planning',0,156,0,156,0,0);
                 INSERT INTO character_teleport_cooldowns VALUES({{id}},'planning',2000000000000,2000000420000);
                 INSERT INTO character_exp_bonus VALUES({{id}},'planning',2000007200,1000);
+                INSERT INTO character_consumable_states VALUES({{id}},'planning',0,10087825,2000000000000,7,5);
                 INSERT INTO character_expert_job VALUES({{id}},'planning',1,0);
                 INSERT INTO character_expert_meta VALUES({{id}},'planning',0,1,300);
                 INSERT INTO character_assault_daily VALUES({{id}},'planning',740000,2,1);

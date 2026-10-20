@@ -14,7 +14,7 @@ namespace DfoServer.Network.Handlers.Inventory;
 internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, ServerLog log,
     TutorialCatalog? tutorials = null, ItemCatalog? items = null, InventoryProjection? inventory = null,
     InventoryPremiumContractUseService? contracts = null, Game.Creatures.CreatureService? creatures = null,
-    Projection.CreatureProjection? creatureProjection = null) : IGameCommandModule
+    Projection.CreatureProjection? creatureProjection = null, Projection.TownProjection? town = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE, Handle, nameof(ConsumableUseHandler));
 
@@ -94,12 +94,21 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
         bool accepted = result.Outcome == ConsumableUseOutcome.Committed;
         log.Write("consumable_use", new { Connection = context.Id, Item = request.ItemId, Slot = request.Position.Index,
             List = request.Position.List, Accepted = accepted, result.Reason, Character = result.Guard?.Character?.Id,
-            Revision = result.Guard?.Character?.Revision, result.SourceUid, result.NativeNoConsumption });
+            Revision = result.Guard?.Character?.Revision, result.SourceUid, result.NativeNoConsumption, result.TownGiftItem,
+            StaminaRecovered = result.Inventory?.Plan is { } used && used.Before.StaminaUntil != used.After.StaminaUntil });
         if (result.Outcome == ConsumableUseOutcome.CloseConnection) return CommandResult.CloseConnection;
         var guard = result.Guard ?? throw new InvalidOperationException("道具使用缺少原状态发布身份");
         bool CanSend() => context.Session.CanPublishConsumable(guard);
         await context.Reply(CmdPacketType.USE_STACKABLE, ConsumableUsePackets.Ack(request, accepted, result.NativeNoConsumption),
             accepted ? "consumable_use_committed" : "consumable_use_rejected", CanSend);
+        if (accepted && result.TownGiftItem != 0 && town is not null)
+            await town.GiftEffectAsync(context, result.TownGiftItem, CanSend);
+        if (accepted && result.Inventory is { Plan: { } plan, Receipt: { } recoveryReceipt } &&
+            plan.Before.StaminaUntil != plan.After.StaminaUntil)
+        {
+            if (context.Premiums is { } premiums) await premiums.StaminaAsync(recoveryReceipt.Character, CanSend, force: true);
+            else await context.Notify(NotiPacketType.STAMINA, [100], "consumable_stamina_recovered", CanSend);
+        }
         // 子类型2在成功ACK后才执行效果；13完整载入关闭新图标标记，不能用1681删后补回。
         if (accepted && result.PreserveSource && !result.NativeNoConsumption)
         {

@@ -97,6 +97,7 @@ internal static class DatabaseSchemaTests
         {
             PassiveItemsUpgrade(root);
             PickupUidUpgrade(root);
+            ConsumableStatesUpgrade(root);
             string path = Path.Combine(root, "game.db");
             var characters = new CharacterRepository(path);
             var accounts = new AuthenticationService(new AuthenticationRepository(path));
@@ -236,6 +237,36 @@ internal static class DatabaseSchemaTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
+    }
+
+    static void ConsumableStatesUpgrade(string root)
+    {
+        root = Path.Combine(root, "consumable-upgrade");
+        Directory.CreateDirectory(root);
+        foreach (bool conflict in new[] { false, true })
+        {
+            string path = Path.Combine(root, "consumable-upgrade-" + conflict + ".db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Execute(db, "DROP TABLE character_consumable_states; PRAGMA user_version=63");
+                if (conflict) Execute(db, "CREATE VIEW character_consumable_states AS SELECT 1 AS character_id");
+            }
+            if (conflict)
+            {
+                string before = Snapshot(path);
+                Reject<Exception>(() => new CharacterRepository(path), "持续状态迁移遇到同名视图必须失败");
+                Check(before == Snapshot(path), "迁移失败不留下半结构或推进版本");
+            }
+            else
+            {
+                _ = new CharacterRepository(path);
+                using var db = Open(path);
+                Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                    Query(db, "SELECT count(*) FROM character_consumable_states") is 0L,
+                    "v63仅增量建立持续状态表，不给旧角色补药效或冷却");
+            }
+        }
     }
 
     static void PassiveItemsUpgrade(string root)

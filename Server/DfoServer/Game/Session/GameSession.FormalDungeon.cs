@@ -25,6 +25,7 @@ internal sealed partial class GameSession
         public bool HasPendingFatigue { get; set; }
         public DungeonInventoryDiscardPreparation? PendingInventoryDiscard { get; set; }
         public bool CharacterDead { get; set; }
+        public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
         public long DeathSerial { get; set; }
         public Location? OrdinaryReturnPosition { get; init; }
         public long StartedTimestamp { get; } = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -716,8 +717,10 @@ internal sealed partial class GameSession
         else
         {
             var before = Selected.Inventory;
-            var after = StaminaRecoveryService.ApplyDungeonRetreat(Selected, dungeon.Entry, dungeon.Run.Phase, DateTimeOffset.UtcNow,
+            var retreatAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
+            var after = StaminaRecoveryService.ApplyDungeonRetreat(Selected, dungeon.Entry, dungeon.Run.Phase, retreatAt,
                 PremiumPcRoom);
+            after = ConsumableStatePolicy.CrossBoundary(after, ConsumableMaintenance.Town, retreatAt.ToUnixTimeMilliseconds());
             var back = dungeon.OrdinaryReturnPosition ?? Selected.Position;
             if (Selected.Position != back || after != before)
                 Selected = repository.Save(owner, Selected, back, Selected.Return,
@@ -726,6 +729,7 @@ internal sealed partial class GameSession
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRun();
         formalDungeon = null;
+        CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         CancelDungeonContinuation();
         pendingQuestReplay = null;
         SetState(SessionPhase.Town);

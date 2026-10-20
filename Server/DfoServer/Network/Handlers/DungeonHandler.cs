@@ -44,12 +44,20 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (!DungeonRequests.TryParseCharacterDeath(request.Body, out var position)) return CommandResult.Unhandled;
         var receipt = context.Session.ReportFormalCharacterDeath();
         log.Write("formal_character_death", new { Connection = context.Id, Accepted = receipt is not null, position.X, position.Y, position.Context,
-            Character = receipt?.Character.Id, receipt?.Snapshot.Identity });
+            Character = receipt?.Character.Id, receipt?.Snapshot.Identity, receipt?.AutomaticRevival });
         if (receipt is not null)
         {
-            if (context.Death is not null) await context.Death.StartAsync();
-            await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(receipt.Character.Id, false),
-                "formal_character_dead", () => context.Session.CanPublishFormalDungeon(receipt));
+            if (context.Death is not null)
+            {
+                if (receipt.AutomaticRevival) await context.Death.StopAsync();
+                else await context.Death.StartAsync();
+            }
+            bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+            await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(receipt.Character.Id, (byte)0),
+                "formal_character_dead", Guard);
+            if (receipt.AutomaticRevival)
+                await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(receipt.Character.Id, (byte)2),
+                    "formal_character_blessing_revived", Guard);
         }
         return CommandResult.Handled;
     }

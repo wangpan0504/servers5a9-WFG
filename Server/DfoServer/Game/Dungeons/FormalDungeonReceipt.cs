@@ -18,6 +18,7 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     public Guid ScriptedReturnId { get; init; }
     public bool NavigationReplay { get; init; }
     public uint ClearTimeMilliseconds { get; init; }
+    public bool AutomaticRevival { get; init; }
 }
 internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     ushort MonsterKey = 0, DungeonExperienceReward? Reward = null, DungeonClearFact? ClearFact = null,

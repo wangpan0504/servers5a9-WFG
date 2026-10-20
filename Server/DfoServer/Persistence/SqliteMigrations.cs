@@ -153,6 +153,7 @@ internal static class SqliteMigrations
         new(61, "异次元裂缝每日通关奖励", static (db, tx) => Execute(db, tx, CrackDailySchema)),
         new(62, "眩惑贮藏箱领奖类型60", UpgradeDazzlementQuestCompletion),
         new(63, "技能窗职业变更次数", static (db, tx) => Execute(db, tx, GrowUpChangeSchema)),
+        new(64, "消耗品持续效果与冷却", static (db, tx) => Execute(db, tx, ConsumableStatesSchema)),
     ];
 
     static void AddExpertJobExperience(SqliteConnection db, SqliteTransaction tx)
@@ -500,6 +501,20 @@ internal static class SqliteMigrations
           day INTEGER NOT NULL,
           clear_count INTEGER NOT NULL CHECK(clear_count BETWEEN 0 AND 255),
           hidden_count INTEGER NOT NULL CHECK(hidden_count BETWEEN 0 AND 255),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string ConsumableStatesSchema = """
+        CREATE TABLE IF NOT EXISTS character_consumable_states(
+          character_id INTEGER NOT NULL,
+          account TEXT NOT NULL,
+          kind INTEGER NOT NULL CHECK(kind IN(0,1)),
+          item_id INTEGER NOT NULL CHECK(item_id>0),
+          until_ms INTEGER NOT NULL CHECK(until_ms>0),
+          maintenance INTEGER NOT NULL CHECK(maintenance BETWEEN 0 AND 15 AND (kind=0 OR maintenance<=7)),
+          cool_group INTEGER NOT NULL,
+          PRIMARY KEY(character_id,kind,item_id),
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
         );
         """;
@@ -1467,6 +1482,7 @@ internal static class SqliteMigrations
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
         "SELECT character_id,account,potion_until,aura_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
+        "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
         "SELECT character_id,account,job_type,expertness FROM character_expert_job LIMIT 0",
         "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
