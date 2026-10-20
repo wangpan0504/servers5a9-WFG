@@ -375,9 +375,9 @@ internal sealed partial class SinglePlayerDungeonRun
         bool first = LastLoadingFact is null;
         bool initialized = InitializationCounterSupported && (!entry.IndividualMapMovement || !initializedMapSlots.Contains(slot));
         uint count = checked(ConfirmedInitializationCount + (!first && initialized && hasMatchingQuest ? 1u : 0u));
-        // 沿用本服每个首次房间一点的费用规则；独立于无限开关及余额，供活动进度读取。
+        // 沿用本服每个首次房间一点的费用规则；入场一次性疲劳（#511）只在首次加载计入 N。独立于无限开关及余额，供活动进度读取。
         if (entry.UsesFatigue && !current.Loaded)
-            consumedFatigue = checked(consumedFatigue + 1);
+            consumedFatigue = checked(consumedFatigue + (entry.StartFatigue == 0 ? 1u : first ? entry.StartFatigue : 0u));
         acceptedActions.Add(actionId, new(expected, "loaded", null));
         current.Loaded = true;
         // NOTI28建立新Run并清统计；接取不重置。缓存安装与活跃任务计数分开，完成仍由真实清图判定。

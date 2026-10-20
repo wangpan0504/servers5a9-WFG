@@ -47,6 +47,8 @@ internal sealed partial class GameSession
         // 实验性：深渊派对入场票；入场提交（InstallFormalDungeon）时按当前背包重算并扣除。
         public HellPartyTicket? HellTicket { get; init; }
         public EpicPieceCatalog? HellPieces { get; init; }
+        // #510/#511 普通入场票（[required item]「物品 1 1」）的规划目录；入场提交时按最新背包重算。
+        public EpicPieceCatalog? EntryPieces { get; init; }
         // 实验性：波次怪"带奖励"的掉落计划；死亡时若它是本波次最后一只存活者则用它替换 DropPlans 里的普通计划。
         public ImmutableDictionary<ushort, DungeonDropGenerationPlan> HellRewardPlans { get; init; } = ImmutableDictionary<ushort, DungeonDropGenerationPlan>.Empty;
     }
@@ -124,13 +126,8 @@ internal sealed partial class GameSession
         if (practice && retry is null && (selection is null || selection.IsClassExperience || selection.IsTutorial ||
             selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id || selection.OriginPosition != expected.Position))
             return RejectFormal("practice-selection-missing");
-        if (!training && !trainingRoom && !classExperience && (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area) ||
-            area.DungeonWorldMap is not { } worldMap || !towns.DungeonMaps.TryGetValue(worldMap,out var selectionMap) ||
-            selectionMap.Error is not null || !selectionMap.Options.Any(option => option.DungeonId == optionDungeon &&
-                (option.QuestId == -1 || (option.InProgress ? expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) :
-                    done.Contains(option.QuestId)))) ||
-            !area.Map(done).DungeonGates.Any(gate =>
-                gate.Quests.All(done.Contains) && gate.Conditions.Length == 0))) return RejectFormal("town-selection-or-gate-check-failed");
+        if (!training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon) is { } selectionReason)
+            return RejectFormal(selectionReason);
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：深渊派对入场条件 = 所在选图区域 [hell dungeon] 为真
         // 且该区域 [hell quest] 列表全部已完成（列表为空视为满足）。拒绝原因以 "hell-party-" 前缀写入 LastFormalDungeonRejection，由 handler 回拒绝包。
         // 未实现：[item condition]（深渊邀请函）消耗、难度/队伍规则。
@@ -175,7 +172,17 @@ internal sealed partial class GameSession
             // 实验性：档位（A..D）= 请求没点名时按 etc/hellparty.etc [difficulty] 的 Probability 加权随机（95 PVF 里只有 A 有权重，所以实际总是 A）。
             entry = entry with { HellPartyMode = rooms.HellParty.ResolveManualMode(RandomNumberGenerator.GetInt32) };
         }
-        if (entry!.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
+        // #233 强袭材料走自己的入场消耗；不叠加 [required item] / 入场一次性疲劳。
+        if (assault is not null) entry = entry! with { EntryItem = null, StartFatigue = 0, EntryCostNote = null };
+        if (entry!.EntryItem is { } entryItem)
+        {
+            // #510/#511 普通入场票：准入阶段只按当前背包规划，不写库；入场提交时重算并与尝试号同事务扣除。
+            if (pieces is null) return RejectFormal("entry-item-catalog-unavailable");
+            var entrySpent = InventoryMaterialConsumptionService.Plan(expected.Inventory,
+                [new ItemMaterialCost(entryItem.ItemId, entryItem.Count)], pieces, DateTimeOffset.UtcNow);
+            if (!entrySpent.Accepted || entrySpent.Plan is null) return RejectFormal("entry-item-required:" + entryItem.ItemId);
+        }
+        if (entry.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
             return RejectFormal("quest-acceptance-missing");
         if (entry.IsClassExperience != classExperience) return RejectFormal("class-experience-mismatch");
         if (entry.IsTutorial && !training) return RejectFormal("tutorial-entry-not-training");
@@ -186,7 +193,7 @@ internal sealed partial class GameSession
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes,crackRewards);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null,
-            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, HellPieces = pieces } };
+            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, HellPieces = pieces, EntryPieces = pieces } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
         bool HasOriginalTerminalClear(ActiveMainQuest original) =>
@@ -206,6 +213,11 @@ internal sealed partial class GameSession
         state.Validate();
         if (entry.RequiresFatigueOwner && expected.Fatigue is null ||
             entry.UsesFatigue && FatigueForClient(expected).Remaining == 0) return RejectFormal("fatigue-exhausted");
+        // #511 [use fatigue only start dungeon] N：余额（客户端可见值与库内值取小）不足 N 时不进图，不扣到负数。
+        if (entry.StartFatigue > 0 && debugSettings?.InfiniteFatigue != true &&
+            (expected.Fatigue is not { } storedFatigue || storedFatigue.Remaining < entry.StartFatigue ||
+                FatigueForClient(expected).Remaining < entry.StartFatigue))
+            return RejectFormal("start-fatigue-insufficient:" + entry.StartFatigue);
         var ordinaryReturn = entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
@@ -348,6 +360,24 @@ internal sealed partial class GameSession
         return new(expected,epoch,dungeon,next);
     }
 
+    // #510/#511 选图准入逐项给出具体拒绝原因（只写 LastFormalDungeonRejection 与日志，协议回包仍是 SelectionRejected）。
+    // 判定与原合并条件等价：区域→世界地图→该副本选项（任一选项满足即可）→无条件入口。
+    string? SelectionRejection(Character expected, IReadOnlySet<int> done, uint optionDungeon)
+    {
+        if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var area)) return "selection-area-missing";
+        if (area.DungeonWorldMap is not { } worldMap) return "selection-area-without-world-map";
+        if (!towns.DungeonMaps.TryGetValue(worldMap, out var selectionMap)) return "selection-world-map-missing:" + worldMap;
+        if (selectionMap.Error is not null) return "selection-world-map-invalid:" + worldMap;
+        var options = selectionMap.Options.Where(option => option.DungeonId == optionDungeon).ToArray();
+        if (options.Length == 0) return "selection-dungeon-not-listed:" + optionDungeon;
+        if (!options.Any(option => option.QuestId == -1 || (option.InProgress ?
+                expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) : done.Contains(option.QuestId))))
+            return (options[0].InProgress ? "selection-quest-in-progress-required:" : "selection-quest-required:") + options[0].QuestId;
+        if (!area.Map(done).DungeonGates.Any(gate => gate.Quests.All(done.Contains) && gate.Conditions.Length == 0))
+            return "selection-gate-unavailable";
+        return null;
+    }
+
     bool CanEnterFormalDungeon(FormalDungeonReceipt? retry) => !HasPendingTownQuestCommit && (retry is null ?
         Phase is SessionPhase.Town or SessionPhase.MapSelect && formalDungeon is null :
         CanPublishFormalDungeon(retry) && CanReplaceSettledDungeon(formalDungeon, retry) && !HasPendingQuestScene && !HasPendingFormalCard);
@@ -389,7 +419,34 @@ internal sealed partial class GameSession
             installing.Run.RebasePreparedRevision(rebased.CharacterRevision);
             installing = installing with { Entry = rebased };
         }
-        var committed = repository.ReserveDungeonAttempt(owner,character,prepared.NextKey);
+        System.Collections.Immutable.ImmutableArray<InventorySlot> entrySlots = [];
+        InventoryPlan? entryItems = null;
+        if (installing.Entry.EntryItem is { } entryItem)
+        {
+            // #510/#511 入场提交时按最新背包重算入场票；prepare 之后变少则整个入场作废。
+            if (installing.EntryPieces is not { } entryPieces) return null;
+            var spent = InventoryMaterialConsumptionService.Plan(character.Inventory,
+                [new ItemMaterialCost(entryItem.ItemId, entryItem.Count)], entryPieces, DateTimeOffset.UtcNow);
+            if (!spent.Accepted || spent.Plan is not { } entryPlan) return null;
+            entryItems = entryPlan;
+        }
+        // 无限疲劳开关与逐房规则一致：不扣余额也不写扣点账本。
+        ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
+        Character committed;
+        if (entryItems is not null || entryFatigue > 0)
+        {
+            // 入场票、入场一次性疲劳与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
+            committed = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
+                new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id));
+            entrySlots = entryItems?.ChangedSlots ?? [];
+            if (committed.Revision != installing.Entry.CharacterRevision)
+            {
+                var rebased = installing.Entry with { CharacterRevision = committed.Revision };
+                installing.Run.RebasePreparedRevision(rebased.CharacterRevision);
+                installing = installing with { Entry = rebased };
+            }
+        }
+        else committed = repository.ReserveDungeonAttempt(owner,character,prepared.NextKey);
         prepared.Dungeon.Ground.PublishPassiveEntry();
         if (formalDungeon is { } previous)
         {
@@ -403,7 +460,8 @@ internal sealed partial class GameSession
         pendingQuestReplay = null;
         CurrentDungeonSelection = null;
         SetState(SessionPhase.Loading);
-        return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket };
+        return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket,
+            EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue };
     }
 
     bool CanReplaceSettledDungeon(FormalDungeon? dungeon, FormalDungeonReceipt receipt) =>
@@ -444,7 +502,7 @@ internal sealed partial class GameSession
             if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading ||
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
-            if (dungeon.Entry.UsesFatigue && debugSettings?.InfiniteFatigue != true)
+            if (dungeon.Entry.UsesRoomFatigue && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
                 Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run);

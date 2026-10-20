@@ -142,6 +142,13 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             return result.MoveToImmutable();
         }
     }
+    public bool DeclaresRequiredItem => RawSections.Any(row => row.Tag == "required item");
+    // #510/#511 普通入场票：只认唯一一段 [required item] 且恰为一行「物品 1 1」。第三列含义未证明，其他形状不当作入场票。
+    public DungeonRequiredItemRow? OrdinaryEntryTicket => RequiredItemRows is [{ Count: 1, Third: 1 } ticket] ? ticket : null;
+    public bool DeclaresStartFatigue => RawSections.Any(row => row.Tag == "use fatigue only start dungeon");
+    // #511 [use fatigue only start dungeon] N：只认唯一一段且恰为一个 1..65535 的整数；其他形状返回 null（保持逐房扣点）。
+    public ushort? StartFatigue => RawSections.Where(row => row.Tag == "use fatigue only start dungeon").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } amount] }] ? (ushort)amount.Value : null;
     public bool IsGriefTower => Id == 5115 &&
         Path.Equals("dungeon/towers/grief/5115_001.dgn", StringComparison.OrdinalIgnoreCase) &&
         RawSections.Where(row => row.Tag == "tower of grief").ToArray() is [{ Tokens.Count: 0 }];

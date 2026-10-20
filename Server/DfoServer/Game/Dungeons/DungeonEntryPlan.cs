@@ -41,6 +41,13 @@ internal sealed record DungeonEntryPlan(
     public bool IsTournament => Maze.IsTournament;
     public bool RequiresFatigueOwner => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
+    // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
+    public ushort StartFatigue { get; init; }
+    public bool UsesRoomFatigue => UsesFatigue && StartFatigue == 0;
+    // #510/#511 普通入场的 [required item]「物品 1 1」：入场提交时与疲劳、尝试号同事务扣除。
+    public DungeonRequiredItemRow? EntryItem { get; init; }
+    // 资源声明了入场票或入场疲劳但形状未确认时的诊断，只写日志，不改变行为。
+    public string? EntryCostNote { get; init; }
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public bool HasExplicitClearMap { get; init; }
@@ -427,8 +434,26 @@ internal sealed record DungeonEntryPlan(
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
+        plan = WithEntryCost(plan, definition, hellParty || isReplay);
         reason = "resource-plan-ready";
         return true;
+    }
+
+    // #510/#511 入场票与入场一次性疲劳只用于普通入场；深渊派对、练习、比赛、回放、修炼场、职业体验及任务路线保持各自规则。
+    static DungeonEntryPlan WithEntryCost(DungeonEntryPlan plan, DungeonDefinition definition, bool excluded)
+    {
+        if (excluded || !plan.IsOrdinary || plan.IsPractice || plan.IsTrainingRoom || plan.IsClassExperience || plan.IsTournament)
+            return plan;
+        var notes = new List<string>();
+        var ticket = definition.OrdinaryEntryTicket;
+        if (ticket is null && definition.DeclaresRequiredItem) notes.Add("required-item-shape-unsupported");
+        ushort start = 0;
+        if (plan.UsesFatigue && definition.DeclaresStartFatigue)
+        {
+            if (definition.StartFatigue is { } amount) start = amount;
+            else notes.Add("start-fatigue-shape-unsupported");
+        }
+        return plan with { EntryItem = ticket, StartFatigue = start, EntryCostNote = notes.Count == 0 ? null : string.Join(',', notes) };
     }
 
     static bool CanUseOrdinaryHuntRoute(DungeonDefinition definition, Character character, StoryQuest quest,

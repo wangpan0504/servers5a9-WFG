@@ -80,7 +80,7 @@ internal sealed partial class CharacterRepository
         var identity = snapshot.Identity;
         var state = expected.Fatigue ?? throw new InvalidOperationException("普通副本疲劳owner未初始化");
         state.Validate();
-        bool ordinary = run.Entry.UsesFatigue;
+        bool ordinary = run.Entry.UsesRoomFatigue;
         string rule = CharacterFatigueState.NormalRoomRuleId;
         if (!ordinary || run.Entry.Maze.QuestConnectionTokens.Count != 0 ||
             run.Entry.Maze.MapSpecification?.Contains(snapshot.CurrentMap) != true ||

@@ -890,7 +890,7 @@ internal static class QuestSceneTests
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
             byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
-            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null)
+            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null,ushort? fatigueRemaining = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
@@ -912,6 +912,8 @@ internal static class QuestSceneTests
             if (growthContractExpiresAt is { } expiry)
                 Repository.CommitInventory(Owner,created,new(created.Inventory,created.Inventory with
                     { AccountWallet = created.Inventory.AccountWallet.SetContractExpiry(84,expiry) },"test_growth_contract"));
+            // 选角前改写库内疲劳余额（入场一次性疲劳不足测试用）。
+            if (fatigueRemaining is { } remaining) Sql("UPDATE character_fatigue SET remaining=$p0", (int)remaining);
             ICharacterRepository repository = lost || loseGrowth ? new LostResultRepository(Repository) { LoseSceneResult = lost, LoseCompletionResult = false,
                 LoseGrowthResult = loseGrowth,GrowthLossCondition = growthLossCondition } : Repository;
             if (loseSettlement)

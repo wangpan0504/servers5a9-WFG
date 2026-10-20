@@ -297,6 +297,7 @@ internal static class SelfTestRunner
         MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HellPartyEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        DungeonEntryCostTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         StadiumQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestScriptedSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         FriendlyAiCharacterDeathTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
