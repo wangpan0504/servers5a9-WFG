@@ -6,7 +6,8 @@ internal static class RecoveryConsumableTests
 {
     public static void Run()
     {
-        string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]"];
+        string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]",
+            "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]"];
         string Resolve(int at) => strings[at];
         PvfToken[] valid = [new(3, 0), new(0, 10000), new(3, 1), new(0, 0), new(3, 2),
             new(6, 3), new(0, 410), new(0, 1000), new(6, 4)];
@@ -30,6 +31,23 @@ internal static class RecoveryConsumableTests
         {
             result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", [..valid,..tail], Resolve);
             That(result.SubType is null && !result.Diagnostics.IsEmpty, "错误或重复子类型保留诊断，不降级成即时效果");
+        }
+        result = RecoveryConsumableFile.Parse(10087825, "stackable/example.stk", [..valid,
+            new(3,7),new(0,1800000),new(6,4),new(3,9),new(0,1),new(0,1),new(0,1),new(0,0),
+            new(3,10),new(0,1),new(0,1),new(0,1)], Resolve);
+        That(result.StatChangeDuration == new StatChangeDurationDeclaration(1800000, "myself", null) &&
+            result.EffectMaintenance == 7 && result.CooltimeMaintenance == 7 && result.Diagnostics.IsEmpty,
+            "持续时间和保留位独立于经验倍率解析，毫秒不误当秒");
+        result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,new(3,7),new(0,604800000),new(6,8)], Resolve);
+        That(result.StatChangeDuration == new StatChangeDurationDeclaration(604800000, "party", null) && result.ExpBonusMilliseconds is null,
+            "通用持续时间不限制24小时或自身目标，保留七天及party声明，不冒充自身经验秘药");
+        result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,new(3,7),new(0,1500),new(6,4),new(0,5)], Resolve);
+        That(result.StatChangeDuration == new StatChangeDurationDeclaration(1500, "myself", 5), "原版三参数形状保留附加参数，不截断或猜含义");
+        foreach (PvfToken[] tail in new PvfToken[][] { [new(3,7),new(0,0),new(6,4)],
+            [new(3,9),new(0,1),new(0,1)], [new(3,10),new(0,1),new(0,2),new(0,1)] })
+        {
+            result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,..tail], Resolve);
+            That(!result.Diagnostics.IsEmpty, "畸形效果时间和保留位显式诊断，不扩大保留范围");
         }
     }
 }

@@ -28,7 +28,10 @@ internal sealed class StaminaRecoveryService(DevilContractCatalog catalog)
         // 匹配ARAD的20级门槛；非豁免退图仍保留十分钟及重复撤退重计时规则。
         if (character.Level < 20)
             return before;
-        return before with { StaminaUntil = seconds + 600 };
+        var penalized = before with { StaminaUntil = seconds + 600 };
+        // 药剂不改变退图资格；惩罚触发后在同一提交内立即恢复，不扣金币或契约次数。
+        return ConsumableStatePolicy.RecoversStamina(penalized, now.ToUnixTimeMilliseconds())
+            ? penalized with { StaminaUntil = 0 } : penalized;
     }
 
     public InventoryResult Recover(Character character, ushort mode, DateTimeOffset now)

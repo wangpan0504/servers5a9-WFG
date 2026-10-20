@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
@@ -13,6 +14,13 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public bool EffectsAfterAcknowledgement { get; init; }
     public int ExpBonusPermille { get; init; }
     public int ExpBonusMilliseconds { get; init; }
+    public int EffectMilliseconds { get; init; }
+    public byte EffectMaintenance { get; init; }
+    public byte CooltimeMaintenance { get; init; }
+    public bool Unlimited { get; init; }
+    public int TownGiftItem { get; init; }
+    public bool RevivalBlessing { get; init; }
+    public ImmutableHashSet<uint> ExcludedDungeons { get; init; } = ImmutableHashSet<uint>.Empty;
     public bool Allows(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
         job < 16 && (Jobs & (1 << job)) != 0;
 }
@@ -41,12 +49,13 @@ internal sealed class RecoveryConsumableCatalog
     {
         var raw = file.Stackable;
         if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId ||
-            raw.TypeDeclaration is not { Label: "[waste]" or "[throw]" or "[set]" } ||
+            raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[throw]" or "[set]" } ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.DeclaredMinimumLevel is < 0 or > 255 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < (raw.DeclaredMinimumLevel ?? 0) ||
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null || file.CoolTime < 0 ||
             file.DeclaredFields.Contains("cooltime group") && file.CoolGroup is null || file.CoolGroup < 0 ||
             file.DeclaredFields.Contains("sub type") && file.SubType is null ||
+            file.TemplateId == ConsumableSpecialItems.StaminaRecoveryItem && file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 } ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is null ||
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 || file.DeclaredFields.Contains("action type") || raw.HasBoosterInfo)
             return null;
@@ -64,12 +73,20 @@ internal sealed class RecoveryConsumableCatalog
         }
         // HP/MP、持续属性、异常状态及随机效果由客户端执行，不以其数值或格式限制消耗资格。
         bool expBonus = file.ExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0;
+        bool revival = ConsumableSpecialItems.IsRevivalBlessing(file.TemplateId);
         return new(file.TemplateId, raw.DeclaredMinimumLevel ?? 0, file.CoolTime ?? 0, file.CoolGroup ?? -file.TemplateId,
             SummonsApc: file.DeclaredFields.Contains("summon apc"))
         { MaximumLevel = raw.DeclaredMaximumLevel ?? int.MaxValue, Jobs = jobs,
-            RequiresDungeon = raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
+            RequiresDungeon = revival || file.DeclaredFields.Contains("summon npc") || raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
             ExpBonusPermille = expBonus ? file.ExpBonusPermille!.Value : 0,
-            ExpBonusMilliseconds = expBonus ? file.ExpBonusMilliseconds!.Value : 0 };
+            ExpBonusMilliseconds = expBonus ? file.ExpBonusMilliseconds!.Value : 0,
+            EffectMilliseconds = revival ? ConsumableSpecialItems.RevivalMilliseconds : file.StatChangeDuration?.Milliseconds ?? 0,
+            EffectMaintenance = revival ? (byte)0 : file.EffectMaintenance ?? 0,
+            CooltimeMaintenance = file.CooltimeMaintenance ?? 0,
+            Unlimited = raw.TypeDeclaration.Label == "[unlimited waste]",
+            TownGiftItem = raw.TypeDeclaration.Label == "[unlimited waste]" ? ConsumableSpecialItems.TownGiftItem(file.TemplateId) : 0,
+            RevivalBlessing = revival,
+            ExcludedDungeons = revival ? file.LimitDungeons.Select(id => checked((uint)id)).ToImmutableHashSet() : ImmutableHashSet<uint>.Empty };
     }
 
     public bool TryGet(int id, out RecoveryConsumableDefinition definition)

@@ -19,6 +19,8 @@ internal static class ConsumableUseSessionTests
 {
     public static void Run(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
+        RunTimedStates(towns, characters, archive);
+        RunRevivalTimeouts(towns, characters, archive);
         using (var f = new Fixture(towns, characters))
         {
             That(f.Use().Outcome == ConsumableUseOutcome.Rejected, "未选角不消费药剂且返回原状态拒绝");
@@ -173,6 +175,119 @@ internal static class ConsumableUseSessionTests
             "真实副本拒绝带城镇/房间并集声明的盒，而无声明保留既有副本合法地点");
     }
 
+    static void RunTimedStates(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        var definition = new RecoveryConsumableDefinition(10087825, 1, 1800000, 5)
+            { EffectMilliseconds = 1800000, EffectMaintenance = 7, CooltimeMaintenance = 7 };
+        using (var f = new Fixture(towns, characters, hp: definition))
+        {
+            f.Select();
+            f.Session.MutateInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
+                { StaminaUntil = f.Clock.GetUtcNow().ToUnixTimeSeconds() + 600 }, "potion_weakness_fixture")));
+            var used = f.Use();
+            That(used.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 && f.Read().Inventory.StaminaUntil == 0 &&
+                f.Read().Inventory.ConsumableStates.Length == 2 && Same(f.Read(), f.Session.Selected!),
+                "扣源、效果/冷却账本与虚弱恢复原子落库，在线状态安装真实提交结果");
+            var states = f.Read().Inventory.ConsumableStates;
+            f.Session.SetCharacterGold("Potion", 123);
+            f.Session.ReturnToRoster(); f.Select();
+            That(f.Read().Inventory.ConsumableStates.SequenceEqual(states) && f.Read().Inventory.Gold == 123 &&
+                f.Use(1).Outcome == ConsumableUseOutcome.Rejected && f.Count == 2,
+                "无关库存提交保留药效，重选不续期且不能绕过持久冷却再次消费");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(1799999));
+            That(f.Use(2).Outcome == ConsumableUseOutcome.Rejected, "冷却到期前一毫秒仍拒绝");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(1));
+            That(f.Use(3).Outcome == ConsumableUseOutcome.Committed && f.Count == 1 && f.Read().Inventory.ConsumableStates.Length == 2,
+                "冷却恰到期可重新使用，替换同ID状态而不堆积历史行");
+            f.Sql("PRAGMA foreign_keys=OFF; UPDATE character_consumable_states SET account='another-account' WHERE kind=0");
+            Reject<InvalidDataException>(() => f.Read(), "存量持续状态owner损坏不能作为当前角色药效装载");
+            f.Sql("PRAGMA foreign_keys=OFF; UPDATE character_consumable_states SET account='potion-session'");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition))
+        {
+            f.Select();
+            f.Session.MutateInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
+                { StaminaUntil = f.Clock.GetUtcNow().ToUnixTimeSeconds()+600 }, "potion_rollback_weakness_fixture")));
+            var before = f.Read();
+            f.Sql("CREATE TRIGGER effect_abort AFTER INSERT ON character_consumable_states BEGIN SELECT RAISE(ABORT,'effect rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => f.Use(), "持续效果写入阶段真实SQL失败");
+            That(Same(before, f.Read()) && Same(before, f.Session.Selected!) && f.Count == 3,
+                "晚期效果写入失败回滚先前扣物、虚弱、revision和审计，不发布成功或推进冷却");
+        }
+        foreach (var freeDefinition in new[] { definition, new RecoveryConsumableDefinition(2600020,1,1200000,-2600020)
+            { EffectMilliseconds=1200000,RevivalBlessing=true,RequiresDungeon=true } })
+        using (var f = new Fixture(towns, characters, hp: freeDefinition))
+        {
+            f.Select();
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "限时药效免耗回归经真实城镇入口");
+            f.Session.BeginDungeonSelection();
+            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive), practice: true) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null, "限时药效建立真实练习实例");
+            That(f.Use().Outcome == ConsumableUseOutcome.Committed && f.Count == 3 && f.Read().Inventory.ConsumableStates.IsEmpty,
+                "练习使用仅本地生效，既不扣药也不把免费效果或冷却持久化带出副本");
+            if (freeDefinition.RevivalBlessing)
+            {
+                var timeout = f.Session.CurrentRevivalBlessingTimeout()!;
+                That(f.Session.ReportFormalCharacterDeath() is { AutomaticRevival: true } && f.Count == 3 &&
+                    !f.Session.CanPublishRevivalBlessingTimeout(timeout, timeout.UntilMilliseconds) &&
+                    f.Session.ReportFormalCharacterDeath() is { AutomaticRevival: false },
+                    "免费神圣祝福保存在原实例内，实际免币复活一次后清除，不与持久库存建立平行快照");
+            }
+            That(f.Session.ReturnFromFormalDungeon() is not null && f.Read().Inventory.ConsumableStates.IsEmpty,
+                "离开免费玩法销毁原实例效果，不保存或带出免费资格");
+            if (!freeDefinition.RevivalBlessing)
+                That(f.Use(1).Outcome == ConsumableUseOutcome.Committed && f.Count == 2,
+                    "免费实例的临时冷却不封锁出图后新的普通有偿使用，旧完整token仍单独保护");
+        }
+    }
+
+    static void RunRevivalTimeouts(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        using var f = new Fixture(towns, characters, hp: new(2600020, 1, 1200000, -2600020)
+            { EffectMilliseconds = 1200000, RevivalBlessing = true, RequiresDungeon = true });
+        f.Select();
+        That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "祝福计时回归经真实城镇入口");
+        Enter();
+        That(f.Use().Outcome == ConsumableUseOutcome.Committed, "祝福计时绑定成功使用，不为失败消费建立定时资格");
+        var first = f.Session.CurrentRevivalBlessingTimeout()!;
+        f.Session.SetCharacterGold("Potion", 123);
+        f.Clock.Advance(TimeSpan.FromMilliseconds(1199999));
+        That(!f.Session.CanPublishRevivalBlessingTimeout(first, f.Clock.GetUtcNow().ToUnixTimeMilliseconds()),
+            "祝福到期前一毫秒不能发送清理通知，普通库存revision不重置截止");
+        var before = f.Read();
+        f.Clock.Advance(TimeSpan.FromMilliseconds(1));
+        That(f.Session.CanPublishRevivalBlessingTimeout(first, f.Clock.GetUtcNow().ToUnixTimeMilliseconds()) && Same(before, f.Read()),
+            "原生到期通知仅清理客户端效果，不重复扣药、不扣复活币或改写角色资产");
+        That(f.Use(1).Outcome == ConsumableUseOutcome.Committed && f.Count == 1, "冷却到期后再次喝药替换原截止");
+        var second = f.Session.CurrentRevivalBlessingTimeout()!;
+        That(second.UntilMilliseconds == first.UntilMilliseconds + 1200000 &&
+            !f.Session.CanPublishRevivalBlessingTimeout(first, second.UntilMilliseconds),
+            "旧到期回调即便延迟执行也不能清除续药后的新资格");
+        That(f.Session.ReturnFromFormalDungeon() is not null && f.Session.CurrentRevivalBlessingTimeout() is null &&
+            !f.Session.CanPublishRevivalBlessingTimeout(second, second.UntilMilliseconds),
+            "回城清除祝福后原定时通知失效，不发送到城镇或下一副本");
+        Enter();
+        That(f.Use(2).Outcome == ConsumableUseOutcome.Committed, "新实例可合法建立新的祝福资格");
+        var third = f.Session.CurrentRevivalBlessingTimeout()!;
+        That(!f.Session.CanPublishRevivalBlessingTimeout(second, third.UntilMilliseconds), "同角色新实例拒绝旧实例到期回调");
+        f.Session.ReturnToRoster(); f.Select();
+        That(f.Session.CurrentRevivalBlessingTimeout() is null &&
+            !f.Session.CanPublishRevivalBlessingTimeout(third, third.UntilMilliseconds),
+            "同连接重选同角色仍由选角epoch隔离，不恢复旧祝福或发送旧清理包");
+        using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
+        Reject<InvalidOperationException>(() => f.Session.CanPublishRevivalBlessingTimeout(third, third.UntilMilliseconds),
+            "旧generation不能为接管后的新连接发布祝福到期通知");
+
+        void Enter()
+        {
+            f.Session.BeginDungeonSelection();
+            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null, "祝福计时建立真实普通正式副本");
+        }
+    }
+
     static bool Same(Character first, Character second) => JsonSerializer.Serialize(first) == JsonSerializer.Serialize(second);
 
     internal sealed class FakeClock : TimeProvider
@@ -199,17 +314,19 @@ internal static class ConsumableUseSessionTests
         public GameSession Session { get; }
         public FakeClock Clock { get; } = new();
         public InventoryConsumableUseService Service { get; }
-        public ConsumableUseRequest Request { get; } = new(new(InventoryListType.Main, 65), 0, 1108, 0);
-        public Fixture(TownCatalog towns, CharacterCatalog characters, bool lost = false)
+        public ConsumableUseRequest Request { get; }
+        public Fixture(TownCatalog towns, CharacterCatalog characters, bool lost = false, RecoveryConsumableDefinition? hp = null)
         {
+            hp ??= ConsumableUseTests.Hp;
+            Request = new(new(InventoryListType.Main, 65), 0, hp.ItemId, 0);
             Directory.CreateDirectory(root); Repository = new(Path.Combine(root, "game.db")); Owner = Owners.Acquire("potion-session", () => { });
             var candidate = CharacterCreation.Prepare("Potion", characters.Get(0), towns.Room, towns.InitialReturn, null);
             Repository.Create(Owner, candidate with { Level = 16, Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
-                .Add(new(0, new(InventoryListType.Main, 65), new(1108, ItemKind.Consumable, 3) { Marker16 = 44, SortLockFlag = 1 }))
+                .Add(new(0, new(InventoryListType.Main, 65), new(hp.ItemId, ItemKind.Consumable, 3) { Marker16 = 44, SortLockFlag = 1 }))
                 .Add(new(0, new(InventoryListType.Main, 66), new(1114, ItemKind.Consumable, 2))) } });
             var store = lost ? new QuestCompletionRepositoryTests.LostResultRepository(Repository) { LoseInventoryResult = true } : null;
-            Session = new(store is null ? Repository : store, towns, Owner);
-            Service = new(new([ConsumableUseTests.Hp, ConsumableUseTests.Mp]), Clock);
+            Session = new(store is null ? Repository : store, towns, Owner, timeProvider: hp.EffectMilliseconds > 0 ? Clock : null);
+            Service = new(new([hp, ConsumableUseTests.Mp]), Clock);
         }
         public void Select() { Session.Select(0); Session.MarkReady(); }
         public Character Read() => Repository.LoadCharacter(Owner, 0);

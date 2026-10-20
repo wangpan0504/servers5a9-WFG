@@ -34,12 +34,13 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         return new(identity, character.Position.Town, character.Position.Area, map.Path, map.IsRoom ? owner.Account : null);
     }
 
-    bool Visible(Member source, Member target)
+    bool Visible(Member source, Member target, Func<Character, Character, bool>? recipient = null)
     {
         lock (gate)
             return members.TryGetValue(source.Sender, out var current) && ReferenceEquals(current, source) &&
-                members.TryGetValue(target.Sender, out var recipient) && ReferenceEquals(recipient, target) &&
-                source.Scene == target.Scene && source.Owner.IsCurrent && target.Owner.IsCurrent;
+                members.TryGetValue(target.Sender, out var currentTarget) && ReferenceEquals(currentTarget, target) &&
+                source.Scene == target.Scene && source.Owner.IsCurrent && target.Owner.IsCurrent &&
+                recipient?.Invoke(source.Character, target.Character) != false;
     }
     readonly record struct Bodies(ReadOnlyMemory<byte> Actor, ReadOnlyMemory<byte> State, ReadOnlyMemory<byte> Position,
         ReadOnlyMemory<byte> Area);
@@ -145,13 +146,15 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     public int Count { get { lock (gate) return members.Count; } }
 
     // 原生宠物通知直接更新既有实体；复用同一场景及发送队列，不为此重发Actor或创建另一套在线目录。
-    public void Publish(AccountOwners.Lease owner, GameConnectionSender sender, ushort opcode, byte[] body, string action) => owner.Execute(() =>
+    public void Publish(AccountOwners.Lease owner, GameConnectionSender sender, ushort opcode, byte[] body, string action,
+        Func<Character, Character, bool>? recipient = null) => owner.Execute(() =>
     {
         lock (gate)
         {
             if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner)) return false;
             foreach (var target in Peers(source))
-                target.Sender.Post(0, opcode, body, action, () => Visible(source, target));
+                if (recipient?.Invoke(source.Character, target.Character) != false)
+                    target.Sender.Post(0, opcode, body, action, () => Visible(source, target, recipient));
             return true;
         }
     });

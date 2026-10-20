@@ -16,11 +16,14 @@ internal sealed record DungeonDropPacketItem(uint ObjectKey, short RecordSlot, I
 
 internal static class DungeonPackets
 {
-    public static byte[] CharacterLife(ushort characterKey, bool revived)
+    public static byte[] CharacterLife(ushort characterKey, bool revived) => CharacterLife(characterKey, revived ? (byte)1 : (byte)0);
+
+    public static byte[] CharacterLife(ushort characterKey, byte state)
     {
+        if (state > 2) throw new ArgumentOutOfRangeException(nameof(state));
         byte[] body = new byte[4];
         BinaryPrimitives.WriteUInt16LittleEndian(body, characterKey);
-        body[2] = revived ? (byte)1 : (byte)0;
+        body[2] = state;
         return body;
     }
 

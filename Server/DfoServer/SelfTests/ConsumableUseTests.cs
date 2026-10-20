@@ -67,6 +67,13 @@ internal static class ConsumableUseTests
             { EffectsAfterAcknowledgement: false }, "sub type2的应答后效果不能套发送端即时效果的原生免扣");
         That(RecoveryConsumableCatalog.Read(raw with { DeclaredFields = raw.DeclaredFields.Add("sub type") }) is null,
             "畸形子类型不能当作缺省0而错误选择免扣应答");
+        foreach (int id in new[] { 2600020, 2680783, 2749063, 2749165 })
+            That(RecoveryConsumableCatalog.Read(raw with
+            {
+                TemplateId = id, Stackable = declaration with { TemplateId = id },
+                StatChangeDuration = new(60000, "myself", null), EffectMaintenance = 7
+            }) is { RevivalBlessing: true, EffectMilliseconds: 1200000, EffectMaintenance: 0 },
+                "神圣祝福按原生特殊ID建立固定二十分钟单次资格，不借普通属性维护位跨回城或换角保留");
         That(!ItemCatalog.ForbidsUse("[impossible contents]\n`enable` `hardcore mode`\n[/impossible contents]") &&
             ItemCatalog.ForbidsUse("[impossible contents]\n`enable`\n[/impossible contents]") &&
             !ItemCatalog.ForbidsUse("[impossible contents]\n`hardcore mode`\n[/impossible contents]"),
@@ -133,6 +140,12 @@ internal static class ConsumableUseTests
             That(resources.RecoveryConsumables.TryGet(id, out var definition) && resources.Items.Get(id).Kind == ItemKind.Consumable &&
                 resources.Items.Get(id).MinimumLevel == definition.MinimumLevel,
                 "使用目录与现有物品目录实际类别/等级一致，不能替代库存实例校验");
+        That(resources.RecoveryConsumables.TryGet(10087825, out var antiWeakness) && antiWeakness is
+            { EffectMilliseconds: 1800000, EffectMaintenance: 7, CooltimeMaintenance: 7, ExpBonusPermille: 0 },
+            "防虚弱药剂沿通用持续效果定义，时长和三种保留位来自真实PVF，不伪装经验秘药或会员资格");
+        That(resources.RecoveryConsumables.TryGet(10087828, out var courage) && courage.EffectMilliseconds == 1800000 &&
+            resources.RecoveryConsumables.TryGet(10087916, out var stats) && stats.EffectMilliseconds == 600000,
+            "不同目录、子型和客户端属性效果走同一持续状态入口，不把持续时间专用于单个ID");
         That(resources.RecoveryConsumables.TryGet(1073, out var set) && set.RequiresDungeon && set.MinimumLevel == 20 && set.CoolTime == 5000 &&
             resources.RecoveryConsumables.TryGet(6001, out var projectile) && projectile.RequiresDungeon && projectile.MinimumLevel == 12 && projectile.CoolTime == 3000,
             "藤蔓种子set及飞盘throw从当前PVF读取等级与冷却，不解析或伪造客户端物件效果");
@@ -142,5 +155,13 @@ internal static class ConsumableUseTests
             "真实PVF任务助手sub type2等待成功应答，普通1113保留发送端即时效果路径");
         foreach (int id in new[] { 25, 3037, 2660408, int.MaxValue })
             That(!resources.RecoveryConsumables.TryGet(id, out _), "宠物、材料、契约和未知ID不作为普通客户端效果物品消费");
+        foreach (int id in new[] { 7789,7790,7791,7792,7793,7794,7795,8004 })
+            That(resources.RecoveryConsumables.TryGet(id, out var gift) && gift.Unlimited && gift.MinimumLevel == 70 &&
+                gift.CoolTime == 43200000 && gift.TownGiftItem == (id == 8004 ? 8005 : id + 7),
+                "高人的恩赐匹配当前PVF原物品与dummy，保留70级资格、十二小时冷却及不扣数量");
+        foreach (int id in new[] { 2600020,2680783,2749063,2749165 })
+            That(resources.RecoveryConsumables.TryGet(id, out var blessing) && blessing.RevivalBlessing &&
+                blessing.RequiresDungeon && blessing.EffectMilliseconds == 1200000,
+                "旧端四种神圣祝福药水在当前PVF仍存在，服务端补二十分钟单次复活窗口");
     }
 }
