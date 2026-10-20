@@ -23,24 +23,28 @@ internal static class QuestPassiveClearTcpTests
         foreach (bool ordinary in new[] { false, true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         VerifyZeroKill(fixture,resources,growth,drain);
         VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons);
-        VerifyEnergyTransmitters(fixture,resources,growth,drain,dungeons);
+        VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,3738,102,16120,76530,
+            [0,0,7,5,4,6,5,15],[76532,76533,76534]);
+        VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,5964,291100308,109022849,59594,
+            [2,1,1,7,1,1,2,1,2,1],[59598,59600,59601,59602,59603,59599,59595,59594,59596,59597]);
     }
 
-    // #218：真实 Q3738 的多份物件通过合成 33 驱动；不把消费槽解释成客户端实例号。
-    static void VerifyEnergyTransmitters(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
-        Action<TcpPeer,Action<WirePacket>?> drain,DungeonCatalog dungeons)
+    // #218/#240：准确任务复用同一热服务；单份、多份及跨房回访通过合成33驱动，不把消费槽解释成实例号。
+    static void VerifyPassiveHunt(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
+        Action<TcpPeer,Action<WirePacket>?> drain,DungeonCatalog dungeons,
+        ushort questId,uint dungeonId,int templateId,int firstMap,int[] copies,int[] targetMaps)
     {
-        const ushort questId = 3738;
-        const string account = "energy-transmitters-3738";
+        string account = "passive-hunt-"+questId;
         var quest = resources.Quests.Get(questId);
-        That(QuestHuntProgress.TryTargets(quest,out var targets) && targets is [{ DungeonId:102,MonsterId:16120,EnemyType:3,Count:15 }],
-            "3738 保留 D102 能量传送器16120的单通道15次真实目标");
-        var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,quest,102);
+        That(QuestHuntProgress.TryTargets(quest,out var targets) && targets is [{ EnemyType:3,Count:15 }] &&
+            targets[0].DungeonId == dungeonId && targets[0].MonsterId == templateId,
+            $"{questId} 保留 D{dungeonId} 被动物件的单通道15次真实目标");
+        var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,quest,dungeonId);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         Character created;
         using (var owner = new AccountOwners().Acquire(account,() => { }))
         {
-            var candidate = CharacterCreation.Prepare("Transmitters",resources.Characters.Get(0),
+            var candidate = CharacterCreation.Prepare("Hunt"+questId,resources.Characters.Get(0),
                 entrance.Position,entrance.Position,resources.Learning.Get);
             byte level = checked((byte)quest.MinimumLevel);
             created = new CharacterRepository(fixture.Database).Create(owner,candidate with
@@ -55,100 +59,118 @@ internal static class QuestPassiveClearTcpTests
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             byte[] information = [];
-            var map = FormalDungeonTcpTests.Enter(peer,questId,102,row => information=row);
-            var maze = dungeons.Get(102).Mazes.Single(row => row.SourceOrdinal == information[7]);
+            var map = FormalDungeonTcpTests.Enter(peer,questId,dungeonId,row => information=row);
+            var maze = dungeons.Get(checked((int)dungeonId)).Mazes.Single(row => row.SourceOrdinal == information[7]);
             var route = maze.MapSpecification!;
-            int[] copies = [0,0,7,5,4,6,5,15];
-            That(route.Select(row => row.Id).SequenceEqual(Enumerable.Range(76530,8)) &&
-                route.Select(row => rooms.Get(row).PassiveObjects.Count(source => source.ObjectId == 16120)).SequenceEqual(copies),
-                "3738 使用完整76530至76537真实路线，各房保留0/0/7/5/4/6/5/15份目标");
+            That(route.Select(row => row.Id).SequenceEqual(Enumerable.Range(firstMap,copies.Length)) &&
+                route.Select(row => rooms.Get(row).PassiveObjects.Count(source => source.ObjectId == templateId)).SequenceEqual(copies),
+                "准确任务地图集合和各房实际目标放置数保持原资源");
             FormalDungeonTcpTests.Load(peer); Drain();
-            acceptance = (string)fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3738",peer.Id)[0][0];
-            That(Scalar() == 15,"3738真实31初始化剩余15，入场和加载不推进");
-            string before = State(); Trigger(15);
-            That(State() == before,"3738无目标起始房的33不写条件、资产或事件");
-            peer.Send(34,[34,0,154,14,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
-            That(State() == before,"3738进度未完成时34拒绝且不产生奖励");
+            acceptance = (string)fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)[0][0];
+            That(Scalar() == 15,$"{questId}真实31初始化剩余15，入场和加载不推进");
+            string before = State();
+            if (copies[CurrentMap().Id-firstMap] == 0)
+            {
+                Trigger(15);
+                That(State() == before,"无目标起始房的33不写条件、资产或事件");
+            }
+            peer.Send(34,[34,0,(byte)questId,(byte)(questId >> 8),255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == before,$"{questId}进度未完成时34拒绝且不产生奖励");
             uint remaining = 15;
-            foreach (int id in new[] {76532,76533,76534})
+            var consumed = new HashSet<int>();
+            foreach (int id in targetMaps)
             {
                 var target = route.Single(row => row.Id == id);
                 var path = QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),target.Position);
                 foreach (var next in path.Skip(1))
                 {
-                    foreach (int offset in Enumerable.Range(0,map[18]).Select(at => 19+22*at)
+                    foreach (int offset in Enumerable.Range(0,map[13] == 0 ? 0 : map[18]).Select(at => 19+22*at)
                         .Where(at => map[at+21] == 0 && map[at+13] != 9))
                     {
                         peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12])); Drain();
                     }
                     var move = new byte[100]; move[0] = checked((byte)next.X); move[1] = checked((byte)next.Y);
                     peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+                    var arrived = CurrentMap();
+                    That(arrived.Position == next && (map[13] == 0
+                        ? map.Length == 16 && map[14] == 0 && map[15] == byte.MaxValue
+                        : U32(map,14) == arrived.Id),"沿真实坐标核对首次与缓存入房；缓存包不含地图ID或演员表");
                     FormalDungeonTcpTests.Load(peer); Drain();
+                    if (consumed.Contains(arrived.Id))
+                    {
+                        string saved = State(); Trigger(remaining);
+                        That(State() == saved,"回访已耗尽物件的房间不重置放置槽或重复进度");
+                    }
                 }
-                That(U32(map,14) == id,"3738沿真实连接到达目标房，不借用相邻任务地图");
+                That(CurrentMap().Id == id,$"{questId}沿真实连接到达目标房，不借用相邻任务地图");
                 before = State();
-                peer.Send(39,PassiveDeath(16120)); Drain();
-                That(State() == before,"同模板多份39仍不消费猎杀33的放置槽");
+                if (copies[id-firstMap] > 1)
+                {
+                    peer.Send(39,PassiveDeath(checked((uint)templateId))); Drain();
+                    That(State() == before,"同模板多份39仍不消费猎杀33的放置槽");
+                }
                 var assets = fixture.Snapshot("SELECT experience,gold FROM characters WHERE id=$p0",peer.Id);
-                int count = Math.Min(copies[id-76530],checked((int)remaining));
+                int count = Math.Min(copies[id-firstMap],checked((int)remaining));
                 for (int at=0;at<count;at++) Trigger(--remaining);
                 That(fixture.Snapshot("SELECT experience,gold FROM characters WHERE id=$p0",peer.Id) == assets,
-                    "3738物件33只推进任务，不伪造普通怪物经验和金币");
+                    $"{questId}物件33只推进任务，不伪造普通怪物经验和金币");
                 before = State(); Trigger(remaining);
                 That(State() == before,"本房放置槽耗尽或目标归零后，相同33不继续递减");
+                consumed.Add(id);
             }
             var events = fixture.Query("SELECT acceptance_id,scene_event FROM character_quest_lifecycle_receipts WHERE character_id=$p0 AND scene_event IS NOT NULL",peer.Id);
             var sources = events.Select(row => JsonSerializer.Deserialize<QuestSceneEvent>((string)row[1])!).ToArray();
             That(remaining == 0 && events.Length == 15 && events.All(row => (string)row[0] == acceptance) &&
-                sources.All(row => row.DungeonId == 102 && row.TemplateId == 16120) &&
+                sources.All(row => row.DungeonId == dungeonId && row.TemplateId == templateId) &&
                 sources.Select(row => row.OperationId).Distinct().Count() == 15 &&
                 sources.Select(row => (row.MapId,row.SourceOrdinal)).Distinct().Count() == 15 &&
                 sources.Select(row => row.Identity.InstanceId).Distinct().Count() == 1,
                 "15次事务沿原接取及同Run保存独立消费槽与操作回执，不把重复正文当实例号");
 
+            DungeonMap CurrentMap() => route.Single(row => row.Position == new DungeonPoint(map[0],map[1]));
             void Drain() => drain(peer,null);
-            uint Scalar() => checked((uint)(long)fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3738",peer.Id)[0][0]);
+            uint Scalar() => checked((uint)(long)fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)[0][0]);
             void Trigger(uint expected)
             {
                 // 真实发送器的同通道正文相同；明确合成事件，不声称客户端逐物件触发或ACK重发已实测。
-                peer.Send(33,[33,0,154,14,16,0,0]);
+                peer.Send(33,[33,0,(byte)questId,(byte)(questId >> 8),16,0,0]);
                 var ack = peer.Expect(1,33).Body;
                 That(ack.Length == 7 && ack[0] == 1 && U16(ack,1) == questId && U32(ack,3) == expected,
-                    "3738 ACK33返回实际提交后的剩余数量："+expected);
-                Drain(); That(Scalar() == expected,"3738 ACK与独立读库进度一致");
+                    $"{questId} ACK33返回实际提交后的剩余数量："+expected);
+                Drain(); That(Scalar() == expected,$"{questId} ACK与独立读库进度一致");
             }
         }
         using (var peer = Open(fixture,account))
         {
             peer.Select(created.Slot,prepared:true); peer.Barrier();
-            That(fixture.Query("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3738",peer.Id)
+            That(fixture.Query("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)
                 is [[0L,string restored]] && restored == acceptance,"断线重登保存原接取及15次已提交进度");
             string before = State();
-            fixture.Sql("CREATE TRIGGER abort_transmitter_finish AFTER INSERT ON character_quest_completion_receipts WHEN NEW.quest_id=3738 BEGIN SELECT RAISE(ABORT,'transmitter finish rollback'); END");
-            peer.Send(34,[34,0,154,14,255,255,1,0,255,255]); peer.Closed();
-            That(State() == before,"3738交付SQL末段失败以EOF收尾，条件、完成位及奖励整笔回滚");
-            fixture.Sql("DROP TRIGGER abort_transmitter_finish");
+            fixture.Sql("CREATE TRIGGER abort_passive_hunt_finish AFTER INSERT ON character_quest_completion_receipts WHEN NEW.quest_id="+questId+" BEGIN SELECT RAISE(ABORT,'passive hunt finish rollback'); END");
+            peer.Send(34,[34,0,(byte)questId,(byte)(questId >> 8),255,255,1,0,255,255]); peer.Closed();
+            That(State() == before,$"{questId}交付SQL末段失败以EOF收尾，条件、完成位及奖励整笔回滚");
+            fixture.Sql("DROP TRIGGER abort_passive_hunt_finish");
         }
         using (var peer = Open(fixture,account))
         {
             peer.Select(created.Slot,prepared:true); peer.Barrier();
-            peer.Send(34,[34,0,154,14,255,255,1,0,255,255]);
+            peer.Send(34,[34,0,(byte)questId,(byte)(questId >> 8),255,255,1,0,255,255]);
             var ack = peer.Expect(1,34).Body; drain(peer,null);
             That(ack.Length >= 4 && ack[0] == 1 && U16(ack,1) == questId && ack[3] == 6 && fixture.Query(
-                "SELECT acceptance_id FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3738",peer.Id)
+                "SELECT acceptance_id FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)
                 is [[string completed]] && completed == acceptance && fixture.Query(
-                "SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3738",peer.Id) is [[0L]],
-                "3738重连后真实34以猎杀分类交付原接取，只保存一份完成回执");
+                "SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId) is [[0L]],
+                $"{questId}重连后真实34以猎杀分类交付原接取，只保存一份完成回执");
             string before = State();
-            peer.Send(34,[34,0,154,14,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); drain(peer,null);
-            That(State() == before,"3738重复34不重复资产或交付回执");
+            peer.Send(34,[34,0,(byte)questId,(byte)(questId >> 8),255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); drain(peer,null);
+            That(State() == before,$"{questId}重复34不重复资产或交付回执");
         }
         using (var peer = Open(fixture,account))
         {
             peer.Select(created.Slot,prepared:true); peer.Barrier();
             That(peer.CompletedQuestHistory[4+questId] == 1 && fixture.Query(
-                "SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3738",peer.Id) is [[1L]],
-                "3738最终重登回放完成位和唯一奖励回执");
+                "SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId) is [[1L]],
+                $"{questId}最终重登回放完成位和唯一奖励回执");
         }
         string State() => CharacterState(fixture,created.Id)+fixture.Snapshot(
             "SELECT * FROM character_quest_lifecycle_receipts WHERE character_id=$p0 ORDER BY revision",created.Id)+fixture.Snapshot(
