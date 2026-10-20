@@ -251,6 +251,7 @@ internal static class TcpRegressionTests
         ("repair", RepairTcpTests.RunAsync),
         ("random-option", RandomOptionTcpTests.RunAsync),
         ("equipment-quality", EquipmentQualityTcpTests.RunAsync),
+        ("texture-change", TextureChangeTcpTests.RunAsync),
         ("refinement", RefinementTcpTests.RunAsync),
         ("refinement-tickets", RefinementTicketTcpTests.RunAsync),
         ("disjoint", DisjointTcpTests.RunAsync),

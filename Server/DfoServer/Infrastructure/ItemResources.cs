@@ -14,6 +14,7 @@ internal sealed class ItemResources
     public EquipmentRepairCatalog Repair { get; }
     public EquipmentRefinementCatalog Refinement { get; }
     public RandomOptionCatalog RandomOptions { get; }
+    public EquipmentTextureChangeCatalog TextureChanges { get; }
     public DisjointCatalog Disjoint { get; }
     public AvatarDisjointCatalog AvatarDisjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
@@ -78,6 +79,7 @@ internal sealed class ItemResources
         AvatarDyes = new(archive, equipment, stackable);
         Teleports = new(archive.ReadText, equipment, stackable);
         RandomOptions = new(archive, equipment);
+        TextureChanges = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
         MagicBoxes = new(archive, stackable);

@@ -252,6 +252,8 @@ internal static class ServerRuntime
                 inventoryProjection, log),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions), inventoryProjection, log),
+            new TextureChangeHandler(new InventoryTextureChangeService(itemResources.Items, itemResources.TextureChanges,
+                itemResources.EpicPieces), inventoryProjection, log),
             new LimitCubeHandler(new InventoryLimitCubeService(itemResources.Items, itemResources.LimitCubes,
                 itemResources.EpicPieces, itemResources.Contracts, itemResources.Boosters.DirectActivationItems,
                 debugSettings: debugSettings), inventoryProjection, log),
