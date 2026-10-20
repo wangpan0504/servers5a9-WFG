@@ -374,6 +374,8 @@ internal static class QuestCompletionRepositoryTests
         public Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning) => inner.CommitSkillLayout(owner, expected, learning);
         public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => inner.ResetProgress(owner, plan);
         public Character CommitClassChange(AccountOwners.Lease owner, ClassChangePlan plan) => inner.CommitClassChange(owner, plan);
+        public int LoadGrowUpChangeCount(AccountOwners.Lease owner, ushort characterId) => inner.LoadGrowUpChangeCount(owner, characterId);
+        public GrowUpChangeCommit CommitGrowUpChange(AccountOwners.Lease owner, GrowUpChangePlan plan) => inner.CommitGrowUpChange(owner, plan);
         public Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected) => inner.CommitExpertJobClear(owner, expected);
         public Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience) => inner.CommitExpertJobExperience(owner, expected, experience);
         public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState) => inner.CommitExpertJobGiveUp(owner, expected, wallet, giveUpState);

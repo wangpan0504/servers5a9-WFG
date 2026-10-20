@@ -33,6 +33,12 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("class-change", ClassChangeTcpTests.RunAsync),
+        ("growup-change-rules", (_, _, resources) =>
+        {
+            GrowUpChangeTests.RunResources(resources);
+            return Task.CompletedTask;
+        }),
+        ("growup-change", GrowUpChangeTcpTests.RunAsync),
         ("stadium-quest", MetroQuestEntryTcpTests.RunStadiumAsync),
         ("titles", TitleTcpTests.RunAsync),
         ("collectbox", CollectBoxTcpTests.RunAsync),

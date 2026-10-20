@@ -1938,6 +1938,7 @@ internal static class DatabaseSchemaTests
                 if (oldVersion < 39) Execute(db, "DROP TABLE IF EXISTS character_teleport_cooldowns");
                 if (oldVersion < 50) Execute(db, "DROP TABLE IF EXISTS character_assault_daily");
                 if (oldVersion < 61) Execute(db, "DROP TABLE IF EXISTS character_crack_daily");
+                if (oldVersion < 63) Execute(db, "DROP TABLE IF EXISTS character_growup_change");
                 if (oldVersion < 41) Execute(db, "DROP TABLE IF EXISTS cube_premium");
                 if (oldVersion < 38) RemoveAdventureNames(db);
                 if (oldVersion < 3)

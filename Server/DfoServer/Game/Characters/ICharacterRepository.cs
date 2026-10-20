@@ -57,6 +57,8 @@ internal interface ICharacterRepository
     Character AdvanceAcceptedStoryLevel(AccountOwners.Lease owner, Character expected);
     Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan);
     Character CommitClassChange(AccountOwners.Lease owner, ClassChangePlan plan);
+    int LoadGrowUpChangeCount(AccountOwners.Lease owner, ushort characterId);
+    GrowUpChangeCommit CommitGrowUpChange(AccountOwners.Lease owner, GrowUpChangePlan plan);
     Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected);
     Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience);
     Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState);

@@ -220,6 +220,7 @@ internal static class ServerRuntime
         var levelUpItems = new LevelUpTicketHandler(
             new Game.Characters.LevelUpTicketService(itemResources.Items,growth,clock,characters,learning),
             quests,levelUpProjection,log);
+        var classChange = new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests);
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
@@ -303,7 +304,8 @@ internal static class ServerRuntime
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs),
-            new ClassChangeHandler(new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests),
+            new ClassChangeHandler(classChange, levelProjection, inventoryProjection, questProjection, projection, log, clock),
+            new GrowUpChangeHandler(new Game.Characters.GrowUpChangeService(GrowUpChangeCatalog.Load(pvf), classChange),
                 levelProjection, inventoryProjection, questProjection, projection, log, clock),
             dungeon,
             new AgitWarHandler(),

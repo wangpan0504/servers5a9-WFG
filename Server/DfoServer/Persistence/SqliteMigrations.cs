@@ -152,6 +152,7 @@ internal static class SqliteMigrations
         new(60, "副职业放弃阶与分解机", static (db, tx) => Execute(db, tx, ExpertJobMetaSchema)),
         new(61, "异次元裂缝每日通关奖励", static (db, tx) => Execute(db, tx, CrackDailySchema)),
         new(62, "眩惑贮藏箱领奖类型60", UpgradeDazzlementQuestCompletion),
+        new(63, "技能窗职业变更次数", static (db, tx) => Execute(db, tx, GrowUpChangeSchema)),
     ];
 
     static void AddExpertJobExperience(SqliteConnection db, SqliteTransaction tx)
@@ -470,6 +471,16 @@ internal static class SqliteMigrations
         using var reader = command.ExecuteReader();
         if (reader.Read()) throw new InvalidDataException("场景清图迁移不能保全旧清图或完成外键");
     }
+
+    // CMD785 已成功变更次数；无行即0次。旧库此前没有实现该菜单，升级时不回填推断历史。
+    internal const string GrowUpChangeSchema = """
+        CREATE TABLE IF NOT EXISTS character_growup_change(
+          character_id INTEGER PRIMARY KEY,
+          account TEXT NOT NULL,
+          change_count INTEGER NOT NULL CHECK(change_count BETWEEN 1 AND 127),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
 
     internal const string CrackDailySchema = """
         CREATE TABLE IF NOT EXISTS character_crack_daily(
@@ -1460,6 +1471,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,day,clear_count,daily_reward FROM character_crack_daily LIMIT 0",
+        "SELECT character_id,account,change_count FROM character_growup_change LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",

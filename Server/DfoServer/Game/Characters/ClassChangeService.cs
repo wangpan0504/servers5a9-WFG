@@ -12,6 +12,8 @@ internal readonly record struct ClassChangeRequest(short Slot, byte Target, bool
 internal sealed record ClassChangePlan(Character Expected, ClassChangeRequest Request, byte GrowType,
     InventoryPlan Inventory, CharacterLearningState Learning, ImmutableArray<int> Completed, long SourceUid);
 internal sealed record ClassChangePreparation(ushort Error, string Reason, ClassChangePlan? Plan = null);
+internal sealed record GrowBranchPlan(byte GrowType, CharacterLearningState Learning, ImmutableArray<int> Completed);
+internal readonly record struct GrowBranchPreparation(ushort Error, string Reason, GrowBranchPlan? Plan = null);
 
 internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog characters, SkillLearningCatalog skills,
     QuestCatalog quests)
@@ -37,15 +39,31 @@ internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog cha
             ticket.Forbidden.Contains((before.Job, request.Target)) ||
             ticket.SourceGrowTypes.Count != 0 && !ticket.SourceGrowTypes.Contains((byte)first))
             return Reject(23, "ticket-qualification");
+        var branch = PlanBranch(before, request.Target, now);
+        if (branch.Plan is not { } planned) return Reject(branch.Error, branch.Reason);
+        if (!InventoryDeleteService.TryDelete(source, source.Core.Value, 1, out var remaining))
+            return Reject(23, "source-consumption");
+        var afterBook = before.Inventory with { Items = before.Inventory.Items
+            .Select(item => item.Position == source.Position ? remaining : item).OfType<InventoryItem>().ToImmutableArray() };
+        var inventory = new InventoryPlan(before.Inventory, afterBook, "class_change");
+        return new(0, "prepared", new(before, request, planned.GrowType, inventory, planned.Learning, planned.Completed, source.Uid));
+    }
+
+    // 同一基础职业内改分支的共用规划：活动转职/觉醒任务、目标分支、两树技能和穿戴资格。
+    // 502转职券与785技能窗变更各自负责入口资格及费用，不在这里扣物或扣金币。
+    public GrowBranchPreparation PlanBranch(Character before, byte requestedTarget, DateTimeOffset now)
+    {
+        GrowBranchPreparation Reject(ushort error, string reason) => new(error, reason);
+        int stage = before.GrowType >> 4;
         foreach (var active in before.ActiveMainQuests)
         {
             if (!quests.TryGet(active.QuestId, out var quest)) return Reject(23, "unknown-active-quest");
             if (quest.Definition?.JobChange == 1) return Reject(22, "active-class-quest");
             if (quest.Definition?.JobChange is 2 or 3) return Reject(23, "active-awakening-quest");
         }
-        var option = characters.Get(before.Job).GrowthOptions.GrowTypes.SingleOrDefault(value => value.Value == request.Target);
+        var option = characters.Get(before.Job).GrowthOptions.GrowTypes.SingleOrDefault(value => value.Value == requestedTarget);
         if (option is null || option.Awakenings.Count < stage) return Reject(235, "unavailable-target");
-        byte target = checked((byte)(request.Target | stage << 4));
+        byte target = checked((byte)(requestedTarget | stage << 4));
         var learning = QuestProfessionReward.Prepare(before, target, before.Level, before.Learning, skills, now);
         var candidate = before with { GrowType = target, Learning = learning,
             Skills = learning.Trees.Single(tree => tree.Context == 0).Skills.Select(value => new CharacterSkill(value.Id, value.Level)).ToArray() };
@@ -55,12 +73,7 @@ internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog cha
             if (equipped.Position.Index == 24 ||
                 !InventoryMoveService.RequiredSkillSatisfied(candidate, items.Get(equipped.Core.ItemId)))
                 return Reject(23, "class-dependent-equipment");
-        if (!InventoryDeleteService.TryDelete(source, source.Core.Value, 1, out var remaining))
-            return Reject(23, "source-consumption");
-        var afterBook = before.Inventory with { Items = before.Inventory.Items
-            .Select(item => item.Position == source.Position ? remaining : item).OfType<InventoryItem>().ToImmutableArray() };
-        var inventory = new InventoryPlan(before.Inventory, afterBook, "class_change");
-        return new(0, "prepared", new(before, request, target, inventory, learning, CompletionHistory(candidate), source.Uid));
+        return new(0, "prepared", new(target, learning, CompletionHistory(candidate)));
     }
 
     ImmutableArray<int> CompletionHistory(Character target)

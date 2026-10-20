@@ -179,6 +179,7 @@ internal static class SelfTestRunner
         GrowthPacketsTests.Run();
         SkillRequestTests.Run();
         ClassChangeTests.RunCore();
+        GrowUpChangeTests.RunCore();
         SkillLearningTests.RunCore();
         SkillLearningCatalogTests.RunCore();
         SkillLayoutTests.Run();

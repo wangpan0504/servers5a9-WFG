@@ -15,6 +15,12 @@ CREATE TABLE character_crack_daily(
   daily_reward INTEGER NOT NULL CHECK(daily_reward IN (0,1)),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_growup_change(
+  character_id INTEGER PRIMARY KEY,
+  account TEXT NOT NULL,
+  change_count INTEGER NOT NULL CHECK(change_count BETWEEN 1 AND 127),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TABLE character_exp_bonus(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,

@@ -82,6 +82,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.AUCTION_NOTIFY_AUCTION_SERVICE, AuctionPackets.ServiceNotice(AuctionPackets.ServiceTypeZero), "auction_service_notice_0");
         await context.Notify(NotiPacketType.AUCTION_NOTIFY_AUCTION_SERVICE, AuctionPackets.ServiceNotice(AuctionPackets.ServiceTypeOne), "auction_service_notice_1");
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(c.Id), "actor_town_state");
+        // NOTI1153：技能窗职业变更菜单的已变更次数(报价索引)与等级(012A6DAA 等级>=50拒绝)。
+        await context.Notify(NotiPacketType.CHARACTER_MANAGE_INFO,
+            GrowUpChangePackets.ManageInfo(context.Session.GrowUpChangeCount(), c.Level), "growup_change_info");
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
         await context.NotifyProtected(NotiPacketType.EVENT_INFO, SeriaLuckPackets.EventInfoCompressed(), "seria_luck_event_initialize");
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
