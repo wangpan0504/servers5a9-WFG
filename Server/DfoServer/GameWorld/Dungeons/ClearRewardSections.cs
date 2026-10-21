@@ -5,11 +5,11 @@ namespace DfoServer.GameWorld.Dungeons;
 internal enum ClearRewardSectionUse
 {
     ReadAlready,
+    PartlyRead,
     NotGranted
 }
 
-// etc/itemdropinfo_clearreward.etc 里，付费翻牌价格和强袭特权段沿用原解析器。
-// 其余段没有证明语义和适用副本，不新发物品。
+// 价格与强袭段沿用原解析器；副本专表只消费类型72的黎明裂缝默认行，其余不追加额外物品。
 internal static class ClearRewardSections
 {
     public const string Path = "etc/itemdropinfo_clearreward.etc";
@@ -58,9 +58,12 @@ internal static class ClearRewardSections
             foreach (string parent in stack)
                 if (parent is "gold card cost table" or "dungeon index privilege service reward rate")
                     insideRead = true;
-            var use = insideRead ? ClearRewardSectionUse.ReadAlready
+            bool dawn = name == "dungeon type" && stack.Contains("dungeon_index specific reward rate") &&
+                at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 72 };
+            var use = insideRead || dawn ? ClearRewardSectionUse.ReadAlready
                 : name is "gold card cost table" or "dungeon index privilege service reward rate"
-                    ? ClearRewardSectionUse.ReadAlready : ClearRewardSectionUse.NotGranted;
+                    ? ClearRewardSectionUse.ReadAlready : name == "dungeon_index specific reward rate"
+                        ? ClearRewardSectionUse.PartlyRead : ClearRewardSectionUse.NotGranted;
             rows.Add((name, use));
             if (Containers.Contains(name)) stack.Push(name);
         }

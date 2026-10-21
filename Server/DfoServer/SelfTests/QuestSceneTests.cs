@@ -30,6 +30,7 @@ internal static class QuestSceneTests
         var quests = sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        DungeonSpecificCardRewardsTests.RunResources(towns, pvf, characters, items, quests, skills);
         VerifyRepeatedPassiveHunt(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         VerifyOuterGentCages(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         VerifyBossRoomAntNests(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);

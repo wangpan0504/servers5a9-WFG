@@ -13,6 +13,8 @@ internal sealed record HellPartyTicket(int ItemId, int Count);
 
 internal static class HellPartyEntryCost
 {
+    // 匹配客户端027AE644/027AE64F使用星空深渊灵石；数量取当前迷宫的legend声明。
+    public const int LegendStone = 10305821;
     public static int RequiredCount(DungeonHellPartyRoom room, int? minimumLevel)
     {
         if (room.RequiredItemCount > 0) return room.RequiredItemCount;

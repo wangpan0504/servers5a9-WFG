@@ -305,7 +305,10 @@ internal sealed partial class SinglePlayerDungeonRun
             entry.QuestClearMap is { } questMap && !entry.IsTerminalMap(questMap) && (!approvedRoute.Rooms.Any(room => room.Room.Map == questMap) ||
                 approvedRoute.Rooms.Count(room => room.Room.Map.Id == questMap.Id) != 1) ||
             entry.Maze.LayeredMaps.Any(map => map.Kind != "layered" || !maps.Any(baseMap => baseMap.Position == map.Position)))
+        {
+            reason = "invalid: 路线地图、起终点或叠层声明不完整";
             return false;
+        }
         var keys = new HashSet<ushort>();
         foreach (DungeonMonsterPlan plan in approvedRoute.Rooms)
         {
@@ -336,7 +339,8 @@ internal sealed partial class SinglePlayerDungeonRun
                 baseMonsters.Zip(resourcePlan.Monsters).Any(pair =>
                 pair.First.SourceOrdinal != pair.Second.SourceOrdinal || pair.First.Source != pair.Second.Source ||
                 pair.First.AiCharacter != pair.Second.AiCharacter || pair.First.MonsterId != pair.Second.MonsterId ||
-                pair.First.CandidateLevel != pair.Second.CandidateLevel || pair.First.SpawnType != pair.Second.SpawnType ||
+                pair.First.CandidateLevel != pair.Second.CandidateLevel ||
+                pair.First.SpawnType != pair.Second.SpawnType && !AllowedChampionPromotion(pair.First, pair.Second, entry) ||
                 pair.First.IsDummyMapBoss != pair.Second.IsDummyMapBoss ||
                 pair.First.IsBlocking != pair.Second.IsBlocking || pair.First.Team != pair.Second.Team ||
                 pair.First.IsFriendly != pair.Second.IsFriendly || pair.First.ObjectKey == entry.CharacterId || !keys.Add(pair.First.ObjectKey)))
@@ -347,7 +351,10 @@ internal sealed partial class SinglePlayerDungeonRun
             if (plan.SpecialObjects.Count != resourcePlan.SpecialObjects.Count || plan.SpecialObjects.Any(actor => actor.ObjectKey == entry.CharacterId ||
                 !keys.Add(actor.ObjectKey) || !resourcePlan.SpecialObjects.Any(expected => expected.Source == actor.Source)) ||
                 plan.SpecialObjects.Select(actor => actor.Source.SourceOrdinal).Distinct().Count() != plan.SpecialObjects.Count)
+            {
+                reason = "invalid: 特殊对象身份不完整或重复";
                 return false;
+            }
         }
         var points = maps.Select(map => map.Position).ToHashSet();
         var edges = new HashSet<(DungeonPoint, DungeonPoint)>();
@@ -375,11 +382,20 @@ internal sealed partial class SinglePlayerDungeonRun
             }
         }
         if (reachable.Count != points.Count || keys.Count == 0 && !entry.IsTrainingRoom)
+        {
+            reason = "invalid: 路线不可达或无可生成演员";
             return false;
+        }
         run = new(entry, taskAttempt, initialEpoch, approvedRoute, combatAuthority);
         reason = "domain-run-created";
         return true;
     }
+
+    // 入场已按资源[champion]抽出精英；复验不能把这一步合法的0→1变化当成伪造演员。
+    static bool AllowedChampionPromotion(DungeonPlannedMonster planned, DungeonPlannedMonster resource, DungeonEntryPlan entry) =>
+        resource.SpawnType == 0 && planned.SpawnType == 1 && resource.Source?.RankKind == "[normal]" &&
+        resource.CanReportDeath && !resource.IsFriendly && entry.ChampionPercents.Length > 0 &&
+        entry.ChampionPercents[Math.Min(entry.Difficulty, entry.ChampionPercents.Length - 1)] > 0;
 
     public DungeonRunResult CompleteLoading(DungeonRunIdentity expected, Guid actionId, bool hasMatchingQuest = false)
     {

@@ -210,6 +210,7 @@ internal static partial class FormalDungeonTcpTests
             RejectDelilahServices(fixture,peer,"Settlement before commit");
             // 修复后击杀XP为2868；最高评分456使首次通关跨过Lv3边界3315。
             var clearReward = clearCatalog.Calculate(SelfTestCatalogs.Dungeons(resources.Archive).Get(3), 0, 99);
+            uint clearExperience = clearReward.TotalExperience;
             byte[] reportResult = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99);
             byte[] corruptedResult = (byte[])reportResult.Clone(); corruptedResult[49] ^= 1;
             peer.Send(46, corruptedResult); peer.Barrier();
@@ -221,7 +222,7 @@ internal static partial class FormalDungeonTcpTests
                 fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id) is [[0L]],
                 "真实通关冻结牌面但不提前写背包或领取位");
             assetsBeforeClear = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
-            experience += clearReward.TotalExperience;
+            experience += clearExperience;
             That(Experience(fixture, peer.Id) == experience && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id) is [[1L]],
                 "通关基础与评分经验仅一次提交，击杀经验不再累计");
             peer.Send(46, reportResult); ReadClear(duplicate: true);
@@ -274,6 +275,9 @@ internal static partial class FormalDungeonTcpTests
                 "在线GM为当前账号保存黑钻及58期限，启用魔王服务0但不隐式启用双倍");
             peer.CheckBlackDiamondRefresh(active: true);
             expectContractOverview = true;
+            // 主线已接入黑钻通关加成；重新入图后的到账按PVF比例加入基础经验加成，评分不参与。
+            clearExperience = checked(clearReward.TotalExperience + (uint)decimal.Floor(clearReward.BaseExperience *
+                ExperienceBonusCatalog.Load(resources.Archive).BlackDiamondPercent / 100m));
             var fatigueAfterBlack = fixture.Query("SELECT f.used,f.maximum,f.remaining,c.revision FROM character_fatigue f JOIN characters c ON c.id=f.character_id WHERE c.id=$p0",peer.Id).Single();
             That(Convert.ToInt64(fatigueAfterBlack[0]) == Convert.ToInt64(fatigueBeforeBlack[0]) &&
                 Convert.ToInt64(fatigueAfterBlack[1]) == Convert.ToInt64(fatigueBeforeBlack[1])+32 &&
@@ -283,7 +287,7 @@ internal static partial class FormalDungeonTcpTests
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"event on 64",out string eventReply) && eventReply.StartsWith("OK "),
                 "本机GM启用全服活动64，已有魔王资格与活动共同进入免费双倍牌，不依赖回归标志");
             ClearAgain(Enter(peer));
-            peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            peer.Send(46, reportResult); ReadClear(); experience += clearExperience;
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"event off 64",out string offReply) && offReply.StartsWith("OK "),
                 "牌面冻结后关闭活动只影响下一份计划，本次仍免金币并按原x2发奖");
             peer.Send(69);peer.Expect(1,69,[1]);peer.Send(70);peer.Expect(1,70);
@@ -299,7 +303,7 @@ internal static partial class FormalDungeonTcpTests
             byte[] retryMap = peer.Expect(0, 29).Body;
             That(U16(retryMap, 25) > U16(map, 25), "再挑战创建新Run、新尝试及新怪key");
             ClearAgain(retryMap);
-            peer.Send(46, reportResult); ReadClear(); experience += clearReward.TotalExperience;
+            peer.Send(46, reportResult); ReadClear(); experience += clearExperience;
             var singleGold = JsonSerializer.Deserialize<DfoServer.Game.Dungeons.DungeonCardOptions>((string)fixture.Query(
                 "SELECT options_json FROM character_dungeon_card_options WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id).Single()[0])!;
             That(singleGold is { UseGoldCard:true, Price:0, DoublePaidItems:false, LegacyReturningPlayer:false } && peer.DevilService0[13] == 1,
@@ -321,7 +325,7 @@ internal static partial class FormalDungeonTcpTests
             {
                 byte[] result = peer.Expect(0, 34).Body;
                 byte[] exp = ReadGrowth();
-                ulong expectedExperience = experience + (duplicate ? 0 : clearReward.TotalExperience);
+                ulong expectedExperience = experience + (duplicate ? 0 : clearExperience);
                 byte expectedLevel = 1;
                 while (expectedExperience >= growth.GetCumulativeExperienceBoundary(expectedLevel)) expectedLevel++;
                 peer.ReadCardMembershipState();

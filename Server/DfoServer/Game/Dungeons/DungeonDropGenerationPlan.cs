@@ -9,7 +9,7 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
     int MinimumCount, int MaximumCount, DungeonDropGoldReference? Gold = null, decimal GoldMultiplier = 1m,
     int ProbabilityDenominator = DungeonDropRatePlan.ProbabilityDenominator,
     ImmutableArray<DungeonDropRarityPool> RarityPools = default, bool ReferenceGold = false, int Attempts = 1,
-    bool GrowthContractEligible = false);
+    bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null);
 
 // 上游必须提供已解释的概率、数量与池；这里只按完整声明执行，不为未知资源列补类别。
 // 准备计划是不可变规则输入，不持有在线角色；原Run负责冻结实际随机结果。
@@ -47,6 +47,11 @@ internal sealed class DungeonDropGenerationPlan
                 throw new InvalidDataException("掉落生成计划的概率、数量或物品/金币来源不完整");
             var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty ?
                 Array.Empty<DungeonItemDropPool>() : trial.RarityPools.Select(row => row.Items).ToArray();
+            // 同一次互斥抽样可以为不同物品声明不同数量，不拆成两个独立概率导致同时掉落。
+            if (trial.ItemCounts is { } counts && (trial.Items is null || trial.MinimumCount != 1 || trial.MaximumCount != 1 ||
+                counts.Values.Any(count => count <= 0) ||
+                !counts.Keys.Order().SequenceEqual(trial.Items.Entries.Select(entry => entry.Template.Id).Distinct().Order())))
+                throw new InvalidDataException("物品分支数量须完整匹配直接候选池，并使用固定单次选择");
             // 任一候选未支持新建时拒绝整份计划；不删候选、更改概率或延后至死亡中断。
             if (pools.Any(pool => pool.Entries.Any(entry => !entry.Template.Expiration.SupportsCreation)))
                 throw new NotSupportedException("掉落候选包含尚未支持的新实例期限声明");
@@ -60,8 +65,11 @@ internal sealed class DungeonDropGenerationPlan
             if (trial.Gold is { } gold && (gold.BaseAmount <= 0 || gold.VariancePercent is < 0 or > 100))
                 throw new InvalidDataException("金币生成计划的基值或波动范围无效");
             long objects = trial.Gold is not null ? trial.MaximumCount : pools.SelectMany(pool => pool.Entries).Select(entry =>
-                entry.Template.Kind == ItemKind.Equipment ? trial.MaximumCount :
-                    ((long)trial.MaximumCount + entry.Template.StackLimit - 1) / entry.Template.StackLimit).DefaultIfEmpty(0).Max();
+            {
+                int count = trial.ItemCounts?.GetValueOrDefault(entry.Template.Id) ?? trial.MaximumCount;
+                return entry.Template.Kind == ItemKind.Equipment ? count :
+                    ((long)count + entry.Template.StackLimit - 1) / entry.Template.StackLimit;
+            }).DefaultIfEmpty(0).Max();
             objects *= trial.Attempts;
             if (objects > 500 - maximum)
                 throw new InvalidDataException("完整掉落生成计划超过本版通知容量，不能截断来源");
@@ -103,6 +111,7 @@ internal sealed class DungeonDropGenerationPlan
             if (pool!.TotalWeight == 0)
                 continue;
             var template = pool.Select(Sample(pool.TotalWeight));
+            if (trial.ItemCounts is { } counts) count = counts[template.Id];
             if (template.Kind == ItemKind.Equipment)
             {
                 for (int index = 0; index < count; index++)

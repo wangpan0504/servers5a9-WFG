@@ -31,6 +31,8 @@ internal static class DungeonPackets
     public static byte[] CoinUsed(ushort characterKey) => [1, (byte)characterKey, (byte)(characterKey >> 8), 0];
 
     public static byte[] BossEntranceOpened() => new byte[5];
+    // 0237F740不读取正文；向场景发布0x26并把深渊完成字节+0x208置1。
+    public static byte[] HellPartyCleared() => [];
     public static byte[] Elevator(DungeonElevatorNotice notice) => [notice.Counter, notice.State];
 
     public static byte[] StoryPause(ushort characterId, byte state, byte type)
@@ -51,7 +53,14 @@ internal static class DungeonPackets
 
     // NOTI27 在 023D8AC0 的空列表足迹：计数字段为 0 时不读列表项，共 42 字节。
     // 顺序是 u32、u32、u8、u32、u8、u8、u8、u32、u16、u16、u32、u8、u8、u32、u32、u8、u16、u8。
-    public static byte[] EmptySelectNotice() => new byte[42];
+    public static byte[] EmptySelectNotice(int hellLegendDungeon = 0)
+    {
+        if (hellLegendDungeon < 0) throw new ArgumentOutOfRangeException(nameof(hellLegendDungeon));
+        byte[] body = new byte[42];
+        // 空countA后u32经03B99380写+57EBD0，客户端按世界地图传奇深渊资格匹配目标。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), checked((uint)hellLegendDungeon));
+        return body;
+    }
 
     // NOTI5 DUNGEON_PERMISSION：u16 count + 每项 u32 dungeonId、u8 state。
     // 布局与参考实现 buildCurrentDungeonResourceStateEntriesBody 一致；state=0 不会进入快照。

@@ -151,7 +151,64 @@ internal static class DungeonDropRuleCatalogTests
         }
         Reject<NotSupportedException>(() => { _ = Parse(changed).PartyBonus[^1].ReferenceDecimal; },
             "参考decimal范围不足只拒绝该参考解释，不能把合法原浮点声明判成资源非法");
+        VerifyLegendEquipment(parsed, entry);
         Console.WriteLine($"PASS {Count - checks} 全局掉落原始规则保真断言");
+    }
+
+    static void VerifyLegendEquipment(DungeonDropRuleCatalog rules, DungeonEntryPlan entry)
+    {
+        ItemTemplate Gear(int id, byte level, int weight) => new(id, ItemKind.Equipment, 0, level, 37, 1, 1, 4, 1,
+            "[free]", ushort.MaxValue, 0, "合成星空史诗") { CreationRate = weight };
+        var old = Gear(9000, 90, 2);
+        var first = Gear(9500, 95, 3);
+        var second = Gear(9501, 95, 7);
+        var future = Gear(10000, 100, 11);
+        var ordinary = old with { Id = 9100, Rarity = 0, CreationRate = 5 };
+        var material = new ItemTemplate(3000, ItemKind.Material, 0, 1, 0, 100, 1, 0, 1,
+            "[free]", ushort.MaxValue, 0, "合成旧史诗碎片") { CreationRate = 1 };
+        var templates = new[] { old, first, second, future, ordinary, material }.ToDictionary(item => item.Id);
+        var candidates = DungeonItemDropCatalog.Create(templates.Values);
+        var special = DungeonSpecialDropCatalog.Create(
+            [new(0, 42, 0, [500000, 500000, 0, 0, 0], [2, 2, 0, 0, 0], 1, 200, -1, 1,
+                [old.Id, 13, first.Id, 17, second.Id, 19, future.Id, 23])], []);
+        var policy = new DungeonResourceDropPolicy(rules, candidates,
+            id => new(id, "monster/合成星空.mob", [new(old.Id, 1)], null), id => templates[id], special);
+        var hell = new DungeonHellRewardPolicy(DungeonHellDropRules.Parse("""
+            [dungeon difficulty drop prob] 1 2 1000 1000 1000 1000 1000
+            [basis of rarity dicision] 1 200000 400000 600000 800000 900000 990000 1000000
+            [item drop ref table] 1 0 2
+            """), candidates, new DungeonItemDropPool(new[] { material }), 1000);
+        var monster = new DungeonPlannedMonster(0, 10, 42, 1, null) { SpawnType = 3, HellRewardRolls = 2 };
+        var normal = policy.PrepareEntry(entry, hell)(monster);
+        var prepareLegend = policy.PrepareEntry(entry with { IsHellLegend = true }, hell);
+        var legend = prepareLegend(monster);
+        var pools = legend.Trials.SelectMany(trial => trial.Items is { } direct ? new[] { direct } :
+            trial.RarityPools.IsDefaultOrEmpty ? [] : trial.RarityPools.Select(row => row.Items));
+        That(pools.SelectMany(pool => pool.Entries).Where(row => row.Template is { Kind: ItemKind.Equipment, Rarity: 4 })
+            .Select(row => row.Template.Id).Distinct().Order().SequenceEqual([first.Id, second.Id]) &&
+            normal.Trials[2].RarityPools[4].Items.Entries.Any(row => row.Template.Id == old.Id),
+            "星空按装备最低等级限制所有史诗通道，普通深渊仍保留90级；不把grade相同误当同装备等级");
+        That(legend.Trials[4].Items!.TotalWeight == 0 && legend.Trials[5].Items!.Entries.Select(row => row.CumulativeWeight).SequenceEqual([17, 36]) &&
+            legend.Trials[2].RarityPools[0].Items.Entries.Single().Template.Id == ordinary.Id,
+            "物品专项不借低等级补位，独立候选保留17/19相对权重，非史诗通道仍保留普通装备");
+        That(legend.Trials.Length == normal.Trials.Length - 1 && legend.Trials[^1].Attempts == 2 &&
+            normal.Trials[^1].Items!.Entries.Single().Template.Id == material.Id &&
+            legend.Trials.Zip(normal.Trials).All(pair => pair.First.Threshold == pair.Second.Threshold &&
+                pair.First.ProbabilityDenominator == pair.Second.ProbabilityDenominator && pair.First.Attempts == pair.Second.Attempts &&
+                pair.First.GrowthContractEligible == pair.Second.GrowthContractEligible),
+            "星空禁用旧史诗碎片实验奖励，装备/特殊通道概率、抽样次数与成长契约标记保留");
+        That(ReferenceEquals(legend, prepareLegend(monster with { ObjectKey = 11 })),
+            "星空过滤后的不可变计划仍按同次入图复用，不在每次死亡重建候选");
+        var missing = new DungeonResourceDropPolicy(rules, DungeonItemDropCatalog.Create([old]),
+            id => new(id, "monster/合成缺95级池.mob", null, null), _ => old)
+            .PrepareEntry(entry with { IsHellLegend = true })(monster with { HellRewardRolls = 0 });
+        That(missing.Trials[2].RarityPools[4].Items.TotalWeight == 0,
+            "资源没有95级史诗时保持空候选，不退回90级或其它稀有度制造奖励");
+        var normalOnly = new DungeonResourceDropPolicy(rules, DungeonItemDropCatalog.Create([ordinary]),
+            id => new(id, "monster/合成仅普通池.mob", null, null), _ => ordinary)
+            .PrepareEntry(entry with { IsHellLegend = true })(monster with { HellRewardRolls = 0 });
+        That(normalOnly.Trials[2].RarityPools[4].Items.TotalWeight == 0 && normalOnly.Trials[2].RarityPools[0].Items.TotalWeight > 0,
+            "史诗通道没有任何史诗时，也不能沿普通参考池的白装回退伪造一次史诗命中");
     }
 
     public static void RunResources(PvfArchive pvf)

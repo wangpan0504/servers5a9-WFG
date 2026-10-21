@@ -147,6 +147,7 @@ internal static class ServerRuntime
             });
         }
         DungeonRoomCatalog? questRooms = null;
+        DungeonCatalog? selectionDungeons = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
         var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
         IGameCommandModule dungeon;
@@ -158,6 +159,7 @@ internal static class ServerRuntime
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
             var dungeonCatalog = DungeonCatalog.Load(pvf);
+            selectionDungeons = dungeonCatalog;
             assaultMode = AssaultModeCatalog.Load(pvf, dungeonCatalog);
             var rooms = DungeonRoomCatalog.Load(pvf);
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
@@ -167,7 +169,14 @@ internal static class ServerRuntime
             var dropCandidates = itemResources.DungeonDropItems;
             var specialDrops = itemResources.DungeonSpecialDrops;
             var amplificationDrops = new EquipmentAmplificationDropPolicy(itemResources.Amplifications.Rules);
-            var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get, specialDrops, amplificationDrops);
+            string? configuredMaterials = Environment.GetEnvironmentVariable("DFO_HARLEM_MATERIAL_RULES");
+            var materialRules = HarlemMaterialDropRules.Parse(configuredMaterials ?? "{}");
+            var harlemDungeons = towns.DungeonMaps.Values.Where(map => map.HellDungeon && map.HellQuests.Contains(6080))
+                .SelectMany(map => map.Options).Select(option => checked((uint)option.DungeonId));
+            var materialDrops = new HarlemMaterialDropPolicy(materialRules, harlemDungeons, itemResources.Items.Get);
+            log.Write("startup", new { Stage = "Harlem material rewards", State = "complete", Rule = HarlemMaterialDropPolicy.Rule,
+                materialRules.Enabled, Configured = configuredMaterials is not null });
+            var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get, specialDrops, amplificationDrops, materialDrops);
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = int.TryParse(Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE"), out int configuredPermille) ? Math.Clamp(configuredPermille, 0, 1000) : 0;
             DungeonItemDropPool? epicPool = null;
@@ -281,7 +290,7 @@ internal static class ServerRuntime
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),
-            new DungeonSelectionHandler(projection, log, tutorials),
+            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new ImageCommunicationHandler(imageCommunication, quests, log),
