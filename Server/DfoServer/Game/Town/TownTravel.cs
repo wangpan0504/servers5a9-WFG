@@ -24,9 +24,11 @@ internal static class TownTravel
         if (request.PreviousTown != character.Position.Town || request.PreviousArea != character.Position.Area)
             return TownTravelPlan.Reject("source-area-mismatch");
         var target = new Location(request.Town, request.Area, request.X, request.Y, character.Position.Direction);
-        // 已确认的房间返回 0/6 与菜单 5 分开；其他值按实际目标路线判断。
+        // 房间返回 0 仍绑定存档返回点；地图传送门对象（实测 PathKind 6）按 PVF warpgate 目标放行，
+        // 等级与前置任务由 Admission 的 portal 分支继续校验；菜单 5 同样按传送目标处理。
         bool portal = request.TargetNpc == 0 && towns.IsRoom(character.Position, completed) &&
-            (request.PathKind == 5 || request.PathKind is not (0 or 6) && towns.RoomPortals.Any(p => p.Town == target.Town && p.Area == target.Area));
+            (request.PathKind == 5 ||
+             request.PathKind != 0 && towns.RoomPortals.Any(p => p.Town == target.Town && p.Area == target.Area));
         string reason = towns.Admission(character.Position, target, character.Level, completed, character.Return, portal, request.TargetNpc);
         if (reason != "ready")
             return TownTravelPlan.Reject(reason);

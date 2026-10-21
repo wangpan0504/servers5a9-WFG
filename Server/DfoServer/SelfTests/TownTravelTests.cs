@@ -1,4 +1,5 @@
 using static DfoServer.Testing.TestCheck;
+using DfoServer.Game.Town;
 using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
 using DfoServer.GameWorld.Towns;
@@ -67,6 +68,14 @@ internal static class TownTravelTests
         That(resumed.Travel(new(38, 3, 780, 362, 5, 39, 0, 0)) && resumed.Travel(new(38, 0, 1407, 360, 5, 38, 3, 0)), "full route roundtrip");
         var saved = repo.List(owner).Single();
         That(saved.Position == new Location(38, 0, 1407, 360) && saved.CompletedQuests.SequenceEqual(preparation.CompletedQuests) && saved.GrowType == 0x25, "movement commits preserve level/job/quest state");
+        // 房间里的地图传送门对象走 PathKind 6，目的地是 PVF warpgate 条目；不能按存档返回点拒绝。
+        var inRoom = saved with { Position = new Location(38, 1, 450, 234, 0), Return = new Location(39, 0, 596, 144, 0) };
+        var quests = saved.CompletedQuests.ToHashSet();
+        var portalPlan = TownTravel.Plan(inRoom, new(38, 0, 622, 196, 5, 38, 1, 6), towns, quests);
+        That(portalPlan.Accepted && portalPlan.Position == new Location(38, 0, 622, 196, 0),
+            "地图传送门 PathKind 6 按 warpgate 目标放行，不受存档返回点限制 原因=" + portalPlan.Reason);
+        var doorPlan = TownTravel.Plan(inRoom, new(38, 0, 622, 196, 5, 38, 1, 0), towns, quests);
+        That(!doorPlan.Accepted && doorPlan.Reason == "room-return-mismatch", "PathKind 0 仍绑定存档返回点 原因=" + doorPlan.Reason);
         Console.WriteLine($"PASS {Count - checks} all-town assertions; towns=65, areas=343, maps=352");
     }
 }

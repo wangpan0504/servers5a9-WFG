@@ -58,7 +58,8 @@ internal static class TownSelectionTests
         for (int kind = 0; kind <= byte.MaxValue; kind++)
         {
             var plan = TownTravel.Plan(character, request with { PathKind = (byte)kind }, towns, Quests);
-            TestCheck.That(plan.Accepted == (kind is not (0 or 6)), "完整kind字节保留菜单/房间返回分流：" + kind);
+            // 实测房间里的地图传送门对象也发 6，因此只有 0 仍绑定存档返回点；其余 kind 按 warpgate 目标判定。
+            TestCheck.That(plan.Accepted == (kind != 0), "仅kind0绑定房间返回点，其余kind可走warpgate目标：" + kind);
             if (plan.Accepted)
                 TestCheck.That(plan.Position == new Location(3, 0, ushort.MaxValue, 0, 7) && plan.Return == new Location(3, 0, 10, 10),
                     "切图保留u16请求落点和方向，返回地区独立解析");
