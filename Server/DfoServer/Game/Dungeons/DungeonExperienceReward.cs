@@ -8,6 +8,8 @@ internal sealed record DungeonExperienceReward(string RuleId, string ResourceSou
 {
     public uint GrowthContractExperience { get; init; }
     public uint PotionExperience { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ExperienceBonuses? Bonuses { get; init; }
 }
 
 // 存储返回实际提交后的角色；Duplicate表示账本精确重放，不是新的击杀或新奖励。

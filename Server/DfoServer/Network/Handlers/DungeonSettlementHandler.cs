@@ -58,7 +58,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints),
             state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
         uint plainClear = reward.TotalExperience - reward.GrowthContractExperience - reward.PotionExperience;
-        var display = CharacterExperienceDisplay.Ordinary with
+        var display = (reward.BonusParts.IsDefault ? null : new ExperienceBonuses(checked(reward.BaseExperience + reward.RankExperience), reward.BonusParts).Display(result.GainedExperience)) ?? CharacterExperienceDisplay.Ordinary with
         { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainClear, reward.GrowthContractExperience, result.GainedExperience),
             PotionExperience = ExpBonusPolicy.Shown(plainClear, reward.GrowthContractExperience, reward.PotionExperience, result.GainedExperience) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);

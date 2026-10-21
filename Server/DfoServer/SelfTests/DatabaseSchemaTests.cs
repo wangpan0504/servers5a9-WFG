@@ -11,9 +11,22 @@ using System.Text.Json;
 
 namespace DfoServer;
 
-internal static class DatabaseSchemaTests
+internal static partial class DatabaseSchemaTests
 {
     const string SettlementColumns = "character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision";
+
+    internal static void RemoveExperienceBonusSchema(SqliteConnection db)
+    {
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='other_bonus_experience'") is not 1L) return;
+        if (Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE other_bonus_experience<>0 OR bonus_json<>'[]'") is not 0L)
+            throw new InvalidOperationException("旧库夹具不能丢弃真实经验加成分项");
+        using var tx = db.BeginTransaction();
+        SqliteMigrations.ReplaceTableConstraint(db, tx, DungeonExperienceBonusSchema.Table,
+            DungeonExperienceBonusSchema.NewTotal + ")", DungeonExperienceBonusSchema.OldTotal + ")");
+        SqliteMigrations.Execute(db, tx, "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN bonus_json");
+        SqliteMigrations.Execute(db, tx, "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN other_bonus_experience");
+        tx.Commit();
+    }
 
     internal static void RemoveAdventurePurchases(SqliteConnection db)
     {
@@ -41,6 +54,7 @@ internal static class DatabaseSchemaTests
     // 旧结构夹具确实移除v40来源列和空场景表，保留旧清图、完成FK与历史行。
     internal static void RewindQuestSceneClearSchema(SqliteConnection db)
     {
+        RemoveExperienceBonusSchema(db);
         RewindQuestRentalCompletion(db);
         Execute(db, "DROP TABLE IF EXISTS cube_premium");
         const string table = "character_quest_clear_receipts";
@@ -509,6 +523,7 @@ internal static class DatabaseSchemaTests
     // v42仍是正死亡场景与结算；回退只接受没有v43新事实的夹具，不删除真实来源或奖励。
     internal static void RewindDungeonSceneSettlement(SqliteConnection db)
     {
+        RemoveExperienceBonusSchema(db);
         RewindQuestDungeonAlternatives(db);
         DropGuildSchema(db);
         const string settlement = "character_dungeon_settlement_receipts", scene = "character_dungeon_scene_clear_receipts";
@@ -1945,6 +1960,7 @@ internal static class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveExperienceBonusSchema(db);
                 RewindDailyBoosterUsage(db);
                 if (oldVersion < 49) RewindDevilServices(db);
                 if (oldVersion < 53) DropQuestStageSchema(db);

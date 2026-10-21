@@ -24,7 +24,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.Quests.QuestSkipEffects? questEffects = null, PremiumContractCatalog? contracts = null, TimeProvider? timeProvider = null,
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null,
     Game.Creatures.CreatureService? creatures = null, GameWorld.Quests.QuestStageGraph? stageGraph = null,
-    ItemCatalog? items = null)
+    ItemCatalog? items = null, ExperienceBonusService? experienceBonuses = null)
 {
     public AuthenticatedIdentity? Identity { get; } = identity;
     public GameWorld.Channels.ChannelEntry? ChannelEntry { get; } = entry;

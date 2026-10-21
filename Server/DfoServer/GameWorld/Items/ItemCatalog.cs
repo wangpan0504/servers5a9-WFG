@@ -349,6 +349,10 @@ internal sealed class ItemCatalog
             AvatarGiftType = isEquipment ? null : AvatarTypeSelectionFile.GiftType(text),
             EmblemTargetSockets = kind == ItemKind.Emblem ? ReadEmblemTargetSockets(text) : (ushort)0,
             GuardianGemEffects = kind == ItemKind.GuardianGem ? ReadGuardianGemEffects(text) : [],
+            ExperiencePercent = isEquipment ? ReadExperiencePercent(text) : 0,
+            ExperienceForbiddenModules = Regex.Matches(text.Block("impossible equip module"), @"`([^`]+)`")
+                .Select(match => match.Groups[1].Value.Trim().Trim('[', ']')).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+            CreatureEgg = kind == ItemKind.Creature && creatures?.Get(id)?.Egg == true,
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
@@ -360,6 +364,15 @@ internal sealed class ItemCatalog
         };
 
         int Int(string tag, int fallback) => Integers(text.Section(tag)).FirstOrDefault(fallback);
+    }
+
+    internal static decimal ReadExperiencePercent(PvfDocument document)
+    {
+        if (!document.Has("exp advantage")) return 0;
+        if (!decimal.TryParse(document.Section("exp advantage").Trim(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out decimal value))
+            throw new InvalidDataException("装备exp advantage必须为非负百分比");
+        return Math.Max(0, value);
     }
 
     // `enable` 是限制名单的开关，不是“禁止使用”。只有开关打开且没有具体内容时才禁止使用；

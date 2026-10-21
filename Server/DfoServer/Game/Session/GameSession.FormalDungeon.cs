@@ -671,10 +671,10 @@ internal sealed partial class GameSession
         {
             var at = (timeProvider ?? TimeProvider.System).GetUtcNow();
             var basis = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
-            uint bonus = GrowthContractPolicy.ExperienceBonus(Selected, basis.Amount, contracts?.Growth, at.ToUnixTimeSeconds());
-            uint potion = ExpBonusPolicy.Bonus(Selected, basis.Amount, at.ToUnixTimeSeconds());
+            var bonuses = PlanExperience(Selected, ExperienceEvent.Kill, basis.Amount, 0, at.ToUnixTimeSeconds(), dungeon.Entry.DungeonId, dungeon.Entry.ExperienceEquipmentModule);
             dungeon.PendingDeathReward = (pending, basis with
-                { Amount = checked(basis.Amount + bonus + potion), GrowthContractExperience = bonus, PotionExperience = potion }, at);
+                { Amount = bonuses.Total, GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
+                    PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), Bonuses = bonuses }, at);
         }
         var frozen = dungeon.PendingDeathReward.Value;
         if (!ReferenceEquals(frozen.Death, pending))
@@ -714,8 +714,9 @@ internal sealed partial class GameSession
         SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
         dungeon.KillExperienceTotal = checked(dungeon.KillExperienceTotal + committed.Commit.GainedExperience);
         dungeon.KillGrowthContractExperience = checked(dungeon.KillGrowthContractExperience +
+            (reward.Bonuses?.Applied(committed.Commit.GainedExperience).Amount(ExperienceBonusSource.GrowthContract) ??
             GrowthContractPolicy.AppliedBonus(reward.Amount - reward.GrowthContractExperience,
-                reward.GrowthContractExperience, committed.Commit.GainedExperience));
+                reward.GrowthContractExperience, committed.Commit.GainedExperience)));
         if (committed.Death.ClearFact is not null)
             dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
         return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward,
