@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
@@ -15,7 +16,7 @@ internal sealed partial class CharacterRepository
     public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected,
         SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog,
         InventoryPlan? cardInventory = null, bool mailCardItem = false, DungeonCardDelivery? premiumDelivery = null,
-        bool grantLuckyStar = false, int luckyStarLimit = 0) => owner.Execute(() =>
+        bool grantLuckyStar = false, int luckyStarLimit = 0, AdventureProgressionPlan? adventure = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -149,6 +150,16 @@ internal sealed partial class CharacterRepository
               $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$otherBonus,$bonusJson)
             """;
         command.ExecuteNonQuery();
+        if (adventure is not null)
+        {
+            // 账号进度与角色成长同一事务：先核对事务内快照，再按同一规则重算增量，拒绝越界或伪造的计划。
+            var accountAdventure = ReadAdventure(db, tx, owner.Account, adventure.Catalog, adventure.Now);
+            if (JsonSerializer.Serialize(accountAdventure.State) != JsonSerializer.Serialize(adventure.Before.State) ||
+                JsonSerializer.Serialize(AdventureProgression.Advance(accountAdventure.State, adventure.MaximumLevelExperience,
+                    adventure.Catalog)) != JsonSerializer.Serialize(adventure.After))
+                throw new InvalidOperationException("通关冒险团进度快照或增量已变化");
+            WriteAdventureProgression(db, tx, owner.Account, accountAdventure.State, adventure.After, adventure.Catalog);
+        }
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久通关成长结果与候选不一致");
@@ -186,6 +197,8 @@ internal sealed partial class CharacterRepository
         return new DungeonSettlementCommit(committed, false, reward)
         {
             GainedExperience = checked((uint)plan.GainedExperience),
+            Adventure = adventure is null ? null : new(adventure.After with { Revision = adventure.Before.State.Revision + 1 },
+                adventure.MaximumLevelExperience),
             LuckyStarGained = luckyStar.Granted,
             LuckyStarTotal = luckyStar.Total,
             Card = prepared.Card, Options = prepared.Options,

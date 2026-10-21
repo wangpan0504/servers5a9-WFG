@@ -1,5 +1,7 @@
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Adventure;
+using DfoServer.GameWorld.Adventure;
 using DfoServer.Game.Town;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
@@ -108,7 +110,7 @@ internal sealed partial class GameSession
     public FormalDungeonSettlementResult SettleFormalDungeon(ushort actorId, byte rankPoint, byte maximumRankPoint,
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth,
         DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0,
-        Events.ServerEventState? goldCardEvent = null)
+        Events.ServerEventState? goldCardEvent = null, AdventureCatalog? adventure = null)
     {
         var capture = owner.Execute(() => (Character: Ready && Phase == SessionPhase.Settlement ? Selected : null,
             Dungeon: formalDungeon, Points: formalDungeon?.Run.CreatureExperiencePoints ?? 0,
@@ -165,10 +167,24 @@ internal sealed partial class GameSession
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
+        AdventureProgressionCommit? adventureCommit = null;
         if (!settlement.Committed)
         {
             // 原owner内校验、提交并安装实际结果；异常时保留同一准备供持久receipt查询。
             var expected = settlement.Expected;
+            // 账号锁内只读一次账号冒险团快照并完成同步规划；未达等级上限时不产生额外读写。
+            AdventureProgressionPlan? progression = null;
+            ulong overflow = dungeon.Entry.IsTutorial ? 0 : AdventureProgression.MaximumLevelExperience(
+                expected.Level, expected.Learning.Experience, reward.TotalExperience,
+                CharacterGrowthCatalog.MaximumSupportedLevel,
+                growth.GetLevelStartExperience(CharacterGrowthCatalog.MaximumSupportedLevel));
+            if (adventure is not null && overflow > 0)
+            {
+                var adventureNow = DateTimeOffset.UtcNow;
+                repository.InitializeAdventure(owner, adventure, adventureNow);
+                progression = AdventureProgression.Plan(repository.ReadAdventure(owner, adventure, adventureNow),
+                    overflow, adventure, adventureNow);
+            }
             if (!ReferenceEquals(Selected, expected) || !ReferenceEquals(formalDungeon, dungeon) || fact.Identity.CharacterId != expected.Id ||
                 !dungeon.Run.IsPendingSettlement(prepared.Pending))
                 throw new InvalidOperationException("通关结算owner或待提交实例已失效");
@@ -188,7 +204,7 @@ internal sealed partial class GameSession
                 bool grantLuckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(
                     dungeons.Get(checked((int)dungeon.Entry.DungeonId)), expected.Level);
                 commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
-                    grantLuckyStar: grantLuckyStar, luckyStarLimit: luckyStarLimit);
+                    grantLuckyStar: grantLuckyStar, luckyStarLimit: luckyStarLimit, adventure: progression);
             }
             if (commit.Character.Id != expected.Id || commit.Character.Revision < expected.Revision ||
                 dungeon.Run.ConfirmCommittedSettlement(prepared.Pending) != DungeonRunOutcome.Accepted)
@@ -200,6 +216,7 @@ internal sealed partial class GameSession
             settlement.GainedExperience = commit.GainedExperience;
             settlement.LuckyStarGained = commit.LuckyStarGained;
             settlement.LuckyStarTotal = commit.LuckyStarTotal;
+            adventureCommit = commit.Adventure;
             if (commit.Inventory is { } plan)
                 inventory = new InventoryResult(true, 0, plan)
                 {
@@ -235,6 +252,7 @@ internal sealed partial class GameSession
                 GainedExperience = settlement.GainedExperience,
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
+                Adventure = adventureCommit,
                 Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond };
         });
     }

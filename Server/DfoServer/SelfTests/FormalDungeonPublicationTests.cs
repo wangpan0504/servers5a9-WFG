@@ -854,9 +854,9 @@ internal static class FormalDungeonPublicationTests
 
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,DungeonCardDelivery? premiumDelivery = null,
-            bool grantLuckyStar = false, int luckyStarLimit = 0)
+            bool grantLuckyStar = false, int luckyStarLimit = 0, DfoServer.Game.Adventure.AdventureProgressionPlan? adventure = null)
         {
-            var result = inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit);
+            var result = inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit, adventure);
             if (++settlementCalls == 1 && loseSettlement) throw new IOException("合成翻牌及经验已提交但返回结果丢失");
             return result;
         }

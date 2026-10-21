@@ -94,6 +94,7 @@ internal static class SelfTestRunner
         AdventureRepresentativeTests.RunCore();
         AdventureExpeditionTests.RunCore();
         AdventureShopTests.RunCore();
+        AdventureProgressionTests.RunCore();
         QuestEligibilityTests.Run();
         QuestStagePolicyTests.RunCore();
         QuestCatalogTests.RunCore();
@@ -347,6 +348,7 @@ internal static class SelfTestRunner
         CharacterGrowthTests.Run(towns, pvf);
         DungeonKillExperienceCatalogTests.Run(pvf);
         DungeonSettlementTests.RunResources(pvf);
+        DungeonSettlementTests.RunAdventureResources(pvf);
         DungeonSettlementSessionTests.Run(towns, pvf, characters, itemResources);
         DungeonMonsterDropCatalogTests.Run(pvf);
         DungeonDropRuleCatalogTests.RunResources(pvf);

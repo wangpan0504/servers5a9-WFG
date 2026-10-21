@@ -18,7 +18,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items,
     CharacterLevelProjection levelProjection, EpicPieceCatalog? pieces = null,
     DungeonCardRewardPolicy? cards = null, InventoryProjection? inventoryProjection = null,
-    RentalCatalog? rental = null, Game.Events.ServerEventService? events = null) : IGameCommandModule
+    RentalCatalog? rental = null, Game.Events.ServerEventService? events = null,
+    GameWorld.Adventure.AdventureCatalog? adventure = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -48,9 +49,13 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 活动查询不占用账号锁；同一份结算准备冻结资格与倍率。
         var goldCardEvent = events?.Read(Game.Events.ServerEventService.DoubleGoldCardId);
         var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
-            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent);
+            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
-            result.Reward, result.GainedExperience, result.Card, result.MailId, result.Receipt?.Snapshot.Identity });
+            result.Reward, result.GainedExperience, result.Card, result.MailId, result.Receipt?.Snapshot.Identity,
+            Adventure = result.Adventure is { } progression
+                ? new { progression.State.Level, progression.State.Experience, progression.MaximumLevelExperience,
+                    progression.State.CapsuleExperience, BravePoints = progression.State.Points[0] }
+                : null });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate) || result.Receipt is not { } receipt)
             return CommandResult.Unhandled;
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("结算角色缺成长附属owner");

@@ -69,4 +69,5 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     public DfoServer.Game.Session.CrackClearResult? CrackClear { get; init; }
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
+    public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
 }

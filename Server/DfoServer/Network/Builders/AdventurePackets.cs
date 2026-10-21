@@ -78,7 +78,9 @@ internal static class AdventurePackets
         U64(raw, 24, state.CapsuleExperience); U32(raw, 32, Claims(state, catalog));
         writer.Write(raw.Length); writer.Write(raw); writer.Write(new byte[4]);
     });
-    public static uint Claims(AdventureState state, AdventureCatalog catalog) => checked((uint)(state.CapsuleExperience / catalog.Capsule.MinimumExperience));
+    // 客户端按胶囊格数展示可领取次数；经验上限可能覆盖多格，但显示不能超过资源声明的最大格数。
+    public static uint Claims(AdventureState state, AdventureCatalog catalog) =>
+        (uint)Math.Min(catalog.Capsule.MaximumGauges, state.CapsuleExperience / catalog.Capsule.MinimumExperience);
 
     public static byte[] Candidates(IReadOnlyList<AdventureMember> rows, byte region) => Build(writer =>
     {

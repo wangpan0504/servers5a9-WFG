@@ -14,6 +14,7 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public uint GainedExperience { get; init; }
     public bool LuckyStarGained { get; init; }
     public int LuckyStarTotal { get; init; }
+    public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
 }
 
 // 冻结首份报告与经验候选；只有原实例保存的同一对象能取得提交资格。

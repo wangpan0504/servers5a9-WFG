@@ -1,6 +1,8 @@
 using static DfoServer.Testing.TestCheck;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Adventure;
+using DfoServer.Game.Auth;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
@@ -51,6 +53,7 @@ internal static class DungeonSettlementSessionTests
         LostPaidResult();
         DelilahServices();
         CappedSettlement();
+        AdventureSettlement();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
 
         void PremiumCards(bool member,bool full)
@@ -601,6 +604,50 @@ internal static class DungeonSettlementSessionTests
                 "满级完整通关之后仍能正常回城");
         }
 
+        void AdventureSettlement()
+        {
+            // 合成冒险团资源：满级3、倍率0.3、勇者结晶5经验1点、胶囊每格100最多2格，便于核对确定结果。
+            var adventure = AdventureCoreTests.SyntheticCatalog();
+            var policy = new DungeonCardRewardPolicy(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),itemResources.DungeonDropItems,itemResources.Items,
+                itemResources.GoldLimits,itemResources.EpicPieces,_ => 0,global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
+            using (var f = new Fixture("AdvClear",towns,characters,learning,quests))
+            {
+                ulong cap = growth.GetCumulativeExperienceBoundary(95) - 1;
+                f.Sql($"UPDATE characters SET level=95,experience={cap-2} WHERE id={f.Created.Id}");
+                f.Sql($"UPDATE character_skill_points SET sp=sp+{growth.GetSpDelta(1,95)},tp=tp+{growth.GetTpDelta(1,95)} WHERE character_id={f.Created.Id}");
+                f.SelectEntry(); Enter(f); ClearRun(f,capped:true);
+                var initial = AdventureState.Initial(f.Account, DateTimeOffset.UtcNow);
+                var cleared = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[41,42,43],dungeons,clear,growth,policy,adventure:adventure);
+                var expected = AdventureProgression.Advance(initial, cleared.Reward?.TotalExperience ?? 0, adventure);
+                Check(cleared.Outcome == DungeonRunOutcome.Accepted && cleared.Reward is not null &&
+                    cleared.Adventure is { } progress && progress.MaximumLevelExperience == cleared.Reward.TotalExperience &&
+                    progress.State.Revision == 1 && progress.State.Level == expected.Level &&
+                    progress.State.Experience == expected.Experience && progress.State.Remainder == expected.Remainder &&
+                    progress.State.BraveExperience == expected.BraveExperience &&
+                    progress.State.CapsuleExperience == expected.CapsuleExperience &&
+                    progress.State.Points.SequenceEqual(expected.Points) &&
+                    f.Query("SELECT level FROM account_adventures") is 3L &&
+                    Convert.ToInt64(f.Query("SELECT experience FROM account_adventures")) == (long)expected.Experience &&
+                    f.Query("SELECT revision FROM account_adventures") is 1L,
+                    "满级通关把整单经验同事务推进账号冒险团等级、勇者结晶、胶囊与点数");
+                Check(cleared.GainedExperience == 0 && f.Read().Learning.Experience == cap && f.Settlements == 1,
+                    "角色经验仍按满级截断到账0，账号进度不能替代或追发角色经验");
+                var replay = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[41,42,43],dungeons,clear,growth,policy,adventure:adventure);
+                Check(replay.Outcome == DungeonRunOutcome.Duplicate && replay.Adventure is null &&
+                    f.Query("SELECT revision FROM account_adventures") is 1L &&
+                    Convert.ToInt64(f.Query("SELECT experience FROM account_adventures")) == (long)expected.Experience,
+                    "重复通关报告不再推进账号冒险团，只读已提交receipt");
+            }
+            using (var f = new Fixture("AdvNormal",towns,characters,learning,quests))
+            {
+                f.SelectEntry(); Enter(f); ClearRun(f);
+                var cleared = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[44,45,46],dungeons,clear,growth,policy,adventure:adventure);
+                Check(cleared.Outcome == DungeonRunOutcome.Accepted && cleared.Adventure is null &&
+                    f.Count("account_adventures") == 0 && f.Read().Learning.Experience > 0,
+                    "未达等级上限的普通通关不创建账号冒险团行，也不产生额外读写");
+            }
+        }
+
         void DelilahServices()
         {
             using var f = new Fixture("Delilah",towns,characters,learning,quests);
@@ -787,6 +834,8 @@ internal static class DungeonSettlementSessionTests
         {
             database = Path.Combine(root, "game.db");
             repository = new(database, quests);
+            // account_adventures 以外键引用 accounts；夹具按真实登录路径先建账号行。
+            new AuthenticationService(new AuthenticationRepository(database)).Create("clear-session", "fixture-password");
             owner = owners.Acquire("clear-session", () => { });
             Session = new(loseCardResult || losePaidResult || loseFreeResult ? new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,
                 loseSettlement:loseCardResult,losePaid:losePaidResult,loseFree:loseFreeResult) : repository, towns, owner);
