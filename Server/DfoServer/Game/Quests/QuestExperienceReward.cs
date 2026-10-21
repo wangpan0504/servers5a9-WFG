@@ -7,6 +7,8 @@ internal sealed record QuestExperienceReward(string ResourcePath, string QuestPa
     int BaseExperience, int RawAdditionalPercent, string DifficultyKey, int DifficultyWeight, uint Amount)
 {
     public uint GrowthContractExperience { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ExperienceBonuses? Bonuses { get; init; }
 }
 
 internal static class QuestExperiencePolicy

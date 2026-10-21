@@ -155,6 +155,7 @@ internal static class SqliteMigrations
         new(63, "技能窗职业变更次数", static (db, tx) => Execute(db, tx, GrowUpChangeSchema)),
         new(64, "消耗品持续效果与冷却", static (db, tx) => Execute(db, tx, ConsumableStatesSchema)),
         new(65, "角色被拉黑有效计分", AddBlacklistCountColumn),
+        new(66, "通关经验其他加成与冻结分项", DungeonExperienceBonusSchema.Upgrade),
     ];
 
     const string BlacklistCountColumn = "blacklist_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(blacklist_count)='integer' AND blacklist_count BETWEEN 0 AND 2147483647)";
@@ -246,7 +247,7 @@ internal static class SqliteMigrations
             "CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419))");
     }
 
-    static void ReplaceTableConstraint(SqliteConnection db, SqliteTransaction tx, string table, string oldLimit, string newLimit)
+    internal static void ReplaceTableConstraint(SqliteConnection db, SqliteTransaction tx, string table, string oldLimit, string newLimit)
     {
         using var query = db.CreateCommand(); query.Transaction = tx;
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
@@ -1418,7 +1419,7 @@ internal static class SqliteMigrations
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
-            ("character_dungeon_settlement_receipts",DungeonSceneSettlementSchema.SettlementSql),
+            ("character_dungeon_settlement_receipts",DungeonExperienceBonusSchema.Sql),
             ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
             ("character_dungeon_drop_pickups",DungeonDropCollectionSchema.PickupDefinition),
             ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema),
@@ -1505,7 +1506,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,day,clear_count,daily_reward FROM character_crack_daily LIMIT 0",
         "SELECT character_id,account,change_count FROM character_growup_change LIMIT 0",
-        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts LIMIT 0",
+        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision,other_bonus_experience,bonus_json FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",
         "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience FROM character_dungeon_state LIMIT 0",

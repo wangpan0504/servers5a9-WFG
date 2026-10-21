@@ -29,6 +29,8 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("通关提交需要本角色当前实例的冻结清图事实与首份报告");
         var identity = prepared.Fact.Identity;
         var reward = prepared.Reward;
+        uint otherBonus = checked(reward.ExtraExperience - reward.GrowthContractExperience);
+        string bonusJson = reward.BonusParts.IsDefault ? "[]" : JsonSerializer.Serialize(reward.BonusParts);
         byte[] deaths = prepared.Fact.ConfirmedDeathEvents.SelectMany(value => value.ToByteArray()).ToArray();
         string? sceneOperation = prepared.Fact.PassiveSource?.OperationId.ToString("N");
         using var db = database.Open();
@@ -46,7 +48,7 @@ internal sealed partial class CharacterRepository
         command.CommandText = """
             SELECT account,event_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,
               base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_experience,after_experience,
-              scene_operation_id,growth_contract_experience
+              scene_operation_id,growth_contract_experience,other_bonus_experience,bonus_json
             FROM character_dungeon_settlement_receipts WHERE character_id=$id AND instance_id=$instance
             """;
         bool duplicate;
@@ -62,7 +64,7 @@ internal sealed partial class CharacterRepository
                 reader.GetInt64(9) != reward.BaseExperience || reader.GetInt64(10) != reward.RankExperience ||
                 reader.GetInt64(11) != reward.TotalExperience || reader.GetInt64(12) != reward.RankBonusIndex ||
                 reader.GetString(13) != reward.RuleId || reader.GetString(14) != reward.ResourceSource ||
-                (reader.IsDBNull(17) ? null : reader.GetString(17)) != sceneOperation || reader.GetInt64(18) != reward.GrowthContractExperience))
+                (reader.IsDBNull(17) ? null : reader.GetString(17)) != sceneOperation || reader.GetInt64(18) != reward.GrowthContractExperience || reader.GetInt64(19) != otherBonus || reader.GetString(20) != bonusJson))
                 throw new InvalidDataException("同一通关实例的事实、报告或奖励被修改");
             if (duplicate) gained = checked((uint)(reader.GetInt64(16) - reader.GetInt64(15)));
         }
@@ -128,6 +130,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$total", reward.TotalExperience);
         command.Parameters.AddWithValue("$sceneOperation", (object?)sceneOperation ?? DBNull.Value);
         command.Parameters.AddWithValue("$growthContract", reward.GrowthContractExperience);
+        command.Parameters.AddWithValue("$otherBonus", otherBonus);
+        command.Parameters.AddWithValue("$bonusJson", bonusJson);
         command.Parameters.AddWithValue("$bonus", reward.RankBonusIndex);
         command.Parameters.AddWithValue("$rule", reward.RuleId);
         command.Parameters.AddWithValue("$resource", reward.ResourceSource);
@@ -140,9 +144,9 @@ internal sealed partial class CharacterRepository
             INSERT INTO character_dungeon_settlement_receipts(character_id,account,event_id,instance_id,quest_id,
               task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,
               total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,
-              before_experience,after_experience,revision,scene_operation_id,growth_contract_experience)
+              before_experience,after_experience,revision,scene_operation_id,growth_contract_experience,other_bonus_experience,bonus_json)
             VALUES($id,$account,$event,$instance,$quest,$attempt,$epoch,$dungeon,$map,$deaths,$report,$generation,
-              $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract)
+              $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$otherBonus,$bonusJson)
             """;
         command.ExecuteNonQuery();
         var committed = Require(db, tx, owner.Account, expected.Name);

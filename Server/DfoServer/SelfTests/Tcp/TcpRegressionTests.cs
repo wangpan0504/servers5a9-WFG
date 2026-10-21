@@ -144,6 +144,7 @@ internal static class TcpRegressionTests
             await QuestCorePublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);
         }),
         ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
+        ("experience-bonuses", FormalDungeonTcpTests.RunExperienceBonusesAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
         ("durability", FormalDungeonTcpTests.RunDurabilityAsync),
         ("dungeon-training", FormalDungeonTcpTests.RunTrainingAsync),

@@ -12,6 +12,7 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
 {
     public int? SubType { get; init; }
     public int? ExpBonusPermille { get; init; }
+    public int? QuestExpBonusPermille { get; init; }
     public int? ExpBonusMilliseconds { get; init; }
     public StatChangeDurationDeclaration? StatChangeDuration { get; init; }
     public byte? EffectMaintenance { get; init; }
@@ -52,19 +53,20 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         var duration = Duration(document, resolve, errors);
         byte? effects = Maintenance(document, "effect maintenance", 4, errors);
         byte? cooldowns = Maintenance(document, "cooltime maintenance", 3, errors);
-        int? bonus = ExpBonus(document, resolve, errors);
+        int? bonus = ExpBonus(document, "exp bonus rate", errors);
+        int? questBonus = ExpBonus(document, "quest exp bonus rate", errors);
         var limits = document.Sections.Where(section => section.Name == "limit dungeon")
             .SelectMany(section => section.Values).Where(token => token.Type == 0).Select(token => token.Value).ToImmutableArray();
         return new(id, path, StackableFile.Parse(id, path, tokens, resolve), coolTime, group, hp, mp,
             document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray())
-        { SubType = subType, ExpBonusPermille = bonus,
+        { SubType = subType, ExpBonusPermille = bonus, QuestExpBonusPermille = questBonus,
             ExpBonusMilliseconds = duration is { Target: "myself" } ? duration.Milliseconds : null,
             StatChangeDuration = duration, EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits };
     }
 
-    static int? ExpBonus(PvfTokenDocument document, Func<int, string> resolve, List<string> errors)
+    static int? ExpBonus(PvfTokenDocument document, string field, List<string> errors)
     {
-        var sections = document.Sections.Where(section => section.Name == "exp bonus rate").ToArray();
+        var sections = document.Sections.Where(section => section.Name == field).ToArray();
         if (sections.Length == 0) return null;
         if (sections is [{ Children.Length: 0, Values: [{ } token] }])
         {

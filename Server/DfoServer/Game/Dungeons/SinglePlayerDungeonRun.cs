@@ -664,7 +664,7 @@ internal sealed partial class SinglePlayerDungeonRun
         ArgumentNullException.ThrowIfNull(reward);
         if (entry.IsPractice || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
             HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial ||
-            (ulong)reward.BaseExperience + reward.RankExperience + reward.GrowthContractExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
+            (ulong)reward.BaseExperience + reward.RankExperience + reward.ExtraExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
             string.IsNullOrWhiteSpace(reward.ResourceSource) || reward.ResourceSource.Length > 1024)
             return new(DungeonRunOutcome.Rejected);
