@@ -46,6 +46,7 @@ internal sealed partial class GameSession
         public CrackDimensionRewardServices? CrackRewards { get; init; }
         // 实验性：深渊派对入场票；入场提交（InstallFormalDungeon）时按当前背包重算并扣除。
         public HellPartyTicket? HellTicket { get; init; }
+        public HellPartyTicket? LegendTicket { get; init; }
         public EpicPieceCatalog? HellPieces { get; init; }
         // #510/#511 普通入场票（[required item]「物品 1 1」）的规划目录；入场提交时按最新背包重算。
         public EpicPieceCatalog? EntryPieces { get; init; }
@@ -130,7 +131,7 @@ internal sealed partial class GameSession
             return RejectFormal(selectionReason);
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：深渊派对入场条件 = 所在选图区域 [hell dungeon] 为真
         // 且该区域 [hell quest] 列表全部已完成（列表为空视为满足）。拒绝原因以 "hell-party-" 前缀写入 LastFormalDungeonRejection，由 handler 回拒绝包。
-        // 未实现：[item condition]（深渊邀请函）消耗、难度/队伍规则。
+        // 票据在下面统一规划并随实例安装原子提交；组队规则未接入。
         if (hellParty)
         {
             if (retry is not null || training || trainingRoom || classExperience || assault is not null || questId != 0 || (sealDoor && hellLegend))
@@ -140,9 +141,14 @@ internal sealed partial class GameSession
                 !(sealDoor || (hellLegend ? hellMap.HellLegendDungeon : hellMap.HellDungeon)))
                 return RejectFormal("hell-party-area-unavailable");
             // 实验性：密门（普通入场里按概率换成深渊房间）不查深渊任务；传奇深渊查 [hell legend quest]（6081）。
-            var missingHellQuests = sealDoor ? [] : (hellLegend ? hellMap.HellLegendQuests : hellMap.HellQuests).Where(id => !done.Contains(id)).ToArray();
+            var missingHellQuests = sealDoor ? [] : (hellLegend ? hellMap.HellQuests.Concat(hellMap.HellLegendQuests) : hellMap.HellQuests)
+                .Where(id => !done.Contains(id)).ToArray();
             if (missingHellQuests.Length > 0) return RejectFormal("hell-party-quest-required:" + missingHellQuests[0]);
+            if (hellLegend && (selection is null || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
+                selection.HellLegendDungeonId != dungeonId)) return RejectFormal("hell-party-legend-selection-mismatch");
         }
+        if (hellParty && !hellLegend && !sealDoor && selection?.HellLegendDungeonId == dungeonId)
+            return RejectFormal("hell-party-legend-selection-mismatch");
         StoryQuest? quest = null;
         if (questCatalog is not null && questId != 0)
         {
@@ -159,8 +165,9 @@ internal sealed partial class GameSession
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         if (hellParty && entry!.HellParty is null) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
-        // 实验性：密门入场和传奇深渊不扣票（密门没有票的概念；传奇的 [hell legend item condition] 在 95 PVF 里是 -1=无票物品，数量 2 无法落到物品上）。
-        if (hellParty && !sealDoor && !hellLegend)
+        HellPartyTicket? legendTicket = null;
+        // 密门不收费；星空裂缝在原深渊邀请函之外消耗客户端指定的灵石，数量来自迷宫声明。
+        if (hellParty && !sealDoor)
         {
             // 实验性：入场票。未配置 EpicPieceCatalog 时无法规划消耗，保守拒绝（不免费放行）。
             var hellTickets = towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var ticketArea) && ticketArea.DungeonWorldMap is { } ticketWorld &&
@@ -169,6 +176,14 @@ internal sealed partial class GameSession
             var ticketPlan = pieces is null ? (null, null) : HellPartyEntryCost.Plan(expected.Inventory, hellTickets, ticketCount, pieces, DateTimeOffset.UtcNow);
             if (ticketPlan.Item1 is null) return RejectFormal("hell-party-item-required");
             hellTicket = ticketPlan.Item1;
+            if (hellLegend)
+            {
+                int count = entry!.HellParty!.LegendRequiredCount;
+                var stones = pieces is null || ticketPlan.Item2 is null ? (null, null) :
+                    HellPartyEntryCost.Plan(ticketPlan.Item2.After, [HellPartyEntryCost.LegendStone], count, pieces, DateTimeOffset.UtcNow);
+                if (stones.Item1 is null) return RejectFormal("hell-party-item-required");
+                legendTicket = stones.Item1;
+            }
             // 实验性：档位（A..D）= 请求没点名时按 etc/hellparty.etc [difficulty] 的 Probability 加权随机（95 PVF 里只有 A 有权重，所以实际总是 A）。
             entry = entry with { HellPartyMode = rooms.HellParty.ResolveManualMode(RandomNumberGenerator.GetInt32) };
         }
@@ -193,7 +208,7 @@ internal sealed partial class GameSession
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes,crackRewards);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null,
-            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, HellPieces = pieces, EntryPieces = pieces } };
+            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, EntryPieces = pieces } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
         bool HasOriginalTerminalClear(ActiveMainQuest original) =>
@@ -324,8 +339,9 @@ internal sealed partial class GameSession
         }
         var authority = new NativeDungeonCombatAuthority();
         var committedEntry = entry with { CharacterRevision = checked(expected.Revision + 1) };
-        if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out _) ||
-            !authority.BindTo(run!)) return null;
+        if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out var runReason))
+            return RejectFormal("run-create:" + runReason);
+        if (!authority.BindTo(run!)) return RejectFormal("run-authority-bind-failed");
         var passiveGrounds = new List<DungeonGroundObject>();
         if (passiveDrops is not null)
         {
@@ -410,21 +426,22 @@ internal sealed partial class GameSession
             assaultAuthorization = null;
         }
         System.Collections.Immutable.ImmutableArray<InventorySlot> hellSlots = [];
+        InventoryPlan? entryItems = null;
         if (installing.HellTicket is { } hellTicket)
         {
-            // 实验性：入场提交时按最新背包重算并整笔扣票；背包在 prepare 之后变少则整个入场作废（不会白进也不会半扣）。
-            var spent = installing.HellPieces is not { } hellPieces ? (null, null) : HellPartyEntryCost.Plan(character.Inventory, [hellTicket.ItemId], hellTicket.Count, hellPieces, DateTimeOffset.UtcNow);
-            if (spent.Item2 is not { } hellPlan) return null;
-            character = repository.CommitInventory(owner, character, hellPlan);
+            if (installing.HellPieces is not { } hellPieces) return null;
+            ItemMaterialCost[] costs = installing.LegendTicket is { } stone
+                ? [new(hellTicket.ItemId, hellTicket.Count), new(stone.ItemId, stone.Count)]
+                : [new(hellTicket.ItemId, hellTicket.Count)];
+            var spent = InventoryMaterialConsumptionService.Plan(character.Inventory, costs, hellPieces, DateTimeOffset.UtcNow);
+            if (!spent.Accepted || spent.Plan is not { } hellPlan) return null;
+            entryItems = hellPlan;
             hellSlots = hellPlan.ChangedSlots;
-            var rebased = installing.Entry with { CharacterRevision = checked(character.Revision + 1) };
-            installing.Run.RebasePreparedRevision(rebased.CharacterRevision);
-            installing = installing with { Entry = rebased };
         }
         System.Collections.Immutable.ImmutableArray<InventorySlot> entrySlots = [];
-        InventoryPlan? entryItems = null;
         if (installing.Entry.EntryItem is { } entryItem)
         {
+            if (entryItems is not null) throw new InvalidDataException("普通入场票不能叠加深渊入场费用");
             // #510/#511 入场提交时按最新背包重算入场票；prepare 之后变少则整个入场作废。
             if (installing.EntryPieces is not { } entryPieces) return null;
             var spent = InventoryMaterialConsumptionService.Plan(character.Inventory,
@@ -440,7 +457,7 @@ internal sealed partial class GameSession
             // 入场票、入场一次性疲劳与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             committed = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                 new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id));
-            entrySlots = entryItems?.ChangedSlots ?? [];
+            if (installing.HellTicket is null) entrySlots = entryItems?.ChangedSlots ?? [];
             if (committed.Revision != installing.Entry.CharacterRevision)
             {
                 var rebased = installing.Entry with { CharacterRevision = committed.Revision };
@@ -462,7 +479,7 @@ internal sealed partial class GameSession
         pendingQuestReplay = null;
         CurrentDungeonSelection = null;
         SetState(SessionPhase.Loading);
-        return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket,
+        return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue };
     }
 
@@ -768,7 +785,9 @@ internal sealed partial class GameSession
         return new FormalDungeonPickupResult(DungeonRunOutcome.Accepted, FormalReceipt(), original, commit);
     });
 
-    public TownTravelReceipt? ReturnFromFormalDungeon() => owner.Execute(() =>
+    public TownTravelReceipt? ReturnFromFormalDungeon() => ReturnFromFormalDungeonCore(false);
+
+    TownTravelReceipt? ReturnFromFormalDungeonCore(bool clearedHell) => owner.Execute(() =>
     {
         if (!CheckState(UserStateRequirement.DungeonContext) || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement) return null;
@@ -781,7 +800,7 @@ internal sealed partial class GameSession
         {
             var before = Selected.Inventory;
             var retreatAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
-            var after = StaminaRecoveryService.ApplyDungeonRetreat(Selected, dungeon.Entry, dungeon.Run.Phase, retreatAt,
+            var after = clearedHell ? before : StaminaRecoveryService.ApplyDungeonRetreat(Selected, dungeon.Entry, dungeon.Run.Phase, retreatAt,
                 PremiumPcRoom);
             after = ConsumableStatePolicy.CrossBoundary(after, ConsumableMaintenance.Town, retreatAt.ToUnixTimeMilliseconds());
             var back = dungeon.OrdinaryReturnPosition ?? Selected.Position;

@@ -142,16 +142,52 @@ internal static class HellPartyEntryTests
             map.HellLegendDungeon && map.HellLegendQuests.SequenceEqual([6081]),
             "黑暗都市：[seal door appear rate]=10、[seal door legend map index]=313169、传奇所需数量 2；区域 [hell legend quest]=6081");
         var legendDone = new HashSet<int>(done) { 6081 };
-        using (var legendFixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, legendDone.Order().ToArray(), position: position))
+        using (var legendFixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, legendDone.Order().ToArray(), position: position,
+            items: [(3330, 30), (HellPartyEntryCost.LegendStone, 2)]))
         using (var legendBlocked = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, done.Order().ToArray(), position: position))
         {
             That(legendBlocked.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms, pieces: items.EpicPieces, hellParty: true, hellLegend: true) is null &&
                 legendBlocked.Session.LastFormalDungeonRejection == "hell-party-quest-required:6081",
                 "传奇深渊：未完成 [hell legend quest] 6081 时拒绝（hell-party-quest-required:6081）");
+            That(legendFixture.Session.BeginDungeonSelection() is not null &&
+                legendFixture.Session.PrepareLegendDungeonSelection(dungeons, count => { That(count == 6, "哈林只有六个有传奇深渊资源的候选"); return 2; }) == 291100308 &&
+                legendFixture.Session.PrepareLegendDungeonSelection(dungeons, count => throw new InvalidOperationException("重复选图不应重抽")) == 291100308,
+                "星空目标从六张普通图抽取，本次选择重复读取保持同一目标");
+            var savedLegend = legendFixture.Read();
+            That(legendFixture.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms, pieces: items.EpicPieces, hellParty: true) is null &&
+                legendFixture.Session.LastFormalDungeonRejection == "hell-party-legend-selection-mismatch" &&
+                QuestCompletionRepositoryTests.Same(savedLegend, legendFixture.Read()), "今日星空目标不能删除匹配标志后按普通深渊少扣灵石");
             var legendReceipt = legendFixture.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms, pieces: items.EpicPieces, hellParty: true, hellLegend: true);
             That(legendReceipt is not null && legendReceipt.Entry.IsHellLegend && legendReceipt.Entry.HellParty!.MapId == 313169 &&
-                legendReceipt.Entry.Maze.MapSpecification!.Single(row => row.Position == new DungeonPoint(2, 2)).Id == 313169 && legendReceipt.HellTicket is null,
-                "传奇深渊：完成 6081 即可入场，(2,2) 房间换成 313169 传奇图，不扣票（95 PVF 传奇票物品为 -1）");
+                legendReceipt.Entry.Maze.MapSpecification!.Single(row => row.Position == new DungeonPoint(2, 2)).Id == 313169 &&
+                legendReceipt.HellTicket == new HellPartyTicket(3330, 30) && legendReceipt.LegendTicket == new HellPartyTicket(HellPartyEntryCost.LegendStone, 2) &&
+                legendFixture.Read().Inventory.Items.All(row => row.Core.ItemId is not (3330 or HellPartyEntryCost.LegendStone)),
+                "星空裂缝按冻结目标进入313169，邀请函与两枚灵石随尝试号一次提交");
+        }
+        foreach (int stones in new[] { 0, 1, 2 })
+        {
+            using var shortfall = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+                legendDone.Order().ToArray(), position: position, items: stones == 0 ? [(3330, 30)] :
+                    [(3330, stones == 2 ? 29 : 30), (HellPartyEntryCost.LegendStone, stones)]);
+            shortfall.Session.BeginDungeonSelection(); shortfall.Session.PrepareLegendDungeonSelection(dungeons, _ => 2);
+            var saved = shortfall.Read();
+            That(shortfall.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms, pieces: items.EpicPieces, hellParty: true, hellLegend: true) is null &&
+                shortfall.Session.LastFormalDungeonRejection == "hell-party-item-required" && QuestCompletionRepositoryTests.Same(saved, shortfall.Read()),
+                "灵石0/1枚或邀请函不足时拒绝，任何费用及尝试号均不改变");
+        }
+        using (var rollback = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+            legendDone.Order().ToArray(), position: position, items: [(3330, 30), (HellPartyEntryCost.LegendStone, 2)]))
+        {
+            rollback.Session.BeginDungeonSelection(); rollback.Session.PrepareLegendDungeonSelection(dungeons, _ => 2);
+            var saved = rollback.Read();
+            rollback.Sql("CREATE TRIGGER fail_hell_entry BEFORE UPDATE ON character_dungeon_state BEGIN SELECT RAISE(ABORT,'test entry rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => Enter(), "尝试号写入失败应回滚两种入场材料");
+            That(QuestCompletionRepositoryTests.Same(saved, rollback.Read()) && rollback.Session.DungeonSnapshot is null &&
+                rollback.Session.Phase == SessionPhase.MapSelect, "事务失败不扣邀请函或灵石，也不安装半个实例");
+            rollback.Sql("DROP TRIGGER fail_hell_entry");
+            That(Enter() is not null, "失败重试沿同一目标正常入场");
+            FormalDungeonReceipt? Enter() => rollback.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms,
+                pieces: items.EpicPieces, hellParty: true, hellLegend: true);
         }
         using (var sealFixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, baseDone95(area).Order().ToArray(), position: position))
         {

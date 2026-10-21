@@ -22,6 +22,7 @@ internal static class SelfTestRunner
         CreatureGroupTests.RunCore();
         CommandLineTests.Run();
         ConnectionAddressTests.Run();
+        Testing.TcpTestFixtureProcessTests.Run();
         await Testing.TcpTestArtifactsTests.RunAsync();
         CashShopTests.RunCore();
         PremiumContractTests.RunCore();
@@ -35,6 +36,7 @@ internal static class SelfTestRunner
         CreatureEggTests.RunCore();
         BoosterCreatureTests.RunCore();
         BoosterNativeSelectionTests.RunCore();
+        BoosterSelectionTests.RunCore();
         AvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();
@@ -162,6 +164,8 @@ internal static class SelfTestRunner
         NativeDungeonCombatAuthorityTests.Run();
         NativeDungeonCombatAuthorityTests.RunFriendlySources();
         DungeonRoomCatalogTests.RunCore();
+        DungeonSpecificCardRewardsTests.RunCore();
+        HarlemMaterialDropTests.RunCore();
         DungeonElevatorTests.Run();
         DungeonStoryFlowTests.Run();
         DungeonScriptedLayerReturnTests.Run();
@@ -303,6 +307,7 @@ internal static class SelfTestRunner
         MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HellPartyEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        HarlemMaterialDropTests.RunResources(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         DungeonEntryCostTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         StadiumQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestScriptedSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);

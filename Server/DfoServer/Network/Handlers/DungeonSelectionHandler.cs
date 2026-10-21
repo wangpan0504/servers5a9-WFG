@@ -9,7 +9,8 @@ namespace DfoServer.Network.Handlers;
 
 // 正式与诊断实例共用已经确认的选图界面入口，不负责建立副本实例。
 internal sealed class DungeonSelectionHandler(TownProjection projection, ServerLog log,
-    DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null) : IGameCommandModule
+    DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null,
+    DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -23,6 +24,19 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
+        if (context.Session.Phase == SessionPhase.Dungeon)
+        {
+            var hellSelection = entry.DungeonIndex == 0 ? context.Session.BeginClearedHellSelection() : null;
+            if (hellSelection is null) return CommandResult.Unhandled;
+            int target = dungeons is null ? 0 : context.Session.PrepareLegendDungeonSelection(dungeons);
+            log.Write("formal_hell_selection", new { Connection = context.Id, hellSelection.Character.Id, hellSelection.SelectionId, LegendDungeon = target });
+            if (!await projection.DetachForDungeonSelectionAsync(context, hellSelection)) return CommandResult.Handled;
+            bool Guard() => context.Session.CanPublishDungeonSelection(hellSelection);
+            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_hell_selection_opened", Guard);
+            await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(hellSelection.Character.Id), "formal_hell_selection_state", Guard);
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(target), "formal_hell_select_notice", Guard);
+            return CommandResult.Handled;
+        }
         var continuation = context.Session.CompleteFormalDungeonContinuation(entry.DungeonIndex);
         if (continuation.Pending)
         {
@@ -85,12 +99,14 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Handled;
         }
         if (!context.Session.ConfirmNewDungeonSelection(receipt)) return CommandResult.Handled;
+        int legendTarget = dungeons is null ? 0 : context.Session.PrepareLegendDungeonSelection(dungeons);
         if (!await projection.DetachForDungeonSelectionAsync(context, receipt))
             return CommandResult.Handled;
         bool CanSend() => context.Session.CanPublishDungeonSelection(receipt);
         // 正文 u32 为 0 是左侧入口打开选图；非 0 是已经选中的副本编号。再推空列表会把选图界面重新打开。
         uint dungeon = entry.DungeonIndex;
-        log.Write("dungeon_entry", new { Connection = context.Id, Accepted = true, Dungeon = dungeon, Reason = dungeon == 0 ? "select-notice" : "dungeon-chosen", receipt.Character.Position, receipt.SelectionId });
+        log.Write("dungeon_entry", new { Connection = context.Id, Accepted = true, Dungeon = dungeon, Reason = dungeon == 0 ? "select-notice" : "dungeon-chosen", receipt.Character.Position, receipt.SelectionId,
+            LegendDungeon = legendTarget });
         await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "dungeon_entry_opened", CanSend);
         // 同步客户端选图状态，触发旧城镇实体清理；仅切服务端阶段不会结束客户端旧动作。
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "dungeon_selection_state", CanSend);
@@ -98,7 +114,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (dungeon == 0)
             await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, context.Session.AssaultDailyCounts(TimeProvider.System.GetLocalNow())), "assault_mode_daily_info", CanSend);
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector)
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(), "dungeon_select_notice", CanSend);
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(legendTarget), "dungeon_select_notice", CanSend);
         return CommandResult.Handled;
     }
 

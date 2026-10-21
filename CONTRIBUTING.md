@@ -179,6 +179,8 @@ macOS/Linux 的仓库检查改用 `pwsh -NoProfile -File Tools/Check-Repository.
 
 ### 检查范围
 
+进程树预算需分别考虑共享资源驱动和真实子进程。`DFO_TCP_CHILD_GC_HEAP_HARD_LIMIT` 可为 fixture 创建的服务与 CLI 子进程覆盖 `DOTNET_GCHeapHardLimit`，使用正数十六进制字节数（可带 `0x`）。未设置或空值沿用原环境，非法值在启动前失败。驱动的 GC 设置仍由本轮启动配置决定；按相同输入和覆盖实际校准，并记录父子预算与进程树峰值。
+
 **测试分层。** 开发内循环 = 增量 Debug 构建 + `--selftest-core` + 受影响 TCP 组：`pwsh Tools/Select-AffectedTests.ps1 [-Run -PvfPath <PVF>]` 按与 `origin/master`（不存在时为 `master`）的差异选组，并输出按历史耗时估算的串行/并行时间。映射依次使用注册表中的测试类、路径关键词，以及引用该类型的 TCP 测试类；非 TCP 的自测文件只由 `--selftest-core`/完整 `--selftest` 覆盖。公共测试框架或 TCP 入口（`TcpPeer`、`TcpTestFixture`、`TcpTestResources`、`TcpRegressionTests` 等）变化在开发期运行固定冒烟组；迁移或表结构变化运行 `database-schema`、`settings-storage`、`inventory-persistence` 与 `startup`；程序入口、`Application/`、`Infrastructure/`、`Network/Core/`、项目文件、PvfLib、自测入口、引用过广或无法映射的代码变化直接全量。`-Run` 在源码指纹（HEAD、未提交差异与未跟踪文件内容）未变时跳过构建和已通过的 `--selftest-core`，`-NoCache` 关闭复用。合入前用 `-Run -Full` 运行一次完整 TCP，并用 `Tools/Check-Development.ps1 -PvfPath <PVF>` 运行一次完整 `--selftest`；冒烟或定向选择不能代替这两项。同一台机器同时运行测试的工作树不超过 2 个；TCP 并行度按 `DFO_TCP_PARALLEL` 调低。
 
 开发迭代先完成 Debug 构建、基础检查及修改点和受影响链路的定向测试；不因一次局部修改反复运行全量资源与 TCP。最终提交、推送或整项交付前按下表补齐验证；相同代码与输入已通过的检查可复用，后续修改、失败或影响范围不明时按影响补测。公共测试夹具、资源共享或测试入口变化在开发期运行冒烟组，交付前须运行完整 TCP，不能只测一个受益组。服务端构建要求 `0 warning / 0 error`。

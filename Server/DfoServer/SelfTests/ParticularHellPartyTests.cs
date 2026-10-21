@@ -141,7 +141,9 @@ internal static class ParticularHellPartyTests
         That(sections.Any(row => row.Name == "dungeon index privilege service reward rate" && row.Use == ClearRewardSectionUse.ReadAlready) &&
             sections.Any(row => row.Name == "gold card cost table" && row.Use == ClearRewardSectionUse.ReadAlready),
             "强袭段和付费翻牌价格仍是原来已读的段");
-        foreach (string name in new[] { "special dungeon clear reward", "dungeon_index specific reward rate", "specific goldcard group",
+        That(sections.Any(row => row.Name == "dungeon_index specific reward rate" && row.Use == ClearRewardSectionUse.PartlyRead) &&
+            DungeonCardPriceCatalog.Load(pvf).SpecificRewards.ContainsKey(530), "副本专表只接入黎明裂缝类型72，其余子表保留未发放状态");
+        foreach (string name in new[] { "special dungeon clear reward", "specific goldcard group",
             "chronicle set reward rate", "reward dungeon type list", "reward item list" })
             That(sections.Any(row => row.Name == name && row.Use == ClearRewardSectionUse.NotGranted),
                 "未证明的通关奖励段不发放 " + name);

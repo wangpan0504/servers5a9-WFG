@@ -430,9 +430,9 @@ internal static class QuestPassiveClearTests
                 !rooms.ReportsQuestDeath(receipt.Monsters.Room.PassiveObjects[34]) &&
                 f.Session.Phase == SessionPhase.Dungeon && before.ActiveMainQuests.Single(row => row.QuestId == 3449).ConditionState == 1,
                 "真实末层唯一迷宫目标为普通物件row34，加载不伪造69292死亡或提前归零");
-            byte[] body = QuestPassiveClearTcpTests.PassiveDeath(69292, 74);
+            byte[] body = QuestPassiveClearTcpTests.PassiveDeath(69292, ordinary ? 52 : 74);
             That(DungeonRequests.TryParsePassiveDeath(body, out var parsed) && parsed!.ChecksumMatches,
-                "合成74B物件正文通过现有Parser，不代表原客户端producer已验证");
+                "显式与普通入口分别以合成74B/52B物件正文通过原Parser，不代表实机实发");
             string fingerprint = Convert.ToHexString(SHA256.HashData(body));
             That(f.Session.ObserveFormalPassiveDeath(69292, false, fingerprint, rooms) is null &&
                 f.Session.ObserveFormalPassiveDeath(69294, true, fingerprint, rooms) is null &&

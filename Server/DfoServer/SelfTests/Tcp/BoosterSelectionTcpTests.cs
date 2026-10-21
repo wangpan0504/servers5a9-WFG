@@ -33,6 +33,11 @@ internal static class BoosterSelectionTcpTests
                     new(0, Bag(5), Core(8403)), new(0, Bag(6), Core(10161354)), new(0, Bag(7), Core(10304530)),
                     new(0, Bag(8), Core(10012104)), new(0, Bag(65), Core(10000743)), new(0, Bag(67), Core(10002056))], Gold: 12345)
             });
+            repo.Create(owner, new("EmptyDupTcp", towns.Room, towns.InitialReturn)
+            {
+                Job = 0, Level = 95, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(65), Core(2749832))], Gold: 12345)
+            });
         }
         int[] all = [100300855, 100312548, 100322438, 100344654, 100352921];
         int[] imported = [100050791, 100100692, 100150661];
@@ -136,12 +141,12 @@ internal static class BoosterSelectionTcpTests
             peer.Expect(1, 160, [0, 19, 0]);
             peer.Barrier();
             That(before == Snapshot(), "replay of consumed selection cannot grant again");
-            That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[15L, 15L]],
+            That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[16L, 16L]],
                 "four stackable and eleven complete equipment instances persist once");
         }
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
-            var current = repo.List(owner).Single();
+            var current = repo.List(owner).Single(character => character.Name == "SelectTcp");
             That(current.Inventory.Find(Bag(9))!.Core == Core(109000071), "full equipment core persists beyond the network projection");
             That(current.Inventory.Find(Bag(19))!.Core == Core(101000007) &&
                 current.Inventory.Find(Bag(121))!.Core == Core(3290, 88) && current.Inventory.Find(Bag(122))!.Core == Core(3311, 88),
@@ -183,8 +188,68 @@ internal static class BoosterSelectionTcpTests
                 Entry(delta, (short)(20 + i), all[i], InventoryRewardGrantService.InitialQuality);
             peer.Barrier();
         }
+        // 同一fixture复用正式资源，单独角色验证空重复源的落库、晚SQL回滚及重连。
+        var group = itemResources.Boosters.Get(2749832).Selection!.Categories.First(category => !category.Rewards.IsEmpty);
+        var choice = group.Rewards[0];
+        var template = itemResources.Items.Get(choice.ItemId);
+        That(template.Kind == DfoServer.GameWorld.Items.ItemKind.Equipment && choice.Count == 1 && choice.UpgradeChances.IsEmpty,
+            "代表TCP选择固定的一件真实普通装备，不替换资源或随机结果");
+        var expectedCore = new ItemCore(template.Id, template.Kind, 999_999_998)
+        {
+            Attr = choice.Upgrade, GenuineUpgrade = choice.Refinement, Durability = template.Durability,
+            SealFlag = template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0,
+            ExpireTime = template.Expiration.Resolve(DateTimeOffset.UtcNow)
+        };
+        That(expectedCore.ExpireTime == 0, "代表TCP奖励必须是真实永久模板，不能忽略期限");
+        long parentUid = Convert.ToInt64(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=(SELECT id FROM characters WHERE name='EmptyDupTcp') AND slot_index=65")[0][0]);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1);
+            string before = Snapshot();
+            SendSelect(peer, 65, [], 7, 2); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == before, "真实空重复坐标仍拒绝且两个角色资产不变");
+            fixture.Sql("CREATE TRIGGER fail_empty_duplicate BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'empty duplicate late rollback'); END");
+            SendSelect(peer, 65, [choice.ItemId], group.Category, group.Subcategory); peer.Closed();
+            That(Snapshot() == before, "空重复源已写物品和槽后审计故障无ACK并回滚全部已核资产、revision及序列");
+            fixture.Sql("DROP TRIGGER fail_empty_duplicate");
+        }
+        byte[] savedEntry;
+        using (var peer = Open(fixture))
+        {
+            var initial = peer.Select(1)[4].Body; Entry(initial, 65, 2749832, 1, true);
+            SendSelect(peer, 65, [choice.ItemId], group.Category, group.Subcategory);
+            ExpectAck(peer, 2749832, 65, [(choice.ItemId, 1)]);
+            var delta = peer.Expect(0, 14).Body;
+            That(U16(delta, 1) == 2, "新兼容源只投影清源和一件装备");
+            Entry(delta, 65, -1, 0); Entry(delta, 9, choice.ItemId, 999_999_998);
+            savedEntry = EquipmentEntry(delta, 9); peer.Barrier();
+            string saved = Snapshot();
+            SendSelect(peer, 65, [choice.ItemId], group.Category, group.Subcategory);
+            peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == saved, "新兼容源耗尽重放不重复发奖");
+        }
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var saved = repo.List(owner).Single(character => character.Name == "EmptyDupTcp");
+            That(saved.Inventory.Items is [{ Position.Index: 9 } reward] && reward.Uid != parentUid && reward.Core == expectedCore &&
+                saved.Inventory.Gold == 12345 && fixture.Query("SELECT item_uid FROM character_inventory_items WHERE item_uid=$p0", parentUid).Length == 0,
+                "新兼容源UID注销且完整装备核心和数量只持久化一次");
+        }
+        using (var peer = Open(fixture))
+        {
+            var full = peer.Select(1)[4].Body;
+            That(EquipmentEntry(full, 9, true).SequenceEqual(savedEntry), "重连恢复新兼容盒完整123B装备且不重建期限或核心");
+            peer.Barrier();
+        }
         await fixture.StopAsync();
-        That(fixture.Query("SELECT gold FROM characters") is [[12345L]], "selection does not add a gold or purchase-material fee");
+        That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
+        {
+            using var entry = JsonDocument.Parse(line); var data = entry.RootElement;
+            return data.GetProperty("Kind").GetString() == "closed" &&
+                data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'empty duplicate late rollback'.";
+        }) == 1, "新兼容盒断线精确来自所注入的晚SQL故障一次");
+        That(fixture.Query("SELECT gold FROM characters ORDER BY slot") is [[12345L], [12345L]], "selection does not add a gold or purchase-material fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "selection database integrity");
         await RunRealTemplateSelectionsAsync(source, root, resources);
         await RunOrdinaryNativeSelectionsAsync(source, root, resources);

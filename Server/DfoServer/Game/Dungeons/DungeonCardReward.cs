@@ -47,8 +47,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
             throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和非负的已提交击杀数");
         var gold = rules.GoldReferences.SingleOrDefault(row => row.Level == level);
-        var items = rules.ItemReferences.SingleOrDefault(row => row.Level == level);
-        if (gold.Level == 0 || items.Level == 0 || items.Value0 < 0 || items.Value1 < 0)
+        var reference = rules.ItemReferences.SingleOrDefault(row => row.Level == level);
+        if (gold.Level == 0 || reference.Level == 0 || reference.Value0 < 0 || reference.Value1 < 0)
             throw new NotSupportedException("当前副本等级缺少完整翻牌引用表");
         draw ??= random ?? Random.Shared.Next;
         int Next(int bound)
@@ -59,11 +59,27 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         long basis = Math.Max(1, (long)gold.BaseAmount * 175 / 1000);
         long amount = checked((long)decimal.Floor(basis * DifficultyRates[difficulty] * confirmedKills));
         amount += (Next(gold.VariancePercent * 2 + 1) - gold.VariancePercent) * amount / 100;
-        int rarity = DungeonDropRatePlan.Rarity(rules, 0, Next(DungeonDropRatePlan.RarityDenominator));
-        var pool = candidates.ReferencePool(true, level - items.Value0, level + items.Value1 - 1, rarity);
-        if (pool.TotalWeight == 0)
-            pool = candidates.ReferencePool(false, level - items.Value0, level + items.Value1 - 1, rarity);
         var now = utcNow ?? DateTimeOffset.UtcNow;
+        if (dungeon.DungeonType == "crackofdaybreak dungeon")
+        {
+            if (prices is null || !prices.SpecificRewards.TryGetValue(dungeon.Id, out var specific))
+                throw new NotSupportedException("黎明裂缝缺少已解释的专用翻牌行，不能退回普通装备池");
+            int roll = Next(10000);
+            foreach (var row in specific)
+            {
+                if (roll >= row.Weight) { roll -= row.Weight; continue; }
+                var item = DungeonDropCreation.Create(items.Get(row.ItemId), row.Count, Next, now);
+                var declared = new DungeonCardReward(checked((int)Math.Max(1, amount)), item, Rule,
+                    $"{DungeonCardPriceCatalog.ResourcePath};{dungeon.Path}", now.ToUnixTimeSeconds());
+                declared.Validate();
+                return declared;
+            }
+            throw new InvalidDataException("黎明裂缝翻牌奖励未命中已验证权重池");
+        }
+        int rarity = DungeonDropRatePlan.Rarity(rules, 0, Next(DungeonDropRatePlan.RarityDenominator));
+        var pool = candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, rarity);
+        if (pool.TotalWeight == 0)
+            pool = candidates.ReferencePool(false, level - reference.Value0, level + reference.Value1 - 1, rarity);
         ItemCore? core = pool.TotalWeight == 0 ? null : DungeonDropCreation.Create(pool.Select(Next(pool.TotalWeight)), 1, Next, now, referenceQuality: true);
         var reward = new DungeonCardReward(checked((int)Math.Max(1, amount)), core, Rule,
             $"{DungeonDropRuleCatalog.CommonPath};{DungeonDropRuleCatalog.MonsterPath};{dungeon.Path}", now.ToUnixTimeSeconds());
