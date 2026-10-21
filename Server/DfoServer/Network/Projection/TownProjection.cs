@@ -15,7 +15,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
-    CollectBoxProjection? collectBoxes = null)
+    CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
@@ -111,6 +111,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await settings.InitializeAsync(context, settingReceipt);
         if (quests is not null)
             await quests.InitializeAsync(context, c);
+        if (weaponSkins is not null) await weaponSkins.InitializeAsync(context, c);
         if (!resumeTown)
             await context.Notify(NotiPacketType.ENTER_GAMEWORLD_COMPLETE, [], "enter_gameworld_complete");
         // 建会认证的补投（顺序模式：创建者与被邀请方不同时在线）：入城序列发完后，若登记表里有指向

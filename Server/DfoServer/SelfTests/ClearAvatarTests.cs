@@ -32,11 +32,6 @@ internal static class ClearAvatarTests
         var templates = Enumerable.Range(0, 12).SelectMany(slot => new[] { Template(slot), Template(slot, true) })
             .Append(new ItemTemplate(300, ItemKind.Equipment, 12, 1, 10, 1, 0, 0, 0, "[trade]", ushort.MaxValue, 0, "weapon"));
         catalog.PrefillTemplates(templates.ToDictionary(item => item.Id));
-        var profiles = new CharacterCatalog(new Dictionary<byte, CharacterProfile>
-        {
-            [0] = new(0, null!, []) { DefaultAvatarEquipment = Enumerable.Range(0, 12)
-                .ToImmutableDictionary(slot => (byte)slot, slot => Template(slot).Id) }
-        });
         var details = new AvatarDetail { Color1 = 7, Color2 = 8, Socket0 = new(2, 888), ExpireTime = 2000000000 };
         foreach (short slot in Enumerable.Range(0, 12).Select(slot => (short)slot))
         {
@@ -64,19 +59,23 @@ internal static class ClearAvatarTests
             result = Move(role, original.Position, new(InventoryListType.Avatar, 2));
             That(result.Plan!.After.Find(new(InventoryListType.Avatar, 2)) is { Avatar.ClearAvatarId: 0, Avatar.ClearAvatarSourceUid: 0, Avatar.Color1: 0 } &&
                 result.Plan.After.Find(original.Position) is null, "卸装清理所属关联，不留下假穿戴物品");
-            role = Role([bag]);
+            role = Role([bag with { Avatar = details with { ClearAvatarId = 300, ClearAvatarSourceUid = 99, Color1 = 12 } }]);
             result = Move(role, bag.Position, original.Position);
-            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarSourceUid: 0 } empty &&
-                empty.ClearAvatarId == (slot == 10 ? original.Core.ItemId : 0),
-                "普通空槽不固定默认EQU，武器装扮保留独立默认武器来源");
+            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 },
+                "全部装扮空槽包括武器均清除旧关联及借用染色，不借用职业默认EQU");
+            role = role with { Inventory = result.Plan.After with { Items = result.Plan.After.Items.Add(next) } };
+            result = Move(role, next.Position, original.Position);
+            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 } &&
+                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 },
+                "用另一件克隆替换无来源克隆仍保持空关联，不制造默认物品来源");
             foreach (byte growth in new byte[] { 1, 0x11, 0x21 })
             {
                 role = Role([bag]) with { GrowType = growth };
                 result = Move(role, bag.Position, original.Position);
                 That(result.Plan!.After.Find(original.Position) is { } native && native.Uid == bag.Uid &&
                     native.Core == bag.Core && native.Avatar is { ClearAvatarSourceUid: 0 } nativeDetail &&
-                    nativeDetail.ClearAvatarId == (slot == 10 ? original.Core.ItemId : 0) && result.Plan.After.Items.Length == 1,
-                    "转职及两次觉醒均不创建基础外观物品或固定普通空槽来源，完整克隆实例不变");
+                    nativeDetail.ClearAvatarId == 0 && result.Plan.After.Items.Length == 1,
+                    "转职及两次觉醒均不创建基础外观物品或固定任何空槽来源，完整克隆实例不变");
                 role = Role([bag, original]) with { GrowType = growth };
                 result = Move(role, bag.Position, original.Position);
                 That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarSourceUid: 12 } explicitSource &&
@@ -88,9 +87,16 @@ internal static class ClearAvatarTests
         var clearWeapon = Avatar(22, new(InventoryListType.Avatar, 0), Template(10, true).Id, details);
         var weaponRole = Role([weapon, clearWeapon]);
         var weaponResult = Move(weaponRole, clearWeapon.Position, new(InventoryListType.Equipment, 10));
-        That(weaponResult.Plan!.After.Find(new(InventoryListType.Equipment, 10))!.Avatar!.ClearAvatarId == 300 &&
+        That(weaponResult.Plan!.After.Find(new(InventoryListType.Equipment, 10))!.Avatar!.ClearAvatarId == 0 &&
             weaponResult.Plan.After.Find(new(InventoryListType.Equipment, 10))!.Avatar!.ClearAvatarSourceUid == 0 &&
-            weaponResult.Plan.After.Find(weapon.Position) == weapon, "空武器装扮克隆当前实际武器，不把实际武器变为装扮或移走");
+            weaponResult.Plan.After.Find(weapon.Position) == weapon, "有实际武器时空武器装扮也保持空来源，不固定普通装备外观");
+        var replacement = weapon with { Uid = 24, Position = new(InventoryListType.Main, 9), Core = weapon.Core with { Attr = 7, EnchantCardId = 10001 } };
+        weaponRole = weaponRole with { Inventory = weaponResult.Plan.After with
+            { Items = weaponResult.Plan.After.Items.Add(replacement), Skins = new([32000], 32000) } };
+        weaponResult = Move(weaponRole, replacement.Position, weapon.Position);
+        That(weaponResult.Plan!.After.Find(new(InventoryListType.Equipment, 10))!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 } &&
+            weaponResult.Plan.After.Find(weapon.Position)!.Core == replacement.Core && weaponResult.Plan.After.Skins.Selected == 32000,
+            "更换真实武器保留空克隆关联及完整属性，不把普通武器或独立幻化写入克隆来源");
         var ordinaryWeaponAvatar = Avatar(23, new(InventoryListType.Equipment, 10), Template(10).Id, details);
         weaponRole = Role([weapon, clearWeapon, ordinaryWeaponAvatar]);
         weaponResult = Move(weaponRole, clearWeapon.Position, ordinaryWeaponAvatar.Position);
@@ -125,13 +131,13 @@ internal static class ClearAvatarTests
         }
         Reject<InvalidDataException>(() => (details with { ClearAvatarSourceUid = -1 }).Validate(), "克隆来源UID不得为负");
         RunPlayerExtensions(details);
-        RunRepository(catalog, profiles, details);
+        RunRepository(catalog, details);
         Console.WriteLine($"PASS {Count - checks} clear avatar覆盖、默认外观、完整资产及事务断言");
 
         InventoryResult Move(Character role, InventorySlot from, InventorySlot to)
         {
             var result = InventoryMoveService.Plan(role, new(from, role.Inventory.Find(from)!.Core.ItemId, 1,
-                to, role.Inventory.Find(to)?.Core.ItemId ?? 0, 0, -1, 0, 0), catalog, 1000, characters: profiles);
+                to, role.Inventory.Find(to)?.Core.ItemId ?? 0, 0, -1, 0, 0), catalog, 1000);
             That(result.Accepted, "合法装扮覆盖、卸装和空槽穿戴均可规划");
             return result;
         }
@@ -177,7 +183,7 @@ internal static class ClearAvatarTests
         That(reader.BaseStream.Position == body.Length, "独立读器消费完整Player穿戴列表");
     }
 
-    static void RunRepository(ItemCatalog catalog, CharacterCatalog profiles, AvatarDetail details)
+    static void RunRepository(ItemCatalog catalog, AvatarDetail details)
     {
         string root = Path.Combine(Path.GetTempPath(), "s5a9-clear-avatar-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -191,7 +197,7 @@ internal static class ClearAvatarTests
                     Avatar(0, new(InventoryListType.Equipment, 3), 103, details)]) });
             var from = new InventorySlot(InventoryListType.Avatar, 0);
             var to = new InventorySlot(InventoryListType.Equipment, 3);
-            var plan = InventoryMoveService.Plan(role, new(from, 203, 1, to, 103, 0, -1, 0, 0), catalog, 1000, characters: profiles);
+            var plan = InventoryMoveService.Plan(role, new(from, 203, 1, to, 103, 0, -1, 0, 0), catalog, 1000);
             That(plan.Accepted, "真实存档中的克隆覆盖请求通过原两端模板校验");
             using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
             {

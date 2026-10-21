@@ -102,10 +102,18 @@ internal static class ServerRuntime
         var guildPermitDelivery = new GuildPermitDelivery(guildPermits);
         var devil = new DevilContractService(itemResources.DevilContracts, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var collectBoxProjection = new CollectBoxProjection(itemResources.CollectBoxes, clock);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection);
+        var weaponSkinService = new InventorySkinStorageService(itemResources.Items, itemResources.Skins,
+            itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock);
+        log.Write("weapon_skin_catalog", new { Recipes = itemResources.Skins.Recipes.Count,
+            Weapons = itemResources.Skins.Weapons.Count, DamageFonts = itemResources.Skins.DamageFonts.Count,
+            Cutscenes = itemResources.Skins.Cutscenes.Count,
+            Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
+        var weaponSkinProjection = new SkinStorageProjection(weaponSkinService);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
+        var weaponSkinHandler = new SkinStorageHandler(weaponSkinService, inventoryProjection, weaponSkinProjection, log);
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
         var guildProjection = new GuildProjection(inventoryProjection, presence);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
@@ -245,10 +253,11 @@ internal static class ServerRuntime
             new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online),
             new CollectBoxHandler(new Game.CollectBox.CollectBoxService(itemResources.CollectBoxes, itemResources.Items,
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
-            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, characters), inventoryProjection),
+            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts), inventoryProjection),
             new CubeContractHandler(new CubeContractService(itemResources.Contracts), inventoryProjection, log, clock),
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), log, tutorials, itemResources.Items, inventoryProjection,
                 new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock), creatures, creatureProjection, projection),
+            weaponSkinHandler,
             new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
@@ -302,7 +311,7 @@ internal static class ServerRuntime
             new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,skinService,inventoryProjection,
                 new Game.Creatures.CreatureChangeService(itemResources.Items.Get, itemResources.Items.CreatureChange,
                     itemResources.Creatures, clock, groups: itemResources.CreatureGroups,
-                    growthItems: itemResources.Items.CreatureGrowthItem),levelUpItems),
+                    growthItems: itemResources.Items.CreatureGrowthItem),levelUpItems,weaponSkinHandler),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs),
@@ -330,7 +339,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

@@ -39,6 +39,7 @@ internal sealed class ItemResources
     public AvatarCompoundCatalog AvatarCompounds { get; }
     public AvatarDyeCatalog AvatarDyes { get; }
     public TeleportCatalog Teleports { get; }
+    public SkinStorageCatalog Skins { get; }
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
     readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
     public DungeonItemDropCatalog DungeonDropItems => dungeonDropItems.Value;
@@ -78,6 +79,7 @@ internal sealed class ItemResources
         AvatarCompounds = new(archive);
         AvatarDyes = new(archive, equipment, stackable);
         Teleports = new(archive.ReadText, equipment, stackable);
+        Skins = new(archive, stackable);
         RandomOptions = new(archive, equipment);
         TextureChanges = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));

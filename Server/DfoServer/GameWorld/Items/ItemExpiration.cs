@@ -45,15 +45,20 @@ internal sealed record ItemExpiration(long AbsoluteTime = 0, int Days = 0, int D
         if (days < 0)
             throw new InvalidDataException("PVF物品期限不能为负数");
         string value = text.Section("expiration date").Trim().Trim('`').Trim();
+        return new(ParseAbsoluteTime(value), days, daily ?? 0);
+    }
+
+    internal static long ParseAbsoluteTime(string value)
+    {
         if (value.Length == 0 || value == "0")
-            return new(0, days, daily ?? 0);
+            return 0;
         if (long.TryParse(value, out long unixTime) && unixTime >= 1_000_000_000)
-            return new(unixTime, days, daily ?? 0);
+            return unixTime;
         if (!DateTime.TryParseExact(value, ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd", "yyyyMMdd"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
             throw new InvalidDataException("PVF物品到期时间无效");
         long seconds = new DateTimeOffset(DateTime.SpecifyKind(date, DateTimeKind.Unspecified), TimeSpan.FromHours(8)).ToUnixTimeSeconds();
         if (seconds <= 0)
             throw new InvalidDataException("PVF物品到期时间超出范围");
-        return new(seconds, days, daily ?? 0);
+        return seconds;
     }
 }

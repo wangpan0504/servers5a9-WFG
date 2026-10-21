@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Net;
 using System.Text;
 using System.IO.Compression;
+using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Testing;
 
@@ -467,7 +468,10 @@ internal sealed class TcpPeer : IDisposable
 
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
         (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,
-        byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false, ushort avatarExpansion = 105)
+        byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false, ushort avatarExpansion = 105,
+        (int[] Owned, int Selected)? weaponSkins = null,
+        (SkinOwnership[] Owned, int Selected)? damageFonts = null,
+        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null)
     {
         if (!resumeTown && !requestedRoster)
             Send(8, [255, 255, 2]);
@@ -646,6 +650,8 @@ internal sealed class TcpPeer : IDisposable
         Mailbox = mails.ToArray();
         WirePacket[] packets = [.. prefix, .. middle, .. tail];
         Id = U16(packets[0].Body, 9);
+        TestCheck.That(U32(packets[2].Body, 115) == (weaponSkins?.Selected ?? 0),
+            "首次入城及重连Actor恢复独立武器幻化，不以Player的仓库选择组代替场景字段");
         ActorAdventureName = DecodeActorAdventureName(packets[2].Body);
         string fullAdventureName = names.GetString(AdventureName, 4, AdventureName.Length - 5);
         TestCheck.That(fullAdventureName.StartsWith(ActorAdventureName, StringComparison.Ordinal) &&
@@ -723,6 +729,34 @@ internal sealed class TcpPeer : IDisposable
                 TestCheck.Bytes(CompletedQuestHistory, middle.Single(packet => packet.Opcode == 356).Body,
                     "入城21后恢复同一角色完成历史，保留前面的场景完成位");
             }
+            var skins = weaponSkins ?? (Owned: Array.Empty<int>(), Selected: 0);
+            Expect(0, 1557, Build(w =>
+            {
+                w.Write((byte)4); w.Write(checked((ushort)skins.Owned.Length));
+                foreach (int id in skins.Owned) w.Write(id);
+            }));
+            Expect(0, 1558, Build(w => { w.Write((byte)4); w.Write(skins.Selected); }));
+            var fonts = damageFonts ?? (Owned: Array.Empty<SkinOwnership>(), Selected: 1);
+            Expect(0, 1557, Build(w =>
+            {
+                w.Write((byte)2); w.Write(checked((ushort)(fonts.Owned.Length + 1)));
+                w.Write(1); w.Write(0);
+                foreach (var font in fonts.Owned) { w.Write(font.SkinId); w.Write(font.ExpiresAt); }
+                w.Write((ushort)0);
+            }));
+            Expect(0, 1558, Build(w => { w.Write((byte)2); w.Write(fonts.Selected); }));
+            var illustrations = cutscenes ?? (Owned: Array.Empty<SkinOwnership>(), Selected: new[] { 30000 });
+            Expect(0,1557,Build(w =>
+            {
+                w.Write((byte)1); w.Write(checked((ushort)(illustrations.Owned.Length+1))); w.Write(30000); w.Write(0);
+                foreach(var row in illustrations.Owned) { w.Write(row.SkinId); w.Write(row.ExpiresAt); }
+                w.Write((ushort)0);
+            }));
+            Expect(0,1558,Build(w =>
+            {
+                w.Write((byte)1); w.Write(checked((ushort)illustrations.Selected.Length));
+                foreach(int id in illustrations.Selected) w.Write(id);
+            }));
         }
     }
 

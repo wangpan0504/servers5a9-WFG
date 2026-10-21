@@ -55,6 +55,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public int AuctionGoldLimit { get; init; } = CurrencyService.BaseAuctionLimit;
     public AccountWallet AccountWallet { get; init; } = AccountWallet.Empty;
     public CubeContractState CubeContract { get; init; } = CubeContractState.Empty;
+    public SkinStorageState Skins { get; init; } = SkinStorageState.Empty;
     public ushort AvatarExpansion { get; init; } = 105;
     public ImmutableArray<DevilServiceUsage> DevilUses { get; init; } = [];
     public ImmutableArray<DailyBoosterUsage> DailyBoosterUses { get; init; } = [];
@@ -70,6 +71,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
         if (AvatarExpansion > 315 || AvatarExpansion % 7 != 0) throw new InvalidDataException("装扮栏扩展值无效");
         AccountWallet.Validate();
         CubeContract.Validate();
+        Skins.Validate();
         DailyBoosterUsage.Validate(DailyBoosterUses);
         ConsumableState.Validate(ConsumableStates);
         if (StaminaUntil < 0 || DevilUses.IsDefault || DevilUses.Any(row => row.Slot > 7 || row.Day < 0 || row.Allowance > 30) ||

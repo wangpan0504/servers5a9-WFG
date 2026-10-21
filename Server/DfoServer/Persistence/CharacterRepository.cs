@@ -49,6 +49,8 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         character.Validate();
         if (!character.Inventory.DailyBoosterUses.IsEmpty)
             throw new InvalidDataException("新角色不能携带历史每日礼盒次数");
+        if (!character.Inventory.Skins.Same(SkinStorageState.Empty))
+            throw new InvalidDataException("新角色不能携带历史武器外观所有权");
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.Create");
         using var transaction = write.Transaction;

@@ -112,22 +112,25 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 await context.Notify(NotiPacketType.SRC_AVATAR_INFO_OF_CLONE, sources, "clear_avatar_sources_committed", CanSend);
         }
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
-        if (refreshEquipment && (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null))
+        bool weaponSkinChanged = plan.Before.Skins.Selected != current.Inventory.Skins.Selected;
+        if (refreshEquipment && (equipmentChanged || weaponSkinChanged || plan.EquipmentSlotFlagsAfter is not null))
         {
             bool appearanceChanged = plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&
                 slot.Index is 9 or 11 or 13 or 26 or 33 && plan.BeforeIndex.Find(slot) != receipt.Index.Find(slot));
             // 称号、光环与宠物真槽/外观槽变化都刷新Actor；副本保留当前场景状态，不重新入城。
-            if (equipmentChanged && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
-                appearanceChanged && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
+            if ((equipmentChanged || weaponSkinChanged) && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
+                (appearanceChanged || weaponSkinChanged) && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
                 await context.Notify(NotiPacketType.USERINFO,
                     TownPackets.Actor(current, context.Channel, adventureName: context.Session.ReadAdventureName(),
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
                             ? ActorSceneState.Dungeon : ActorSceneState.Town,
                         premiumPcRoom: context.Session.PremiumPcRoom), "equipment_actor", CanSend);
-            await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current), context.Channel), "equipment_player", CanSend);
+            // 幻化选择的ACK已刷新战斗对象，Actor再同步城镇对象及成员快照；不额外重装本人属性。
+            if (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null)
+                await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
-                if (equipmentChanged && CanSend() && context.Session.Phase == SessionPhase.Town)
+                if ((equipmentChanged || weaponSkinChanged) && CanSend() && context.Session.Phase == SessionPhase.Town)
                     town.Refresh(context);
                 return true;
             });

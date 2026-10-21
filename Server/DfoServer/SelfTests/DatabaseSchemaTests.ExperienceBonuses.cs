@@ -43,11 +43,11 @@ internal static partial class DatabaseSchemaTests
             }
             Check(Snapshot(path) == old,"经验列、CHECK及版本在事务回滚后完整恢复");
             _ = new SqliteGameDatabase(path);
-            Check(Data(path) == before && QueryOn(path,"PRAGMA user_version") is 66L &&
+            Check(Data(path) == before && Convert.ToInt32(QueryOn(path,"PRAGMA user_version")) == SqliteMigrations.CurrentVersion &&
                 QueryOn(path,"SELECT other_bonus_experience FROM character_dungeon_settlement_receipts") is 0L &&
                 QueryOn(path,"SELECT bonus_json FROM character_dungeon_settlement_receipts") is "[]" &&
                 QueryOn(path,"SELECT count(*) FROM sqlite_schema WHERE name IN ('bonus_migration_index','bonus_migration_trigger')") is 2L,
-                "真实65旧库升级66保留全表原值、UID序列和历史回执，旧分项缺省0且无补发");
+                "真实65旧库升级当前版本保留全表原值、UID序列和历史回执，经验分项缺省0且无补发");
             string current = Snapshot(path);
             _ = new SqliteGameDatabase(path);
             Check(Snapshot(path) == current,"重复打开新结构不重复迁移、修改资产或重建表");

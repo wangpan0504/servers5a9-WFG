@@ -156,9 +156,23 @@ internal static class SqliteMigrations
         new(64, "消耗品持续效果与冷却", static (db, tx) => Execute(db, tx, ConsumableStatesSchema)),
         new(65, "角色被拉黑有效计分", AddBlacklistCountColumn),
         new(66, "通关经验其他加成与冻结分项", DungeonExperienceBonusSchema.Upgrade),
+        new(67, "角色皮肤仓库与选择", AddSkinStorageStateColumn),
     ];
 
     const string BlacklistCountColumn = "blacklist_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(blacklist_count)='integer' AND blacklist_count BETWEEN 0 AND 2147483647)";
+    const string SkinStorageStateColumn = "weapon_skin_state TEXT NOT NULL DEFAULT '{\"Owned\":[],\"Selected\":0}' CHECK(json_valid(weapon_skin_state) AND json_type(weapon_skin_state)='object')";
+
+    static void AddSkinStorageStateColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='weapon_skin_state'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE characters ADD COLUMN " + SkinStorageStateColumn);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains(SkinStorageStateColumn, StringComparison.Ordinal))
+            throw new InvalidDataException("角色武器幻化列结构不兼容");
+    }
 
     static void AddBlacklistCountColumn(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1530,6 +1544,7 @@ internal static class SqliteMigrations
         "SELECT avatar_expansion FROM characters LIMIT 0",
         "SELECT devil_usage,stamina_until FROM characters LIMIT 0",
         "SELECT daily_booster_usage FROM characters LIMIT 0",
+        "SELECT weapon_skin_state FROM characters LIMIT 0",
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",

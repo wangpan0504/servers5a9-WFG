@@ -88,6 +88,8 @@ internal static class TownPackets
                 InventoryCreatureSkinService.AppearanceTemplateId(character, utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
             CharacterName.Encoding.GetEncoder().Convert(adventureName.AsSpan(), state.AsSpan(51, 16), true,
                 out _, out _, out _);
+            // 0267ECF2读取头部+6Eh，经Data+49Ch恢复城镇及战斗武器幻化，独立于克隆来源。
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(state.AsSpan(110), character.Inventory.Skins.Selected);
             // Actor原始状态末尾u16为心情字段。
             System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(state.AsSpan(114), character.Emotion);
             writer.Write(state);
@@ -229,7 +231,8 @@ internal static class TownPackets
             writer.Write(0u); // 02676410 / 02676510 empty lists.
             writer.Write(0u);
             writer.Write(0u); // Direct scalar, then 02675CD0.
-            writer.Write(new byte[3]); // 0267B480, direct byte, 0267AC80 empty list.
+            writer.Write(new byte[2]); // 0267B480及其后的独立u8。
+            SkinStoragePackets.WriteUserInfo(writer, character.Inventory.Skins, (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds());
             return stream.ToArray();
         }
     }

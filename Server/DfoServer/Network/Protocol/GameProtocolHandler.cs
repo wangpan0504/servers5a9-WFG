@@ -21,7 +21,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     DfoServer.Game.Creatures.CreatureService? creatures = null, CreatureProjection? creatureProjection = null,
     DfoServer.GameWorld.Quests.QuestStageGraph? stageGraph = null, DfoServer.GameWorld.Items.BoosterCatalog? boosters = null,
-    NativeChannel? native = null, DfoServer.GameWorld.Items.ItemCatalog? items = null, ExperienceBonusService? experienceBonuses = null) : IConnectionProtocol
+    NativeChannel? native = null, DfoServer.GameWorld.Items.ItemCatalog? items = null,
+    ExperienceBonusService? experienceBonuses = null,
+    DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -131,6 +133,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
                         if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
                         if (context.Creatures is { } creatureClock) await creatureClock.RefreshAsync();
+                        if (skins is not null) await skins.RefreshAsync(context);
                     }
                     finally { context.CommandGate.Release(); }
                     return true;

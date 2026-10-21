@@ -18,22 +18,34 @@ internal static class ClearAvatarTcpTests
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "clear-avatar"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         int originalCoat = resources.Characters.Get(0).DefaultAvatarEquipment[3];
-        var cases = new[] { (Name: "ClearCoat", Slot: (short)3, Clone: 101500878, Original: originalCoat, Grow: (byte)0),
-            (Name: "ClearEmpty", Slot: (short)3, Clone: 101500878, Original: 0, Grow: (byte)0),
-            (Name: "ClearAura", Slot: (short)9, Clone: 113590006, Original: 101590068, Grow: (byte)0),
-            (Name: "ClearAwaken", Slot: (short)3, Clone: 101500878, Original: 0, Grow: (byte)0x11),
-            (Name: "ClearSecond", Slot: (short)3, Clone: 101500878, Original: 0, Grow: (byte)0x21) };
+        var cases = new List<(string Name, short Slot, int Clone, int Original, byte Grow)>
+        { ("ClearCoat", 3, 101500878, originalCoat, 0),
+            ("ClearEmpty", 3, 101500878, 0, 0),
+            ("ClearAura", 9, 113590006, 101590068, 0),
+            ("ClearAwaken", 3, 101500878, 0, 0x11),
+            ("ClearSecond", 3, 101500878, 0, 0x21) };
+        if (resources.ItemResources.Items.ContainsEquipment(401600057) &&
+            resources.ItemResources.Items.Get(401600057) is { CloneAvatar: true, BorrowAvatarAppearance: true, EquipmentSlot: 10 })
+            cases.Add(("ClearWeapon", 10, 401600057, 0, 0));
+        else
+            Console.WriteLine("SKIP 空武器装扮TCP：当前PVF未声明测试克隆武器装扮；全槽规则由核心自测覆盖");
         var roles = new List<Character>();
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             foreach (var row in cases)
             {
                 var items = new List<InventoryItem> { Item(0, new(InventoryListType.Avatar, 0), row.Clone) };
                 if (row.Original != 0) items.Add(Item(0, new(InventoryListType.Equipment, row.Slot), row.Original));
+                if (row.Slot == 10)
+                {
+                    var weapon = resources.Characters.Get(0).Equipment.Single(item => item.Slot == 12).Template;
+                    items.Add(InventoryRewardGrantService.CreateItem(weapon, new(InventoryListType.Equipment, 12),
+                        InventoryRewardGrantService.Create(weapon) with { SealFlag = 0 }));
+                }
                 roles.Add(repository.Create(owner, new(row.Name, resources.Towns.Room, resources.Towns.InitialReturn)
                     { Level = 95, GrowType = row.Grow, AcceptedStoryLevel = 1, Inventory = new([.. items]) }));
             }
         await fixture.StartAsync();
-        for (int index = 0; index < cases.Length; index++)
+        for (int index = 0; index < cases.Count; index++)
         {
             var row = cases[index];
             int appearance = row.Original;
@@ -89,7 +101,7 @@ internal static class ClearAvatarTcpTests
             if (row.Original == 0)
                 That(detail.ClearAvatarSourceUid == 0 && fixture.Query(
                     "SELECT COUNT(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type IN (1,3)",
-                    roles[index].Id).Single().Single() is long count && count == 1,
+                    roles[index].Id).Single().Single() is long count && count == (row.Slot == 10 ? 2 : 1),
                     "空槽克隆只保存真实实例，不发放或存储基础外观替代物品");
             if (row.Original != 0)
                 That(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=1 AND slot_index=$p1",
@@ -141,10 +153,13 @@ internal static class ClearAvatarTcpTests
         static void Verify(byte[] actor, byte[] player, string name, short slot, int physical, int appearance, ushort color)
         {
             int at = 134 + NameWidth(name);
-            That(actor[at - 1] == 1 && actor[at] == slot && U32(actor, at + 1) == physical &&
-                U32(actor, at + 16) == appearance && player[126] == 1 && player[127] == slot &&
+            That(actor[at - 1] == (slot == 10 ? 2 : 1) && actor[at] == slot && U32(actor, at + 1) == physical &&
+                U32(actor, at + 16) == appearance && player[126] == (slot == 10 ? 2 : 1) && player[127] == slot &&
                 U32(player, 128) == physical && U32(player, 141) == appearance,
                 "Actor及Player保持真实克隆模板，只传真实覆盖来源，空槽由客户端选择基础外观");
+            if (slot == 10)
+                That(actor[at + 25] == 12 && U32(actor, at + 26) > 0 && U32(actor, at + 41) == 0,
+                    "空武器克隆与实际武器独立传输，二者均不伪造克隆来源");
             That(U32(actor, at + 5) == 4 && U16(actor, at + 9) == color && U16(actor, at + 11) == (color == 0 ? 0 : 8),
                 "Actor借用染色与关联编号来自同一已提交详情");
             int sockets = slot == 9 ? 187 : 153;
