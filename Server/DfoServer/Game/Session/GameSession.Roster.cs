@@ -37,21 +37,19 @@ internal sealed partial class GameSession
         return true;
     });
 
-    public CharacterSlotChangeResult ChangeCharacterSlots(uint slotA, uint slotB) => owner.Execute(() =>
+    public CharacterSlotChangeResult ChangeCharacterSlots(uint indexA, uint indexB) => owner.Execute(() =>
     {
         if (Selected is not null || Phase != SessionPhase.Unselected)
             return new CharacterSlotChangeResult(null, SelectionEpoch, "selected");
-        if (slotA > ushort.MaxValue || slotB > ushort.MaxValue)
-            return new CharacterSlotChangeResult(new(CaptureRoster()), SelectionEpoch, "slot-invalid");
-        // 同槽请求不写库，仍回复成功和当前名册，避免客户端停在拖动后的本地行序。
-        if (slotA == slotB)
+        // 同索引请求不写库，仍回复成功和当前名册，避免客户端停在拖动后的本地行序。
+        if (indexA == indexB)
             return new CharacterSlotChangeResult(new(CaptureRoster()), SelectionEpoch, "same-slot");
-        // 只按最近已发布名册解释两个持久槽位；名册外的请求不能猜归属，回推当前名册重新同步。
+        // 客户端正文是最近名册的行索引，不是持久槽位；有空洞时二者不同，必须按已发布行序映射。
         var roster = publishedRoster;
         if (roster is null || !MatchesRoster(roster) ||
-            !roster.Entries.Any(entry => entry.Slot == slotA) || !roster.Entries.Any(entry => entry.Slot == slotB))
+            indexA >= roster.Entries.Length || indexB >= roster.Entries.Length)
             return new CharacterSlotChangeResult(new(CaptureRoster()), SelectionEpoch, "roster-mismatch");
-        repository.SwapSlots(owner, checked((ushort)slotA), checked((ushort)slotB));
+        repository.SwapSlots(owner, roster.Entries[(int)indexA].Slot, roster.Entries[(int)indexB].Slot);
         SelectionEpoch++;
         return new CharacterSlotChangeResult(new(CaptureRoster()), SelectionEpoch, "committed");
     });

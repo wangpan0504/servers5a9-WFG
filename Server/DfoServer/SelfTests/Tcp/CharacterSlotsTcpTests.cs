@@ -24,7 +24,12 @@ internal static class CharacterSlotsTcpTests
             var role = repository.Create(owner, new("SlotsTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             { Level = 60, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills });
             InventoryService.Commit(repository, owner, role, new CurrencyService(r.GoldLimits).Grant(role, CurrencyKind.Cera, 1_000_000));
-            for (int i = 1; i < 32; i++) repository.Create(owner, new("Fill" + i, resources.Towns.Room, resources.Towns.InitialReturn));
+            for (int i = 1; i < 32; i++)
+                repository.Create(owner, i == 1
+                    // Fill1 与 SlotsTcp 同配置，便于拖动后按新行序选中并核对入城包序。
+                    ? new NewCharacter("Fill1", resources.Towns.Room, resources.Towns.InitialReturn)
+                    { Level = 60, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills }
+                    : new NewCharacter("Fill" + i, resources.Towns.Room, resources.Towns.InitialReturn));
             Reject<InvalidDataException>(() => repository.Create(owner, new("Denied33", resources.Towns.Room, resources.Towns.InitialReturn)), "默认32栏不越界建角");
         }
         string migrationAssets = MigrationAssets();
@@ -54,16 +59,17 @@ internal static class CharacterSlotsTcpTests
             var loginRows = RosterNames(peer.Roster);
             That(loginRows.Length == 32 && loginRows[0] == "SlotsTcp" && loginRows[1] == "Fill1" && loginRows[2] == "Fill2",
                 "重排前登录名册按持久槽位排列");
+            var fill1Row = fixture.Query("SELECT id FROM characters WHERE name='Fill1'");
+            That(fill1Row is [[long _]], "夹具取得被拖动角色编号");
+            ushort fill1 = (ushort)(long)fill1Row[0][0];
             peer.Send(295, SwapBody(1, 2));
             peer.Expect(1, 295, [1]);
-            var swappedRoster = peer.Expect(0, 2).Body;
-            var swappedRows = RosterNames(swappedRoster);
-            That(swappedRows.Length == 32 && swappedRows[0] == "SlotsTcp" && swappedRows[1] == "Fill2" && swappedRows[2] == "Fill1" &&
-                U16(swappedRoster, 3) == 32 && U16(swappedRoster, 5) == 32 &&
-                fixture.Query("SELECT slot FROM characters WHERE name='Fill1'") is [[2L]] &&
-                fixture.Query("SELECT slot FROM characters WHERE name='Fill2'") is [[1L]],
-                "op295互换两个持久槽位，ACK后完整名册按提交行序下发并落库");
-            peer.Select(); peer.Barrier(); string before = State(); peer.Send(64, Purchase()); peer.Closed();
+            // 成功拖动只回ACK，不再整份回推名册；服务端若仍推名册，Select 的首包顺序断言会在此失败。
+            peer.Select(2);
+            That(peer.Id == (ushort)fill1, "拖动后不推名册，新行序仍映射到被拖动角色");
+            That(fixture.Query("SELECT slot FROM characters WHERE name='Fill1'") is [[2L]] &&
+                fixture.Query("SELECT slot FROM characters WHERE name='Fill2'") is [[1L]], "op295互换两个持久槽位并落库");
+            peer.Barrier(); string before = State(); peer.Send(64, Purchase()); peer.Closed();
             That(State() == before, "容量保存失败不扣点券或推进revision");
         }
         fixture.Sql("DROP TRIGGER fail_slot_purchase");

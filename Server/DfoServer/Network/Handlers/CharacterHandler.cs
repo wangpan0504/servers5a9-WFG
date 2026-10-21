@@ -107,15 +107,23 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
     async Task<CommandResult> ChangeSlotAsync(GameConnectionContext context, Packet request)
     {
         var parsed = CharacterRequests.ChangeSlot(request.Body);
-        var result = context.Session.ChangeCharacterSlots(parsed.SlotA, parsed.SlotB);
+        var result = context.Session.ChangeCharacterSlots(parsed.IndexA, parsed.IndexB);
         log.Write(result.Accepted ? "character_slot_change" : "character_slot_change_rejected", new
         {
-            Connection = context.Id, SlotA = parsed.SlotA, SlotB = parsed.SlotB, result.Reason, result.SelectionEpoch,
+            Connection = context.Id, IndexA = parsed.IndexA, IndexB = parsed.IndexB, result.Reason, result.SelectionEpoch,
             Count = result.Receipt?.Roster.Entries.Length
         });
         if (result.Receipt is not { } receipt) return CommandResult.Handled;
-        // 拖动只在选角页发生；成功ACK后必须用本次提交的完整名册覆盖客户端行序。
         bool CanSend() => context.Session.CanPublishSlotChange(receipt);
+        if (result.Reason == "committed")
+        {
+            // 客户端拖动后本地行序已与本次互换一致：先安装新行序，再只回ACK。
+            // 不再整份回推名册，避免客户端清空并重建名册列表把滚动条复位到第一行。
+            context.Session.MarkRosterPublished(receipt.Roster);
+            await context.Reply(CmdPacketType.CHANGE_CHARAC_SLOT, CharacterPackets.SlotChanged(), "character_slot_ack", CanSend);
+            return CommandResult.Handled;
+        }
+        // 同索引/名册不匹配没有写库，仍用当前名册覆盖客户端本地拖动结果，使其退出拖动状态。
         await context.Reply(CmdPacketType.CHANGE_CHARAC_SLOT, CharacterPackets.SlotChanged(), "character_slot_ack", CanSend);
         await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity),
             "character_slot_roster", CanSend);

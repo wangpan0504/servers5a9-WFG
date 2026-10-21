@@ -6,8 +6,9 @@ namespace DfoServer.Network.Parsers;
 
 internal sealed record CreateCharacterRequest(byte Job, string Name, byte[] Tail);
 internal sealed record DeleteCharacterRequest(ushort RosterIndex, string ConfirmationName);
-// 重排正文为两个u32持久槽位；客户端名册行携带的slot原样回传，不是UI行索引。
-internal sealed record ChangeCharacterSlotRequest(uint SlotA, uint SlotB);
+// 重排正文为两个u32名册行索引（03B45760→03B42550，源0x8f8、目标edi均为绝对列表索引）。
+// 有槽位空洞时索引不等于持久槽位，必须按最近已发布名册行序映射。
+internal sealed record ChangeCharacterSlotRequest(uint IndexA, uint IndexB);
 internal static class CharacterRequests
 {
     public static void HiddenRoster(ReadOnlySpan<byte> body)
