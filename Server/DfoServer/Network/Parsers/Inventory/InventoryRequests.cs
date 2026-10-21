@@ -7,6 +7,13 @@ namespace DfoServer.Network.Parsers.Inventory;
 
 internal static class InventoryRequests
 {
+    public static byte DurabilityLoss(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 1)
+            throw new InvalidDataException("耐久损耗报告必须是一个穿戴槽字节");
+        return body[0];
+    }
+
     public static InventoryDiscardRequest Discard(ReadOnlySpan<byte> body)
     {
         if (body.Length != 12) throw new InvalidDataException("CMD47丢弃请求宽度");

@@ -18,6 +18,13 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
         InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, goldLimits, pieces, contracts: contracts);
     public InventoryResult Delete(Character character, InventoryDeleteRequest request, bool preserveMaterials = false) =>
         InventoryDeleteService.PlanBatch(character.Inventory, request, preserveMaterials);
+    public InventoryResult DecreaseDurability(Character character, byte slot)
+    {
+        var source = character.Inventory.Find(new(InventoryListType.Equipment, slot));
+        if (source is null || source.Core.Kind != ItemKind.Equipment)
+            return InventoryResult.Reject();
+        return InventoryDurabilityService.Plan(character, slot, catalog.Get(source.Core.ItemId), DateTimeOffset.UtcNow);
+    }
     public (InventoryDiscardPlan? Plan, ushort Error) Discard(Character character, InventoryDiscardRequest request)
     {
         if (request.Slot > short.MaxValue || character.Inventory.Find(new((InventoryListType)request.List, (short)request.Slot)) is not { } source)
