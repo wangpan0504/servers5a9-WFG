@@ -33,6 +33,7 @@ internal static class SelfTestRunner
         CreatureSkinTests.RunCore();
         CreatureEggTests.RunCore();
         BoosterCreatureTests.RunCore();
+        BoosterNativeSelectionTests.RunCore();
         AvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();

@@ -244,8 +244,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 {
                     // 选择行的[creature]只有编号和数量；实体类型由真实模板决定，特殊owner不可走快捷发奖。
                     var selectedTemplate = catalog.Get(id);
-                    if (selectedTemplate.Kind is not (ItemKind.Equipment or ItemKind.Creature or ItemKind.Avatar) ||
-                        CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
+                    if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
                         selectedTemplate.AcquisitionContract is not null || selectedTemplate.IsPremiumService ||
                         contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id))
                         return InventoryResult.Reject(19);
