@@ -15,29 +15,39 @@ internal static class InventoryStackLimitTests
         // 该真实模板有绝对期限，用有效期内的时刻单独验证堆叠规则，不修改资源或生产期限。
         var now = new DateTimeOffset(2016, 2, 1, 0, 0, 0, TimeSpan.Zero);
         var empty = Role();
-        LegacyExpiryFixture.Restore(catalog, (10008885, "2016-03-10 06:00:00"));
-        var limited = catalog.Get(10008885);
-        var first = Grant(empty, new InventoryReward(limited.Id, 1));
-        check(limited.StackLimit == 1 && first.Accepted && first.Plan!.After.Items.Length == 1,
-            "matched limit-one box grants its first instance during its valid period");
-        var old = first.Plan!.After.Items[0] with { Uid = 101, Position = Bag(3), Core = first.Plan.After.Items[0].Core with { SortLockFlag = 1 } };
-        var current = Role(old);
-        check(Grant(current, new InventoryReward(limited.Id, 1)) is { Accepted: false, Error: 17, Plan: null } && current.Inventory.Items[0] == old,
-            "limit-one grant detects quickbar stack and rejects without allocating a second instance");
-        check(!Grant(empty, new InventoryReward(limited.Id, 2)).Accepted && !Grant(empty, new(limited.Id, 1), new(limited.Id, 1)).Accepted,
-            "single-row and repeated-row limit-one batches are rejected atomically");
-        check(!Grant(current, new(10400, 1), new(limited.Id, 1)).Accepted && current.Inventory.Items.Length == 1,
-            "earlier planned rewards are not published when a later stack fails");
-        check(Grant(empty, new InventoryReward(10400, 2)).Plan!.After.Items.Length == 2,
-            "equipment stack limit one is not a unique possession rule");
-        check(!InventoryRewardGrantService.TryGrantBatch(empty, [new(limited.Id, 1)], catalog, itemResources.GoldLimits, itemResources.EpicPieces, now.AddYears(1)).Accepted,
-            "stack fix retains absolute expiration rejection");
+        var original = catalog.Get(10008885);
+        try
+        {
+            LegacyExpiryFixture.Restore(catalog, (10008885, "2016-03-10 06:00:00"));
+            var limited = catalog.Get(10008885);
+            var first = Grant(empty, new InventoryReward(limited.Id, 1));
+            check(limited.StackLimit == 1 && first.Accepted && first.Plan!.After.Items.Length == 1,
+                "matched limit-one box grants its first instance during its valid period");
+            var limitedItem = first.Plan!.After.Items[0] with { Uid = 101, Position = Bag(3), Core = first.Plan.After.Items[0].Core with { SortLockFlag = 1 } };
+            var limitedRole = Role(limitedItem);
+            check(Grant(limitedRole, new InventoryReward(limited.Id, 1)) is { Accepted: false, Error: 17, Plan: null } && limitedRole.Inventory.Items[0] == limitedItem,
+                "limit-one grant detects quickbar stack and rejects without allocating a second instance");
+            check(!Grant(empty, new InventoryReward(limited.Id, 2)).Accepted && !Grant(empty, new(limited.Id, 1), new(limited.Id, 1)).Accepted,
+                "single-row and repeated-row limit-one batches are rejected atomically");
+            check(!Grant(limitedRole, new(10400, 1), new(limited.Id, 1)).Accepted && limitedRole.Inventory.Items.Length == 1,
+                "earlier planned rewards are not published when a later stack fails");
+            check(Grant(empty, new InventoryReward(10400, 2)).Plan!.After.Items.Length == 2,
+                "equipment stack limit one is not a unique possession rule");
+            check(!InventoryRewardGrantService.TryGrantBatch(empty, [new(limited.Id, 1)], catalog, itemResources.GoldLimits, itemResources.EpicPieces, now.AddYears(1)).Accepted,
+                "stack fix retains absolute expiration rejection");
+        }
+        finally
+        {
+            // 历史期限仅属于本段夹具，不能污染后续使用同一目录的真实资源用例。
+            catalog.PrefillTemplates([KeyValuePair.Create(original.Id, original)]);
+        }
+        check(ReferenceEquals(catalog.Get(original.Id), original), "历史期限夹具完整恢复共享目录的原模板");
 
         var potion = catalog.Get(1106);
         var core = InventoryRewardGrantService.Create(potion, 5, now);
-        old = new(101, Bag(3), core with { Value = potion.StackLimit - 2, SortLockFlag = 1 });
+        var old = new InventoryItem(101, Bag(3), core with { Value = potion.StackLimit - 2, SortLockFlag = 1 });
         var later = new InventoryItem(102, Bag(65), core);
-        current = Role(later, old);
+        var current = Role(later, old);
         var granted = Grant(current, new InventoryReward(potion.Id, 2));
         check(granted.Accepted && granted.Plan!.After.Find(old.Position) == old with { Core = old.Core with { Value = potion.StackLimit } } &&
             granted.Plan.After.Find(later.Position) == later, "grant chooses first compatible slot and preserves its UID and sorting lock");
