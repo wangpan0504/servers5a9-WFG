@@ -836,7 +836,7 @@ internal static class QuestLifecycleTcpTests
                     await QuestQuickClearTcpTests.RunAsync(extra,resources);
                     VerifySequentialParent(extra,resources,growth);
                     VerifyNonBossSettlement(extra,resources,growth);
-                    VerifyMutationEntry(extra,resources,growth);
+                    VerifyMutationAndNonoraEntry(extra,resources,growth);
                     QuestMutationClearTcpTests.Verify(extra,resources,growth,DrainNotifications);
                     VerifyLayeredBossSettlement(extra,resources,growth);
                     VerifyDungeonNpcMeeting(extra,resources,growth);
@@ -1661,53 +1661,67 @@ internal static class QuestLifecycleTcpTests
         }
     }
 
-    static void VerifyMutationEntry(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
+    static void VerifyMutationAndNonoraEntry(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth)
     {
-        var done = new HashSet<int> { 3347 };
-        var area = resources.Towns.Areas.Values.First(row => row.Level <= 48 && row.DungeonWorldMap is { } world &&
-            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 52));
-        // 隔离准备入口资格；任务接取和副本加载走真实请求，不替代连续主线或客户端验收。
-        done.UnionWith(area.Quests);
-        if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
-        var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
-        var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
-            checked((ushort)(walk.X + walk.Width / 2)),checked((ushort)(walk.Y + walk.Height / 2)));
-        Character created;
-        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        // 职业全矩阵在Session层；TCP只选报告中的死灵术士，转职值从实际资源名册取得。
+        var necromancer = resources.Characters.Get(6).GrowthOptions.GrowTypes.Single(row => row.Label.Contains("死灵",StringComparison.Ordinal));
+        foreach (var sample in new[] {
+            (Quest:(ushort)3348,Dungeon:52u,Map:76340,Previous:3347,Job:(byte)0,Grow:(byte)0,Scalar:(byte)1,Name:"QuestMutant"),
+            (Quest:(ushort)3347,Dungeon:61u,Map:76330,Previous:3346,Job:(byte)6,Grow:necromancer.Value,Scalar:(byte)2,Name:"QuestNonora") })
         {
-            var candidate = CharacterCreation.Prepare("QuestMutant",resources.Characters.Get(0),position,position,resources.Learning.Get);
-            var learning = SkillPointLedger.Synchronize(0,0,48,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(48) },resources.Learning);
-            created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level = 48, AcceptedStoryLevel = 48,
-                CompletedQuests = done.ToArray(),InitialLearning = learning });
-        }
-        string acceptance;
-        using (var peer = Open(fixture))
-        {
-            peer.Select(created.Slot,prepared: true,resumeTown: true,room: false);
-            peer.Send(31,[31,0,20,13]); peer.Expect(1,31,[1,20,13,1,0,0,0,0]);
-            peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
-            acceptance = Accepted();
-            foreach (ushort requestQuest in new ushort[] { 3348,0 })
+            var done = new HashSet<int> { sample.Previous };
+            var area = resources.Towns.Areas.Values.First(row => row.Level <= 48 && row.DungeonWorldMap is { } world &&
+                resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == sample.Dungeon));
+            // 隔离准备入口资格；任务接取和副本加载走真实请求，不替代连续主线或客户端验收。
+            done.UnionWith(area.Quests);
+            if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+            var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+            var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
+                checked((ushort)(walk.X + walk.Width / 2)),checked((ushort)(walk.Y + walk.Height / 2)));
+            Character created;
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
             {
-                peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27,new byte[42]);
-                byte[] request = new byte[25]; BinaryPrimitives.WriteUInt32LittleEndian(request,52);
-                BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(9),ushort.MaxValue);
-                BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),requestQuest);
-                peer.Send(16,request);
-                That(U32(peer.Expect(0,28).Body,0) == 52 && U32(peer.Expect(0,29).Body,14) == 76340,
-                    "真实3348及0请求均从D52任务起点加载，不返回拒绝ACK16 " + requestQuest);
-                FormalDungeonTcpTests.Load(peer);
-                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
-                That(Accepted() == acceptance && fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
-                    "未清图返回保留3348接取身份和进行中状态，不签发清图凭据 " + requestQuest);
+                var candidate = CharacterCreation.Prepare(sample.Name,resources.Characters.Get(sample.Job),position,position,resources.Learning.Get);
+                if (sample.Grow != 0)
+                {
+                    var free = resources.Learning.FreeSkills(sample.Job,sample.Grow).ToArray();
+                    candidate = candidate with { GrowType=sample.Grow,Skills=free,
+                        InitialLearning=SkillLearning.Initialize(sample.Job,free,resources.Learning).State! };
+                }
+                var learning = SkillPointLedger.Synchronize(sample.Job,sample.Grow,48,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(48) },resources.Learning);
+                created = new CharacterRepository(fixture.Database).Create(owner,candidate with { Level = 48, AcceptedStoryLevel = 48,
+                    CompletedQuests = done.ToArray(),InitialLearning = learning });
             }
+            string acceptance;
+            using (var peer = Open(fixture))
+            {
+                peer.Select(created.Slot,prepared: true,resumeTown: true,room: false);
+                byte lo=(byte)sample.Quest,hi=(byte)(sample.Quest>>8);
+                peer.Send(31,[31,0,lo,hi]); peer.Expect(1,31,[1,lo,hi,sample.Scalar,0,0,0,0]);
+                peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                acceptance = Accepted();
+                foreach (ushort requestQuest in new ushort[] { sample.Quest,0 })
+                {
+                    peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27,new byte[42]);
+                    byte[] request = new byte[25]; BinaryPrimitives.WriteUInt32LittleEndian(request,sample.Dungeon);
+                    BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(9),ushort.MaxValue);
+                    BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),requestQuest);
+                    peer.Send(16,request);
+                    That(U32(peer.Expect(0,28).Body,0) == sample.Dungeon && U32(peer.Expect(0,29).Body,14) == sample.Map,
+                        "显式及0请求从原任务起点加载，不返回拒绝ACK16 " + sample.Quest + "/" + requestQuest);
+                    FormalDungeonTcpTests.Load(peer);
+                    peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                    That(Accepted() == acceptance && fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                        "未清图返回保留原接取身份和进行中状态，不签发清图凭据 " + sample.Quest + "/" + requestQuest);
+                }
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(created.Slot,prepared: true,resumeTown: true,room: false); peer.Barrier();
+                That(Accepted() == acceptance,"两次正式加载退出在重连后回放同一持久接取："+sample.Quest);
+            }
+            string Accepted() => fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id);
         }
-        using (var peer = Open(fixture))
-        {
-            peer.Select(created.Slot,prepared: true,resumeTown: true,room: false); peer.Barrier();
-            That(Accepted() == acceptance,"3348接取和两次正式加载退出在重连后回放同一持久接取");
-        }
-        string Accepted() => fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id);
     }
 
     public static async Task RunContinuationAsync(ServerOptions options, string root, TcpTestResources resources)
