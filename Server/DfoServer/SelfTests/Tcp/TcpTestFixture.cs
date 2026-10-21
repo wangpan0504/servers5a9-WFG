@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Development.Dungeons;
 using Microsoft.Data.Sqlite;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -81,6 +82,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             RedirectStandardError = true,
             RedirectStandardInput = true
         };
+        ConfigureChildHeapLimit(info, Environment.GetEnvironmentVariable("DFO_TCP_CHILD_GC_HEAP_HARD_LIMIT"));
         info.ArgumentList.Add(singleFile ? "--server" : Path.Combine(Root, "DfoServer.dll"));
         info.WorkingDirectory = Root;
         foreach (string argument in new[] { "--server-ip", Options.AdvertisedAddress, "--listen-ip", Options.ListenAddress,
@@ -100,6 +102,19 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             info.ArgumentList.Add(Options.DevelopmentDungeonEntryProbe.ToString());
         }
         return info;
+    }
+
+    internal static void ConfigureChildHeapLimit(ProcessStartInfo start, string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return;
+        ReadOnlySpan<char> digits = value.AsSpan();
+        if (digits.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            digits = digits[2..];
+        if (!ulong.TryParse(digits, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out ulong bytes) || bytes == 0)
+            throw new InvalidDataException("DFO_TCP_CHILD_GC_HEAP_HARD_LIMIT 必须为正数十六进制字节数");
+        // 仅覆盖真实fixture子进程，不修改持有共享资源的驱动环境。
+        start.Environment["DOTNET_GCHeapHardLimit"] = value;
     }
 
     public Task<string> CliAsync(string? input, params string[] arguments) => CliAsync(input, 0, arguments);

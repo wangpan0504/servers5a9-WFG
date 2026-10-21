@@ -22,6 +22,7 @@ internal static class SelfTestRunner
         CreatureGroupTests.RunCore();
         CommandLineTests.Run();
         ConnectionAddressTests.Run();
+        Testing.TcpTestFixtureProcessTests.Run();
         await Testing.TcpTestArtifactsTests.RunAsync();
         CashShopTests.RunCore();
         PremiumContractTests.RunCore();
