@@ -180,20 +180,7 @@ internal static class ServerRuntime
                 epicPool = new DungeonItemDropPool(fragmentTemplates);
             }
             var hellRewards = DungeonHellDropRules.TryLoad(pvf) is { } hellDropRules ? new DungeonHellRewardPolicy(hellDropRules, dropCandidates, epicPool, epicPermille) : null;
-            DungeonDropGenerationPlan PrepareDrops(DungeonEntryPlan entry, DungeonPlannedMonster monster)
-            {
-                // APC 波次（spawn type 5..8）没有怪物掉落表。最后一波的深渊装备只走 hellparty 骰，不套普通怪概率。
-                if (monster.SpawnType > 3)
-                {
-                    var apc = new DungeonDropGenerationPlan("hell-party-apc", [], amplification: amplificationDrops);
-                    return monster.HellRewardRolls > 0 && hellRewards is not null
-                        ? hellRewards.Extend(apc, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : apc;
-                }
-                var plan = resourceDrops.Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel);
-                // 深渊装备骰只挂在最后一波；前面的恶魔波次保持各自的普通掉落。
-                return monster.HellRewardRolls > 0 && hellRewards is not null
-                    ? hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode, monster.HellRewardRolls, entry.Difficulty) : plan;
-            }
+            Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareDrops(DungeonEntryPlan entry) => resourceDrops.PrepareEntry(entry, hellRewards);
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
                 FifthProbabilityRows = dropRules.ProbabilityRows.Count(row => row.Values[4] != 0),

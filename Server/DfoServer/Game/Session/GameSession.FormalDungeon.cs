@@ -19,7 +19,7 @@ internal sealed partial class GameSession
     sealed record FormalDungeon(DungeonEntryPlan Entry, DungeonFixedRoute Route,
         SinglePlayerDungeonRun Run, NativeDungeonCombatAuthority Authority, uint MapSeed,
         DungeonGroundState Ground, IReadOnlyDictionary<int, DungeonExplicitDropPool> Pools, Func<int, int> Draw,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? PrepareDrops,
+        Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? PrepareDrops,
         ImmutableDictionary<ushort, DungeonDropGenerationPlan> DropPlans)
     {
         public bool HasPendingFatigue { get; set; }
@@ -66,7 +66,7 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null,
         Func<int, int>? draw = null, EpicPieceCatalog? pieces = null, Character? requiredCharacter = null,
         FormalDungeonReceipt? retry = null,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+        Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false,
         bool hellParty = false, bool hellLegend = false, bool sealDoor = false, bool practice = false,
         CrackDimensionRewardServices? crackRewards = null)
@@ -88,7 +88,7 @@ internal sealed partial class GameSession
     PreparedFormalDungeon? PrepareFormalDungeon(uint dungeonId, uint questId, byte difficulty,
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         Func<int, int>? draw, EpicPieceCatalog? pieces, Character? requiredCharacter, FormalDungeonReceipt? retry,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+        Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false, bool hellParty = false,
         bool hellLegend = false, bool sealDoor = false, bool practice = false,
         CrackDimensionRewardServices? crackRewards = null)
@@ -205,7 +205,7 @@ internal sealed partial class GameSession
 
     PreparedFormalDungeon? PrepareFormalDungeonResources(Character expected,long epoch,DungeonEntryPlan entry,
         DungeonRoomCatalog rooms,DungeonMonsterDropCatalog? drops,ItemCatalog? items,Func<int,int>? draw,EpicPieceCatalog? pieces,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+        Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         Location? tutorialReturn = null, TutorialScenes? tutorialScenes = null,
         CrackDimensionRewardServices? crackRewards = null)
     {
@@ -267,6 +267,7 @@ internal sealed partial class GameSession
         // 比赛副本 [disable drop item]，不准备掉落。
         if (drops is not null && items is not null && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice)
         {
+            var prepareMonsterDrops = prepareDrops?.Invoke(entry);
             foreach (var plan in plans)
             foreach (var monster in plan.Monsters.Where(monster =>
                 monster.HellWave is not null && monster.HellRewardRolls > 0 && monster.Source is null ||
@@ -275,7 +276,7 @@ internal sealed partial class GameSession
             {
                 // 资源准备在owner锁外；每个真实monster保留自己的等级、类型、难度及完整数量规则。
                 DungeonDropGenerationPlan? dropGeneration;
-                try { dropGeneration = prepareDrops?.Invoke(entry, monster); }
+                try { dropGeneration = prepareMonsterDrops?.Invoke(monster); }
                 catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
                 if (prepareDrops is not null && dropGeneration is null)
                     throw new InvalidDataException("掉落规则准备不能以空引用替代未支持的怪物");
@@ -284,7 +285,7 @@ internal sealed partial class GameSession
                 {
                     // 波次怪：普通计划 = 不带奖励骰；带奖励计划另存，死亡时若是本波次最后一只才用（地面槽位按带奖励计划的上限预留）。
                     rewardGeneration = dropGeneration;
-                    try { dropGeneration = prepareDrops?.Invoke(entry, monster with { HellRewardRolls = 0 }); }
+                    try { dropGeneration = prepareMonsterDrops?.Invoke(monster with { HellRewardRolls = 0 }); }
                     catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
                     hellRewardPlans[monster.ObjectKey] = rewardGeneration;
                 }

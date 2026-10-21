@@ -30,6 +30,10 @@ internal static class DungeonItemDropCatalogTests
             catalog.ReferencePool(true, 1, 1, 6).Entries.IsEmpty,
             "参考装备可回退最近较低grade，真实空池不能借堆叠品补造装备");
         source[0] = source[0] with { CreationRate = 99 };
+        var mixed = DungeonItemDropCatalog.Create([.. source, Template(104, ItemKind.Profession, 1, 0, 9),
+            Template(105, ItemKind.Consumable, 2, 0, 1)]).ReferencePool(false, 1, 2, 6);
+        That(mixed.Entries.Select(row => row.Template.Id).SequenceEqual(new[] { 100, 101, 102, 104, 105 }) && mixed.TotalWeight == 5,
+            "跨等级及稀有度回退保留消耗品、材料、副职业材料的原候选顺序和等权区间");
         That(pool.TotalWeight == 5 && pool.Entries[0].Template.CreationRate == 2,
             "源集合替换不能改变已准备的权重和模板");
         Reject<ArgumentOutOfRangeException>(() => pool.Select(5), "抽样上界拒绝，不回退到最后候选");

@@ -551,7 +551,7 @@ internal static class DungeonSettlementSessionTests
             var generation = new DungeonDropGenerationPlan("明确合成再挑战规则/实际资源模板", [
                 new(10000, pool, 3, 3), new(10000, null, 1, 1, new(1, 17, 0))]);
             var entry = f.Session.EnterFormalDungeon(3, 3145, 0, dungeons, rooms, drops, itemResources.Items,
-                draw: _ => 0, prepareDrops: (_, _) => generation)!;
+                draw: _ => 0, prepareDrops: _ => _ => generation)!;
             var completed = ClearRun(f);
             var settled = Settle(f, [1, 2, 3]);
             var retry = f.Session.RetryFormalDungeon(settled.Receipt!, dungeons, rooms, drops, itemResources.Items);

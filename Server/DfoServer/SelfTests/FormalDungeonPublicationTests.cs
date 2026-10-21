@@ -58,7 +58,7 @@ internal static class FormalDungeonPublicationTests
 
 
         GameCommandRegistry Registry(Fixture f, TownPresence? presence = null,
-            Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+            Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
             InventoryService? inventoryActions = null)
         {
             var commands = new GameCommandRegistry();
@@ -398,7 +398,7 @@ internal static class FormalDungeonPublicationTests
             await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
             var context = new GameConnectionContext(new(99, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
             int prepared = 0;
-            var commands = Registry(f, prepareDrops: (route, monster) =>
+            var commands = Registry(f, prepareDrops: route => monster =>
             {
                 Check(route.Difficulty == 0 && monster.CandidateLevel > 0, "生产选图Handler传递实际逐怪规则输入");
                 prepared++;

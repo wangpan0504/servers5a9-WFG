@@ -1213,13 +1213,13 @@ internal static class FormalDungeonSessionTests
             var boss = new DungeonDropGenerationPlan("明示Boss规则", [new(10000, null, 2, 2, new(5, 17, 0))]);
             var beforeEntry = f.Session.Selected!;
             Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
-                prepareDrops: (_, _) => throw new NotSupportedException("明确未解释的fixture规则")) is null &&
+                prepareDrops: _ => _ => throw new NotSupportedException("明确未解释的fixture规则")) is null &&
                 ReferenceEquals(beforeEntry, f.Session.Selected) && Same(beforeEntry, f.Read()) && f.Session.DungeonSnapshot is null,
                 "未支持的逐怪规则在预留attempt/key前拒绝准入，不静默换用显式掉率或写资产");
             var inputs = new Dictionary<ushort, (int Level, byte Type, byte Difficulty)>();
             int draws = 0;
             var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
-                draw: _ => { draws++; return 0; }, prepareDrops: (route, monster) =>
+                draw: _ => { draws++; return 0; }, prepareDrops: route => monster =>
                 {
                     inputs.Add(monster.ObjectKey, (monster.CandidateLevel, monster.SpawnType, route.Difficulty));
                     return monster.IsBoss ? boss : ordinary;

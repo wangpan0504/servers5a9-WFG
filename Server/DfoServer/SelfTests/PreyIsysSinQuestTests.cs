@@ -1,9 +1,13 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Session;
+using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
+using DfoServer.Infrastructure;
+using DfoServer.Network.Parsers;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
@@ -14,6 +18,86 @@ internal static class PreyIsysSinQuestTests
 {
     internal const int QuestId = 6210, ReplayQuestId = 6216, PreviousQuestId = 6209, ReplayPreviousQuestId = 6215;
     internal const int DungeonId = 291100374, HuntTarget = 107009977, Praxess = 107009968, BossMapId = 292106200;
+
+    // 完整服务端提交链使用明确合成的脚本报告；不把CMT3112的DESTROY声明当作客户端发包证明。
+    public static void RunSession(TownCatalog towns, CharacterCatalog characters, ItemResources items, QuestCatalog quests,
+        SkillLearningCatalog skills, CharacterGrowthCatalog growth, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
+        DungeonKillExperienceCatalog kills, DungeonClearExperienceCatalog clears, QuestRewardParameterCatalog parameters)
+    {
+        int checks = Count;
+        foreach (var sample in new[] { (Quest: QuestId, Request: (uint)QuestId), (Quest: ReplayQuestId, Request: 0u) })
+        {
+            var quest = quests.Get(sample.Quest);
+            var entrance = MiddleQuestEntryTests.Entrance(towns, quest, DungeonId);
+            using var f = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+                entrance.Completed, position: entrance.Position);
+            ushort id = checked((ushort)sample.Quest);
+            That(f.Session.ChangeQuest(id, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces)?.Commit is not null,
+                "罪恶按真实等级和前置接取：" + id);
+            var accepted = f.Read().ActiveMainQuests.Single(row => row.QuestId == id);
+            var opening = f.Session.EnterFormalDungeon(DungeonId, sample.Request, 0, dungeons, rooms);
+            That(opening is not null && opening.Entry.RouteQuestId == id && opening.Entry.BossMap.Id == BossMapId,
+                "罪恶显式及自动入口选中原任务末图：" + f.Session.LastFormalDungeonRejection);
+            var path = QuestStoryRouteTests.Path(opening!.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, opening.Entry.BossMap.Position);
+            FormalDungeonReceipt loaded = opening;
+            for (int at = 0; at < path.Length; at++)
+            {
+                loaded = f.Session.CompleteFormalDungeonLoading()!;
+                if (at == path.Length - 1) break;
+                foreach (var monster in loaded.Monsters.Monsters.Where(row => row.IsBlocking))
+                    That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(loaded, monster), kills, growth).Outcome == DungeonRunOutcome.Accepted,
+                        "罪恶前序房间按当前真实演员key清房");
+                That(f.Session.MoveFormalDungeon(checked((byte)path[at + 1].X), checked((byte)path[at + 1].Y)) is not null,
+                    "罪恶沿真实门墙移动");
+            }
+            var boss = loaded.Monsters.Monsters.Single(row => row.MonsterId == HuntTarget);
+            var friendly = loaded.Monsters.Monsters.Single(row => row.MonsterId == Praxess);
+            That(loaded.Snapshot.CurrentMap.Id == BossMapId && boss is { SourceOrdinal: 0, IsBlocking: true, CanReportDeath: true, IsFriendly: false } &&
+                friendly is { SourceOrdinal: 1, IsBlocking: false, CanReportDeath: false, IsFriendly: true },
+                "罪恶保留468的dummy Boss资格及友方普勒瑟斯");
+            var before = f.Read();
+            That(f.Session.EnableFormalDungeonSettlement() is null &&
+                f.Session.FinishQuest(id, ushort.MaxValue, quests, parameters, items.Items, items.GoldLimits, items.EpicPieces, growth).Outcome == QuestFinishOutcome.Rejected,
+                "罪恶目标报告前不能提前结算或交付");
+            That(f.Session.ObserveFormalDungeonScriptedDeath(new(boss.ObjectKey, 0x22, false, new string('A', 64)), kills, growth).Outcome == DungeonRunOutcome.Rejected &&
+                QuestCompletionRepositoryTests.Same(before, f.Read()), "罪恶坏摘要不落库");
+            var retire = f.Session.ObserveFormalDungeonScriptedDeath(new(friendly.ObjectKey, 0x22, true, new string('B', 64)), kills, growth);
+            That(retire is { Outcome: DungeonRunOutcome.Accepted, ClearFact: null, Reward: null } &&
+                QuestCompletionRepositoryTests.Same(before, f.Read()) && f.Session.Phase == SessionPhase.Dungeon,
+                "普勒瑟斯退场不能冒充目标死亡或生成通关");
+            var report = new NativeDungeonScriptedDeathObservation(boss.ObjectKey, 0x22, true, new string('C', 64));
+            var death = f.Session.ObserveFormalDungeonScriptedDeath(report, kills, growth);
+            That(death is { Outcome: DungeonRunOutcome.Accepted, ClearFact.ClearMap.Id: BossMapId } &&
+                f.Session.Phase == SessionPhase.Settlement, "罪恶合法目标报告生成真实末图通关事实并进入结算");
+            That(f.Read().ActiveMainQuests.Single(row => row.QuestId == id) == accepted with { ConditionState = 0 },
+                "罪恶猎杀归零与原接取身份同事务保存，不要求清图任务专用凭据");
+            before = f.Read();
+            That(f.Session.ObserveFormalDungeonScriptedDeath(report, kills, growth).Outcome == DungeonRunOutcome.Duplicate &&
+                QuestCompletionRepositoryTests.Same(before, f.Read()), "罪恶重复目标报告不重复推进或发奖");
+            var enabled = f.Session.EnableFormalDungeonSettlement();
+            That(enabled?.BossKey == boss.ObjectKey, "罪恶用实际目标key开放结算");
+            f.Session.ConfirmFormalDungeonSettlementEnabled(enabled!.Value.Receipt);
+            byte[] result = DungeonSettlementProtocolTests.Report(f.Read().Id, 99);
+            That(DungeonSettlementRequests.TryParsePlayResult(result, out var parsed), "罪恶使用正式46解析");
+            var settled = f.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint, result, dungeons, clears, growth);
+            That(settled is { Outcome: DungeonRunOutcome.Accepted, Receipt: not null }, "罪恶结算入库");
+            before = f.Read();
+            That(f.Session.SettleFormalDungeon(parsed.ActorId, parsed.RankPoint, parsed.MaximumRankPoint, result, dungeons, clears, growth).Outcome == DungeonRunOutcome.Duplicate &&
+                QuestCompletionRepositoryTests.Same(before, f.Read()), "罪恶重复46不重复发奖");
+            That(f.Session.ReturnFromFormalDungeon() is not null &&
+                f.Session.ObserveFormalDungeonScriptedDeath(report, kills, growth).Outcome == DungeonRunOutcome.Rejected,
+                "罪恶结算后可返回，迟到目标报告不能跨实例提交");
+            f.Session.ReturnToRoster();
+            f.Session.Select(0, resumeTown: true);
+            f.Session.MarkReady();
+            That(f.Read().ActiveMainQuests.Single(row => row.QuestId == id) == accepted with { ConditionState = 0 } &&
+                f.Session.Selected!.ActiveMainQuests.Single(row => row.QuestId == id) == accepted with { ConditionState = 0 },
+                "罪恶重选恢复同一接取身份及已持久化的猎杀归零进度");
+            That(f.Session.FinishQuest(id, ushort.MaxValue, quests, parameters, items.Items, items.GoldLimits, items.EpicPieces, growth).Receipt is not null &&
+                f.Read().CompletedQuests.Contains(id), "罪恶重选后正常34交付");
+        }
+        Console.WriteLine($"PASS {Count - checks} 罪恶目标报告、结算返回及原接取持久化断言（合成输入，非实机）");
+    }
 
     public static void RunResources(PvfArchive pvf, QuestCatalog? sharedQuests = null)
     {

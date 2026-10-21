@@ -89,7 +89,7 @@ internal sealed class DungeonItemDropCatalog
         {
             var result = new List<ItemTemplate>();
             for (int grade = minimum; grade <= maximum; grade++)
-            foreach (var kind in equipment ? new[] { ItemKind.Equipment } : new[] { ItemKind.Consumable, ItemKind.Material, ItemKind.Profession })
+            foreach (var kind in equipment ? EquipmentKinds : StackableKinds)
                 if (buckets.TryGetValue((kind, grade, targetRarity), out var entries))
                     result.AddRange(entries);
             return result;
@@ -102,4 +102,7 @@ internal sealed class DungeonItemDropCatalog
             return [];
         }
     }
+
+    static ReadOnlySpan<ItemKind> EquipmentKinds => [ItemKind.Equipment];
+    static ReadOnlySpan<ItemKind> StackableKinds => [ItemKind.Consumable, ItemKind.Material, ItemKind.Profession];
 }

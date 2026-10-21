@@ -22,7 +22,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
     CharacterGrowthCatalog growth, DungeonKillExperienceCatalog rewards, TownProjection town, CharacterLevelProjection levelProjection,
     DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null,
     GoldLimitCatalog? goldLimits = null, QuestProjection? quests = null,
-    Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+    Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
     TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
     CrackDimensionRewardServices? crackRewards = null) : IGameCommandModule
 {
