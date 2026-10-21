@@ -52,8 +52,44 @@ internal static class FormalDungeonSessionTests
         CharacterRevive();
         DeathReturnAndPurchase();
         RetreatStamina();
+        EquipmentDurability();
         Console.WriteLine($"PASS {TestCheck.Count - before} 正式Session文件库、六房合成击杀、身份及回滚断言（非实机）");
         return Task.CompletedTask;
+
+        void EquipmentDurability()
+        {
+            using var f = new Fixture("WearAtomic", towns, characters, learning, quests);
+            f.SelectEntry();
+            var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+            InventoryResult Wear() => f.Session.PlanAndCommitInventory(character => service.DecreaseDurability(character, 12),
+                requireTown: false, requiredPhase: SessionPhase.Dungeon);
+            var before = f.Read();
+            Check(!Wear().Accepted && Same(before, f.Read()), "城镇的48报告不能损耗库存");
+            Enter(f);
+            Check(!Wear().Accepted, "未完成地图加载不能提前损耗穿戴");
+            f.Session.CompleteFormalDungeonLoading();
+            before = f.Read();
+            var original = before.Inventory.Find(new(InventoryListType.Equipment, 12))!;
+            f.Sql("CREATE TRIGGER wear_abort AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'wear rollback'); END");
+            Reject<SqliteException>(() => Wear(), "耐久及revision写入后的审计失败整笔回滚");
+            Check(Same(before, f.Read()) && Same(before, f.Session.Selected!),
+                "失败没有提前安装减损核心、半笔revision或写入原实例");
+            f.Sql("DROP TRIGGER wear_abort");
+            var worn = Wear();
+            var committed = f.Read();
+            Check(worn.Accepted && committed.Revision == before.Revision + 1 &&
+                committed.Inventory.Find(original.Position) == (original with { Core = original.Core with { Durability = (ushort)(original.Core.Durability - 1) } }) &&
+                committed.Learning.Experience == before.Learning.Experience && committed.Inventory.Gold == before.Inventory.Gold &&
+                f.Session.CanPublishInventory(worn.Receipt!), "合法报告复用库存事务，只保存当前装备耐久及本次实际角色快照");
+            var stale = f.Session.PlanAndCommitInventory(character =>
+            {
+                var result = service.DecreaseDurability(character, 12);
+                f.Session.ReturnToRoster();
+                return result;
+            }, requireTown: false, requiredPhase: SessionPhase.Dungeon);
+            Check(!stale.Accepted && Same(committed, f.Read()) && !f.Session.CanPublishInventory(worn.Receipt!),
+                "锁外规划期间重选使旧耐久计划和通知失效，不扣另一实例装备");
+        }
 
         void RetreatStamina()
         {

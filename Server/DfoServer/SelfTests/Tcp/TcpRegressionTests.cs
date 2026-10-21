@@ -145,6 +145,7 @@ internal static class TcpRegressionTests
         }),
         ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
+        ("durability", FormalDungeonTcpTests.RunDurabilityAsync),
         ("dungeon-training", FormalDungeonTcpTests.RunTrainingAsync),
         ("class-experience", FormalDungeonTcpTests.RunClassExperienceAsync),
         ("dungeon-practice", FormalDungeonTcpTests.RunPracticeAsync),

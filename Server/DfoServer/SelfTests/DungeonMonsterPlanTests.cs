@@ -107,14 +107,24 @@ internal static class DungeonMonsterPlanTests
         var child = new DungeonRoomSpecialChild(1, "[monster]", Array.AsReadOnly(new[] { 1, 5, 2, 5, -1 }), "monster/fixture.mob");
         var trap = new DungeonRoomSpecialChild(0, "[trap]", [40002, 40, 1, 10, -1], null);
         var parent = new DungeonRoomSpecialObject(0, 3, [3, 100, 200, 0, 2], "passiveobject/fixture.obj", [trap, child]);
-        var specialPlan = DungeonMonsterPlan.FromRoom(room with { SpecialObjects = [parent] }, 99, 98, 5);
+        var specialRoom = room with { SpecialObjects = [parent] };
+        var specialPlan = DungeonMonsterPlan.FromRoom(specialRoom, 99, 98, 5);
         That(specialPlan.SpecialObjects.Single().Source == parent && specialPlan.Monsters.Count == 3 &&
             specialPlan.Monsters[^1] is { IsSpecialChild: true, IsBlocking: false, CandidateLevel: 5 } specialMonster &&
             specialMonster.Source!.SpecialChild == child && specialMonster.Source!.RawValues.SequenceEqual([1, 5, 2, 5, -1]) &&
             specialPlan.Monsters.Select(monster => monster.ObjectKey).Concat(specialPlan.SpecialObjects.Select(actor => actor.ObjectKey)).Distinct().Count() == 4 &&
             specialPlan.NextObjectKey == 103, "特殊父子与普通怪物统一预留key并跳过角色，非怪物原规则未丢失");
-        That(DungeonMonsterPlan.FromRoom(room with { SpecialObjects = [parent] }, 99, 10).SpecialObjects.Count == 1,
+        That(DungeonMonsterPlan.FromRoom(specialRoom, 99, 10).SpecialObjects.Count == 1,
             "剧情与普通房间均按资源装载特殊父子");
+        var lastSpecialKey = DungeonMonsterPlan.FromRoom(specialRoom, 0, 65532, 5);
+        That(lastSpecialKey.SpecialObjects.Single().ObjectKey == 65534 && lastSpecialKey.Monsters[^1].ObjectKey == ushort.MaxValue,
+            "普通怪、特殊父对象和子怪共享容量，最后一个ushort key仍可使用");
+        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(specialRoom, 0, 65534, 5),
+            "普通怪占满ushort后，特殊父对象仍须拒绝key溢出而不是复用或绕回");
+        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(specialRoom, 0, 65533, 5),
+            "普通怪与特殊父对象占满ushort后，特殊子怪仍须拒绝key溢出");
+        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(specialRoom, ushort.MaxValue, 65532, 5),
+            "特殊子怪跳过末尾角色key后拒绝耗尽的共享容量");
         foreach (int automatic in new[] { 0, -1 })
         {
             var automaticRoom = room with { SpecialObjects = [parent with { Children = [trap,child with { RawValues = [1,automatic,2,5,-1] }] }] };
@@ -284,10 +294,11 @@ internal static class DungeonMonsterPlanTests
             .SequenceEqual(new ushort[] { 10, 11, 12, 13 }), "unoccupied keys remain consecutive");
         That(DungeonMonsterPlan.FromRoom(first.Room, 10, 10).Monsters[0].ObjectKey == 11,
             "allocation skips a character collision at the initial key");
-        That(DungeonMonsterPlan.FromRoom(first.Room, 0, 65532).Monsters[^1].ObjectKey == ushort.MaxValue,
+        // 普通怪容量不依赖房间装饰物；特殊父子共享容量由合成夹具独立验证。
+        That(DungeonMonsterPlan.FromRoom(first.Room, 0, 65532, includeSpecial: false).Monsters[^1].ObjectKey == ushort.MaxValue,
             "last ushort key is usable when it does not collide");
-        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(first.Room, 0, 65533), "allocation refuses overflow instead of wrapping");
-        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(first.Room, ushort.MaxValue, 65532),
+        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(first.Room, 0, 65533, includeSpecial: false), "allocation refuses overflow instead of wrapping");
+        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(first.Room, ushort.MaxValue, 65532, includeSpecial: false),
             "skipping the last ushort character key refuses exhausted capacity");
 
         var source = first.Room.Monsters[0];
@@ -331,7 +342,7 @@ internal static class DungeonMonsterPlanTests
         var mixed = first.Room with { Monsters = Array.AsReadOnly(new[] { source, source with { RankKind = "[future]" } }), MonsterTeams = null };
         Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(mixed, 99, 10),
             "mixed supported and unknown rows reject the whole plan rather than publishing a partial roster");
-        var empty = first.Room with { Monsters = Array.Empty<DungeonRoomMonster>(), MonsterTeams = null };
+        var empty = first.Room with { Monsters = Array.Empty<DungeonRoomMonster>(), MonsterTeams = null, SpecialObjects = [], AiCharacters = [] };
         That(DungeonMonsterPlan.FromRoom(empty, ushort.MaxValue, ushort.MaxValue).Monsters.Count == 0,
             "a genuinely empty resource roster needs no object keys");
         var candidate = source with { RawValues = [1, 0, int.MaxValue, 573, 197, -7, 1, 1] };
