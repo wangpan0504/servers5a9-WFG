@@ -34,6 +34,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         commands.Register(CmdPacketType.DIE_CHARACTER, CharacterDeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.USE_COIN, UseCoinAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.MOVE_MAP, MoveAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.OPERATE_RIDABLE_OBJECT, RidableOperationAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
@@ -446,6 +447,18 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
         if (published && receipt.ScriptedReturnId != Guid.Empty) context.Session.ConfirmScriptedReturnPresentation(receipt);
         return CommandResult.Handled;
+    }
+
+    Task<CommandResult> RidableOperationAsync(GameConnectionContext context, Packet request)
+    {
+        if (!DungeonRequests.TryParseRidableOperation(request.Body,out var operation))
+            return Task.FromResult(CommandResult.Unhandled);
+        var result = context.Session.OperateFormalRidable(operation.Operation,operation.ResourceId,operation.MapX,operation.MapY);
+        bool accepted = result?.Outcome is DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate;
+        log.Write("formal_ridable_operation",new { Connection = context.Id, Accepted = accepted, operation.Operation,
+            operation.ResourceId, operation.MapX, operation.MapY, result?.Outcome, result?.Snapshot.Identity });
+        // 原生本地状态机已执行操作；不伪造ACK或重复创建MAP已有的骑乘演员。
+        return Task.FromResult(accepted ? CommandResult.Handled : CommandResult.Unhandled);
     }
 
     async Task<CommandResult> ReturnAsync(GameConnectionContext context, Packet request)

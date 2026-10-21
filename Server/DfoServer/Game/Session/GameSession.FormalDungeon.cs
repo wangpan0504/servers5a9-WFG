@@ -579,11 +579,23 @@ internal sealed partial class GameSession
         return dungeon.Entry.Maze.LayeredMaps.Count(map => map.Position == target) == 1;
     }
 
+    public DungeonRunResult? OperateFormalRidable(byte operation, uint resourceId, byte mapX, byte mapY) => owner.Execute(() =>
+    {
+        if (!Ready || Selected is null || Phase != SessionPhase.Dungeon || formalDungeon is not { } dungeon ||
+            dungeon.CharacterDead || dungeon.Ground.HasPendingOperation || dungeon.PendingTutorialClear is not null || HasPendingQuestScene ||
+            !Selected.ActiveMainQuests.Any(active => active.QuestId == dungeon.Entry.RouteQuestId && QuestHuntProgress.Bound(active,dungeon.Entry)))
+            return null;
+        return dungeon.Run.OperateRidable(dungeon.Run.Snapshot.Identity,operation,resourceId,new(mapX,mapY));
+    });
+
     public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
         if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.CharacterDead ||
             dungeon.Ground.HasPendingOperation || dungeon.PendingTutorialClear is not null || HasPendingQuestScene) return null;
         if (moveKind > 1) return null;
+        // 上车后放弃或重接任务也不能沿用旧接取的移动资格。
+        if (!Selected.ActiveMainQuests.Any(active => active.QuestId == dungeon.Entry.RouteQuestId && QuestHuntProgress.Bound(active,dungeon.Entry)))
+            dungeon.Run.CancelRidable();
         var target = new DungeonPoint(x,y);
         if (dungeon.Run.HasScriptedReturn || dungeon.Run.CanPresentScriptedBase(target))
         {

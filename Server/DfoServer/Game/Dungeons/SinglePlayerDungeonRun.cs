@@ -432,7 +432,8 @@ internal sealed partial class SinglePlayerDungeonRun
         if (HasPendingDeath)
             return Result(DungeonRunOutcome.Rejected);
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
-            current.Elevator is { Completed: false } || !current.Cleared || HasPendingLayer() || !connections.Contains((current.Plan.Room.Map.Position, target)) || !rooms.TryGetValue(target, out Room? next))
+            current.Elevator is { Completed: false } || !current.Cleared || HasPendingLayer() ||
+            !connections.Contains((current.Plan.Room.Map.Position, target)) && !CanRidableWarp(target) || !rooms.TryGetValue(target, out Room? next))
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "move", target));
         bool replaceVisited = false;
@@ -933,7 +934,11 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     private bool Matches(DungeonRunIdentity expected) => identity == expected && Phase != SinglePlayerDungeonPhase.Returned;
     private bool CanAdvance() => identity.Epoch < long.MaxValue - 2;
-    private void Advance() => identity = identity with { Epoch = checked(identity.Epoch + 1) };
+    private void Advance()
+    {
+        CancelRidable();
+        identity = identity with { Epoch = checked(identity.Epoch + 1) };
+    }
     private DungeonRunResult Result(DungeonRunOutcome outcome) => new(outcome, Snapshot);
     private DungeonRunResult? Replay(DungeonRunIdentity expected, Guid actionId, string kind, DungeonPoint? target)
         => acceptedActions.TryGetValue(actionId, out ActionFact? fact)

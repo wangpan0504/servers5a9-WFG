@@ -7,6 +7,7 @@ internal readonly record struct DungeonEntryRequest(uint DungeonIndex);
 internal readonly record struct DungeonStoryPauseRequest(byte State, byte Type);
 internal readonly record struct DungeonCharacterDeathRequest(ushort X, ushort Y, ushort? Context = null);
 internal sealed record DungeonMoveRequest(byte X, byte Y, uint Unknown2, uint Unknown6, byte Unknown10, IReadOnlyList<byte> RemainingFields);
+internal readonly record struct DungeonRidableOperationRequest(byte Operation, uint ResourceId, byte MapX, byte MapY);
 // 目标实例按来源记录的正HP降低量及次数；原生setter统计在夹取前计算，允许overkill，不是服务端伤害模拟。
 internal sealed record DungeonDeathParticipant(ushort Kind, ushort ObjectKey, ulong CumulativeHpDecrease, ushort PositiveHpDecreaseCount);
 internal sealed record DungeonSinglePlayerDeathStatistics(ulong Unknown6, uint Unknown14, ulong Unknown18, uint Unknown26,
@@ -40,6 +41,15 @@ internal readonly record struct DungeonSelectionRequest(
 
 internal static class DungeonRequests
 {
+    public static bool TryParseRidableOperation(ReadOnlySpan<byte> body, out DungeonRidableOperationRequest request)
+    {
+        request = default;
+        // 三个原生生产者均直接写7B；本版316不追加通用正文校验和。
+        if (body.Length != 7 || body[0] is < 1 or > 3) return false;
+        request = new(body[0], BinaryPrimitives.ReadUInt32LittleEndian(body[1..]), body[5], body[6]);
+        return true;
+    }
+
     public static bool TryParseCharacterDeath(ReadOnlySpan<byte> body, out DungeonCharacterDeathRequest request)
     {
         request = default;

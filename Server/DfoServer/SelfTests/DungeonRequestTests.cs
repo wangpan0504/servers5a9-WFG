@@ -12,6 +12,17 @@ internal static class DungeonRequestTests
     {
         int checks = Count;
 
+        foreach (byte operation in new byte[] { 1,2,3 })
+            That(DungeonRequests.TryParseRidableOperation([operation,0x78,0x56,0x34,0xF2,0xAB,0xCD],out var riding) &&
+                riding == new DungeonRidableOperationRequest(operation,0xF2345678,0xAB,0xCD),
+                "316保留7B操作、完整无符号资源编号及两个地图上下文值");
+        That(DungeonRequests.TryParseRidableOperation([2,0,0,0,0,255,255],out var noMap) &&
+            noMap is { ResourceId:0,MapX:255,MapY:255 },"316解析保留空场景哨兵，资格由领域校验");
+        foreach (int length in new[] { 0,1,6,8,11,100 })
+            That(!DungeonRequests.TryParseRidableOperation(new byte[length],out _),"316拒绝未证实宽度："+length);
+        foreach (byte operation in new byte[] { 0,4,255 })
+            That(!DungeonRequests.TryParseRidableOperation([operation,1,0,0,0,0,0],out _),"316拒绝未知操作："+operation);
+
         That(DungeonRequests.TryParseCharacterDeath([0x34, 0xF2, 0xFF, 0xFF], out var dead) &&
             dead == new DungeonCharacterDeathRequest(0xF234, ushort.MaxValue), "角色死亡保留两个完整u16坐标");
         That(DungeonRequests.TryParseUseCoin([0xCD, 0xAB], out ushort reviveKey) && reviveKey == 0xABCD,

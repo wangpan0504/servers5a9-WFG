@@ -43,6 +43,7 @@ internal sealed partial class GameSession
             formalDungeon.FreeConsumableEffects = formalDungeon.FreeConsumableEffects.Where(row => row.Kind != ConsumableStateKind.Effect ||
                 !GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId)).ToImmutableArray();
         CrossConsumableCooldownBoundary(ConsumableMaintenance.Death);
+        formalDungeon!.Run.CancelRidable();
         formalDungeon!.CharacterDead = !blessing;
         formalDungeon.DeathSerial++;
         return FormalReceipt() with { AutomaticRevival = blessing };

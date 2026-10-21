@@ -21,6 +21,7 @@ internal static class QuestRoomClearTcpTests
         foreach (bool ordinary in new[] { false,true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         foreach (bool ordinary in new[] { false,true }) VerifyGrandine(fixture,resources,growth,drain,dungeons,ordinary);
         QuestDarkElfGuardTcpTests.Verify(fixture,resources,growth,drain,dungeons);
+        QuestHarlemRidingTcpTests.Verify(fixture,resources,growth,drain);
     }
 
     static void VerifyCase(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,

@@ -14,6 +14,7 @@ internal static class SinglePlayerDungeonRunTests
         VerifyExplicitTerminalLayer();
         VerifyPassiveClearCondition();
         VerifyPassiveTerminalLayer();
+        VerifyRidableWarpIdentity();
         var authority = new FixtureCombatAuthority();
         var start = new DungeonMap("map", new(0, 0), 1, "map/fixture-start.map");
         var friendly = new DungeonMap("map", new(1, 0), 2, "map/fixture-friendly.map");
@@ -1098,6 +1099,46 @@ internal static class SinglePlayerDungeonRunTests
             That(!SinglePlayerDungeonRun.TryCreate(entry,2,200,route with { Rooms = [.. route.Rooms.Take(3),invalid] },authority,out _,out _),
                 "真实MAP类型及敌方可报告Boss必须共同成立");
         }
+    }
+
+    private static void VerifyRidableWarpIdentity()
+    {
+        var start = new DungeonMap("map",new(0,0),292104867,"map/fixture-harlem-start.map");
+        var middle = new DungeonMap("map",new(1,0),292104868,"map/fixture-harlem-middle.map");
+        var boss = new DungeonMap("boss",new(2,0),292104869,"map/fixture-harlem-boss.map");
+        var source = new DungeonRoomMonster(107010392,[107010392,0,3,100,100,0,1,1],"[fixed]","[normal]","monster/fixture-balgur.mob")
+            { Team = 0 };
+        var first = DungeonMonsterPlan.FromRoom(new(start,[source],[],[]),99,10,playerTeam:0);
+        var maze = new DungeonMaze(0,3,1,"fixture",[start.Position],[boss.Position],[start,middle,boss],[])
+            { WarpMaps = [new(start.Position,boss.Position)] };
+        var entry = new DungeonEntryPlan(99,17,291100318,5934,0,0,maze,start,boss) { RouteQuestId = 5934 };
+        var route = new DungeonFixedRoute([first,Plan(middle),BossPlan(boss,12)],
+            [new(start.Position,middle.Position),new(middle.Position,boss.Position)]);
+        var authority = new FixtureCombatAuthority();
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,route,authority,out var created,out _),"合成哈林Run保留真实编号及有向声明");
+        var run = created!;
+        That(run.OperateRidable(run.Snapshot.Identity,2,107010392,start.Position).Outcome == DungeonRunOutcome.Rejected,
+            "加载未完成不能绑定骑乘");
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        var identity = run.Snapshot.Identity;
+        foreach (var stale in new[] { identity with { CharacterId = 100 },identity with { QuestId = 5935 },
+            identity with { TaskAttempt = 2 },identity with { InstanceId = Guid.NewGuid() },identity with { Epoch = identity.Epoch-1 } })
+            That(run.OperateRidable(stale,2,107010392,start.Position).Outcome == DungeonRunOutcome.Rejected,
+                "骑乘绑定逐项拒绝异角色、任务、attempt、实例及epoch");
+        That(run.Move(identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Rejected &&
+            run.OperateRidable(identity,2,107010392,start.Position).Outcome == DungeonRunOutcome.Accepted,
+            "只有本次有效上车开放精确有向目标");
+        That(run.OperateRidable(identity,1,107010392,start.Position).Outcome == DungeonRunOutcome.Rejected &&
+            run.Move(identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Rejected,
+            "上车前的旧版本不能解除或使用新骑乘绑定");
+        var mounted = run.Snapshot.Identity;
+        That(run.Move(mounted,Guid.NewGuid(),middle.Position).Outcome == DungeonRunOutcome.Accepted,
+            "骑乘不破坏已有相邻通路");
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        run.Move(run.Snapshot.Identity,Guid.NewGuid(),start.Position);
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Rejected,
+            "经过相邻房间并回访源房也不恢复已消费的骑乘绑定");
     }
 
     private static DungeonMonsterPlan Plan(DungeonMap map, params ushort[] keys)

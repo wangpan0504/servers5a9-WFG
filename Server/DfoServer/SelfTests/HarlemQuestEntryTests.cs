@@ -15,7 +15,7 @@ namespace DfoServer;
 
 internal static class HarlemQuestEntryTests
 {
-    // 复用本轮PVF和Session文件库夹具；只核当前入场及相邻移动，不冒充乘骑warp或客户端验收。
+    // 复用PVF和Session文件库；骑乘事件为合成输入，不代替客户端自然送包及演出验收。
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills)
     {
@@ -39,11 +39,12 @@ internal static class HarlemQuestEntryTests
         DungeonEntryPlan? previousPlan = null;
         DungeonMonsterPlan[]? fullPlans = null;
         foreach (uint request in new uint[] { 5934,0 })
+        foreach (bool riding in new[] { false,true })
         {
             var before = fixture.Read();
             That(DungeonEntryPlan.TryCreate(dungeons,before,291100318,request,0,out var plan,out var reason,
                 quest:request == 0 ? null : quest,quests:quests),
-                "真实荒芜之地声明应能规划入场，不把未实现warp当完整修复："+reason);
+                "真实荒芜之地声明应能规划入场："+reason);
             var entry = plan ?? throw new InvalidOperationException("哈林入场计划未建立");
             CheckBinding(entry,before,accepted,request);
             That(entry.Maze.ResourceError is null && entry.Maze.WarpMaps.SequenceEqual(expectedWarps) &&
@@ -77,19 +78,48 @@ internal static class HarlemQuestEntryTests
                 afterRejected.Identity == unchanged.Identity && afterRejected.CurrentMap == unchanged.CurrentMap &&
                 afterRejected.Phase == unchanged.Phase && afterRejected.LivingMonsters.SequenceEqual(unchanged.LivingMonsters) &&
                 fixture.Session.CanPublishFormalDungeon(loaded),
-                "未实现的非相邻kind0及跨格kind1仍拒绝且不改变原场景，不伪造乘骑warp成功");
+                "无骑乘绑定的非相邻kind0及跨格kind1拒绝且保持原场景");
+            if (riding)
+            {
+                bool Rejected(byte operation,uint resource,byte x = 0,byte y = 0) =>
+                    fixture.Session.OperateFormalRidable(operation,resource,x,y)?.Outcome == DungeonRunOutcome.Rejected;
+                That(Rejected(2,107010392,255,255) && Rejected(2,107010392,1) && Rejected(0,107010392) &&
+                    Rejected(2,107002770) && Rejected(2,loaded.Monsters.Monsters[0].ObjectKey) && Rejected(1,107010392),
+                    "空场景、旧房、未知操作、敌人、ObjectKey和无绑定下车均不能授予跨房资格");
+                That(fixture.Session.CanPublishFormalDungeon(loaded),"拒绝骑乘报文不改变Run版本");
+                foreach (uint resource in new uint[] { 107010392,107012115,107012117,107012119 })
+                {
+                    var mounted = fixture.Session.OperateFormalRidable(2,resource,0,0)!;
+                    That(mounted.Outcome == DungeonRunOutcome.Accepted &&
+                        fixture.Session.OperateFormalRidable(2,resource,0,0) is { Outcome:DungeonRunOutcome.Duplicate } duplicate &&
+                        duplicate.Snapshot.Identity == mounted.Snapshot.Identity,
+                        "四个真实巴古尔分别可上车，同绑定重放不改变版本");
+                    That(Rejected(1,107002770) && fixture.Session.MoveFormalDungeon(3,0) is null &&
+                        fixture.Session.MoveFormalDungeon(2,0,1) is null,
+                        "上车不放行未声明目的地或跨格kind1，错误下车不解除原绑定");
+                    That(fixture.Session.OperateFormalRidable(resource == 107012119 ? (byte)3 : (byte)1,resource,0,0)?.Outcome ==
+                        DungeonRunOutcome.Accepted && fixture.Session.MoveFormalDungeon(2,0) is null,
+                        "下车或销毁立即解除跨房资格，不制造死亡或清图");
+                }
+                That(fixture.Session.OperateFormalRidable(2,107010392,0,0)?.Outcome == DungeonRunOutcome.Accepted &&
+                    !fixture.Session.CanPublishFormalDungeon(loaded),"再次上车绑定当前Run，旧回执失效");
+            }
             var seenKeys = loaded.Monsters.Monsters.Select(row => row.ObjectKey).ToHashSet();
-            for (byte x = 1; x <= 2; x++)
+            for (byte x = riding ? (byte)2 : (byte)1; x <= 2; x++)
             {
                 var moved = fixture.Session.MoveFormalDungeon(x,0,0);
                 That(moved is not null && !fixture.Session.CanPublishFormalDungeon(loaded),
-                    "当前支持的相邻通路沿原Run换房，旧回执失效");
+                    "相邻通路或已绑定骑乘的有向warp沿原Run换房，旧回执失效");
                 loaded = fixture.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("哈林相邻房加载未完成");
                 That(loaded.Snapshot.CurrentMap.Id == 292104867+x &&
                     loaded.Monsters.Monsters.Select(Shape).SequenceEqual(fullPlans![x].Monsters.Select(Shape)) &&
                     loaded.Monsters.Monsters.All(row => row.ObjectKey != before.Id && seenKeys.Add(row.ObjectKey)) &&
                     fixture.Session.Phase == SessionPhase.Dungeon,
                     "相邻路线保留完整中间房和终末敌人/APC；存活敌人不产生结算");
+                if (riding)
+                    That(fixture.Session.OperateFormalRidable(2,107010392,0,0)?.Outcome == DungeonRunOutcome.Rejected &&
+                        fixture.Session.MoveFormalDungeon(0,0) is null,
+                        "跨房后源房骑乘绑定失效，不能逆用0到2的有向声明");
             }
             That(fixture.Session.EnableFormalDungeonSettlement() is null &&
                 fixture.Repository.LoadQuestClear(fixture.Owner,fixture.Session.Selected!,5934) is null,
@@ -108,7 +138,38 @@ internal static class HarlemQuestEntryTests
                 fixture.Repository.LoadQuestClear(fixture.Owner,after,5934) is null,
                 "真实Session入场、加载、相邻移动及退出不造死亡、清图或任务奖励");
         }
-        Console.WriteLine($"PASS {Count-checks} 哈林真实三MAP完整演员及显式/普通0入场回归（跨格乘骑warp未实现，非客户端验收）");
+        fixture.Session.EnterFormalDungeon(291100318,5934,0,dungeons,rooms);
+        fixture.Session.CompleteFormalDungeonLoading();
+        That(fixture.Session.OperateFormalRidable(2,107010392,0,0)?.Outcome == DungeonRunOutcome.Accepted &&
+            fixture.Session.ChangeQuest(5934,QuestLifecycleAction.Giveup,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null &&
+            fixture.Session.MoveFormalDungeon(2,0) is null,"上车后放弃原任务立即失去跨房资格");
+        That(fixture.Session.ReturnFromFormalDungeon() is not null &&
+            fixture.Session.ChangeQuest(5934,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
+            "回城重新接取生成独立任务接取");
+        var newAcceptance = fixture.Read().ActiveMainQuests.Single(row => row.QuestId == 5934);
+        That(newAcceptance.AcceptanceId != accepted.AcceptanceId,"重接不复用旧AcceptanceId");
+        accepted = newAcceptance;
+        var finalOpening = fixture.Session.EnterFormalDungeon(291100318,5934,0,dungeons,rooms)!;
+        fixture.Session.CompleteFormalDungeonLoading();
+        That(fixture.Session.OperateFormalRidable(2,107010392,0,0)?.Outcome == DungeonRunOutcome.Accepted &&
+            fixture.Session.MoveFormalDungeon(2,0) is not null,"真实任务沿骑乘绑定进入终末房");
+        var finalRoom = fixture.Session.CompleteFormalDungeonLoading()!;
+        var enemy = finalRoom.Monsters.Monsters.Single(monster => monster.IsBlocking);
+        var observation = FormalDungeonSessionTests.Observation(finalRoom,enemy);
+        var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        var death = fixture.Session.ObserveFormalDungeonDeath(observation,kills,growth);
+        That(death.Outcome == DungeonRunOutcome.Accepted && fixture.Session.ReadClearedQuest(5934)?.Clear is
+            { MapId:292104869 } clear && clear.AcceptanceId == accepted.AcceptanceId &&
+            fixture.Session.DungeonSnapshot!.Identity.InstanceId == finalOpening.Snapshot.Identity.InstanceId,
+            "仅真实终末敌人死亡产生同实例、原接取及目标MAP的清图凭据");
+        That(fixture.Session.ObserveFormalDungeonDeath(observation,kills,growth).Outcome == DungeonRunOutcome.Duplicate,
+            "终末死亡重放不重复提交成长和清图");
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        var finished = fixture.Session.FinishQuest(5934,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
+        That(finished.Outcome == QuestFinishOutcome.Committed && fixture.Read().CompletedQuests.Contains(5934),
+            "骑乘换房后原任务生命周期可交付前往哈林");
+        That(fixture.Session.ReturnFromFormalDungeon() is not null,"完成后的Run按原生命周期回城");
+        Console.WriteLine($"PASS {Count-checks} 哈林显式/普通0入场、骑乘有向warp、终末死亡及交付回归（非客户端验收）");
     }
 
     static void CheckBinding(DungeonEntryPlan entry, Character character, ActiveMainQuest accepted,uint request)
