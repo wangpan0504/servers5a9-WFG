@@ -470,7 +470,9 @@ internal static class DungeonSettlementSessionTests
             f.Sql("DROP TRIGGER clear_session_fail");
             var settled = Settle(f, report);
             var committed = f.Session.Selected!;
-            Check(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt is not null && settled.Reward == expectedReward &&
+            Check(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt is not null &&
+                settled.Reward is { } settledReward && settledReward.BonusParts.IsDefaultOrEmpty &&
+                (settledReward with { BonusParts = default }) == expectedReward &&
                 settled.Presentation is { RankPoint: 99, RankGrade: 99 } presentation && presentation.MonsterExperience == expectedKills &&
                 f.Settlements == 1 && f.Kills == completed.Count && Same(committed, f.Read()) &&
                 f.Session.CanPublishFormalDungeon(settled.Receipt) && !f.Session.CanPublishFormalDungeon(bossReceipt!),

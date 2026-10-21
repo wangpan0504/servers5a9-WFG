@@ -7,10 +7,14 @@ internal static class RecoveryConsumableTests
     public static void Run()
     {
         string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]",
-            "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]"];
+            "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]"];
         string Resolve(int at) => strings[at];
         PvfToken[] valid = [new(3, 0), new(0, 10000), new(3, 1), new(0, 0), new(3, 2),
             new(6, 3), new(0, 410), new(0, 1000), new(6, 4)];
+        var questPotion = RecoveryConsumableFile.Parse(1, "stackable/quest.stk", [new(3,11),new(2,BitConverter.SingleToInt32Bits(0.5f)),
+            new(3,12),new(0,1),new(3,7),new(0,7200000),new(6,4)], Resolve);
+        That(questPotion.QuestExpBonusPermille == 500 && questPotion.ExpBonusPermille == 1000 &&
+            questPotion.ExpBonusMilliseconds == 7200000, "任务和普通经验倍率独立保留，持续时间来自自身效果声明");
         var result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid, Resolve);
         That(result.CoolTime == 10000 && result.CoolGroup == 0 && result.HpRecovery == new RecoveryDeclaration("+", 410, 1000, "myself") &&
             result.MpRecovery is null && result.Diagnostics.IsEmpty, "恢复原四元组、冷却声明和显式组0无损保存，不推断单位");

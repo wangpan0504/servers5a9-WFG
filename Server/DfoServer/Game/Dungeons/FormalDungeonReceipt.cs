@@ -8,12 +8,17 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record FormalDungeonReceipt(Character Character, long Generation, long SelectionEpoch,
     DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed)
 {
+    public bool HellPartyRoomCleared => Snapshot.Phase == SinglePlayerDungeonPhase.Dungeon &&
+        Entry.HellParty is { } hell && Snapshot.CurrentMap.Id == hell.MapId && Monsters.HellWaves.Count > 0 &&
+        Monsters.Monsters.Where(monster => monster.IsBlocking).All(monster => !Snapshot.LivingMonsters.Contains(monster.ObjectKey));
+
     public ImmutableArray<DungeonGroundObject> PassiveItems { get; init; } = [];
     // #233 强袭入场提交时扣除材料变化的背包格，仅入场回执携带。
     public ImmutableArray<InventorySlot> AssaultConsumedSlots { get; init; } = [];
     // 实验性：深渊派对入场票在入场提交时扣掉的背包格与票据（日志 + UPDATE_ITEM_LIST 用）。
     public ImmutableArray<InventorySlot> HellConsumedSlots { get; init; } = [];
     public HellPartyTicket? HellTicket { get; init; }
+    public HellPartyTicket? LegendTicket { get; init; }
     // #510/#511 普通入场票在入场提交时扣掉的背包格，与实际扣掉的入场一次性疲劳（无限疲劳时为 0）。
     public ImmutableArray<InventorySlot> EntryItemConsumedSlots { get; init; } = [];
     public ushort EntryFatigueCharged { get; init; }

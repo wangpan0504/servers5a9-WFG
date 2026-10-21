@@ -48,6 +48,7 @@ internal sealed record DungeonEntryPlan(
     public DungeonRequiredItemRow? EntryItem { get; init; }
     // 资源声明了入场票或入场疲劳但形状未确认时的诊断，只写日志，不改变行为。
     public string? EntryCostNote { get; init; }
+    public string ExperienceEquipmentModule { get; init; } = "dungeon";
     public int? MonsterBasisLevel { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public bool HasExplicitClearMap { get; init; }
@@ -421,6 +422,10 @@ internal sealed record DungeonEntryPlan(
             RouteQuestId = routeQuest,
             IsOrdinaryHunt = ordinaryHunt,
             QuestAcceptances = definition.IsClassExperience || practice ? [] : character.ActiveMainQuests.ToImmutableArray(),
+            ExperienceEquipmentModule = definition.RawSections.Any(row => row.Tag == "tower of despair") ? "despair tower" :
+                definition.RawSections.Any(row => row.Tag == "tower of scream") ? "scream tower" :
+                definition.DungeonType?.Trim().Trim('`', '[', ']') switch
+                { "tower of death" => "dead tower", "advance altar" => "advanced altar", null or "" => "dungeon", var module => module },
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
             ChampionPercents = DungeonChampionRates.For(definition),

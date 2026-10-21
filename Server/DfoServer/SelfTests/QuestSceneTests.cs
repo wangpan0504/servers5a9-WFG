@@ -30,6 +30,7 @@ internal static class QuestSceneTests
         var quests = sharedQuests ?? global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        DungeonSpecificCardRewardsTests.RunResources(towns, pvf, characters, items, quests, skills);
         VerifyRepeatedPassiveHunt(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         VerifyOuterGentCages(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
         VerifyBossRoomAntNests(towns, characters, items, quests, skills, growth, dungeons, rooms, kills);
@@ -151,6 +152,7 @@ internal static class QuestSceneTests
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         PreyIsysSinQuestTests.RunSession(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+        NonoraDungeonEntryTests.Run(towns,pvf,characters,items,quests,skills,growth,dungeons,rooms);
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
     }
 
@@ -898,11 +900,14 @@ internal static class QuestSceneTests
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
             byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
-            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null,ushort? fatigueRemaining = null)
+            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null,ushort? fatigueRemaining = null,byte growType = 0)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
-            var learning = SkillPointLedger.Synchronize(job,0,level,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(level) },skills);
+            if (growType != 0)
+                candidate = candidate with { GrowType = growType, Skills = skills.FreeSkills(job,growType).ToArray(),
+                    InitialLearning = SkillLearning.Initialize(job,skills.FreeSkills(job,growType),skills).State! };
+            var learning = SkillPointLedger.Synchronize(job,growType,level,candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(level) },skills);
             var created = Repository.Create(Owner,candidate with { Level = level, CompletedQuests = completed ?? [3145,4873], InitialLearning = learning,
                 AcceptedStoryLevel = position is null ? candidate.AcceptedStoryLevel : level });
             // 实验性：给新建角色在主背包预置物品（深渊入场票测试用）。

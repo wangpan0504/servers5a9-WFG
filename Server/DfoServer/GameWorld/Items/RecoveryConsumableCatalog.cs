@@ -13,6 +13,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public bool RequiresDungeon { get; init; }
     public bool EffectsAfterAcknowledgement { get; init; }
     public int ExpBonusPermille { get; init; }
+    public int QuestExpBonusPermille { get; init; }
     public int ExpBonusMilliseconds { get; init; }
     public int EffectMilliseconds { get; init; }
     public byte EffectMaintenance { get; init; }
@@ -71,6 +72,8 @@ internal sealed class RecoveryConsumableCatalog
                 jobs |= checked((ushort)(1 << job));
             }
         }
+        if (file.DeclaredFields.Contains("quest exp bonus rate") &&
+            (file.QuestExpBonusPermille is null || file.ExpBonusMilliseconds is not > 0)) return null;
         // HP/MP、持续属性、异常状态及随机效果由客户端执行，不以其数值或格式限制消耗资格。
         bool expBonus = file.ExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0;
         bool revival = ConsumableSpecialItems.IsRevivalBlessing(file.TemplateId);
@@ -79,6 +82,7 @@ internal sealed class RecoveryConsumableCatalog
         { MaximumLevel = raw.DeclaredMaximumLevel ?? int.MaxValue, Jobs = jobs,
             RequiresDungeon = revival || file.DeclaredFields.Contains("summon npc") || raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
             ExpBonusPermille = expBonus ? file.ExpBonusPermille!.Value : 0,
+            QuestExpBonusPermille = file.QuestExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0 ? file.QuestExpBonusPermille.Value : 0,
             ExpBonusMilliseconds = expBonus ? file.ExpBonusMilliseconds!.Value : 0,
             EffectMilliseconds = revival ? ConsumableSpecialItems.RevivalMilliseconds : file.StatChangeDuration?.Milliseconds ?? 0,
             EffectMaintenance = revival ? (byte)0 : file.EffectMaintenance ?? 0,

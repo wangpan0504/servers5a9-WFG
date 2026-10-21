@@ -20,6 +20,7 @@ internal static class QuestRoomClearTcpTests
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (bool ordinary in new[] { false,true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         foreach (bool ordinary in new[] { false,true }) VerifyGrandine(fixture,resources,growth,drain,dungeons,ordinary);
+        QuestDarkElfGuardTcpTests.Verify(fixture,resources,growth,drain,dungeons);
     }
 
     static void VerifyCase(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,

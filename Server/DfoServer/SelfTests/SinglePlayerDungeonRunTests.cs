@@ -141,6 +141,12 @@ internal static class SinglePlayerDungeonRunTests
                 "caller cannot forge blocking eligibility away from the same resource row");
         }
         var defaultRoute = route with { Rooms = [Plan(start, 10, 11), .. route.Rooms.Skip(1)] };
+        var championEntry = entry with { ChampionPercents = [100] };
+        var championRoute = defaultRoute with { Rooms = defaultRoute.Rooms.Select(room => room.WithChampionRolls([100], 0, _ => 0)).ToArray() };
+        That(SinglePlayerDungeonRun.TryCreate(championEntry, 3, 300, championRoute, authority, out _, out _) &&
+            !SinglePlayerDungeonRun.TryCreate(entry, 3, 300, championRoute, authority, out _, out _) &&
+            !SinglePlayerDungeonRun.TryCreate(entry with { ChampionPercents = [0] }, 3, 300, championRoute, authority, out _, out _),
+            "有精英概率声明的普通怪升级仍能建立实例；没有声明或概率为零时不能伪造精英");
         That(SinglePlayerDungeonRun.TryCreate(entry, 3, 300, defaultRoute, authority, out var defaultRun, out _),
             "fixtures without team metadata retain their former lifecycle contract");
         defaultRun!.CompleteLoading(defaultRun.Snapshot.Identity, Guid.NewGuid());

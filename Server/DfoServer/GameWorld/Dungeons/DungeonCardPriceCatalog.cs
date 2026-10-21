@@ -1,4 +1,5 @@
 using PvfLib;
+using System.Collections.Immutable;
 
 namespace DfoServer.GameWorld.Dungeons;
 
@@ -7,6 +8,8 @@ internal sealed class DungeonCardPriceCatalog
     public const string ResourcePath = "etc/itemdropinfo_clearreward.etc";
     readonly (int Level, int Price)[] rows;
     DungeonCardPriceCatalog((int Level, int Price)[] rows) => this.rows = rows;
+    public ImmutableDictionary<int, ImmutableArray<DungeonSpecificCardItem>> SpecificRewards { get; private init; } =
+        ImmutableDictionary<int, ImmutableArray<DungeonSpecificCardItem>>.Empty;
 
     public static DungeonCardPriceCatalog Load(PvfArchive archive) => Parse(archive.ReadTokens(ResourcePath), archive.ResolveString);
 
@@ -32,7 +35,10 @@ internal sealed class DungeonCardPriceCatalog
                 throw new InvalidDataException("付费翻牌等级重复或价格不是非负整数");
             result.Add((values[at].Value,values[at+1].Value));
         }
-        return new(result.OrderBy(row => row.Level).ToArray());
+        return new(result.OrderBy(row => row.Level).ToArray())
+        {
+            SpecificRewards = DungeonSpecificCardRewards.Parse(tokens, resolve)
+        };
     }
 
     public int Price(int level)
