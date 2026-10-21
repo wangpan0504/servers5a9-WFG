@@ -25,6 +25,9 @@ internal static class QuestPassiveClearTcpTests
         VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,3738,102,16120,76530,
             [0,0,7,5,4,6,5,15],[76532,76533,76534]);
+        VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,5947,291100293,109034854,292105331,
+            [0,4,3,1,3,1,2,4,3],[292105332,292105334,292105333,292105337],
+            expectedStartMap:292105331,requiredCount:10);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,5964,291100308,109022849,59594,
             [2,1,1,7,1,1,2,1,2,1],[59598,59600,59601,59602,59603,59599,59595,59594,59596,59597]);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,3646,74,10624,91901,
@@ -32,17 +35,17 @@ internal static class QuestPassiveClearTcpTests
             [91901,91908,91902,91903,91909,91904,91905,91906,91907],expectedStartMap:91901);
     }
 
-    // #181/#218/#240：准确任务复用同一热服务；单份、多份及跨房回访通过合成33驱动，不把消费槽解释成实例号。
+    // #181/#218/#238/#240：准确任务复用同一热服务；单份、多份及跨房回访通过合成33驱动，不把消费槽解释成实例号。
     static void VerifyPassiveHunt(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain,DungeonCatalog dungeons,
         ushort questId,uint dungeonId,int templateId,int firstMap,int[] copies,int[] targetMaps,int[]? mapOrder=null,
-        int? expectedStartMap=null)
+        int? expectedStartMap=null,int requiredCount=15)
     {
         string account = "passive-hunt-"+questId;
         var quest = resources.Quests.Get(questId);
-        That(QuestHuntProgress.TryTargets(quest,out var targets) && targets is [{ EnemyType:3,Count:15 }] &&
+        That(QuestHuntProgress.TryTargets(quest,out var targets) && targets is [{ EnemyType:3 }] && targets[0].Count == requiredCount &&
             targets[0].DungeonId == dungeonId && targets[0].MonsterId == templateId,
-            $"{questId} 保留 D{dungeonId} 被动物件的单通道15次真实目标");
+            $"{questId} 保留 D{dungeonId} 被动物件的单通道{requiredCount}次真实目标");
         var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,quest,dungeonId);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         Character created;
@@ -77,16 +80,16 @@ internal static class QuestPassiveClearTcpTests
                     "准确任务实际入场保持声明起点，不跳过无目标房验证");
             FormalDungeonTcpTests.Load(peer); Drain();
             acceptance = (string)fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)[0][0];
-            That(Scalar() == 15,$"{questId}真实31初始化剩余15，入场和加载不推进");
+            That(Scalar() == requiredCount,$"{questId}真实31初始化剩余{requiredCount}，入场和加载不推进");
             string before = State();
             if (copies[CurrentMap().Id-firstMap] == 0)
             {
-                Trigger(15);
+                Trigger(checked((uint)requiredCount));
                 That(State() == before,"无目标起始房的33不写条件、资产或事件");
             }
             peer.Send(34,[34,0,(byte)questId,(byte)(questId >> 8),255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
             That(State() == before,$"{questId}进度未完成时34拒绝且不产生奖励");
-            uint remaining = 15;
+            uint remaining = checked((uint)requiredCount);
             var consumed = new HashSet<int>();
             var expectedPerMap = new Dictionary<int,int>();
             foreach (int id in targetMaps)
@@ -132,13 +135,13 @@ internal static class QuestPassiveClearTcpTests
             }
             var events = fixture.Query("SELECT acceptance_id,scene_event FROM character_quest_lifecycle_receipts WHERE character_id=$p0 AND scene_event IS NOT NULL",peer.Id);
             var sources = events.Select(row => JsonSerializer.Deserialize<QuestSceneEvent>((string)row[1])!).ToArray();
-            That(remaining == 0 && events.Length == 15 && events.All(row => (string)row[0] == acceptance) &&
+            That(remaining == 0 && events.Length == requiredCount && events.All(row => (string)row[0] == acceptance) &&
                 sources.All(row => row.DungeonId == dungeonId && row.TemplateId == templateId) &&
                 sources.GroupBy(row => row.MapId).All(group => expectedPerMap.GetValueOrDefault(group.Key) == group.Count()) &&
-                sources.Select(row => row.OperationId).Distinct().Count() == 15 &&
-                sources.Select(row => (row.MapId,row.SourceOrdinal)).Distinct().Count() == 15 &&
+                sources.Select(row => row.OperationId).Distinct().Count() == requiredCount &&
+                sources.Select(row => (row.MapId,row.SourceOrdinal)).Distinct().Count() == requiredCount &&
                 sources.Select(row => row.Identity.InstanceId).Distinct().Count() == 1,
-                "15次事务沿原接取及同Run保存独立消费槽与操作回执，不把重复正文当实例号");
+                $"{requiredCount}次事务沿原接取及同Run保存独立消费槽与操作回执，不把重复正文当实例号");
 
             DungeonMap CurrentMap() => route.Single(row => row.Position == new DungeonPoint(map[0],map[1]));
             void Drain() => drain(peer,null);
@@ -157,7 +160,7 @@ internal static class QuestPassiveClearTcpTests
         {
             peer.Select(created.Slot,prepared:true); peer.Barrier();
             That(fixture.Query("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)
-                is [[0L,string restored]] && restored == acceptance,"断线重登保存原接取及15次已提交进度");
+                is [[0L,string restored]] && restored == acceptance,$"断线重登保存原接取及{requiredCount}次已提交进度");
             string before = State();
             fixture.Sql("CREATE TRIGGER abort_passive_hunt_finish AFTER INSERT ON character_quest_completion_receipts WHEN NEW.quest_id="+questId+" BEGIN SELECT RAISE(ABORT,'passive hunt finish rollback'); END");
             peer.Send(34,[34,0,(byte)questId,(byte)(questId >> 8),255,255,1,0,255,255]); peer.Closed();
