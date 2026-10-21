@@ -149,6 +149,8 @@ internal static class QuestSceneTests
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         Issue153MermaidClearTests.Run(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+        PreyIsysSinQuestTests.RunSession(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,
+            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
         Console.WriteLine($"PASS {Count-checks} 实际父子剧情、物件结算、清图交付与恢复断言（非实机）");
     }
 
