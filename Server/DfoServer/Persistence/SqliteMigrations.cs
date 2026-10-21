@@ -157,6 +157,12 @@ internal static class SqliteMigrations
         new(65, "角色被拉黑有效计分", AddBlacklistCountColumn),
         new(66, "通关经验其他加成与冻结分项", DungeonExperienceBonusSchema.Upgrade),
         new(67, "角色皮肤仓库与选择", AddSkinStorageStateColumn),
+        new(68, "道具永久属性来源", static (db, tx) =>
+        {
+            // 旧皮肤测试分支曾占用v66；复用精确结构校验补齐主线经验列，不改版本冒充降级。
+            DungeonExperienceBonusSchema.Upgrade(db, tx);
+            Execute(db, tx, PermanentStatSchema.Sql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+        }),
     ];
 
     const string BlacklistCountColumn = "blacklist_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(blacklist_count)='integer' AND blacklist_count BETWEEN 0 AND 2147483647)";
@@ -1443,6 +1449,7 @@ internal static class SqliteMigrations
             ("character_quest_stage_witnesses",QuestStageSchema.WitnessSql),
             ("character_quest_stage_claims",QuestStageSchema.ClaimSql),
             ("character_skill_switch_inventory",SkillSwitchInventoryStateSchema),
+            ("character_permanent_stats",PermanentStatSchema.Sql),
             ("character_skill_switch_inventory_items",SkillSwitchInventoryItemsSchema) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
@@ -1507,6 +1514,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,operation_id,source_type,instance_id,quest_id,task_attempt,before_epoch,epoch,dungeon_id,map_id,template_id,source_ordinal,fingerprint,death_events,generation,revision FROM character_dungeon_scene_clear_receipts LIMIT 0",
         "SELECT character_id,acceptance_id,event_id,source_type,growth_event_id,scene_operation_id FROM character_quest_clear_receipts LIMIT 0",
         "SELECT character_id,bonus_tp FROM character_tp_sources LIMIT 0",
+        "SELECT character_id,account,max_hp,max_mp,strength,vitality,intelligence,spirit,move_speed,all_element_resistance FROM character_permanent_stats LIMIT 0",
         "SELECT character_id,context,skill_id,keys FROM character_skill_commands LIMIT 0",
         "SELECT character_id,context,root_id,children FROM character_skill_combos LIMIT 0",
         "SELECT character_id,bonus_sp FROM character_skill_point_sources LIMIT 0",

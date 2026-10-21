@@ -82,6 +82,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("experience-consumable", ExperienceConsumableTcpTests.RunAsync),
+        ("permanent-growth", PermanentGrowthTcpTests.RunAsync),
         ("experience-consumable-rules", (_, _, resources) =>
         {
             ExperienceConsumableTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Learning);

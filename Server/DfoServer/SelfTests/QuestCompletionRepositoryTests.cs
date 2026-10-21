@@ -268,6 +268,13 @@ internal static class QuestCompletionRepositoryTests
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
         public bool LoseExperienceResult { get; set; }
+        public bool LosePermanentGrowthResult { get; set; }
+        public Character CommitPermanentGrowth(AccountOwners.Lease owner, PermanentGrowthPlan plan, DateTimeOffset now)
+        {
+            var result = inner.CommitPermanentGrowth(owner, plan, now);
+            if (LosePermanentGrowthResult) throw new IOException("合成永久成长已提交但返回结果丢失");
+            return result;
+        }
         public Character CommitExperienceConsumable(AccountOwners.Lease owner, ExperienceConsumablePlan plan, DateTimeOffset now)
         {
             var result = inner.CommitExperienceConsumable(owner, plan, now);

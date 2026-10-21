@@ -290,6 +290,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             Guild = ReadGuildMembership(db, character.Id, transaction),
             ActiveMainQuests = active.ToArray(),
             Learning = ReadLearning(db, character.Id, transaction),
+            PermanentStats = ReadPermanentStats(db, character.Id, transaction),
             Inventory = ReadInventory(db, character.Id, transaction, shared),
             SkillSwitchInventory = ReadSkillSwitchInventory(db, character.Id, transaction),
             DungeonState = ReadDungeonState(db, character.Id, transaction),

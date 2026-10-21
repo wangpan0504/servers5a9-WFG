@@ -10,13 +10,16 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class ExperienceConsumableHandler(ExperienceConsumableService service, InventoryProjection inventory,
-    CharacterLevelProjection levels, ServerLog log, LevelUpTicketHandler? levelUpTickets = null) : IGameCommandModule
+    CharacterLevelProjection levels, ServerLog log, LevelUpTicketHandler? levelUpTickets = null,
+    PermanentGrowthHandler? permanentGrowth = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.INCREASE_STATUS, UseAsync, nameof(ExperienceConsumableHandler));
 
     async Task<CommandResult> UseAsync(GameConnectionContext context, Packet packet)
     {
         var slot = ExperienceConsumableRequests.Read(packet.Body);
+        if (permanentGrowth is not null && await permanentGrowth.TryUseAsync(context, slot) is { } permanentResult)
+            return permanentResult;
         if (levelUpTickets is not null && await levelUpTickets.TryUseTableAsync(context,slot) is { } tableResult)
             return tableResult;
         var result = context.Session.UseExperienceConsumable(slot, service, context.Activity?.BlocksTownActions == true);

@@ -2,7 +2,7 @@ using DfoServer.GameWorld.Characters;
 
 namespace DfoServer.Game.Characters;
 
-// 统一评估Player的CHR基础属性；装备和技能由完整Core/技能树参与客户端派生。
+// 统一合成Player的CHR基础与永久来源；装备和技能仍由完整Core/技能树参与客户端派生。
 internal sealed class CharacterStatComputer(CharacterCatalog characters)
 {
     public CharacterStats Compute(Character character)
@@ -10,10 +10,19 @@ internal sealed class CharacterStatComputer(CharacterCatalog characters)
         // 创建用例明确拥有副本附属状态与完整两树；存量无owner的角色维持原投影。
         if (character.Job > 15 || character.Level is < 1 or > CharacterGrowthCatalog.MaximumSupportedLevel ||
             character.DungeonState is null || !character.Learning.Initialized)
-            return characters.Get(character.Job).InitialStats;
+            return character.PermanentStats.Apply(characters.Get(character.Job).InitialStats);
         character.DungeonState.Validate();
         character.Learning.Validate();
-        return ComputeLevelBaseStats(character.Job, character.GrowType, character.Level);
+        return character.PermanentStats.Apply(ComputeLevelBaseStats(character.Job, character.GrowType, character.Level));
+    }
+
+    public void ValidatePermanentBonuses(byte job, PermanentStatBonuses bonuses)
+    {
+        if (bonuses == PermanentStatBonuses.Empty) return;
+        // 正常 CHR 是在18级分段的线性成长；端点覆盖各分段的极值及未来转职。
+        foreach (var growth in characters.Get(job).GrowthOptions.GrowTypes)
+            foreach (byte level in new byte[] { 1, 18, CharacterGrowthCatalog.MaximumSupportedLevel })
+                bonuses.Apply(ComputeLevelBaseStats(job, growth.Value, level));
     }
 
     public CharacterStats ComputeLevelBaseStats(byte job, byte growType, byte level)

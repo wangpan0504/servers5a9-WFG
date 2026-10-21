@@ -690,6 +690,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_active_main_quests VALUES({{id}},0,30,1,'1234567890abcdef1234567890abcdef');
                 INSERT INTO character_skill_point_sources VALUES({{id}},1);
                 INSERT INTO character_tp_sources VALUES({{id}},2);
+                INSERT INTO character_permanent_stats VALUES({{id}},'planning',250,250,50,50,50,50,10,10);
                 INSERT INTO character_skill_commands VALUES({{id}},0,5,X'0102');
                 INSERT INTO character_skill_combos VALUES({{id}},0,5,X'');
                 INSERT INTO character_client_settings VALUES({{id}},'planning',zeroblob(512));

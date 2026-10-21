@@ -12,4 +12,5 @@ internal sealed record ConsumableUseResult(ConsumableUseOutcome Outcome, string 
     public bool NativeNoConsumption { get; init; }
     public int TownGiftItem { get; init; }
     public DfoServer.Game.Characters.ExperienceConsumablePlan? Experience { get; init; }
+    public DfoServer.Game.Characters.PermanentGrowthPlan? PermanentGrowth { get; init; }
 }

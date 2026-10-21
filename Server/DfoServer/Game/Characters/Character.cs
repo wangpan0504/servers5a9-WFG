@@ -33,6 +33,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     // 进行中的主要任务。槽位 0–29 对应 ACK4 的 30 组；空槽不入库。
     public ActiveMainQuest[] ActiveMainQuests { get; init; } = [];
     public CharacterLearningState Learning { get; init; } = CharacterLearningState.Uninitialized;
+    public PermanentStatBonuses PermanentStats { get; init; } = PermanentStatBonuses.Empty;
     public InventorySnapshot Inventory { get; init; } = InventorySnapshot.Empty;
     public SkillSwitchInventoryState SkillSwitchInventory { get; init; } = SkillSwitchInventoryState.Empty;
     public DfoServer.Game.CollectBox.CollectBoxState CollectBox { get; init; } = DfoServer.Game.CollectBox.CollectBoxState.Empty;

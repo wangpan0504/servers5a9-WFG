@@ -51,9 +51,9 @@ internal static class WeaponSkinTcpTests
         string beforeUpgrade = fixture.Snapshot("SELECT id,revision,job,level,gold FROM characters ORDER BY id") + Assets();
         fixture.Sql("ALTER TABLE characters DROP COLUMN weapon_skin_state; PRAGMA user_version=66;");
         await fixture.StartAsync();
-        That(fixture.Query("PRAGMA user_version") is [[67L]] &&
+        That(fixture.Query("PRAGMA user_version") is [[long version]] && version == SqliteMigrations.CurrentVersion &&
             fixture.Snapshot("SELECT id,revision,job,level,gold FROM characters ORDER BY id") + Assets() == beforeUpgrade &&
-            State().Same(SkinStorageState.Empty), "v66增量升级67只添加空皮肤仓库，不重写玩家资产、等级或revision");
+            State().Same(SkinStorageState.Empty), "v66升级当前结构保留v67空皮肤仓库迁移，不重写玩家资产、等级或revision");
         long firstOutputUid;
         using (var peer = Open(fixture))
         {

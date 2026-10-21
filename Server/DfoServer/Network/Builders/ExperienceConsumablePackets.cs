@@ -19,4 +19,15 @@ internal static class ExperienceConsumablePackets
     }
 
     public static byte[] Rejected() => [0, 19, 0];
+
+    public static byte[] Permanent(PermanentGrowthPlan plan)
+    {
+        byte[] body = new byte[12];
+        body[0] = 1;
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), checked((ushort)plan.Source.Position.Index));
+        body[3] = (byte)plan.Definition.Kind;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), checked((uint)plan.Definition.Amount));
+        // SP/TP 在 kind0/17 中已增加，尾部两项保持0，避免再次累计。
+        return body;
+    }
 }

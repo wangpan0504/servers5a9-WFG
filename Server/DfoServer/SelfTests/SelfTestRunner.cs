@@ -105,6 +105,8 @@ internal static class SelfTestRunner
         LevelUpTicketTests.RunCore();
         LevelUpByTableTests.RunCore();
         ExperienceConsumableTests.RunCore();
+        PermanentGrowthTests.RunCore();
+        DatabaseSchemaTests.RunPermanentStats();
         QuestSpecifiedTicketTests.RunCore();
         QuestAwakeningTicketTests.RunCore();
         QuestPlayOnlyTests.RunCore();
@@ -328,6 +330,7 @@ internal static class SelfTestRunner
         LevelUpTicketTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         LevelUpByTableTests.Run(towns,pvf,characters,itemResources,sharedSkills,sharedQuests);
         ExperienceConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
+        PermanentGrowthTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         QuestCascadeCompletionTests.Run(towns, pvf, characters, itemResources);
         await QuestCompletionPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         QuestFixedRewardTests.RunResources(pvf);
