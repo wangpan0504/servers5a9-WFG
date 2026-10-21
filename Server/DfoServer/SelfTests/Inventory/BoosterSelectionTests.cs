@@ -86,6 +86,7 @@ internal static class BoosterSelectionTests
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
         RunRealTemplateSelection(towns, itemResources, now);
+        BoosterNativeSelectionTests.RunResources(towns, characters, itemResources, now);
         RunDisjointInstanceSelection(towns, itemResources, now);
         var creatureCategory = Parse("0 0\n[creature]\n400990444 1 400990445 1\n[/creature]").Selection!.Categories.Single();
         That(creatureCategory.PendingRule is null && creatureCategory.Rewards.All(row =>

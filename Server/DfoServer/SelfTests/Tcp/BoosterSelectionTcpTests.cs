@@ -252,6 +252,7 @@ internal static class BoosterSelectionTcpTests
         That(fixture.Query("SELECT gold FROM characters ORDER BY slot") is [[12345L], [12345L]], "selection does not add a gold or purchase-material fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "selection database integrity");
         await RunRealTemplateSelectionsAsync(source, root, resources);
+        await RunOrdinaryNativeSelectionsAsync(source, root, resources);
 
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(itemResources.Items.Get(id), count);
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +
@@ -369,6 +370,106 @@ internal static class BoosterSelectionTcpTests
             fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[33L, 33L]] &&
             fixture.Query("PRAGMA integrity_check") is [["ok"]], "33件真实选择奖励及12条光环详情一次持久化");
     }
+    static async Task RunOrdinaryNativeSelectionsAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var items = resources.ItemResources.Items;
+        int[] sources = [10007740, 10007999];
+        var categories = sources.Select(id => resources.ItemResources.Boosters.Get(id).Selection!.Categories.Single()).ToArray();
+        var now = DateTimeOffset.UtcNow;
+        var sourceRoles = sources.Select(id => Inventory.BoosterNativeSelectionTests.ResourceRoles(resources.Towns, resources.Characters, items.Get(id), now).ToArray()).ToArray();
+        var legal = sourceRoles[0].First(role => sourceRoles[1].Any(other => role.Job == other.Job));
+        byte level = sourceRoles.Max(roles => roles.Single(role => role.Job == legal.Job).Level);
+        var initial = legal with { Level = level, Inventory = new(sources.Select((id, index) => new InventoryItem(0,
+            Bag((short)(65 + index)), InventoryRewardGrantService.Create(items.Get(id), categories[index].Rewards.Length, now))).ToImmutableArray()) };
+        That(initial.Inventory.Items.All(item => InventoryAvatarPackageService.SourceEligible(initial, item, items.Get(item.Core.ItemId))),
+            "普通类型TCP角色按两源实际职业、等级、技能资格创建");
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "ordinary-native-selection"), gm: true, resources: resources);
+        var repo = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repo.Create(owner, new("OrdinarySel", initial.Position, initial.Return)
+            { Job = initial.Job, Level = initial.Level, Skills = initial.Skills, AcceptedStoryLevel = 1, Inventory = initial.Inventory });
+        await fixture.StartAsync();
+        SetExpirationDebug(fixture, false);
+        // 两种新Kind分别触发真实SQL写入失败，源扣减、UID分配、revision和审计必须同回滚。
+        foreach (int index in new[] { 0, 1 })
+        {
+            using var peer = Open(fixture);
+            peer.Select();
+            string before = Snapshot();
+            int list = index == 0 ? 0 : 7, slot = index == 0 ? 67 : 140;
+            fixture.Sql($"CREATE TRIGGER fail_native_selection BEFORE INSERT ON character_inventory_slots WHEN NEW.list_type={list} AND NEW.slot_index={slot} BEGIN SELECT RAISE(ABORT,'native selection rollback'); END");
+            SendSelect(peer, (short)(65 + index), [categories[index].Rewards[0].ItemId], categories[index].Category, categories[index].Subcategory);
+            peer.Closed();
+            That(before == Snapshot(), "原生普通选择写入失败整笔回滚且没有成功响应 " + sources[index]);
+            fixture.Sql("DROP TRIGGER fail_native_selection");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            foreach (int index in new[] { 0, 1 })
+                foreach (var choice in categories[index].Rewards)
+                {
+                    var category = categories[index];
+                    short sourceSlot = (short)(65 + index);
+                    SendSelect(peer, sourceSlot, [choice.ItemId], category.Category, category.Subcategory);
+                    ExpectAck(peer, sources[index], sourceSlot, [(choice.ItemId, choice.Count)]);
+                    var saved = repo.List(owner).Single();
+                    var reward = saved.Inventory.Items.Single(item => item.Core.ItemId == choice.ItemId);
+                    var template = items.Get(choice.ItemId);
+                    var expectedCore = new ItemCore(choice.ItemId, index == 0 ? ItemKind.Consumable : ItemKind.CreatureEquipment,
+                        index == 0 ? choice.Count : 999_999_998)
+                    { Durability = template.Durability, SealFlag = template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0 };
+                    That(template.Expiration == new ItemExpiration() && reward.Core == expectedCore && reward.Uid > 0 &&
+                        reward.Avatar is null && reward.Creature is null &&
+                        (index == 0 ? reward.Position.List == InventoryListType.Main && reward.Position.Index is >= 65 and <= 120 :
+                            reward.Position.List == InventoryListType.Pet && reward.Position.Index is >= 140 and <= 188),
+                        "真实六候选持久化核心字面预期含Kind、质量、期限、页和无额外详情 " + choice.ItemId);
+                    if (reward.Position == Bag(sourceSlot))
+                        That(peer.Expect(0, 14).Body.SequenceEqual(InventoryPackets.Delta(InventorySnapshot.Empty,
+                            InventoryListType.Main, [Bag(sourceSlot)])), "耗尽源格被宝珠复用时先清槽再同步新完整核心");
+                    byte[] main = peer.Expect(0, 14).Body;
+                    That(main.SequenceEqual(InventoryPackets.Delta(saved.Inventory, InventoryListType.Main, [Bag(sourceSlot), reward.Position])),
+                        "普通选择ACK后的Main通知精确匹配已提交源及奖励");
+                    if (index == 1)
+                        That(peer.Expect(0, 14).Body.SequenceEqual(InventoryPackets.Delta(saved.Inventory, InventoryListType.Pet, [reward.Position])),
+                            "宠物装备完整123B通知匹配已提交Pet实例");
+                    peer.Barrier();
+                }
+            foreach (int index in new[] { 0, 1 })
+            {
+                string before = Snapshot();
+                SendSelect(peer, (short)(65 + index), [categories[index].Rewards[0].ItemId], categories[index].Category, categories[index].Subcategory);
+                peer.Expect(1, 160, [0, 19, 0]);
+                peer.Barrier();
+                That(before == Snapshot(), "两种普通类型源耗尽重放不增加资产、UID或审计");
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] main = peer.Select()[4].Body;
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var saved = repo.List(owner).Single();
+            That(saved.Inventory.Items.Length == 6 && main.SequenceEqual(InventoryPackets.Full(saved.Inventory)) &&
+                peer.SpecialContainers[2].Body.SequenceEqual(InventoryPackets.SpecialFull(saved.Inventory, InventoryListType.Pet)),
+                "重连完整Main和Pet表恢复全部三宝珠及三宠物装备");
+            peer.Barrier();
+        }
+        await fixture.StopAsync();
+        That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[6L, 6L]] &&
+            fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[0L]] &&
+            fixture.Query("SELECT count(*) FROM inventory_creature_details") is [[0L]] &&
+            fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+            "两种新Kind只落六个实体、不产生Avatar或Creature详情且数据库完整");
+
+        string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT * FROM characters")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT list_type,slot_index,item_uid FROM character_inventory_slots ORDER BY list_type,slot_index")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+    }
+
     internal static byte[] EquipmentEntry(byte[] body, short slot, bool full = false)
     {
         int header = full ? 5 : 3;
