@@ -15,6 +15,53 @@ namespace DfoServer;
 
 internal static class CharacterPreparationTests
 {
+    public static void RunCore()
+    {
+        int checks = Count;
+        var point = new Location(38,1,450,234);
+        var towns = new TownCatalog(new(),point,point,new(0,[],[]),[],new Dictionary<uint,uint[]>());
+        var definition = new CharacterPreparation([3448],[],[5151],[3448,5151],[new(179,7)],[],[])
+        {
+            InitialLearning = new(12345, Array.AsReadOnly(new CharacterSkillTree[]
+            {
+                new(0, 100, 20, Array.AsReadOnly(new LearnedSkill[] {new(0,179,7)})),
+                new(1, 100, 20, Array.AsReadOnly(new LearnedSkill[] {new(0,179,7)}))
+            })) {BonusSp=0, BonusTp=0}
+        };
+        string root = Path.Combine(Path.GetTempPath(),"ServerS5A9-prepared-owner-"+Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root,"game.db");
+            var repository = new CharacterRepository(path);
+            using var owner = new AccountOwners().Acquire("prepared-owner",() => {});
+            var legacy = repository.Create(owner,new("Legacy",point,point));
+            var prepared = repository.Create(owner,definition.ToCharacter("Prepared",towns));
+            That(prepared.DungeonState == CharacterDungeonState.NewOrdinary && prepared.Fatigue == CharacterFatigueState.NewOrdinary,
+                "离线实验新角色与普通建角一样初始化副本owner及疲劳");
+            var reopened = new CharacterRepository(path);
+            var saved = reopened.List(owner).Single(row => row.Id == prepared.Id);
+            That(saved.DungeonState == CharacterDungeonState.NewOrdinary && saved.Fatigue == CharacterFatigueState.NewOrdinary,
+                "实验角色重新开库仍可提供正式副本状态");
+            That(saved.Learning.Initialized && saved.Learning.Experience == 12345 && saved.Learning.BonusSp == 0 &&
+                saved.Learning.BonusTp == 0 && saved.Learning.Trees.All(tree => tree.Sp == 100 && tree.Tp == 20),
+                "实验角色经验、双技能树及点数来源随建角持久化");
+            bool rejected = false;
+            try { (definition with {InitialLearning=CharacterLearningState.Uninitialized}).ToCharacter("Broken",towns); }
+            catch (InvalidDataException) { rejected = true; }
+            That(rejected, "未初始化的实验角色准备在写库前拒绝");
+            var reserved = reopened.ReserveDungeonAttempt(owner,saved,257);
+            var restored = new CharacterRepository(path).List(owner).Single(row => row.Id == prepared.Id);
+            That(restored.DungeonState is {NextObjectKey:257,LastAttempt:1} && restored.DungeonState == reserved.DungeonState &&
+                restored.CompletedQuests.SequenceEqual(definition.CompletedQuests) && restored.Skills.SequenceEqual(definition.Skills),
+                "实验角色可沿正式仓储预留入场尝试号且保留任务技能");
+            That(reopened.List(owner).Single(row => row.Id == legacy.Id) is {DungeonState:null,Fatigue:null},
+                "新角色准备修复不替未知存量角色补造副本状态");
+        }
+        finally { Directory.Delete(root,true); }
+        Console.WriteLine($"PASS {Count-checks} 实验角色副本owner及持久化断言");
+    }
+
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         int count = Count;
@@ -40,7 +87,7 @@ internal static class CharacterPreparationTests
         That(new[] { 10100, 2670, 6928, 8664, 8665, 8672, 6170, 8703, 8709, 2941 }.All(definition.MapQuests.Contains), "map access includes non-epic unlock quests");
         That(definition.CompletedQuests.Contains(8663) && definition.CompletedQuests.Contains(8702), "map unlock prerequisite chains");
         That(!definition.CompletedQuests.Contains(6766), "other job awakening clear-map quests are not map unlocks");
-        That(definition.Skills.Length == 15 && definition.Skills.Contains(new CharacterSkill(296, 1)) && definition.Skills.Contains(new CharacterSkill(297, 1)), "matching CHR declared starter and awakening skills");
+        That(definition.Skills.Length == 15 && definition.Skills.Contains(new CharacterSkill(296, 1)) && definition.Skills.Contains(new CharacterSkill(297, 10)), "匹配CHR声明技能并按95级固定等级资源同步觉醒技能");
         byte[] name = CharacterName.Encoding.GetBytes("剑影");
         That(Convert.ToHexString(name) == "BDA3D3B0", "Client native CP936 character name");
         That(CharacterName.IsValid("剑影") && !CharacterName.IsValid("剑影剑影剑影剑") && !CharacterName.IsValid("😀") && !CharacterName.IsValid("剑影\n"), "bounded encodable names only");
@@ -109,6 +156,14 @@ internal static class CharacterPreparationTests
         Reject(() => repo.Create(owner, definition.ToCharacter("剑影", towns)), "duplicate role preparation rejected");
         var reopened = new CharacterRepository(path);
         var saved = reopened.List(owner).Single(c => c.Id == role.Id);
+        var growth = CharacterGrowthCatalog.Load(pvf);
+        That(saved.Learning.Initialized && saved.Learning.Experience == growth.GetLevelStartExperience(95) &&
+            saved.Learning.BonusSp == 0 && saved.Learning.BonusTp == 0,
+            "95级实验角色重开库后保留匹配等级的累计经验与明确点数来源");
+        That(CharacterGrowthPlan.AddExperience(saved, 1, growth).Success,
+            "准备角色沿正式经验成长规则接受击杀经验，不因快照无效拒绝");
+        That(CharacterGrowthPlan.AddExperience(saved with {Learning=saved.Learning with {Experience=0}}, 1, growth).Failure == CharacterGrowthFailure.InvalidSnapshot,
+            "95级零经验反例仍被成长校验拒绝，未绕过门禁");
         That(saved.CompletedQuests.SequenceEqual(definition.CompletedQuests) && saved.Skills.SequenceEqual(definition.Skills) && saved.ActiveMainQuests.Length == 0, "quest and skill progress durable");
         var oldAfter = reopened.List(owner).Single(c => c.Id == 1);
         That(oldAfter.Name == old.Name && oldAfter.Revision == old.Revision && oldAfter.Position == old.Position && oldAfter.Level == 1 && oldAfter.AcceptedStoryLevel == 1 && oldAfter.CompletedQuests.Length == 0 && oldAfter.ActiveMainQuests.Length == 0, "other character unchanged");

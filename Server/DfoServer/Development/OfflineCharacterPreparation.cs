@@ -55,6 +55,12 @@ internal static class OfflineCharacterPreparation
         Character persisted = repository.List(owner).Single(c => c.Id == created.Id);
         if (persisted.Name != name || persisted.Job != 0 || persisted.GrowType != 0x25 ||
             persisted.Level != 95 || persisted.AcceptedStoryLevel != 95 ||
+            persisted.DungeonState != CharacterDungeonState.NewOrdinary || persisted.Fatigue is null ||
+            !persisted.Learning.Initialized || persisted.Learning.Experience != preparation.InitialLearning.Experience ||
+            persisted.Learning.BonusSp != preparation.InitialLearning.BonusSp || persisted.Learning.BonusTp != preparation.InitialLearning.BonusTp ||
+            persisted.Learning.Trees.Where((tree, index) => tree.Sp != preparation.InitialLearning.Trees[index].Sp ||
+                tree.Tp != preparation.InitialLearning.Trees[index].Tp ||
+                !tree.Skills.SequenceEqual(preparation.InitialLearning.Trees[index].Skills)).Any() ||
             !persisted.CompletedQuests.SequenceEqual(preparation.CompletedQuests) ||
             !persisted.Skills.SequenceEqual(preparation.Skills))
             throw new InvalidDataException("Committed character readback differs");

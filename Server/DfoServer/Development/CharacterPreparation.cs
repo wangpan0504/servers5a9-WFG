@@ -1,6 +1,7 @@
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Skills;
 using System.Text.RegularExpressions;
 using PvfLib;
 using static PvfLib.PvfScript;
@@ -16,6 +17,8 @@ internal sealed record CharacterPreparation(
     int[] ObsoleteMapReferences,
     string[] MissingMaps)
 {
+    public CharacterLearningState InitialLearning { get; init; } = CharacterLearningState.Uninitialized;
+
     public NewCharacter ToCharacter(string name, TownCatalog towns)
     {
         Validate();
@@ -25,6 +28,8 @@ internal sealed record CharacterPreparation(
             GrowType = 0x25,
             Level = 95,
             AcceptedStoryLevel = 95,
+            DungeonState = CharacterDungeonState.NewOrdinary,
+            InitialLearning = InitialLearning,
             CompletedQuests = [.. CompletedQuests],
             Skills = [.. Skills]
         };
@@ -32,12 +37,15 @@ internal sealed record CharacterPreparation(
 
     public void Validate()
     {
+        InitialLearning.Validate();
         if (MainQuests.Length == 0 || JobQuests.Length == 0 ||
             CompletedQuests.Any(q => q is <= 0 or >= 30000) ||
             !CompletedQuests.SequenceEqual(CompletedQuests.Distinct().Order()) ||
             !MainQuests.Concat(MapQuests).Concat(JobQuests).All(CompletedQuests.Contains) ||
             Skills.Length is 0 or > 255 || Skills.Any(s => s.Level == 0) ||
-            Skills.Select(s => s.Id).Distinct().Count() != Skills.Length)
+            Skills.Select(s => s.Id).Distinct().Count() != Skills.Length || !InitialLearning.Initialized ||
+            InitialLearning.Trees.Any(tree => !tree.Skills.Select(s => new CharacterSkill(s.Id, s.Level)).OrderBy(s => s.Id)
+                .SequenceEqual(Skills.OrderBy(s => s.Id))))
             throw new InvalidDataException("Invalid Client Ghostblade preparation");
     }
 
@@ -87,14 +95,23 @@ internal sealed record CharacterPreparation(
             foreach (int prerequisite in Integers(Section(scripts[id], "pre required quest")))
                 if (prerequisite > 0 && scripts.ContainsKey(prerequisite) && complete.Add(prerequisite))
                     pending.Enqueue(prerequisite);
+        // 离线角色没有达人契约；按同版资源建立双树、固定等级技能与实际点数来源。
+        var learningCatalog = SkillLearningCatalog.Load(pvf, expertContractLevels: 0);
+        var growthCatalog = CharacterGrowthCatalog.Load(pvf, learningCatalog);
+        var initialization = SkillLearning.Initialize(0, skills.OrderBy(s => s.Key)
+            .Select(s => new CharacterSkill(s.Key, s.Value)).ToArray(), learningCatalog);
+        if (!initialization.Success)
+            throw new InvalidDataException("实验角色技能树初始化失败: " + initialization.Failure);
+        var learning = SkillPointLedger.Synchronize(0, 0x25, 95,
+            initialization.State! with { Experience = growthCatalog.GetLevelStartExperience(95) }, learningCatalog);
         var result = new CharacterPreparation(
             main,
             mapQuests,
             jobs,
             complete.Order().ToArray(),
-            skills.OrderBy(s => s.Key).Select(s => new CharacterSkill(s.Key, s.Value)).ToArray(),
+            learning.Trees[0].Skills.OrderBy(s => s.Id).Select(s => new CharacterSkill(s.Id, s.Level)).ToArray(),
             references.Where(q => !scripts.ContainsKey(q)).Order().ToArray(),
-            missingMaps.ToArray());
+            missingMaps.ToArray()) { InitialLearning = learning };
         result.Validate();
         return result;
         void AddSkills(string text)
