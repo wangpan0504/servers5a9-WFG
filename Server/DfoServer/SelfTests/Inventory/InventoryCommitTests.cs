@@ -23,6 +23,7 @@ internal static class InventoryCommitTests
             foreach (string field in new[] { "level", "job", "grow", "skill" })
                 ChangedQualification(field);
             PreserveProgress();
+            SeparateOwners();
         }
         finally
         {
@@ -89,10 +90,27 @@ internal static class InventoryCommitTests
                 "发布快照与重开后的持久状态一致");
         }
 
-        Character Create(CharacterRepository repository, AccountOwners.Lease owner)
+        void SeparateOwners()
+        {
+            string path = Path.Combine(root, "owners.db");
+            var repository = new CharacterRepository(path);
+            using var owner = new AccountOwners().Acquire("read-owners", () => { });
+            using var other = new AccountOwners().Acquire("read-other", () => { });
+            var first = Create(repository, owner, "ReadFirst");
+            var second = Create(repository, owner, "ReadSecond");
+            var third = Create(repository, other, "ReadOther");
+            var reopened = new CharacterRepository(path);
+            var own = reopened.List(owner);
+            Check(own.Length == 2 && own.Single(row => row.Id == first.Id).Inventory.Items.Single() == first.Inventory.Items.Single() &&
+                own.Single(row => row.Id == second.Id).Inventory.Items.Single() == second.Inventory.Items.Single() &&
+                reopened.List(other).Single().Inventory.Items.Single() == third.Inventory.Items.Single(),
+                "完整角色冷读只取各自归属库存，同账号其他角色及其他账号不串入UID或Core");
+        }
+
+        Character Create(CharacterRepository repository, AccountOwners.Lease owner, string name = "CommitCase")
         {
             var weapon = characters.Get(0).Equipment.Single(item => item.Slot == 12).Template;
-            return repository.Create(owner, new("CommitCase", towns.Room, towns.InitialReturn)
+            return repository.Create(owner, new(name, towns.Room, towns.InitialReturn)
             {
                 Level = 95, Skills = [new(5, 1)],
                 Inventory = new([new(0, new(InventoryListType.Main, 9), InventoryRewardGrantService.Create(weapon))])

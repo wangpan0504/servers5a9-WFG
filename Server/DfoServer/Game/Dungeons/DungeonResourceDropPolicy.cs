@@ -15,6 +15,26 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
         "common champion drop item", "monster repeated item blocks after first"];
     static readonly decimal[] DifficultyRates = [1m, 1.2m, 1.4m, 1.6m, 1.8m];
 
+    // 只在一次入图准备中复用不可变规则；对象编号、位置和实际随机结果仍归各只怪物。
+    public Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareEntry(DungeonEntryPlan entry, DungeonHellRewardPolicy? hellRewards = null)
+    {
+        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls), DungeonDropGenerationPlan>();
+        return monster =>
+        {
+            var key = (monster.MonsterId, monster.CandidateLevel, monster.RewardType, monster.SpawnType, monster.HellRewardRolls);
+            if (plans.TryGetValue(key, out var existing)) return existing;
+            // APC 不套普通怪概率；深渊奖励与不带奖励的普通计划分别保存。
+            var plan = monster.SpawnType > 3
+                ? new DungeonDropGenerationPlan("hell-party-apc", [], amplification: amplification)
+                : Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel);
+            if (monster.HellRewardRolls > 0 && hellRewards is not null)
+                plan = hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode,
+                    monster.HellRewardRolls, entry.Difficulty);
+            plans.Add(key, plan);
+            return plan;
+        };
+    }
+
     public DungeonDropGenerationPlan Prepare(int monsterId, int level, byte monsterType, byte difficulty, int? dungeonLevel = null)
     {
         if (monsterType > 3 || difficulty > 4)

@@ -479,7 +479,7 @@ internal sealed partial class CharacterRepository
             LEFT JOIN character_title_book_slots b ON b.item_uid=i.item_uid AND b.account=i.account AND b.character_id=i.character_id
             LEFT JOIN inventory_avatar_details a ON a.item_uid=i.item_uid
             LEFT JOIN inventory_creature_details p ON p.item_uid=i.item_uid
-            WHERE i.account=$account AND i.character_id IS $id
+            WHERE i.account=$account AND i.owner_character_id=COALESCE($id,0) AND i.character_id IS $id
               AND NOT EXISTS(SELECT 1 FROM mailbox_attachments m WHERE m.item_uid=i.item_uid)
             ORDER BY 2,3;
             """;

@@ -11,7 +11,7 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed class QuestReplayHandler(QuestConnectionCatalog connections,DungeonCatalog dungeons,DungeonRoomCatalog rooms,ServerLog log,
     DungeonMonsterDropCatalog? drops = null,ItemCatalog? items = null,EpicPieceCatalog? pieces = null,
-    Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+    Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
     CrackDimensionRewardServices? crackRewards = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.QUEST_REPLAY,PrepareAsync,nameof(QuestReplayHandler));

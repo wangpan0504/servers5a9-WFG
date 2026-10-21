@@ -100,6 +100,37 @@ internal static class DungeonDropRuleCatalogTests
             specialPolicy.Prepare(42, 1, 3, 1, 4).Trials.Length == 5 && specialPolicy.Prepare(42, 1, 3, 0).Trials.Length == 5,
             "特殊抽样临界不命中，独立条件按副本基准等级与难度过滤，不用怪物等级替代副本条件");
         var changed = source.ToArray(); changed[9] = new(0, 99);
+        var map = new DungeonMap("boss", new(0, 0), 1, "map/drop-preparation.map");
+        var maze = new DungeonMaze(0, 1, 1, "fixture", [map.Position], [map.Position], [map], []);
+        var entry = new DungeonEntryPlan(1, 0, 1, 0, 0, 1, maze, map, map) { BasisLevel = 1, HellPartyMode = 1 };
+        var hell = new DungeonHellRewardPolicy(DungeonHellDropRules.Parse("""
+            [dungeon difficulty drop prob] 1 2 1000 1000 1000 1000 1000
+            [basis of rarity dicision] 1 200000 400000 600000 800000 900000 990000 1000000
+            [item drop ref table] 1 0 2 2 1 3
+            """), candidates);
+        var prepare = specialPolicy.PrepareEntry(entry, hell);
+        var monster = new DungeonPlannedMonster(0, 10, 42, 1, null) { SpawnType = 3 };
+        var cached = prepare(monster);
+        That(ReferenceEquals(cached, prepare(monster with { ObjectKey = 11, SourceOrdinal = 1 })),
+            "同次入图相同掉落输入复用不可变规则，对象编号与位置不产生第二份候选池");
+        foreach (var different in new[] { monster with { MonsterId = 43 }, monster with { CandidateLevel = 2 },
+            monster with { SpawnType = 1 }, monster with { IsDummyMapBoss = true } })
+            That(!ReferenceEquals(cached, prepare(different)), "怪物模板、等级、生成类型与奖励品级分别参与规则复用");
+        That(!ReferenceEquals(cached, specialPolicy.PrepareEntry(entry, hell)(monster)) &&
+            specialPolicy.PrepareEntry(entry with { BasisLevel = 4 }, hell)(monster).Trials.Length == 5 &&
+            specialPolicy.PrepareEntry(entry with { Difficulty = 0 }, hell)(monster).Trials[0].Threshold == 986,
+            "下次入图重新准备，副本等级与难度不会沿用上次计划");
+        var rewarded = prepare(monster with { HellRewardRolls = 2 });
+        var apc = prepare(monster with { SpawnType = 5, HellRewardRolls = 2 });
+        That(rewarded.Trials.Length == cached.Trials.Length + 1 && rewarded.Trials[^1].Attempts == 2 &&
+            apc.ResourceSource == "hell-party-apc" && apc.Trials.Length == 1 &&
+            prepare(monster with { SpawnType = 5 }).Trials.IsEmpty && ReferenceEquals(cached, prepare(monster)),
+            "深渊额外骰与普通计划分离，APC不套普通概率，去掉奖励骰仍恢复原普通计划");
+        int firstSamples = 0, secondSamples = 0;
+        var firstAssets = cached.Generate(_ => { firstSamples++; return 0; }, DateTimeOffset.FromUnixTimeSeconds(1800000000));
+        var secondAssets = cached.Generate(bound => { secondSamples++; return bound - 1; }, DateTimeOffset.FromUnixTimeSeconds(1800000000));
+        That(firstAssets.Length > 0 && secondAssets.IsEmpty && firstSamples > 0 && secondSamples > 0 && cached.Trials.Length == 6,
+            "共享计划每次死亡仍独立抽样，不缓存实际奖励或被深渊追加修改");
         That(parsed.ProbabilityRows[0].Values[4] == 15, "原token变更不污染已加载概率表");
         changed = source.ToArray(); changed[1] = new(0, 2);
         Reject<InvalidDataException>(() => Parse(changed), "概率行数不匹配拒绝，不补默认行");

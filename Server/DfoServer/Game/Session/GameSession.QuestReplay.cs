@@ -17,7 +17,7 @@ internal sealed partial class GameSession
 
     public QuestReplayReceipt? PrepareQuestReplay(uint questId,QuestConnectionCatalog connections,DungeonCatalog dungeons,
         DungeonRoomCatalog rooms,DungeonMonsterDropCatalog? drops = null,ItemCatalog? items = null,EpicPieceCatalog? pieces = null,
-        Func<DungeonEntryPlan, DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareDrops = null,
+        Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         CrackDimensionRewardServices? crackRewards = null)
     {
         var (expected,epoch,phase,pending) = owner.Execute(() =>

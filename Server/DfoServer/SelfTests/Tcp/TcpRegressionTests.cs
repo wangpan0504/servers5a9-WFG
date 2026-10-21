@@ -158,6 +158,9 @@ internal static class TcpRegressionTests
         }),
         ("dungeon-settlement", async (_, _, resources) =>
         {
+            DungeonItemDropCatalogTests.RunCore();
+            DungeonDropRuleCatalogTests.RunCore();
+            DungeonDropGenerationPlanTests.RunCore();
             DungeonRoomCatalogTests.Run(resources.Archive);
             DungeonMonsterPlanTests.Run(resources.Archive);
             SinglePlayerDungeonRunTests.Run(resources.Archive);
