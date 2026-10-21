@@ -165,11 +165,13 @@ internal sealed class PacketCapture : IDisposable
 
     static void Hex(StringBuilder text, ReadOnlySpan<byte> bytes)
     {
+        const string digits = "0123456789ABCDEF";
         for (int i = 0; i < bytes.Length; i++)
         {
             if (i != 0)
                 text.Append(' ');
-            text.Append(bytes[i].ToString("X2"));
+            text.Append(digits[bytes[i] >> 4]);
+            text.Append(digits[bytes[i] & 15]);
         }
     }
 

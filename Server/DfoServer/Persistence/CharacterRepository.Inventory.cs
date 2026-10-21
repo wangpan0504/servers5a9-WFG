@@ -292,6 +292,14 @@ internal sealed partial class CharacterRepository
     {
         ValidateInventoryPlan(expected, plan);
         var current = Require(db, transaction, owner.Account, expected.Name);
+        return CommitInventoryInTransaction(db, transaction, owner, current, expected, plan, retained, incoming);
+    }
+
+    // 复用调用方在同一事务内刚读取的完整角色，避免联合提交重复装载。
+    Character CommitInventoryInTransaction(SqliteConnection db, SqliteTransaction transaction, AccountOwners.Lease owner,
+        Character current, Character expected, InventoryPlan plan, IReadOnlySet<long>? retained = null,
+        IReadOnlyDictionary<long, InventoryItem>? incoming = null)
+    {
         // GM进度修改不递增revision；库存和规划资格都必须在写事务内重新核对。
         ValidateCurrentInventoryPlan(current, expected, plan);
         if (plan.CharacterPrecondition?.IsExpired() == true)
