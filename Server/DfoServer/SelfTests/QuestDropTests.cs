@@ -139,6 +139,11 @@ internal static class QuestDropTests
             if (lost) Reject<IOException>(() => Observe(),"任务物品和死亡经验已提交但返回丢失");
             else
             {
+                f.Sql($"UPDATE characters SET gold=gold+1 WHERE id={previous.Id}");
+                Reject<InvalidOperationException>(() => Observe(),"同revision的库存变化仍拒绝旧任务掉落规划");
+                That(QuestCompletionRepositoryTests.Same(previous with { Inventory = previous.Inventory with { Gold = previous.Inventory.Gold + 1 } },f.Read()) &&
+                    ReferenceEquals(online,f.Session.Selected) && draws == 2,"拒绝保留外部金币变化，不保存任务物品或经验，不重抽已冻结奖励");
+                f.Sql($"UPDATE characters SET gold=gold-1 WHERE id={previous.Id}");
                 f.Sql("CREATE TRIGGER drop_abort AFTER INSERT ON character_quest_drop_receipts BEGIN SELECT RAISE(ABORT,'quest drop rollback'); END");
                 Reject<SqliteException>(() => Observe(),"任务掉落回执末段失败");
                 That(QuestCompletionRepositoryTests.Same(previous,f.Read()),"任务物品UID、寻物进度和死亡经验整笔回滚");

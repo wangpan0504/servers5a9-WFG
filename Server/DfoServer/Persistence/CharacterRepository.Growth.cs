@@ -80,7 +80,9 @@ internal sealed partial class CharacterRepository
             !current.Skills.OrderBy(skill => skill.Id).SequenceEqual(expected.Skills.OrderBy(skill => skill.Id)))
             throw new InvalidOperationException("成长revision或完整学习前提已变化");
         command.Parameters.AddWithValue("$account", owner.Account);
-        var inventoryCharacter = questDrops is null ? current : CommitInventoryInTransaction(db,tx,owner,expected,questDrops.Inventory);
+        if (questDrops is not null)
+            ValidateInventoryPlan(expected, questDrops.Inventory);
+        var inventoryCharacter = questDrops is null ? current : CommitInventoryInTransaction(db,tx,owner,current,expected,questDrops.Inventory);
         command.Parameters.AddWithValue("$revision", inventoryCharacter.Revision);
         command.Parameters.AddWithValue("$increment", questDrops?.Inventory.Changed == true ? 0 : 1);
         command.Parameters.AddWithValue("$level", plan.TargetLevel);

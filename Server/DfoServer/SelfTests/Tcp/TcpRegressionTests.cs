@@ -17,7 +17,11 @@ internal static class TcpRegressionTests
         }),
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
-        ("packet-capture", (options, root, _) => PacketCaptureTcpTests.RunAsync(options, root)),
+        ("packet-capture", async (options, root, _) =>
+        {
+            await PacketCaptureTests.RunAsync();
+            await PacketCaptureTcpTests.RunAsync(options, root);
+        }),
         ("packet-http", (options, root, _) => PacketCaptureTcpTests.RunHttpAsync(options, root)),
         ("town", TownProtocolTcpTests.RunAsync),
         ("tutorial", TutorialTcpTests.RunAsync),

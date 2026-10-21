@@ -34,6 +34,16 @@ internal static class PacketCaptureTests
             TestCheck.That(text.Contains("SEND kind=0x00 opcode=0x0002 name=USERINFO len=18 body=(2B) [AB CD]"), "send header is 16 bytes");
             TestCheck.That(text.Contains("raw: " + BitConverter.ToString(sent).Replace('-', ' ')), "full wire frame is present");
 
+            byte[] allBytes = Enumerable.Range(0, 256).Select(value => (byte)value).ToArray();
+            byte[] allByteFrame = GameFrame.Build(0, 65535, 0, allBytes);
+            capture.Write(12, false, true, allByteFrame);
+            capture.Write(12, false, true, GameFrame.Build(0, 65535, 0, []));
+            capture.Flush();
+            text = ReadCapture(path);
+            TestCheck.That(text.Contains("body=(256B) [" + BitConverter.ToString(allBytes).Replace('-', ' ') + "]\n  raw: " +
+                BitConverter.ToString(allByteFrame).Replace('-', ' ')), "全部字节值的正文和原帧保持大写十六进制及单空格分隔");
+            TestCheck.That(text.Contains("body=(0B) []\n  raw: "), "空正文不输出多余字符");
+
             byte[] secret = Encoding.ASCII.GetBytes("credential-must-not-be-logged");
             foreach (ushort opcode in new ushort[] { 1, 1562, 171 })
                 capture.Write(12, false, false, ClientFrame(opcode, secret));
