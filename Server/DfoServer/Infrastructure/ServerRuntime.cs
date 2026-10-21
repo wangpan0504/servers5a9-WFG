@@ -294,6 +294,9 @@ internal static class ServerRuntime
             new AvatarDisjointHandler(new InventoryAvatarDisjointService(itemResources.Items, itemResources.AvatarDisjoint,
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
+            // 设计图升级：CMD271，材料与产物来自设计图自身的 [emancipate group]。
+            new UpgradeChronicleHandler(new InventoryUpgradeChronicleService(itemResources.UpgradeChronicles, itemResources.Items,
+                itemResources.EpicPieces, clock), inventoryProjection),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
                 debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages, clock: clock), inventoryProjection,
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),

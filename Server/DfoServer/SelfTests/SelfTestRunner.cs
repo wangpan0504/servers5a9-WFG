@@ -197,6 +197,7 @@ internal static class SelfTestRunner
         SkillLayoutTests.Run();
         ItemRequestTests.Run();
         ConsumableUseTests.RunCore();
+        UpgradeChronicleServiceTests.RunCore();
         ConsumableStateTests.RunCore();
         RandomOptionTests.RunCore();
         EquipmentRandomOptionChangeTests.RunCore();
@@ -333,6 +334,8 @@ internal static class SelfTestRunner
         StarterSkillTests.Run(pvf, characters);
         ItemCatalogTests.Run(pvf);
         StackableCatalogTests.Run(pvf);
+        BoosterSelectionResourceTests.Run(pvf);
+        UpgradeChronicleTests.Run(pvf);
         SkillCatalogTests.Run(pvf);
         GuildParameterTests.Run(pvf);
         GuildCreationTests.Run(towns, characters, itemResources, pvf);

@@ -256,8 +256,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                             return InventoryResult.Reject(19);
                     }
                 }
-                // 只兼容模板自身已禁分解的装备，不能猜写未知实例位，也不能被钱包等快捷发奖绕过。
-                if (definition.SetsDisjointInstanceType && catalog.Get(id) is not { Kind: ItemKind.Equipment, DisjointForbidden: true })
+                // 该声明只约束领取到的实例是装备；本服没有实例级“不可分解”字段，官方同款装备本身可分解，
+                // 因此不按模板 DisjointForbidden 收窄，也不猜测实例标志。
+                if (definition.SetsDisjointInstanceType && catalog.Get(id).Kind != ItemKind.Equipment)
                     return InventoryResult.Reject(19);
                 if (lottery && (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
                     contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id) ||

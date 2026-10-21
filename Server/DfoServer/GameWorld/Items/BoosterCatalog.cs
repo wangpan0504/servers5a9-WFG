@@ -88,10 +88,15 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         foreach (string tag in new[] { "cooltime maintenance", "effect maintenance", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime", "usable first growtype",
             "random box", "random box removal items", "raid booster item", "convert boost item", "check usable itemlevel",
-            "set epic exchange instance type", "random option unseal", "custom ability grade",
+            "set epic exchange instance type", "random option unseal",
             "daybreak drop item", "battle royal", "action usable server type", "usable game server type", "usable server type" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);
+        // [custom ability grade] 规定发放装备的品级。本服没有实例级品级字段，只校验声明形态，
+        // 数值不写入实例，也不据此收窄可领取范围；形态不合法仍整包拒绝。
+        if (tags.Contains("[custom ability grade]", StringComparison.OrdinalIgnoreCase) &&
+            (!int.TryParse(PvfScript.Section(text, "custom ability grade").Trim(), out int abilityGrade) || abilityGrade < 0))
+            return new([], "custom ability grade");
         if (type == "upgradable legacy")
         {
             // 此类型经独立的CMD27入口一次抽取一行；不能交给CMD160忽略其回包合同。

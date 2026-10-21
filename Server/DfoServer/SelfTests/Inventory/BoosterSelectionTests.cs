@@ -662,6 +662,11 @@ internal static class BoosterSelectionTests
         var syntheticRole = Role(10000743);
         That(guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
             "支持范围由声明及实际模板驱动，不按四个新秀盒ID放行");
+        // 官方同款装备本身可分解：本服没有实例级不可分解字段，不按模板 DisjointForbidden 收窄。
+        definitions[10000743] = BoosterCatalog.Parse(Text("[equipment]\n16400 1\n[/equipment]"));
+        That(!catalog.Get(16400).DisjointForbidden &&
+            guarded.Open(syntheticRole, Select(3, [16400]), out _, now).Accepted,
+            "可分解装备同样按声明发放，不再整包拒绝");
         definitions[10000743] = BoosterCatalog.Parse(Text(safe,
             "[outer]\n[inner]\n[/outer]\n" + marker + "[/inner]\n"));
         string beforeCrossedDeclaration = JsonSerializer.Serialize(syntheticRole);
@@ -699,13 +704,14 @@ internal static class BoosterSelectionTests
         That(!guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
             "分类内嵌实例分解声明不能按根级空声明放行");
         That(!catalog.Get(16400).DisjointForbidden, "负例普通装备确实允许分解");
-        foreach (int unsafeId in new[] { 16400, 1106, 1, resources.EpicPieces.ByPiece.Keys.First(), resources.Boosters.DirectActivationItems.First() })
+        // 可分解装备已按声明放行（见上），非装备产物、钱包、碎片与契约仍整包拒绝。
+        foreach (int unsafeId in new[] { 1106, 1, resources.EpicPieces.ByPiece.Keys.First(), resources.Boosters.DirectActivationItems.First() })
         {
             definitions[10000743] = BoosterCatalog.Parse(Text(safe + "\n[etc]\n" + unsafeId + " 1\n[/etc]"));
             var rejected = guarded.Open(syntheticRole, Select(3, [401030066, unsafeId]), out var receipt, now);
             That(!rejected.Accepted && rejected.Plan is null && receipt is null && syntheticRole.Inventory.Gold == 12345 &&
                 syntheticRole.Inventory.Items.Single().Core.ItemId == 10000743,
-                "禁分解实例声明的实际所选奖励必须全为已禁分解装备，快捷钱包/碎片/契约也不能绕过 " + unsafeId);
+                "实例分解声明的实际所选奖励必须为装备，非装备产物与快捷发放不能绕过 " + unsafeId);
         }
         definitions[10000743] = BoosterCatalog.Parse(Text(safe + "\n[etc]\n1106 1\n[/etc]")
             .Replace("[booster selection num]\n0", "[booster selection num]\n1", StringComparison.Ordinal));

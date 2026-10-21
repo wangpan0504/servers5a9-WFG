@@ -25,6 +25,7 @@ internal sealed class ItemResources
     public MagicBoxCatalog MagicBoxes { get; }
     public PremiumContractCatalog Contracts { get; }
     public RecoveryConsumableCatalog RecoveryConsumables { get; }
+    public UpgradeChronicleCatalog UpgradeChronicles { get; }
     public LimitCubeCatalog LimitCubes { get; }
     public EnchantmentCatalog Enchantments { get; }
     public EnhancementCatalog Enhancements { get; }
@@ -68,6 +69,7 @@ internal sealed class ItemResources
         CashShop = CashShopCatalog.Load(archive);
         DevilContracts = new(archive, stackable, CashShop);
         RecoveryConsumables = new(archive, stackable, Items);
+        UpgradeChronicles = new(archive, stackable);
         LimitCubes = new(archive, stackable, equipment);
         Enchantments = new(archive, stackable);
         Enhancements = new(archive, stackable, equipment);
