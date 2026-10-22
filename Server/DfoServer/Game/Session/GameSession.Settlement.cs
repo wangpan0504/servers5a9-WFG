@@ -200,11 +200,13 @@ internal sealed partial class GameSession
             }
             else
             {
-                // 同一±5等级区间既决定幸运星，也计作冒险团「推荐地下城通关」；教程与修炼场不走此分支。
-                bool recommended = DungeonLuckyStarPolicy.IsRecommendedLevel(
-                    dungeons.Get(checked((int)dungeon.Entry.DungeonId)), expected.Level);
+                // 幸运星只按 ±5 等级区间；冒险团「推荐地下城通关」另按 95 规则加入剧情路线、地轨中心与哈林全图，团本排除。
+                var definition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
+                bool luckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(definition, expected.Level);
+                bool recommendedClear = DungeonLuckyStarPolicy.IsRecommendedClear(
+                    definition, dungeon.Entry.QuestId, dungeon.Entry.RouteQuestId, expected.Level);
                 commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
-                    grantLuckyStar: recommended, luckyStarLimit: luckyStarLimit, recommendedClear: recommended);
+                    grantLuckyStar: luckyStar, luckyStarLimit: luckyStarLimit, recommendedClear: recommendedClear);
             }
             if (commit.Character.Id != expected.Id || commit.Character.Revision < expected.Revision ||
                 dungeon.Run.ConfirmCommittedSettlement(prepared.Pending) != DungeonRunOutcome.Accepted)

@@ -24,6 +24,20 @@ internal static class DungeonLuckyStarPolicy
         return characterMaximum >= minimum && characterMinimum <= basis;
     }
 
+    // 95 规则：地轨中心与哈林全图所有副本无条件计作推荐地下城；哈林突击、等级加速、地狱模式等独立模式副本不属于区域全图。
+    private static readonly string[] RecommendedRegions = ["dungeon/metrocenter/", "dungeon/harlem/"];
+
+    // 冒险团「推荐地下城通关」口径：团本排除；剧情/支线任务绑定入场无条件计入；
+    // 地轨中心与哈林全图计入；其余按角色等级 ±5 与副本等级的区间相交。
+    public static bool IsRecommendedClear(DungeonDefinition dungeon, uint questId, uint routeQuestId, int characterLevel)
+    {
+        ArgumentNullException.ThrowIfNull(dungeon);
+        if (dungeon.IsRaid) return false;
+        if (questId != 0 || routeQuestId != 0) return true;
+        if (RecommendedRegions.Any(prefix => dungeon.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) return true;
+        return IsRecommendedLevel(dungeon, characterLevel);
+    }
+
     public static DungeonLuckyStarGrant Apply(AccountWallet wallet, int stackLimit)
     {
         ArgumentNullException.ThrowIfNull(wallet);
