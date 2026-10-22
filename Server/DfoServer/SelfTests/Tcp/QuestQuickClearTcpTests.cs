@@ -1,5 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
@@ -100,6 +102,7 @@ internal static class QuestQuickClearTcpTests
             peer.Send(1714,Build(writer => writer.Write((uint)connections.Units.Single(unit => unit.QuestionQuestId == role.Question).ParentKey)));
             peer.Expect(1,1714,[0,0,0]); peer.Barrier();
         }
+        ConsecutiveTickets(fixture,resources);
 
         string Assets(ushort id) => fixture.Snapshot("SELECT job,grow_type,level,experience,equipment_slot_flags FROM characters WHERE id=$p0",id)+
             fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.Kind')!=$p1 ORDER BY item_uid",id,(int)ItemKind.Quest)+
@@ -120,5 +123,57 @@ internal static class QuestQuickClearTcpTests
             fixture.Snapshot("SELECT * FROM character_quest_skip_receipts WHERE character_id=$p0",id)+
             fixture.Snapshot("SELECT * FROM character_quest_effect_receipts WHERE character_id=$p0",id)+
             fixture.Snapshot("SELECT * FROM character_quest_special_reward_claims WHERE character_id=$p0",id);
+    }
+
+    static void ConsecutiveTickets(TcpTestFixture fixture,TcpTestResources resources)
+    {
+        var growth=SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
+        var tickets=new[] {(Slot:(short)65,Id:10162928,Action:119u),(Slot:(short)66,Id:10162929,Action:122u),
+            (Slot:(short)67,Id:10006257,Action:130u),(Slot:(short)68,Id:10005390,Action:130u)};
+        Character created;
+        using (var owner=new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{}))
+        {
+            var candidate=CharacterCreation.Prepare("TicketChain",resources.Characters.Get(0),resources.Towns.Room,
+                resources.Towns.InitialReturn,resources.Learning.Get);
+            created=new CharacterRepository(fixture.Database).Create(owner,candidate with
+            {
+                Level=75,GrowType=1,CompletedQuests=[3356,3427],
+                InitialLearning=SkillPointLedger.Synchronize(0,1,75,candidate.InitialLearning with
+                    {Experience=growth.GetLevelStartExperience(75)},resources.Learning),
+                Inventory=candidate.Inventory with {Items=candidate.Inventory.Items.AddRange(tickets.Select(ticket=>
+                    new InventoryItem(0,new(InventoryListType.Main,ticket.Slot),
+                        InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(ticket.Id)) with {ExpireTime=0})))}
+            });
+        }
+        using (var peer=Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true);
+            foreach (var ticket in tickets)
+            {
+                peer.Send(515,Build(writer=>
+                {
+                    writer.Write((ushort)ticket.Slot);writer.Write((byte)0);writer.Write(0u);
+                    writer.Write(ticket.Action);writer.Write(0u);writer.Write(0u);
+                }));
+                if (ticket.Action is 119 or 122) peer.Expect(0,19);
+                peer.Expect(1,515,Build(writer=>
+                {
+                    writer.Write((byte)1);writer.Write((ushort)ticket.Slot);writer.Write((byte)0);writer.Write(ticket.Action);
+                }));
+                if (ticket.Action is 119 or 122) peer.Expect(0,2);
+                peer.Expect(0,2);peer.Expect(0,574);peer.Expect(0,21);peer.Expect(0,356);peer.Barrier();
+            }
+            That(fixture.Query("SELECT grow_type,equipment_slot_flags FROM characters WHERE id=$p0",created.Id) is [[33L,3L]] &&
+                fixture.Query("SELECT count(*) FROM character_quest_skip_receipts WHERE character_id=$p0",created.Id) is [[4L]] &&
+                fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index BETWEEN 65 AND 68",created.Id) is [[0L]],
+                "同一TCP选角连续一觉、二觉、辅助装备、魔法石各提交一次并消费实际源");
+        }
+        using (var peer=Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true);peer.Barrier();
+            That(fixture.Query("SELECT grow_type,equipment_slot_flags FROM characters WHERE id=$p0",created.Id) is [[33L,3L]] &&
+                fixture.Query("SELECT count(*) FROM character_quest_skip_receipts WHERE character_id=$p0",created.Id) is [[4L]],
+                "连续券重连恢复职业及槽位，不补做消费事务");
+        }
     }
 }

@@ -153,6 +153,37 @@ internal static class QuestAwakeningTicketTests
         try
         {
             using var log=new ServerLog(logRoot);
+            var secondSteps=Definitions(2).Take(2).Select(row=>row with
+            {
+                Id=row.Id+10,
+                Definition=row.Definition! with {PrerequisiteGroups=[[row.Id==100 ? 101 : 110]]}
+            });
+            using (var f=Make(1,Definitions(1).Concat(secondSteps).ToArray(),consecutive:true))
+            {
+                var firstUse=f.Session.UseQuestTicket(65,0,f.Catalog,items.Items,119,skills)!;
+                That(firstUse.Commit is {Duplicate:false} && firstUse.Character.GrowType==17,
+                    "连续觉醒先提交一觉职业与消费");
+                var firstSaved=f.Read();
+                That(f.Session.UseQuestTicket(66,0,f.Catalog,items.Items,122,skills) is {Commit:null} &&
+                    f.Session.UseQuestTicket(65,0,f.Catalog,items.Items,119,skills)?.Commit is {Duplicate:true} && Same(firstSaved,f.Read()),
+                    "消费ACK尚未确认时不切换到二觉券，保留一觉原提交恢复");
+                f.Session.MarkQuestTicketAcknowledged(firstUse);
+                using var output=new ControlledOutput(); using var stop=new CancellationTokenSource();
+                await using var sender=new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_)=>{});
+                var commands=Registry(f,log); var context=Context(f,output,sender,stop);
+                That(await commands.DispatchAsync(context,Use(122,66))==CommandResult.Handled &&
+                    output.Opcodes.SequenceEqual(new ushort[] {19,515,2,2,574,21,356}) && output.Frames[1][16]==1,
+                    "一觉ACK确认后不重选角可直接完成二觉及其完整投影");
+                var secondSaved=f.Read(); output.Frames.Clear();
+                That(secondSaved.GrowType==33 && secondSaved.Revision==firstSaved.Revision+1 &&
+                    secondSaved.CompletedQuests.SequenceEqual(new[] {100,101,110,111,900}) &&
+                    secondSaved.Inventory.Find(Bag()) is null && secondSaved.Inventory.Find(new(InventoryListType.Main,66)) is null &&
+                    PreservesLearning(firstSaved.Learning,secondSaved.Learning) && Receipts(f)==2,
+                    "连续觉醒分别消费和持久化，保留一觉技能与完成记录");
+                That(await commands.DispatchAsync(context,Use(122,66))==CommandResult.Handled &&
+                    !output.Opcodes.Contains((ushort)515) && Same(secondSaved,f.Read()),
+                    "二觉已确认的重复请求仍不重发消费ACK或新建事务");
+            }
             foreach(byte stage in new byte[] {1,2})
             using(var f=Make(stage,Definitions(stage)))
             {
@@ -247,11 +278,17 @@ internal static class QuestAwakeningTicketTests
         }
         QuestQuickClearPlan Plan(Character role,QuestTicketDefinition ticket,QuestCatalog catalog)
         {That(Create(role,ticket,catalog,out var plan),"合法觉醒券事务fixture规划");return plan!;}
-        QuestOrdinaryCompletionTests.Fixture Make(byte stage,StoryQuest[] definitions) =>
+        QuestOrdinaryCompletionTests.Fixture Make(byte stage,StoryQuest[] definitions,bool consecutive=false) =>
             new(towns,characters,skills,growth,parameters,items,definitions[0],materialCount:0,definitions:definitions,
                 active:[Active(0,100),Active(1,101),Active(2,300,0),Active(3,400,1)],configure:candidate=>
                 {
                     var role=Role(0,checked((byte)(1 | (stage-1)<<4)),stage,stage==1 ? first : second);
+                    if (consecutive)
+                        role=role with {Level=75,Learning=SkillPointLedger.Synchronize(role.Job,role.GrowType,75,
+                            role.Learning with {Experience=growth.GetLevelStartExperience(75)},skills),
+                            Inventory=role.Inventory with {Items=role.Inventory.Items.Select(row=>row.Position.Index==66
+                                ? row with {Core=InventoryRewardGrantService.Create(items.Items.Get(SecondTicket)) with {ExpireTime=0}}
+                                : row).ToImmutableArray()}};
                     var paid=SkillLearning.Plan(0,role.GrowType,role.Level,role.Learning,new(0,0,[new(5,false,2)]),skills);
                     That(paid.Success,"觉醒券fixture保留真实付费技能来源");
                     var learning=paid.State! with {Trees=paid.State!.Trees.Select(tree=>tree with
@@ -287,8 +324,8 @@ internal static class QuestAwakeningTicketTests
                 row.Level>=skill.Level && row.Command==skill.Command)) && pair.First.SameCombos(pair.Second));
     static long Receipts(QuestOrdinaryCompletionTests.Fixture f)
     {using var db=f.Open();using var command=db.CreateCommand();command.CommandText="SELECT count(*) FROM character_quest_skip_receipts";return (long)command.ExecuteScalar()!;}
-    static Packet Use(uint action)
-    {byte[] body=new byte[19];BinaryPrimitives.WriteUInt16LittleEndian(body,65);BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7),action);return new(1,515,body);}
+    static Packet Use(uint action,ushort slot=65)
+    {byte[] body=new byte[19];BinaryPrimitives.WriteUInt16LittleEndian(body,slot);BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7),action);return new(1,515,body);}
     static Packet Giveup(ushort id)
     {byte[] body=new byte[4];BinaryPrimitives.WriteUInt16LittleEndian(body,32);BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(2),id);return new(1,32,body);}
     static GameConnectionContext Context(QuestOrdinaryCompletionTests.Fixture f,Stream output,GameConnectionSender sender,CancellationTokenSource stop) =>

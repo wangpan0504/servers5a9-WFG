@@ -169,6 +169,31 @@ internal static class QuestSpecifiedTicketTests
         try
         {
             using var log=new ServerLog(logRoot);
+            var slotDefinitions = new[] {674,649,675,650}.Select(quests.Get).ToArray();
+            using (var f=Fixture(TicketId,slotDefinitions,65,0,[],extraTemplate:10005390))
+            {
+                using var output=new ControlledOutput(); using var stop=new CancellationTokenSource();
+                await using var sender=new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_)=>{});
+                var context=Context(f,output,sender,stop); var commands=Registry(f,log);
+                That(await commands.DispatchAsync(context,Use())==CommandResult.Handled && output.Frames[0][16]==1,
+                    "连续指定券先完成辅助装备槽位");
+                var first=f.Read(); output.Frames.Clear();
+                That(f.Session.UseQuestTicket(67,0,f.Catalog,items.Items,130) is {Commit:null} &&
+                    f.Session.UseQuestTicket(65,0,f.Catalog,items.Items,130)?.Commit is {Duplicate:true} && Same(first,f.Read()),
+                    "无效后续源不丢弃已确认回执，同槽重放不扣剩余券");
+                That(await commands.DispatchAsync(context,Use(slot:66))==CommandResult.Handled &&
+                    output.Opcodes.SequenceEqual(new ushort[] {515,2,574,21,356}) && output.Frames[0][16]==1,
+                    "不重选角可立即使用另一槽位的魔法石完成券");
+                var second=f.Read(); output.Frames.Clear();
+                That(second.EquipmentSlotFlags==19 && second.Revision==first.Revision+1 &&
+                    second.CompletedQuests.SequenceEqual(new[] {649,650,674,675}) &&
+                    second.Inventory.Find(Bag())!.Core.Count==1 && second.Inventory.Find(Bag(66))!.Core.Count==1 &&
+                    Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts")==2,
+                    "连续指定券各扣一张，保留既有标志并分别原子保存完成记录");
+                That(await commands.DispatchAsync(context,Use(slot:66))==CommandResult.Handled &&
+                    !output.Opcodes.Contains((ushort)515) && Same(second,f.Read()),
+                    "第二张券已确认后的同槽重复请求不再消费");
+            }
             using (var f=Fixture(TicketId,targetDefinitions,60,15,[Active(0,674),Active(1,649)]))
             {
                 var before=f.Read(); using var output=new ControlledOutput(); using var stop=new CancellationTokenSource();
@@ -227,16 +252,20 @@ internal static class QuestSpecifiedTicketTests
         Console.WriteLine($"PASS {Count-checks} 指定130券资源、资格、槽位事务、Handler及恢复断言（非主线）");
 
         QuestOrdinaryCompletionTests.Fixture Fixture(int template,StoryQuest[] definitions,byte level,byte job,ActiveMainQuest[] active,
-            int[]? completed=null) =>
+            int[]? completed=null,int extraTemplate=0) =>
             new(towns,characters,skills,growth,parameters,items,definitions[0],materialCount:5,definitions:definitions,active:active,
                 configure:candidate=>
                 {
                     var created=CharacterCreation.Prepare(candidate.Name,characters.Get(job),towns.Room,towns.InitialReturn,skills.Get);
+                    var inventory=created.Inventory with { Gold=900000,Items=created.Inventory.Items.Add(new(0,Bag(),
+                        InventoryRewardGrantService.Create(items.Items.Get(template),2) with { ExpireTime=0 })) };
+                    if (extraTemplate!=0)
+                        inventory=inventory with { Items=inventory.Items.Add(new(0,Bag(66),
+                            InventoryRewardGrantService.Create(items.Items.Get(extraTemplate),2) with {ExpireTime=0})) };
                     return created with { Level=level,EquipmentSlotFlags=16,CompletedQuests=completed ?? [],
                         InitialLearning=SkillPointLedger.Synchronize(job,created.GrowType,level,
                             created.InitialLearning with { Experience=growth.GetLevelStartExperience(level) },skills),
-                        Inventory=created.Inventory with { Gold=900000,Items=created.Inventory.Items.Add(new(0,Bag(),
-                            InventoryRewardGrantService.Create(items.Items.Get(template),2) with { ExpireTime=0 })) } };
+                        Inventory=inventory };
                 });
         GameCommandRegistry Registry(QuestOrdinaryCompletionTests.Fixture f,ServerLog log)
         {
@@ -265,9 +294,9 @@ internal static class QuestSpecifiedTicketTests
         OtherItems=role.Inventory.Items.Where(row=>row.Core.ItemId!=ticket).ToArray(),role.Position,role.Return,role.DungeonState });
     static long Scalar(QuestOrdinaryCompletionTests.Fixture f,string sql)
     { using var db=f.Open(); using var c=db.CreateCommand(); c.CommandText=sql; return Convert.ToInt64(c.ExecuteScalar()); }
-    static Packet Use(uint action=130,uint reserved=0,uint first=0)
+    static Packet Use(uint action=130,uint reserved=0,uint first=0,ushort slot=65)
     {
-        byte[] body=new byte[19]; BinaryPrimitives.WriteUInt16LittleEndian(body,65);
+        byte[] body=new byte[19]; BinaryPrimitives.WriteUInt16LittleEndian(body,slot);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(3),reserved); BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7),action);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(11),first); return new(1,515,body);
     }

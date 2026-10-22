@@ -140,6 +140,11 @@ internal sealed partial class GameSession
         if (capture.Character is not { } expected) return null;
         var receipt = new QuestQuickClearReceipt(expected,null,owner.Generation,capture.SelectionEpoch,capture.Phase,capture.Identity,"没有可用任务券");
         var pending = capture.Pending;
+        // 已确认消费的回执只恢复同一源槽/动作；下一张合法券可替换它，规划失败仍保留原回执。
+        if (pending is { Committed: not null, TicketAcknowledged: true } &&
+            (pending.Plan.Ticket is not { } prior || prior.Item.Position.List != (InventoryListType)list ||
+                prior.Item.Position.Index != slot || prior.Definition.ActionIndex != action))
+            pending = null;
         if (pending is not null)
         {
             if (!pending.Plan.IsTicket || !SameManualPending(pending,expected,capture.SelectionEpoch,capture.Phase,capture.Identity) ||
