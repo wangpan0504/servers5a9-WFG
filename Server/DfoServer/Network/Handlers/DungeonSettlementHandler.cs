@@ -101,7 +101,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         else
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(result.GainedExperience),
             result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
-            result.Presentation.MonsterGrowthContractExperience), "formal_clear_reward", Guard);
+            result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
+            result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience), "formal_clear_reward", Guard);
         if (result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
                 RentalPackets.State(receipt.Character.Inventory, DateTimeOffset.UtcNow),

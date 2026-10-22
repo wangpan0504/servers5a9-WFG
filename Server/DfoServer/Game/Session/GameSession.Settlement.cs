@@ -168,7 +168,12 @@ internal sealed partial class GameSession
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
             new(dungeon.ClearTimeMilliseconds, rankPoint, rewards.GradeForPoint(rankPoint), dungeon.KillExperienceTotal)
-                { MonsterGrowthContractExperience = dungeon.KillGrowthContractExperience }, Selected!)
+            {
+                MonsterGrowthContractExperience = dungeon.KillGrowthContractExperience,
+                MonsterEquipmentExperience = dungeon.KillEquipmentExperience,
+                MonsterBossExperience = dungeon.KillBossExperience,
+                MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
+            }, Selected!)
             { CardPolicy = cards };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");

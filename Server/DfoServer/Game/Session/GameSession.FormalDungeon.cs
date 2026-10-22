@@ -31,6 +31,11 @@ internal sealed partial class GameSession
         public long StartedTimestamp { get; } = System.Diagnostics.Stopwatch.GetTimestamp();
         public uint KillExperienceTotal { get; set; }
         public uint KillGrowthContractExperience { get; set; }
+        public uint KillEquipmentExperience { get; set; }
+        // 结果页“领主”行只读评分quartet的147槽；按本实例实际到账的领主基础经验累计（不含加成）。
+        public uint KillBossExperience { get; set; }
+        // 结果页特殊怪物明细：每只实际到账的怪一条（对象键、基础经验），客户端按类型归并。
+        public List<DungeonObjectExperience> KillObjectExperience { get; } = [];
         public uint ClearTimeMilliseconds { get; set; }
         public bool SettlementEnabled { get; set; }
         public bool PracticeOtherSelectionRequested { get; set; }
@@ -702,7 +707,7 @@ internal sealed partial class GameSession
             var basis = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
             var bonuses = PlanExperience(Selected, ExperienceEvent.Kill, basis.Amount, 0, at.ToUnixTimeSeconds(), dungeon.Entry.DungeonId, dungeon.Entry.ExperienceEquipmentModule);
             dungeon.PendingDeathReward = (pending, basis with
-                { Amount = bonuses.Total, GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
+                { BaseAmount = basis.Amount, Amount = bonuses.Total, GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
                     PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), Bonuses = bonuses }, at);
         }
         var frozen = dungeon.PendingDeathReward.Value;
@@ -746,6 +751,13 @@ internal sealed partial class GameSession
             (reward.Bonuses?.Applied(committed.Commit.GainedExperience).Amount(ExperienceBonusSource.GrowthContract) ??
             GrowthContractPolicy.AppliedBonus(reward.Amount - reward.GrowthContractExperience,
                 reward.GrowthContractExperience, committed.Commit.GainedExperience)));
+        // 结果页杀怪侧装备加成行按每只怪实际到账的分项累计；未冻结分项的历史奖励没有该口径，保持 0。
+        dungeon.KillEquipmentExperience = checked(dungeon.KillEquipmentExperience +
+            (reward.Bonuses?.Applied(committed.Commit.GainedExperience).Amount(ExperienceBonusSource.Equipment) ?? 0));
+        dungeon.KillObjectExperience.Add(new(pending.Death.MonsterKey, reward.BaseAmount));
+        // 领主行独立于明细列表：客户端用评分段147槽显示，不取该对象在151/155里的条目。
+        if (pending.Monster.IsBoss)
+            dungeon.KillBossExperience = checked(dungeon.KillBossExperience + reward.BaseAmount);
         if (committed.Death.ClearFact is not null)
             dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
         return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward,

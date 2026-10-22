@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
@@ -15,6 +16,7 @@ internal static class DungeonSettlementProtocolTests
     {
         int before = Count;
         MembershipPackets();
+        ExperiencePartOffsets();
         byte[] boss = Convert.FromHexString("04001B0100000000000000000003000000B2080000000000003F03EF007400030106001E002000");
         That(DungeonSettlementRequests.TryParseBossCheck(boss, out var parsedBoss) && parsedBoss!.ActorId == 4 &&
             parsedBoss.BossKey == 283 && parsedBoss.SpawnLevel == 3 && parsedBoss.SpawnHp == 2226 && parsedBoss.RemainingFields.Count == 35,
@@ -118,6 +120,61 @@ internal static class DungeonSettlementProtocolTests
         Reject<InvalidDataException>(() => DungeonCardPriceCatalog.Parse([new(3,1),new(0,1)],_ => "[gold card cost table]"),
             "残缺价格表不能默认为零金币");
         Console.WriteLine($"PASS {Count - before} Boss及空奖励结算协议断言");
+    }
+
+    // NOTI35加成分项按实机哨兵探针映射（2026-10-22）逐槽锁定；显示值只能来自本次冻结分项，不能借用未到账来源。
+    static void ExperiencePartOffsets()
+    {
+        var reward = new DungeonClearExperienceReward(100, 7, 1000, 1, "fixture", "fixture")
+        {
+            BonusParts =
+            [
+                new(ExperienceBonusSource.Party, 808),
+                new(ExperienceBonusSource.Avatar, 1212),
+                new(ExperienceBonusSource.Potion, 102),
+                new(ExperienceBonusSource.QuestPotion, 3),
+                new(ExperienceBonusSource.BlackDiamond, 103),
+                new(ExperienceBonusSource.InternetCafe, 104),
+                new(ExperienceBonusSource.Creature, 106),
+                new(ExperienceBonusSource.GrowthContract, 109),
+                new(ExperienceBonusSource.FatigueBurning, 114),
+                new(ExperienceBonusSource.Guild, 112)
+            ]
+        };
+        byte[] body = DungeonSettlementPackets.EmptyCardReward(reward, 1200, 118, 120);
+        That(body.Length == 218 && U32(body, 8) == 808 && U32(body, 12) == 1212 && U32(body, 21) == 105 &&
+            U32(body, 25) == 103 && U32(body, 29) == 104 && U32(body, 37) == 106 && U32(body, 49) == 109 &&
+            U32(body, 53) == 114 && U32(body, 61) == 112 && U32(body, 85) == 118 && U32(body, 93) == 120 &&
+            U32(body, 194) == 1200,
+            "35加成分项按实机映射写入基础块+8/+12及对应槽位，杀怪侧成长契约与装备分来源累计");
+        var legacy = new DungeonClearExperienceReward(100, 7, 1000, 1, "fixture", "fixture")
+        { GrowthContractExperience = 109, PotionExperience = 102 };
+        byte[] old = DungeonSettlementPackets.EmptyCardReward(legacy, 1200);
+        That(U32(old, 21) == 102 && U32(old, 49) == 109 && U32(old, 8) == 0 && U32(old, 25) == 0 &&
+            U32(old, 53) == 0 && U32(old, 61) == 0,
+            "未冻结分项的历史结算只按旧口径展示成长契约与秘药，其余来源保持0");
+        // 杀怪经验明细是变长段：u32 条数在151，条目（对象键、基础经验）从155起，其后卡牌区与尾部整体平移8N。
+        DungeonObjectExperience[] entries = [new(3587, 211), new(3591, 907)];
+        byte[] detail = DungeonSettlementPackets.EmptyCardReward(reward, 1200, 118, 120, entries);
+        That(detail.Length == 234 && U32(detail, 147) == 0 && U32(detail, 151) == 2 && U32(detail, 155) == 3587 && U32(detail, 159) == 211 &&
+            U32(detail, 163) == 3591 && U32(detail, 167) == 907 && detail[171] == 0 && U32(detail, 194) == 0 &&
+            U32(detail, 210) == 1200 && detail.AsSpan(226, 8).IndexOfAnyExcept((byte)0) == -1,
+            "35杀怪明细按条数+对象键/基础经验写入，尾段杀怪合计与八bool尾随8N平移；未传领主值时147槽保持0");
+        That(U32(DungeonSettlementPackets.EmptyCardReward(reward, 1200), 151) == 0,
+            "35没有明细时条数为0，不能借旧的固定正文让客户端读出条目");
+        // 领主行只读评分quartet第4槽（147），与151/155的对象明细互不替代。
+        byte[] bossBody = DungeonSettlementPackets.EmptyCardReward(reward, 1200, 118, 120, null, 4400);
+        That(bossBody.Length == 218 && U32(bossBody, 147) == 4400 && U32(bossBody, 151) == 0 && U32(bossBody, 194) == 1200,
+            "35领主基础经验写入147槽；无对象明细时条数仍为0");
+        var detailCardReward = new DungeonCardReward(123,
+            new DfoServer.Game.Inventory.Models.ItemCore(10400, DfoServer.GameWorld.Items.ItemKind.Equipment, 345), "fixture", "fixture", 1);
+        byte[] detailCard = DungeonSettlementPackets.CardReward(reward, 1200, detailCardReward, objectExperience: entries,
+            monsterBossExperience: 4400);
+        That(detailCard.Length == 250 && U32(detailCard, 147) == 4400 && U32(detailCard, 155) == 3587 && U32(detailCard, 159) == 211 &&
+            detailCard[172] == 2 && U32(detailCard, 173) == 0 && U32(detailCard, 177) == 123 &&
+            detailCard[224] == 0 && U32(detailCard, 226) == 1200 &&
+            detailCard.AsSpan(242, 8).IndexOfAnyExcept((byte)0) == -1,
+            "35杀怪明细与免费席同时存在时两段动态长度都按各自8N平移");
     }
 
     internal static byte[] Report(ushort actorId, byte point)

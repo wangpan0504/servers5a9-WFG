@@ -50,10 +50,19 @@ internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, Form
 {
     public bool CapacityRejected { get; init; }
 }
+// 结果页杀怪经验明细的一条：客户端用对象键认回自己刷出的演员，再按怪物类型归并显示。
+// Experience 是该怪本次的基础经验，不含任何百分比加成。
+internal readonly record struct DungeonObjectExperience(uint ObjectKey, uint Experience);
+
 internal sealed record DungeonSettlementPresentation(uint ClearTimeMilliseconds, byte RankPoint, byte RankGrade,
     uint MonsterExperience)
 {
     public uint MonsterGrowthContractExperience { get; init; }
+    public uint MonsterEquipmentExperience { get; init; }
+    // 本实例实际到账的领主基础经验合计；客户端结果页“领主”行只读该口径，不取对象明细。
+    public uint MonsterBossExperience { get; init; }
+    // 按击杀顺序累计；为空时客户端只能显示特殊怪物行而显示不出各自经验。
+    public IReadOnlyList<DungeonObjectExperience> MonsterExperienceEntries { get; init; } = [];
 }
 internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     DfoServer.GameWorld.Dungeons.DungeonClearExperienceReward? Reward = null, DungeonSettlementPresentation? Presentation = null,

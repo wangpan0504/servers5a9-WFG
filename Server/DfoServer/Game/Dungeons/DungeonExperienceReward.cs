@@ -6,6 +6,8 @@ namespace DfoServer.Game.Dungeons;
 // 奖励候选携带明确规则与资源身份；合法死亡及当前owner仍由提交路径核验。
 internal sealed record DungeonExperienceReward(string RuleId, string ResourceSource, int MonsterId, int MonsterLevel, uint Amount)
 {
+    // 本只怪的基础经验；冻结后 Amount 是含加成的到账总额，展示明细仍要按基础口径。
+    public uint BaseAmount { get; init; }
     public uint GrowthContractExperience { get; init; }
     public uint PotionExperience { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]

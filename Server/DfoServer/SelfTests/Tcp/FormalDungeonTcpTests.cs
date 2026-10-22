@@ -1191,14 +1191,16 @@ internal static partial class FormalDungeonTcpTests
         if (bonus?.Gold > 0) bonusPairs.Add((0,checked((uint)bonus.Gold)));
         if (bonus?.Item is { } bonusItem) bonusPairs.Add((checked((uint)bonusItem.ItemId),checked((uint)bonusItem.Count)));
         int totalPairs = expected.Count+bonusPairs.Count;
-        That(body.Length == 218 + totalPairs * 8 && body[156] == expected.Count && body[193 + totalPairs * 8] == 0 &&
+        // 杀怪对象明细是变长段：条数在151，条目从155起各8B，其后所有固定字段与卡牌区整体平移8N。
+        int shift = checked((int)U32(body,151)*8);
+        That(body.Length == 218 + shift + totalPairs * 8 && body[156+shift] == expected.Count && body[193 + shift + totalPairs * 8] == 0 &&
             body[^26] == (options.DoublePaidItems ? 1 : 0) && body[^27] == 0 && body[^8] == 0 &&
-            body.AsSpan(body.Length-7).IndexOfAnyExcept((byte)0) == -1 && U32(body,164+expected.Count*8) == options.Price,
+            body.AsSpan(body.Length-7).IndexOfAnyExcept((byte)0) == -1 && U32(body,164+shift+expected.Count*8) == options.Price,
             "35个人冻结候选、x2及回归标记按持久计划独立核对，不混为黑钻标志");
         for (int index = 0; index < expected.Count; index++)
-            That(U32(body,157+index*8) == expected[index].Item && U32(body,161+index*8) == expected[index].Amount,
+            That(U32(body,157+shift+index*8) == expected[index].Item && U32(body,161+shift+index*8) == expected[index].Amount,
                 "免费牌每项模板ID和本次数量对应实际金币或冻结物品");
-        int bonusAt = 176+expected.Count*8;
+        int bonusAt = 176+shift+expected.Count*8;
         That(body[bonusAt] == bonusPairs.Count,"35黑钻单独预载额外奖励组，非会员为空");
         for (int index = 0; index < bonusPairs.Count; index++)
             That(U32(body,bonusAt+1+index*8) == bonusPairs[index].Item && U32(body,bonusAt+5+index*8) == bonusPairs[index].Amount,

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Network.Builders;
@@ -79,20 +80,61 @@ internal static class DungeonSettlementPackets
         return [.. body];
     }
 
+    // 结果页加成分项按实机哨兵探针（2026-10-22）逐行投影：基础块+8为通关组队、+12为扮装；
+    // 22个加成槽中1秘药、2黑钻、3网吧、5宠物、8通关成长契约、9通关疲劳燃烧、11通关公会、
+    // 15杀怪疲劳燃烧、16疲劳Buff、17杀怪成长契约、19装备、20杀怪公会；槽7与14由客户端合并成
+    // “归来的勇士”，槽0/4/6/10/12/13/18/21当前无对应到账来源。显示值只取本次已到账的同一份分项。
     public static byte[] EmptyCardReward(DungeonClearExperienceReward reward, uint monsterExperience,
-        uint monsterGrowthContractExperience = 0)
+        uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
+        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0)
     {
-        // 所有动态名单和翻牌奖励为空。固定经验字段来自已经提交的同一次结算。
+        // 所有翻牌奖励为空。固定经验字段和杀怪明细来自已经提交的同一次结算。
         // 本版固定尾部含八个独立bool，不能套用其他版本的210B正文。
-        byte[] body = new byte[218];
+        // 对象明细是变长列表（4B 条数 + 每条 8B），插在固定头和卡牌区之间；其后所有偏移整体平移 8N。
+        var entries = objectExperience ?? [];
+        int shift = checked(entries.Count * 8);
+        byte[] body = new byte[218 + shift];
         // 冒险团加成没有独立字段，按基础通关经验合并；拆分顺序保证两项之和不超过已到账经验。
         BinaryPrimitives.WriteUInt32LittleEndian(body, checked(reward.BaseExperience + reward.AdventureExperience));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), reward.RankExperience);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8), Part(reward, ExperienceBonusSource.Party));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(12), Part(reward, ExperienceBonusSource.Avatar));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(21),
+            checked(Part(reward, ExperienceBonusSource.Potion) + Part(reward, ExperienceBonusSource.QuestPotion)));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(25), Part(reward, ExperienceBonusSource.BlackDiamond));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(29), Part(reward, ExperienceBonusSource.InternetCafe));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(37), Part(reward, ExperienceBonusSource.Creature));
         // 02393C80分别投影到结果页两组“成长之契约”栏；不是组队或评分经验。
-        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(49), reward.GrowthContractExperience);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(49), Part(reward, ExperienceBonusSource.GrowthContract));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(53), Part(reward, ExperienceBonusSource.FatigueBurning));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(61), Part(reward, ExperienceBonusSource.Guild));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(85), monsterGrowthContractExperience);
-        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(194), monsterExperience);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(93), monsterEquipmentExperience);
+        // 杀怪经验明细：u32 条数 + 每条（对象键、基础经验），客户端按对象键归并到怪物类型后显示各自经验。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(151), checked((uint)entries.Count));
+        for (int index = 0; index < entries.Count; index++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(155 + index * 8), entries[index].ObjectKey);
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(159 + index * 8), entries[index].Experience);
+        }
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(194 + shift), monsterExperience);
+        // 评分quartet第4槽（147）在实机探针中投影到“领主”行；精英/超级精英行走151/155的对象明细。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(147), monsterBossExperience);
         return body;
+    }
+
+    // 未冻结分项的历史回执只有成长契约与秘药两项，按旧口径展示；其余来源保持0，不借旧回执伪造其他加成。
+    static uint Part(DungeonClearExperienceReward reward, ExperienceBonusSource source)
+    {
+        if (reward.BonusParts.IsDefault)
+            return source switch
+            {
+                ExperienceBonusSource.GrowthContract => reward.GrowthContractExperience,
+                ExperienceBonusSource.Potion => reward.PotionExperience,
+                _ => 0
+            };
+        return checked((uint)reward.BonusParts.Aggregate(0UL,
+            (total, part) => part.Source == source ? total + part.Amount : total));
     }
 
     public static byte[] CardRights(short fatigue = 1)
@@ -107,18 +149,22 @@ internal static class DungeonSettlementPackets
 
     public static byte[] CardReward(DungeonClearExperienceReward reward, uint monsterExperience, DungeonCardReward? card,
         DungeonCardOptions? options = null,DungeonCardReward? blackDiamond = null,
-        uint monsterGrowthContractExperience = 0)
+        uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
+        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0)
     {
-        var empty = EmptyCardReward(reward, monsterExperience, monsterGrowthContractExperience);
+        var empty = EmptyCardReward(reward, monsterExperience, monsterGrowthContractExperience, monsterEquipmentExperience,
+            objectExperience, monsterBossExperience);
         if (card is null) return empty;
         card.Validate();
         var free = Display(card);
         var bonusItems = blackDiamond is null ? [] : Display(blackDiamond);
         int count = free.Count;
         int bonusCount = bonusItems.Count;
+        // 对象明细在前，卡牌区和尾部跟着同样的 8N 平移。
+        int shift = checked((objectExperience?.Count ?? 0) * 8);
         byte[] body = new byte[empty.Length + (count+bonusCount) * 8];
-        empty.AsSpan(0,156).CopyTo(body);
-        int at = 156;
+        empty.AsSpan(0,156+shift).CopyTo(body);
+        int at = 156+shift;
         body[at++] = checked((byte)count);
         foreach (var item in free) Pair(item.Id, item.Count);
         at += 7; // 本人之外的七个免费席。
@@ -127,7 +173,7 @@ internal static class DungeonSettlementPackets
         body[at++] = checked((byte)bonusCount);
         foreach (var item in bonusItems) Pair(item.Id, item.Count);
         at += 7;
-        empty.AsSpan(184).CopyTo(body.AsSpan(at));
+        empty.AsSpan(184+shift).CopyTo(body.AsSpan(at));
         // 尾段先读全局u32和弃用u32，再读双倍位；它不是结果页显示开关。
         body[at + 8] = options?.DoublePaidItems == true ? (byte)1 : (byte)0;
         // 回归消费者仅有静态分析，八个成员标志保持零，不借旧本地回执赋予资格。

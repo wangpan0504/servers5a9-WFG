@@ -14,9 +14,11 @@ internal static class ExclusiveDropPackets
 
     public static byte[] ClearCard(DungeonClearExperienceReward reward, uint monsterExperience, DungeonCardReward? card,
         int? enteredDungeonId, DungeonCardOptions? options = null, DungeonCardReward? blackDiamond = null,
-        uint monsterGrowthContractExperience = 0)
+        uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
+        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0)
     {
         ExclusiveTableNotice.RejectUnproven(ExclusiveNotice.ClearCard, enteredDungeonId);
-        return DungeonSettlementPackets.CardReward(reward, monsterExperience, card, options, blackDiamond, monsterGrowthContractExperience);
+        return DungeonSettlementPackets.CardReward(reward, monsterExperience, card, options, blackDiamond, monsterGrowthContractExperience,
+            monsterEquipmentExperience, objectExperience, monsterBossExperience);
     }
 }
