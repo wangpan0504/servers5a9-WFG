@@ -146,6 +146,13 @@ internal static class QuestDungeonClearProgressTests
         Console.WriteLine($"PASS {Count-checks} 条件通关计数、原子回滚、重放、重接及领奖断言（合成战斗）");
         RunAlternatives(towns,pvf,characters,items);
         RunResourceAccept(towns,pvf,characters,items);
+        Issue262OtherverseQuestTests.Run(towns,characters,items,
+            global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf),
+            global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf),growth,
+            global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf),
+            global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf),
+            global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf),
+            global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
     }
 
     static void RunResourceAccept(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)

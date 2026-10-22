@@ -60,18 +60,22 @@ internal static class QuestDungeonClearProgress
     public static bool Matches(StoryQuest quest, DungeonEntryPlan entry, SinglePlayerDungeonRun? run = null)
     {
         if (HasDungeonAlternatives(quest))
-        {
-            // 原生45的成对列表是OR；每一对都保留自己的最低难度，不用首项代替整表。
-            for (int at = 0; at < quest.IntData.Count; at += 2)
-                if (quest.IntData[at] == entry.DungeonId &&
-                    (quest.IntData[at+1] == -1 || entry.Difficulty >= quest.IntData[at+1])) return true;
-            return false;
-        }
+            return MatchesAlternative(quest,entry.DungeonId,entry.Difficulty);
         if (!TryTarget(quest,out var target) || !MatchesDungeon(target,entry)) return false;
         if (target.MinimumInitializations is not { } minimum) return true;
         if (run is not { InitializationCounterSupported: true }) return false;
         uint? threshold = minimum == -1 ? run.MazeInitializationThreshold : checked((uint)minimum);
         return threshold is { } count && run.ConfirmedInitializationCount >= count;
+    }
+
+    // 入场和真实清图共用原生45的OR匹配，每一对保留自己的最低难度。
+    public static bool MatchesAlternative(StoryQuest quest, uint dungeonId, byte difficulty)
+    {
+        if (!HasDungeonAlternatives(quest)) return false;
+        for (int at = 0; at < quest.IntData.Count; at += 2)
+            if (quest.IntData[at] == dungeonId &&
+                (quest.IntData[at+1] == -1 || difficulty >= quest.IntData[at+1])) return true;
+        return false;
     }
 
     static bool MatchesDungeon(QuestDungeonClearTarget target, DungeonEntryPlan entry) =>

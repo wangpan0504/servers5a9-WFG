@@ -31,6 +31,7 @@ internal sealed record DungeonEntryPlan(
     public bool DisableGiveupPenalty { get; init; }
     public bool DisableFatigueConsumption { get; init; }
     public Guid QuestAcceptanceId { get; init; }
+    // 带原接取身份的普通路线，含猎杀、收集及列表通关；同样核对普通入场费用。
     public bool IsOrdinaryHunt { get; init; }
     public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
@@ -248,9 +249,9 @@ internal sealed record DungeonEntryPlan(
             quest.Definition is { Diagnostics.Length: 0 } declared && declared.Dungeons.Any(row => row.DungeonId == dungeonId) &&
             definition.Mazes.All(maze => maze.QuestConnectionTokens.Count == 0))
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
-        // 普通猎杀只借用明确归属的普通迷宫；已有本任务连接或未知连接不能降级为普通路线。
+        // 普通任务只借用明确归属的普通迷宫；已有本任务连接或未知连接不能降级为普通路线。
         if (!isReplay && candidates.Length == 0 && questId != 0 && quest is not null &&
-            CanUseOrdinaryHuntRoute(definition,character,quest,dungeonId,questId,difficulty))
+            CanUseOrdinaryQuestRoute(definition,character,quest,dungeonId,questId,difficulty))
         {
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
             if (candidates.Length > 0)
@@ -460,14 +461,16 @@ internal sealed record DungeonEntryPlan(
         return plan with { EntryItem = ticket, StartFatigue = start, EntryCostNote = notes.Count == 0 ? null : string.Join(',', notes) };
     }
 
-    static bool CanUseOrdinaryHuntRoute(DungeonDefinition definition, Character character, StoryQuest quest,
+    static bool CanUseOrdinaryQuestRoute(DungeonDefinition definition, Character character, StoryQuest quest,
         uint dungeonId, uint questId, byte difficulty)
     {
+        bool listClear = quest.Grade == "[side]" && QuestDungeonClearProgress.MatchesAlternative(quest,dungeonId,difficulty);
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
-            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
-            // 支线杀怪声明参数-1或0..3最低难度；觉醒杀怪/收集阶段同样不得低于声明难度。
+            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
+            // 支线杀怪保留0..3，列表通关沿正式0..4难度域；-1不限，仍须命中dungeon info。
             quest.Grade == "[side]" && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
-                (row.Parameter == -1 || quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
+                (row.Parameter == -1 || (quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 ||
+                    listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
                 !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
             quest.Grade is not ("[side]" or "[achievement]") ||
@@ -481,9 +484,9 @@ internal sealed record DungeonEntryPlan(
         }
         // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。
         // #256黑市EXP的6053/6056/6059（seeking sub type 0）同样只借用普通路线，材料来自任务声明的本图怪物掉落。
-        else if (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
+        else if (!listClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
                 QuestLifecyclePlan.HarlemSeeking(quest)) ||
-            !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty))) return false;
+            !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)))) return false;
         var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
         return active.AcceptanceId != Guid.Empty &&
             character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) == 1;
