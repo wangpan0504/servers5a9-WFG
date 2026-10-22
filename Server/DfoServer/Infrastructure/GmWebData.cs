@@ -64,6 +64,29 @@ internal sealed class GmWebData(ServerOptions options, DateTimeOffset startedAt,
     public byte[]? ItemIcon(int id) => items.Icon(id);
     public object? ItemPreview(int id) => items.Preview(id);
 
+    // 外观来源经开发 GM 只读命令 appearance 取得（在线走原 owner，离线取租约），合成在本进程内完成，不改库。
+    public GmAvatarResult AvatarPortrait(string account, string name, IReadOnlyList<int> tryOn)
+    {
+        string reply = command($"account {account} appearance {name}");
+        if (!reply.StartsWith("OK ", StringComparison.Ordinal)) return new(null, reply);
+        Network.Management.Avatar.AvatarLookInput input;
+        try
+        {
+            using var document = JsonDocument.Parse(reply[3..]);
+            var root = document.RootElement;
+            input = new(root.GetProperty("name").GetString() ?? name, root.GetProperty("job").GetByte(), root.GetProperty("growType").GetByte(),
+                root.GetProperty("equipment").EnumerateArray().Select(row => new Network.Management.Avatar.AvatarWorn(
+                    row.GetProperty("slot").GetInt32(), row.GetProperty("id").GetInt32(), row.GetProperty("clear").GetInt32())).ToArray(),
+                root.GetProperty("weaponSkin").GetInt32());
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+        {
+            return new(null, "ERR 外观数据格式无效");
+        }
+        var portrait = items.Portrait(input, tryOn);
+        return portrait is null ? new(null, "ERR 找不到客户端 ImagePacks2（可用 DFO_IMAGEPACKS2 指定）") : new(portrait, null);
+    }
+
     public void NotifyMailArrived(string account, string name)
     {
         if (mailbox.FindRecipient(name) is { } recipient && recipient.Account == account)

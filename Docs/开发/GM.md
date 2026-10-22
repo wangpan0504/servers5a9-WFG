@@ -59,6 +59,7 @@
 | `gold <角色> <金额>` | 是 | 设置该角色金币余额，0–2147483647，0清零；开发设置不受等级携带上限限制，正常玩法仍按自身上限执行 |
 | `item <角色> <道具ID> <数量> [强化]` | 是 | 发到该角色系统邮箱；装备及其他非堆叠物品按件创建，单封最多10件；堆叠数量不超过模板上限。可选强化0–31仅用于普通装备，其他种类拒绝 |
 | `item-info <道具ID>` | 否 | 当前PVF模板的名称、种类、等级、稀有度、堆叠上限及能否强化；未知或无法解析的ID返回错误 |
+| `equip-slots <角色> [位掩码]` | 带位掩码时是 | 扩展装备栏 `characters.equipment_slot_flags`。不带位掩码只读返回当前标志及各栏状态；位掩码只能由 1（槽22辅助装备）、2（槽23魔法石）、16（槽25耳环）按位或组成，如 19 全开，只追加不清除，已开启的位不提交也不递增revision。8（光环外观）与 32（宠物幻化）不开放，仍由对应道具开栏。写入须在选角界面，复用背包提交复核revision与原标志；客户端重新选择角色后由 Player 包 offset125 刷新，见[角色与入城](../协议/角色与入城.md) |
 | `items <角色>` | 否 | 只读JSON：金币、复活币、胜点、栏位扩展及全部容器实例（容器、位置、UID、道具、名称、数量、强化、封装、期限） |
 | `chat-inject <连接号> <L1\|L2\|L3\|P3E\|AAS\|AAS8\|AASU> <文本>` | 否 | 诊断工具：向指定在线连接注入一帧测试通知，不需要玩家在客户端打字；只发这一条连接，不进入正式投递、不改喇叭扣减。`L1`/`L2`/`L3` 是 `NOTI 0x000C`，正文 `[u8 type][u16 层 id][u8 v=0][u32 CP936 字节数][CP936 文本]`（长度 `1..255`，超限按字符边界截断并在回复标注 `(truncated)`），与正式投递共用同一段编码，约定分别传 ASCII / 中文 / 超长文本，用于核对聊天行文本显示与截断；`P3E` 换成 `NOTI 0x03E2` 制裁弹窗（正文 `[u32 A=1][u32 B=1][字符数][UTF-16LE 文本][CP936 字节数][CP936 文本]`，A/B 必须非 0 才走制裁分支），`AAS`/`AAS8`/`AASU` 换成 `NOTI 0x06AD` 弹框（布局相同：标题固定「系统公告」、正文取命令文本，上限为编码后标题 24 字节、正文 600 字节，超长按字符边界截断并在回复标注 `(truncated)`；三者只换这两段文本的编码——`AAS` 用 CP936、`AAS8` 用 UTF-8、`AASU` 用 UTF-16LE，长度字段都是字节数，`AASU` 不带 BOM、不加结尾 `\0`），用于验证这两个通知能否让客户端显示任意文本及客户端期望的文本编码（实测结论：`NOTI 0x06AD` + `AAS8` 的 UTF-8 文本可正常显示，已成为正式公告通道，见 `notice`；`AAS`/`AASU` 只保留为编码对照，`P3E` 仍只是探针）。层 id 只对 `L1`/`L2`/`L3` 有意义，取该连接最近一次聊天上报值，没有则用0并在回复里标注`(fallback)`；当前移动包没有层 id 字段，不能作为来源 |
 | `inject-raw <连接号> <opcode> <body-hex\|->` | 否 | 诊断工具：把命令行给出的字节原样发送成一帧 `NOTI`（`Kind=0`），服务端不构造、不解析、不校验、不重试，用于客户端解析失败时逐个变体试长度字段、编码与结尾字节。`opcode` 支持十进制或 `0x` 十六进制（不超过 `0xFFFF`）；`body-hex` 允许内含空格、必须偶数长度且只含 `0-9a-f`、上限 4096 字节，`-` 表示空 body。只发这一条连接，不进入正式投递、不写库；连接不存在或未进入世界返回 `ERR`。示例：`inject-raw 3 12 0304000006000000544553542D41`（`NOTI 0x000C`，正文 `TEST-A`）、`inject-raw 3 0x0C 03040000 06000000 544553542D41`（同一帧分段书写）、`inject-raw 3 0x0C -`（空 body）。回复给出实际 `opcode`、字节数与规范化 `hex`，日志 `inject_raw` 记录 `Connection`/`Opcode`/`Body` |
@@ -119,6 +120,7 @@ dotnet run --project Server/DfoServer -- --gm skill 测试角色 179 7
 dotnet run --project Server/DfoServer -- --gm gold 测试角色 1000000
 dotnet run --project Server/DfoServer -- --gm item 测试角色 18400 2
 dotnet run --project Server/DfoServer -- --gm account other-1 list
+dotnet run --project Server/DfoServer -- --gm appearance 测试角色
 ```
 
 剑影这类实验角色仍用[离线准备](离线实验角色.md)。本工具只改已经存在的角色，不创建 Lv95 任务集，也不代替那次准备的备份和审计。
@@ -218,6 +220,11 @@ python3 Tools/GmWeb/gm_web.py --self-check
 - 网页新增 `POST /api/exp`（按累计经验设等级）、`POST /api/disconnect`（断开账号连接）、`GET /api/audit` 的筛选与 CSV 导出。
 - 称号成就对在线角色可直接完成（同步内存快照，客户端画面重新选角后刷新）。
 
+## 扩展装备栏（GM 网页接口）
+
+- `GET /api/characters/{account}/{name}/equip-slots`：只读，返回 `{ok, data:{name, rev, flags, added:0, changed:false, slots:{support, magicStone, earring, aura, creatureSkin}}}`。
+- `POST /api/equip-slots`，请求头 `X-GM-Request: 1`，JSON `{account, name, flags, returnFirst?, confirm:true}`。`flags` 只能是 1、2、3、16、17、18、19 之一（1/2/16 的组合），其他值返回 400。角色在游戏中时默认返回 400「角色正在游戏中」；`returnFirst=true` 先强制小退再执行，响应带 `returned:true`。成功 `data` 同上，`added` 为本次新开的位，`changed=false` 表示所选位早已开启。小退与开栏各写一条审计（动作 `force-return`、`equip-slots`）。
+
 ## GM 网页：索引预热、分页与 UX（摘要）
 - 启动即后台预热物品/任务/词条索引并缓存到存档目录（`gm-index-*.json`，按 PVF 大小+修改时间校验），前端只在真正构建时提示。
 - 物品、审计、账号、任务均为服务端分页（`page`/`pageSize`，审计用 `X-Total-Count`）。
@@ -225,3 +232,47 @@ python3 Tools/GmWeb/gm_web.py --self-check
 - 任务页：状态筛选、按 PVF `[grade]` 分类（无法归类为“其他”）、勾选批量完成、“全部完成”二次确认并审计。
 - 顶部全局角色选择器与整页角色工作台；只有危险操作二次确认。详见 `GM迁移对照.md`。
 
+## 纸娃娃（只读，GM 网页接口）
+
+按角色**当前已保存**的外观合成站立帧 PNG，供 WPF 等前端显示。只读：不改库、不写审计；试穿只在内存里替换部位。需要客户端 `ImagePacks2`（`DFO_IMAGEPACKS2` 或自动搜索，同物品图标）。
+
+| 方法与路径 | 参数 | 返回 |
+| --- | --- | --- |
+| `GET /api/characters/{account}/{name}/portrait` | `tryOn`（可选）：逗号分隔的物品编号，最多 16 个 | `image/png`；响应头 `X-Avatar-Layers: 画出层数/总层数`；没有任何可画图层时 `204`；角色不存在、ImagePacks2 不可用时 `400 {ok:false,error}` |
+| `GET /api/characters/{account}/{name}/portrait/layers` | 同上 | `{ok:true,data:{width,height,frame,jobTag,drawn,layers:[{slot,itemId,source,layer,z,img,palette,frame,drawn,note}],notes:[…]}}` |
+
+`source` 取值：`worn` 实穿、`clone` 克隆装扮（画 ClearAvatarId 外观）、`try-on` 试穿、`default` 职业默认外观、`weapon-skin` 武器幻化、`body` 无皮肤装扮时的 body0000。可试穿装扮列表直接用已有 `GET /api/items/search?tag=coat%20avatar&job=<职业>`（tag 依次为 hat/hair/face/coat/pants/shoes/breast/waist/skin/aurora/weapon avatar），未另加接口；`usable job` 允许但没有该职业图层的装扮会在 `notes` 里说明。
+
+外观来源是开发 GM 只读命令 `appearance <角色>`：`{name,job,growType,rev,weaponSkin,equipment:[{slot,id,clear}]}`（0–12 号装备位；在线走原 owner，离线取租约）。
+
+合成规则（全部来自 PVF 与 ImagePacks2）：
+
+- 职业：`character/character.lst` → `.chr`。`[job]` 匹配装扮的 `[animation job]`；`[body image path]` 给出皮肤目录与文件前缀（如 `sm_`、AT 鬼剑 `sg_`）；`[waiting motion]` 第一项 `.ani` 第一帧 `[IMAGE]` 的帧号是合成帧（鬼剑士 90）。
+- 装扮：`[variation] a b` → 编号 `a×100+b`，至少 4 位（`110 0` → `11000`，`0 1000` → `1000`）；该文件不存在且 b>0 时取 `a×100` 号文件的第 b 个调色板（v6）。依据：本机 swordman 1934 个武器脚本中能按单层格式解析的 1289 个：538 个直接命中 a×100+b，698 个属于“a×100+b 文件不存在、a×100 文件是调色板数大于 b 的 v6”，52 个找不到对应武器 NPK，仅 1 个两者都不成立（katana `58 9`，a×100 文件是 v4）；`[layer variation] z` 加层名 `coat_c` → `<皮肤目录同级>/coat/<前缀>coat<编号>c.img`。武器层 `[职业前缀_]核心+后缀`：`sswdc` → `Weapon/sswd/sswd0000c.img`，`at_sswda` → `Weapon/sswd/sg_sswd0000a.img`；没有职业前缀时先试不带前缀，再试皮肤前缀（魔法师 `rodc` → `mg_rod0000c.img`、圣职者 `crossc` → `pr_cross0000c.img`，资源里只有带前缀的文件）。对 swordman 抽查：variation≥100 的层 7824 个命中、247 个在全部 swordman NPK 里都不存在（资源本身缺失），未见另一种命名。
+- 默认外观：`character/characteretc/<chr名>.etc` 的 `defaultEquipment`（`[equipment index]` 按位置、`[key value index]` 为首值加下标/值对两种写法），按物品自身 `[equipment type]` 归位，部位为空才使用。
+- 克隆装扮画 `ClearAvatarId`；武器优先级：武器幻化（武器幻化存储的当前选择，且编号是武器）> 武器装扮(10) > 武器(12) > 默认武器。
+- 层按 z 升序叠放，裁到非透明范围外加 4 像素。缺失的 IMG/帧、无法解析的层名跳过，写入 `layers[].note` 并记 `server.jsonl` 的 `gm-avatar`。
+- IMG：v2 直接色；v4 单调色板、v6 多调色板（默认第 0 个），压缩后长度等于 w×h 的 0x0E 帧是 1 字节下标，调色板为 RGBA 字节序（按本机 `sm_body0000/0004`、`sm_coat*`、`sswd*` 样本核对）。未压缩帧（compress≠6）实际占 w×h×2（0x10 为 ×4）字节，头里声明的 size 不可信（`gn_coat0000c.img` 的 165 个 1×1 帧声明 4 字节，按 2 字节累计才与文件长度一致）。解码由本仓库自写的 `ImagePack/ImgFrameReader.cs` 完成，物品图标入口的 v4/v6 也转交给它（v2 图标仍走原移植代码）。
+
+已知缺口（未从资源证明，不猜）：
+
+- 皮肤层没有 `[layer variation]`，z 序暂定 1000（低于它的层如武器背面 650、发型后层 400 画在身体后面）；同 z 时先画皮肤。
+- 帽子遮发、上衣遮裤等隐藏规则未处理，所有层都画。
+- 魔枪士（demoniclancer）、圣职者（女，atpriest）、枪剑士（gunblader）在 PVF 中没有 `characteretc/*.etc`，空部位不画默认外观；觉醒默认外观表 `character/chn_1stawaken_defaultavatarinfo.chr` 未接入。
+- 武器幻化只核对“编号是武器”，未复核到期与可穿戴（与 `InventorySkinStorageService.EffectiveSelection` 不同）。
+- IMG v5（DDS 纹理表）未实现；`(tn)` 前缀资源、层名如 `hair_f1` 的变体未确认命名，缺失时按上面规则跳过。
+- 光环/光环皮肤（9、11 号位）按同一规则尝试，其特效层多数不在装扮目录，常见为缺失跳过。
+
+## 物品检索扩展选项与预览补充（feat/gm-item-filter）
+
+用于让 GM 客户端按迁移前 90 轻装 GM 的规则筛选（多分类并集、武器子类、隐藏占位模板、按 ID 排序）。全部可省略，省略时结果与旧版一致。
+
+- 命令：`item-search` / `item-filter` 的关键字区可追加（与 `job:` / `grow:` 同一写法，空格写作 `_`）：
+  - `tags:<分类>[@e|@s],…`：多分类并集，`@e` 只要装备、`@s` 只要道具，也可写 `g:<分组>`；不能与位置参数的单个分类或 `sets` 同时使用。
+  - `kind:e|s`、`sub:<武器子类>,…`（PVF 路径 `weapon/` 后的目录名，如 `katana`）、`real:1`（隐藏无名或 `name_数字` 占位模板）、`sort:id|-id|level|-level|rarity|-rarity|name`。
+- 网页：`GET /api/items/search` 与 `/api/items/filter` 增加同名参数 `tags`、`kind`、`sub`、`real`、`sort`；结果每行多 `sub`，并回显 `options`（旧服务端没有此字段，客户端据此判断是否支持）。
+- `item-categories` 每个分类多 `real`（去掉占位模板后的数量），并新增 `weaponSubs`（武器子类与数量）与 `searchOptions`。
+- 修正：关键字只在为正整数时按 ID 匹配。以前非数字关键字 `TryParse` 失败留下 0，会把 ID 0（金币）混进任何中文关键字的结果。
+- `GET /api/items/{id}/preview` 增加 `grade`、`durability`、`weight`、`stackLimit`、`price`、`value`、`attachType`（归一后的交易类型）、`trade`（中文交易限制说明，按服务端交易与仓库判定归纳）、`weaponSub`、`booster`（礼包内容：与开箱同一解析，最多 30 项，含数量区间；自选礼包只标注 `selection`）。
+- `POST /api/story {account,name,level,confirm}`：设置剧情等级（0–95），调用已有 `story` 命令并写审计。
+- 物品索引缓存版本升到 3（新增武器子类字段），首次启动会重建一次 `gm-index-items.json`。

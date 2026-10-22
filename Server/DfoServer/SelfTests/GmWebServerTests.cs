@@ -36,6 +36,8 @@ internal static class GmWebServerTests
             if (line.Contains(" show ")) return "OK Hero id=7 level=" + (Commands.Count(c => c.Contains(" level ")) == 0 ? 50 : 60);
             if (line.Contains(" gold ") && line.Contains("999")) return "ERR 金币失败";
             if (InGame && (line.Contains(" item-delete ") || line.Contains(" item-clear ") || line.Contains(" mail-delete ") || line.EndsWith(" direct"))) return "ERR 角色正在游戏中，客户端背包或邮箱不会即时刷新；请先回到选角再执行";
+            if (InGame && line.Contains(" equip-slots ") && line.Split(' ').Length == 5) return "ERR 角色正在游戏中，客户端背包或邮箱不会即时刷新；请先回到选角再执行";
+            if (line.Contains(" equip-slots ")) return "OK {\"name\":\"Hero\",\"flags\":19,\"added\":19,\"changed\":true}";
             if (line.Contains(" points ")) return "OK {\"bonusSp\":5,\"bonusTp\":6,\"sp\":7,\"tp\":8}";
             return "OK {\"target\":\"mail\",\"ok\":1}";
         }
@@ -46,6 +48,15 @@ internal static class GmWebServerTests
         public void WriteQuickItems(string json) => Quick = json;
         public byte[]? ItemIcon(int id) => id == 7 ? [137, 80, 78, 71] : null;
         public object? ItemPreview(int id) => id == 7 ? new { id, name = "测试", stats = new[] { "力量 +3" } } : null;
+        public List<string> Portraits { get; } = [];
+        public GmAvatarResult AvatarPortrait(string account, string name, IReadOnlyList<int> tryOn)
+        {
+            Portraits.Add(account + "/" + name + "/" + string.Join(",", tryOn));
+            if (name != "Hero") return new(null, "ERR 角色不存在");
+            var layers = new[] { new DfoServer.Network.Management.Avatar.AvatarLayer(8, 1, "default", "body", 1000, "a/sm_body0000.img", 90, true, ""),
+                new DfoServer.Network.Management.Avatar.AvatarLayer(0, 2, "worn", "cap_a", 2500, "a/sm_cap0100a.img", 90, false, "ImagePacks2 中没有该 IMG 或该帧") };
+            return new(new(tryOn.Contains(404) ? null : [137, 80, 78, 71], 3, 4, 90, "[swordman]", layers, ["说明"]), null);
+        }
         public string DeliverGoldMail(string account, string name, uint gold, string text) { Gold.Add($"{account}/{name}/{gold}/{text}"); return "OK {\"gold\":" + gold + "}"; }
     }
 
@@ -213,6 +224,20 @@ internal static class GmWebServerTests
         data.InGame = true;
         TestCheck.That((await Post("/api/direct/set", new { account = "acct", name = "Hero", setIndex = 2, upgrade = 0, refine = 0, confirm = true })).StatusCode == HttpStatusCode.BadRequest, "直接发套装同样要求先小退");
 
+        // 扩展装备栏：只读走命令；写入只接受1/2/16组合，在线角色须 returnFirst 先小退，两步都审计。
+        TestCheck.That((await http.GetAsync("/api/characters/acct/Hero/equip-slots")).IsSuccessStatusCode && data.Commands.Contains("account acct equip-slots Hero"), "扩展装备栏只读接口");
+        data.InGame = true; data.Returned.Clear();
+        foreach (int flags in new[] { 0, 8, 32, 4, 27, 256, -1 })
+            TestCheck.That((await Post("/api/equip-slots", new { account = "acct", name = "Hero", flags, confirm = true })).StatusCode == HttpStatusCode.BadRequest, "扩展装备栏拒绝非1/2/16组合: " + flags);
+        TestCheck.That((await Post("/api/equip-slots", new { account = "acct", name = "Hero", flags = 19 })).StatusCode == HttpStatusCode.BadRequest, "扩展装备栏写入需要二次确认");
+        var slotRefused = await Post("/api/equip-slots", new { account = "acct", name = "Hero", flags = 19, confirm = true });
+        TestCheck.That(slotRefused.StatusCode == HttpStatusCode.BadRequest && (await slotRefused.Content.ReadAsStringAsync()).Contains("游戏中") && data.Returned.Count == 0, "游戏中的角色默认拒绝开栏且不小退");
+        var slotDone = await Post("/api/equip-slots", new { account = "acct", name = "Hero", flags = 19, returnFirst = true, confirm = true });
+        TestCheck.That(slotDone.IsSuccessStatusCode && data.Returned.Count == 1 && data.Commands.Contains("account acct equip-slots Hero 19") &&
+            (await slotDone.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("returned").GetBoolean(), "returnFirst 先小退再开栏，并标记 returned");
+        var slotAudit = await http.GetFromJsonAsync<JsonElement>("/api/audit?action=equip-slots&limit=50");
+        TestCheck.That(slotAudit.EnumerateArray().Any(r => r.GetProperty("ok").GetBoolean()) && slotAudit.EnumerateArray().Any(r => !r.GetProperty("ok").GetBoolean()), "开栏成功与被拒都写审计");
+
         // 称号簿/属性/金库/高级筛选：只读走命令、写入严格校验；称号完成对在线角色同样要求先小退。
         TestCheck.That((await http.GetAsync("/api/characters/acct/Hero/titles?q=general")).IsSuccessStatusCode && data.Commands.Contains("account acct title-list Hero general")
             && (await http.GetAsync("/api/characters/acct/Hero/stats")).IsSuccessStatusCode && data.Commands.Contains("account acct stats Hero"), "称号簿与属性只读接口");
@@ -315,6 +340,26 @@ internal static class GmWebServerTests
         TestCheck.That(csv.IsSuccessStatusCode && csv.Content.Headers.ContentType?.MediaType == "text/csv" && csv.Content.Headers.ContentDisposition?.FileName == "gm-audit.csv"
             && csvText.Contains("\"'=cmd|") && !csvText.Contains(",\"=cmd") && csvText.Contains("\"line1\nline2, \"\"q\"\"\""), "审计 CSV 导出：防公式注入并正确转义");
         TestCheck.That(!GmAudit.ToCsv([new(DateTimeOffset.Now, "gm", "x", " =1", "@a", true, "", "", "")]).Contains("\" =1"), "CSV 前导空白后的公式也被中和");
+
+        // 纸娃娃：只读 GET，PNG 与逐层诊断；试穿编号严格校验，不写审计。
+        int audited = data.Audit.Query(5000, null, null, null, null, null).Length;
+        var portrait = await http.GetAsync("/api/characters/acct/Hero/portrait?tryOn=15,17");
+        TestCheck.That(portrait.IsSuccessStatusCode && portrait.Content.Headers.ContentType?.MediaType == "image/png" &&
+            (await portrait.Content.ReadAsByteArrayAsync()).Length == 4 && portrait.Headers.GetValues("X-Avatar-Layers").Single() == "1/2" &&
+            data.Portraits.Contains("acct/Hero/15,17"), "纸娃娃 PNG 接口把试穿编号原样交给合成，并在响应头给出画出/总层数");
+        var layersJson = await http.GetFromJsonAsync<JsonElement>("/api/characters/acct/Hero/portrait/layers");
+        TestCheck.That(layersJson.GetProperty("ok").GetBoolean() && layersJson.GetProperty("data").GetProperty("frame").GetInt32() == 90 &&
+            layersJson.GetProperty("data").GetProperty("layers")[1].GetProperty("note").GetString()!.Contains("ImagePacks2") &&
+            layersJson.GetProperty("data").GetProperty("layers")[0].GetProperty("palette").GetInt32() == 0 &&
+            layersJson.GetProperty("data").GetProperty("notes")[0].GetString() == "说明" && data.Portraits.Contains("acct/Hero/"), "纸娃娃诊断接口列出逐层来源与缺失原因");
+        TestCheck.That((await http.GetAsync("/api/characters/acct/Hero/portrait?tryOn=404")).StatusCode == HttpStatusCode.NoContent, "没有可画图层时返回 204");
+        TestCheck.That((await http.GetAsync("/api/characters/acct/Ghost/portrait")).StatusCode == HttpStatusCode.BadRequest, "角色不存在时返回错误 JSON");
+        int asked = data.Portraits.Count;
+        foreach (string bad in new[] { "tryOn=a", "tryOn=1,,2", "tryOn=-1", "tryOn=0", "tryOn=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17", "tryOn=99999999999" })
+            TestCheck.That((await http.GetAsync("/api/characters/acct/Hero/portrait?" + bad)).StatusCode == HttpStatusCode.BadRequest, "试穿参数严格拒绝: " + bad);
+        TestCheck.That((await http.GetAsync("/api/characters/acct/bad%20name/portrait")).StatusCode == HttpStatusCode.BadRequest && data.Portraits.Count == asked,
+            "非法参数不进入合成");
+        TestCheck.That(data.Audit.Query(5000, null, null, null, null, null).Length == audited, "纸娃娃只读，不写审计");
 
         stop.Cancel();
         await server.WaitAsync(TimeSpan.FromSeconds(10));

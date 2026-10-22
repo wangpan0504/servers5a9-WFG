@@ -39,6 +39,8 @@ internal interface IGmWebData
     void WriteQuickItems(string json);
     byte[]? ItemIcon(int id);
     object? ItemPreview(int id);
+    // 纸娃娃（只读）：按角色当前外观合成站立帧；tryOn 为只在内存中替换的物品编号。
+    GmAvatarResult AvatarPortrait(string account, string name, IReadOnlyList<int> tryOn) => new(null, "ERR 纸娃娃未装配");
     GmAudit Audit { get; }
 }
 
@@ -109,6 +111,7 @@ internal static partial class GmWebServer
         MapReads(app, data);
         MapWrites(app, data);
         MapOperations(app, data);
+        MapAvatar(app, data);
     }
 
     // 只读详情与物品库：全部是已有 GM 查询命令的 JSON 结果，不改库。
@@ -127,6 +130,7 @@ internal static partial class GmWebServer
                 "skills" => $"account {account} skills {name}",
                 "stats" => $"account {account} stats {name}",
                 "skill-list" => $"account {account} skill-list {name}",
+                "equip-slots" => $"account {account} equip-slots {name}",
                 "titles" when q is null || Keyword(q) => $"account {account} title-list {name} {q}".TrimEnd(),
                 "quest-search" when (q is null || Keyword(q) && !Regex.IsMatch(q, "(^| )(cat|st|job|page|size):")) && (category is null || category == "*" || Regex.IsMatch(category, "^[a-z]{1,16}$"))
                     && (status is null || status is "*" or "todo" or "active" or "done") && (job is null || job is "mine" or "any") =>
@@ -147,8 +151,10 @@ internal static partial class GmWebServer
             return Reply(result);
         });
         app.MapGet("/api/items/categories", () => Reply(data.Command("item-categories")));
-        app.MapGet("/api/items/search", (int? offset, int? page, int? pageSize, int? min, int? max, string? rarity, string? tag, string? job, string? grow, string? q) =>
+        app.MapGet("/api/items/search", (int? offset, int? page, int? pageSize, int? min, int? max, string? rarity, string? tag, string? job, string? grow, string? q,
+            string? tags, string? kind, string? sub, string? real, string? sort) =>
         {
+            if (SearchOptionTokens(tags, kind, sub, real, sort, out string extra) is { } invalid) return Bad(invalid);
             if (rarity is not null && rarity != "*" && !Regex.IsMatch(rarity, "^[0-9]{1,3}$")) return Bad("稀有度无效");
             if (tag is not null && tag != "*" && !Regex.IsMatch(tag, @"^[^\p{C}]{1,80}$")) return Bad("分类无效");
             if (job is not null && job != "*" && !Regex.IsMatch(job, "^([0-9]|1[0-5])$")) return Bad("职业无效");
@@ -157,10 +163,12 @@ internal static partial class GmWebServer
             string tagToken = string.IsNullOrEmpty(tag) || tag == "*" ? "*" : tag.Replace(' ', '_');
             string jobToken = (string.IsNullOrEmpty(job) || job == "*" ? "" : " job:" + job) + (string.IsNullOrEmpty(grow) || grow == "*" ? "" : " grow:" + grow);
             return Reply(data.Command($"item-search {PageToken(offset, page, pageSize)} {Math.Clamp(min ?? 0, 0, 255)} {Math.Clamp(max ?? 0, 0, 255)} " +
-                $"{(string.IsNullOrEmpty(rarity) ? "*" : rarity)} {tagToken}{jobToken} {q}".TrimEnd()));
+                $"{(string.IsNullOrEmpty(rarity) ? "*" : rarity)} {tagToken}{jobToken}{extra} {q}".TrimEnd()));
         });
-        app.MapGet("/api/items/filter", (int? offset, int? page, int? pageSize, int? min, int? max, string? rarity, string? tag, string? stat, string? period, string? skillJob, string? job, string? grow, string? q) =>
+        app.MapGet("/api/items/filter", (int? offset, int? page, int? pageSize, int? min, int? max, string? rarity, string? tag, string? stat, string? period, string? skillJob, string? job, string? grow, string? q,
+            string? tags, string? kind, string? sub, string? real, string? sort) =>
         {
+            if (SearchOptionTokens(tags, kind, sub, real, sort, out string extra) is { } invalid) return Bad(invalid);
             if (rarity is not null && rarity != "*" && !Regex.IsMatch(rarity, "^[0-9]{1,3}$")) return Bad("稀有度无效");
             if (tag is not null && tag != "*" && !Regex.IsMatch(tag, @"^[^\p{C}]{1,80}$")) return Bad("分类无效");
             if (stat is not null && stat != "*" && !Regex.IsMatch(stat, "^[a-z_ ]{1,40}$")) return Bad("词条无效");
@@ -172,7 +180,7 @@ internal static partial class GmWebServer
             string S(string? value, string fallback = "*") => string.IsNullOrEmpty(value) ? fallback : value.Replace(' ', '_');
             string jobToken = (string.IsNullOrEmpty(job) || job == "*" ? "" : " job:" + job) + (string.IsNullOrEmpty(grow) || grow == "*" ? "" : " grow:" + grow);
             return Reply(data.Command($"item-filter {PageToken(offset, page, pageSize)} {Math.Clamp(min ?? 0, 0, 255)} {Math.Clamp(max ?? 0, 0, 255)} " +
-                $"{S(rarity)} {S(tag)} {S(stat)} {S(period)} {S(skillJob)}{jobToken} {q}".TrimEnd()));
+                $"{S(rarity)} {S(tag)} {S(stat)} {S(period)} {S(skillJob)}{jobToken}{extra} {q}".TrimEnd()));
         });
         app.MapGet("/api/items/stat-keys", () =>
         {
@@ -285,6 +293,13 @@ internal static partial class GmWebServer
             if (b.Level is < 1 or > 95) return Bad("等级须在 1–95");
             return Run(http, data, "level", b.Account, b.Name, $"account {b.Account} level {b.Name} {b.Level}", $"account {b.Account} show {b.Name}");
         });
+        // 剧情等级（story 命令，0–95）：只改角色的剧情进度等级，不改等级、经验和任务。
+        app.MapPost("/api/story", (HttpContext http, LevelBody b) =>
+        {
+            if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
+            if (b.Level is < 0 or > 95) return Bad("剧情等级须在 0–95");
+            return Run(http, data, "story", b.Account, b.Name, $"account {b.Account} story {b.Name} {b.Level}", $"account {b.Account} show {b.Name}");
+        });
         app.MapPost("/api/exp", (HttpContext http, ExpBody b) =>
         {
             if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
@@ -353,6 +368,43 @@ internal static partial class GmWebServer
     internal sealed record DebugBody(string Key, string Value, bool? Confirm);
 
     // 物品分页：page/pageSize（pageSize 1–200，默认 50）；兼容旧的 offset。命令偏移参数写成 "偏移/每页条数"。
+    // /api/items/search 与 /filter 的扩展参数（都可省略，省略时与旧版完全一致）：
+    //   tags=coat,pants,creature@e,g:pet   多分类并集（@e 只要装备，@s 只要道具）
+    //   kind=e|s   sub=katana,beamsword   real=1（隐藏占位模板）   sort=id|-id|level|-level|rarity|-rarity|name
+    // 转成 item-search 关键字区的 tags:/kind:/sub:/real:/sort: 选项，由命令端严格校验。
+    internal static string? SearchOptionTokens(string? tags, string? kind, string? sub, string? real, string? sort, out string extra)
+    {
+        extra = "";
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(tags))
+        {
+            if (!Regex.IsMatch(tags, @"^[^\p{C},]{1,80}(,[^\p{C},]{1,80}){0,63}$")) return "tags 无效";
+            parts.Add("tags:" + tags.Replace(' ', '_'));
+        }
+        if (!string.IsNullOrEmpty(kind))
+        {
+            if (kind is not ("e" or "s" or "equipment" or "stackable")) return "kind 须为 e 或 s";
+            parts.Add("kind:" + kind);
+        }
+        if (!string.IsNullOrEmpty(sub))
+        {
+            if (!Regex.IsMatch(sub, "^[a-z0-9 _]{1,40}(,[a-z0-9 _]{1,40}){0,63}$")) return "sub 无效";
+            parts.Add("sub:" + sub.Replace(' ', '_'));
+        }
+        if (!string.IsNullOrEmpty(real))
+        {
+            if (real is not ("1" or "0" or "true" or "false")) return "real 须为 1 或 0";
+            parts.Add("real:" + real);
+        }
+        if (!string.IsNullOrEmpty(sort))
+        {
+            if (sort is not ("id" or "-id" or "level" or "-level" or "rarity" or "-rarity" or "name")) return "sort 无效";
+            parts.Add("sort:" + sort);
+        }
+        extra = parts.Count == 0 ? "" : " " + string.Join(' ', parts);
+        return null;
+    }
+
     static string PageToken(int? offset, int? page, int? pageSize)
     {
         int size = Math.Clamp(pageSize ?? 50, 1, 200);

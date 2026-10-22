@@ -9,6 +9,9 @@ internal static class InventoryMoveService
 {
     // ACK19 的 23 显示“无法移动该物品”；1 是地区限制，不能用于普通物品校验失败。
     const ushort CannotMoveItem = 23;
+    // 扩展装备栏标志：槽22辅助装备=1、槽23魔法石=2、槽25耳环=16（客户端 02B64FA0 同一位定义）。
+    internal const byte SupportSlotFlag = 1, MagicStoneSlotFlag = 2, EarringSlotFlag = 16;
+    internal const byte ExpansionSlotFlags = SupportSlotFlag | MagicStoneSlotFlag | EarringSlotFlag;
 
     public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds,
         PremiumContractCatalog? contracts = null)
@@ -208,7 +211,7 @@ internal static class InventoryMoveService
         if (position.Index == InventoryCreatureSkinService.AuraTargetSlot)
             return (character.EquipmentSlotFlags & InventoryCreatureSkinService.AuraUnlockFlag) != 0 &&
                 core.Kind == ItemKind.Avatar && template.Id == core.ItemId && template.EquipmentSlot is 9 or 11;
-        int unlock = position.Index switch { 22 => 1, 23 => 2, 25 => 16, _ => 0 };
+        int unlock = position.Index switch { 22 => SupportSlotFlag, 23 => MagicStoneSlotFlag, 25 => EarringSlotFlag, _ => 0 };
         if (unlock != 0 && (character.EquipmentSlotFlags & unlock) == 0) return false;
         // 女鬼剑流浪武士的副武器栏接受普通武器；觉醒位不改变基础转职。
         bool matchesSlot = template.EquipmentSlot == position.Index ||

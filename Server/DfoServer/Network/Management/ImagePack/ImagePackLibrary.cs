@@ -141,6 +141,21 @@ namespace DfoServer.Network.Management.ImagePack
             return true;
         }
 
+        // 纸娃娃合成用：取原始帧（不裁到 256 画布），保留 keyX/keyY 供按层叠放。
+        public bool TryReadFrame(string imgPath, int frame, int palette, out ImgFrame result)
+        {
+            result = null;
+            var normalized = NpkNameCipher.NormalizeImgPath(imgPath);
+            return normalized != null && TryReadImg(normalized, out var blob) && ImgFrameReader.TryRead(blob, frame, out result, palette);
+        }
+
+        // v6 调色板个数（v4 为 1，其他为 0；读不到 IMG 为 -1）。
+        public int PaletteCount(string imgPath)
+        {
+            var normalized = NpkNameCipher.NormalizeImgPath(imgPath);
+            return normalized != null && TryReadImg(normalized, out var blob) ? ImgFrameReader.PaletteCount(blob) : -1;
+        }
+
         private bool TryDecode(string imgPath, int frame, out int width, out int height, out byte[] rgba)
         {
             width = 0;

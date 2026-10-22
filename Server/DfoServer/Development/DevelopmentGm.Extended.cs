@@ -41,7 +41,12 @@ internal static partial class DevelopmentGm
                 {
                     maxRefinement = resources.Refinement.MaximumLevel, jobs = DevelopmentCatalog.JobList,
                     categories = catalog.Items.GroupBy(row => (row.Equipment, row.Tag)).OrderBy(group => !group.Key.Equipment).ThenBy(group => group.Key.Tag)
-                        .Select(group => new { equipment = group.Key.Equipment, tag = group.Key.Tag, count = group.Count() })
+                        .Select(group => new { equipment = group.Key.Equipment, tag = group.Key.Tag, count = group.Count(), real = group.Count(row => !row.Placeholder) }),
+                    // 武器子类（PVF 路径目录名）与数量；real 为去掉占位模板后的数量。
+                    weaponSubs = catalog.Items.Where(row => row.Equipment && row.Sub.Length > 0).GroupBy(row => row.Sub).OrderBy(group => group.Key, StringComparer.Ordinal)
+                        .Select(group => new { sub = group.Key, count = group.Count(), real = group.Count(row => !row.Placeholder) }),
+                    // item-search / item-filter 支持的扩展选项，客户端据此决定是否在服务端做多分类、子类与排序。
+                    searchOptions = new[] { "tags", "kind", "sub", "real", "sort" }
                 });
             case DevelopmentAction.IndexStatus:
             {
@@ -703,16 +708,20 @@ internal static partial class DevelopmentGm
         }
         int? wearer = null, branch = null;
         var words = new List<string>();
+        var options = new SearchOptions();
         for (int i = keywordAt; i < args.Length; i++)
         {
             if (args[i].StartsWith("job:", StringComparison.Ordinal))
                 wearer = args[i][4..] == "*" ? null : (int)Number(args[i][4..], 15);
             else if (args[i].StartsWith("grow:", StringComparison.Ordinal))
                 branch = args[i][5..] == "*" ? null : (int)Number(args[i][5..], 15);
-            else words.Add(args[i]);
+            else if (!options.TryParse(args[i])) words.Add(args[i]);
         }
+        if (options.Tags is not null && (tag is not null || group is not null || setIndex is not null || setOnly || listSets))
+            throw new InvalidDataException("tags: 不能与单个分类同时使用");
         string keyword = string.Join(' ', words);
-        int.TryParse(keyword, NumberStyles.None, CultureInfo.InvariantCulture, out int id);
+        // 关键字是正整数时才按 ID 匹配；否则 TryParse 失败留下的 0 会把 ID 0（金币）混进任何中文关键字的结果。
+        bool byId = int.TryParse(keyword, NumberStyles.None, CultureInfo.InvariantCulture, out int id) && id > 0;
         // 没选角色时不套职业或分支。通用职业位和没写分支的物品始终保留。
         bool Fits(DevelopmentCatalog.ItemEntry row) =>
             (wearer is not { } job || (row.Jobs & (1 << job)) != 0) &&
@@ -721,14 +730,15 @@ internal static partial class DevelopmentGm
             (rarity is null || row.Rarity == rarity) && (tag is null || row.Tag == tag) &&
             (group is null || ItemGroups[group].Contains(row.Tag)) &&
             (setIndex is null || row.SetIndex == setIndex) && (!setOnly || row.SetIndex > 0) && (!listSets || row.SetIndex > 0) &&
-            Fits(row) &&
-            (keyword.Length == 0 || row.Id == id || row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) || (listSets && row.SetIndex.ToString(CultureInfo.InvariantCulture) == keyword)) &&
+            Fits(row) && options.Matches(row) &&
+            (keyword.Length == 0 || (byId && row.Id == id) || row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) || (listSets && row.SetIndex.ToString(CultureInfo.InvariantCulture) == keyword)) &&
             (attributes is null || AttributeMatches(attributes.GetValueOrDefault(row.Id), stat, period, skillJob))).ToArray();
+        rows = options.Sort(rows);
         if (listSets)
         {
             var groups = catalog.Items.Where(row => row.SetIndex > 0 && Fits(row)).GroupBy(row => row.SetIndex);
             if (keyword.Length > 0)
-                groups = groups.Where(group => group.Key.ToString(CultureInfo.InvariantCulture) == keyword || group.Any(row => row.Id == id || row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
+                groups = groups.Where(group => group.Key.ToString(CultureInfo.InvariantCulture) == keyword || group.Any(row => (byId && row.Id == id) || row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
             var pageGroups = groups.OrderBy(group => group.Key).ToArray();
             return Ok(new
             {
@@ -743,11 +753,110 @@ internal static partial class DevelopmentGm
         return Ok(new
         {
             total = rows.Length, offset, pageSize, page = offset / pageSize + 1,
+            // 回显本次生效的扩展筛选；旧服务端没有这个字段，客户端据此判断能否用 tags/kind/sub/real/sort。
+            options = options.Echo(),
             items = rows.Skip(offset).Take(pageSize).Select(row => new
             {
-                id = row.Id, name = row.Name, equipment = row.Equipment, tag = row.Tag, minLevel = row.MinLevel, rarity = row.Rarity, set = row.SetIndex
+                id = row.Id, name = row.Name, equipment = row.Equipment, tag = row.Tag, minLevel = row.MinLevel, rarity = row.Rarity, set = row.SetIndex, sub = row.Sub
             })
         });
+    }
+
+    // item-search / item-filter 关键字区的扩展选项（与 job:/grow: 相同写法，空格写成 _）；不写时行为与旧版完全一致。
+    //   tags:<标签>[@e|@s],…  多个分类取并集；@e 只要装备、@s 只要道具；也可写 g:<分组>。
+    //   kind:e|s               只要装备 / 只要道具。
+    //   sub:<武器子类>,…       武器子类（PVF 路径 weapon/ 后的目录名），多个取并集。
+    //   real:1                 隐藏没有名字或名字为 name_数字 的占位模板。
+    //   sort:id|-id|level|-level|rarity|-rarity|name   排序；不写时按目录顺序（equipment.lst 后接 stackable.lst）。
+    internal sealed class SearchOptions
+    {
+        public List<(string Tag, bool? Equipment, string? Group)>? Tags { get; private set; }
+        public bool? Equipment { get; private set; }
+        public HashSet<string>? Subs { get; private set; }
+        public bool Real { get; private set; }
+        public string? Order { get; private set; }
+
+        public bool TryParse(string token)
+        {
+            int colon = token.IndexOf(':');
+            if (colon <= 0) return false;
+            string key = token[..colon], value = token[(colon + 1)..];
+            switch (key)
+            {
+                case "tags":
+                    if (Tags is not null) throw new InvalidDataException("tags: 重复");
+                    var list = new List<(string, bool?, string?)>();
+                    foreach (string part in value.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        string name = part; bool? equipment = null;
+                        if (name.EndsWith("@e", StringComparison.Ordinal)) { equipment = true; name = name[..^2]; }
+                        else if (name.EndsWith("@s", StringComparison.Ordinal)) { equipment = false; name = name[..^2]; }
+                        name = name.Replace('_', ' ').Trim();
+                        if (name.Length is 0 or > 80) throw new InvalidDataException("tags: 分类无效");
+                        if (name.StartsWith("g:", StringComparison.Ordinal))
+                        {
+                            if (!ItemGroups.ContainsKey(name[2..])) throw new InvalidDataException("tags: 分组无效: " + name);
+                            list.Add(("", equipment, name[2..]));
+                        }
+                        else list.Add((name.ToLowerInvariant(), equipment, null));
+                    }
+                    if (list.Count is 0 or > 64) throw new InvalidDataException("tags: 须为 1–64 个分类");
+                    Tags = list;
+                    return true;
+                case "kind":
+                    if (Equipment is not null) throw new InvalidDataException("kind: 重复");
+                    Equipment = value switch { "e" or "equipment" => true, "s" or "stackable" => false, _ => throw new InvalidDataException("kind: 须为 e 或 s") };
+                    return true;
+                case "sub":
+                    if (Subs is not null) throw new InvalidDataException("sub: 重复");
+                    var subs = value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Replace('_', ' ').Trim().ToLowerInvariant()).Where(x => x.Length > 0).ToHashSet(StringComparer.Ordinal);
+                    if (subs.Count is 0 or > 64 || subs.Any(x => x.Length > 40)) throw new InvalidDataException("sub: 武器子类无效");
+                    Subs = subs;
+                    return true;
+                case "real":
+                    Real = value switch { "1" or "true" => true, "0" or "false" => false, _ => throw new InvalidDataException("real: 须为 1 或 0") };
+                    return true;
+                case "sort":
+                    if (value is not ("id" or "-id" or "level" or "-level" or "rarity" or "-rarity" or "name")) throw new InvalidDataException("sort: 须为 id、-id、level、-level、rarity、-rarity 或 name");
+                    Order = value;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        public bool Matches(DevelopmentCatalog.ItemEntry row)
+        {
+            if (Equipment is { } equipment && row.Equipment != equipment) return false;
+            if (Real && row.Placeholder) return false;
+            if (Subs is not null && !Subs.Contains(row.Sub)) return false;
+            if (Tags is null) return true;
+            foreach (var (tag, wanted, group) in Tags)
+                if ((wanted is null || wanted == row.Equipment) && (group is null ? row.Tag == tag : ItemGroups[group].Contains(row.Tag)))
+                    return true;
+            return false;
+        }
+
+        public DevelopmentCatalog.ItemEntry[] Sort(DevelopmentCatalog.ItemEntry[] rows) => Order switch
+        {
+            "id" => [.. rows.OrderBy(row => row.Id)],
+            "-id" => [.. rows.OrderByDescending(row => row.Id)],
+            "level" => [.. rows.OrderBy(row => row.MinLevel).ThenBy(row => row.Id)],
+            "-level" => [.. rows.OrderByDescending(row => row.MinLevel).ThenBy(row => row.Id)],
+            "rarity" => [.. rows.OrderBy(row => row.Rarity).ThenBy(row => row.Id)],
+            "-rarity" => [.. rows.OrderByDescending(row => row.Rarity).ThenBy(row => row.Id)],
+            "name" => [.. rows.OrderBy(row => row.Name, StringComparer.Ordinal).ThenBy(row => row.Id)],
+            _ => rows
+        };
+
+        public object Echo() => new
+        {
+            tags = Tags?.Select(t => (t.Group is null ? t.Tag : "g:" + t.Group) + (t.Equipment switch { true => "@e", false => "@s", _ => "" })).ToArray(),
+            kind = Equipment switch { true => "e", false => "s", _ => null },
+            sub = Subs?.Order(StringComparer.Ordinal).ToArray(),
+            real = Real,
+            sort = Order
+        };
     }
 
     static bool AttributeMatches(GmItemAttributes.Attrs? attrs, string? stat, string period, string? skillJob)

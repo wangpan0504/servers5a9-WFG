@@ -257,7 +257,15 @@ internal sealed partial class CharacterRepository
         if (!SameInventory(expected.Inventory, plan) || plan.CharacterPrecondition?.MatchesIdentity(expected) == false)
             throw new InvalidOperationException("背包规划不是当前快照");
         plan.After.Validate(allocating: true);
-        if (plan.EquipmentSlotFlagsAfter is { } slots)
+        if (plan.EquipmentSlotFlagsAfter is not null && plan.Reason == "gm_equipment_slot_flags")
+        {
+            // 开发GM开扩展装备栏：只在原标志上追加辅助装备/魔法石/耳环位，背包不变，不清除也不开放幻化位。
+            int gmSlots = plan.EquipmentSlotFlagsAfter.Value, added = gmSlots & ~expected.EquipmentSlotFlags;
+            if (plan.CharacterPrecondition is null || !ReferenceEquals(plan.Before, plan.After) || added == 0 ||
+                (added & ~DfoServer.Game.Inventory.Services.InventoryMoveService.ExpansionSlotFlags) != 0 || (gmSlots & expected.EquipmentSlotFlags) != expected.EquipmentSlotFlags)
+                throw new InvalidOperationException("GM开栏只能在原角色标志上追加辅助装备、魔法石或耳环位");
+        }
+        else if (plan.EquipmentSlotFlagsAfter is { } slots)
         {
             byte flag = plan.Reason switch
             {

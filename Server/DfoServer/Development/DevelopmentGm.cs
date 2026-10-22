@@ -46,6 +46,10 @@ internal static partial class DevelopmentGm
                 return InjectRaw(request, findConnection, log);
             if (request.Action == DevelopmentAction.Notice)
                 return SendNotice(request, noticeSender, log);
+            if (request.Action == DevelopmentAction.EquipSlots)
+                return ExecuteEquipmentSlots(repository, owners, find(request.Account), request);
+            if (request.Action == DevelopmentAction.Appearance)
+                return DescribeAppearance(repository, owners, find(request.Account), request);
             if (request.Action >= DevelopmentAction.Wallet)
                 return ExecuteExtended(repository, owners, find(request.Account), request, mailbox,
                     catalog ?? throw new InvalidOperationException("开发GM资源目录未装配"));

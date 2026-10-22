@@ -168,7 +168,61 @@ internal sealed partial class GmItemExtras(PvfArchive pvf, string? imagePacksPat
                 // [expiration date] 在 PVF 中是 `yyyy-MM-dd HH:mm:ss` 文本，而不是整数。
                 absoluteExpireDate = Regex.Match(raw, @"\[expiration date\]\s*`([^`]+)`") is { Success: true } expiry ? expiry.Groups[1].Value : ""
             },
-            edit = EditOptions(document, raw, equipment, refineMax.Value)
+            edit = EditOptions(document, raw, equipment, refineMax.Value),
+            // 以下为游戏内说明框里的其余信息，均来自同一份 PVF 脚本；脚本没写的项为 0 或空。
+            grade = document.TryGetInt32("grade", out int grade) ? grade : 0,
+            durability = document.TryGetInt32("durability", out int durability) ? durability : 0,
+            weight = document.TryGetInt32("weight", out int weight) ? weight : 0,
+            stackLimit = document.TryGetInt32("stack limit", out int stackLimit) ? stackLimit : 0,
+            price = PvfScript.Integers(document.Section("price")).FirstOrDefault(),
+            value = PvfScript.Integers(document.Section("value")).FirstOrDefault(),
+            attachType = AttachType(document),
+            trade = TradeLabel(AttachType(document)),
+            weaponSub = equipment ? DfoServer.Development.DevelopmentCatalog.WeaponSub(Regex.Match(document.Section("equipment type"), @"\[([^\]]+)\]").Groups[1].Value.ToLowerInvariant(), paths.Value[id].Path) : "",
+            booster = equipment ? null : BoosterContents(raw)
+        };
+    }
+
+    // [attach type] 归一成小写裸词（free / trade limit / sealing / account / trade delete …），与交易、仓库判定同一写法。
+    static string AttachType(PvfDocument document) =>
+        document.Section("attach type").Replace("`", "").Trim().Trim('[', ']').Trim().ToLowerInvariant();
+
+    // 交易限制的中文说明，按服务端交易判定（AuctionService.TransferBlocked、InventoryDiscardPlan：free/trade 可交易，
+    // trade limit 按剩余次数，sealing 封装状态可交易；其余一律不可交易）与仓库判定（InventoryCargoService、InventoryDisjointService）归纳。
+    internal static string TradeLabel(string attach) => attach switch
+    {
+        "" => "",
+        "free" or "trade" => "可交易",
+        "trade limit" => "限次交易",
+        "sealing" or "seal" => "封装（解封后不可交易）",
+        "trade delete" => "不可交易（不能存个人仓库、不能分解）",
+        _ when attach.Contains("account", StringComparison.Ordinal) => "账号绑定（不可交易）",
+        _ => "不可交易（" + attach + "）"
+    };
+
+    // 礼包内容：用服务端开箱同一个解析（BoosterCatalog.Parse），合并同一物品的数量区间；最多列 30 项。自选礼包只标注，不展开。
+    object? BoosterContents(string raw)
+    {
+        BoosterDefinition definition;
+        try { definition = BoosterCatalog.Parse(raw); }
+        catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException or KeyNotFoundException) { return null; }
+        var rewards = definition.Pools.SelectMany(pool => pool.Rewards)
+            .Concat(definition.PackageRewards.IsDefaultOrEmpty ? [] : definition.PackageRewards).ToArray();
+        if (rewards.Length == 0 && definition.Selection is null) return null;
+        var merged = rewards.GroupBy(reward => reward.ItemId).Take(30).Select(group =>
+        {
+            string name = "";
+            try { name = Script(group.Key)?.Section("name").Trim('`', ' ', '\r', '\n') ?? ""; }
+            catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException or KeyNotFoundException or FormatException) { }
+            return new { id = group.Key, name, min = group.Min(reward => reward.Count), max = group.Max(reward => reward.Count) };
+        }).ToArray();
+        return new
+        {
+            items = merged,
+            more = Math.Max(0, rewards.Select(reward => reward.ItemId).Distinct().Count() - merged.Length),
+            selection = definition.Selection is not null,
+            random = definition.Pools.Length > 0 && definition.PackageRewards.IsDefaultOrEmpty,
+            unsupported = definition.PendingRule
         };
     }
 

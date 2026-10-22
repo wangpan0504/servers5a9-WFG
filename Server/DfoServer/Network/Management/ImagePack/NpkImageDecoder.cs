@@ -8,7 +8,7 @@ using System.Text;
 
 namespace DfoServer.Network.Management.ImagePack
 {
-    // IMG v2：0x0E/0x0F/0x10 为像素帧，0x11 为链接帧。
+    // IMG v2：0x0E/0x0F/0x10 为像素帧，0x11 为链接帧。v4/v6 转交 ImgFrameReader（本仓库自写）。
     internal static class NpkImageDecoder
     {
         private const int TypeArgb1555 = 0x0E;
@@ -44,6 +44,9 @@ namespace DfoServer.Network.Management.ImagePack
             var indexLength = BitConverter.ToInt32(blob, 16);
             var version = BitConverter.ToInt32(blob, 24);
             var frameCount = BitConverter.ToInt32(blob, 28);
+            // v4/v6 调色板格式由本仓库自写的 ImgFrameReader 解码，再按同样规则放到画布上。
+            if (version == 4 || version == 6)
+                return TryDecodePaletted(blob, frameIndex, out width, out height, out rgba);
             if (version != 2 || frameCount <= 0 || frameIndex >= frameCount)
                 return false;
             if (indexLength <= 0 || 32L + indexLength > blob.Length)
@@ -132,6 +135,30 @@ namespace DfoServer.Network.Management.ImagePack
             Blit(canvas, canvasWidth, canvasHeight, pixels, frame.Width, frame.Height, frame.KeyX, frame.KeyY);
             width = canvasWidth;
             height = canvasHeight;
+            rgba = canvas;
+            return true;
+        }
+
+        private static bool TryDecodePaletted(byte[] blob, int frameIndex, out int width, out int height, out byte[] rgba)
+        {
+            width = 0;
+            height = 0;
+            rgba = null;
+            if (!ImgFrameReader.TryRead(blob, frameIndex, out var frame))
+                return false;
+            if (frame.CanvasWidth > MaxCanvas || frame.CanvasHeight > MaxCanvas
+                || (frame.KeyX == 0 && frame.KeyY == 0 && frame.CanvasWidth == frame.Width && frame.CanvasHeight == frame.Height))
+            {
+                width = frame.Width;
+                height = frame.Height;
+                rgba = frame.Rgba;
+                return true;
+            }
+
+            var canvas = new byte[frame.CanvasWidth * frame.CanvasHeight * 4];
+            Blit(canvas, frame.CanvasWidth, frame.CanvasHeight, frame.Rgba, frame.Width, frame.Height, frame.KeyX, frame.KeyY);
+            width = frame.CanvasWidth;
+            height = frame.CanvasHeight;
             rgba = canvas;
             return true;
         }

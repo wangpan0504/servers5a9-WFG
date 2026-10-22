@@ -13,7 +13,23 @@ namespace DfoServer.Development;
 internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources, QuestCatalog? quests)
 {
     // Grows：空脚本为全部分支；[usable first growtype] 写成 0–5 的位。无法识别的非空声明为 0，选了角色时不匹配任何分支。
-    internal sealed record ItemEntry(int Id, string Name, bool Equipment, string Tag, int MinLevel, int Rarity, int SetIndex, ushort Jobs, ushort Grows);
+    // Sub：武器子类，取自 PVF 路径中 weapon/ 之后的目录名（如 katana、beamsword）；非武器为空。
+    internal sealed record ItemEntry(int Id, string Name, bool Equipment, string Tag, int MinLevel, int Rarity, int SetIndex, ushort Jobs, ushort Grows, string Sub = "")
+    {
+        // PVF 里没有填名字或只写了 name_数字 的占位模板：游戏内不可正常显示，GM 列表可按需隐藏。
+        public bool Placeholder => IsPlaceholderName(Name);
+    }
+
+    internal static bool IsPlaceholderName(string? name)
+    {
+        string value = (name ?? "").Trim();
+        if (value.Length == 0) return true;
+        return value.Length > 5 && value.StartsWith("name_", StringComparison.OrdinalIgnoreCase) && value[5..].All(char.IsAsciiDigit);
+    }
+
+    static readonly Regex WeaponDirectory = new("/weapon/([^/]+)/", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    internal static string WeaponSub(string tag, string path) =>
+        tag == "weapon" && WeaponDirectory.Match("equipment/" + path.Replace('\\', '/')) is { Success: true } match ? match.Groups[1].Value.ToLowerInvariant() : "";
 
     static readonly string[] JobNames = ["swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief", "at fighter",
         "at mage", "demonic swordman", "creator mage", "at swordman", "knight", "demonic lancer", "at priest", "gun blader"];
@@ -28,7 +44,7 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
     bool stopping;
     public string? PvfPath { get; init; }
     public string? CacheDirectory { get; init; }
-    Task<ImmutableArray<ItemEntry>> ItemsTask => Start(ref itemsTask, () => Cached("items", () => BuildItems(pvf, warmupStop.Token), 2));
+    Task<ImmutableArray<ItemEntry>> ItemsTask => Start(ref itemsTask, () => Cached("items", () => BuildItems(pvf, warmupStop.Token), 3));
     Task<ImmutableDictionary<int, GmItemAttributes.Attrs>> AttributesTask => Start(ref attributesTask, () => Cached("attrs", () => BuildAttributes(pvf, warmupStop.Token)));
     Task<ImmutableDictionary<int, string>> QuestNamesTask => Start(ref questNamesTask, () => BuildQuestNames(pvf, quests, warmupStop.Token));
 
@@ -265,7 +281,8 @@ internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources
                     int level = doc.TryGetInt32("minimum level", out int minimum) ? minimum : 0;
                     int rarity = doc.TryGetInt32("rarity", out int value) ? value : 0;
                     int set = PvfScript.Integers(doc.Section("part set index")).FirstOrDefault();
-                    rows.Add(new(id, name, equipment, tag, level, rarity, set, Jobs(doc.Section("usable job")), GrowMask(doc.Section("usable first growtype"))));
+                    rows.Add(new(id, name, equipment, tag, level, rarity, set, Jobs(doc.Section("usable job")), GrowMask(doc.Section("usable first growtype")),
+                        equipment ? WeaponSub(tag, path) : ""));
                 }
                 catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException or KeyNotFoundException or FormatException or OverflowException)
                 {

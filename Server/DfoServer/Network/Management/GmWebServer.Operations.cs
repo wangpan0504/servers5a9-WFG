@@ -33,6 +33,7 @@ internal static partial class GmWebServer
     internal sealed record TitleCompleteBody(string Account, string Name, string Spec, bool? Confirm, bool? ReturnFirst);
     internal sealed record VaultGoldBody(string Account, string Name, string Op, long Amount, bool? Confirm);
     internal sealed record AccountCurrencyBody(string Account, string Key, string Op, long Amount, bool? Confirm);
+    internal sealed record EquipSlotsBody(string Account, string Name, int Flags, bool? ReturnFirst, bool? Confirm);
 
     static void MapOperations(WebApplication app, IGmWebData data)
     {
@@ -131,6 +132,14 @@ internal static partial class GmWebServer
             if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
             if (!TitleSpec.IsMatch(b.Spec ?? "")) return Bad("成就范围无效");
             return await RunReturning(http, data, "title-complete", b.Account, b.Name, $"account {b.Account} title-complete {b.Name} {b.Spec}", b.ReturnFirst == true, Snapshot(b.Account, b.Name));
+        });
+        // 扩展装备栏：flags 只能由 1 辅助装备、2 魔法石、16 耳环按位或组成，只增不减；写角色标志须在选角界面，returnFirst 先强制小退。
+        app.MapPost("/api/equip-slots", async (HttpContext http, EquipSlotsBody b) =>
+        {
+            if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
+            if (b.Flags is <= 0 or > 255 || (b.Flags & ~19) != 0) return Bad("flags 只能由 1（辅助装备）、2（魔法石）、16（耳环）组合");
+            return await RunReturning(http, data, "equip-slots", b.Account, b.Name, $"account {b.Account} equip-slots {b.Name} {b.Flags}", b.ReturnFirst == true,
+                $"account {b.Account} equip-slots {b.Name}");
         });
         // 账号金库金币：账号共享；命令层在线安全（owner 内提交并同步在线快照），所以不需要小退。
         app.MapPost("/api/vault-gold", (HttpContext http, VaultGoldBody b) =>

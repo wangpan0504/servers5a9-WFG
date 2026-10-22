@@ -45,9 +45,15 @@ internal static class DevelopmentAssetTcpTests
             Gm("account unknown item GmA 18400 1", accepted: false); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id") == before, "拒绝数量或跨账号不发成功通知与邮件");
             Gm("item GmB 3175 7"); peer.Barrier();
+            // 扩展装备栏：游戏中的角色拒绝；同账号未选中角色直接提交，选角后 Player offset125 为实际标志。
+            Gm("equip-slots GmA 19", accepted: false); peer.Barrier();
+            That(fixture.Query("SELECT equipment_slot_flags FROM characters WHERE name='GmA'") is [[0L]], "游戏中的角色开栏被拒绝且不写库");
+            Gm("equip-slots GmB 3"); peer.Barrier();
             peer.Send(7); peer.Batch((1, 7), (0, 2));
             entry = peer.Select(1);
             That(U32(entry[4].Body, 11) == 55, "同账号其他角色选角加载其独立金币");
+            That(entry[3].Body[0] == 1 && entry[3].Body[125] == 3 && fixture.Query("SELECT equipment_slot_flags FROM characters WHERE name='GmB'") is [[3L]],
+                "GM开启辅助装备与魔法石后，Player包装备栏标志为3");
             mail = MailboxTcpTests.ReadList(peer.Mailbox.Single());
             That(mail.Summaries is [var material] && material.ItemId == 3175 && U32(material.Core, 6) == 7,
                 "同账号未选中角色材料邮件在其上线恢复，数量保留为堆叠数");
@@ -59,12 +65,15 @@ internal static class DevelopmentAssetTcpTests
         }
         await fixture.StopAsync();
         That((await fixture.CliAsync(null, "--gm", "gold", "GmB", "0")).StartsWith("OK ") &&
-            (await fixture.CliAsync(null, "--gm", "item", "GmB", "18400", "1")).StartsWith("OK "), "停止服务后CLI复用同一金币和系统邮件入口");
+            (await fixture.CliAsync(null, "--gm", "item", "GmB", "18400", "1")).StartsWith("OK ") &&
+            (await fixture.CliAsync(null, "--gm", "equip-slots", "GmB", "16")).StartsWith("OK "), "停止服务后CLI复用同一金币、系统邮件和开栏入口");
         await fixture.StartAsync("restarted");
         using (var peer = Open(fixture))
         {
             var entry = peer.Select(1);
             That(U32(entry[4].Body, 11) == 0, "离线清零在服务重启和选角后恢复");
+            That(entry[3].Body[125] == 19 && fixture.Query("SELECT equipment_slot_flags FROM characters WHERE name='GmB'") is [[19L]],
+                "离线追加耳环位后重启重登，Player包标志保留为19");
             That(MailboxTcpTests.ReadList(peer.Mailbox.Single()).Summaries.Any(row => row.ItemId == 18400), "离线发放邮件在服务重启后保留");
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("SELECT count(*) FROM pragma_foreign_key_check") is [[0L]], "GM资产全过程完整性与外键正常");

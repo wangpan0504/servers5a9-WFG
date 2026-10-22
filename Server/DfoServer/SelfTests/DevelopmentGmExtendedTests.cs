@@ -91,6 +91,7 @@ internal static class DevelopmentGmExtendedTests
         TestCheck.That(dated.ValueKind == JsonValueKind.Object && DateTime.TryParse(dated.GetProperty("expiration").GetProperty("absoluteExpireDate").GetString(), out _), "绝对到期日按文本日期读取");
         var categories = Json(Answer("item-categories"));
         TestCheck.That(categories.GetProperty("categories").GetArrayLength() > 1 && categories.GetProperty("maxRefinement").GetInt32() > 0, "分类与锻造上限来自资源");
+        RunSearchOptions(Answer, Json, catalog, extras, categories);
 
         TestCheck.That(Json(Answer("currency Other cera set 500")).GetProperty("currencies").EnumerateArray()
             .Single(row => row.GetProperty("key").GetString() == "cera").GetProperty("amount").GetInt64() == 500, "账号点券按设置提交");
@@ -229,6 +230,14 @@ internal static class DevelopmentGmExtendedTests
         session.Select(0, resources.GoldLimits);
         session.MarkReady();
         TestCheck.That(Answer("rename Other Z_z", session).StartsWith("ERR ") && Answer("char-delete Other Other", session).StartsWith("ERR "), "游戏中的角色拒绝改名与删除");
+        byte slotFlags = session.Selected!.EquipmentSlotFlags;
+        TestCheck.That(Answer("equip-slots Other 1", session).StartsWith("ERR 角色正在游戏中", StringComparison.Ordinal) && Answer("equip-slots Other", session).StartsWith("OK ") &&
+            session.Selected!.EquipmentSlotFlags == slotFlags, "游戏中的角色拒绝开扩展装备栏，只读查询仍可用");
+        session.ReturnToRoster();
+        TestCheck.That(Answer("equip-slots Other 16", session).StartsWith("OK ") && session.QueryCharacters().Single(row => row.Name == "Other").EquipmentSlotFlags == (slotFlags | 16),
+            "回到选角后经原owner开启耳环栏");
+        session.Select(0, resources.GoldLimits);
+        session.MarkReady();
         session.ReturnToRoster();
         TestCheck.That(Answer("char-delete Other Wrong", session).StartsWith("ERR "), "删除须输入一致的角色名");
         f.Integrity();
@@ -275,5 +284,78 @@ internal static class DevelopmentGmExtendedTests
                 Skill("stats Nobody").StartsWith("ERR "), "stats 只读返回服务端基础属性，未知角色拒绝");
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} GM扩展命令：搜索、货币、发放、删除、邮箱、任务链与在线路由断言");
+    }
+
+    // item-search 扩展选项（tags/kind/sub/real/sort）与关键字 ID 匹配修正；不带选项时结果与旧版一致。
+    static void RunSearchOptions(Func<string, Game.Session.GameSession?, string> answer, Func<string, JsonElement> json, DevelopmentCatalog catalog,
+        DfoServer.Network.Management.GmItemExtras extras, JsonElement categories)
+    {
+        string Answer(string line) => answer(line, null);
+        int Total(string line) => json(Answer(line)).GetProperty("total").GetInt32();
+        JsonElement[] All(string line)
+        {
+            var rows = new List<JsonElement>();
+            for (int offset = 0; ; offset += 200)
+            {
+                var page = json(Answer(line.Replace("{o}", offset + "/200", StringComparison.Ordinal)));
+                rows.AddRange(page.GetProperty("items").EnumerateArray().Select(row => row.Clone()));
+                if (offset + 200 >= page.GetProperty("total").GetInt32()) return [.. rows];
+            }
+        }
+        int Category(string tag, bool? equipment = null, string field = "count") => categories.GetProperty("categories").EnumerateArray()
+            .Where(row => row.GetProperty("tag").GetString() == tag && (equipment is null || row.GetProperty("equipment").GetBoolean() == equipment)).Sum(row => row.GetProperty(field).GetInt32());
+
+        // 关键字：不是正整数时不按 ID 匹配（以前 TryParse 失败的 0 会命中 ID 0 金币）。
+        TestCheck.That(Total("item-search 0 0 0 * * 不存在的物品名zz") == 0, "非数字关键字不再按 ID 0 命中金币");
+        TestCheck.That(json(Answer("item-search 0 0 0 * * 0")).GetProperty("items").EnumerateArray().All(row => row.GetProperty("name").GetString()!.Contains('0')),
+            "关键字 0 只按名称匹配");
+        // 旧参数不变：单分类总数等于分类表数量，回显 options 为空选项。
+        var old = json(Answer("item-search 0 0 0 * coat"));
+        TestCheck.That(old.GetProperty("total").GetInt32() == Category("coat") && old.GetProperty("options").GetProperty("tags").ValueKind == JsonValueKind.Null &&
+            !old.GetProperty("options").GetProperty("real").GetBoolean(), "不带扩展选项时单分类结果与旧版一致");
+        TestCheck.That(Total("item-search 0 0 0 * * tags:coat,pants") == Category("coat") + Category("pants"), "tags 多分类取并集");
+        TestCheck.That(Total("item-search 0 0 0 * * tags:coat_avatar,hat_avatar") == Category("coat avatar") + Category("hat avatar"), "tags 中空格写作 _");
+        var creatures = All("item-search {o} 0 0 * * tags:creature@e");
+        TestCheck.That(creatures.Length == Category("creature", true) && creatures.All(row => row.GetProperty("equipment").GetBoolean()), "tags 的 @e 只要装备");
+        TestCheck.That(Total("item-search 0 0 0 * * tags:creature@s") == Category("creature", false), "tags 的 @s 只要道具");
+        TestCheck.That(Total("item-search 0 0 0 * * tags:g:peteq") == Category("artifact red") + Category("artifact blue") + Category("artifact green"), "tags 可写分组");
+        TestCheck.That(json(Answer("item-search 0/200 0 0 * * kind:s 药")).GetProperty("items").EnumerateArray().All(row => !row.GetProperty("equipment").GetBoolean()), "kind:s 只要道具");
+        int weapons = Category("weapon"), realWeapons = Category("weapon", null, "real");
+        TestCheck.That(Total("item-search 0 0 0 * weapon real:1") == realWeapons && realWeapons <= weapons, "real:1 与分类表 real 数一致");
+        TestCheck.That(All("item-search {o} 0 0 * * tags:title_name real:1").All(row => !DevelopmentCatalog.IsPlaceholderName(row.GetProperty("name").GetString())), "real:1 不含占位名");
+        var subs = categories.GetProperty("weaponSubs").EnumerateArray().ToArray();
+        TestCheck.That(subs.Length > 3 && subs.Sum(row => row.GetProperty("count").GetInt32()) <= weapons, "武器子类来自 PVF 路径");
+        var sub = subs.OrderByDescending(row => row.GetProperty("count").GetInt32()).First();
+        string subKey = sub.GetProperty("sub").GetString()!;
+        var subRows = All("item-search {o} 0 0 * * sub:" + subKey.Replace(' ', '_'));
+        TestCheck.That(subRows.Length == sub.GetProperty("count").GetInt32() && subRows.All(row => row.GetProperty("sub").GetString() == subKey && row.GetProperty("tag").GetString() == "weapon"),
+            "sub 只返回该武器子类: " + subKey);
+        var sorted = json(Answer("item-search 0/200 0 0 * * tags:coat,pants sort:id")).GetProperty("items").EnumerateArray().Select(row => row.GetProperty("id").GetInt32()).ToArray();
+        TestCheck.That(sorted.Length > 1 && sorted.SequenceEqual(sorted.Order()), "sort:id 按 ID 升序");
+        var levels = json(Answer("item-search 0/200 0 0 * * tags:coat sort:-level")).GetProperty("items").EnumerateArray().Select(row => row.GetProperty("minLevel").GetInt32()).ToArray();
+        TestCheck.That(levels.Length > 1 && levels.SequenceEqual(levels.OrderDescending()), "sort:-level 按等级降序");
+        TestCheck.That(Total("item-filter 0 0 0 * * * * * tags:coat,pants") == Category("coat") + Category("pants"), "item-filter 同样支持 tags");
+        foreach (string bad in new[] { "item-search 0 0 0 * coat tags:pants", "item-search 0 0 0 * * sort:price", "item-search 0 0 0 * * kind:x",
+            "item-search 0 0 0 * * tags:g:nope", "item-search 0 0 0 * * real:2", "item-search 0 0 0 * * tags:coat tags:pants", "item-search 0 0 0 * sets tags:coat" })
+            TestCheck.That(Answer(bad).StartsWith("ERR "), "扩展选项严格拒绝: " + bad);
+        // 网页参数转命令选项。
+        TestCheck.That(DfoServer.Network.Management.GmWebServer.SearchOptionTokens("coat avatar,creature@e", "e", "katana", "1", "id", out string extra) is null &&
+            extra == " tags:coat_avatar,creature@e kind:e sub:katana real:1 sort:id", "网页扩展参数转换: " + extra);
+        TestCheck.That(DfoServer.Network.Management.GmWebServer.SearchOptionTokens(null, null, null, null, null, out string none) is null && none.Length == 0, "网页不带扩展参数时不追加选项");
+        TestCheck.That(DfoServer.Network.Management.GmWebServer.SearchOptionTokens(null, null, null, null, "price", out _) is not null &&
+            DfoServer.Network.Management.GmWebServer.SearchOptionTokens(null, null, "Katana!", null, null, out _) is not null &&
+            DfoServer.Network.Management.GmWebServer.SearchOptionTokens(null, "x", null, null, null, out _) is not null, "网页扩展参数严格校验");
+        // 预览补充：交易限制、价格、武器子类、礼包内容。
+        JsonElement Preview(int id) => JsonSerializer.SerializeToElement(extras.Preview(id));
+        var weapon = Preview(subRows[0].GetProperty("id").GetInt32());
+        TestCheck.That(weapon.GetProperty("weaponSub").GetString() == subKey && weapon.TryGetProperty("price", out _) && weapon.TryGetProperty("trade", out _), "武器预览带子类、价格与交易限制");
+        var traded = catalog.Items.Where(row => row.Equipment && !row.Placeholder).Take(3000).Select(row => Preview(row.Id)).FirstOrDefault(value => value.GetProperty("attachType").GetString()!.Length > 0);
+        TestCheck.That(traded.ValueKind == JsonValueKind.Object && traded.GetProperty("trade").GetString()!.Length > 0, "交易类型有中文说明");
+        var box = catalog.Items.Where(row => !row.Equipment && row.Tag == "booster").Take(500).Select(row => Preview(row.Id))
+            .FirstOrDefault(value => value.GetProperty("booster").ValueKind == JsonValueKind.Object && value.GetProperty("booster").GetProperty("items").GetArrayLength() > 0);
+        TestCheck.That(box.ValueKind == JsonValueKind.Object && box.GetProperty("booster").GetProperty("items").EnumerateArray().All(row => row.GetProperty("min").GetInt32() > 0),
+            "礼包预览列出内容物品与数量");
+        TestCheck.That(DfoServer.Network.Management.GmItemExtras.TradeLabel("sealing") == "封装（解封后不可交易）" && DfoServer.Network.Management.GmItemExtras.TradeLabel("free") == "可交易" &&
+            DfoServer.Network.Management.GmItemExtras.TradeLabel("account") == "账号绑定（不可交易）", "交易类型中文说明");
     }
 }

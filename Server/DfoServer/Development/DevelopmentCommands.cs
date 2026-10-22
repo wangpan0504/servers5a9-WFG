@@ -66,7 +66,8 @@ internal static class DevelopmentCommands
             var progress = reset ? new CharacterProgressReset(CharacterCatalog.Load(pvf, resources!.Items), learning!, CharacterGrowthCatalog.Load(pvf, learning)) : null;
             var events = request.Action == DevelopmentAction.Event ? new Game.Events.ServerEventService(
                 new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db"))) : null;
-            bool extended = request.Action >= DevelopmentAction.Wallet;
+            // 扩展装备栏只读写角色标志、纸娃娃外观只读角色存档，不需要物品与邮件资源。
+            bool extended = request.Action >= DevelopmentAction.Wallet && request.Action is not (DevelopmentAction.EquipSlots or DevelopmentAction.Appearance);
             resources ??= extended ? new ItemResources(pvf) : null;
             mailbox ??= extended ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
             var catalog = extended ? new DevelopmentCatalog(pvf, resources!, request.Action is DevelopmentAction.QuestSearch or DevelopmentAction.QuestChain or DevelopmentAction.TitleList or DevelopmentAction.TitleComplete
