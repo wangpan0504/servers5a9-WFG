@@ -8,8 +8,21 @@ internal static class SkillSlotAllocator
     {
         if (skill.SkillId is >= 200 and <= 211)
             return occupied.Contains((byte)(138 + skill.SkillId - 200)) ? -1 : 138 + skill.SkillId - 200;
-        if (initial && skill.Job == 9 && !skill.HasComboDeclaration && skill.Type == SkillType.Active && skill.SkillId != 169)
-            return FirstFree(occupied, 150, 198);
+        if (skill.Job == 9 && !skill.HasComboDeclaration && skill.Type == SkillType.Active && skill.SkillId != 169)
+        {
+            int arrangement = FirstFree(occupied, 150, 198);
+            if (arrangement >= 0)
+                return arrangement;
+            // 初始建角沿用原布局：下排排满即失败，不落到上排快捷栏。
+            if (initial)
+                return -1;
+            // 新学主动只进下排排列区；六列排满后进入普通技能区，绝不占用上排快捷栏，
+            // 避免客户端自动编排把同一技能同时铺进快捷栏和排列造成重复摆放。
+            int stored = FirstFree(occupied, 12, 138);
+            if (stored >= 0)
+                return stored;
+            return -1;
+        }
         if (skill.Type == SkillType.Active)
         {
             int slot = FirstFree(occupied, 0, 12);

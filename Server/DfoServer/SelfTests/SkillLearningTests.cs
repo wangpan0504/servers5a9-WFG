@@ -287,6 +287,25 @@ internal static class SkillLearningTests
                         "职业资源零上限继续禁止学习："+job+"/"+growth+"/"+id);
             }
         }
+
+        // 黑暗武士新学主动只进下排排列区（150–197），排满退普通技能区，绝不占上排快捷栏。
+        SkillLearningDefinition Dark(ushort id, bool combo = false) =>
+            new(9, id, "skill/fixture.skl", SkillType.Active, [0], Enumerable.Repeat(3, 6).ToArray(),
+                Enumerable.Repeat(3, 6).ToArray(), 1, 0, [], new int[6], false, combo, [], 3, 6);
+        That(SkillSlotAllocator.Allocate(Dark(5), []) == 150,
+            "黑暗武士新学主动优先进入排列区150，不占上排快捷栏");
+        That(SkillSlotAllocator.Allocate(Dark(5), Enumerable.Range(0, 12).Select(slot => (byte)slot).ToHashSet()) == 150,
+            "快捷栏完全空闲时新学主动也不使用0–11");
+        var arrangementFull = Enumerable.Range(150, 48).Select(slot => (byte)slot).ToHashSet();
+        That(SkillSlotAllocator.Allocate(Dark(5), arrangementFull) == 12,
+            "排列区排满后新学主动进入普通技能区12，不回退快捷栏");
+        arrangementFull.UnionWith(Enumerable.Range(12, 126).Select(slot => (byte)slot));
+        That(SkillSlotAllocator.Allocate(Dark(5), arrangementFull) == -1,
+            "排列区与普通技能区都满时整笔拒绝，不伪造快捷栏绑定");
+        That(SkillSlotAllocator.Allocate(Dark(5), arrangementFull, initial: true) == -1,
+            "初始建角布局保持原规则，排列区满即失败");
+        That(SkillSlotAllocator.Allocate(Dark(5, combo: true), []) == 0,
+            "连招根仍按主动规则占用快捷栏");
     }
 
     private static CharacterLearningState State(ushort sp, IReadOnlyList<LearnedSkill> skills) => new(123,

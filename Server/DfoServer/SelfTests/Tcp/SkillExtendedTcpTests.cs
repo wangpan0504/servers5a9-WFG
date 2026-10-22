@@ -95,7 +95,9 @@ internal static class SkillExtendedTcpTests
             peer.Send(29, Purchase(77, 1));
             var bought = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
             // 普通学习只回ACK29；若额外推NOTI447，下一条28回执会先读到447而失败。
-            That(bought.Skills.Single().Slot == 7, "黑武新学主动补可见扩展空位7");
+            // 新学主动只进下排排列区150–197：取当前树的首个空位，绝不占上排快捷栏0–11。
+            int expected = Enumerable.Range(150, 48).First(slot => initial[0].Skills.All(skill => skill.Slot != slot));
+            That(bought.Skills.Single().Slot == expected, "黑武新学主动进入排列区首个空位，不占上排快捷栏");
             // 自动组合的排列由客户端本地生成，510只确认开始；服务端不生成也不落库任何排列。
             var tree = Role(1).Learning.Trees[0];
             ushort from46 = tree.Skills.Single(skill => skill.Id == 46).Slot;

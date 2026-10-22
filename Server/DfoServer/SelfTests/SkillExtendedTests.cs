@@ -83,8 +83,12 @@ internal static class SkillExtendedTests
             ushort id = job == 9 ? (ushort)77 : (ushort)131;
             var learned = SkillLearning.Plan(job, 0, 60, special, new(0, 0, [new(id, false, 1)]), catalog);
             Check(learned.Success, "特殊职业技能等级与资源费用 " + job);
-            Check(job == 9 ? learned.Changes.Single().Slot == 7 : learned.Changes.Single().Slot is >= 102 and < 138,
-                "黑武新学主动填扩展空位，缔造被动使用分组 " + job);
+            // 黑暗武士新学主动只进下排排列区：取当前树 150–197 的首个空位，绝不占上排快捷栏。
+            int expected = job == 9
+                ? Enumerable.Range(150, 48).First(slot => special.Trees[0].Skills.All(skill => skill.Slot != slot))
+                : -1;
+            Check(job == 9 ? learned.Changes.Single().Slot == expected : learned.Changes.Single().Slot is >= 102 and < 138,
+                "黑武新学主动填排列区首个空位，缔造被动使用分组 " + job);
             var character = new Character(1, 0, "Special", 1, towns.Room, towns.InitialReturn)
             { Job = job, Level = 49, Learning = initialized.State! with { Experience = growth.GetLevelStartExperience(49) } };
             var grown = CharacterGrowthPlan.AddExperience(character, growth.GetLevelExperienceSpan(49), growth);
