@@ -389,7 +389,7 @@ internal sealed partial class GameSession
             formalDungeon?.HasPendingFatigue == true || formalDungeon?.Run.HasPendingDeath == true ||
             formalDungeon?.Run.HasPendingSettlement == true || formalDungeon?.Ground.HasPendingOperation == true ||
             formalDungeon?.PendingTutorialClear is not null || pendingQuestCompletion is not null ||
-            pendingQuestLifecycle is not null || pendingQuestQuickClear is not null || HasPendingQuestScene)
+            pendingQuestLifecycle is not null || HasUncommittedQuestQuickClear || HasPendingQuestScene)
             throw new InvalidOperationException("当前业务结果待确认，不能覆盖账号契约快照");
         var result = repository.SetCardMembership(owner,name,kind,expires);
         if (Selected is { } selected)

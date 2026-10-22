@@ -2,11 +2,13 @@ using System.Collections.Immutable;
 using System.Buffers.Binary;
 using System.Net;
 using System.Text.Json;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Skills;
+using DfoServer.GameWorld.Adventure;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
@@ -249,6 +251,16 @@ internal static class QuestSpecifiedTicketTests
             }
         }
         finally { Directory.Delete(logRoot,true); }
+        // 券回执已提交后只用于重复请求重放，不得继续阻塞远征取消等其它城镇业务；未提交的任务券规划仍互斥。
+        using (var f=Fixture(TicketId,targetDefinitions,60,0,[Active(0,674),Active(1,649)]))
+        {
+            var service=new AdventureExpeditionService(new AdventureCatalog(pvf),new AdventureExpeditionCatalog(pvf));
+            AdventureExpeditionResult Cancel() => f.Session.PlanAdventureExpedition(service,_ => (null,(ushort)7,0u),DateTimeOffset.UtcNow);
+            That(f.Session.PrepareQuestTicket(TicketId,f.Catalog,items.Items)?.Prepared is not null && Cancel().Error==3,
+                "未提交的任务券规划仍排斥远征取消等其它业务");
+            That(f.Session.UseQuestTicket(65,0,f.Catalog,items.Items,130)?.Commit is not null && Cancel().Error==7,
+                "任务券提交后的回执不再阻塞远征取消等其它城镇业务");
+        }
         Console.WriteLine($"PASS {Count-checks} 指定130券资源、资格、槽位事务、Handler及恢复断言（非主线）");
 
         QuestOrdinaryCompletionTests.Fixture Fixture(int template,StoryQuest[] definitions,byte level,byte job,ActiveMainQuest[] active,

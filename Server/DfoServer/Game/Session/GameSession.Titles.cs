@@ -39,7 +39,7 @@ internal sealed partial class GameSession
         bool CanUpdate() => owner.Execute(() => pendingCommunication is null && pendingRental is null && Selected is not null && (initializing
             ? !Ready && Phase == SessionPhase.Unselected
             : Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Dungeon or SessionPhase.Settlement &&
-              !HasPendingQuestScene && pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null &&
+              !HasPendingQuestScene && pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasUncommittedQuestQuickClear &&
               !HasActiveDungeonContinuation && !HasPendingQuestReplay && !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true &&
               formalDungeon?.HasPendingFatigue != true && formalDungeon?.Run.HasPendingDeath != true && formalDungeon?.Run.HasPendingSettlement != true));
     }

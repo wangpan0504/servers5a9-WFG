@@ -26,7 +26,7 @@ internal sealed partial class GameSession
         result.Accepted && Ready && result.Generation == owner.Generation && result.Epoch == SelectionEpoch && result.Phase == Phase &&
         result.Dungeon == formalDungeon?.Run.Snapshot.Identity && ReferenceEquals(result.Selected, Selected));
     bool CanPlanAdventureRepresentative() => pendingRental is null && pendingCommunication is null && Ready && Selected is not null && !HasPendingQuestScene &&
-        pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null &&
+        pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasUncommittedQuestQuickClear &&
         !HasActiveDungeonContinuation && !HasPendingQuestReplay && !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true &&
         formalDungeon?.HasPendingFatigue != true && formalDungeon?.Run.HasPendingDeath != true && formalDungeon?.Run.HasPendingSettlement != true &&
         Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement;

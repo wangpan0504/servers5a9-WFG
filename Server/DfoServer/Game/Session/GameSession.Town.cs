@@ -4,9 +4,9 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    // 已进入提交的任务依赖原角色快照恢复；未提交手册与已提交回答缓存仍按普通操作自然失效。
+    // 已进入提交的任务依赖原角色快照恢复；未提交手册与已提交的券回执不排斥城镇操作，按普通操作自然失效。
     bool HasPendingTownQuestCommit => pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null ||
-        pendingQuestQuickClear is { CommitStarted: true } or { Plan.IsPreparedSkip: false } || HasPendingQuestScene;
+        pendingQuestQuickClear is { CommitStarted: true } or { Committed: null, Plan.IsPreparedSkip: false } || HasPendingQuestScene;
 
     public bool Move(PositionRequest request) => owner.Execute(() =>
     {

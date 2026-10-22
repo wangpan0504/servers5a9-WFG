@@ -91,7 +91,7 @@ internal sealed partial class GameSession
 
     // 原付款可恢复；这里只排斥其它未决事务，不把自己的pending加入循环门禁。
     bool CanUseImageCommunication() => pendingRental is null && Ready && Phase == SessionPhase.Town && Selected is not null &&
-        pendingQuestCompletion is null && pendingQuestLifecycle is null && pendingQuestQuickClear is null && !HasPendingQuestScene &&
+        pendingQuestCompletion is null && pendingQuestLifecycle is null && !HasUncommittedQuestQuickClear && !HasPendingQuestScene &&
         !HasPendingFormalCard && towns.IsPosition(Selected.Position, QuestEligibility.Completed(Selected));
 
     public bool CanPublishImageCommunication(ImageCommunicationReceipt receipt) => owner.Execute(() => Ready &&

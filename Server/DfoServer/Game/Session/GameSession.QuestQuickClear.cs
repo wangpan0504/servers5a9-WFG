@@ -22,6 +22,8 @@ internal sealed partial class GameSession
         ImmutableArray<QuestSkipAnswer> AnsweredBatch = default, bool CommitStarted = false, QuestQuickClearCommit? Committed = null,
         bool TicketAcknowledged = false);
     PendingQuestQuickClear? pendingQuestQuickClear;
+    // 券回执已提交后只用于重复请求重放与ACK，不再排斥其它业务；只有提交进行中或尚未提交的规划独占当前快照。
+    bool HasUncommittedQuestQuickClear => pendingQuestQuickClear is { Committed: null };
 
     public QuestQuickClearReceipt? QuickClearQuest(uint parentKey, QuestCatalog quests, QuestConnectionCatalog connections)
     {
