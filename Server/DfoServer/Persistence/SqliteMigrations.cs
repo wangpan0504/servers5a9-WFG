@@ -176,6 +176,8 @@ internal static class SqliteMigrations
         new(72, "冒险团每周地下城信息配置", EnsureAdventureWeeklyConfig),
         // 国服95模型：账号累计所有角色经验；开启总量、排除累计与角色里程一次性建出，开启在启动时执行。
         new(73, "冒险团经验账本", EnsureAdventureLedger),
+        // 满级入口线后角色经验到账为0，回执需保留同一笔经验记入熟练度的额度，结算显示与重复报告才能回放有效经验。
+        new(74, "熟练度到账额度", SettlementProficiencySchema.Upgrade),
     ];
 
     // 早期真实库没有该表（v72首次引入），直接建出；从当前schema回退重放的夹具可能已带同结构表，
@@ -1565,7 +1567,7 @@ internal static class SqliteMigrations
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
-            ("character_dungeon_settlement_receipts",SettlementBreakdownSchema.SettlementSql),
+            ("character_dungeon_settlement_receipts",SettlementProficiencySchema.SettlementSql),
             ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
             ("character_dungeon_drop_pickups",DungeonDropCollectionSchema.PickupDefinition),
             ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema),
@@ -1657,13 +1659,13 @@ internal static class SqliteMigrations
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,day,clear_count,daily_reward FROM character_crack_daily LIMIT 0",
         "SELECT character_id,account,change_count FROM character_growup_change LIMIT 0",
-        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision,potion_experience,adventure_experience,other_bonus_experience,bonus_json FROM character_dungeon_settlement_receipts LIMIT 0",
+        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision,potion_experience,adventure_experience,other_bonus_experience,bonus_json,proficiency_gain FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",
         "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience,recommended_dungeon_clears FROM character_dungeon_state LIMIT 0",
         "SELECT character_id,account,used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary FROM character_fatigue LIMIT 0",
         "SELECT character_id,account,instance_id,task_attempt,map_id,epoch,generation,rule_id,before_revision,revision,before_state,after_state FROM character_dungeon_fatigue_receipts LIMIT 0",
-        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts LIMIT 0",
+        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision,proficiency_gain FROM character_dungeon_growth_receipts LIMIT 0",
         "SELECT [account_id],[salt],[password_hash],[iterations],[disabled],[revision] FROM [accounts] LIMIT 0",
         "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",
         "SELECT [character_id],[account],[character_options] FROM [character_client_settings] LIMIT 0",

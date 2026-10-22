@@ -724,7 +724,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_quest_skip_receipts VALUES({{id}},'planning',NULL,NULL,NULL,0,1,'{}','abcdef1234567890abcdef1234567890','Manual');
                 INSERT INTO character_quest_effect_receipts VALUES({{id}},'abcdef1234567890abcdef1234567890',0,1,'[]','[]');
                 INSERT INTO character_quest_special_reward_claims VALUES({{id}},30,'abcdef1234567890abcdef1234567890');
-                INSERT INTO character_dungeon_growth_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,1,1,1,'test','test',1,1,1,1,0,1,1);
+                INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,1,1,1,'test','test',1,1,1,1,0,1,1);
                 INSERT INTO character_dungeon_loot_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',1,1,1,1,'test','test',1,'{}',0,0,0);
                 INSERT INTO character_dungeon_pickup_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,'instance',1,1,0,121,1,'{}',1);
                 INSERT INTO character_dungeon_drop_batches VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,'test','test',1);

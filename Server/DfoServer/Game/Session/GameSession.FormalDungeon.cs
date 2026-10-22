@@ -746,14 +746,16 @@ internal sealed partial class GameSession
         if (loot is not null && !dungeon.Ground.PublishCommitted(pending, loot))
             throw new InvalidOperationException("已提交掉落的原准备不能发布");
         SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
-        dungeon.KillExperienceTotal = checked(dungeon.KillExperienceTotal + committed.Commit.GainedExperience);
+        // 满级入口线后角色经验到账为 0，击杀累计改用「角色到账 + 熟练度到账」的有效经验。
+        uint effective = checked(committed.Commit.GainedExperience + committed.Commit.ProficiencyGained);
+        dungeon.KillExperienceTotal = checked(dungeon.KillExperienceTotal + effective);
         dungeon.KillGrowthContractExperience = checked(dungeon.KillGrowthContractExperience +
-            (reward.Bonuses?.Applied(committed.Commit.GainedExperience).Amount(ExperienceBonusSource.GrowthContract) ??
+            (reward.Bonuses?.Applied(effective).Amount(ExperienceBonusSource.GrowthContract) ??
             GrowthContractPolicy.AppliedBonus(reward.Amount - reward.GrowthContractExperience,
-                reward.GrowthContractExperience, committed.Commit.GainedExperience)));
+                reward.GrowthContractExperience, effective)));
         // 结果页杀怪侧装备加成行按每只怪实际到账的分项累计；未冻结分项的历史奖励没有该口径，保持 0。
         dungeon.KillEquipmentExperience = checked(dungeon.KillEquipmentExperience +
-            (reward.Bonuses?.Applied(committed.Commit.GainedExperience).Amount(ExperienceBonusSource.Equipment) ?? 0));
+            (reward.Bonuses?.Applied(effective).Amount(ExperienceBonusSource.Equipment) ?? 0));
         dungeon.KillObjectExperience.Add(new(pending.Death.MonsterKey, reward.BaseAmount));
         // 领主行独立于明细列表：客户端用评分段147槽显示，不取该对象在151/155里的条目。
         if (pending.Monster.IsBoss)
@@ -765,6 +767,7 @@ internal sealed partial class GameSession
         {
             Drops = loot?.Grounds ?? [],
             GainedExperience = committed.Commit.GainedExperience,
+            ProficiencyGained = committed.Commit.ProficiencyGained,
             ReportedTarget = target,
             PreviousQuests = previousQuests,
             QuestDropSlots = questDrop?.Inventory.ChangedSlots ?? [],

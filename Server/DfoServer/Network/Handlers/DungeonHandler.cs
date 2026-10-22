@@ -313,7 +313,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         var target = result.ReportedTarget;
         log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, Report = audit,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.Team, target.IsFriendly, target.IsBlocking, target.CanReportDeath },
-            result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ClearFact, result.RoomClearFact });
+            result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return CommandResult.Unhandled;
         if (result.Receipt is not { } receipt) return CommandResult.Handled;
@@ -359,9 +359,11 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints), state.GrowthCapsuleExperience,
             state.ProficiencyLevel, state.ProficiencyExperience);
         uint plainKill = reward.Amount - reward.GrowthContractExperience - reward.PotionExperience;
-        var display = reward.Bonuses?.Display(result.GainedExperience) ?? CharacterExperienceDisplay.Ordinary with
-        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainKill, reward.GrowthContractExperience, result.GainedExperience),
-            PotionExperience = ExpBonusPolicy.Shown(plainKill, reward.GrowthContractExperience, reward.PotionExperience, result.GainedExperience) };
+        // 满级后角色经验为 0，击杀经验全额记入熟练度；显示与秘药判定都用两者之和的有效经验。
+        uint effective = checked(result.GainedExperience + result.ProficiencyGained);
+        var display = reward.Bonuses?.Display(effective) ?? CharacterExperienceDisplay.Ordinary with
+        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainKill, reward.GrowthContractExperience, effective),
+            PotionExperience = ExpBonusPolicy.Shown(plainKill, reward.GrowthContractExperience, reward.PotionExperience, effective) };
         foreach (ushort key in result.CulledMonsterKeys)
             await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
         // 秘药分量非 0 时，客户端会先拼出经验明细。31 若排在这条 NOTI37 之后，02D23170 看到明细窗口仍在就跳过结算锁存。

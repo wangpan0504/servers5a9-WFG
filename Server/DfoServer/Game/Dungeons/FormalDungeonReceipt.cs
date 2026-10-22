@@ -34,6 +34,8 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
 {
     public ImmutableArray<DungeonGroundObject> Drops { get; init; } = [];
     public uint GainedExperience { get; init; }
+    // 同一笔击杀经验里记入熟练度的额度；与 GainedExperience 相加才是本次有效经验。
+    public uint ProficiencyGained { get; init; }
     public DungeonPlannedMonster? ReportedTarget { get; init; }
     public bool SpecialChildRetired { get; init; }
     public DungeonElevatorReceipt? Elevator { get; init; }
@@ -69,6 +71,8 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     Character? PreviousCharacter = null)
 {
     public uint GainedExperience { get; init; }
+    // 通关结算的熟练度到账额度；展示位统一使用两者之和，不把满级入口线的实际收益显示成 0。
+    public uint ProficiencyGained { get; init; }
     public bool LuckyStarGained { get; init; }
     public int LuckyStarTotal { get; init; }
     public DungeonCardReward? Card { get; init; }

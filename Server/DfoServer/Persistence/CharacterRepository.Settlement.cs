@@ -53,11 +53,11 @@ internal sealed partial class CharacterRepository
             SELECT account,event_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,
               base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_experience,after_experience,
               scene_operation_id,growth_contract_experience,potion_experience,adventure_experience,
-              other_bonus_experience,bonus_json
+              other_bonus_experience,bonus_json,proficiency_gain
             FROM character_dungeon_settlement_receipts WHERE character_id=$id AND instance_id=$instance
             """;
         bool duplicate;
-        uint gained = 0;
+        uint gained = 0, proficiencyGained = 0;
         using (var reader = command.ExecuteReader())
         {
             duplicate = reader.Read();
@@ -73,11 +73,15 @@ internal sealed partial class CharacterRepository
                 reader.GetInt64(19) != reward.PotionExperience || reader.GetInt64(20) != reward.AdventureExperience ||
                 reader.GetInt64(21) != otherBonus || reader.GetString(22) != bonusJson))
                 throw new InvalidDataException("同一通关实例的事实、报告或奖励被修改");
-            if (duplicate) gained = checked((uint)(reader.GetInt64(16) - reader.GetInt64(15)));
+            if (duplicate)
+            {
+                gained = checked((uint)(reader.GetInt64(16) - reader.GetInt64(15)));
+                proficiencyGained = checked((uint)reader.GetInt64(23));
+            }
         }
         if (duplicate)
         {
-            var restored = ReadCardCommit(db, tx, owner.Account, prepared, current, expected, true, gained);
+            var restored = ReadCardCommit(db, tx, owner.Account, prepared, current, expected, true, gained, proficiencyGained);
             restored = restored with { LuckyStarTotal = ReadAccountWallet(db, owner.Account, tx).RentalPoints };
             tx.Commit();
             return restored;
@@ -127,12 +131,16 @@ internal sealed partial class CharacterRepository
                 adventureCommit = new(credit.After with { Revision = credit.Before.Revision + 1 }, credit.RawOverflow);
         }
         // 熟练度与通关经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
+        // 回执保存这笔经验里真正记入熟练度的额度，重复报告与显示层都按同一有效经验回放。
         if (current.DungeonState is { } dungeonState)
         {
             var proficiencyBefore = new ProficiencyProgress(dungeonState.ProficiencyLevel, dungeonState.ProficiencyExperience);
             var proficiencyGain = ProficiencyProgression.Gain(plan.PreviousLevel, plan.Before.Experience, reward.TotalExperience, catalog);
             if (ProficiencyProgression.Advance(proficiencyBefore, proficiencyGain, catalog) is { } proficiency)
+            {
                 WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
+                proficiencyGained = checked((uint)proficiency.Credited);
+            }
         }
         // 推荐地下城通关按角色累计到u16上限，账号面板读取时求和；同一实例的重复报告已在上面提前返回。
         if (recommendedClear)
@@ -171,6 +179,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$adventure", reward.AdventureExperience);
         command.Parameters.AddWithValue("$otherBonus", otherBonus);
         command.Parameters.AddWithValue("$bonusJson", bonusJson);
+        command.Parameters.AddWithValue("$proficiencyGained", proficiencyGained);
         command.Parameters.AddWithValue("$bonus", reward.RankBonusIndex);
         command.Parameters.AddWithValue("$rule", reward.RuleId);
         command.Parameters.AddWithValue("$resource", reward.ResourceSource);
@@ -184,9 +193,9 @@ internal sealed partial class CharacterRepository
               task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,
               total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,
               before_experience,after_experience,revision,scene_operation_id,growth_contract_experience,potion_experience,adventure_experience,
-              other_bonus_experience,bonus_json)
+              other_bonus_experience,bonus_json,proficiency_gain)
             VALUES($id,$account,$event,$instance,$quest,$attempt,$epoch,$dungeon,$map,$deaths,$report,$generation,
-              $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$potion,$adventure,$otherBonus,$bonusJson)
+              $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$potion,$adventure,$otherBonus,$bonusJson,$proficiencyGained)
             """;
         command.ExecuteNonQuery();
         var committed = Require(db, tx, owner.Account, expected.Name);
@@ -226,6 +235,7 @@ internal sealed partial class CharacterRepository
         return new DungeonSettlementCommit(committed, false, reward)
         {
             GainedExperience = checked((uint)plan.GainedExperience),
+            ProficiencyGained = proficiencyGained,
             Adventure = adventureCommit,
             LuckyStarGained = luckyStar.Granted,
             LuckyStarTotal = luckyStar.Total,
@@ -254,9 +264,10 @@ internal sealed partial class CharacterRepository
     }
 
     static DungeonSettlementCommit ReadCardCommit(SqliteConnection db, SqliteTransaction tx, string account,
-        PreparedDungeonSettlement prepared, Character current, Character expected, bool duplicate, uint gained)
+        PreparedDungeonSettlement prepared, Character current, Character expected, bool duplicate, uint gained, uint proficiencyGained)
     {
-        if (prepared.Card is null) return new(current, duplicate, prepared.Reward) { GainedExperience = gained };
+        if (prepared.Card is null) return new(current, duplicate, prepared.Reward)
+            { GainedExperience = gained, ProficiencyGained = proficiencyGained };
         using var query = db.CreateCommand();
         query.Transaction = tx;
         query.Parameters.AddWithValue("$id", current.Id);
@@ -285,7 +296,7 @@ internal sealed partial class CharacterRepository
         }
         return new(current, duplicate, prepared.Reward)
         {
-            GainedExperience = gained,
+            GainedExperience = gained, ProficiencyGained = proficiencyGained,
             Card = card, MailId = mail, Options = prepared.Options, BlackDiamond = bonus,
             Inventory = null
         };

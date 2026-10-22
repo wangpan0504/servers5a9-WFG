@@ -56,6 +56,8 @@ internal static class SettlementBreakdownSchema
         if (canonical == SqliteMigrations.NormalizeTable(SettlementSql, Settlement)) return;
         // 上游 #543 先合入时回执已带其他加成分项列；本步在其结构上继续补秘药与冒险团分项。
         bool extended = canonical == SqliteMigrations.NormalizeTable(ExtendedPreviousSettlementSql, Settlement);
+        // 从当前 schema 回退重放的夹具还可能已带 v74 追加的熟练度到账列。
+        if (canonical == SqliteMigrations.NormalizeTable(SettlementProficiencySchema.SettlementSql, Settlement)) return;
         if (!extended && canonical != SqliteMigrations.NormalizeTable(PreviousSettlementSql, Settlement))
             throw new InvalidDataException("通关分项迁移不是已确认的原结算结构");
         foreach (string table in new[] { Breakdown, BreakdownOptions })

@@ -46,6 +46,7 @@ internal static partial class DatabaseSchemaTests
             Check(Data(path) == before && QueryOn(path,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
                 QueryOn(path,"SELECT other_bonus_experience FROM character_dungeon_settlement_receipts") is 0L &&
                 QueryOn(path,"SELECT bonus_json FROM character_dungeon_settlement_receipts") is "[]" &&
+                QueryOn(path,"SELECT proficiency_gain FROM character_dungeon_settlement_receipts") is 0L &&
                 QueryOn(path,"SELECT count(*) FROM sqlite_schema WHERE name IN ('bonus_migration_index','bonus_migration_trigger')") is 2L,
                 "真实65旧库升级到当前版本保留全表原值、UID序列和历史回执，旧分项缺省0且无补发");
             string current = Snapshot(path);
@@ -66,7 +67,7 @@ internal static partial class DatabaseSchemaTests
         {
             using var db = Open(file);
             return string.Join('|', TableNames(db).Select(table => table + ":" + Rows(db,table,
-                ColumnNames(db,table).Where(column => column is not "\"other_bonus_experience\"" and not "\"bonus_json\"").ToArray())));
+                ColumnNames(db,table).Where(column => column is not "\"other_bonus_experience\"" and not "\"bonus_json\"" and not "\"proficiency_gain\"").ToArray())));
         }
     }
 }

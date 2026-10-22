@@ -127,6 +127,7 @@ internal sealed partial class CharacterRepository
             WHERE id=$id AND account=$account AND revision=$revision
             """;
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("训练提交角色revision变化");
+        uint proficiencyGained = 0;
         if (plan.Growth is { } progress)
         {
             WriteLearning(db, tx, expected.Id, progress.Learning);
@@ -138,7 +139,10 @@ internal sealed partial class CharacterRepository
                     checked((uint)progress.RequestedExperience), progress.Catalog);
                 if (ProficiencyProgression.Advance(new(dungeonState.ProficiencyLevel, dungeonState.ProficiencyExperience),
                         proficiencyGain, progress.Catalog) is { } proficiency)
+                {
                     WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
+                    proficiencyGained = checked((uint)proficiency.Credited);
+                }
             }
             // 训练检查点击杀/通关经验属于经验获取，按同一模型计入冒险团。
             if (plan.Experience > 0 &&
@@ -152,7 +156,7 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("训练状态owner缺失");
         if (plan.Death is { } death)
         {
-            WriteDungeonGrowthReceipt(db, tx, owner, expected, death, plan.DeathReward!, plan.Growth!);
+            WriteDungeonGrowthReceipt(db, tx, owner, expected, death, plan.DeathReward!, plan.Growth!, proficiencyGained);
             SaveDungeonLoot(db, tx, owner.Account, expected, death, plan.Loot);
         }
         command.Parameters["$revision"].Value = checked(expected.Revision + 1);

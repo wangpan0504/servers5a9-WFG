@@ -51,7 +51,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
             request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
-            result.Reward, result.GainedExperience, result.Card, result.MailId, result.Receipt?.Snapshot.Identity,
+            result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.MailId, result.Receipt?.Snapshot.Identity,
             Adventure = result.Adventure is { } progression
                 ? new { progression.State.Level, progression.State.Experience, progression.MaximumLevelExperience,
                     progression.State.CapsuleExperience, BravePoints = progression.State.Points[0] }
@@ -63,10 +63,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints),
             state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
         // 本版协议没有独立的冒险团加成字段：它属于基础通关经验，和基础项一起作为普通经验展示。
+        // 满级入口线后角色经验到账为0，结算面板、大会奖励与掉落卡都按「角色到账 + 熟练度到账」的有效经验展示。
+        uint effective = checked(result.GainedExperience + result.ProficiencyGained);
         uint plainClear = reward.TotalExperience - reward.GrowthContractExperience - reward.PotionExperience - reward.AdventureExperience;
-        var display = ExperienceBonuses.FromClearReward(reward)?.Display(result.GainedExperience) ?? CharacterExperienceDisplay.Ordinary with
-        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainClear, reward.GrowthContractExperience, result.GainedExperience),
-            PotionExperience = ExpBonusPolicy.Shown(plainClear, reward.GrowthContractExperience, reward.PotionExperience, result.GainedExperience) };
+        var display = ExperienceBonuses.FromClearReward(reward)?.Display(effective) ?? CharacterExperienceDisplay.Ordinary with
+        { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainClear, reward.GrowthContractExperience, effective),
+            PotionExperience = ExpBonusPolicy.Shown(plainClear, reward.GrowthContractExperience, reward.PotionExperience, effective) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
         // 大会副本没有普通结算页：不发 34/35，改发 NOTI388（见 TournamentReward 注释）。
         bool tournament = receipt.Entry.IsTournament;
@@ -96,10 +98,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         {
             context.TournamentRewardSelection[0] = context.TournamentRewardSelection[1] = DungeonSettlementPackets.TournamentUnselected;
             await context.Notify(NotiPacketType.TOURNAMENT_CLEAR_REWARD,
-                DungeonSettlementPackets.TournamentReward(DungeonTournamentPlan.RoundCount, result.GainedExperience), "formal_tournament_clear_reward", Guard);
+                DungeonSettlementPackets.TournamentReward(DungeonTournamentPlan.RoundCount, effective), "formal_tournament_clear_reward", Guard);
         }
         else
-        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(result.GainedExperience),
+        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(effective),
             result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
             result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
             result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience), "formal_clear_reward", Guard);

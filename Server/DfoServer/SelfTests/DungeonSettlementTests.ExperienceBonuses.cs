@@ -86,6 +86,16 @@ internal static partial class DungeonSettlementTests
         Check(adventureBonuses.Total == 589 && adventureDisplay.GrowthContractExperience == 76 &&
             adventureDisplay.PartyExperience == 19,
             "冒险团通关加成并入普通项，冻结奖励按实际到账589完整分摊");
+        // 满级入口线后结算页按「角色到账 + 熟练度到账」的有效经验分摊：等于整单时原分项不变形，0到账时全部分项清零。
+        var fullAdventure = adventureClear.Applied(589);
+        var emptyAdventure = adventureClear.Applied(0);
+        Check(fullAdventure is { BaseExperience: 380, AdventureExperience: 38, RankExperience: 76, GrowthContractExperience: 76,
+                PotionExperience: 0, TotalExperience: 589 } &&
+            fullAdventure.BonusParts.SequenceEqual(adventureClear.BonusParts) &&
+            emptyAdventure is { BaseExperience: 0, AdventureExperience: 0, RankExperience: 0, GrowthContractExperience: 0,
+                PotionExperience: 0, TotalExperience: 0, BonusParts.IsEmpty: true } &&
+            Reward.Applied(1000) is { BaseExperience: 990, RankExperience: 10, TotalExperience: 1000 },
+            "有效经验按整单回落时结算分项保持原值，熟练度封顶为0时基础与动态分项全部清零");
         Check(ExperienceBonuses.FromClearReward(new DungeonClearExperienceReward(1, 0, 1, 0, "no-parts", "fixture")) is null,
             "未冻结分项的历史结算保持旧口径投影");
     }

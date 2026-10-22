@@ -17,10 +17,16 @@ internal static partial class DatabaseSchemaTests
 
     internal static void RemoveExperienceBonusSchema(SqliteConnection db)
     {
-        if (Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='other_bonus_experience'") is not 1L) return;
-        if (Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE other_bonus_experience<>0 OR bonus_json<>'[]'") is not 0L)
+        bool bonus = Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='other_bonus_experience'") is 1L;
+        bool proficiency = Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='proficiency_gain'") is 1L;
+        if (!bonus && !proficiency) return;
+        if (bonus && Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE other_bonus_experience<>0 OR bonus_json<>'[]'") is not 0L ||
+            proficiency && Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE proficiency_gain<>0") is not 0L)
             throw new InvalidOperationException("旧库夹具不能丢弃真实经验加成分项");
         using var tx = db.BeginTransaction();
+        if (proficiency)
+            SqliteMigrations.Execute(db, tx, "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN proficiency_gain");
+        if (!bonus) { tx.Commit(); return; }
         // 回退到本分支账本迁移之前的结构：保留秘药/冒险团分项，只去掉上游 #543 的其他加成。
         SqliteMigrations.ReplaceTableConstraint(db, tx, DungeonExperienceBonusSchema.Table,
             "total_experience=base_experience+rank_experience+growth_contract_experience+potion_experience+adventure_experience+other_bonus_experience)",
@@ -440,7 +446,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, """
                     INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold)
                       VALUES('old',0,'UidOld',7,38,1,450,234,0,2,60,123);
-                    INSERT INTO character_dungeon_growth_receipts
+                    INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision)
                       VALUES(1,'old','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-source',1,1,2,2,40,60,7);
                     INSERT INTO character_dungeon_loot_receipts
                       VALUES(1,'old','legacy','legacy-instance',1,1,76121,123,'legacy-rule','old-source',513,'{}',100,200,0);
@@ -1278,7 +1284,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(path))
         {
             Execute(db,"INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('xp-old',0,'XpOld',7,38,1,450,234,0)");
-            Execute(db,"INSERT INTO character_dungeon_growth_receipts VALUES(1,'xp-old','legacy','legacy-instance',0,1,1,76121,123,99,1,20,'legacy-rule','old-resource',1,1,1,1,40,60,7)");
+            Execute(db,"INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES(1,'xp-old','legacy','legacy-instance',0,1,1,76121,123,99,1,20,'legacy-rule','old-resource',1,1,1,1,40,60,7)");
             AddDropDependencyFixture(db);
             Execute(db,"CREATE TABLE character_dungeon_growth_receipts_extra(character_id INTEGER,event_id TEXT,value TEXT DEFAULT 'character_dungeon_growth_receipts',FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id)); INSERT INTO character_dungeon_growth_receipts_extra(character_id,event_id) VALUES(1,'legacy')");
             RewindExperienceCaps(db);
@@ -1326,7 +1332,7 @@ internal static partial class DatabaseSchemaTests
                 "封顶迁移保留原集合索引与触发器，不重放触发器");
             Check(Query(db,"SELECT dflt_value FROM pragma_table_info('character_dungeon_growth_receipts_extra') WHERE name='value'") is "'character_dungeon_growth_receipts'",
                 "外键后代名称含父表前缀时正确替换，字符串默认值保持原样");
-            Execute(db,"INSERT INTO character_dungeon_growth_receipts VALUES(1,'xp-old','cap','cap-instance',0,2,2,76121,124,100,1,20,'cap-rule','resource',1,1,95,95,60,60,8)");
+            Execute(db,"INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES(1,'xp-old','cap','cap-instance',0,2,2,76121,124,100,1,20,'cap-rule','resource',1,1,95,95,60,60,8)");
             Reject<SqliteException>(() => Execute(db,"UPDATE character_dungeon_growth_receipts SET after_experience=59 WHERE event_id='cap'"),"封顶约束仍拒绝经验倒退");
             Reject<SqliteException>(() => Execute(db,"UPDATE character_dungeon_growth_receipts SET after_experience=81 WHERE event_id='cap'"),"封顶约束仍拒绝超过原冻结额度");
         }
@@ -1452,7 +1458,7 @@ internal static partial class DatabaseSchemaTests
                 "迁移保留附加索引与触发器，恢复历史行时不重新执行触发器");
             That(Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L && Query(db, "PRAGMA integrity_check") is "ok",
                 "有历史父子账本的v13直接迁移仍保持完整外键");
-            Execute(db, "INSERT INTO character_dungeon_growth_receipts SELECT character_id,account,'ordinary','new-run',0,task_attempt,epoch,map_id,2,2,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts WHERE rowid=41");
+            Execute(db, "INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) SELECT character_id,account,'ordinary','new-run',0,task_attempt,epoch,map_id,2,2,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts WHERE rowid=41");
             Execute(db, "INSERT INTO character_dungeon_settlement_receipts(" + SettlementColumns + ") SELECT character_id,account,'ordinary-settlement','new-run',0,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_settlement_receipts WHERE event_id='old-settlement'");
             That(Query(db, "SELECT count(*) FROM character_dungeon_growth_receipts WHERE quest_id=0") is 1L &&
                 Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE quest_id=0") is 1L,
@@ -1700,7 +1706,7 @@ internal static partial class DatabaseSchemaTests
             Execute(db, "INSERT INTO character_inventory_items(item_uid,character_id,account,item_core) VALUES(12345,1,'history','{\"Uid\":12345,\"Legacy\":true}')");
             Execute(db, "INSERT INTO inventory_avatar_details VALUES(12345,'{\"Detail\":true}')");
             Execute(db, "INSERT INTO character_quest_drop_receipts(rowid,character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items) VALUES(73,1,'history','1234567890abcdef1234567890abcdef',6,7,'{\"QuestDrop\":true}','[]')");
-            Execute(db, "INSERT INTO character_dungeon_growth_receipts SELECT character_id,account,'legacy','drop-old-run',quest_id,task_attempt,epoch,map_id,3,3,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts WHERE rowid=41");
+            Execute(db, "INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) SELECT character_id,account,'legacy','drop-old-run',quest_id,task_attempt,epoch,map_id,3,3,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts WHERE rowid=41");
             AddDropDependencyFixture(db);
             Execute(db, "CREATE TABLE v18_trigger_calls(value INTEGER)");
             Execute(db, "CREATE INDEX v18_completion_index ON character_quest_completion_receipts(rule_id); CREATE INDEX v18_skip_index ON character_quest_skip_receipts(revision)");
@@ -2216,7 +2222,7 @@ internal static partial class DatabaseSchemaTests
                 if (oldVersion < 34)
                     Execute(db, "DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts");
                 if (oldVersion >= 3)
-                    Execute(db, "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
+                    Execute(db, "INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES(1,'migrated','legacy','legacy-instance',3145,1,1,76121,123,99,1,20,'legacy-rule','legacy-hash',1,1,2,2,40,60,7)");
                 // 旧版必须确实缺少新结构；只改版本号会让真实 CREATE/ALTER 迁移撞表或撞列。
                 if (oldVersion < 40) RewindQuestSceneClearSchema(db);
                 if (oldVersion < 34) RemoveCardClaimSchema(db);
@@ -2345,7 +2351,7 @@ internal static partial class DatabaseSchemaTests
                     Query(db, "SELECT quest_id||':'||condition_state FROM character_active_main_quests WHERE character_id=1") is "3145:1" &&
                     Query(db, "SELECT revision FROM account_wallets WHERE account='migrated'") is 5L,
                     "迁移不补经验、两树SP或任务，不修改角色与钱包revision");
-                string receipt = "INSERT INTO character_dungeon_growth_receipts VALUES(1,'migrated','event','instance',3145,1,1,76121,256,1,1,72,'rule','hash',1,3,2,2,60,132,8)";
+                string receipt = "INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES(1,'migrated','event','instance',3145,1,1,76121,256,1,1,72,'rule','hash',1,3,2,2,60,132,8)";
                 Execute(db, receipt);
                 Reject<SqliteException>(() => Execute(db, receipt), "迁移账本保留事件唯一约束");
                 Reject<SqliteException>(() => Execute(db, receipt.Replace("'event'", "'same-key'").Replace("256,1,1,72", "256,2,1,72")),

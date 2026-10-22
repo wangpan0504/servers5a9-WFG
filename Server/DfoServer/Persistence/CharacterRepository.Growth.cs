@@ -44,11 +44,11 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$event", death.EventId.ToString("N"));
         command.CommandText = """
             SELECT account,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,amount,
-              rule_id,resource_source,monster_id,monster_level,before_experience,after_experience
+              rule_id,resource_source,monster_id,monster_level,before_experience,after_experience,proficiency_gain
             FROM character_dungeon_growth_receipts WHERE character_id=$id AND event_id=$event
             """;
         bool duplicate;
-        uint gained = 0;
+        uint gained = 0, proficiencyGained = 0;
         using (var reader = command.ExecuteReader())
         {
             duplicate = reader.Read();
@@ -59,7 +59,11 @@ internal sealed partial class CharacterRepository
                 reader.GetString(9) != reward.RuleId || reader.GetString(10) != reward.ResourceSource ||
                 reader.GetInt64(11) != reward.MonsterId || reader.GetInt64(12) != reward.MonsterLevel))
                 throw new InvalidDataException("同一成长事件ID的来源或奖励被修改");
-            if (duplicate) gained = checked((uint)(reader.GetInt64(14) - reader.GetInt64(13)));
+            if (duplicate)
+            {
+                gained = checked((uint)(reader.GetInt64(14) - reader.GetInt64(13)));
+                proficiencyGained = checked((uint)reader.GetInt64(15));
+            }
         }
         // 同ID重读返回当前持久角色；不根据旧expected再次加经验，也不重发清图事实。
         if (duplicate)
@@ -68,7 +72,7 @@ internal sealed partial class CharacterRepository
             VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
             SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: true);
             tx.Commit();
-            return new DungeonGrowthCommit(current, true, gained);
+            return new DungeonGrowthCommit(current, true, gained, proficiencyGained);
         }
         var result = CharacterGrowthPlan.AddExperience(expected, amount, catalog);
         if (!result.Success)
@@ -103,14 +107,18 @@ internal sealed partial class CharacterRepository
                 DateTimeOffset.UtcNow) is { } credit)
             WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         // 熟练度与角色经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
+        // 回执保存这笔经验里真正记入熟练度的额度，重复报告与显示层都按同一有效经验回放。
         if (current.DungeonState is { } dungeonState)
         {
             var proficiencyBefore = new ProficiencyProgress(dungeonState.ProficiencyLevel, dungeonState.ProficiencyExperience);
             var proficiencyGain = ProficiencyProgression.Gain(plan.PreviousLevel, plan.Before.Experience, checked((uint)amount), catalog);
             if (ProficiencyProgression.Advance(proficiencyBefore, proficiencyGain, catalog) is { } proficiency)
+            {
                 WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
+                proficiencyGained = checked((uint)proficiency.Credited);
+            }
         }
-        WriteDungeonGrowthReceipt(db, tx, owner, expected, prepared, reward, plan);
+        WriteDungeonGrowthReceipt(db, tx, owner, expected, prepared, reward, plan, proficiencyGained);
         if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
         SaveDungeonLoot(db, tx, owner.Account, expected, prepared, loot);
         SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
@@ -129,12 +137,12 @@ internal sealed partial class CharacterRepository
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");
         tx.Commit();
-        return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience));
+        return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained);
     });
 
     static void WriteDungeonGrowthReceipt(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx,
         AccountOwners.Lease owner, Character expected, PreparedDungeonDeath prepared,
-        DungeonExperienceReward reward, CharacterGrowthPlan plan)
+        DungeonExperienceReward reward, CharacterGrowthPlan plan, uint proficiencyGained)
     {
         var death = prepared.Death;
         var identity = death.Identity;
@@ -162,12 +170,15 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$beforeExperience", checked((long)plan.Before.Experience));
         command.Parameters.AddWithValue("$afterExperience", checked((long)plan.Learning.Experience));
         command.Parameters.AddWithValue("$revision", checked(plan.Revision + 1));
+        command.Parameters.AddWithValue("$proficiencyGained", proficiencyGained);
         command.CommandText = """
             INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,
               task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,
-              rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision)
+              rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision,
+              proficiency_gain)
             VALUES($id,$account,$event,$instance,$quest,$attempt,$epoch,$map,$key,$sequence,$generation,$amount,
-              $rule,$resource,$monster,$monsterLevel,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision)
+              $rule,$resource,$monster,$monsterLevel,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,
+              $proficiencyGained)
             """;
         command.ExecuteNonQuery();
     }

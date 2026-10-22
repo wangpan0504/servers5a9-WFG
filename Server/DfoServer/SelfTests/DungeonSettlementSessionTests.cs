@@ -54,6 +54,7 @@ internal static class DungeonSettlementSessionTests
         LostPaidResult();
         DelilahServices();
         CappedSettlement();
+        MaxedProficiencySettlement();
         AdventureSettlement();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
 
@@ -590,23 +591,67 @@ internal static class DungeonSettlementSessionTests
             f.SelectEntry(); Enter(f);
             var before = f.Session.Selected!;
             var completed = ClearRun(f,capped:true);
-            Check(f.Read().Learning.Experience == cap && f.Kills == completed.Count &&
-                f.Read().Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
+            var killed = f.Read();
+            Check(killed.Learning.Experience == cap && f.Kills == completed.Count &&
+                killed.DungeonState!.ProficiencyLevel == 0 && killed.DungeonState!.ProficiencyExperience == completed.Experience &&
+                killed.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
                     before.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp))),
-                "Lv95经验停在入口线，怪物仍确认死亡和清图，不额外发SP/TP");
+                "Lv95经验停在入口线，击杀经验全额转入熟练度，不额外发SP/TP");
             var policy = new DungeonCardRewardPolicy(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),itemResources.DungeonDropItems,itemResources.Items,
                 itemResources.GoldLimits,itemResources.EpicPieces,_ => 0,global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
             var cleared = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[21,22,23],dungeons,clear,growth,policy);
+            uint clearCredit = expectedReward.TotalExperience;
+            var settled = f.Read();
             Check(cleared.Outcome == DungeonRunOutcome.Accepted && cleared.GainedExperience == 0 &&
-                cleared.Presentation!.MonsterExperience == 0 && cleared.Card is not null && f.Settlements == 1 &&
-                f.Count("character_dungeon_card_rewards") == 1 && f.Read().Learning.Experience == cap,
-                "经验已满仍原子完成通关和免费翻牌，展示实际击杀0及通关0经验");
+                cleared.ProficiencyGained == clearCredit && cleared.Presentation!.MonsterExperience == completed.Experience &&
+                cleared.Card is not null && f.Settlements == 1 &&
+                f.Count("character_dungeon_card_rewards") == 1 && settled.Learning.Experience == cap,
+                "满级通关角色经验到账0，击杀与通关显示按熟练度有效经验全额");
+            Check(settled.DungeonState!.ProficiencyLevel == 0 &&
+                settled.DungeonState!.ProficiencyExperience == completed.Experience + clearCredit &&
+                Convert.ToInt64(f.Query("SELECT proficiency_gain FROM character_dungeon_settlement_receipts")) == clearCredit &&
+                Convert.ToInt64(f.Query("SELECT sum(proficiency_gain) FROM character_dungeon_growth_receipts")) == completed.Experience,
+                "满级击杀与通关经验全额记入熟练度，两类回执保存各自到账额");
             var actual = f.Read();
             var replay = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[21,22,23],dungeons,clear,growth,policy);
-            Check(replay.Outcome == DungeonRunOutcome.Duplicate && replay.GainedExperience == 0 && Same(actual,f.Read()),
-                "满级通关精确重放保持经验和奖励，不重复发资产");
+            Check(replay.Outcome == DungeonRunOutcome.Duplicate && replay.GainedExperience == 0 &&
+                replay.ProficiencyGained == clearCredit && Same(actual,f.Read()),
+                "满级通关精确重放保持经验和熟练度回执，不重复发资产");
             Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town,
                 "满级完整通关之后仍能正常回城");
+        }
+
+        void MaxedProficiencySettlement()
+        {
+            using var f = new Fixture("ProfCap",towns,characters,learning,quests);
+            // 英雄90：熟练度已到289级封顶，击杀与通关都不再产生角色或熟练度到账，结算页保持全0。
+            ulong cap = growth.GetLevelStartExperience(95);
+            f.Sql($"UPDATE characters SET level=95,experience={cap} WHERE id={f.Created.Id}");
+            f.Sql($"UPDATE character_skill_points SET sp=sp+{growth.GetSpDelta(1,95)},tp=tp+{growth.GetTpDelta(1,95)} WHERE character_id={f.Created.Id}");
+            f.Sql($"UPDATE character_dungeon_state SET proficiency_level={ProficiencyCatalog.MaximumLevel},proficiency_experience=0 WHERE character_id={f.Created.Id}");
+            f.SelectEntry(); Enter(f);
+            var completed = ClearRun(f,capped:true);
+            var killed = f.Read();
+            Check(killed.Learning.Experience == cap && f.Kills == completed.Count &&
+                killed.DungeonState!.ProficiencyLevel == ProficiencyCatalog.MaximumLevel &&
+                killed.DungeonState!.ProficiencyExperience == 0 &&
+                Convert.ToInt64(f.Query("SELECT sum(proficiency_gain) FROM character_dungeon_growth_receipts")) == 0,
+                "熟练度封顶后击杀经验丢弃，回执到账额为0且不改变289级状态");
+            var policy = new DungeonCardRewardPolicy(global::DfoServer.Testing.SelfTestCatalogs.DropRules(pvf),itemResources.DungeonDropItems,itemResources.Items,
+                itemResources.GoldLimits,itemResources.EpicPieces,_ => 0,global::DfoServer.Testing.SelfTestCatalogs.CardPrices(pvf));
+            var cleared = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[31,32,33],dungeons,clear,growth,policy);
+            var settled = f.Read();
+            Check(cleared.Outcome == DungeonRunOutcome.Accepted && cleared.GainedExperience == 0 &&
+                cleared.ProficiencyGained == 0 && cleared.Presentation!.MonsterExperience == 0 &&
+                cleared.Card is not null && f.Settlements == 1 &&
+                settled.Learning.Experience == cap && settled.DungeonState!.ProficiencyLevel == ProficiencyCatalog.MaximumLevel &&
+                settled.DungeonState!.ProficiencyExperience == 0 &&
+                Convert.ToInt64(f.Query("SELECT proficiency_gain FROM character_dungeon_settlement_receipts")) == 0,
+                "熟练度封顶的满级通关经验全部丢弃，结算显示0且回执到账额0");
+            var replay = f.Session.SettleFormalDungeon(f.Created.Id,99,99,[31,32,33],dungeons,clear,growth,policy);
+            Check(replay.Outcome == DungeonRunOutcome.Duplicate && replay.GainedExperience == 0 &&
+                replay.ProficiencyGained == 0 && Same(settled,f.Read()),
+                "熟练度封顶的重复通关报告回放0到账，不重发资产");
         }
 
         void AdventureSettlement()

@@ -33,6 +33,7 @@ internal sealed partial class GameSession
         public DungeonCardReward? BlackDiamond { get; set; }
         public DungeonCardReward? Paid { get; set; }
         public uint GainedExperience { get; set; }
+        public uint ProficiencyGained { get; set; }
         public bool LuckyStarGained { get; set; }
         public int LuckyStarTotal { get; set; }
         public DungeonCardRewardPolicy? CardPolicy { get; init; }
@@ -213,6 +214,7 @@ internal sealed partial class GameSession
             settlement.MailId = commit.MailId;
             settlement.BlackDiamond = commit.BlackDiamond ?? prepared.Pending.Options?.BlackDiamond;
             settlement.GainedExperience = commit.GainedExperience;
+            settlement.ProficiencyGained = commit.ProficiencyGained;
             settlement.LuckyStarGained = commit.LuckyStarGained;
             settlement.LuckyStarTotal = commit.LuckyStarTotal;
             adventureCommit = commit.Adventure;
@@ -249,6 +251,7 @@ internal sealed partial class GameSession
             settlement.Presentation, previous) { Card = settlement.Card, Inventory = inventory, MailId = settlement.MailId,
                 AssaultClear = assaultClear, CrackClear = crackClear,
                 GainedExperience = settlement.GainedExperience,
+                ProficiencyGained = settlement.ProficiencyGained,
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
                 Adventure = adventureCommit,

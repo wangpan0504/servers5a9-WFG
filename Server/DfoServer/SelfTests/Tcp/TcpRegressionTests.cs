@@ -170,6 +170,7 @@ internal static class TcpRegressionTests
             SinglePlayerDungeonRunTests.Run(resources.Archive);
             DungeonSettlementTests.RunResources(resources.Archive);
             DungeonSettlementTests.RunAdventureResources(resources.Archive);
+            DungeonSettlementTests.RunProficiencyResources(resources.Archive);
             DungeonSettlementSessionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             await FormalDungeonSessionTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             await FormalDungeonPublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);

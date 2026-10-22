@@ -192,6 +192,7 @@ internal static class DungeonGrowthRepositoryTests
         }
         Console.WriteLine($"PASS {Count - checks} 副本成长原子提交、去重、回滚与迁移断言");
         RunSessionPublication(towns, pvf, characters);
+        RunProficiencyKills(towns, pvf, characters);
 
         DungeonExperienceReward Reward(uint amount, PreparedDungeonDeath prepared) =>
             new("fixture-only", DungeonKillExperienceCatalog.ResourcePath, prepared.Monster.MonsterId, prepared.Monster.CandidateLevel, amount);
@@ -324,6 +325,106 @@ internal static class DungeonGrowthRepositoryTests
             using var query = db.CreateCommand();
             query.CommandText = text;
             return query.ExecuteScalar();
+        }
+    }
+
+    // 击杀经验同样按国服95模型拆分：满级入口线之上整单进熟练度，289级封顶后丢弃，跨入口线按入口线拆分。
+    private static void RunProficiencyKills(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-growth-proficiency-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "game.db");
+        int checks = Count;
+        try
+        {
+            var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+            var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+            var repository = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("growth-proficiency", () => { });
+            var fixture = SkillRepositoryTests.Fixture("ProfKill", towns, characters, learning) with
+            {
+                Level = 1,
+                ActiveMainQuests = [new(0, 3145, 1)]
+            };
+            fixture = fixture with
+            {
+                InitialLearning = new(0, Array.AsReadOnly(fixture.InitialLearning.Trees
+                    .Select(tree => tree with { Sp = 0 }).ToArray()))
+            };
+            ulong cap = growth.GetLevelStartExperience(CharacterGrowthCatalog.MaximumSupportedLevel);
+
+            // 满级20/0：角色经验0到账，击杀经验全额记入熟练度，回执保存同额。
+            var maxed = repository.Create(owner, fixture with
+            {
+                Name = "ProfKillMax", Level = CharacterGrowthCatalog.MaximumSupportedLevel,
+                InitialLearning = fixture.InitialLearning with { Experience = cap }, DungeonState = new(256, 1, 0, 20, 0)
+            });
+            var (maxRun, maxAuthority) = CreateRun(maxed);
+            var maxPending = maxRun.PrepareConfirmedDeath(maxAuthority.Death(maxRun.Snapshot.Identity, 20, 1)).Pending!;
+            var maxReward = KillReward(maxPending, 1000);
+            var maxCommit = repository.CommitDungeonGrowth(owner, maxed, maxRun, maxPending, maxReward, growth);
+            var maxState = maxCommit.Character.DungeonState!;
+            That(!maxCommit.Duplicate && maxCommit.GainedExperience == 0 && maxCommit.ProficiencyGained == 1000 &&
+                maxCommit.Character.Level == CharacterGrowthCatalog.MaximumSupportedLevel &&
+                maxCommit.Character.Learning.Experience == cap && maxState.ProficiencyLevel == 20 &&
+                maxState.ProficiencyExperience == 1000 &&
+                Convert.ToInt64(Query("SELECT proficiency_gain FROM character_dungeon_growth_receipts WHERE character_id=" + maxed.Id)) == 1000,
+                "满级击杀经验整单记入熟练度，角色经验保持95级入口线");
+            var maxReplay = repository.CommitDungeonGrowth(owner, maxed, maxRun, maxPending, maxReward, growth);
+            That(maxReplay.Duplicate && maxReplay.GainedExperience == 0 && maxReplay.ProficiencyGained == 1000 &&
+                SkillRepositoryTests.Equal(maxReplay.Character, maxCommit.Character),
+                "满级击杀重复报告按回执回放同额熟练度到账，不重复推进");
+
+            // 英雄90封顶：289级没有下一行经验条，击杀经验丢弃，回执保存0且不写熟练度。
+            var capped = repository.Create(owner, fixture with
+            {
+                Name = "ProfKCapped", Level = CharacterGrowthCatalog.MaximumSupportedLevel,
+                InitialLearning = fixture.InitialLearning with { Experience = cap },
+                DungeonState = new(256, 1, 0, ProficiencyCatalog.MaximumLevel, 0)
+            });
+            var (cappedRun, cappedAuthority) = CreateRun(capped);
+            var cappedPending = cappedRun.PrepareConfirmedDeath(cappedAuthority.Death(cappedRun.Snapshot.Identity, 20, 1)).Pending!;
+            var cappedCommit = repository.CommitDungeonGrowth(owner, capped, cappedRun, cappedPending, KillReward(cappedPending, 1000), growth);
+            var cappedState = cappedCommit.Character.DungeonState!;
+            That(!cappedCommit.Duplicate && cappedCommit.GainedExperience == 0 && cappedCommit.ProficiencyGained == 0 &&
+                cappedState.ProficiencyLevel == ProficiencyCatalog.MaximumLevel && cappedState.ProficiencyExperience == 0 &&
+                Convert.ToInt64(Query("SELECT proficiency_gain FROM character_dungeon_growth_receipts WHERE character_id=" + capped.Id)) == 0,
+                "熟练度289级封顶后击杀经验丢弃，角色与熟练度都不再推进");
+
+            // 94→95跨入口线：1000中600到角色、400到熟练度。
+            ulong entry = cap - 600;
+            var crossing = repository.Create(owner, fixture with
+            {
+                Name = "ProfKCross", Level = 94, InitialLearning = fixture.InitialLearning with { Experience = entry },
+                DungeonState = new(256, 1, 0, 0, 0)
+            });
+            var (crossingRun, crossingAuthority) = CreateRun(crossing);
+            var crossingPending = crossingRun.PrepareConfirmedDeath(crossingAuthority.Death(crossingRun.Snapshot.Identity, 20, 1)).Pending!;
+            var crossingCommit = repository.CommitDungeonGrowth(owner, crossing, crossingRun, crossingPending, KillReward(crossingPending, 1000), growth);
+            var crossingState = crossingCommit.Character.DungeonState!;
+            That(!crossingCommit.Duplicate && crossingCommit.GainedExperience == 600 && crossingCommit.ProficiencyGained == 400 &&
+                crossingCommit.GainedExperience + crossingCommit.ProficiencyGained == 1000 &&
+                crossingCommit.Character.Level == CharacterGrowthCatalog.MaximumSupportedLevel &&
+                crossingCommit.Character.Learning.Experience == cap && crossingState.ProficiencyLevel == 0 &&
+                crossingState.ProficiencyExperience == 400,
+                "跨95级入口线的击杀经验按入口线拆分到角色与熟练度，合计等于整单");
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+        Console.WriteLine($"PASS {Count - checks} 击杀熟练度到账拆分、封顶与回执回放断言");
+
+        DungeonExperienceReward KillReward(PreparedDungeonDeath prepared, uint amount) =>
+            new("fixture-only", DungeonKillExperienceCatalog.ResourcePath, prepared.Monster.MonsterId, prepared.Monster.CandidateLevel, amount);
+        object? Query(string sql)
+        {
+            using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+            db.Open();
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = sql;
+            return cmd.ExecuteScalar();
         }
     }
 

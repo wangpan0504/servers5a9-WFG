@@ -6,7 +6,8 @@ namespace DfoServer.Game.Characters;
 // 熟练度是角色级进度：等级 0 表示挑战者初始态，经验是当前级内进度，不是累计值。
 internal readonly record struct ProficiencyProgress(uint Level, ulong Experience);
 
-internal sealed record ProficiencyAdvance(ProficiencyProgress Before, ProficiencyProgress After);
+// Credited 是这笔经验里真正记入熟练度的额度；289 级封顶后丢弃的余量不计入显示的有效经验。
+internal sealed record ProficiencyAdvance(ProficiencyProgress Before, ProficiencyProgress After, ulong Credited);
 
 internal static class ProficiencyProgression
 {
@@ -19,12 +20,18 @@ internal static class ProficiencyProgression
     // 单笔经验可以连升多级；289 级封顶后余量丢弃，与客户端只暴露当前级进度一致。
     public static ProficiencyAdvance? Advance(ProficiencyProgress before, ulong gain, CharacterGrowthCatalog catalog)
     {
+        var after = Walk(before, gain, catalog, out ulong credited);
+        return after == before ? null : new(before, after, credited);
+    }
+
+    static ProficiencyProgress Walk(ProficiencyProgress before, ulong gain, CharacterGrowthCatalog catalog, out ulong credited)
+    {
         var table = catalog.Proficiency;
         if (before.Level > ProficiencyCatalog.MaximumLevel ||
             before.Level == ProficiencyCatalog.MaximumLevel && before.Experience != 0 ||
             before.Level < ProficiencyCatalog.MaximumLevel && before.Experience >= table.Requirement(before.Level))
             throw new InvalidDataException("熟练度持久状态非法");
-        if (gain == 0) return null;
+        ulong original = gain;
         uint level = before.Level;
         ulong experience = before.Experience;
         while (gain > 0 && level < ProficiencyCatalog.MaximumLevel)
@@ -33,13 +40,14 @@ internal static class ProficiencyProgression
             if (gain < remaining)
             {
                 experience += gain;
+                gain = 0;
                 break;
             }
             gain -= remaining;
             level++;
             experience = 0;
         }
-        // 满级后余量丢弃；没有实际变化时不产生写入计划。
-        return level == before.Level && experience == before.Experience ? null : new(before, new(level, experience));
+        credited = original - gain;
+        return new(level, experience);
     }
 }

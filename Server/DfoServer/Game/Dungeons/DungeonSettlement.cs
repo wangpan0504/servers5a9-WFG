@@ -12,6 +12,8 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
     public uint GainedExperience { get; init; }
+    // 同一笔通关经验记入熟练度的额度；与GainedExperience之和是本次有效经验，重复报告按回执同值回放。
+    public uint ProficiencyGained { get; init; }
     public bool LuckyStarGained { get; init; }
     public int LuckyStarTotal { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }

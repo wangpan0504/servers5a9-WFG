@@ -262,7 +262,7 @@ internal static class MailboxPersistenceTests
         DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
         f.Execute(dropMail + "ALTER TABLE character_dungeon_growth_receipts RENAME COLUMN resource_source TO resource_sha256; PRAGMA user_version=3;");
         f.Execute("""
-            INSERT INTO character_dungeon_growth_receipts VALUES(
+            INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_sha256,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES(
                 1,'sender','legacy-event','legacy-instance',1,1,1,76125,20,1,1,1,
                 'legacy-rule','legacy-resource-marker',1,1,95,95,0,1,1);
             """);

@@ -15,7 +15,8 @@ internal sealed record DungeonExperienceReward(string RuleId, string ResourceSou
 }
 
 // 存储返回实际提交后的角色；Duplicate表示账本精确重放，不是新的击杀或新奖励。
-internal sealed record DungeonGrowthCommit(Character Character, bool Duplicate, uint GainedExperience = 0);
+// GainedExperience是角色经验到账，ProficiencyGained是同一笔经验记入熟练度的额度；两者之和是本次有效经验。
+internal sealed record DungeonGrowthCommit(Character Character, bool Duplicate, uint GainedExperience = 0, uint ProficiencyGained = 0);
 
 internal static class DungeonKillExperiencePolicy
 {

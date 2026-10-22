@@ -17,6 +17,7 @@ internal static partial class FormalDungeonTcpTests
     {
         ExperienceBonusTests.RunCore();
         DatabaseSchemaTests.RunExperienceBonuses();
+        DatabaseSchemaTests.RunSettlementProficiency();
         DungeonSettlementTests.RunExperienceBonusStorage(SelfTestCatalogs.Growth(resources.Archive));
         var rules = ExperienceBonusCatalog.Load(resources.Archive);
         That(rules.BlackDiamondPercent == 5 && rules.InternetCafePercent == 20,
