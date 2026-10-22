@@ -433,7 +433,8 @@ internal sealed partial class SinglePlayerDungeonRun
             return Result(DungeonRunOutcome.Rejected);
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
             current.Elevator is { Completed: false } || !current.Cleared || HasPendingLayer() ||
-            !connections.Contains((current.Plan.Room.Map.Position, target)) && !CanRidableWarp(target) || !rooms.TryGetValue(target, out Room? next))
+            !connections.Contains((current.Plan.Room.Map.Position, target)) && !CanRidableWarp(target) && !CanBorderTownWarp(target) ||
+            !rooms.TryGetValue(target, out Room? next))
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "move", target));
         bool replaceVisited = false;
@@ -458,6 +459,13 @@ internal sealed partial class SinglePlayerDungeonRun
         Advance();
         return Result(DungeonRunOutcome.Accepted);
     }
+
+    // 亡命杀镇普通迷宫的出口直接上报kind0有向目标；不能借此放行条件Boss替换或任务骑乘。
+    private bool CanBorderTownWarp(DungeonPoint target) => entry.DungeonId == 291100268 && entry.IsOrdinary &&
+        entry.Maze.QuestConnectionTokens.Count == 0 && entry.Maze.BossEntrance is null &&
+        entry.Maze.ConditionalMaps.Count == 0 && entry.Maze.LayeredMaps.Count == 0 &&
+        entry.Maze.StoryStages.Count == 0 && entry.Maze.DummyStages.Count == 0 &&
+        entry.Maze.WarpMaps.Any(warp => warp.Source == current.Plan.Room.Map.Position && warp.Destination == target);
 
     public DungeonRunResult MoveLayer(DungeonRunIdentity expected, Guid actionId, DungeonPoint target, bool nextLayer,
         bool allowSettlementEntry = false)

@@ -15,6 +15,7 @@ internal static class SinglePlayerDungeonRunTests
         VerifyPassiveClearCondition();
         VerifyPassiveTerminalLayer();
         VerifyRidableWarpIdentity();
+        VerifyBorderTownWarp();
         var authority = new FixtureCombatAuthority();
         var start = new DungeonMap("map", new(0, 0), 1, "map/fixture-start.map");
         var friendly = new DungeonMap("map", new(1, 0), 2, "map/fixture-friendly.map");
@@ -1139,6 +1140,57 @@ internal static class SinglePlayerDungeonRunTests
         run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
         That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Rejected,
             "经过相邻房间并回访源房也不恢复已消费的骑乘绑定");
+    }
+
+    private static void VerifyBorderTownWarp()
+    {
+        var start = new DungeonMap("map",new(0,0),1,"map/warp-start.map");
+        var middle = new DungeonMap("map",new(1,0),2,"map/warp-middle.map");
+        var destination = new DungeonMap("map",new(2,0),3,"map/warp-destination.map");
+        var boss = new DungeonMap("boss",new(3,0),4,"map/warp-boss.map");
+        var maze = new DungeonMaze(0,4,1,"fixture",[start.Position],[boss.Position],[start,middle,destination,boss],[])
+            { WarpMaps = [new(start.Position,destination.Position)] };
+        var entry = new DungeonEntryPlan(99,17,291100268,0,byte.MaxValue,0,maze,start,boss);
+        var route = new DungeonFixedRoute([Plan(start,10),Plan(middle),Plan(destination,11),BossPlan(boss,12)],
+            [new(start.Position,middle.Position),new(middle.Position,destination.Position),new(destination.Position,boss.Position)]);
+        var authority = new FixtureCombatAuthority();
+        var run = Create(entry);
+        var loading = run.Snapshot.Identity;
+        That(run.Move(loading,Guid.NewGuid(),destination.Position).Outcome == DungeonRunOutcome.Rejected,"普通传送仍拒绝加载阶段");
+        run.CompleteLoading(loading,Guid.NewGuid());
+        That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),destination.Position).Outcome == DungeonRunOutcome.Rejected,"普通传送仍要求源房清怪");
+        var pending = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity,10,1));
+        That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),destination.Position).Outcome == DungeonRunOutcome.Rejected,"普通传送不能跨越待提交死亡");
+        run.ConfirmCommittedDeath(pending.Pending!);
+        That(run.Move(loading,Guid.NewGuid(),destination.Position).Outcome == DungeonRunOutcome.Rejected &&
+            run.Move(run.Snapshot.Identity,Guid.NewGuid(),new(9,9)).Outcome == DungeonRunOutcome.Rejected,
+            "普通传送拒绝旧epoch及未声明目标");
+        var before = run.Snapshot.Identity;
+        var action = Guid.NewGuid();
+        That(run.Move(before,action,destination.Position).Outcome == DungeonRunOutcome.Accepted &&
+            run.Snapshot.MapPayload == DungeonMapPayload.Build &&
+            run.Move(before,action,destination.Position).Outcome == DungeonRunOutcome.Duplicate,
+            "资源有向传送沿原加载进入实际目标，重复请求不再次换房");
+        run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,11,2));
+        That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),start.Position).Outcome == DungeonRunOutcome.Rejected,
+            "目标已清房也不能自动补出未声明的反向传送");
+        foreach (var invalid in new[] { entry with { DungeonId = 3 },entry with { RouteQuestId = 5934 },
+            entry with { Maze = maze with { WarpMaps = [] } },
+            entry with { Maze = maze with { BossEntrance = new(0,0,[]) } } })
+        {
+            var other = Create(invalid);
+            other.CompleteLoading(other.Snapshot.Identity,Guid.NewGuid());
+            other.AcceptConfirmedDeath(authority.Death(other.Snapshot.Identity,10,1));
+            That(other.Move(other.Snapshot.Identity,Guid.NewGuid(),destination.Position).Outcome == DungeonRunOutcome.Rejected,
+                "其他副本、任务路线、缺失声明及条件Boss不能借用普通传送资格");
+        }
+
+        SinglePlayerDungeonRun Create(DungeonEntryPlan planned)
+        {
+            That(SinglePlayerDungeonRun.TryCreate(planned,1,100,route,authority,out var result,out _),"构造普通传送最小路线");
+            return result!;
+        }
     }
 
     private static DungeonMonsterPlan Plan(DungeonMap map, params ushort[] keys)
