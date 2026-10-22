@@ -26,6 +26,7 @@ internal sealed class ItemResources
     public PremiumContractCatalog Contracts { get; }
     public RecoveryConsumableCatalog RecoveryConsumables { get; }
     public UpgradeChronicleCatalog UpgradeChronicles { get; }
+    public ItemRecipeCatalog ItemRecipes { get; }
     public LimitCubeCatalog LimitCubes { get; }
     public EnchantmentCatalog Enchantments { get; }
     public EnhancementCatalog Enhancements { get; }
@@ -70,6 +71,7 @@ internal sealed class ItemResources
         DevilContracts = new(archive, stackable, CashShop);
         RecoveryConsumables = new(archive, stackable, Items);
         UpgradeChronicles = new(archive, stackable);
+        ItemRecipes = new(archive, stackable);
         LimitCubes = new(archive, stackable, equipment);
         Enchantments = new(archive, stackable);
         Enhancements = new(archive, stackable, equipment);

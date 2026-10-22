@@ -301,6 +301,9 @@ internal static class ServerRuntime
             // 设计图升级：CMD271，材料与产物来自设计图自身的 [emancipate group]。
             new UpgradeChronicleHandler(new InventoryUpgradeChronicleService(itemResources.UpgradeChronicles, itemResources.Items,
                 itemResources.EpicPieces, clock), inventoryProjection),
+            // 设计图制造：CMD25，配方来自 [recipe] 设计图的 [input item]/[output item]。
+            new CompoundHandler(new InventoryRecipeCraftService(itemResources.ItemRecipes, itemResources.Items,
+                itemResources.EpicPieces, clock), inventoryProjection, log),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
                 debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages, clock: clock), inventoryProjection,
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
