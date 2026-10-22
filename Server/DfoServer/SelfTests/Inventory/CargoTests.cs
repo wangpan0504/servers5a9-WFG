@@ -35,6 +35,25 @@ internal static class CargoTests
         var move = new InventoryMoveRequest(source.Position, 50, 1, new(InventoryListType.PersonalCargo, 1), 1, 0, -1, 0, 0);
         That(InventoryMoveService.Plan(role, move, catalog, 0).Accepted, "空个人金库格接纳当前客户端格号别名");
         That(InventoryMoveService.Plan(role, move with { DestinationItemId = 0 }, catalog, 0).Accepted, "保留标准空格零值");
+        var accountRole = role with { Inventory = role.Inventory with { AccountCargo = new(Capacity: 8) } };
+        var accountMove = move with { Count = 2, Destination = new(InventoryListType.AccountCargo, 1) };
+        foreach (short target in new short[] { 1, 7 })
+        {
+            var result = InventoryMoveService.Plan(accountRole, accountMove with
+                { Destination = new(InventoryListType.AccountCargo, target), DestinationItemId = target }, catalog, 0);
+            That(result.Accepted && result.Plan!.After.Find(new(InventoryListType.AccountCargo, target)) is { Uid: 1 } accountItem &&
+                accountItem.Core == source.Core, "账号仓库升级后的非零空格接受客户端格号且保留UID和完整核心");
+        }
+        That(!InventoryMoveService.Plan(accountRole, accountMove with { DestinationItemId = 2 }, catalog, 0).Accepted &&
+            !InventoryMoveService.Plan(accountRole, accountMove with
+                { Destination = new(InventoryListType.AccountCargo, 8), DestinationItemId = 8 }, catalog, 0).Accepted,
+            "账号格号兼容不接受错误编号或超出8格容量的目标");
+        var accountStored = source with { Uid = 3, Position = new(InventoryListType.AccountCargo, 1) };
+        var accountWithdraw = new InventoryMoveRequest(accountStored.Position, 1, 1, source.Position, 0, 0, -1, 0, 0);
+        var accountTaken = InventoryMoveService.Plan(accountRole with { Inventory = accountRole.Inventory with { Items = [accountStored] } },
+            accountWithdraw, catalog, 0);
+        That(accountTaken.Accepted && accountTaken.Plan!.After.Find(source.Position) is { Core.ItemId: 50, Core.Value: 1 } &&
+            accountTaken.Plan.After.Find(accountStored.Position) is { Core.Value: 1 }, "账号非零格取出接受格号并正确同步拆堆数量");
         That(!InventoryMoveService.Plan(role, move with { SourceItemId = 51 }, catalog, 0).Accepted &&
             !InventoryMoveService.Plan(role, move with { DestinationItemId = 2 }, catalog, 0).Accepted &&
             !InventoryMoveService.Plan(role, move with { Destination = new(InventoryListType.PersonalCargo, 8), DestinationItemId = 8 }, catalog, 0).Accepted,
@@ -47,6 +66,39 @@ internal static class CargoTests
         var other = new DfoServer.GameWorld.Items.ItemTemplate(51, DfoServer.GameWorld.Items.ItemKind.Material,
             0, 1, 0, 100, 0, 0, 0, "[free]", 1, 0, "另一格材料");
         catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = template, [51] = other });
+        var mirror = source with { Uid = 8, Position = new(InventoryListType.Main, 3) };
+        var echoRole = accountRole with { Inventory = accountRole.Inventory with { Items = [source, mirror] } };
+        var echoRequest = accountMove with { Destination = new(InventoryListType.AccountCargo, 3), DestinationItemId = 50 };
+        var echoResult = InventoryMoveService.Plan(echoRole, echoRequest, catalog, 0);
+        That(echoResult.Accepted && echoResult.Plan!.After.Find(echoRequest.Destination) == source with { Position = echoRequest.Destination } &&
+            echoResult.Plan.After.Find(mirror.Position) == mirror,
+            "空账号格接受源容器同编号格模板回显，只移动真实源，保留被回显实例的UID和完整核心");
+        That(InventoryMoveService.Plan(echoRole, echoRequest with { Destination = new(InventoryListType.PersonalCargo, 3) }, catalog, 0).Accepted,
+            "同一原生跨容器发送器的个人仓库回显也保持兼容");
+        That(!InventoryMoveService.Plan(echoRole, echoRequest with { DestinationItemId = 51 }, catalog, 0).Accepted &&
+            !InventoryMoveService.Plan(echoRole, echoRequest with { SourceItemId = 51 }, catalog, 0).Accepted &&
+            !InventoryMoveService.Plan(echoRole with { Inventory = echoRole.Inventory with { AccountCargo = new(Capacity: 1) } },
+                echoRequest, catalog, 0).Accepted,
+            "回显兼容不接受未知目标编号、错误源模板或未开放仓库格");
+        var echoBlocker = new InventoryItem(10, echoRequest.Destination, new ItemCore(51, other.Kind, 4));
+        var echoOccupied = InventoryMoveService.Plan(echoRole with { Inventory = echoRole.Inventory with { Items = [source, mirror, echoBlocker] } },
+            echoRequest, catalog, 0);
+        That(echoOccupied.Accepted && echoOccupied.Plan!.After.Find(echoBlocker.Position) == echoBlocker &&
+            echoOccupied.Plan.After.Find(new(InventoryListType.AccountCargo, 0))?.Uid == source.Uid &&
+            echoOccupied.Plan.After.Find(mirror.Position) == mirror,
+            "目标仓库实际已占用时改投合法空格，不把源容器回显当作授权覆盖目标物品");
+        var reverseEcho = InventoryMoveService.Plan(echoRole with { Inventory = echoRole.Inventory with { Items = [mirror, echoBlocker] } },
+            new(new(InventoryListType.Main, 121), 0, 0, echoBlocker.Position, 50, 0, -1, 0, 0), catalog, 0);
+        That(reverseEcho.Accepted && reverseEcho.Plan!.After.Find(new(InventoryListType.Main, 121))?.Uid == echoBlocker.Uid &&
+            reverseEcho.Plan.After.Find(echoBlocker.Position) is null && reverseEcho.Plan.After.Find(mirror.Position) == mirror,
+            "空源反向取出不会误走存入改投空格，保留数量与第三格实例且不触发空引用");
+        var returning = source with { Position = new(InventoryListType.AccountCargo, 1) };
+        var cargoMirror = mirror with { Position = new(InventoryListType.AccountCargo, 3), Core = new(51, other.Kind, 4) };
+        var returnEcho = InventoryMoveService.Plan(accountRole with { Inventory = accountRole.Inventory with { Items = [returning, cargoMirror] } },
+            new(returning.Position, 50, 2, new(InventoryListType.Main, 3), 51, 0, -1, 0, 0), catalog, 0);
+        That(returnEcho.Accepted && returnEcho.Plan!.After.Find(new(InventoryListType.Main, 3))?.Uid == source.Uid &&
+            returnEcho.Plan.After.Find(cargoMirror.Position) == cargoMirror,
+            "取出到空Main格也按真实源容器解释回显，不误消费另一件仓库物品");
         var blocker = new InventoryItem(9, move.Destination, new ItemCore(51, other.Kind, 4));
         var blocked = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Add(blocker) } };
         var relocated = InventoryMoveService.Plan(blocked, move, catalog, 0);

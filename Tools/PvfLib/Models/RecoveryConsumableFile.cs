@@ -11,6 +11,8 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     ImmutableArray<string> DeclaredFields, ImmutableArray<string> Diagnostics)
 {
     public int? SubType { get; init; }
+    public int? TotalUsableCount { get; init; }
+    public ImmutableArray<string> StructureDiagnostics { get; init; } = [];
     public int? ExpBonusPermille { get; init; }
     public int? QuestExpBonusPermille { get; init; }
     public int? ExpBonusMilliseconds { get; init; }
@@ -22,8 +24,9 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     public static RecoveryConsumableFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
         var document = new PvfTokenDocument(tokens, resolve);
-        var errors = document.Diagnostics.ToList();
-        if (document.Sections.Any(section => section.Children.Length != 0)) errors.Add("恢复物品含未确认的嵌套声明");
+        var structureErrors = document.Diagnostics.ToList();
+        if (document.Sections.Any(section => section.Children.Length != 0)) structureErrors.Add("恢复物品含未确认的嵌套声明");
+        var errors = new List<string>(structureErrors);
         foreach (var duplicate in document.Sections.GroupBy(section => section.Name).Where(group => group.Count() != 1))
             errors.Add("重复恢复物品字段：" + duplicate.Key);
         int? Scalar(string name)
@@ -48,7 +51,7 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
             errors.Add("恢复物品四元组不完整：" + name);
             return null;
         }
-        int? coolTime = Scalar("cool time"), group = Scalar("cooltime group"), subType = Scalar("sub type");
+        int? coolTime = Scalar("cool time"), group = Scalar("cooltime group"), subType = Scalar("sub type"), totalUses = Scalar("total usable count");
         var hp = Recovery("hp recovery"); var mp = Recovery("mp recovery");
         var duration = Duration(document, resolve, errors);
         byte? effects = Maintenance(document, "effect maintenance", 4, errors);
@@ -59,7 +62,8 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
             .SelectMany(section => section.Values).Where(token => token.Type == 0).Select(token => token.Value).ToImmutableArray();
         return new(id, path, StackableFile.Parse(id, path, tokens, resolve), coolTime, group, hp, mp,
             document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray())
-        { SubType = subType, ExpBonusPermille = bonus, QuestExpBonusPermille = questBonus,
+        { SubType = subType, TotalUsableCount = totalUses, StructureDiagnostics = structureErrors.ToImmutableArray(),
+            ExpBonusPermille = bonus, QuestExpBonusPermille = questBonus,
             ExpBonusMilliseconds = duration is { Target: "myself" } ? duration.Milliseconds : null,
             StatChangeDuration = duration, EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits };
     }

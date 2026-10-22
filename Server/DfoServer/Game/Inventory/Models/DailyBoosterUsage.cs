@@ -4,6 +4,7 @@ namespace DfoServer.Game.Inventory.Models;
 
 internal sealed record DailyBoosterUsage(int ItemId, int Day, byte Used)
 {
+    // 历史名称来自保留礼盒；疲劳主动道具复用相同的角色/STK模板日限次，不另建账本。
     public static void Validate(ImmutableArray<DailyBoosterUsage> rows)
     {
         if (rows.IsDefault || rows.Any(row => row is null || row.ItemId <= 0 || row.Day < 0 ||

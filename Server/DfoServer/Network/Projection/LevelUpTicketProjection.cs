@@ -26,6 +26,7 @@ internal sealed class LevelUpTicketProjection(InventoryProjection inventory, Cha
         bool Guard() => context.Session.CanPublishQuestQuickClear(receipt);
         if (!receipt.TicketAcknowledged)
         {
+            // 各入口由对应原生消费者收尾；30不会释放418登记的公共使用等待标记。
             await context.Reply(Opcode(source.Kind), LevelUpTicketPackets.Used(source), "level_up_ticket_used", Guard);
             context.Session.MarkQuestTicketAcknowledged(receipt);
         }

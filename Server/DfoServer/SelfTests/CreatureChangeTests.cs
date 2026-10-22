@@ -23,6 +23,13 @@ internal static class CreatureChangeTests
     public static void RunCore()
     {
         var definition = CreatureChangeDefinition.Parse(Raw, Book)!;
+        var potential = CreatureChangeDefinition.Parse(Raw with { ActionDeclaration = new("[change creature random]", [7001,7001,1,2,2,3]),
+            DeclaredActionLimitIndexes = [], DeclaredActionResultLimitIndexes = [], DeclaredActionUsablePlaces = null }, Book)!;
+        That(potential is { Random:true, TownOnly:false, TotalWeight:5 } && potential.Select(1) == 7001 && potential.Select(2) == 7002 &&
+            potential.AllowedItems.SetEquals([7001,7002]), "潜能药读取连续产物和逐项权重，允许同族再次随机，不生成六种以外模板");
+        That(CreatureChangeDefinition.Parse(Raw with { ActionDeclaration = new("[change creature random]", [7001,7001,1,3,2,3]),
+            DeclaredActionLimitIndexes = [], DeclaredActionResultLimitIndexes = [], DeclaredActionUsablePlaces = null }, Book) is null,
+            "潜能药候选数量必须与完整权重表一致");
         That(definition is { SourceItemId: -1, CreatureMinimumLevel: 1, TotalWeight: 10000 } &&
             definition.Select(0) == 7002 && definition.Select(9999) == 7002, "单个转换结果的10000是相对权重，不留失败概率");
         var weighted = CreatureChangeDefinition.Parse(Raw with { DeclaredActionResultLimitIndexes = [0,7002,2,0,7001,3,0,7002,1] }, Book)!;
@@ -60,6 +67,14 @@ internal static class CreatureChangeTests
         var service = new CreatureChangeService(Item, _ => definition, CreatureSystemTests.Synthetic(),
             new ConsumableUseSessionTests.FakeClock(), total => { draws++; return total-1; });
         var result = service.Plan(character, book.Position, pet.Position);
+        var potentialUse = new ActionConsumableDefinition(Book, "[change creature random]", [7001,7001,1,2,2,3],1000,-9000,0,0,[]);
+        var potentialService = new CreatureChangeService(Item, _ => potential, CreatureSystemTests.Synthetic(),
+            new ConsumableUseSessionTests.FakeClock(), _ => 4, actionItems: _ => potentialUse);
+        var potentialResult = potentialService.Plan(character, book.Position, pet.Position);
+        That(potentialResult.Accepted && potentialResult.Plan!.After.Find(pet.Position) == pet with { Core = pet.Core with { ItemId = 7002 } } &&
+            potentialResult.Plan.After.Find(book.Position)!.Core.Count == 1 &&
+            !potentialService.Plan(character with { Inventory = potentialResult.Plan.After }, book.Position, pet.Position).Accepted,
+            "潜能随机、扣源和冷却同一计划，UID、附魔、名字及原期限不丢失，连续请求不能重抽");
         That(result.Accepted && result.Plan!.After.Find(book.Position)!.Core.Count == 1 && draws == 1 &&
             result.Plan.After.Find(pet.Position) == pet with { Core = pet.Core with { ItemId = 7002 } } &&
             character.Inventory.Find(pet.Position) == pet && character.Inventory.Find(book.Position) == book,
@@ -107,9 +122,9 @@ internal static class CreatureChangeTests
             .Plan(character, book.Position, pet.Position);
         That(unchangedTarget.Accepted && !unchangedTarget.Plan!.CharacterPrecondition!.Matches(character,2000000000),
             "随机结果同原模板时仍消耗书，并复验没有变化的目标期限");
-        That(QuestTicketRequests.TryUse(Convert.FromHexString("4A000000000000400000000700000008000000"), out var request) &&
-            request == new QuestTicketUseRequest(74,0,0,64,7,8), "实收19B转换请求解析为源74、目标Pet槽8，不当作五个i32");
-        Bytes(QuestTicketPackets.Used(request), [1,74,0,0,64,0,0,0], "成功515仅8B，不追加私有目标字段");
-        Bytes(QuestTicketPackets.Rejected(request), [0,0,0,74,0,0,64], "失败515的动作只占一字节");
+        That(StackableActionRequests.TryUse(Convert.FromHexString("4A000000000000400000000700000008000000"), out var request) &&
+            request == new StackableActionUseRequest(74,0,0,64,7,8), "实收19B转换请求解析为源74、目标Pet槽8，不当作五个i32");
+        Bytes(StackableActionPackets.Used(request), [1,74,0,0,64,0,0,0], "成功515仅8B，不追加私有目标字段");
+        Bytes(StackableActionPackets.Rejected(request), [0,0,0,74,0,0,64], "失败515的动作只占一字节");
     }
 }

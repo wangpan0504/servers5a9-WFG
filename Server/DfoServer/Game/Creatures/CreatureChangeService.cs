@@ -8,13 +8,14 @@ namespace DfoServer.Game.Creatures;
 
 internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<int, CreatureChangeDefinition?> definitions,
     CreatureCatalog creatures, TimeProvider? clock = null, Func<long, long>? random = null,
-    CreatureGroupCatalog? groups = null, Func<int, CreatureGrowthItemDefinition?>? growthItems = null)
+    CreatureGroupCatalog? groups = null, Func<int, CreatureGrowthItemDefinition?>? growthItems = null,
+    Func<int, ActionConsumableDefinition?>? actionItems = null)
 {
     readonly TimeProvider clock = clock ?? TimeProvider.System;
     readonly Func<long, long> random = random ?? Random.Shared.NextInt64;
 
-    public InventoryResult Plan(Character character, InventorySlot sourceSlot, InventorySlot targetSlot) =>
-        Plan(character, sourceSlot, targetSlot, (source, _) => definitions(source.Core.ItemId), true, "creature_change");
+    public InventoryResult Plan(Character character, InventorySlot sourceSlot, InventorySlot targetSlot, bool inTown = true) =>
+        Plan(character, sourceSlot, targetSlot, (source, _) => definitions(source.Core.ItemId), inTown, "creature_change");
 
     public InventoryResult PlanGroup(Character character, InventorySlot sourceSlot, InventorySlot targetSlot, uint choice, bool inTown) =>
         Plan(character, sourceSlot, targetSlot, (source, target) => growthItems?.Invoke(source.Core.ItemId) is { } item
@@ -23,7 +24,8 @@ internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<
     InventoryResult Plan(Character character, InventorySlot sourceSlot, InventorySlot targetSlot,
         Func<InventoryItem, InventoryItem, CreatureChangeDefinition?> resolve, bool inTown, string reason)
     {
-        long now = clock.GetUtcNow().ToUnixTimeSeconds();
+        var time = clock.GetUtcNow();
+        long now = time.ToUnixTimeSeconds();
         var before = character.Inventory;
         var source = before.Find(sourceSlot);
         var target = before.Find(targetSlot);
@@ -58,7 +60,15 @@ internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<
         {
             return InventoryResult.Reject(0);
         }
-        var consumed = InventoryDeleteService.Plan(before, sourceSlot, source.Core.ItemId, definition.ConsumeCount);
+        InventoryResult consumed;
+        ActionConsumableDefinition? use = null;
+        if (definition.Random)
+        {
+            use = actionItems?.Invoke(source.Core.ItemId);
+            if (use is not { Label: "[change creature random]" }) return InventoryResult.Reject(0);
+            consumed = InventoryActionConsumableService.Plan(character, sourceSlot, use, inTown ? "[village]" : "[dungeon]", clock, time);
+        }
+        else consumed = InventoryDeleteService.Plan(before, sourceSlot, source.Core.ItemId, definition.ConsumeCount);
         if (!consumed.Accepted || consumed.Plan is null) return InventoryResult.Reject(0);
         int resultId = definition.Select(random(definition.TotalWeight));
         // 只换模板；原实例、附魔、扩展、名称、等级、经验及期限均不重新创建。
@@ -67,7 +77,8 @@ internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<
         var plan = new InventoryPlan(before, after, reason);
         long? deadline = plan.ChangedSlots.Select(plan.BeforeIndex.Find).OfType<InventoryItem>().Append(target)
             .Where(item => item.ExpireTime > 0).Select(item => (long?)item.ExpireTime).Min();
-        return new(true, 0, new(before, after, reason, new(character, deadline)));
+        if (use?.DailyLimit > 0) deadline = Math.Min(deadline ?? long.MaxValue, DailyBoosterUsage.NextReset(time).ToUnixTimeSeconds());
+        return new(true, 0, new(before, after, reason, new(character, deadline, clock, requirePosition: use is not null)));
 
         bool ValidCreature(int id) => items(id) is { Kind: ItemKind.Creature, EquipmentSlot: 26, CreatureSubType: 0 } &&
             creatures.Get(id) is { Egg: false };

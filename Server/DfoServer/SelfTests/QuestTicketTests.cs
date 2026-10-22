@@ -36,15 +36,24 @@ internal static class QuestTicketTests
     {
         int checks = Count;
         var packet = Use(65);
-        That(QuestTicketRequests.TryUse(packet.Body,out var request) && request == new QuestTicketUseRequest(65,0,0,77,0,0) &&
-            !QuestTicketRequests.TryUse(packet.Body.AsSpan(0,18),out _) && !QuestTicketRequests.TryUse([.. packet.Body,0],out _),
+        That(StackableActionRequests.TryUse(packet.Body,out var request) && request == new StackableActionUseRequest(65,0,0,77,0,0) &&
+            !StackableActionRequests.TryUse(packet.Body.AsSpan(0,18),out _) && !StackableActionRequests.TryUse([.. packet.Body,0],out _),
             "515精确19B，slot/list/reserved/action/两个参数独立解码");
         var wide = Use(ushort.MaxValue,uint.MaxValue,uint.MaxValue,uint.MaxValue,uint.MaxValue,byte.MaxValue);
-        That(QuestTicketRequests.TryUse(wide.Body,out var decoded) && decoded.Slot == ushort.MaxValue && decoded.List == byte.MaxValue &&
+        That(StackableActionRequests.TryUse(wide.Body,out var decoded) && decoded.Slot == ushort.MaxValue && decoded.List == byte.MaxValue &&
             decoded.Reserved == uint.MaxValue && decoded.Action == uint.MaxValue && decoded.FirstArgument == uint.MaxValue &&
             decoded.SecondArgument == uint.MaxValue,"parser保留完整整数，不把动作或物品上下文解释为任务ID");
-        Bytes(QuestTicketPackets.Used(request),[1,65,0,0,77,0,0,0],"77成功ACK515固定8B，不追加消耗数量");
-        Bytes(QuestTicketPackets.Rejected(request,0x1234),[0,0x34,0x12,65,0,0,77],"失败ACK515的u16错误及u8动作符合本版消费者");
+        Bytes(StackableActionPackets.Used(request),[1,65,0,0,77,0,0,0],"77成功ACK515固定8B，不追加消耗数量");
+        Bytes(StackableActionPackets.Rejected(request,0x1234),[0,0x34,0x12,65,0,0,77],"失败ACK515的u16错误及u8动作符合本版消费者");
+        var raw = new StackableFile(TicketId, "stackable/ticket.stk", new("[etc]", [1]), 1000, null, null, 0, null, [])
+        {
+            ActionDeclaration = new("[quest clear]", []), HasMaximumLevel = true, DeclaredMaximumLevel = 84,
+            HasUsableJobs = true, DeclaredUsableJobs = ["[all]"]
+        };
+        var template = new ItemTemplate(TicketId, ItemKind.Consumable, 0, 0, 0, 1000, 0, 2, 1, "[trade]", ushort.MaxValue, 0, "ticket");
+        foreach (var expiry in new[] { new ItemExpiration(2145823200), new ItemExpiration(Days: 7), new ItemExpiration() })
+            That(QuestTicketDefinition.Parse(raw, template with { Expiration = expiry }).Expiration == expiry,
+                "任务券解析保留绝对、相对及永久期限，不要求每份PVF都提供活动到期日");
         var definition = new QuestTicketDefinition(TicketId,0,84,ushort.MaxValue,new());
         var item = new InventoryItem(10,Bag(65),new(TicketId,ItemKind.Consumable,2));
         var role = new Character(1,0,"Ticket",0,new(1,0,1,1),null)
@@ -84,8 +93,8 @@ internal static class QuestTicketTests
         var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var definition = items.Items.QuestTicket(TicketId);
-        That(definition is { MinimumLevel:0,MaximumLevel:84,Jobs:ushort.MaxValue } && definition.Expiration.AbsoluteTime > 0,
-            "匹配10006007真实普通77券，完整保留活动期限元数据和0..84/all范围");
+        That(definition is { MinimumLevel:0,MaximumLevel:84,Jobs:ushort.MaxValue } && definition.Expiration == items.Items.Get(TicketId).Expiration,
+            $"匹配10006007真实普通77券，保留当前资源实际期限及0..84/all范围；实际min={definition.MinimumLevel},max={definition.MaximumLevel},jobs={definition.Jobs},absolute={definition.Expiration.AbsoluteTime}");
         foreach (int specified in new[] {10005390,10005391,490000716,10006257})
         {
             var specific = items.Items.QuestTicket(specified);
@@ -256,7 +265,7 @@ internal static class QuestTicketTests
             {
                 var commands=new GameCommandRegistry(); var projection=new QuestProjection(fixture.Catalog);
                 new QuestQuickClearHandler(fixture.Catalog,QuestConnectionCatalog.Parse([],_=>""),projection,log,items.Items).Register(commands);
-                new QuestTicketHandler(fixture.Catalog,items.Items,projection,log).Register(commands); commands.Seal(); return commands;
+                new StackableActionHandler(fixture.Catalog,items.Items,projection,log).Register(commands); commands.Seal(); return commands;
             }
         }
         finally { Directory.Delete(logRoot,true); }

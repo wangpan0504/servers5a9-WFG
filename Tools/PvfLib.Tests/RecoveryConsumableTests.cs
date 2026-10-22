@@ -7,7 +7,8 @@ internal static class RecoveryConsumableTests
     public static void Run()
     {
         string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]",
-            "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]"];
+            "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]",
+            "[total usable count]", "[attach type]", "[trade]", "[account]"];
         string Resolve(int at) => strings[at];
         PvfToken[] valid = [new(3, 0), new(0, 10000), new(3, 1), new(0, 0), new(3, 2),
             new(6, 3), new(0, 410), new(0, 1000), new(6, 4)];
@@ -52,6 +53,15 @@ internal static class RecoveryConsumableTests
         {
             result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,..tail], Resolve);
             That(!result.Diagnostics.IsEmpty, "畸形效果时间和保留位显式诊断，不扩大保留范围");
+        }
+        result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,new(3,13),new(0,2),
+            new(3,14),new(6,15),new(3,14),new(6,16)], Resolve);
+        That(result.TotalUsableCount == 2 && result.StructureDiagnostics.IsEmpty && !result.Diagnostics.IsEmpty,
+            "日次数按原始整数保留，重复交易元数据诊断不等于使用声明结构损坏");
+        foreach (PvfToken[] tail in new PvfToken[][] { [new(3,13),new(6,3)], [new(3,13),new(0,1),new(3,13),new(0,2)] })
+        {
+            result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,..tail], Resolve);
+            That(result.TotalUsableCount is null && !result.Diagnostics.IsEmpty, "畸形或重复日次数不能被解释为无限使用");
         }
     }
 }

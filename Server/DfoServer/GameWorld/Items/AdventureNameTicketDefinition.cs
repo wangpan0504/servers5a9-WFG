@@ -8,7 +8,7 @@ internal sealed record AdventureNameTicketDefinition(int TemplateId, int Minimum
     {
         if (raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || template.UseForbidden ||
             raw.TypeDeclaration is not { Label: "[waste]", Parameters: [0] } ||
-            raw.ActionDeclaration is not { Label: "[represent account name change]", Parameters.Count: 0 } ||
+            StackableActionCatalog.Arguments(raw) is not { Label: "[represent account name change]", Parameters.Count: 0 } ||
             raw.DeclaredMinimumLevel is not { } minimum || minimum < 0 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < minimum ||
             raw.DeclaredUsableJobs is not ["[all]"] || template.Jobs != ushort.MaxValue ||

@@ -3,13 +3,41 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Creatures;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Game.Quests;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Creatures;
 
-internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? time = null)
+internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? time = null, TownCatalog? towns = null, ItemCatalog? items = null)
 {
     public CreatureCatalog Catalog { get; } = catalog;
     public TimeProvider Clock { get; } = time ?? TimeProvider.System;
+
+    public InventoryResult UseEffect(Character character, InventorySlot position, bool inTown)
+    {
+        var source = character.Inventory.Find(position);
+        var definition = source is null ? null : items?.ActionConsumable(source.Core.ItemId);
+        if (definition is not { Label: "[creature effect]" }) return InventoryResult.Reject(19);
+        string place = !inTown ? "[dungeon]" : towns?.IsRoom(character.Position, QuestEligibility.Completed(character)) == true
+            ? "[seria room]" : "[village]";
+        var paid = InventoryActionConsumableService.Plan(character, position, definition, place, Clock);
+        if (!paid.Accepted) return paid;
+        var states = paid.Plan!.After.ConsumableStates.Where(row => row.Kind != ConsumableStateKind.Effect ||
+            row.ItemId == definition.Item.Id || items?.ActionConsumable(row.ItemId)?.Label != "[creature effect]").ToImmutableArray();
+        return new(true, 0, new(character.Inventory, paid.Plan.After with { ConsumableStates = states },
+            "creature_effect_item", paid.Plan.CharacterPrecondition));
+    }
+
+    public InventoryResult ExpireEffect(Character character)
+    {
+        long now = Clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var states = character.Inventory.ConsumableStates.Where(row => row.Kind != ConsumableStateKind.Effect || row.Active(now) ||
+            items?.ActionConsumable(row.ItemId)?.Label != "[creature effect]").ToImmutableArray();
+        // 客户端到期通知不含源或版本，迟到的旧通知不得撤销刚续用的新时限。
+        return new(true, 0, new(character.Inventory, character.Inventory with { ConsumableStates = states }, "creature_effect_expire",
+            new(character)));
+    }
 
     public InventoryItem? Equipped(Character character, long now)
     {
@@ -31,14 +59,21 @@ internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? tim
         var creature = Equipped(character, now);
         var source = character.Inventory.Find(request.Position);
         var feed = Catalog.Feed(request.ItemId);
-        if (creature?.Creature is not { } detail || source is null || request.Argument != 0 ||
+        if (creature?.Creature is not { } detail || source is null || request.Argument != 0 || request.OpaqueCheck > 32767 ||
             source.Uid <= 0 || source.Core.ItemId != request.ItemId || source.Core.Kind is not (ItemKind.CreatureConsumable or ItemKind.Consumable) ||
             source.Core.Count < 1 || source.Core.EquipmentLockId != 0 || source.IsExpired(now) ||
             !ItemSlotBoundService.Allows(character.Inventory, source.Position, source.Core.Kind) ||
             Catalog.Get(creature.Core.ItemId) is not { } definition)
             return InventoryResult.Reject(123);
         InventoryItem fed;
-        if (definition.UsesExperienceItems && definition.SelectiveGrowth is { } growth &&
+        if (Catalog.ExperienceItem(request.ItemId) is { } experienceItem)
+        {
+            if (source.Core.Kind != ItemKind.CreatureConsumable) return InventoryResult.Reject(123);
+            var gained = CreatureRules.UseExperienceItem(detail, definition, Catalog, experienceItem);
+            if (gained == detail) return InventoryResult.Reject(123);
+            fed = EvolveAfterExperience(creature with { Creature = gained }, detail.Level, definition);
+        }
+        else if (definition.UsesExperienceItems && definition.SelectiveGrowth is { } growth &&
             (request.ItemId == growth.ItemA || request.ItemId == growth.ItemB || request.ItemId == growth.ExperienceItem))
         {
             if (Catalog.GrowthFood(request.ItemId) is not { } food || detail.Level < food.MinimumLevel ||
@@ -101,15 +136,18 @@ internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? tim
                 if (rate != 0 && artifact.ExpireTime > 0) deadline = Math.Min(deadline ?? long.MaxValue, artifact.ExpireTime);
             }
         var updated = creature with { Creature = CreatureRules.GainExperience(detail, definition, Catalog, points, bonus) };
-        if (updated.Creature.Level > detail.Level && !definition.EvolutionQuest && definition.EvolutionLevel > 0 &&
-            updated.Creature.Level >= definition.EvolutionLevel && definition.EvolutionSpecies > 0 &&
-            Catalog.Evolution(definition, definition.EvolutionSpecies) is { } evolution)
-            updated = Transform(updated, evolution);
+        updated = EvolveAfterExperience(updated, detail.Level, definition);
         return new(true, 0, new(character.Inventory, character.Inventory with { Items = character.Inventory.Items.Replace(creature, updated) },
             "creature_experience", new(character, deadline)));
     }
 
+    InventoryItem EvolveAfterExperience(InventoryItem updated, byte previousLevel, CreatureDefinition definition) =>
+        updated.Creature!.Level > previousLevel && !definition.EvolutionQuest && definition.EvolutionLevel > 0 &&
+            updated.Creature.Level >= definition.EvolutionLevel && definition.EvolutionSpecies > 0 &&
+            Catalog.Evolution(definition, definition.EvolutionSpecies) is { } evolution ? Transform(updated, evolution) : updated;
+
     public bool RecognizesFeed(Character character, int itemId, long now) => Catalog.Feed(itemId) is not null ||
+        Catalog.ExperienceItem(itemId) is not null ||
         Equipped(character, now) is { } item && Catalog.Get(item.Core.ItemId)?.SelectiveGrowth is { } growth &&
             (itemId == growth.ItemA || itemId == growth.ItemB || itemId == growth.ExperienceItem);
 

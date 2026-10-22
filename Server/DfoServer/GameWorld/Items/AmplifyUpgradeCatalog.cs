@@ -117,35 +117,34 @@ internal sealed class AmplifyUpgradeCatalog
 
     internal static AmplifyUse? ParseUse(PvfTokenDocument document, Func<int, string> resolve)
     {
-        var actions = document.Sections.Where(row => row.Name == "action type").ToArray();
-        if (actions.Length == 0) return null;
-        Require(actions.Length == 1 && actions[0].Children.IsEmpty);
-        var values = actions[0].Values;
-        if (values.IsEmpty || values[0].Type != 6) return null;
-        string name = resolve(values[0].Value);
+        var raw = StackableActionDeclaration.Read(document, resolve);
+        if (raw is null) return null;
+        var parsed = StackableActionCatalog.Parse(raw);
+        var values = parsed.Arguments?.Parameters;
+        string name = raw.Label;
         AmplifyUse? result = name switch
         {
             "[portable amplify]" => new(AmplifyUseKind.Portable),
             "[new portable amplify]" => new(AmplifyUseKind.Portable),
-            "[lucky enchant deed]" when values.Length == 2 && values[1] is { Type: 0, Value: 1 } => new(AmplifyUseKind.Lucky, MaximumUpgrade: 14),
+            "[lucky enchant deed]" when values is [1] => new(AmplifyUseKind.Lucky, MaximumUpgrade: 14),
             "[amplify protect equipment]" => new(AmplifyUseKind.Protection),
             "[new amplify protect equipment]" => new(AmplifyUseKind.Protection),
             _ => null
         };
         if (result is null) return null;
-        Require(values.Skip(1).All(value => value.Type == 0));
+        Require(raw.HasIntegerArguments && parsed.Status == StackableActionParseStatus.Parsed && values is not null);
         if (result.Kind == AmplifyUseKind.Portable)
         {
             bool boosted = name == "[new portable amplify]";
-            Require(values.Length == (boosted ? 4 : 3) && values[1].Value >= 0 && values[2].Value >= values[1].Value &&
-                (!boosted || values[3].Value >= 0));
-            result = result with { MinimumUpgrade = values[1].Value, MaximumUpgrade = values[2].Value,
-                SuccessBonusWeight = boosted ? values[3].Value : 0 };
+            Require(values!.Count == (boosted ? 3 : 2) && values[0] >= 0 && values[1] >= values[0] &&
+                (!boosted || values[2] >= 0));
+            result = result with { MinimumUpgrade = values[0], MaximumUpgrade = values[1],
+                SuccessBonusWeight = boosted ? values[2] : 0 };
         }
         else if (result.Kind == AmplifyUseKind.Protection)
         {
-            Require(name == "[amplify protect equipment]" ? values.Length == 1 : values.Length == 2 && values[1].Value is >= 0 and <= 30);
-            result = result with { RetainLevel = values.Length == 2 ? values[1].Value : 0 };
+            Require(name == "[amplify protect equipment]" ? values!.Count == 0 : values is [>= 0 and <= 30]);
+            result = result with { RetainLevel = values!.Count == 1 ? values[0] : 0 };
         }
         foreach (string unsupported in new[] { "total usable count", "total weekly usable count", "total accumulated usable count",
             "usable datetime", "usable first growtype", "action usable server type", "usable server type", "usable game server type", "use count limit all server item" })

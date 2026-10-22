@@ -12,6 +12,7 @@ internal sealed record LevelUpTicketSource(InventoryItem Item, InventoryPlan Inv
     CharacterGrowthPlan Growth, long UtcSeconds)
 {
     public LevelUpTicketDefinition? Definition { get; init; }
+    public int GainedLevels { get; init; } = 1;
     public LevelUpByTableDefinition? ByTable { get; init; }
     public byte? ProfessionGrowType { get; init; }
     public CharacterLearningState? ProfessionLearning { get; init; }
@@ -22,11 +23,11 @@ internal sealed record LevelUpTicketSource(InventoryItem Item, InventoryPlan Inv
     public int TemplateId => ByTable?.Item.Id ?? Definition!.TemplateId;
     public int CoolTime => ByTable?.CoolTime ?? Definition!.CoolTime;
     public bool TownOnly => ByTable?.TownOnly ?? Definition!.VillageOnly;
-    public bool SeriaRoomOnly => ByTable?.SeriaRoomOnly == true;
-    public byte TargetLevel(byte level) => ByTable?.TargetLevel(level) ?? checked((byte)(level + 1));
+    public bool SeriaRoomOnly => ByTable?.SeriaRoomOnly == true || Definition?.SeriaRoomOnly == true;
+    public byte TargetLevel(byte level) => ByTable?.TargetLevel(level) ?? Definition!.TargetLevel(level, GainedLevels);
     public bool Allows(Character character) => (Definition, ByTable) switch
     {
-        ({ } ticket, null) => ProfessionGrowType is null && ProfessionLearning is null && ticket.Allows(character.Level, character.Job),
+        ({ } ticket, null) => ProfessionGrowType is null && ProfessionLearning is null && ticket.Allows(character.Level, character.Job) && ticket.AllowsRoll(GainedLevels),
         (null, { } table) => table.Allows(character.Level, character.Job, character.GrowType) &&
             (table.Jumping && character.GrowType == 0 && character.Job is not (9 or 10)
                 ? ProfessionGrowType is >= 1 and <= 5 && ProfessionLearning is not null
@@ -37,7 +38,7 @@ internal sealed record LevelUpTicketSource(InventoryItem Item, InventoryPlan Inv
 }
 
 internal sealed class LevelUpTicketService(ItemCatalog items, CharacterGrowthCatalog growth,
-    TimeProvider? time = null, CharacterCatalog? characters = null, SkillLearningCatalog? skills = null)
+    TimeProvider? time = null, CharacterCatalog? characters = null, SkillLearningCatalog? skills = null, Func<long,long>? random = null)
 {
     public TimeProvider Clock { get; } = time ?? TimeProvider.System;
 
@@ -48,7 +49,8 @@ internal sealed class LevelUpTicketService(ItemCatalog items, CharacterGrowthCat
         var definition = items.LevelUpTicket(item.Core.ItemId);
         if (definition is null || !definition.Allows(expected.Level, expected.Job))
             throw new InvalidDataException("升级券等级、职业或资源资格不符");
-        return PrepareGrowth(expected, item, checked((byte)(expected.Level + 1)), now) with { Definition = definition };
+        int levels = definition.Roll(random ?? Random.Shared.NextInt64);
+        return PrepareGrowth(expected, item, definition.TargetLevel(expected.Level, levels), now) with { Definition = definition, GainedLevels = levels };
     }
 
     public bool IsTableSource(Character? character, InventorySlot position) => character?.Inventory.Find(position) is { } item &&

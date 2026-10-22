@@ -10,9 +10,13 @@ internal sealed record ExperienceConsumableDefinition(ItemTemplate Item, bool Pe
     public static ExperienceConsumableDefinition? Parse(ExperienceConsumableFile file, ItemTemplate template)
     {
         var raw = file.Stackable;
+        // 原生1034..1037没有数值标签；只对LST中ID与脚本身份同时匹配的旧经验书补默认值。
+        var effect = file.Effect;
+        if (effect is null && LegacyBookAmount(raw) is > 0 and var legacyAmount)
+            effect = new("[expUp]", [legacyAmount]);
         if (file.Diagnostics.Length != 0 || raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || template.UseForbidden ||
             raw.TypeDeclaration is not { Label: "[etc]", Parameters: [0 or 1] } ||
-            file.Effect is not { Label: "[expUp]" or "[expPercentUp]", Parameters: [> 0] } effect ||
+            effect is not { Label: "[expUp]" or "[expPercentUp]", Parameters: [> 0] } ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasCoolTime && raw.DeclaredCoolTime is null || raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
@@ -30,4 +34,16 @@ internal sealed record ExperienceConsumableDefinition(ItemTemplate Item, bool Pe
 
     public bool Allows(byte level, byte job) => Item.AllowsUse(level, job) &&
         !ExcludedJobs.Contains("[all]") && !ExcludedJobs.Contains(ItemCatalog.JobTag(job));
+
+    static int LegacyBookAmount(StackableFile raw)
+    {
+        (string Path, int Amount)? book = raw.TemplateId switch
+        {
+            1034 => ("book_exp1.stk", 100), 1035 => ("book_exp2.stk", 1000),
+            1036 => ("book_exp3.stk", 10000), 1037 => ("book_exp4.stk", 100000),
+            _ => null
+        };
+        return book is { } value && raw.ScriptPath.Equals("stackable/" + value.Path, StringComparison.OrdinalIgnoreCase)
+            ? value.Amount : 0;
+    }
 }

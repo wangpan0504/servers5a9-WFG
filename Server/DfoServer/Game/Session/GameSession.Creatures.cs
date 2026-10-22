@@ -93,7 +93,8 @@ internal sealed partial class GameSession
             !service.RecognizesFeed(character, request.ItemId, service.Clock.GetUtcNow().ToUnixTimeSeconds()))
             return Reject("invalid-state-or-feed");
         var feed = service.Catalog.Feed(request.ItemId);
-        int coolTime = feed?.CoolTime ?? service.Catalog.GrowthFood(request.ItemId)?.CoolTime ?? 0;
+        int coolTime = feed?.CoolTime ?? service.Catalog.GrowthFood(request.ItemId)?.CoolTime ??
+            service.Catalog.ExperienceItem(request.ItemId)?.CoolTime ?? 0;
         var planned = service.Feed(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds());
         return owner.Execute(() =>
         {

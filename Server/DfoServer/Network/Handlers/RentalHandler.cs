@@ -11,6 +11,26 @@ namespace DfoServer.Network.Handlers;
 // S5A9 租赁请求只负责解析、提交后应答和投影；费用与装备实例由 RentalService 规划。
 internal sealed class RentalHandler(RentalService rental, InventoryProjection projection, ServerLog log) : IGameCommandModule
 {
+    public async Task<CommandResult> UsePointsAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
+        var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool valid = request.Action == 106 && request.Reserved == 0 && request.FirstArgument == 0 && request.SecondArgument == 0 &&
+            request.List == 0 && request.Slot <= short.MaxValue;
+        var position = new InventorySlot(InventoryListType.Main, unchecked((short)request.Slot));
+        var result = !valid || context.BlocksTownActions ? InventoryResult.Reject(19) :
+            context.Session.PlanAndCommitInventory(character => rental.UsePoints(character, position), 19);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
+            context.Session.Phase == before.Phase);
+        log.Write("rental_point_item", new { Connection = context.Id, request.Slot, result.Accepted, result.Error });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request, result.Error),
+            result.Accepted ? "rental_point_item_used" : "rental_point_item_rejected", Guard);
+        await PublishStateAsync(context, result, "rental_state_after_item");
+        await projection.RefreshAsync(context, result, new HashSet<InventorySlot> { position }, refreshEquipment: false);
+        return CommandResult.Handled;
+    }
+
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.CHARGE_RENTPOINT, ChargeAsync, nameof(RentalHandler));

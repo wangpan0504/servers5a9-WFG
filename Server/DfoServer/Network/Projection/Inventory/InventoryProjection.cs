@@ -142,6 +142,13 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         await RestoreLocksAsync(context, current.Inventory, lockSlots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
         if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera and <= DfoServer.Game.Currency.CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
+        if (plan.ChangedCurrencies.Contains(DfoServer.Game.Currency.CurrencyKind.Mileage))
+        {
+            bool gained = plan.Reason == "mileage_item" && current.Inventory.AccountWallet.Mileage > plan.Before.AccountWallet.Mileage;
+            await context.Notify(gained ? NotiPacketType.UPDATE_MILEAGE_DATA : NotiPacketType.MILEAGE_DATA,
+                gained ? MileagePackets.Added(plan.Before.AccountWallet, current.Inventory.AccountWallet) : MileagePackets.State(current.Inventory.AccountWallet),
+                "mileage_committed_delta", CanSend);
+        }
         if (plan.ChangedEpicPieces.Length != 0)
             await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(current.Inventory.EpicPieces, pieces, plan.ChangedEpicPieces), "epic_book_committed_delta", CanSend);
         if (seriaLuckChanged)

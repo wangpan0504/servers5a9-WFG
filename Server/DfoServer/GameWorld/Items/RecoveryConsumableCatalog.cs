@@ -49,7 +49,7 @@ internal sealed class RecoveryConsumableCatalog
     internal static RecoveryConsumableDefinition? Read(RecoveryConsumableFile file)
     {
         var raw = file.Stackable;
-        if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId ||
+        if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId || LegacyStatusConsumableDefinition.IsNativeItem(file.TemplateId) ||
             raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[throw]" or "[set]" } ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.DeclaredMinimumLevel is < 0 or > 255 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < (raw.DeclaredMinimumLevel ?? 0) ||

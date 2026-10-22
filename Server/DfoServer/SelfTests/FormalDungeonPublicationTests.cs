@@ -779,6 +779,10 @@ internal static class FormalDungeonPublicationTests
     {
         public Character CommitPermanentGrowth(AccountOwners.Lease owner, PermanentGrowthPlan plan, DateTimeOffset now) =>
             inner.CommitPermanentGrowth(owner, plan, now);
+        public Character CommitLegacyStatusConsumable(AccountOwners.Lease owner, LegacyStatusConsumablePlan plan, DateTimeOffset now) =>
+            inner.CommitLegacyStatusConsumable(owner, plan, now);
+        public Character CommitFatigueConsumable(AccountOwners.Lease owner, FatigueConsumablePlan plan, DateTimeOffset now) =>
+            inner.CommitFatigueConsumable(owner, plan, now);
         public Character CommitExperienceConsumable(AccountOwners.Lease owner, ExperienceConsumablePlan plan, DateTimeOffset now) =>
             inner.CommitExperienceConsumable(owner, plan, now);
         public string ReadAdventureName(AccountOwners.Lease owner) => inner.ReadAdventureName(owner);

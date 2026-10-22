@@ -111,10 +111,12 @@ internal static class ServerRuntime
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService);
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection);
-        var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock);
+        var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
         var weaponSkinHandler = new SkinStorageHandler(weaponSkinService, inventoryProjection, weaponSkinProjection, log);
+        var rentalHandler = new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items, towns, clock), inventoryProjection, log);
+        var creatureHandler = new CreatureHandler(creatures, creatureProjection, log, inventoryProjection);
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
         var guildProjection = new GuildProjection(inventoryProjection, presence);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
@@ -260,14 +262,14 @@ internal static class ServerRuntime
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), log, tutorials, itemResources.Items, inventoryProjection,
                 new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock), creatures, creatureProjection, projection),
             weaponSkinHandler,
-            new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items), inventoryProjection, log),
+            rentalHandler,
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
             new ShopHandler(
                 new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock),
                 cashShop,
                 inventoryProjection, log),
-            new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair), inventoryProjection, log),
+            new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions), inventoryProjection, log),
             new TextureChangeHandler(new InventoryTextureChangeService(itemResources.Items, itemResources.TextureChanges,
                 itemResources.EpicPieces), inventoryProjection, log),
@@ -289,7 +291,7 @@ internal static class ServerRuntime
                 itemResources.Enhancements, towns, clock), inventoryProjection, log),
             new CreatureSkinHandler(skinService, inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
-            new CreatureHandler(creatures, creatureProjection, log),
+            creatureHandler,
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, expertJobs: expertJobs), inventoryProjection, expertJobs),
             new ExpertJobHandler(quests, expertJobs, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, presence, expertStores, enchantmentService),
@@ -313,12 +315,18 @@ internal static class ServerRuntime
             new ExperienceConsumableHandler(new Game.Characters.ExperienceConsumableService(itemResources.Items, growth, clock),
                 inventoryProjection, levelProjection, log, levelUpItems,
                 new PermanentGrowthHandler(new Game.Characters.PermanentGrowthService(itemResources.Items, stats, learning, clock),
-                    inventoryProjection, levelProjection, log)),
+                    inventoryProjection, levelProjection, log),
+                new LegacyStatusConsumableHandler(new Game.Characters.LegacyStatusConsumableService(itemResources.Items,
+                    itemResources.GoldLimits, clock), inventoryProjection, log)),
             new QuestQuickClearHandler(quests,questConnections,questProjection,log,itemResources.Items,learning,levelUpProjection),
-            new QuestTicketHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,skinService,inventoryProjection,
+            new StackableActionHandler(quests,itemResources.Items,questProjection,log,levelProjection,learning,skinService,inventoryProjection,
                 new Game.Creatures.CreatureChangeService(itemResources.Items.Get, itemResources.Items.CreatureChange,
                     itemResources.Creatures, clock, groups: itemResources.CreatureGroups,
-                    growthItems: itemResources.Items.CreatureGrowthItem),levelUpItems,weaponSkinHandler),
+                    growthItems: itemResources.Items.CreatureGrowthItem, actionItems: itemResources.Items.ActionConsumable),levelUpItems,weaponSkinHandler,
+                new FatigueConsumableHandler(new Game.Characters.FatigueConsumableService(itemResources.Items, towns, clock), inventoryProjection, log), rentalHandler, creatureHandler,
+                new InventoryPeriodExtensionService(itemResources.Items, towns, clock), new InventoryMileageService(itemResources.Items, towns, clock)),
+            new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
+                itemResources.Items.ActionConsumable, itemResources.Creatures, repository, clock), inventoryProjection, log),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs),

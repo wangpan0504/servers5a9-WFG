@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders;
@@ -31,6 +32,8 @@ internal static class WeaponSkinTests
         Bytes(SkinStoragePackets.Owned(new([32000])), [4, 1, 0, 0, 125, 0, 0], "1557武器类别仅有u16数量与每项u32编号");
         Bytes(SkinStoragePackets.Selection(32000), [4, 0, 125, 0, 0], "1558武器选择为u8类别和u32编号");
         Bytes(SkinStoragePackets.Recent(32000), [1, 4, 0, 125, 0, 0], "1559最近加入记录不是另一份完整仓库");
+        Bytes(SkinStoragePackets.Recent([new(2,3),new(2,8)]), [2,2,3,0,0,0,2,8,0,0,0],
+            "1559批量最近记录完整发送数量和每个类别/编号，不截成第一个");
         Bytes(TcpPeer.Build(w => SkinStoragePackets.WriteUserInfo(w, new([32000], 32000))),
             [1, 4, 1, 0, 125, 0, 0], "Player刷新携带原生武器选择组，不把幻化写进真实武器或装扮核心");
         var ack = SkinStoragePackets.SelectedAck(new(true, 0), 32000);
@@ -75,7 +78,7 @@ internal static class WeaponSkinTests
         }), "1557字体使用SKN编号与角色绝对期限，并保留空账号列表，不复用旧1243布局");
         Bytes(TcpPeer.Build(w => SkinStoragePackets.WriteUserInfo(w, fonts, 2000000000)),
             [2, 2, 1, 1, 0, 0, 0, 4, 1, 0, 125, 0, 0], "Player的字体与武器分组共存，过期字体不能覆盖成过期选择");
-        That(QuestTicketRequests.TryUse([90,0,0,0,0,0,0,199,0,0,0,0,0,0,0,0,0,0,0], out var use) &&
+        That(StackableActionRequests.TryUse([90,0,0,0,0,0,0,199,0,0,0,0,0,0,0,0,0,0,0], out var use) &&
             use.Slot == 90 && use.Action == 199 && use.List == 0 && use.Reserved == 0,
             "真实幻化消耗品抓包是19B动作199，不是普通44使用");
         string[] actionStrings = ["[stackable type]", "[waste]", "[action type]", "[add skin storage]", "[/action type]",
@@ -85,6 +88,20 @@ internal static class WeaponSkinTests
         That(SkinStorageFile.ReadAction(1,"test.stk",actionTokens,id => actionStrings[id]) is
             { SkinId: 3, Target: "[character]", Days: 45, ExpirationMode: "[period]", Places: ["[village]"] },
             "入库读取动作SKN3和期限45天，不从旧字体序号2推断新ID");
+        var multipleTokens = actionTokens.Take(6).Concat(new[] { new PvfToken(0,8) }).Concat(actionTokens.Skip(6)).ToArray();
+        That(SkinStorageFile.ReadAction(1,"test.stk",multipleTokens,id => actionStrings[id])!.SkinIds.SequenceEqual([3,8]),
+            "多ID入库声明保留完整原序，归属和期限仍独立解析");
+        var batch = new SkinStorageToken(2,3,new(Days:45),[]) { SkinIds=[3,8] };
+        var time = DateTimeOffset.FromUnixTimeSeconds(1800000000);
+        That(InventorySkinStorageService.TryAddTimed(SkinStorageState.Empty,batch,time,out var granted) &&
+            granted.DamageFonts.Select(row=>row.SkinId).SequenceEqual([3,8]) &&
+            granted.DamageFonts.All(row=>row.ExpiresAt==time.AddDays(45).ToUnixTimeSeconds()),
+            "批量字体在同一快照完整入库，并为每个ID应用实际期限");
+        var owned = SkinStorageState.Empty with { DamageFonts=[new(8,0)] };
+        That(!InventorySkinStorageService.TryAddTimed(owned,batch,time,out var rejected) && ReferenceEquals(owned,rejected) &&
+            owned.DamageFonts.All(row=>row.SkinId!=3), "后项已永久拥有时整批失败，不先写入前项");
+        That(InventorySkinStorageService.TryAddTimed(granted,batch,time,out var extended) &&
+            extended.DamageFonts.All(row=>row.ExpiresAt==time.AddDays(90).ToUnixTimeSeconds()), "多个已有相对期限一起按原截止续期");
         actionTokens[11] = new(0,0);
         Reject<InvalidDataException>(() => SkinStorageFile.ReadAction(1,"test.stk",actionTokens,id => actionStrings[id]),
             "期限声明不能把无效相对天数默认为永久");

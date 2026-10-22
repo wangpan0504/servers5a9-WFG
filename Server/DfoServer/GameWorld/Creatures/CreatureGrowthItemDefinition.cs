@@ -11,9 +11,10 @@ internal sealed record CreatureGrowthItemDefinition(int ItemId, int ViewMode, in
 
     public static CreatureGrowthItemDefinition? Parse(StackableFile raw, ItemTemplate template)
     {
+        var action = StackableActionCatalog.Arguments(raw);
         if (raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || template.UseForbidden ||
             raw.TypeDeclaration is not { Label: "[etc]" or "[waste]", Parameters: [0] } ||
-            raw.ActionDeclaration is not { Label: "[creature growth]", Parameters.Count: >= 3 } action ||
+            action is not { Label: "[creature growth]", Parameters.Count: >= 3 } ||
             action.Parameters[0] is < 0 or > 4 || action.Parameters[1] <= 0 || action.Parameters.Skip(2).Any(value => value is < 1 or > 4) ||
             raw.DeclaredMinimumLevel is not >= 1 || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.DeclaredMaximumLevel < raw.DeclaredMinimumLevel ||

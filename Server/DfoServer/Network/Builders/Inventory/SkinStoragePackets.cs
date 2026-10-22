@@ -122,4 +122,13 @@ internal static class SkinStoragePackets
         BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2), id);
         return body;
     }
+
+    public static byte[] Recent(IReadOnlyList<SkinStorageKey> keys)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(checked((byte)keys.Count));
+        foreach (var key in keys) { writer.Write(key.Type); writer.Write(key.SkinId); }
+        return stream.ToArray();
+    }
 }

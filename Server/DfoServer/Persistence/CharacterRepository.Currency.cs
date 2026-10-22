@@ -19,10 +19,11 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$account", account);
-        command.CommandText = "SELECT revision,rental_points,premium_contracts,seria_luck,character_slots FROM account_wallets WHERE account=$account";
+        command.CommandText = "SELECT revision,rental_points,premium_contracts,seria_luck,character_slots,mileage FROM account_wallets WHERE account=$account";
         long revision = 0;
         int rentalPoints = 0;
         int seriaLuck = 0;
+        int mileage = 0;
         ushort characterSlots = 32;
         var contracts = ImmutableSortedDictionary.CreateBuilder<int, long>();
         using (var walletReader = command.ExecuteReader())
@@ -31,6 +32,7 @@ internal sealed partial class CharacterRepository
                 revision = walletReader.GetInt64(0);
                 rentalPoints = walletReader.GetInt32(1);
                 characterSlots = checked((ushort)walletReader.GetInt32(4));
+                mileage = walletReader.GetInt32(5);
                 if (!walletReader.IsDBNull(2))
                 {
                     var persisted = JsonSerializer.Deserialize<Dictionary<int, long>>(walletReader.GetString(2));
@@ -45,7 +47,7 @@ internal sealed partial class CharacterRepository
         var balances = ImmutableSortedDictionary.CreateBuilder<CurrencyKind, int>();
         using (var reader = command.ExecuteReader())
             while (reader.Read()) balances.Add((CurrencyKind)reader.GetInt32(0), reader.GetInt32(1));
-        var wallet = new AccountWallet(revision, balances.ToImmutable(), rentalPoints, seriaLuck, contracts.ToImmutable()) { CharacterSlotCapacity = characterSlots };
+        var wallet = new AccountWallet(revision, balances.ToImmutable(), rentalPoints, seriaLuck, contracts.ToImmutable()) { CharacterSlotCapacity = characterSlots, Mileage = mileage };
         wallet.Validate();
         return wallet;
     }
@@ -78,10 +80,11 @@ internal sealed partial class CharacterRepository
             command.CommandText = "INSERT INTO account_wallets(account) VALUES($account) ON CONFLICT(account) DO NOTHING";
             command.ExecuteNonQuery();
             command.Parameters.AddWithValue("$rental", after.AccountWallet.RentalPoints);
+            command.Parameters.AddWithValue("$mileage", after.AccountWallet.Mileage);
             command.Parameters.AddWithValue("$slots", after.AccountWallet.CharacterSlotCapacity);
             command.Parameters.AddWithValue("$contracts", JsonSerializer.Serialize(after.AccountWallet.PremiumContracts));
             command.Parameters.AddWithValue("$luck", after.AccountWallet.SeriaLuck);
-            command.CommandText = "UPDATE account_wallets SET revision=revision+1,rental_points=$rental,character_slots=$slots,premium_contracts=$contracts,seria_luck=$luck WHERE account=$account AND revision=$revision";
+            command.CommandText = "UPDATE account_wallets SET revision=revision+1,rental_points=$rental,mileage=$mileage,character_slots=$slots,premium_contracts=$contracts,seria_luck=$luck WHERE account=$account AND revision=$revision";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("账号钱包版本变化");
             command.CommandText = "DELETE FROM account_currency_balances WHERE account=$account";
             command.ExecuteNonQuery();

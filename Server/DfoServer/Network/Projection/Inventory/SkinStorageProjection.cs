@@ -29,15 +29,16 @@ internal sealed class SkinStorageProjection(InventorySkinStorageService skins)
         }
     }
 
-    public async Task AddedAsync(GameConnectionContext context, InventoryCommitReceipt receipt, SkinStorageKey key)
+    public async Task AddedAsync(GameConnectionContext context, InventoryCommitReceipt receipt, IReadOnlyList<SkinStorageKey> keys)
     {
         bool Guard() => context.Session.CanPublishInventory(receipt);
-        if (!Guard()) return;
+        if (!Guard() || keys.Count == 0) return;
+        var key = keys[0];
         byte[] owned = key.Type == InventorySkinStorageService.Type ? SkinStoragePackets.Owned(receipt.Character.Inventory.Skins) :
             key.Type == InventorySkinStorageService.CutsceneType ? SkinStoragePackets.Cutscenes(skins.View(receipt.Character)) :
                 SkinStoragePackets.DamageFonts(skins.View(receipt.Character));
         await context.Notify(NotiPacketType.SKIN_CARGO_INFO, owned, "skin_storage_added", Guard);
-        await context.Notify(NotiPacketType.RECENT_ADD_SKIN_LIST, SkinStoragePackets.Recent(key.SkinId, key.Type), "skin_storage_recent", Guard);
+        await context.Notify(NotiPacketType.RECENT_ADD_SKIN_LIST, SkinStoragePackets.Recent(keys), "skin_storage_recent", Guard);
         if (key.Type == InventorySkinStorageService.DamageFontType)
             await context.Notify(NotiPacketType.SELECT_SKIN_LIST, SkinStoragePackets.Selection(skins.EffectiveDamageFont(receipt.Character),
                 key.Type), "damage_font_selection_committed", Guard);

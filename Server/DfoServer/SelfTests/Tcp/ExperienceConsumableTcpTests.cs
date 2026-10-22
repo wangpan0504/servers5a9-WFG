@@ -23,7 +23,7 @@ internal static class ExperienceConsumableTcpTests
                 resources.Towns.InitialReturn, resources.Learning.Get);
             foreach (var (name, level, item) in new (string, byte, int)[]
                 { ("Capsule", 49, ExperienceConsumableTests.PercentItem), ("CapsuleRoll", 60, ExperienceConsumableTests.FixedItem),
-                  ("CapsuleMap", 16, ExperienceConsumableTests.PercentItem) })
+                  ("CapsuleMap", 16, ExperienceConsumableTests.PercentItem), ("OldBook", 1, 1034) })
                 created.Add(repository.Create(owner, candidate with
                 {
                     Name = name, Level = level, InitialLearning = SkillPointLedger.Synchronize(0, 0, level, candidate.InitialLearning with
@@ -73,6 +73,12 @@ internal static class ExperienceConsumableTcpTests
             var packets = Use(peer, created[2], growth.GetLevelExperienceSpan(16) * 10 / 100, 17);
             That(packets.Count(packet => packet.Opcode == 2) == 1 && packets.Single(packet => packet.Opcode == 2).Body[0] == 1,
                 "副本升级只刷新Player，不重建Actor或城镇上下文");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created[3].Slot);
+            var packets = Use(peer, created[3], 100, 2);
+            That(packets.All(packet => packet.Opcode != 14), "旧经验书同样由ACK30扣源，不重复发送源删除");
         }
         await fixture.StopAsync(); await fixture.StartAsync();
         using (var peer = Open(fixture))

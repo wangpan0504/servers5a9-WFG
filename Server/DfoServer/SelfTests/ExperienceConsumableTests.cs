@@ -55,6 +55,20 @@ internal static class ExperienceConsumableTests
             !bare.Allows(10, 3) && bare.Allows(10, 2) &&
             ExperienceConsumableDefinition.Parse(file with { ExcludedJobs = ["[mage"] }, template) is null,
             "排除职业接受资源中的裸名称，不把残缺括号修补成合法声明");
+        foreach (var (id, amount) in new[] { (1034, 100), (1035, 1000), (1036, 10000), (1037, 100000) })
+        {
+            var nativeTemplate = template with { Id = id };
+            var native = file with { Stackable = raw with { TemplateId = id, ScriptPath = "stackable/book_exp" + (id - 1033) + ".stk" },
+                Effect = null, DeclaredFields = [] };
+            That(ExperienceConsumableDefinition.Parse(native, nativeTemplate) is { Percent: false } book && book.Amount == amount,
+                "旧经验书ID与规范路径同时命中时补原生固定经验 " + id);
+            That(ExperienceConsumableDefinition.Parse(native with { Stackable = native.Stackable with { ScriptPath = "stackable/custom.stk" } }, nativeTemplate) is null,
+                "编号相同但脚本身份不同不套旧书经验");
+            That(ExperienceConsumableDefinition.Parse(native with { Effect = new("[expUp]", [321]) }, nativeTemplate) is { Amount: 321 },
+                "显式PVF经验标签优先于旧编号默认值");
+            That(ExperienceConsumableDefinition.Parse(native with { Effect = new("[unknown]", [321]) }, nativeTemplate) is null,
+                "未知显式效果不退回旧书默认经验");
+        }
         Console.WriteLine($"PASS {Count - checks} 经验物品纯规则与CMD30边界断言");
     }
 
@@ -65,6 +79,19 @@ internal static class ExperienceConsumableTests
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
         var clock = new ConsumableUseSessionTests.FakeClock();
         var service = new ExperienceConsumableService(items.Items, growth, clock);
+        foreach (var (id, amount) in new[] { (1034, 100), (1035, 1000), (1036, 10000), (1037, 100000) })
+        {
+            That(items.Items.ExperienceConsumable(id) is { Percent: false } book && book.Amount == amount,
+                "当前PVF的旧经验书无需效果标签即可查询 " + id);
+            using var bookFixture = Make(60, id, nearLevel: true);
+            var previous = bookFixture.Read();
+            var used = bookFixture.Session.UseExperienceConsumable(Slot, service);
+            That(used.Outcome == ConsumableUseOutcome.Committed && bookFixture.Read().Level == 61 &&
+                bookFixture.Read().Learning.Experience == previous.Learning.Experience + (uint)amount &&
+                bookFixture.Read().Inventory.Find(Slot)!.Core.Count == 1 &&
+                bookFixture.Read().Learning.BonusSp == previous.Learning.BonusSp && bookFixture.Read().Learning.BonusTp == previous.Learning.BonusTp,
+                "旧书沿已有成长事务升级、扣一件并保留额外来源 " + id);
+        }
         That(items.Items.ExperienceConsumable(PercentItem) is { Percent: true, Amount: 10 } &&
             items.Items.ExperienceConsumable(FixedItem) is { Percent: false, Amount: 500000 } &&
             items.Items.ExperienceConsumable(10005107) is { Percent: true, Amount: 10 } &&

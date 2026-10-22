@@ -10,13 +10,14 @@ internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercen
 
     public static EquipmentQualityBox? Parse(int id, PvfDocument script)
     {
-        string action = Regex.Match(script.Section("action type"), @"\[([^\]]+)\]").Groups[1].Value;
-        bool fixedRange = action == "fixed probability kaleido";
-        bool gold = action == "gold kaleido box";
+        StackableActionDeclaration.TryRead(script, out var raw);
+        var action = StackableActionCatalog.Arguments(raw);
+        bool fixedRange = raw?.Label == "[fixed probability kaleido]";
+        bool gold = action?.Label == "[gold kaleido box]";
         // 本版旧商城15/897没有action type；活动版本由PVF动作声明识别。黄金箱说明是取最高品级。
-        if (!fixedRange && !gold && action != "kaleido" && !(id is 15 or 897 && action.Length == 0)) return null;
-        var arguments = PvfScript.Integers(script.Section("action type"));
-        if (fixedRange && (arguments.Length != 2 || arguments[0] < 1 || arguments[1] > 100 || arguments[0] > arguments[1]))
+        if (!fixedRange && !gold && action?.Label != "[kaleido]" && !(id is 15 or 897 && !script.Has("action type"))) return null;
+        var arguments = action?.Parameters;
+        if (fixedRange && (arguments is not { Count: 2 } || arguments[0] < 1 || arguments[1] > 100 || arguments[0] > arguments[1]))
             throw new InvalidDataException("品级调整箱固定范围无效");
         string slotText = script.Section("usable equipment type");
         if (slotText.Length == 0)
@@ -25,7 +26,7 @@ internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercen
             .Select(match => ItemCatalog.Slot(match.Groups[1].Value)).Distinct().ToImmutableArray();
         if (gold)
             return new(100, 100, slots);
-        return new(fixedRange ? arguments[0] : -1, fixedRange ? arguments[1] : -1, slots);
+        return new(fixedRange ? arguments![0] : -1, fixedRange ? arguments![1] : -1, slots);
     }
 
     public bool Allows(ItemTemplate equipment) => equipment.Kind == ItemKind.Equipment &&

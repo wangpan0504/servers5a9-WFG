@@ -269,6 +269,20 @@ internal static class QuestCompletionRepositoryTests
     {
         public bool LoseExperienceResult { get; set; }
         public bool LosePermanentGrowthResult { get; set; }
+        public bool LoseLegacyStatusResult { get; set; }
+        public bool LoseFatigueConsumableResult { get; set; }
+        public Character CommitFatigueConsumable(AccountOwners.Lease owner, FatigueConsumablePlan plan, DateTimeOffset now)
+        {
+            var committed = inner.CommitFatigueConsumable(owner, plan, now);
+            if (LoseFatigueConsumableResult) throw new IOException("合成疲劳恢复已提交但返回结果丢失");
+            return committed;
+        }
+        public Character CommitLegacyStatusConsumable(AccountOwners.Lease owner, LegacyStatusConsumablePlan plan, DateTimeOffset now)
+        {
+            var committed = inner.CommitLegacyStatusConsumable(owner, plan, now);
+            if (LoseLegacyStatusResult) throw new IOException("合成旧状态道具已提交但返回结果丢失");
+            return committed;
+        }
         public Character CommitPermanentGrowth(AccountOwners.Lease owner, PermanentGrowthPlan plan, DateTimeOffset now)
         {
             var result = inner.CommitPermanentGrowth(owner, plan, now);

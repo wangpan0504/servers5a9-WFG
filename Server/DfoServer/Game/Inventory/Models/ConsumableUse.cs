@@ -13,4 +13,6 @@ internal sealed record ConsumableUseResult(ConsumableUseOutcome Outcome, string 
     public int TownGiftItem { get; init; }
     public DfoServer.Game.Characters.ExperienceConsumablePlan? Experience { get; init; }
     public DfoServer.Game.Characters.PermanentGrowthPlan? PermanentGrowth { get; init; }
+    public DfoServer.Game.Characters.LegacyStatusConsumablePlan? LegacyStatus { get; init; }
+    public DfoServer.Game.Characters.FatigueConsumablePlan? FatigueRecovery { get; init; }
 }

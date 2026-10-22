@@ -15,10 +15,11 @@ internal sealed record LevelUpByTableDefinition(ItemTemplate Item, ImmutableArra
     public static LevelUpByTableDefinition? Parse(ExperienceConsumableFile file, ItemTemplate template)
     {
         var raw = file.Stackable;
+        var action = StackableActionCatalog.Arguments(raw);
         if (file.Diagnostics.Length != 0 || raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || template.UseForbidden ||
             raw.TypeDeclaration is not { Label: "[etc]", Parameters: [0 or 1] } ||
             file.Effect is not { Label: "[levelUpByTable]", Parameters.Count: > 0 } effect || effect.Parameters.Count % 3 != 0 ||
-            file.DeclaredFields.Contains("action type") && raw.ActionDeclaration is not { Label: "[jumping lv]", Parameters.Count: 0 } ||
+            file.DeclaredFields.Contains("action type") && action is not { Label: "[jumping lv]", Parameters.Count: 0 } ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasCoolTime && raw.DeclaredCoolTime is null || raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
@@ -40,7 +41,7 @@ internal sealed record LevelUpByTableDefinition(ItemTemplate Item, ImmutableArra
         bool village = raw.DeclaredActionUsablePlaces?.Contains("[village]") == true;
         bool room = raw.DeclaredActionUsablePlaces?.Contains("[seria room]") == true;
         return new(template, ranges.ToImmutable(), growTypes.Select(value => (byte)value).ToImmutableArray(),
-            raw.ActionDeclaration is not null, village || room, room && !village, raw.DeclaredCoolTime ?? 0);
+            action is not null, village || room, room && !village, raw.DeclaredCoolTime ?? 0);
     }
 
     // ARAD 按原序匹配第一个包含当前等级的三元组；不排序或合并区间。

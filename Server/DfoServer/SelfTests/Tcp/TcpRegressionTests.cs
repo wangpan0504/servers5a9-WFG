@@ -83,6 +83,18 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("experience-consumable", ExperienceConsumableTcpTests.RunAsync),
+        ("legacy-status", LegacyStatusConsumableTcpTests.RunAsync),
+        ("legacy-status-rules", (_, _, resources) =>
+        {
+            LegacyStatusConsumableTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Learning);
+            return Task.CompletedTask;
+        }),
+        ("action-consumables", ActionConsumableTcpTests.RunAsync),
+        ("stackable-actions", (_, _, resources) =>
+        {
+            StackableActionTests.RunResources(resources.Archive, resources.ItemResources.Items);
+            return Task.CompletedTask;
+        }),
         ("permanent-growth", PermanentGrowthTcpTests.RunAsync),
         ("experience-consumable-rules", (_, _, resources) =>
         {
@@ -222,6 +234,12 @@ internal static class TcpRegressionTests
         ("guild-permit", GuildPermitTcpTests.RunAsync),
         ("guild-permit-sequential", GuildPermitSequentialTcpTests.RunAsync),
         ("currency", CurrencyTcpTests.RunAsync),
+        ("currency-rules", (_, _, resources) =>
+        {
+            Inventory.CurrencyTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
+        ("mileage", MileageTcpTests.RunAsync),
         ("cargo", CargoTcpTests.RunAsync),
         ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
@@ -258,6 +276,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("creature-system", CreatureSystemTcpTests.RunAsync),
+        ("creature-transport", CreatureTransportTcpTests.RunAsync),
         ("creature-change", CreatureChangeTcpTests.RunAsync),
         ("creature-group", CreatureGroupTcpTests.RunAsync),
         ("creature-dungeon", FormalDungeonTcpTests.RunCreatureAsync),
@@ -312,6 +331,8 @@ internal static class TcpRegressionTests
         "levelup-ticket-rules",
         "levelup-table-rules",
         "experience-consumable-rules",
+        "legacy-status-rules",
+        "stackable-actions",
         "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",

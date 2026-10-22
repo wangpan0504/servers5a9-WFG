@@ -29,7 +29,7 @@ internal sealed class LevelUpTicketHandler(LevelUpTicketService service, QuestCa
         return await UsePreparedAsync(context,position,LevelUpConsumableKind.StatusTable,0);
     }
 
-    public async Task<CommandResult> UseJumpingAsync(GameConnectionContext context, QuestTicketUseRequest request)
+    public async Task<CommandResult> UseJumpingAsync(GameConnectionContext context, StackableActionUseRequest request)
     {
         var position = new InventorySlot((InventoryListType)request.List, unchecked((short)request.Slot));
         bool valid = request.Reserved == 0 && request.SecondArgument == 0 && request.Action == LevelUpByTableDefinition.JumpingAction;

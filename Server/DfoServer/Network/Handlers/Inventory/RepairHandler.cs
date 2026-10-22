@@ -25,7 +25,14 @@ internal sealed class RepairHandler(InventoryRepairService repair, InventoryProj
             ReferenceEquals(context.Session.Selected, original.Selected));
         await context.Reply(CmdPacketType.REPAIR_EQUIPMENT, RepairPackets.Ack(request, result),
             result.Accepted ? "equipment_repaired" : "equipment_repair_rejected", CanSend);
-        await projection.RefreshAsync(context, result);
+        HashSet<InventorySlot>? consumed = null;
+        if (result.Accepted && request.RepairItemSlot >= 0 && result.Receipt is { } used)
+        {
+            // ACK23只修理目标，不扣源券；13完整载入同步真实剩余量，避免把消费当作获得通知。
+            consumed = [new(InventoryListType.Main, request.RepairItemSlot)];
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(used.Character.Inventory), "repair_item_remaining", CanSend);
+        }
+        await projection.RefreshAsync(context, result, consumed);
         return CommandResult.Handled;
     }
 }

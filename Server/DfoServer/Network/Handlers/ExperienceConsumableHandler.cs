@@ -11,13 +11,15 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed class ExperienceConsumableHandler(ExperienceConsumableService service, InventoryProjection inventory,
     CharacterLevelProjection levels, ServerLog log, LevelUpTicketHandler? levelUpTickets = null,
-    PermanentGrowthHandler? permanentGrowth = null) : IGameCommandModule
+    PermanentGrowthHandler? permanentGrowth = null, LegacyStatusConsumableHandler? legacyStatus = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.INCREASE_STATUS, UseAsync, nameof(ExperienceConsumableHandler));
 
     async Task<CommandResult> UseAsync(GameConnectionContext context, Packet packet)
     {
         var slot = ExperienceConsumableRequests.Read(packet.Body);
+        if (legacyStatus is not null && await legacyStatus.TryUseAsync(context, slot) is { } legacyResult)
+            return legacyResult;
         if (permanentGrowth is not null && await permanentGrowth.TryUseAsync(context, slot) is { } permanentResult)
             return permanentResult;
         if (levelUpTickets is not null && await levelUpTickets.TryUseTableAsync(context,slot) is { } tableResult)

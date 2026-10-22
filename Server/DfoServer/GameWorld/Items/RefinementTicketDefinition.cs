@@ -30,7 +30,8 @@ internal sealed record RefinementTicketDefinition(byte Level, int SuccessWeight,
     }
     public static RefinementTicketDefinition? Parse(PvfDocument script)
     {
-        if (Regex.Match(script.Section("action type"), @"\[([^\]]+)\]").Groups[1].Value == "portable genuine damage upgrade upgrede")
+        StackableActionDeclaration.TryRead(script, out var raw);
+        if (StackableActionCatalog.Arguments(raw)?.Label == "[portable genuine damage upgrade upgrede]")
         {
             var range = script.Section("check usable itemlevel").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             if (range.Length != 2 || !int.TryParse(range[0], out int min) || !int.TryParse(range[1], out int max) || min < 0 || max < min)

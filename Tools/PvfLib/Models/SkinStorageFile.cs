@@ -4,7 +4,10 @@ using PvfLib.Scripting;
 namespace PvfLib;
 
 public sealed record SkinStorageAction(int SkinId, string Target, string ExpirationMode, int Days,
-    string Date, ImmutableArray<string> Places);
+    string Date, ImmutableArray<string> Places)
+{
+    public ImmutableArray<int> SkinIds { get; init; } = [SkinId];
+}
 
 public static class SkinStorageFile
 {
@@ -19,8 +22,14 @@ public static class SkinStorageFile
     public static SkinStorageAction? ReadAction(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
         var item = StackableFile.Parse(id, path, tokens, resolve);
+        return ReadAction(item, tokens, resolve);
+    }
+
+    public static SkinStorageAction? ReadAction(StackableFile item, PvfToken[] tokens, Func<int, string> resolve)
+    {
         if (item.TypeDeclaration is not { Label: "[waste]" } ||
-            item.ActionDeclaration is not { Label: "[add skin storage]", Parameters: [> 0] } action)
+            item.ActionDeclaration is not { HasIntegerArguments: true, Label: "[add skin storage]", Parameters.Count: > 0 } action ||
+            action.Parameters.Any(id => id <= 0))
             return null;
         var fields = new PvfTokenFields(tokens, resolve, ["action target", "action expiration info"]);
         if (!fields.TryGet("action target", out var target) || target is not [{ Type: 6 } targetToken] ||
@@ -43,6 +52,6 @@ public static class SkinStorageFile
                 throw new InvalidDataException("入库动作期限结构无效");
         }
         return new(action.Parameters[0], resolve(targetToken.Value), mode, days, date,
-            item.DeclaredActionUsablePlaces?.ToImmutableArray() ?? []);
+            item.DeclaredActionUsablePlaces?.ToImmutableArray() ?? []) { SkinIds = action.Parameters.ToImmutableArray() };
     }
 }

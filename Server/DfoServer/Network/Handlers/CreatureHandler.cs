@@ -6,10 +6,12 @@ using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
+using DfoServer.Network.Projection.Inventory;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class CreatureHandler(CreatureService service, CreatureProjection projection, ServerLog log) : IGameCommandModule
+internal sealed class CreatureHandler(CreatureService service, CreatureProjection projection, ServerLog log,
+    InventoryProjection? inventory = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -18,6 +20,35 @@ internal sealed class CreatureHandler(CreatureService service, CreatureProjectio
         commands.Register(CmdPacketType.CREATURE_SEND_MESSAGE, MessageAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.CREATURE_SCRIPT_MESSAGE, MessageAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.VERIFY_CREATURE_QUEST, VerifyQuestAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CREATURE_EFFECT_TIME_EXPIRE, ExpireEffectAsync, nameof(CreatureHandler), UserStateRequirement.WorldReady);
+    }
+
+    public async Task<CommandResult> UseEffectAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
+        var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var position = new InventorySlot(InventoryListType.Main, unchecked((short)request.Slot));
+        bool valid = request.Action == 151 && request.Reserved == 0 && request.FirstArgument == 0 && request.SecondArgument == 0 &&
+            request.List == 0 && request.Slot <= short.MaxValue;
+        var result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+            context.Session.PlanAndCommitInventory(character => service.UseEffect(character, position,
+                before.Phase == SessionPhase.Town), 19, requireTown: false);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
+            context.Session.Phase == before.Phase);
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request, result.Error),
+            result.Accepted ? "creature_effect_used" : "creature_effect_rejected", Guard);
+        if (inventory is not null) await inventory.RefreshAsync(context, result, new HashSet<InventorySlot> { position }, refreshEquipment: false);
+        log.Write("creature_effect_item", new { Connection = context.Id, request.Slot, result.Accepted, result.Error });
+        return CommandResult.Handled;
+    }
+
+    Task<CommandResult> ExpireEffectAsync(GameConnectionContext context, Packet packet)
+    {
+        if (packet.Body.Length != 0) return Task.FromResult(CommandResult.Unhandled);
+        if (context.Activity?.BlocksTownActions != true)
+            _ = context.Session.PlanAndCommitInventory(service.ExpireEffect, 19, requireTown: false);
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> VerifyQuestAsync(GameConnectionContext context, Packet packet)

@@ -178,7 +178,26 @@ internal static class SqliteMigrations
         new(73, "冒险团经验账本", EnsureAdventureLedger),
         // 满级入口线后角色经验到账为0，回执需保留同一笔经验记入熟练度的额度，结算显示与重复报告才能回放有效经验。
         new(74, "熟练度到账额度", SettlementProficiencySchema.Upgrade),
+        new(75, "账号商城积分", AddMileageColumn),
     ];
+
+    static void AddMileageColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='mileage'";
+        if (Convert.ToInt32(query.ExecuteScalar()) == 0)
+        {
+            Execute(db, tx, "ALTER TABLE account_wallets ADD COLUMN mileage INTEGER NOT NULL DEFAULT 0 CHECK(mileage BETWEEN 0 AND 2147483647)");
+            return;
+        }
+        // 回退迁移夹具只接受同一正式列，不吞掉未知同名字段或重置已有余额。
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='mileage' AND upper(type)='INTEGER' AND \"notnull\"=1 AND dflt_value='0'";
+        if (Convert.ToInt32(query.ExecuteScalar()) != 1) throw new InvalidDataException("未知商城积分列定义");
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_wallets'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains("CHECK(mileage BETWEEN 0 AND 2147483647)", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("商城积分列缺少正式数量约束");
+    }
 
     // 早期真实库没有该表（v72首次引入），直接建出；从当前schema回退重放的夹具可能已带同结构表，
     // 校验目标结构后跳过，不重复建表。同名视图或不同结构仍整笔失败回滚。
@@ -1679,7 +1698,7 @@ internal static class SqliteMigrations
         "SELECT [character_id],[context],[sp],[tp] FROM [character_skill_points] LIMIT 0",
         "SELECT [character_id],[context],[slot],[skill_id],[level] FROM [character_skill_bindings] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[list_type],[slot_index],[item_uid_before],[item_uid_after],[item_id_before],[item_id_after],[value_before],[value_after],[item_kind_before],[item_kind_after],[count_before],[count_after],[count_delta],[core_hash_before],[core_hash_after] FROM [inventory_audit_log] LIMIT 0",
-        "SELECT [account],[revision],[rental_points],[seria_luck],[premium_contracts],[character_slots] FROM [account_wallets] LIMIT 0",
+        "SELECT [account],[revision],[rental_points],[mileage],[seria_luck],[premium_contracts],[character_slots] FROM [account_wallets] LIMIT 0",
         "SELECT avatar_expansion FROM characters LIMIT 0",
         "SELECT devil_usage,stamina_until FROM characters LIMIT 0",
         "SELECT daily_booster_usage FROM characters LIMIT 0",

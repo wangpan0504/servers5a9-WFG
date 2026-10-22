@@ -71,6 +71,30 @@ internal static class CreatureRules
             Mode1Field0 = 10, Mode1Field1 = checked((byte)intimacy) };
     }
 
+    public static CreatureDetail UseExperienceItem(CreatureDetail detail, CreatureDefinition definition, CreatureCatalog catalog,
+        CreatureExperienceItemDefinition item)
+    {
+        int maximum = Math.Min(definition.MaximumLevel, catalog.MaximumExperienceLevel);
+        if (definition.SelectEvolutionLevel >= 0) maximum = Math.Min(maximum, definition.SelectEvolutionLevel);
+        if (detail.Mode != 0 || definition.UsesExperienceItems || detail.Level < item.MinimumLevel || detail.Level >= maximum)
+            return detail;
+        long experience;
+        if (item.Kind == 1)
+        {
+            long span = catalog.ExperienceAtLevel(detail.Level + 1) - catalog.ExperienceAtLevel(detail.Level);
+            experience = detail.Experience + Math.Max(1, span * item.Amount / 100);
+        }
+        else
+        {
+            int target = (int)Math.Min(maximum, item.Kind == 2 ? (long)detail.Level + item.Amount : item.Amount);
+            if (target <= detail.Level) return detail;
+            experience = catalog.ExperienceAtLevel(target);
+        }
+        int total = (int)Math.Min(catalog.ExperienceAtLevel(maximum), experience);
+        if (total <= detail.Experience) return detail;
+        return detail with { Experience = total, Level = Math.Max(detail.Level, catalog.Level(total, definition)) };
+    }
+
     public static bool ValidName(string name)
     {
         if (name.Any(char.IsControl)) return false;

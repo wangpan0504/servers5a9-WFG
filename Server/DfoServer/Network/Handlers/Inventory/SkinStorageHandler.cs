@@ -62,7 +62,7 @@ internal sealed class SkinStorageHandler(InventorySkinStorageService skins, Inve
         return CommandResult.Handled;
     }
 
-    public async Task<CommandResult> UseAsync(GameConnectionContext context, QuestTicketUseRequest request)
+    public async Task<CommandResult> UseAsync(GameConnectionContext context, StackableActionUseRequest request)
     {
         var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         bool valid = request.Action == InventorySkinStorageService.AddAction && request.Reserved == 0 &&
@@ -72,18 +72,18 @@ internal sealed class SkinStorageHandler(InventorySkinStorageService skins, Inve
             context.Session.PlanAndCommitInventory(character => skins.Add(character, position,
                 before.Phase == Game.Session.SessionPhase.Town), 3, requireTown: false);
         var receipt = result.Receipt;
-        var key = result.Plan is { } plan ? skins.Key(plan.Before.Find(position)) : null;
+        var keys = result.Plan is { } plan ? skins.Keys(plan.Before.Find(position)) : [];
         bool Guard() => receipt is not null ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
             ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
             context.Session.Phase == before.Phase);
         log.Write("skin_storage_add", new { Connection = context.Id, request.Slot, request.List, request.Action,
-            Skin = key, result.Accepted, result.Error, result.RejectReason, Revision = receipt?.Character.Revision });
+            Skins = keys, result.Accepted, result.Error, result.RejectReason, Revision = receipt?.Character.Revision });
         // 028C0AE0先自行扣源，28C0930回调不额外读包；不能复用ACK44或再发一次源差量。
         await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
-            result.Accepted ? QuestTicketPackets.Used(request) : QuestTicketPackets.Rejected(request, result.Error),
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request, result.Error),
             result.Accepted ? "skin_storage_token_used" : "skin_storage_token_rejected", Guard);
         await inventory.RefreshAsync(context, result, acknowledgedSlots: new HashSet<InventorySlot> { position });
-        if (receipt is not null && key is { } added) await projection.AddedAsync(context, receipt, added);
+        if (receipt is not null && !keys.IsEmpty) await projection.AddedAsync(context, receipt, keys);
         return CommandResult.Handled;
     }
 }

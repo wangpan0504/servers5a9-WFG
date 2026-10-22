@@ -16,9 +16,9 @@ internal static class ConsumableStatePolicy
     public static bool RecoversStamina(InventorySnapshot inventory, long now) => inventory.ConsumableStates.Any(row =>
         row.Kind == ConsumableStateKind.Effect && row.ItemId == StaminaRecoveryItem && row.Active(now));
 
-    public static InventorySnapshot? Activate(InventorySnapshot inventory, RecoveryConsumableDefinition definition, long now)
+    public static InventorySnapshot? Activate(InventorySnapshot inventory, RecoveryConsumableDefinition definition, long now, bool sessionCooldown = false)
     {
-        if (definition.EffectMilliseconds <= 0 && (definition.CoolTime <= 0 || definition.CooltimeMaintenance == 0))
+        if (definition.EffectMilliseconds <= 0 && (definition.CoolTime <= 0 || definition.CooltimeMaintenance == 0 && !sessionCooldown))
             return inventory;
         var rows = inventory.ConsumableStates.Where(row => row.Active(now)).ToList();
         // 四种神圣祝福共用一次资格；再次使用覆盖截止，不叠加次数或保留另一种药的旧资格。
@@ -35,7 +35,7 @@ internal static class ConsumableStatePolicy
             rows.Add(new(kind, definition.ItemId, until, maintenance, definition.CoolGroup));
         }
         Put(ConsumableStateKind.Effect, definition.EffectMilliseconds, definition.EffectMaintenance);
-        if (definition.CooltimeMaintenance != 0)
+        if (definition.CooltimeMaintenance != 0 || sessionCooldown)
             Put(ConsumableStateKind.Cooldown, definition.CoolTime, definition.CooltimeMaintenance);
         var states = rows.OrderBy(row => row.Kind).ThenBy(row => row.ItemId).ToImmutableArray();
         if (states.GroupBy(row => row.Kind).Any(group => group.Count() > byte.MaxValue)) return null;

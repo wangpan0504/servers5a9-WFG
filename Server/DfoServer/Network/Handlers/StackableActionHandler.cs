@@ -16,24 +16,59 @@ using DfoServer.GameWorld.Creatures;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,QuestProjection projection,ServerLog log,
+internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog items,QuestProjection projection,ServerLog log,
     CharacterLevelProjection? levelProjection=null,SkillLearningCatalog? skills=null,
     InventoryCreatureSkinService? skinService=null,InventoryProjection? inventoryProjection=null,
     CreatureChangeService? creatureChanges=null,LevelUpTicketHandler? levelUpTickets=null,
-    Inventory.SkinStorageHandler? skinStorage=null) : IGameCommandModule
+    Inventory.SkinStorageHandler? skinStorage=null,FatigueConsumableHandler? fatigueConsumables=null,
+    RentalHandler? rental=null,CreatureHandler? creatures=null,InventoryPeriodExtensionService? periodExtensions=null,
+    InventoryMileageService? mileage=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
-    public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE_ACTION,UseAsync,nameof(QuestTicketHandler));
+    const uint PeriodExtensionAction = 69;
+    public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE_ACTION,UseAsync,nameof(StackableActionHandler));
 
     async Task<CommandResult> UseAsync(GameConnectionContext context,Packet packet)
     {
-        if (!QuestTicketRequests.TryUse(packet.Body,out var request))
+        if (!StackableActionRequests.TryUse(packet.Body,out var request))
             return CommandResult.Unhandled;
-        if (request.Action == InventorySkinStorageService.AddAction)
-            return skinStorage is not null ? await skinStorage.UseAsync(context,request) : CommandResult.Unhandled;
+        // 这两类由原提交回执识别重放：源可能已耗尽，不能用当前空槽否认原操作。
+        // 首次消费的动作身份仍由任务券/成长定义校验，原owner与回执门禁保持不变。
+        if (request.Action is QuestTicketDefinition.Action or QuestTicketDefinition.SpecifiedAction or
+            QuestTicketDefinition.FirstAwakeningAction or QuestTicketDefinition.SecondAwakeningAction)
+            return await UseQuestTicketAsync(context, request);
         if (request.Action == LevelUpByTableDefinition.JumpingAction)
             return await (levelUpTickets ?? throw new InvalidOperationException("按表成长动作缺少升级道具处理器"))
                 .UseJumpingAsync(context,request);
+        // 请求动作来自客户端，但必须与本次源STK的原生动作一致；不能拿任务券触发宠物或其他业务。
+        var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var source = request.List == (byte)InventoryListType.Main && request.Slot <= short.MaxValue
+            ? captured.Selected?.Inventory.Find(new(InventoryListType.Main, (short)request.Slot)) : null;
+        StackableActionIdentity? definition = null;
+        try { if (source is not null) definition = items.StackableAction(source.Core.ItemId); }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException)
+        { log.Write("stackable_action_resource_rejected", new { Connection = context.Id, Item = source?.Core.ItemId, Error = error.Message }); }
+        if (definition?.ClientType != request.Action)
+        {
+            bool SameSourceContext() => context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, captured.Selected) &&
+                context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase);
+            log.Write("stackable_action_rejected", new { Connection = context.Id, request.Slot, request.List, request.Action,
+                Item = source?.Core.ItemId, Label = definition?.Label, Reason = "source-action-mismatch-or-unknown" });
+            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, StackableActionPackets.Rejected(request), "stackable_action_rejected", SameSourceContext);
+            return CommandResult.Handled;
+        }
+        if (request.Action == FatigueConsumableDefinition.Action)
+            return fatigueConsumables is not null ? await fatigueConsumables.UseAsync(context, request) : CommandResult.Unhandled;
+        if (request.Action == 106)
+            return rental is not null ? await rental.UsePointsAsync(context, request) : CommandResult.Unhandled;
+        if (request.Action == 72)
+            return await UseMileageAsync(context, request);
+        if (request.Action == 151)
+            return creatures is not null ? await creatures.UseEffectAsync(context, request) : CommandResult.Unhandled;
+        if (request.Action == PeriodExtensionAction)
+            return await ExtendPeriodAsync(context, request, items.ActionConsumable(source!.Core.ItemId));
+        if (request.Action == InventorySkinStorageService.AddAction)
+            return skinStorage is not null ? await skinStorage.UseAsync(context,request) : CommandResult.Unhandled;
         if (request.Action == CreatureSkinAction)
             return await UseCreatureSkinAsync(context, request);
         if (request.Action == InventoryCreatureSkinService.AuraAction)
@@ -60,7 +95,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             log.Write("aura_skin_action",new { Connection=context.Id,request.Slot,request.List,request.Action,
                 result.Accepted,result.Error,Revision=result.Receipt?.Character.Revision });
             await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
-                result.Accepted ? QuestTicketPackets.Used(request) : QuestTicketPackets.Rejected(request),
+                result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
                 result.Accepted ? "aura_skin_action_committed" : "aura_skin_action_rejected",
                 CanPublish);
             if (result.Accepted)
@@ -71,14 +106,85 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             }
             return CommandResult.Handled;
         }
-        if (request.Action is CreatureChangeDefinition.Action or CreatureGrowthItemDefinition.Action)
+        if (request.Action is CreatureChangeDefinition.Action or CreatureChangeDefinition.RandomAction or CreatureGrowthItemDefinition.Action)
             return await ChangeCreatureAsync(context, request);
+        log.Write("stackable_action_unsupported", new { Connection = context.Id, request.Action,
+            Item = source?.Core.ItemId, Label = definition?.Label });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, StackableActionPackets.Rejected(request), "stackable_action_unsupported",
+            () => context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, captured.Selected) &&
+                context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase));
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseMileageAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
+        var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool valid = request.List == 0 && request.Slot <= short.MaxValue && request.Reserved == 0 &&
+            request.FirstArgument == 0 && request.SecondArgument == 0 && mileage is not null && inventoryProjection is not null;
+        var source = new InventorySlot(InventoryListType.Main, unchecked((short)request.Slot));
+        InventoryResult result;
+        try
+        {
+            result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+                context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, before.Selected)
+                    ? mileage!.Plan(character, source, before.Phase == Game.Session.SessionPhase.Town) : InventoryResult.Reject(19),
+                    19, requireTown: false, requiredPhase: before.Phase);
+        }
+        catch (Exception error) when (error is DbException or InvalidDataException or KeyNotFoundException)
+        {
+            log.Write("mileage_item_commit_failed", new { Connection = context.Id, request.Slot, Error = error.Message });
+            result = InventoryResult.Reject(19);
+        }
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch && context.Session.Phase == before.Phase);
+        log.Write("mileage_item", new { Connection = context.Id, request.Slot, result.Accepted, result.Error,
+            Before = before.Selected?.Inventory.AccountWallet.Mileage, After = result.Receipt?.Character.Inventory.AccountWallet.Mileage });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
+            result.Accepted ? "mileage_item_committed" : "mileage_item_rejected", Guard);
+        // 动作72的默认成功消费者自行扣一件源；随后只发布已提交的537积分通知。
+        if (inventoryProjection is not null)
+            await inventoryProjection.RefreshAsync(context, result, new HashSet<InventorySlot> { source }, refreshEquipment: false);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ExtendPeriodAsync(GameConnectionContext context, StackableActionUseRequest request,
+        ActionConsumableDefinition? definition)
+    {
+        var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool valid = request.List == 0 && request.Slot <= short.MaxValue && request.Reserved == 0 &&
+            request.FirstArgument is 0 or 3 && request.SecondArgument <= short.MaxValue &&
+            periodExtensions is not null && inventoryProjection is not null;
+        var source = new InventorySlot(InventoryListType.Main, unchecked((short)request.Slot));
+        var target = new InventorySlot((InventoryListType)request.FirstArgument, unchecked((short)request.SecondArgument));
+        var result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+            context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, before.Selected)
+                ? periodExtensions!.Plan(character, source, target, definition, before.Phase == Game.Session.SessionPhase.Town)
+                : InventoryResult.Reject(19), 19, requireTown: false, requiredPhase: before.Phase);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
+            context.Session.Phase == before.Phase);
+        log.Write("item_period_extension", new { Connection = context.Id, Item = definition?.Item.Id, Source = source.Index,
+            TargetList = target.List, Target = target.Index, result.Accepted, result.Error,
+            Before = before.Selected?.Inventory.Find(target)?.ExpireTime,
+            After = result.Receipt?.Character.Inventory.Find(target)?.ExpireTime, Revision = result.Receipt?.Character.Revision });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
+            result.Accepted ? "item_period_extended" : "item_period_extension_rejected", Guard);
+        // 原生69成功ACK自行扣一张源券；随后只更新目标完整核心，不重复扣源或播报新获得。
+        if (inventoryProjection is not null)
+            await inventoryProjection.RefreshAsync(context, result, new HashSet<InventorySlot> { source }, suppressMainNotice: true);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseQuestTicketAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
         if (context.Activity?.BlocksTownActions == true) return CommandResult.Unhandled;
         if (request.Reserved != 0 || request.FirstArgument != 0 || request.SecondArgument != 0 ||
             request.Action is not (QuestTicketDefinition.Action or QuestTicketDefinition.SpecifiedAction or
                 QuestTicketDefinition.FirstAwakeningAction or QuestTicketDefinition.SecondAwakeningAction))
         {
-            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,QuestTicketPackets.Rejected(request),"quest_ticket_unsupported");
+            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,StackableActionPackets.Rejected(request),"quest_ticket_unsupported");
             return CommandResult.Handled;
         }
         var receipt = context.Session.UseQuestTicket(request.Slot,request.List,quests,items,request.Action,skills);
@@ -88,7 +194,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             receipt.Commit?.Duplicate,receipt.Commit?.Plan.OperationId,receipt.TicketAcknowledged });
         if (receipt.Commit is null)
         {
-            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,QuestTicketPackets.Rejected(request),"quest_ticket_rejected",Guard);
+            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,StackableActionPackets.Rejected(request),"quest_ticket_rejected",Guard);
             return CommandResult.Handled;
         }
         // 绝对快照可安全重放；与正常职业领奖一样，先装载真实技能，再由客户端券动作重建职业。
@@ -97,7 +203,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
         if (!receipt.TicketAcknowledged)
         {
             // ACK515的已确认券消费者自行扣一张；不发NOTI14“获得剩余量”，同一操作不重复发送消费ACK。
-            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,QuestTicketPackets.Used(request),"quest_ticket_used",Guard);
+            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,StackableActionPackets.Used(request),"quest_ticket_used",Guard);
             context.Session.MarkQuestTicketAcknowledged(receipt);
         }
         var added=receipt.Commit.Plan.Inventory.ChangedSlots.Where(slot=>receipt.Commit.Plan.Inventory.Before.Find(slot)?.Core.Kind==ItemKind.Quest ||
@@ -136,7 +242,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             captured.SelectionEpoch == context.Session.SelectionEpoch && captured.Phase == context.Session.Phase);
     }
 
-    async Task<CommandResult> UseCreatureSkinAsync(GameConnectionContext context, QuestTicketUseRequest request)
+    async Task<CommandResult> UseCreatureSkinAsync(GameConnectionContext context, StackableActionUseRequest request)
     {
         if (skinService is null || inventoryProjection is null)
             throw new InvalidOperationException("宠物幻化右键缺少库存服务或投影");
@@ -164,19 +270,19 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             result.Accepted, result.Error, Revision = result.Receipt?.Character.Revision });
         if (!result.Accepted)
         {
-            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, QuestTicketPackets.Rejected(request),
+            await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, StackableActionPackets.Rejected(request),
                 "creature_skin_ticket_rejected", Guard);
             return CommandResult.Handled;
         }
         // 成功ACK515由客户端自行扣一张；随后只恢复权威Player开栏位，不再通知同一源槽。
-        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, QuestTicketPackets.Used(request),
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, StackableActionPackets.Used(request),
             "creature_skin_ticket_used", Guard);
         await inventoryProjection.RefreshAsync(context, result, acknowledgedSlots: new HashSet<InventorySlot>
         { new(InventoryListType.Main, (short)request.Slot) });
         return CommandResult.Handled;
     }
 
-    async Task<CommandResult> ChangeCreatureAsync(GameConnectionContext context, QuestTicketUseRequest request)
+    async Task<CommandResult> ChangeCreatureAsync(GameConnectionContext context, StackableActionUseRequest request)
     {
         var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         bool grouped = request.Action == CreatureGrowthItemDefinition.Action;
@@ -187,8 +293,9 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             context.Session.PlanAndCommitInventory(character => grouped
                 ? creatureChanges.PlanGroup(character, new(InventoryListType.Main, (short)request.Slot),
                     new(InventoryListType.Pet, (short)targetIndex), request.SecondArgument, capture.Phase == Game.Session.SessionPhase.Town)
-                : creatureChanges.Plan(character, new(InventoryListType.Main, (short)request.Slot), new(InventoryListType.Pet, (short)targetIndex)),
-                0, requireTown: !grouped, requiredPhase: capture.Phase);
+                : creatureChanges.Plan(character, new(InventoryListType.Main, (short)request.Slot), new(InventoryListType.Pet, (short)targetIndex),
+                    capture.Phase == Game.Session.SessionPhase.Town),
+                0, requireTown: request.Action == CreatureChangeDefinition.Action, requiredPhase: capture.Phase);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
             context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, capture.Selected) &&
                 context.Session.SelectionEpoch == capture.SelectionEpoch && context.Session.Phase == capture.Phase);
@@ -196,7 +303,7 @@ internal sealed class QuestTicketHandler(QuestCatalog quests,ItemCatalog items,Q
             request.Action, TargetSlot = targetIndex, Choice = grouped ? request.SecondArgument : 0, result.Accepted,
             Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
-            result.Accepted ? QuestTicketPackets.Used(request) : QuestTicketPackets.Rejected(request), "creature_change_ack", Guard);
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request), "creature_change_ack", Guard);
         if (result.Accepted)
         {
             var source = new InventorySlot(InventoryListType.Main, (short)request.Slot);

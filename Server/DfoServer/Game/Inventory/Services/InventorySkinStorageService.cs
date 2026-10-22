@@ -57,6 +57,9 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
     public SkinStorageKey? Key(InventoryItem? item) => item is not null && skins.Token(item.Core.ItemId) is { } token
         ? new(token.Type, token.Type == Type ? item.Core.EnchantCardId : token.SkinId) : null;
 
+    public ImmutableArray<SkinStorageKey> Keys(InventoryItem? item) => item is not null && skins.Token(item.Core.ItemId) is { } token
+        ? token.SkinIds.Select(id => new SkinStorageKey(token.Type, token.Type == Type ? item.Core.EnchantCardId : id)).ToImmutableArray() : [];
+
     public InventoryResult Add(Character character, InventorySlot position, bool town)
     {
         var now = Clock.GetUtcNow();
@@ -81,32 +84,39 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
         }
         else
         {
-            int defaultId = definition.Type == CutsceneType ? 30000 : 1;
-            if (definition.SkinId == defaultId)
-                return InventoryResult.Reject(3);
-            var owned = definition.Type == CutsceneType ? state.Cutscenes : state.DamageFonts;
-            var previous = owned.SingleOrDefault(row => row.SkinId == definition.SkinId);
-            if (previous is null && owned.Length == ushort.MaxValue - 1) return InventoryResult.Reject(3);
-            if (previous is { ExpiresAt: 0 })
-                return InventoryResult.Reject(3) with { RejectReason = "permanent_skin_already_owned" };
-            int expiry = definition.Expiration.Resolve(now);
-            if (expiry > 0 && expiry <= now.ToUnixTimeSeconds())
-                return InventoryResult.Reject(3) with { RejectReason = "skin_action_expired" };
-            if (definition.Expiration.Days > 0 && previous is not null)
-                expiry = (int)Math.Min(ItemExpiration.MaximumUnixTime,
-                    Math.Max(previous.ExpiresAt, now.ToUnixTimeSeconds()) + (long)definition.Expiration.Days * 86400);
-            else if (expiry > 0 && previous is not null)
-                expiry = Math.Max(expiry, previous.ExpiresAt);
+            if (!TryAddTimed(state, definition, now, out state)) return InventoryResult.Reject(3) with { RejectReason = "skin_batch_unavailable" };
             if (definition.Expiration.AbsoluteTime > 0)
-                deadline = deadline is null ? expiry : Math.Min(deadline.Value, expiry);
-            var updated = owned.Where(row => row.SkinId != definition.SkinId).Append(new(definition.SkinId, expiry))
-                .OrderBy(row => row.SkinId).ToImmutableArray();
-            state = definition.Type == CutsceneType ? state with { Cutscenes = updated } : state with { DamageFonts = updated };
+                deadline = Math.Min(deadline ?? long.MaxValue, definition.Expiration.Resolve(now));
         }
         var removed = InventoryDeleteService.Plan(before, position, token.Core.ItemId, 1);
         if (!removed.Accepted) return InventoryResult.Reject(3);
         return new(true, 0, new(before, removed.Plan!.After with { Skins = state }, "skin_storage_add",
             new(character, deadline, Clock)));
+    }
+
+    internal static bool TryAddTimed(SkinStorageState before, SkinStorageToken definition, DateTimeOffset now, out SkinStorageState after)
+    {
+        after = before;
+        if (definition.Type is not (CutsceneType or DamageFontType) || definition.SkinIds.IsDefaultOrEmpty ||
+            definition.SkinIds.Length > byte.MaxValue || definition.SkinIds.Distinct().Count() != definition.SkinIds.Length) return false;
+        int defaultId = definition.Type == CutsceneType ? 30000 : 1;
+        var owned = (definition.Type == CutsceneType ? before.Cutscenes : before.DamageFonts).ToDictionary(row => row.SkinId);
+        foreach (int skinId in definition.SkinIds)
+        {
+            if (skinId <= 0 || skinId == defaultId) return false;
+            var previous = owned.GetValueOrDefault(skinId);
+            if (previous is { ExpiresAt: 0 } || previous is null && owned.Count == ushort.MaxValue - 1) return false;
+            int expiry = definition.Expiration.Resolve(now);
+            if (expiry > 0 && expiry <= now.ToUnixTimeSeconds()) return false;
+            if (definition.Expiration.Days > 0 && previous is not null)
+                expiry = (int)Math.Min(ItemExpiration.MaximumUnixTime,
+                    Math.Max(previous.ExpiresAt, now.ToUnixTimeSeconds()) + (long)definition.Expiration.Days * 86400);
+            else if (expiry > 0 && previous is not null) expiry = Math.Max(expiry, previous.ExpiresAt);
+            owned[skinId] = new(skinId, expiry);
+        }
+        var updated = owned.Values.OrderBy(row => row.SkinId).ToImmutableArray();
+        after = definition.Type == CutsceneType ? before with { Cutscenes = updated } : before with { DamageFonts = updated };
+        return true;
     }
 
     public InventoryResult Select(Character character, SelectSkinRequest request)

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using DfoServer.GameWorld.Items;
 using PvfLib;
 
 namespace DfoServer.GameWorld.Creatures;
@@ -24,6 +25,7 @@ internal sealed record CreatureDefinition(int ItemId, int Species, bool Egg, int
 internal sealed record CreatureFeedDefinition(int ItemId, int MinimumLevel, int CoolTime,
     int Satiety, int EffectSeconds, int SkillRecoveryRate);
 internal sealed record CreatureGrowthFood(int MinimumLevel, int CoolTime);
+internal sealed record CreatureExperienceItemDefinition(int Kind, int Amount, int MinimumLevel, int CoolTime);
 
 internal sealed class CreatureCatalog
 {
@@ -33,6 +35,7 @@ internal sealed class CreatureCatalog
     readonly int[] thresholds;
     readonly ConcurrentDictionary<int, CreatureDefinition> creatures = new();
     readonly ConcurrentDictionary<int, CreatureFeedDefinition> feeds = new();
+    readonly ConcurrentDictionary<int, Lazy<CreatureExperienceItemDefinition?>> experienceItems = new();
     readonly ConcurrentDictionary<int, int> foodRates = new();
     readonly Lazy<IReadOnlyDictionary<int, int[]>> evolutionItems;
 
@@ -106,6 +109,15 @@ internal sealed class CreatureCatalog
         return checked((byte)Math.Min(definition.MaximumLevel, level));
     }
 
+    public int MaximumExperienceLevel => thresholds.Length + 1;
+
+    public int ExperienceAtLevel(int level)
+    {
+        if (!Available || level < 1 || level > MaximumExperienceLevel)
+            throw new InvalidDataException("宠物等级超出经验表范围");
+        return level == 1 ? 0 : thresholds[level - 2];
+    }
+
     public CreatureDefinition? Get(int itemId)
     {
         if (creatures.TryGetValue(itemId, out var known)) return known;
@@ -166,9 +178,30 @@ internal sealed class CreatureCatalog
         return feeds.GetOrAdd(itemId, new CreatureFeedDefinition(itemId, minimum, cool, data[2], data[0], data[1]));
     }
 
-    public bool RenameCard(int itemId) => stackable.TryGetValue(itemId, out string? path) &&
-        Regex.IsMatch(new PvfDocument(read("stackable/" + path)).Section("stackable type"),
+    public bool RenameCard(int itemId)
+    {
+        if (!stackable.TryGetValue(itemId, out string? path)) return false;
+        var script = new PvfDocument(read("stackable/" + path));
+        // 同为creature/1的经验胶囊有独立action，不能拿它冒充改名卡消费。
+        return !script.Has("action type") && Regex.IsMatch(script.Section("stackable type"),
             @"^\s*`\[creature\]`\s+1\s*$", RegexOptions.CultureInvariant);
+    }
+
+    public CreatureExperienceItemDefinition? ExperienceItem(int itemId)
+    {
+        if (!stackable.TryGetValue(itemId, out string? path)) return null;
+        return experienceItems.GetOrAdd(itemId, _ => new(() =>
+        {
+            var script = new PvfDocument(read("stackable/" + path));
+            if (!Regex.IsMatch(script.Section("stackable type"), @"^\s*`\[creature\]`\s+1\s*$", RegexOptions.CultureInvariant) ||
+                !StackableActionDeclaration.TryRead(script, out var declaration) ||
+                StackableActionCatalog.Arguments(declaration) is not { Label: "[creature use item]", Parameters: [>= 1 and <= 3, > 0] } action)
+                return null;
+            int minimum = Integer(script, "creature minimum level", 1), cool = Integer(script, "cool time", 0);
+            if (minimum is < 1 or > 255 || cool < 0) return null;
+            return new(action.Parameters[0], action.Parameters[1], minimum, cool);
+        })).Value;
+    }
 
     public CreatureGrowthFood? GrowthFood(int itemId)
     {

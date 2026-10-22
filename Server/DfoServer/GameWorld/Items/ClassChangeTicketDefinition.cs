@@ -9,9 +9,10 @@ internal sealed record ClassChangeTicketDefinition(int TemplateId, int MinimumLe
 {
     public static ClassChangeTicketDefinition? Parse(StackableFile raw, ItemTemplate template)
     {
+        var action = StackableActionCatalog.Arguments(raw);
         if (raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || template.UseForbidden ||
             raw.TypeDeclaration is not { Label: "[waste]", Parameters: [0] } ||
-            raw.ActionDeclaration is not { Label: "[class change]" } action ||
+            action is not { Label: "[class change]" } ||
             action.Parameters.Count > 1 || action.Parameters.Any(value => value is < 1 or > 5) ||
             raw.DeclaredMinimumLevel is not { } minimum || minimum < 1 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < minimum ||

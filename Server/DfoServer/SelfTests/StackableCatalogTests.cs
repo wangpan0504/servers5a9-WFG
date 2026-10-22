@@ -41,12 +41,17 @@ internal static class StackableCatalogTests
             "真实重复标签保留unsupported不猜覆盖规则");
         That(ReferenceEquals(catalog.Get(1051), potion), "lazy查询复用不可变定义");
         // 验证全索引均可读取，特殊字段可以未知，但不能漏掉模板或默默用另一个文件。
-        foreach (int id in catalog.TemplateIds)
+        IEnumerable<StackableFile> Definitions()
         {
-            var definition = catalog.Get(id);
-            if (definition.TemplateId != id || pvf.FindFile(definition.ScriptPath)?.DataType != 1)
-                throw new InvalidOperationException("FAIL 堆叠索引模板路径或脚本类型不一致: " + id);
+            foreach (int id in catalog.TemplateIds)
+            {
+                var definition = catalog.Get(id);
+                if (definition.TemplateId != id || pvf.FindFile(definition.ScriptPath)?.DataType != 1)
+                    throw new InvalidOperationException("FAIL 堆叠索引模板路径或脚本类型不一致: " + id);
+                yield return definition;
+            }
         }
+        StackableActionTests.Survey(Definitions());
         That(true, "全部82227项真实脚本可读且ID路径保持对应");
         Reject<KeyNotFoundException>(() => catalog.Get(-1));
         Reject<KeyNotFoundException>(() => catalog.Get(int.MaxValue));

@@ -7,7 +7,10 @@ namespace DfoServer.GameWorld.Items;
 
 internal sealed record WeaponSkinRecipeDefinition(int Id, int ResultItemId, ImmutableArray<ItemMaterialCost> Materials);
 internal sealed record WeaponSkinCandidate(int ItemId, int Level, string Name, int EquipmentType, int Job);
-internal sealed record SkinStorageToken(byte Type, int SkinId, ItemExpiration Expiration, ImmutableArray<string> Places);
+internal sealed record SkinStorageToken(byte Type, int SkinId, ItemExpiration Expiration, ImmutableArray<string> Places)
+{
+    public ImmutableArray<int> SkinIds { get; init; } = [SkinId];
+}
 
 internal sealed class SkinStorageCatalog
 {
@@ -51,16 +54,23 @@ internal sealed class SkinStorageCatalog
         var result = tokens.GetOrAdd(id, key =>
         {
             string path = "stackable/" + stackable[key];
-            var action = SkinStorageFile.ReadAction(key, path, archive.ReadTokens(path), archive.ResolveString);
+            var source = archive.ReadTokens(path);
+            var item = StackableFile.Parse(key, path, source, archive.ResolveString);
+            if (StackableActionCatalog.Arguments(item) is not { Label: "[add skin storage]", Parameters.Count: > 0 })
+                return Unsupported;
+            var action = SkinStorageFile.ReadAction(item, source, archive.ResolveString);
             if (action is null || action.Target != "[character]") return Unsupported;
             byte type = action.SkinId == 40000 ? (byte)4 : DamageFonts.Contains(action.SkinId) ? (byte)2 :
                 Cutscenes.Contains(action.SkinId) ? (byte)1 : (byte)255;
             if (type == 255 || type == 2 && !HasDamageFonts || type == 1 && !HasCutscenes) return Unsupported;
+            if (action.SkinIds.Length > byte.MaxValue || action.SkinIds.Distinct().Count() != action.SkinIds.Length ||
+                (type == 4 ? action.SkinIds.Length != 1 :
+                    action.SkinIds.Any(id => !(type == 2 ? DamageFonts.Contains(id) : Cutscenes.Contains(id))))) return Unsupported;
             long absoluteTime = action.ExpirationMode == "[date]" ? ItemExpiration.ParseAbsoluteTime(action.Date) : 0;
             if (action.ExpirationMode == "[date]" && absoluteTime == 0)
                 throw new InvalidDataException("皮肤动作的指定日期不能解释为永久");
             var expiration = new ItemExpiration(absoluteTime, action.Days);
-            return new(type, action.SkinId, expiration, action.Places);
+            return new(type, action.SkinId, expiration, action.Places) { SkinIds = action.SkinIds };
         });
         return result == Unsupported ? null : result;
     }

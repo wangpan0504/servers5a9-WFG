@@ -10,28 +10,46 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
     int CreatureMinimumLevel, ImmutableHashSet<int> AllowedItems, ImmutableArray<CreatureChangeCandidate> Candidates)
 {
     public const uint Action = 64;
+    public const uint RandomAction = 87;
     public int ConsumeCount { get; init; } = 1;
     public bool TownOnly { get; init; } = true;
+    public bool Random { get; init; }
     public long TotalWeight => Candidates.Sum(row => (long)row.Weight);
 
     public static CreatureChangeDefinition? Parse(StackableFile raw, ItemTemplate template)
     {
+        var action = StackableActionCatalog.Arguments(raw);
+        bool random = action?.Label == "[change creature random]";
         if (raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || template.UseForbidden ||
             raw.TypeDeclaration is not { Label: "[etc]" or "[waste]", Parameters: [0] } ||
-            raw.ActionDeclaration is not { Label: "[change creature]", Parameters.Count: 4 } action ||
+            (random ? action!.Parameters.Count < 5 : action is not { Label: "[change creature]", Parameters.Count: 4 }) ||
             raw.DeclaredMinimumLevel is not >= 1 || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.DeclaredMaximumLevel < raw.DeclaredMinimumLevel ||
             raw.HasCreatureMinimumLevel && raw.DeclaredCreatureMinimumLevel is not (>= 1 and <= 255) ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            raw.DeclaredActionUsablePlaces is not ["[village]"] ||
+            (!random && raw.DeclaredActionUsablePlaces is not ["[village]"]) ||
+            random && raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not ["[village]"] ||
             raw.DeclaredActionLimitIndexes is not { } limits || limits.Any(id => id <= 0) ||
             raw.DeclaredActionResultLimitIndexes is not { } results || results.Count % 3 != 0)
             return null;
 
-        int source = action.Parameters[0], target = action.Parameters[1];
+        int source = action!.Parameters[0], target = action.Parameters[1];
         var candidates = ImmutableArray.CreateBuilder<CreatureChangeCandidate>();
-        if (source > 0 && target > 0 && action.Parameters[3] == -1 && results.Count == 0)
+        if (random)
+        {
+            int count = action.Parameters[3];
+            if (source <= 0 || target <= 0 || action.Parameters[2] != 1 || count <= 0 ||
+                count != action.Parameters.Count - 4 || (long)target + count - 1 > int.MaxValue || results.Count != 0 || limits.Count != 0)
+                return null;
+            for (int i = 0; i < count; i++)
+            {
+                int weight = action.Parameters[i + 4];
+                if (weight < 0) return null;
+                candidates.Add(new(target + i, weight));
+            }
+        }
+        else if (source > 0 && target > 0 && action.Parameters[3] == -1 && results.Count == 0)
             candidates.Add(new(target, 1));
         else if (source == -1 && target == -1 && action.Parameters[3] == 0 && limits.Count > 0 && results.Count > 0)
         {
@@ -45,8 +63,10 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
         else return null;
         if (candidates.Sum(row => (long)row.Weight) <= 0) return null;
 
-        return new(template.Id, source, raw.DeclaredMinimumLevel.Value, raw.DeclaredMaximumLevel ?? int.MaxValue,
-            raw.DeclaredCreatureMinimumLevel ?? 1, limits.ToImmutableHashSet(), candidates.ToImmutable());
+        return new(template.Id, random ? -1 : source, raw.DeclaredMinimumLevel.Value, raw.DeclaredMaximumLevel ?? int.MaxValue,
+            raw.DeclaredCreatureMinimumLevel ?? 1,
+            random ? candidates.Select(row => row.ItemId).Append(source).ToImmutableHashSet() : limits.ToImmutableHashSet(), candidates.ToImmutable())
+            { TownOnly = !random || raw.HasActionUsablePlace, Random = random };
     }
 
     public int Select(long roll)

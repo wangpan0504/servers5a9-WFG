@@ -4,12 +4,31 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Game.Quests;
 
 namespace DfoServer.Game.Rental;
 
 // 租赁业务只生成普通库存计划；账号钱包、装备实例和费用由现有 InventoryPlan 一次提交。
-internal sealed class RentalService(RentalCatalog catalog, ItemCatalog items)
+internal sealed class RentalService(RentalCatalog catalog, ItemCatalog items, TownCatalog? towns = null, TimeProvider? clock = null)
 {
+    readonly TimeProvider clock = clock ?? TimeProvider.System;
+
+    public InventoryResult UsePoints(Character character, InventorySlot position)
+    {
+        var source = character.Inventory.Find(position);
+        var definition = source is null ? null : items.ActionConsumable(source.Core.ItemId);
+        if (definition is not { Label: "[rent point]", Parameters: [> 0] }) return InventoryResult.Reject(19);
+        long points = (long)character.Inventory.AccountWallet.RentalPoints + definition.Parameters[0];
+        if (points > catalog.PointLimit) return InventoryResult.Reject(19);
+        string place = towns?.IsRoom(character.Position, QuestEligibility.Completed(character)) == true ? "[seria room]" : "[village]";
+        var paid = InventoryActionConsumableService.Plan(character, position, definition, place, clock);
+        return !paid.Accepted ? paid : new(true, 0, new(character.Inventory, paid.Plan!.After with
+        {
+            AccountWallet = paid.Plan.After.AccountWallet.Set(CurrencyKind.RentalPoint, (int)points)
+        }, "rental_point_item", paid.Plan.CharacterPrecondition));
+    }
+
     public InventoryResult Charge(Character character, int count)
     {
         var before = character.Inventory;

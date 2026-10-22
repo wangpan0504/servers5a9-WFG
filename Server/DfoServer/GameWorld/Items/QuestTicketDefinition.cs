@@ -21,9 +21,11 @@ internal sealed record QuestTicketDefinition(int TemplateId, int MinimumLevel, i
 
     public static QuestTicketDefinition Parse(StackableFile raw, ItemTemplate template)
     {
-        if (raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || raw.ActionDeclaration is not { } action ||
+        var action = StackableActionCatalog.Arguments(raw);
+        if (raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || action is null ||
             !(action is { Label: "[quest clear]", Parameters.Count: 0 } || action is { Label: "[any quest clear]", Parameters.Count: > 0 } ||
-                action is { Label: "[first awaken clear]", Parameters: [1] } || action is { Label: "[second awaken clear]", Parameters: [0] }) ||
+                action is { Label: "[first awaken clear]", Parameters: [1] or [1, 1] } ||
+                action is { Label: "[second awaken clear]", Parameters: [0] or [0, 1] }) ||
             raw.DeclaredMinimumLevel is not { } minimum || minimum < 0 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             (action.Label is "[first awaken clear]" or "[second awaken clear]"

@@ -7,12 +7,14 @@ namespace DfoServer.Network.Builders;
 
 internal static class LevelUpTicketPackets
 {
-    // ARAD 0235BFF0：ACK先消费源并增加经验/SP/TP；绝对成长通知必须在其后。
+    // 0235BFF0的418回复必须携带源容器，交由原消费者完成扣源、697结果窗和等待释放。
     public static byte[] Used(LevelUpTicketSource source)
     {
         if (source.Kind == LevelUpConsumableKind.JumpingTable)
-            return QuestTicketPackets.Used(new(checked((ushort)source.Item.Position.Index), (byte)source.Item.Position.List,
+            return StackableActionPackets.Used(new(checked((ushort)source.Item.Position.Index), (byte)source.Item.Position.List,
                 0, LevelUpByTableDefinition.JumpingAction, 0, 0));
+        if (source.Item.Position.List != InventoryListType.Main)
+            throw new InvalidDataException("升级消费只能确认已校验的Main源实例");
         byte[] body = new byte[12];
         body[0] = 1;
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), checked((ushort)source.Item.Position.Index));
@@ -31,7 +33,7 @@ internal static class LevelUpTicketPackets
     {
         LevelUpConsumableKind.Ticket => Rejected(),
         LevelUpConsumableKind.StatusTable => ExperienceConsumablePackets.Rejected(),
-        LevelUpConsumableKind.JumpingTable => QuestTicketPackets.Rejected(new(unchecked((ushort)slot.Index), (byte)slot.List,
+        LevelUpConsumableKind.JumpingTable => StackableActionPackets.Rejected(new(unchecked((ushort)slot.Index), (byte)slot.List,
             0, LevelUpByTableDefinition.JumpingAction, 0, 0), 19),
         _ => throw new InvalidDataException("未知升级道具回复入口")
     };

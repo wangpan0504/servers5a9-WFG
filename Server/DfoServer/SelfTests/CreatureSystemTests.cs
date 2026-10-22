@@ -21,14 +21,19 @@ internal static class CreatureSystemTests
             ["creature/evolved.cre"] = "[max level]\n4",
             ["stackable/feed.stk"] = "[stackable type]\n`[feed]` 1\n[creature minimum level]\n1\n[cool time]\n10000\n[int data]\n300 -20 30\n[/int data]",
             ["stackable/rename.stk"] = "[stackable type]\n`[creature]` 1",
-            ["stackable/growth.stk"] = "[stackable type]\n`[creature expitem]` 0\n[need material]\n100 3\n[/need material]"
+            ["stackable/growth.stk"] = "[stackable type]\n`[creature expitem]` 0\n[need material]\n100 3\n[/need material]",
+            ["stackable/experience.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 1 50\n[/action type]\n[cool time]\n1000",
+            ["stackable/level.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 2 1\n[/action type]",
+            ["stackable/target-level.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 3 50\n[/action type]",
+            ["stackable/invalid-experience.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 0 50\n[/action type]"
         };
         return new(path => files[path], path => path == "creature/pet.cre" ?
             itemGrowth ? new PvfLib.CreatureFile { MaximumLevel = 4, ItemsPerLevel = 25,
                 SelectiveGrowth = new() { UsingExperienceItem = 1, ItemA = 100, SelectLevel = -1 } } :
             new PvfLib.CreatureFile { MaximumLevel = 4, EvolutionLevel = 2, EvolutionSpecies = 11 } : new PvfLib.CreatureFile { MaximumLevel = 4 },
             new Dictionary<int, string> { [7001] = "test/pet.equ", [7002] = "test/evolved.equ" },
-            new Dictionary<int, string> { [24] = "feed.stk", [25] = "rename.stk", [100] = "growth.stk" },
+            new Dictionary<int, string> { [24] = "feed.stk", [25] = "rename.stk", [100] = "growth.stk",
+                [200] = "experience.stk", [201] = "level.stk", [202] = "target-level.stk", [203] = "invalid-experience.stk" },
             new Dictionary<int, string> { [10] = "pet.cre", [11] = "evolved.cre" }, "#PVF_File\n2\n5\n9");
     }
 
@@ -124,6 +129,45 @@ internal static class CreatureSystemTests
         var timely = service.Feed(limited, new(food.Position, 1, 24, 0), 1000);
         That(timely.Accepted && timely.Plan!.CharacterPrecondition!.Matches(limited, 1009) &&
             !timely.Plan.CharacterPrecondition.Matches(limited, 1010), "喂食以宠物及源饲料最早期限为提交边界");
+        var capsule = catalog.ExperienceItem(200)!;
+        That(capsule is { Kind: 1, Amount: 50, MinimumLevel: 1, CoolTime: 1000 } && !catalog.RenameCard(200) &&
+            catalog.ExperienceItem(25) is null && catalog.ExperienceItem(203) is null,
+            "宠物经验胶囊按动作声明识别，不占用换名卡或未知参数路径");
+        That(catalog.ExperienceAtLevel(1) == 0 && catalog.ExperienceAtLevel(4) == 9,
+            "宠物升级券使用独立累计经验阈值");
+        foreach (int level in new[] { 0, 5 })
+            Reject<InvalidDataException>(() => catalog.ExperienceAtLevel(level), "等级不得越过实际经验表边界");
+        var experienced = detail with { Level = 2, Experience = 3 };
+        That(CreatureRules.UseExperienceItem(experienced, definition, catalog, capsule) is { Level: 2, Experience: 4 } &&
+            CreatureRules.UseExperienceItem(experienced with { Experience = 4 }, definition, catalog, capsule) is { Level: 3, Experience: 5 },
+            "百分比按当前等级完整经验段计算，保留原经验，允许跨级");
+        That(CreatureRules.UseExperienceItem(experienced, definition, catalog, catalog.ExperienceItem(201)!) is { Level: 3, Experience: 5 } &&
+            CreatureRules.UseExperienceItem(experienced, definition, catalog, catalog.ExperienceItem(202)!) is { Level: 4, Experience: 9 },
+            "提升等级与升到指定等级使用不同参数语义，夹到CRE及经验表上限");
+        That(CreatureRules.UseExperienceItem(experienced, definition, catalog, capsule with { Amount = int.MaxValue }) is { Level: 4, Experience: 9 } &&
+            CreatureRules.UseExperienceItem(detail, definition, catalog, capsule with { Amount = 1 }) is { Level: 1, Experience: 1 },
+            "百分比整数截断最少增加一点，大数不溢出累计经验或等级");
+        foreach (var inactive in new[] { detail with { Level = 4 }, detail with { Mode = 1 } })
+            That(CreatureRules.UseExperienceItem(inactive, definition, catalog, capsule) == inactive,
+                "满级或道具亲密成长模式不消耗普通宠物经验胶囊");
+        That(CreatureRules.UseExperienceItem(detail, definition with { UsesExperienceItems = true }, catalog, capsule) == detail &&
+            CreatureRules.UseExperienceItem(experienced, definition, catalog, catalog.ExperienceItem(202)! with { Amount = 2 }) == experienced &&
+            CreatureRules.UseExperienceItem(detail, definition with { SelectEvolutionLevel = 2 }, catalog, capsule with { Amount = 1000 })
+                is { Level: 2, Experience: 2 }, "不绕过亲密成长和分支选择，不消耗低于现有等级的定级券");
+        var experienceSource = food with { Core = food.Core with { ItemId = 200, Value = 1, ExpireTime = 1010 } };
+        var capsuleRole = character with { Inventory = new([pet with { Creature = detail with { Experience = 1, Satiety = 0 },
+            Core = pet.Core with { ExpireTime = 1020 } }, experienceSource]) };
+        var usedCapsule = service.Feed(capsuleRole, new(experienceSource.Position, 0x5306, 200, 0), 1000);
+        That(usedCapsule.Accepted && usedCapsule.Plan!.After.Find(experienceSource.Position) is null &&
+            usedCapsule.Plan.After.Find(pet.Position) is { Uid: 63, Core.ItemId: 7002, Creature: { Experience: 2, Level: 2, Satiety: 0 } } grownCapsule &&
+            grownCapsule.Core == pet.Core with { ItemId = 7002, SealFlag = 0, ExpireTime = 1020 } &&
+            !usedCapsule.Plan.CharacterPrecondition!.Matches(capsuleRole, 1010),
+            "胶囊只消费一份并复用自动进化，保留UID和完整扩展；非战斗经验不受饱食阻拦，期限仍约束提交");
+        That(!service.Feed(capsuleRole, new(experienceSource.Position, 32768, 200, 0), 1000).Accepted &&
+            !service.Feed(capsuleRole, new(experienceSource.Position, 1, 200, 1), 1000).Accepted &&
+            !service.Feed(capsuleRole, new(experienceSource.Position, 1, 200, 0), 1010).Accepted &&
+            !service.Feed(capsuleRole with { Inventory = new([experienceSource]) }, new(experienceSource.Position, 1, 200, 0), 1000).Accepted,
+            "胶囊拒绝畸形校验值、额外参数、过期源和无穿戴宠物，不产生空成功");
         Console.WriteLine($"PASS {Count - before} 宠物资源、成长、饱食与匹配原生协议断言");
     }
 }

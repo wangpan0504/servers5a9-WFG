@@ -29,7 +29,8 @@ internal static class CreatureSessionTests
                 { Creature = new() { Satiety = 10 } };
             repository.Create(owner, candidate with { Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(Pet(equipped)).Add(Pet(new(InventoryListType.Pet, 0)))
-                .Add(new(0, new(InventoryListType.Pet, 189), new(24, ItemKind.CreatureConsumable, 1))) } });
+                .Add(new(0, new(InventoryListType.Pet, 189), new(24, ItemKind.CreatureConsumable, 1)))
+                .Add(new(0, new(InventoryListType.Pet, 190), new(200, ItemKind.CreatureConsumable, 2))) } });
             var clock = new ConsumableUseSessionTests.FakeClock();
             var service = new CreatureService(CreatureSystemTests.Synthetic(), clock);
             var session = new GameSession(repository, towns, owner);
@@ -44,6 +45,30 @@ internal static class CreatureSessionTests
             That(fed.Outcome == ConsumableUseOutcome.Committed && session.Selected!.Inventory.Find(request.Position) is null &&
                 session.RecentCreatureFeed(request, service) && session.FeedCreature(request, service).Outcome == ConsumableUseOutcome.CloseConnection,
                 "最后一份饲料消费后仍识别歧义重放，不再次扣除或盲发失败ACK");
+            clock.Advance(TimeSpan.FromSeconds(10));
+            var capsuleRequest = new ConsumableUseRequest(new(InventoryListType.Pet, 190), 1, 200, 0);
+            var beforeCapsule = session.Selected!;
+            Sql("CREATE TRIGGER fail_creature_capsule AFTER INSERT ON inventory_audit_log WHEN NEW.action_name='creature_feed' " +
+                "BEGIN SELECT RAISE(ABORT,'capsule rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => session.FeedCreature(capsuleRequest, service),
+                "宠物胶囊扣源、经验及进化写入后注入审计失败");
+            That(ReferenceEquals(beforeCapsule, session.Selected) &&
+                repository.LoadCharacter(owner, 0).Inventory.Find(equipped) == beforeCapsule.Inventory.Find(equipped) &&
+                repository.LoadCharacter(owner, 0).Inventory.Find(capsuleRequest.Position) == beforeCapsule.Inventory.Find(capsuleRequest.Position),
+                "胶囊晚期SQL失败不安装快照或消费源，不写入冷却记录");
+            Sql("DROP TRIGGER fail_creature_capsule");
+            That(session.FeedCreature(capsuleRequest, service).Outcome == ConsumableUseOutcome.Committed &&
+                session.Selected!.Inventory.Find(equipped)!.Creature is { Level: 1, Experience: 1 } &&
+                session.Selected.Inventory.Find(capsuleRequest.Position)!.Core.Count == 1,
+                "失败后可提交同请求，宠物经验和源数量一并落库");
+            That(session.FeedCreature(capsuleRequest, service).Outcome == ConsumableUseOutcome.CloseConnection &&
+                session.FeedCreature(capsuleRequest with { OpaqueCheck = 2 }, service).Outcome == ConsumableUseOutcome.Rejected,
+                "胶囊遵守原喂食重放与冷却，不连续扣除或重复发送消费ACK");
+            clock.Advance(TimeSpan.FromSeconds(1));
+            That(session.FeedCreature(capsuleRequest with { OpaqueCheck = 2 }, service).Outcome == ConsumableUseOutcome.Committed &&
+                repository.LoadCharacter(owner, 0).Inventory.Find(equipped) is { Core.ItemId: 7002, Creature: { Level: 2, Experience: 2 } } &&
+                session.Selected!.Inventory.Find(capsuleRequest.Position) is null,
+                "冷却后最后一件胶囊可消费，经验与同UID进化保存后可重载");
             ticket = session.PrepareCreatureTick(service)!;
             session.PlanAndCommitInventory(character =>
             {

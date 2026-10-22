@@ -28,18 +28,23 @@ internal static class InventoryMoveService
         var before = character.Inventory;
         var source = before.Find(request.Source);
         var destination = before.Find(request.Destination);
-        // 当前客户端把个人金库格号写进物品编号：空格存入、从该格取出，以及丢到已占用格（编号为 0 或格号）。
+        // 029E10D0跨容器发送器仍从源容器读取目标格的模板；该回显不代表目标仓库实际占用。
+        bool sourceContainerEcho = request.Source.List != request.Destination.List &&
+            (IsCargo(request.Source.List) || IsCargo(request.Destination.List)) &&
+            before.Find(new(request.Source.List, request.Destination.Index)) is { } echoed &&
+            echoed.Core.ItemId == request.DestinationItemId;
+        // 当前客户端把个人/账号金库格号写进物品编号：空格存入、取出，以及丢到已占用格（编号为0或格号）。
         // 0 仍是空格哨兵，不能把 0 号格的真实物品当成别名。已占用格只在编号对不上模板时改投空格，避免盖掉原物品。
-        bool sourceMatches = source is not null && PersonalCargoCell(request.Source, request.SourceItemId) ||
+        bool sourceMatches = source is not null && CargoCell(request.Source, request.SourceItemId) ||
             (source?.Core.ItemId ?? 0) == request.SourceItemId;
-        bool destinationMatches = destination is null && PersonalCargoCell(request.Destination, request.DestinationItemId) ||
+        bool destinationMatches = destination is null && (CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho) ||
             (destination?.Core.ItemId ?? 0) == request.DestinationItemId ||
-            destination is not null && request.Destination.List == InventoryListType.PersonalCargo &&
-            (request.DestinationItemId == 0 || PersonalCargoCell(request.Destination, request.DestinationItemId));
-        bool throwOntoOccupied = destination is not null && destinationMatches &&
-            request.Destination.List == InventoryListType.PersonalCargo &&
+            destination is not null && IsCargo(request.Destination.List) &&
+            (request.DestinationItemId == 0 || CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho);
+        bool throwOntoOccupied = source is not null && destination is not null && destinationMatches &&
+            IsCargo(request.Destination.List) &&
             destination.Core.ItemId != request.DestinationItemId &&
-            (request.DestinationItemId == 0 || PersonalCargoCell(request.Destination, request.DestinationItemId));
+            (request.DestinationItemId == 0 || CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho);
         if (request.Actor is not (-1 or 0) || request.Flag0 != 0 || request.Flag1 != 0 || request.DestinationCount != 0 ||
             !sourceMatches || !destinationMatches)
             return InventoryResult.Reject(CannotMoveItem);
@@ -56,7 +61,7 @@ internal static class InventoryMoveService
         if (source is null || ExpiredMoveBlocked(source, sourceSlot, destinationSlot, utcSeconds) ||
             destination is not null && ExpiredMoveBlocked(destination, destinationSlot, sourceSlot, utcSeconds))
             return InventoryResult.Reject(CannotMoveItem);
-        if (throwOntoOccupied && sourceSlot.List != InventoryListType.PersonalCargo &&
+        if (throwOntoOccupied && sourceSlot.List != destinationSlot.List &&
             !(source.Core.IsStackable && destination!.Core.IsStackable && source.Core.ItemId == destination.Core.ItemId))
         {
             var emptyCargo = FindEmptyDestination(character, source.Core, destinationSlot.List, catalog, utcSeconds, contracts);
@@ -177,8 +182,10 @@ internal static class InventoryMoveService
         }
     }
 
-    static bool PersonalCargoCell(InventorySlot slot, int requestedId) =>
-        slot.List == InventoryListType.PersonalCargo && slot.Index > 0 && requestedId == slot.Index;
+    static bool IsCargo(InventoryListType list) => list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo;
+
+    static bool CargoCell(InventorySlot slot, int requestedId) =>
+        IsCargo(slot.List) && slot.Index > 0 && requestedId == slot.Index;
 
     static InventorySlot? FindEmptyDestination(Character character, ItemCore core, InventoryListType list, ItemCatalog catalog, long utcSeconds,
         PremiumContractCatalog? contracts)

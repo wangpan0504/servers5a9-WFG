@@ -2,12 +2,12 @@ using System.Buffers.Binary;
 
 namespace DfoServer.Network.Parsers;
 
-internal readonly record struct QuestTicketUseRequest(ushort Slot,byte List,uint Reserved,uint Action,uint FirstArgument,uint SecondArgument);
+internal readonly record struct StackableActionUseRequest(ushort Slot,byte List,uint Reserved,uint Action,uint FirstArgument,uint SecondArgument);
 
-internal static class QuestTicketRequests
+internal static class StackableActionRequests
 {
     // Full03 028BA3F0：19B正文，无额外opcode或任务ID前缀。
-    public static bool TryUse(ReadOnlySpan<byte> body,out QuestTicketUseRequest request)
+    public static bool TryUse(ReadOnlySpan<byte> body,out StackableActionUseRequest request)
     {
         request = default;
         if (body.Length != 19) return false;

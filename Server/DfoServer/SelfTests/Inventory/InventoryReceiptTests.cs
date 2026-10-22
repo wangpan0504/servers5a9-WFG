@@ -106,7 +106,7 @@ internal static class InventoryReceiptTests
                     owner, session, heldSender);
                 Task held = heldSender.Send(1, 0, [], "held_aura_rejection");
                 await heldStream.Started.WaitAsync(TimeSpan.FromSeconds(5));
-                var rejectionGuard = QuestTicketHandler.CaptureAuraRejectionGuard(heldContext);
+                var rejectionGuard = StackableActionHandler.CaptureAuraRejectionGuard(heldContext);
                 Task rejected = heldContext.Reply(CmdPacketType.USE_STACKABLE_ACTION, [0, 0, 0, 0, 0, 0, 0],
                     "aura_rejected", rejectionGuard);
                 try

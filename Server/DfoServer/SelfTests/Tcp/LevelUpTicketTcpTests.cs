@@ -32,13 +32,20 @@ internal static class LevelUpTicketTcpTests
             var learning=SkillPointLedger.Synchronize(0,0,3,candidate.InitialLearning with
                 {Experience=growth.GetLevelStartExperience(3)+123,BonusSp=17,BonusTp=5},resources.Learning);
             foreach(var (name,completed) in new (string,int[])[] {("LevelTicket",[]),("BranchTicket",[900]),("LevelRoll",[]),("EmptyTicket",[100,101])})
+            {
+                byte level = name == "EmptyTicket" ? (byte)81 : (byte)3;
+                var initial = level == 3 ? learning : SkillPointLedger.Synchronize(0, 0, level, candidate.InitialLearning with
+                    { Experience = growth.GetLevelStartExperience(level), BonusSp = 17, BonusTp = 5 }, resources.Learning);
                 created.Add(repository.Create(owner,candidate with
                 {
-                    Name=name,Level=3,InitialLearning=learning,CompletedQuests=completed,
+                    Name=name,Level=level,InitialLearning=initial,CompletedQuests=completed,
                     Inventory=candidate.Inventory with {Items=candidate.Inventory.Items.Add(new(0,new(Game.Inventory.Models.InventoryListType.Main,65),
                         new(LevelUpTicketTests.TicketId,GameWorld.Items.ItemKind.Consumable,1)))
-                        .Add(new(0,new(Game.Inventory.Models.InventoryListType.Main,66),new(LevelUpTicketTests.TicketId,GameWorld.Items.ItemKind.Consumable,1)))}
+                        .Add(new(0,new(Game.Inventory.Models.InventoryListType.Main,66),new(LevelUpTicketTests.TicketId,GameWorld.Items.ItemKind.Consumable,1)))
+                        .Add(new(0,new(Game.Inventory.Models.InventoryListType.Main,67),new(1034,GameWorld.Items.ItemKind.Consumable,1)))
+                        .Add(new(0,new(Game.Inventory.Models.InventoryListType.Main,68),new(level < 6 ? 1013 : 1113,GameWorld.Items.ItemKind.Consumable,2)))}
                 }));
+            }
         }
         var candidate9=CharacterCreation.Prepare("LevelTicket9",resources.Characters.Get(9),resources.Towns.Room,
             resources.Towns.InitialReturn,resources.Learning.Get);
@@ -58,10 +65,10 @@ internal static class LevelUpTicketTcpTests
             peer.Send(418,[65,0,0]);peer.Expect(1,418,[0,99,0]);
             peer.Select(created[0].Slot);
             string before=fixture.Snapshot();
-            foreach(var bad in new byte[][] {[65,0,1],[255,255,0],[67,0,0]})
+            foreach(var bad in new byte[][] {[65,0,1],[255,255,0],[67,0,0],[69,0,0]})
             {
                 peer.Send(418,bad);peer.Expect(1,418,[0,99,0]);peer.Barrier();
-                That(fixture.Snapshot()==before,"非法容器、槽位和空源明确失败，连接及完整状态保持");
+                That(fixture.Snapshot()==before,"非法容器、槽位、非升级券源和空源明确失败，连接及完整状态保持");
             }
             long revisionBefore=Revision(created[0]);
             peer.Send(418,[65,0,0]);ExpectUsed(peer,created[0]);
@@ -88,6 +95,13 @@ internal static class LevelUpTicketTcpTests
             ReadCompleted(peer);
             That(fixture.Query("SELECT level FROM characters WHERE id=$p0",created[0].Id) is [[5L]],
                 "单调时钟到期后第二张正常升一级，不复用旧回执");
+            peer.Send(30, [67, 0]);
+            peer.Expect(1, 30, Build(w => { w.Write((byte)1); w.Write((ushort)67); w.Write((byte)1); w.Write(100u); w.Write(0u); }));
+            peer.Expect(0, 37); peer.Barrier();
+            UsePotion(peer, 1013);
+            That(fixture.Query("SELECT experience FROM characters WHERE id=$p0", created[0].Id) is [[var afterBook]] &&
+                Convert.ToUInt64(afterBook) == growth.GetLevelStartExperience(5) + 100 && Count(created[0], 67) == 0 && Count(created[0], 68) == 1,
+                "同连接418完成后，独立30经验书及44药剂可继续真实消费，不把418回执改为30");
         }
         using(var peer=Open(fixture))
         {
@@ -103,8 +117,8 @@ internal static class LevelUpTicketTcpTests
             That(table[4+500]==2 && table[4+502]==1 && table[4+501]==0,"问题答案和所选分支最后由356恢复");
             before=fixture.Snapshot();
             peer.Send(1431,answer);peer.Expect(1,1431,[1]);
-            That(ReadCompleted(peer).All(packet=>packet.Kind!=1 || packet.Opcode!=418) && fixture.Snapshot()==before,
-                "重复最终回答允许绝对投影，不再次发送418经验和点数增量");
+            That(ReadCompleted(peer).All(packet=>packet.Kind!=1 || packet.Opcode is not (30 or 418)) && fixture.Snapshot()==before,
+                "重复最终回答允许绝对投影，不再次发送消费增量或借30确认418请求");
         }
         fixture.Sql($"CREATE TRIGGER level_tcp_abort AFTER INSERT ON character_quest_skip_receipts WHEN NEW.character_id={created[2].Id} BEGIN SELECT RAISE(ABORT,'level tcp rollback'); END");
         string failedBefore=fixture.Snapshot();
@@ -122,14 +136,17 @@ internal static class LevelUpTicketTcpTests
         using(var peer=Open(fixture))
         {
             peer.Select(created[3].Slot,prepared:true);peer.Send(418,[65,0,0]);ExpectUsed(peer,created[3]);ReadCompleted(peer);
-            That(fixture.Query("SELECT level FROM characters WHERE id=$p0",created[3].Id) is [[4L]],"没有可跳过主线仍能正常升级");
+            That(fixture.Query("SELECT level FROM characters WHERE id=$p0",created[3].Id) is [[82L]],
+                "超过60级仍回复真实418并保留原等级，不伪造低等级规避客户端697完成提示");
+            UsePotion(peer, 1113);
+            That(Count(created[3], 68) == 1, "高等级418后44药剂同样可提交，客户端窗口与等待释放另做实机验收");
         }
         using(var peer=Open(fixture))
         {
             var stored=StoredCombos(fixture,job9.Id);
             peer.Select(job9.Slot,combos:stored);
             peer.Send(418,[65,0,0]);
-            That(peer.Expect(1,418).Body is [1,65,..],"job9升级券消费后ACK确认源槽");
+            That(peer.Expect(1,418).Body is [1,65,0,0,..],"job9升级券仍由418确认Main源槽并释放其原生等待");
             var packets=ReadCompleted(peer);
             // 连招通知首字节与登录初始化一致为0；写1会让客户端重建自动排列。
             var expected=stored.ToArray();
@@ -149,16 +166,26 @@ internal static class LevelUpTicketTcpTests
             peer.Select(created[0].Slot,prepared:true);
             That(peer.CompletedQuestHistory[4+100]==1 && peer.CompletedQuestHistory[4+101]==1 &&
                 fixture.Query("SELECT level,experience FROM characters WHERE id=$p0",created[0].Id) is [[5L,var xp]] &&
-                Convert.ToUInt64(xp)==growth.GetLevelStartExperience(5),"服务实例重建恢复等级经验和跳过完成位，不补发升级");
+                Convert.ToUInt64(xp)==growth.GetLevelStartExperience(5)+100,"服务实例重建恢复升级及后续经验书的实际累计经验，不补发升级");
             peer.Barrier();
         }
 
         void ExpectUsed(TcpPeer peer,Character before) => peer.Expect(1,418,Build(w=>
         {
             w.Write((byte)1);w.Write((ushort)65);w.Write((byte)0);
-            w.Write(checked((uint)(growth.GetLevelStartExperience(4)-before.Learning.Experience)));
-            w.Write(checked((ushort)growth.GetSpDelta(3,4)));w.Write((ushort)0);
+            byte target = (byte)(before.Level + 1);
+            w.Write(checked((uint)(growth.GetLevelStartExperience(target)-before.Learning.Experience)));
+            w.Write(checked((ushort)growth.GetSpDelta(before.Level,target)));w.Write(checked((ushort)(growth.GetTpDelta(before.Level,target))));
         }));
+        static void UsePotion(TcpPeer peer, int itemId)
+        {
+            peer.Send(44, Build(w => { w.Write((ushort)68); w.Write((byte)0); w.Write(42u); w.Write(itemId); w.Write(0); }));
+            peer.Expect(1, 44, Build(w => { w.Write((byte)1); w.Write((ushort)68); w.Write((byte)0); w.Write(42u); w.Write(itemId); }));
+            peer.Barrier();
+        }
+        int Count(Character character, short slot) => fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items i " +
+            "JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1", character.Id, slot)
+            is [var row] ? Convert.ToInt32(row[0]) : 0;
         static List<WirePacket> ReadCompleted(TcpPeer peer)
         {
             var packets=new List<WirePacket>();
@@ -177,6 +204,8 @@ internal static class LevelUpTicketTcpTests
             int skills = published.FindIndex(packet => packet is { Kind: 0, Opcode: 19 });
             That(player >= 0 && skills > player && packets.Count(packet => packet is { Kind: 0, Opcode: 19 }) == 1,
                 "升级券在Player后只重装一次完整技能，避免后续装备刷新覆盖被动状态");
+            That(packets.All(packet => packet is not { Kind: 1, Opcode: 30 }),
+                "418消费不能替换或追加30成功回复，避免留下原生公共等待标记");
             var table=packets.Last().Body;
             That(table.Length==30004 && table[4+100]==1 && table[4+101]==1 && table[4+102]==0 && table[4+103]==0 &&
                 fixture.Query("SELECT level,revision FROM characters WHERE id=$p0",before.Id) is [[4L,var revision]] &&

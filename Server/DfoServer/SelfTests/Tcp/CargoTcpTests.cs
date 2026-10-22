@@ -25,6 +25,7 @@ internal static class CargoTcpTests
         int weaponId = characters.Get(0).Equipment.Single(item => item.Slot == 12).Template.Id;
         long weaponUid;
         string weaponCore;
+        long mirrorUid;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.Create(owner, new("CargoTcp", towns.Room, towns.InitialReturn)
@@ -43,6 +44,9 @@ internal static class CargoTcpTests
                 new(new(InventoryListType.Equipment, 12), weaponId, 1, new(InventoryListType.Main, 9), 0, 0, -1, 0, 0)));
             weaponUid = weapon.Uid;
             weaponCore = JsonSerializer.Serialize(core);
+            current = repo.CommitInventory(owner, current, new(current.Inventory,
+                current.Inventory with { Items = current.Inventory.Items.Add(new(0, new(InventoryListType.Main, 13), core)) }, "cargo_echo_fixture"));
+            mirrorUid = current.Inventory.Find(new(InventoryListType.Main, 13))!.Uid;
             repo.Create(owner, new("CargoSibling", towns.Room, towns.InitialReturn) { AcceptedStoryLevel = 1 });
         }
         await fixture.StartAsync();
@@ -55,6 +59,9 @@ internal static class CargoTcpTests
             peer.Expect(1, 305, [1]);
             ExpectGold(peer, 19_900_000);
             Cargo(peer.Expect(0, 13).Body, 12, 1, 0, 0);
+            peer.Barrier();
+            That(fixture.Query("SELECT capacity FROM account_cargo") is [[1L]],
+                "305开通一格并同步实际费用与权威容量");
             peer.Send(305);
             peer.Expect(1, 305, [0, 20, 0]);
             peer.Barrier();
@@ -62,6 +69,9 @@ internal static class CargoTcpTests
             peer.Expect(1, 306, [1]);
             ExpectGold(peer, 17_900_000);
             Cargo(peer.Expect(0, 13).Body, 12, 8, 0, 0);
+            peer.Barrier();
+            That(fixture.Query("SELECT capacity FROM account_cargo") is [[8L]],
+                "原生306由客户端推进八格，随后的第七格存取无需重选角色");
             peer.Send(307, Build(w => w.Write(1000)));
             peer.Expect(1, 307, [1, 232, 3, 0, 0]);
             ExpectGold(peer, 17_899_000);
@@ -82,7 +92,7 @@ internal static class CargoTcpTests
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 2, 16, 0]); peer.Barrier();
             That(fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[var sortedCore]] && Equals(sortedCore, weaponCore),
                 "个人仓库真实整理与重复整理保持完整物品核心及UID");
-            Transfer(peer, 2, 0, weaponId, 1, 12, 7, 0, 1);
+            Transfer(peer, 2, 0, weaponId, 1, 12, 7, 7, 1);
             That(peer.Expect(0, 14).Body[0] == 2 && peer.Expect(0, 14).Body[0] == 12, "cross cargo move clears personal and updates account");
             That(fixture.Query("SELECT character_id,item_core FROM character_inventory_items WHERE item_uid=$p0", weaponUid) is [[DBNull, var saved]] &&
                 Equals(saved, weaponCore), "account storage changes owner while preserving complete core and UID");
@@ -94,14 +104,14 @@ internal static class CargoTcpTests
             var sorted = peer.Expect(0, 1681).Body;
             That(sorted[0] == 12 && U16(sorted, 1) == 2 && U16(sorted, 3) == 0 && U32(sorted, 5) == weaponId && U32(sorted, 128) == uint.MaxValue,
                 "account sorting publishes new slot and clears previous slot");
-            Transfer(peer, 0, 121, 3299, 17, 12, 1, 0, 17);
+            Transfer(peer, 0, 121, 3299, 17, 12, 1, 1, 17);
             That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 12, "partial deposit updates both stacks");
             Transfer(peer, 0, 121, 3299, 2, 12, 7, 0, 2, actualTargetSlot: 1);
             That(peer.Expect(0, 14).Body[0] == 0 && U32(peer.Expect(0, 14).Body, 9) == 19,
                 "deposit into an empty requested slot merges into existing account stack");
             That(fixture.Query("SELECT COUNT(*) FROM character_inventory_slots WHERE list_type=12 AND slot_index=7") is [[0L]],
                 "automatic merge does not allocate requested target slot seven");
-            Transfer(peer, 12, 1, 3299, 0, 0, 122, 0, 19, actualTargetSlot: 121);
+            Transfer(peer, 12, 1, 1, 0, 0, 122, 0, 19, actualTargetSlot: 121);
             That(U32(peer.Expect(0, 14).Body, 9) == 600 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
                 "partial withdrawal merges full quantity and clears account stack");
             peer.Send(408, [65, 0]);
@@ -123,6 +133,22 @@ internal static class CargoTcpTests
             That(U32(peer.Expect(0, 14).Body, 9) == 350, "material upgrade charges 250 from inventory");
             Cargo(peer.Expect(0, 13).Body, 12, 24, 750, 1);
             peer.Expect(1, 713, [1, 12, 0, 0]);
+            peer.Barrier();
+            That(fixture.Query("SELECT capacity,gold FROM account_cargo") is [[24L,750L]] &&
+                fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE list_type=12") is [[1L]],
+                "材料扩容发布实际材料及容量，保留已有仓库物品、金币并恢复锁");
+            Transfer(peer, 0, 121, 3299, 1, 12, 13, weaponId, 1);
+            That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 12,
+                "升级同连接立即存入仓库槽13，接受源Main槽13的装备编号回显");
+            peer.Barrier();
+            That(fixture.Query("SELECT json_extract(item_core,'$.ItemId'),json_extract(item_core,'$.Value') FROM character_inventory_items " +
+                "JOIN character_inventory_slots USING(item_uid) WHERE list_type=12 AND slot_index=13") is [[3299L,1L]] &&
+                fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", mirrorUid) is [[var mirrorCore]] && Equals(mirrorCore, weaponCore),
+                "真正入库的是请求材料，不误移动或修改被回显的主背包装备及其完整属性");
+            Transfer(peer, 12, 13, 13, 1, 0, 121, 3299, 1);
+            That(U32(peer.Expect(0, 14).Body, 9) == 350 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
+                "回显存入后仍可取回并合堆，源仓库槽清空且数量守恒");
+            peer.Barrier();
             peer.Send(7);
             peer.Expect(1, 7, [1]);
             peer.Expect(0, 2);

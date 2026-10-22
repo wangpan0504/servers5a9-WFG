@@ -21,6 +21,7 @@ internal static class SelfTestRunner
         CreatureSystemTests.RunCore();
         CreatureChangeTests.RunCore();
         CreatureGroupTests.RunCore();
+        CreatureTransportTests.RunCore();
         CommandLineTests.Run();
         ConnectionAddressTests.Run();
         Testing.TcpTestFixtureProcessTests.Run();
@@ -110,6 +111,11 @@ internal static class SelfTestRunner
         LevelUpTicketTests.RunCore();
         LevelUpByTableTests.RunCore();
         ExperienceConsumableTests.RunCore();
+        LegacyStatusConsumableTests.RunCore();
+        FatigueConsumableTests.RunCore();
+        StackableActionTests.RunCore();
+        ActionConsumableTests.RunCore();
+        MileageTests.RunCore();
         PermanentGrowthTests.RunCore();
         DatabaseSchemaTests.RunPermanentStats();
         QuestSpecifiedTicketTests.RunCore();
@@ -335,6 +341,8 @@ internal static class SelfTestRunner
         LevelUpTicketTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         LevelUpByTableTests.Run(towns,pvf,characters,itemResources,sharedSkills,sharedQuests);
         ExperienceConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
+        LegacyStatusConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
+        FatigueConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         PermanentGrowthTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         QuestCascadeCompletionTests.Run(towns, pvf, characters, itemResources);
         await QuestCompletionPublicationTests.RunAsync(towns, pvf, characters, itemResources);

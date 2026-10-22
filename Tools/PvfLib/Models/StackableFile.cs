@@ -10,7 +10,8 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     int? DeclaredSellPrice, int? DeclaredMinimumLevel, string? DeclaredItemGroupName,
     IReadOnlyList<string> UnsupportedFields)
 {
-    public StackableTypeDeclaration? ActionDeclaration { get; init; }
+    public StackableActionDeclaration? ActionDeclaration { get; init; }
+    public bool HasActionType { get; init; }
     public int? DeclaredMaximumLevel { get; init; }
     public bool HasMaximumLevel { get; init; }
     public bool HasMinimumLevel { get; init; }
@@ -34,6 +35,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public int? DeclaredCoolTime { get; init; }
     public bool HasCoolTime { get; init; }
     public bool HasBoosterInfo { get; init; }
+    public IReadOnlyList<int>? DeclaredBoosterEtc { get; init; }
 
     public static StackableFile Parse(int templateId, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -72,12 +74,12 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             else
                 fields.Unsupported("item group name");
         }
-        StackableTypeDeclaration? action = null;
+        StackableActionDeclaration? action = null;
         if (fields.TryGet("action type", out values))
         {
-            if (values.Length > 0 && values[0].Type == 6 && values[1..].ToArray().All(token => token.Type == 0))
-                action = new(resolve(values[0].Value), Array.AsReadOnly(values[1..].ToArray().Select(token => token.Value).ToArray()));
-            else fields.Unsupported("action type");
+            action = StackableActionDeclaration.ReadValues(values, resolve);
+            if (action is null || action.Arguments.Any(value => value.Type is not (0 or 1 or 2 or 6)))
+                fields.Unsupported("action type");
         }
         IReadOnlyList<string>? jobs = null;
         if (fields.TryGet("usable job", out values))
@@ -110,9 +112,20 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
         if (checkOff && (!fields.TryGet("class change grow type check off", out values) || values.Length != 0))
             fields.Unsupported("class change grow type check off");
         int? levelUpRange=fields.Scalar("levelup range"), coolTime=fields.Scalar("cool time");
+        bool hasBooster = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[booster info]");
+        IReadOnlyList<int>? boosterEtc = null;
+        if (hasBooster)
+        {
+            var document = new PvfTokenDocument(tokens, resolve);
+            var sections = document.Sections.Where(section => section.Name == "booster info").ToArray();
+            if (document.Diagnostics.IsEmpty && sections is [{ Values.Length: 0, Children: [{ Name: "etc", Children.Length: 0 } child] }] &&
+                child.Values.All(token => token.Type == 0))
+                boosterEtc = Array.AsReadOnly(child.Values.Select(token => token.Value).ToArray());
+        }
         return new(templateId, path, type, limit, price, sellPrice, minimum, group, fields.UnsupportedFields)
         {
-            ActionDeclaration = action, DeclaredMaximumLevel = maximum, HasMaximumLevel = hasMaximum,
+            ActionDeclaration = action, HasActionType = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action type]"),
+            DeclaredMaximumLevel = maximum, HasMaximumLevel = hasMaximum,
             HasMinimumLevel = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[minimum level]"),
             DeclaredUseActionPacket = useAction, HasUseActionPacket = hasUseAction, DeclaredUsableJobs = jobs,
             HasUsableJobs = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[usable job]"),
@@ -130,7 +143,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             DeclaredLevelUpRange = levelUpRange,
             DeclaredCoolTime = coolTime,
             HasCoolTime = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[cool time]"),
-            HasBoosterInfo = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[booster info]")
+            HasBoosterInfo = hasBooster, DeclaredBoosterEtc = boosterEtc
         };
     }
 }

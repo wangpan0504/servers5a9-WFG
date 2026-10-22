@@ -97,7 +97,9 @@ internal sealed partial class GameSession
     public InventoryResult RepairEquipment(RepairEquipmentRequest request, InventoryRepairService repair) =>
         // 战斗中的耐久由本版客户端维护；CMD23 mode1触发后仍核对副本实例、契约期限与当日次数。
         PlanAndCommitInventory(character => repair.Repair(character, request,
-            clientBattleWear: Phase == SessionPhase.Dungeon && formalDungeon is not null), 19, requireTown: request.Mode != 1, allowSettlement: true);
+            clientBattleWear: Phase == SessionPhase.Dungeon && formalDungeon is not null,
+            inDungeon: Phase is SessionPhase.Dungeon or SessionPhase.Settlement), 19,
+            requireTown: request.Mode != 1 && request.RepairItemSlot < 0, allowSettlement: true);
 
     public InventoryResult DisjointEquipment(DisjointRequest request, InventoryDisjointService disjoint, out DisjointReceipt? receipt)
     {

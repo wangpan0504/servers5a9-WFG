@@ -13,7 +13,8 @@ internal enum CurrencyKind
     LegendarySoul = 13, EpicSoul = 14,
     Cera, TokenCera, HappyTokenCera,
     // 租赁幸运星是账号级虚拟余额，不映射到任何普通背包槽位。
-    RentalPoint = 18
+    RentalPoint = 18,
+    Mileage = 19
 }
 
 // 账号余额随选中角色载入不可变快照；换角重读，不为每个角色复制持久余额。
@@ -22,14 +23,22 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
 {
     public static AccountWallet Empty { get; } = new(0, ImmutableSortedDictionary<CurrencyKind, int>.Empty);
     public ushort CharacterSlotCapacity { get; init; } = 32;
+    public int Mileage { get; init; }
     public ImmutableSortedDictionary<int, long> PremiumContracts => Contracts ?? ImmutableSortedDictionary<int, long>.Empty;
-    public int Get(CurrencyKind kind) => kind == CurrencyKind.RentalPoint ? RentalPoints : Balances.GetValueOrDefault(kind);
+    public int Get(CurrencyKind kind) => kind switch
+    {
+        CurrencyKind.RentalPoint => RentalPoints,
+        CurrencyKind.Mileage => Mileage,
+        _ => Balances.GetValueOrDefault(kind)
+    };
     public AccountWallet Set(CurrencyKind kind, int count)
     {
         if (!CurrencyWallet.IsAccount(kind) || count < 0)
             throw new InvalidDataException("无效账号货币余额");
         if (kind == CurrencyKind.RentalPoint)
             return this with { RentalPoints = count };
+        if (kind == CurrencyKind.Mileage)
+            return this with { Mileage = count };
         return this with { Balances = count == 0 ? Balances.Remove(kind) : Balances.SetItem(kind, count) };
     }
     public AccountWallet ActivateContract(int type, long durationSeconds, DateTimeOffset now, int count = 1)
@@ -54,11 +63,11 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
             throw new InvalidDataException("无效赛丽亚幸运值");
         return this with { SeriaLuck = value };
     }
-    public bool Same(AccountWallet other) => Revision == other.Revision && CharacterSlotCapacity == other.CharacterSlotCapacity && RentalPoints == other.RentalPoints && SeriaLuck == other.SeriaLuck &&
+    public bool Same(AccountWallet other) => Revision == other.Revision && CharacterSlotCapacity == other.CharacterSlotCapacity && RentalPoints == other.RentalPoints && Mileage == other.Mileage && SeriaLuck == other.SeriaLuck &&
         Balances.SequenceEqual(other.Balances) && PremiumContracts.SequenceEqual(other.PremiumContracts);
     public void Validate()
     {
-        if (CharacterSlotCapacity is < 32 or > 62 || Revision < 0 || RentalPoints < 0 || SeriaLuck is < 0 or > 8 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key == CurrencyKind.RentalPoint || pair.Value <= 0) ||
+        if (CharacterSlotCapacity is < 32 or > 62 || Revision < 0 || RentalPoints < 0 || Mileage < 0 || SeriaLuck is < 0 or > 8 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key is CurrencyKind.RentalPoint or CurrencyKind.Mileage || pair.Value <= 0) ||
             PremiumContracts.Any(pair => pair.Key <= 0 || pair.Value <= 0))
             throw new InvalidDataException("无效账号钱包快照");
     }
@@ -66,7 +75,7 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
 
 internal static class CurrencyWallet
 {
-    public static bool IsAccount(CurrencyKind kind) => kind is >= CurrencyKind.BlackCube and <= CurrencyKind.HappyTokenCera or CurrencyKind.RentalPoint;
+    public static bool IsAccount(CurrencyKind kind) => kind is >= CurrencyKind.BlackCube and <= CurrencyKind.HappyTokenCera or CurrencyKind.RentalPoint or CurrencyKind.Mileage;
     public static long Get(InventorySnapshot inventory, CurrencyKind kind) => kind switch
     {
         CurrencyKind.Gold => inventory.Gold,

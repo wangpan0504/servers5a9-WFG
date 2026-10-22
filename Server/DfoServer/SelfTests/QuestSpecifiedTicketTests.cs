@@ -282,7 +282,7 @@ internal static class QuestSpecifiedTicketTests
         GameCommandRegistry Registry(QuestOrdinaryCompletionTests.Fixture f,ServerLog log)
         {
             var registry=new GameCommandRegistry(); var projection=new QuestProjection(f.Catalog);
-            new QuestTicketHandler(f.Catalog,items.Items,projection,log,
+            new StackableActionHandler(f.Catalog,items.Items,projection,log,
                 new CharacterLevelProjection(new CharacterStatComputer(characters),projection)).Register(registry);
             registry.Seal(); return registry;
         }

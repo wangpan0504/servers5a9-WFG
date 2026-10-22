@@ -26,11 +26,14 @@ internal static class CreatureSystemTcpTests
         That(catalog.Get(63407) is { UsesExperienceItems: true, ItemsPerLevel: 10,
             SelectiveGrowth: { ItemA: 10098003, ItemB: 10098002, ExperienceItem: 10098004 } },
             "原版CRE嵌套成长类型和每级喂食次数可被正式解析器读取");
+        That(catalog.ExperienceItem(10005895) is { Kind: 1, Amount: 50 } &&
+            catalog.ExperienceItem(10005896) is { Kind: 2, Amount: 1, CoolTime: 1000 } &&
+            catalog.ExperienceItem(10005898) is { Kind: 3, Amount: 50 } && !catalog.RenameCard(10005895),
+            "当前PVF三种普通宠物经验道具按标签注册，不再落入恢复药或改名卡路径");
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "creature-system"), resources: resources,
             clock: new ConsumableUseSessionTests.FakeClock());
         var repository = new CharacterRepository(fixture.Database);
         ushort id;
-        InventoryItem exchangeMaterial;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var candidate = CharacterCreation.Prepare("PetTcp", resources.Characters.Get(0), resources.Towns.Room,
@@ -38,15 +41,15 @@ internal static class CreatureSystemTcpTests
             var created = repository.Create(owner, candidate with { Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(new(0, CreatureRules.EquippedSlot, new(63032, ItemKind.Creature, 0)) { Creature = new() { Satiety = 10 } })
                 .Add(new(0, new(InventoryListType.Pet, 189), new(24, ItemKind.CreatureConsumable, 2)))
-                .Add(new(0, new(InventoryListType.Pet, 190), new(25, ItemKind.CreatureConsumable, 1))) } });
+                .Add(new(0, new(InventoryListType.Pet, 190), new(25, ItemKind.CreatureConsumable, 1)))
+                .Add(new(0, new(InventoryListType.Pet, 191), new(10005895, ItemKind.CreatureConsumable, 2))) } });
             id = created.Id;
-            var grow = repository.Create(owner, candidate with { Name = "PetGrow", Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
+            repository.Create(owner, candidate with { Name = "PetGrow", Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(new(0, CreatureRules.EquippedSlot, new(63407, ItemKind.Creature, 0))
                     { Creature = new() { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5, Experience = 199, Level = 20 } })
                 .Add(new(0, new(InventoryListType.Main, 65), new(10098003, ItemKind.Consumable, 1)))
                 .Add(new(0, new(InventoryListType.Main, 66), new(10098004, ItemKind.Consumable, 1)))
                 .Add(new(0, new(InventoryListType.Main, 67), new(10098002, ItemKind.Consumable, 3))) } });
-            exchangeMaterial = grow.Inventory.Find(new(InventoryListType.Main,67))!;
             repository.Create(owner, candidate with { Name = "PetExp", Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(new(0, CreatureRules.EquippedSlot, new(63407, ItemKind.Creature, 0))
                     { Creature = new() { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5, Experience = 195, Level = 20 } })
@@ -67,6 +70,15 @@ internal static class CreatureSystemTcpTests
             peer.Expect(0, 101, [.. Build(writer => writer.Write(peer.Id)), .. Name("小伙伴")]); peer.Barrier();
             That(ReadPet().Uid == uid && ReadPet().Creature!.Name == "小伙伴" && Count(190) == 0,
                 "真实100消费源换名卡，同UID名称及详情原子保存");
+            foreach (uint check in new uint[] { 0x5306, 0x23FF })
+            {
+                peer.Send(44, Build(writer => { writer.Write((ushort)191); writer.Write((byte)7); writer.Write(check); writer.Write(10005895); writer.Write(0); }));
+                peer.Expect(1, 44, Build(writer => { writer.Write((byte)1); writer.Write((ushort)191); writer.Write((byte)7); writer.Write(check); writer.Write(10005895); }));
+                peer.Expect(0, 102, check == 0x5306 ? [1, 0, 1, 0, 0, 0] : [2, 0, 2, 0, 0, 0]);
+                peer.Barrier();
+            }
+            That(Count(191) == 0 && ReadPet() is { Creature: { Level: 2, Experience: 2, Name: "小伙伴", Satiety: 10 } } capsulePet &&
+                capsulePet.Uid == uid, "实收44校验值原样返回；先消费ACK再102，同UID经验跨级，最后一件不重复发送14扣源");
             peer.Send(479); peer.Expect(0, 21); peer.Barrier();
             byte[] use = Build(writer => { writer.Write((ushort)189); writer.Write((byte)7); writer.Write(0u); writer.Write(24); writer.Write(0); });
             peer.Send(44, use);
@@ -80,8 +92,8 @@ internal static class CreatureSystemTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
-            That(ReadPet().Uid == uid && ReadPet().Creature is { Satiety: 40, Name: "小伙伴" },
-                "重新连接保留宠物名称和饱食，不自动再消费饲料");
+            That(ReadPet().Uid == uid && ReadPet().Creature is { Level: 2, Experience: 2, Satiety: 40, Name: "小伙伴" },
+                "重新连接保留胶囊经验、宠物名称和饱食，不自动再消费道具");
             string before = State();
             fixture.Sql("CREATE TRIGGER pet_feed_abort AFTER INSERT ON inventory_audit_log WHEN NEW.action_name='creature_feed' " +
                 "BEGIN SELECT RAISE(ABORT,'pet rollback'); END");
@@ -93,6 +105,10 @@ internal static class CreatureSystemTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1);
+            peer.Barrier();
+            InventoryItem exchangeMaterial;
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                exchangeMaterial = repository.LoadCharacter(owner, 1).Inventory.Find(new(InventoryListType.Main, 67))!;
             peer.Send(44, Build(writer => { writer.Write((ushort)65); writer.Write((byte)0); writer.Write(0u); writer.Write(10098003); writer.Write(0); }));
             peer.Expect(1, 44, Build(writer => { writer.Write((byte)1); writer.Write((ushort)65); writer.Write((byte)0); writer.Write(0u); writer.Write(10098003); }));
             peer.Expect(0, 102, [21, 1, 200, 0, 0, 0, 10, 6]);
@@ -104,9 +120,11 @@ internal static class CreatureSystemTcpTests
                 var saved = repository.LoadCharacter(owner, 1);
                 var evolved = saved.Inventory.Find(CreatureRules.EquippedSlot)!;
                 That(catalog.Get(evolved.Core.ItemId) is { Species: 387, UsesExperienceItems: true } &&
-                    evolved.Creature is { Level: 21, Experience: 200, Mode1Field1: 6 } && saved.Inventory.Find(new(InventoryListType.Main, 65)) is null &&
-                    saved.Inventory.Find(new(InventoryListType.Main, 67)) == exchangeMaterial,
-                    "原版PVF A类成长到21级，按亲密度进化387，只消费实际Main源，兑换材料UID与三份数量不变");
+                    evolved.Creature is { Level: 21, Experience: 200, Mode1Field1: 6 } && saved.Inventory.Find(new(InventoryListType.Main, 65)) is null,
+                    "原版PVF A类成长到21级，按亲密度进化387，只消费实际Main源");
+                var retained = saved.Inventory.Find(new(InventoryListType.Main, 67));
+                That(retained == exchangeMaterial, $"兑换材料完整实例不变：UID {exchangeMaterial.Uid}/{retained?.Uid}，" +
+                    $"数量 {exchangeMaterial.Core.Count}/{retained?.Core.Count}，期限 {exchangeMaterial.ExpireTime}/{retained?.ExpireTime}");
             }
         }
         using (var peer = Open(fixture))

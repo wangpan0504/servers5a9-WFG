@@ -20,6 +20,10 @@ internal sealed class ItemCatalog
     readonly ConcurrentDictionary<int, Lazy<LevelUpTicketDefinition?>> levelUpTickets = new();
     readonly ConcurrentDictionary<int, Lazy<ExperienceConsumableDefinition?>> experienceConsumables = new();
     readonly ConcurrentDictionary<int, Lazy<PermanentGrowthDefinition?>> permanentGrowth = new();
+    readonly ConcurrentDictionary<int, Lazy<LegacyStatusConsumableDefinition?>> legacyStatusConsumables = new();
+    readonly ConcurrentDictionary<int, Lazy<FatigueConsumableDefinition?>> fatigueConsumables = new();
+    readonly ConcurrentDictionary<int, Lazy<ActionConsumableDefinition?>> actionConsumables = new();
+    readonly ConcurrentDictionary<int, Lazy<StackableFile>> stackableDefinitions = new();
     readonly ConcurrentDictionary<int, Lazy<LevelUpByTableDefinition?>> levelUpTables = new();
     readonly ConcurrentDictionary<int, Lazy<ClassChangeTicketDefinition?>> classChangeTickets = new();
     readonly ConcurrentDictionary<int, Lazy<GameWorld.Creatures.CreatureChangeDefinition?>> creatureChanges = new();
@@ -151,8 +155,7 @@ internal sealed class ItemCatalog
 
     public IReadOnlyList<(int ItemId, int Count)>? NeededMaterials(int id)
     {
-        if (!stackable.TryGetValue(id, out var path)) return null;
-        var raw = StackableFile.Parse(id, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
+        if (StackableDefinition(id) is not { } raw) return null;
         if (raw.DeclaredNeededMaterials is not { } materials || materials.Count % 2 != 0) return null;
         var pairs = new (int ItemId, int Count)[materials.Count / 2];
         for (int index = 0; index < pairs.Length; index++)
@@ -166,23 +169,21 @@ internal sealed class ItemCatalog
 
     public QuestTicketDefinition QuestTicket(int id) => questTickets.GetOrAdd(id, key =>
     {
-        if (!stackable.TryGetValue(key,out var path)) throw new InvalidDataException("任务券不是堆叠物品: " + key);
-        var raw = StackableFile.Parse(key,"stackable/" + path,pvf.ReadTokens("stackable/" + path),pvf.ResolveString);
+        var raw = StackableDefinition(key) ?? throw new InvalidDataException("任务券不是堆叠物品: " + key);
         return QuestTicketDefinition.Parse(raw,Get(key));
     });
 
     public AdventureNameTicketDefinition? AdventureNameTicket(int id)
     {
-        if (!stackable.TryGetValue(id, out var path)) return null;
-        var raw = StackableFile.Parse(id, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
+        if (StackableDefinition(id) is not { } raw) return null;
         return AdventureNameTicketDefinition.Parse(raw, Get(id));
     }
 
     public LevelUpTicketDefinition? LevelUpTicket(int id)
     {
-        if (!stackable.TryGetValue(id, out var path)) return null;
+        if (!stackable.ContainsKey(id)) return null;
         return levelUpTickets.GetOrAdd(id, key => new(() => LevelUpTicketDefinition.Parse(
-            StackableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+            StackableDefinition(key)!, Get(key)))).Value;
     }
 
     internal static string JobTag(byte job) => job < JobNames.Length ? "[" + JobNames[job] + "]" : throw new InvalidDataException("未知物品使用职业");
@@ -208,28 +209,55 @@ internal sealed class ItemCatalog
             ExperienceConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
     }
 
-    public ClassChangeTicketDefinition? ClassChangeTicket(int id)
+    public LegacyStatusConsumableDefinition? LegacyStatusConsumable(int id)
+    {
+        if (!LegacyStatusConsumableDefinition.IsNativeItem(id) || !stackable.TryGetValue(id, out var path)) return null;
+        return legacyStatusConsumables.GetOrAdd(id, key => new(() => LegacyStatusConsumableDefinition.Parse(
+            ExperienceConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    public FatigueConsumableDefinition? FatigueConsumable(int id)
     {
         if (!stackable.TryGetValue(id, out var path)) return null;
+        return fatigueConsumables.GetOrAdd(id, key => new(() => FatigueConsumableDefinition.Parse(
+            RecoveryConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    public StackableActionIdentity? StackableAction(int id) => StackableDefinition(id) is { } raw ? StackableActionCatalog.Read(raw) : null;
+
+    public ActionConsumableDefinition? ActionConsumable(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return actionConsumables.GetOrAdd(id, key => new(() => ActionConsumableDefinition.Parse(
+            RecoveryConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    StackableFile? StackableDefinition(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return stackableDefinitions.GetOrAdd(id, key => new(() => StackableFile.Parse(key, "stackable/" + path,
+            pvf.ReadTokens("stackable/" + path), pvf.ResolveString))).Value;
+    }
+
+    public ClassChangeTicketDefinition? ClassChangeTicket(int id)
+    {
+        if (!stackable.ContainsKey(id)) return null;
         return classChangeTickets.GetOrAdd(id, key => new(() =>
-            ClassChangeTicketDefinition.Parse(StackableFile.Parse(key, "stackable/" + path,
-                pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+            ClassChangeTicketDefinition.Parse(StackableDefinition(key)!, Get(key)))).Value;
     }
 
     public GameWorld.Creatures.CreatureChangeDefinition? CreatureChange(int id)
     {
-        if (!stackable.TryGetValue(id, out var path)) return null;
+        if (!stackable.ContainsKey(id)) return null;
         return creatureChanges.GetOrAdd(id, key => new(() =>
-            GameWorld.Creatures.CreatureChangeDefinition.Parse(StackableFile.Parse(key, "stackable/" + path,
-                pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+            GameWorld.Creatures.CreatureChangeDefinition.Parse(StackableDefinition(key)!, Get(key)))).Value;
     }
 
     public GameWorld.Creatures.CreatureGrowthItemDefinition? CreatureGrowthItem(int id)
     {
-        if (!stackable.TryGetValue(id, out var path)) return null;
+        if (!stackable.ContainsKey(id)) return null;
         return creatureGrowthItems.GetOrAdd(id, key => new(() =>
-            GameWorld.Creatures.CreatureGrowthItemDefinition.Parse(StackableFile.Parse(key, "stackable/" + path,
-                pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+            GameWorld.Creatures.CreatureGrowthItemDefinition.Parse(StackableDefinition(key)!, Get(key)))).Value;
     }
 
     // 只有唯一、完整的类型声明参与成宠资格；缺项和未知格式不按成宠0补齐。
@@ -238,12 +266,14 @@ internal sealed class ItemCatalog
 
     // 仅接入已核对的城镇使用动作；未知地点和发包模式不按同名券推定。
     internal static bool ReadCreatureSkinTicket(PvfDocument document) =>
-        document.TryGetString("action type", out string action) && action == "[open creature skin slot]" &&
+        StackableActionDeclaration.TryRead(document, out var action) &&
+        StackableActionCatalog.Arguments(action) is { Label: "[open creature skin slot]", Parameters.Count: 0 } &&
         document.TryGetString("action usable place", out string place) && place == "[village]" &&
         document.TryGetInt32("use action packet", out int packet) && packet == 0;
 
     internal static bool ReadAuraSkinAction(PvfDocument document) =>
-        document.TryGetString("action type", out string action) && action == "[open aura skin slot]" &&
+        StackableActionDeclaration.TryRead(document, out var action) &&
+        StackableActionCatalog.Arguments(action) is { Label: "[open aura skin slot]", Parameters.Count: 0 } &&
         document.TryGetString("action usable place", out string place) && place == "[village]" &&
         document.TryGetInt32("use action packet", out int packet) && packet == 0;
 

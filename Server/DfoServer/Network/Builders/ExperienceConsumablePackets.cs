@@ -20,6 +20,16 @@ internal static class ExperienceConsumablePackets
 
     public static byte[] Rejected() => [0, 19, 0];
 
+    public static byte[] Legacy(LegacyStatusConsumablePlan plan)
+    {
+        byte[] body = new byte[12];
+        body[0] = 1;
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), checked((ushort)plan.Source.Position.Index));
+        body[3] = (byte)plan.Definition.Kind;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), checked((uint)plan.Definition.Amount));
+        return body;
+    }
+
     public static byte[] Permanent(PermanentGrowthPlan plan)
     {
         byte[] body = new byte[12];

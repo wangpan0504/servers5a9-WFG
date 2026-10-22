@@ -43,11 +43,14 @@ internal static class QuestAwakeningTicketTests
         That(first is {ActionIndex:119,AwakeningStage:1,MinimumLevel:50,VillageOnly:true} && second is {ActionIndex:122,AwakeningStage:2,MinimumLevel:75,VillageOnly:true},
             "匹配非空[1]/[0]觉醒券参数、stage与真实tag1保留");
         foreach(var invalid in new[] { raw with { DeclaredUseActionPacket=0 },raw with { HasUseActionPacket=false },
-            raw with { ActionDeclaration=new("[first awaken clear]",[]) },raw with { ActionDeclaration=new("[first awaken clear]",[1,1]) },
+            raw with { ActionDeclaration=new("[first awaken clear]",[]) },raw with { ActionDeclaration=new("[first awaken clear]",[1,2]) },
             raw with { ActionDeclaration=new("[second awaken clear]",[1]) },raw with {DeclaredActionUsablePlaces=null},
             raw with {DeclaredActionUsablePlaces=["[dungeon]"]} })
             DfoServer.Testing.TestCheck.Reject<NotSupportedException>(()=>QuestTicketDefinition.Parse(invalid,template),
                 "不猜造空参数旧券或不同use-action-packet形状");
+        That(QuestTicketDefinition.Parse(raw with { ActionDeclaration = new("[first awaken clear]", [1,1]) },template).AwakeningStage == 1 &&
+            QuestTicketDefinition.Parse(raw with { ActionDeclaration = new("[second awaken clear]", [0,1]) },template).AwakeningStage == 2,
+            "含自我觉醒标志的双参数券沿现有职业任务、CHR赠技与原子提交，不凭标志直接改职业");
         foreach(byte job in Enumerable.Range(0,16).Select(value=>(byte)value))
             That(first.Allows(50,job) && second.Allows(75,job) && !first.Allows(49,job) && !second.Allows(74,job),
                 "真实all职业及50/75边界 "+job);
@@ -300,7 +303,7 @@ internal static class QuestAwakeningTicketTests
         GameCommandRegistry Registry(QuestOrdinaryCompletionTests.Fixture f,ServerLog log)
         {
             var commands=new GameCommandRegistry(); var projection=new QuestProjection(f.Catalog);
-            new QuestTicketHandler(f.Catalog,items.Items,projection,log,new CharacterLevelProjection(new CharacterStatComputer(characters),projection),skills).Register(commands);
+            new StackableActionHandler(f.Catalog,items.Items,projection,log,new CharacterLevelProjection(new CharacterStatComputer(characters),projection),skills).Register(commands);
             new QuestLifecycleHandler(f.Catalog,items.Items,items.GoldLimits,items.EpicPieces,log,projection).Register(commands);
             commands.Seal();return commands;
         }

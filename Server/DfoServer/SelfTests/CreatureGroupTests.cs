@@ -81,9 +81,9 @@ internal static class CreatureGroupTests
             .PlanGroup(character,source.Position,pet.Position,1,true);
         That(!same.Accepted && same.Plan is null && character.Inventory.Find(source.Position)!.Core.Count == 30,
             "原生选择窗排除当前属性，重复选择当前模板不消费源道具");
-        That(QuestTicketRequests.TryUse(Convert.FromHexString("410000000000006B0000000800000002000000"),out var request) &&
-            request == new QuestTicketUseRequest(65,0,0,107,8,2), "107请求是Pet槽及1基选项，不借用64的目标容器参数");
-        Bytes(QuestTicketPackets.Used(request),[1,65,0,0,107,0,0,0],"107成功8B且无私有尾部，客户端不自行扣源");
+        That(StackableActionRequests.TryUse(Convert.FromHexString("410000000000006B0000000800000002000000"),out var request) &&
+            request == new StackableActionUseRequest(65,0,0,107,8,2), "107请求是Pet槽及1基选项，不借用64的目标容器参数");
+        Bytes(StackableActionPackets.Used(request),[1,65,0,0,107,0,0,0],"107成功8B且无私有尾部，客户端不自行扣源");
         Console.WriteLine($"PASS {Count-before} 宠物转换组、资源优先级、消耗及选择协议断言");
     }
 }

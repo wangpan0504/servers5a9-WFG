@@ -42,8 +42,17 @@ internal static class LevelUpTicketTests
             parsed.Allows(94,15) && !parsed.Allows(95,0),"固定一级券按实际声明解释等级和职业");
         That(LevelUpTicketDefinition.Parse(raw with { DeclaredNeededMaterials=[177,5] },template) == LevelUpTicketDefinition.Parse(raw,template),
             "商店兑换价格不改变升级券的使用规则");
-        foreach (var invalid in new[] { raw with { DeclaredLevelUpRange=null },raw with { DeclaredLevelUpRange=2 },
+        var multiple = LevelUpTicketDefinition.Parse(raw with { ActionDeclaration = new("[level up ticket]", [85]),
+            DeclaredLevelUpRange = 10, DeclaredActionUsablePlaces = ["[village]", "[seria room]"], HasActionUsablePlace = true }, template)!;
+        That(multiple.Levels == 10 && multiple.TargetLevel(74) == 84 && multiple.TargetLevel(80) == 85 &&
+            multiple.Allows(84, 0) && !multiple.Allows(85, 0), "多级券按levelup range增长并钳在动作声明的85级，不改成固定一级");
+        var randomTicket = LevelUpTicketDefinition.Parse(raw with { ActionDeclaration=new("[level up ticket]",[85]),
+            DeclaredLevelUpRange=10,HasBoosterInfo=true,DeclaredBoosterEtc=[1,1,50000,1,1,30000,2,1,20000,10] },template)!;
+        That(randomTicket.Roll(_=>0)==1 && randomTicket.Roll(_=>50000)==2 && randomTicket.Roll(_=>99999)==10 &&
+            randomTicket.AllowsRoll(10) && !randomTicket.AllowsRoll(3), "随机升级数量来自booster的完整相对权重，不取最大levelup range当固定结果");
+        foreach (var invalid in new[] { raw with { DeclaredLevelUpRange=null },raw with { DeclaredLevelUpRange=0 },
             raw with { HasBoosterInfo=true },raw with { DeclaredMaximumLevel=null },
+            raw with { ActionDeclaration=new("[level up ticket]",[85,95]) },
             raw with { ActionDeclaration=new("[quest clear]",[]) } })
             That(LevelUpTicketDefinition.Parse(invalid,template) is null,"未知、随机或坏定义不被降级为固定一级券");
         That(LevelUpTicketDefinition.Parse(raw with {DeclaredMinimumLevel=null},template)!.MinimumLevel==template.MinimumLevel &&
@@ -59,6 +68,7 @@ internal static class LevelUpTicketTests
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
         var service = new LevelUpTicketService(items.Items,growth);
         That(items.Items.LevelUpTicket(TicketId) is { MinimumLevel:1,MaximumLevel:85,Jobs:ushort.MaxValue } &&
+            items.Items.LevelUpTicket(10156788) is { Levels:10, TargetMaximum:85, Rolls.Length:10 } &&
             items.Items.LevelUpTicket(490705250) is { MinimumLevel:85,MaximumLevel:94 } &&
             items.Items.LevelUpTicket(490008526) is { Jobs:32768 } &&
             items.Items.LevelUpTicket(490001017) is { MinimumLevel:0,MaximumLevel:84 } &&
@@ -76,7 +86,10 @@ internal static class LevelUpTicketTests
             var gain = checked((uint)(growth.GetLevelStartExperience(4)-before.Learning.Experience));
             Bytes(LevelUpTicketPackets.Used(source),TcpPeer.Build(w=>
             { w.Write((byte)1);w.Write((ushort)65);w.Write((byte)0);w.Write(gain);w.Write((ushort)growth.GetSpDelta(3,4));w.Write((ushort)0); }),
-                "418完整12字节含真实差额，不重复使用绝对SP");
+                "418完整12字节携带源容器Main0及实际成长差额，不套用30的效果种类1");
+            TestCheck.Reject<InvalidDataException>(() => LevelUpTicketPackets.Used(source with
+                { Item = source.Item with { Position = new(InventoryListType.PersonalCargo, 1) } }),
+                "升级券只能确认实际Main源，不能错误确认仓库道具");
             var committed = f.Repository.CommitQuestQuickClear(f.Owner,plan);
             That(committed.Character.Level==4 && committed.Character.Learning.Experience==growth.GetLevelStartExperience(4) &&
                 committed.Character.Inventory.Find(Slot) is null && committed.Character.Inventory.Gold==before.Inventory.Gold &&
@@ -87,6 +100,23 @@ internal static class LevelUpTicketTests
                 Same(committed.Character,f.Read()),"精确回执重放不重复加经验或扣券");
             f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             That(Same(f.Session.Selected!,committed.Character),"重新装载保留真实经验、两树、任务和耗尽源");
+        }
+        using (var f = Make(ticket:10156788))
+        {
+            int draws = 0;
+            var randomService = new LevelUpTicketService(items.Items,growth,random:total=>{draws++;return total-1;});
+            var before = f.Read(); var source = randomService.Prepare(before,Slot);
+            That(source.GainedLevels==10 && source.Growth.TargetLevel==13 && draws==1,
+                "真实随机升级券冻结一次抽取，最末权重命中10级而不是重复随机");
+            That(QuestQuickClearPlan.TryCreateLevelUpTicket(before,Guid.NewGuid(),f.Catalog,source,
+                ImmutableDictionary<int,byte>.Empty,out var plan,out _,towns),"随机成长复用现有主线规划");
+            f.Sql("CREATE TRIGGER random_level_abort AFTER INSERT ON character_quest_skip_receipts BEGIN SELECT RAISE(ABORT,'random level rollback'); END");
+            TestCheck.Reject<SqliteException>(()=>f.Repository.CommitQuestQuickClear(f.Owner,plan!),"随机升级券晚期SQL回滚");
+            That(Same(before,f.Read()) && draws==1,"回滚保留真实源和角色，不能重抽随机等级");
+            f.Sql("DROP TRIGGER random_level_abort");
+            var committed=f.Repository.CommitQuestQuickClear(f.Owner,plan!);
+            That(committed.Character.Level==13 && committed.Character.Inventory.Find(Slot) is null && draws==1 &&
+                f.Repository.CommitQuestQuickClear(f.Owner,plan!).Duplicate,"重试和精确回执重放均使用原冻结随机结果");
         }
         using (var f = Make())
         {
