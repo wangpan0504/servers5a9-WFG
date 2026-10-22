@@ -48,7 +48,8 @@ internal sealed record AdventureState(long Revision, string Name, int CreatedDat
             throw new InvalidDataException("账号冒险团持久状态非法");
     }
 }
-// 1343的20条内容通关累计；type0为推荐地下城。当前只有推荐地下城有服务端通关来源，其余内容未接入时不伪造数值。
+// 内容通关累计按内容类型索引；type0为推荐地下城。当前只有推荐地下城有服务端通关来源（写入1343的u32@16），
+// 其余内容未接入时不伪造数值；该数组不再写入20组收藏分类表。
 internal static class AdventureContent
 {
     public const int Count = 20;

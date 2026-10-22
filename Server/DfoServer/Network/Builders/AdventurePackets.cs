@@ -10,10 +10,17 @@ internal static class AdventurePackets
     public const int InformationRawLength = 7440;
     public const int RefreshRawLength = 40;
     public const int LoginDaysOffset = 20;
-    // 基本信息页「内容熟练度」8 条累计：RAW+42 起连续 8 个 u16，按 tabinfo slot01..slot08 顺序
-    // 依次对应 AdventureContent 的 type0..type7（type0=推荐地下城通关）。
-    public const int ContentSlotOffset = 42;
-    public const int ContentSlotCount = 8;
+    // 基本信息页「内容熟练度」由客户端按独立 u32 读取（2026-10-22 哨兵探针+实机截图逐项对上）：
+    // 推荐地下城通关@16、卢克攻坚@28、超时空漩涡@32、普雷·伊希斯攻坚战@36、
+    // 无双决斗场获胜@44、绝望之塔100层@48、悲叹之塔100层@52。
+    // 当前只有推荐地下城通关有账号级累计来源；其余六项尚无统计，保持 0，不借用收藏表或其他字段。
+    public const int RecommendedClearOffset = 16;
+    public const int LukeRaidClearOffset = 28;
+    public const int MetroRaidClearOffset = 32;
+    public const int PreyRaidClearOffset = 36;
+    public const int DuelWinOffset = 44;
+    public const int DespairTowerClearOffset = 48;
+    public const int LamentTowerClearOffset = 52;
     public const int RosterOffset = 72;
     public const int ShopOffset = 5272;
     public const int PurchasesOffset = 5312;
@@ -41,15 +48,17 @@ internal static class AdventurePackets
     {
         if (ack) writer.Write((byte)1);
         writer.Write(actor); writer.Write(checked((uint)snapshot.State.CreatedDate));
-        writer.Write(new byte[4]); writer.Write(0u);
+        writer.Write(0u); writer.Write(0u);
         var raw = new byte[InformationRawLength];
         U32(raw, 0, checked((uint)snapshot.State.Level)); U64(raw, 8, snapshot.State.Experience);
         U32(raw, LoginDaysOffset, checked((uint)snapshot.State.LoginStreakDays));
-        // 内容熟练度槽位按账号级通关累计下发；代表角色为空时也照常展示。
-        var slots = snapshot.ContentCounts;
-        for (int slot = 0; slot < ContentSlotCount; slot++)
-            U16(raw, ContentSlotOffset + slot * 2, slot < slots.Length ? slots[slot] : (ushort)0);
+        // 内容熟练度按内容各自独立的 u32 下发；当前只有推荐地下城通关有账号级累计来源，
+        // 其余六项没有统计数据，保持 0，不借用收藏分类表伪造。
+        var counts = snapshot.ContentCounts;
+        U32(raw, RecommendedClearOffset, counts.Length > AdventureContent.RecommendedDungeon
+            ? counts[AdventureContent.RecommendedDungeon] : 0u);
         U16(raw, 68, checked((ushort)snapshot.Members.Length));
+        AdventureMember? best = null;
         int at = 0;
         foreach (var profession in catalog.Professions.Values.OrderBy(row => row.Job).ThenBy(row => row.Grow))
         {
@@ -57,7 +66,18 @@ internal static class AdventurePackets
             if (member is null && !snapshot.State.Representatives.Any(row => row.Job == profession.Job && row.Grow == profession.Grow)) continue;
             var row = raw.AsSpan(RosterOffset + 52 * at++, 52);
             row[0] = profession.Job; row[1] = profession.Grow;
-            if (member is not null) WriteCollection(row, member);
+            if (member is null) continue;
+            WriteCollection(row, member);
+            // 同熟练度取目录顺序靠前者，保持每次构包稳定。
+            if (best is null || member.Proficiency > best.Proficiency) best = member;
+        }
+        // 基本信息页「最高熟练度角色」卡片：1343消费者01034220把RAW+16起14个dword搬到管理器+0xD4，
+        // 页面从+0xFC/+0xFD读职业与成长、从+0x100读熟练度，值为0时只显示占位。
+        // 布局与S5A3同源（本版整体+12B）：job@56、grow@57、熟练度u32@60；没有真实候选时保持0。
+        if (best is not null)
+        {
+            raw[56] = best.Job; raw[57] = best.ProfessionGrow;
+            U32(raw, 60, best.Proficiency);
         }
         for (int i = 0; i < 5; i++)
         {
@@ -69,13 +89,10 @@ internal static class AdventurePackets
         {
             U32(raw, PurchasesOffset + at * 8, checked((uint)pair.Key)); U32(raw, PurchasesOffset + at++ * 8 + 4, pair.Value);
         }
-        // 20条内容通关累计：count u16在前、type u8在后（type0=推荐地下城），按账号求和下发。
-        var counts = snapshot.ContentCounts;
+        // 20组分类计数：count u16在前、type u8在后。90CN同源结构把该表用于收藏分类而非内容熟练度
+        // （内容熟练度已改为上面的独立u32）；本版暂无收藏统计来源，计数保持0，不借内容累计充当。
         for (byte type = 0; type < AdventureContent.Count; type++)
-        {
-            U16(raw, ContentCountsOffset + type * 3, type < counts.Length ? counts[type] : (ushort)0);
             raw[ContentCountsOffset + type * 3 + 2] = type;
-        }
         U64(raw, CapsuleOffset, snapshot.State.CapsuleExperience);
         U32(raw, ClaimsOffset, Claims(snapshot.State, catalog));
         writer.Write(raw.Length); writer.Write(raw); PacketEncoding.WriteString(writer, snapshot.State.Name);
@@ -119,8 +136,8 @@ internal static class AdventurePackets
         // 010314C0 把 u8@42 读进显示结构+2C；选角卡片右上角的熟练角标按熟练等级分档取图标，
         // 原先写频道 ServerIndex 会让所有角色恒显示同一档。超过255沿用最高档，不按u8回绕。
         row[42] = checked((byte)Math.Min(member.Proficiency, byte.MaxValue));
-        // 010314C0 把 word@44 读进显示结构+30；此前恒为 0，基本信息页「最高熟练度角色」卡片缺少
-        // 排名依据。按熟练等级下发，待实机确认卡片是否据此选人。
+        // 010314C0 把 word@44 读进显示结构+30；该字段的客户端用途尚未确认，
+        // 「最高熟练度」卡片实际读取报文头的 RAW+56/57/60，不再依赖这里选人。
         U16(row, 44, (ushort)Math.Min(member.Proficiency, ushort.MaxValue));
         U32(row, 48, member.Level);
     }
