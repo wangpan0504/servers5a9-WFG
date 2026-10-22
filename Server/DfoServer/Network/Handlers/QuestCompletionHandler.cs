@@ -78,7 +78,8 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
                 character,
                 Guard,
                 "quest_skill_switch_inventory");
-        if (commit.ExperienceReward.Amount != 0 || commit.GainedExperience != 0)
+        if ((commit.ExperienceReward.Amount != 0 || commit.GainedExperience != 0) &&
+            CharacterExperienceNotice.ShouldPublish(commit.PreviousLevel))
         {
             var state = character.DungeonState ?? throw new InvalidOperationException("已提交任务成长缺少附属owner");
             var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)character.Inventory.WinPoints), state.GrowthCapsuleExperience,

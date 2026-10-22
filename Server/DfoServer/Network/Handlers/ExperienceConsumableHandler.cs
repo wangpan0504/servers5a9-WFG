@@ -39,9 +39,10 @@ internal sealed class ExperienceConsumableHandler(ExperienceConsumableService se
         await context.Reply(CmdPacketType.INCREASE_STATUS, ExperienceConsumablePackets.Used(plan), "experience_consumable_used", Guard);
         await inventory.RefreshAsync(context, result.Inventory, new HashSet<InventorySlot> { slot }, refreshEquipment: false);
         var state = character.DungeonState ?? throw new InvalidOperationException("经验物品缺少成长附属状态");
-        await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning,
-            new(checked((uint)character.Inventory.WinPoints), state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience),
-            CharacterExperienceDisplay.Ordinary), "experience_consumable_growth", Guard);
+        if (CharacterExperienceNotice.ShouldPublish(plan.Expected.Level))
+            await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning,
+                new(checked((uint)character.Inventory.WinPoints), state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience),
+                CharacterExperienceDisplay.Ordinary), "experience_consumable_growth", Guard);
         if (plan.Expected.Level == character.Level && SkillPackets.BindingsChanged(plan.Expected.Learning, character.Learning))
             await SkillProjection.PublishAsync(context, character, "experience_consumable_skills", "experience_consumable_combo", Guard);
         if (!plan.Expected.ActiveMainQuests.SequenceEqual(character.ActiveMainQuests))

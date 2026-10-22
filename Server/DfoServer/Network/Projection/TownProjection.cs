@@ -41,7 +41,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             TownPackets.Actor(c, context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
                 premiumPcRoom: premiumPcRoom), "actor");
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(c, stats.Compute(c), context.Channel, appearanceTime), "player");
+        await context.Notify(NotiPacketType.USERINFO,
+            TownPackets.Player(c, stats.Compute(c), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         if (c.Guild is { } membership)
             await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");

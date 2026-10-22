@@ -26,21 +26,26 @@ internal static class AdventureRepresentativeTests
         That(plan.Changed && (snapshot with { State = snapshot.State with { Representatives = plan.After } }).Representatives(catalog) is [{ Id: 2 }],
             "指定同账号真实UID，不按槽位或名册首项重新选择");
         That(service.Prepare(snapshot, 1, 0, 1, 999) is null && service.Prepare(snapshot, 1, 0, 2, 2) is null &&
-            service.Prepare(snapshot with { Members = [second with { Level = 94 }] }, 1, 0, 1, 2) is null,
-            "拒绝别的账号/不存在角色、错误职业和未满级资格");
+            service.Prepare(snapshot with { Members = [second with { Level = 89 }] }, 1, 0, 1, 2) is null,
+            "拒绝别的账号/不存在角色、错误职业和Lv90以下资格");
+        That(service.Prepare(snapshot with { Members = [second with { Level = 90 }] }, 1, 0, 1, 2) is not null,
+            "Lv90（含）起满足客户端帮助的收藏等级资格");
         var removed = snapshot with { State = snapshot.State with { Representatives = [new(0, 1, null)] } };
         That(removed.Representatives(catalog).IsEmpty && !service.Prepare(removed, 1, 0, 1, null)!.Changed,
             "显式解除保留职业空位，重复解除为合法零变化");
         That(AdventureRequests.Representative([2, 2, 0, 0, 0, 0, 33]) == (2, 2, 0, 1),
             "代表设置保留region、UID32及二觉打包成长字段");
+        That(AdventureRequests.Profession([9, 0x20]) == (9, 1) && AdventureRequests.Profession([10, 0x20]) == (10, 1) &&
+            AdventureRequests.Representative([2, 2, 0, 0, 0, 9, 0x20]) == (2, 2, 9, 1),
+            "外传职业低半字节0归一化为收藏分支1，不再因猜填拒绝而断线");
         Reject<InvalidDataException>(() => AdventureRequests.Profession([0, 1]), "不把普通成长字节当二觉");
         var candidates = AdventurePackets.Candidates([first, second], 2);
         That(candidates.Length == 108 && candidates[0] == 1 && candidates[1] == 1 && candidates[2] == 2 && candidates[3] == 2 &&
             BitConverter.ToUInt32(candidates, 16) == 1 && BitConverter.ToUInt32(candidates, 68) == 2,
             "1476为52B候选，不误用56B客户端扩展记录");
-        var set = AdventurePackets.Representative(catalog.Professions[(0, 1)], 2, second, 2);
-        That(set.Length == 64 && BitConverter.ToUInt32(set, 1) == 3 && BitConverter.ToUInt32(set, 8) == 52 && set[54] == 2,
-            "1477成功含3B职业RAW及52B收藏RAW，地域在收藏42偏移");
+        var set = AdventurePackets.Representative(catalog.Professions[(0, 1)], 2, second);
+        That(set.Length == 64 && BitConverter.ToUInt32(set, 1) == 3 && BitConverter.ToUInt32(set, 8) == 52 && set[54] == 7,
+            "1477成功含3B职业RAW及52B收藏RAW，熟练角标在收藏42偏移");
         Persist(service, now);
         Console.WriteLine($"PASS {Count - before} 代表职业资格、字节、零变化与SQLite原子断言");
     }

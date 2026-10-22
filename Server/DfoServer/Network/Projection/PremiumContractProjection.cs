@@ -102,8 +102,9 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
             state.PcRoom), "premium_identity_actor", () => sent = CanSend());
         if (!sent) return;
         sent = false;
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(character, stats.Compute(character), context.Channel,
-            DateTimeOffset.FromUnixTimeSeconds(now)), "premium_identity_player", () => sent = CanSend());
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(character, stats.Compute(character),
+            context.Session.ReadAdventureLevel(), context.Channel, DateTimeOffset.FromUnixTimeSeconds(now)),
+            "premium_identity_player", () => sent = CanSend());
         if (!sent) return;
         announcedAppearance = state;
         context.Owner.Execute(() =>
@@ -146,8 +147,8 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
         }
         // 901只更新选择集；本人Player消费者267CC10经277F870实际重装虚拟装备，不重建场景Actor。
         bool refreshed = false;
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(character, stats.Compute(character), context.Channel),
-            "premium_equipment_refresh", () => refreshed = guard?.Invoke() ?? true);
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(character, stats.Compute(character),
+            context.Session.ReadAdventureLevel(), context.Channel), "premium_equipment_refresh", () => refreshed = guard?.Invoke() ?? true);
         if (refreshed) { announcedEffects = effects; effectsEpoch = currentEpoch; }
     }
 }

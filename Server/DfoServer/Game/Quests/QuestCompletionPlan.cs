@@ -29,7 +29,8 @@ internal sealed class QuestCompletionPlan
         uint gold, int goldBase, int goldMultiple, int penalty, DateTimeOffset now, QuestCatalog quests, QuestClearReceipt? clear,
         byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
         byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold,
-        int? completedParentId = null, QuestStagePlan? stagePlan = null, byte? expertJob = null)
+        int? completedParentId = null, QuestStagePlan? stagePlan = null, byte? expertJob = null,
+        ProficiencyAdvance? proficiency = null)
     {
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
         CompletedParentId = completedParentId;
@@ -44,7 +45,8 @@ internal sealed class QuestCompletionPlan
         // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
         if (completedParentId is not null && ConditionType is 1 or 3 or 45) ConditionType = 4;
         RewardSelector = selector;
-        ExperienceReward = experience; Inventory = inventory; GrowthPlan = growth; Rewards = rewards; Consumed = consumed;
+        ExperienceReward = experience; Inventory = inventory; GrowthPlan = growth; Proficiency = proficiency;
+        Rewards = rewards; Consumed = consumed;
         Multiplier = multiplier;
         Currencies = currencies;
         GoldAmount = gold; MailedGoldAmount = mailedGold; FrozenAt = now;
@@ -158,6 +160,8 @@ internal sealed class QuestCompletionPlan
     public QuestExperienceReward ExperienceReward { get; }
     public InventoryPlan Inventory { get; }
     public CharacterGrowthPlan? GrowthPlan { get; }
+    // 任务经验与副本经验走同一条熟练度判定；不写入Snapshot，历史回执字节与重放条件保持不变。
+    public ProficiencyAdvance? Proficiency { get; }
     public CharacterGrowthPlan Growth => GrowthPlan ?? throw new InvalidOperationException("零经验任务不需要成长规划");
     public byte? ProfessionGrowType { get; }
     public byte? GrantedExpertJob { get; }
@@ -456,10 +460,19 @@ internal sealed class QuestCompletionPlan
                 int deadline = expected.Inventory.Find(DfoServer.Game.Creatures.CreatureRules.EquippedSlot)!.ExpireTime;
                 creaturePrecondition = new(expected, deadline == 0 ? null : deadline);
             }
-            QuestCompletionPlan Create(CharacterGrowthPlan? finalGrowth, CharacterLearningState? finalLearning, QuestStagePlan? stage = null) => new(expected, active, quest, selector, experience,
-                new(expected.Inventory, after, "quest_complete", creaturePrecondition), finalGrowth, rewards.ToImmutable(), consumed.ToImmutable(),
-                gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, finalLearning, multiplier, currencies.ToImmutable(),
-                QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage, expertJob: expertJob);
+            QuestCompletionPlan Create(CharacterGrowthPlan? finalGrowth, CharacterLearningState? finalLearning, QuestStagePlan? stage = null)
+            {
+                ProficiencyAdvance? proficiency = null;
+                if (finalGrowth is not null && expected.DungeonState is { } dungeon)
+                    proficiency = ProficiencyProgression.Advance(new(dungeon.ProficiencyLevel, dungeon.ProficiencyExperience),
+                        ProficiencyProgression.Gain(finalGrowth.PreviousLevel, finalGrowth.Before.Experience,
+                            checked((uint)finalGrowth.RequestedExperience), growthCatalog), growthCatalog);
+                return new(expected, active, quest, selector, experience,
+                    new(expected.Inventory, after, "quest_complete", creaturePrecondition), finalGrowth, rewards.ToImmutable(), consumed.ToImmutable(),
+                    gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, finalLearning, multiplier, currencies.ToImmutable(),
+                    QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage,
+                    expertJob: expertJob, proficiency: proficiency);
+            }
             var normal = Create(growth, rewardLearning);
             if ((stageGraph is null) != (stageState is null)) throw new InvalidDataException("阶段图与持久状态必须同时提供");
             if (stageGraph is null) return new(QuestCompletionOutcome.Accepted, normal, "通用领奖计划已冻结");

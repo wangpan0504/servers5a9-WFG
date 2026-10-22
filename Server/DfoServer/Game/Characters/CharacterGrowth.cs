@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Game.Skills;
 
@@ -20,7 +21,8 @@ internal sealed record CharacterGrowthResult(CharacterGrowthFailure Failure, Cha
 // 只描述成长候选，不证明经验来源、事件去重、owner有效或事务已提交。
 internal sealed class CharacterGrowthPlan
 {
-    private CharacterGrowthPlan(Character expected, byte targetLevel, CharacterLearningState learning, int spDelta, ulong requestedExperience)
+    private CharacterGrowthPlan(Character expected, byte targetLevel, CharacterLearningState learning, int spDelta,
+        ulong requestedExperience, CharacterGrowthCatalog catalog)
     {
         CharacterId = expected.Id;
         Revision = expected.Revision;
@@ -32,9 +34,13 @@ internal sealed class CharacterGrowthPlan
         Learning = learning;
         LevelSpDelta = spDelta;
         RequestedExperience = requestedExperience;
+        Catalog = catalog;
     }
 
     public ushort CharacterId { get; }
+    // 熟练度与角色经验共用这张等级/经验事实表；提交方无需再单独传成长目录。
+    // 不参与回执Snapshot序列化，保持训练等既有回执字节与重放条件不变。
+    [JsonIgnore] public CharacterGrowthCatalog Catalog { get; }
     public long Revision { get; }
     public byte Job { get; }
     public byte GrowType { get; }
@@ -55,9 +61,11 @@ internal sealed class CharacterGrowthPlan
             return Fail(CharacterGrowthFailure.InvalidSnapshot);
         if (amount == 0 || amount > ulong.MaxValue - expected.Learning.Experience)
             return Fail(CharacterGrowthFailure.InvalidTarget);
-        // 满级截断只影响实际到账，不取消本次死亡、掉落或领奖事实。
-        ulong cap = catalog.GetCumulativeExperienceBoundary(CharacterGrowthCatalog.MaximumSupportedLevel) - 1;
-        ulong target = Math.Min(cap, expected.Learning.Experience + amount);
+        // 满级经验条钉在 95 级入口线：满级后不再增长，溢出只进熟练度/冒险团。
+        // 既有高位旧值原地保持而不向下改写：经验回执只允许 after>=before，负数差额会整笔失败。
+        ulong entry = catalog.GetLevelStartExperience(CharacterGrowthCatalog.MaximumSupportedLevel);
+        ulong target = expected.Learning.Experience >= entry ? expected.Learning.Experience
+            : Math.Min(entry, expected.Learning.Experience + amount);
         byte level = 1;
         while (target >= catalog.GetCumulativeExperienceBoundary(level))
             level++;
@@ -97,7 +105,8 @@ internal sealed class CharacterGrowthPlan
         if (!WithinLevel(expected.Level, expected.Learning.Experience))
             return Fail(CharacterGrowthFailure.InvalidSnapshot);
         if (targetLevel < expected.Level || targetLevel > CharacterGrowthCatalog.MaximumSupportedLevel ||
-            targetExperience < expected.Learning.Experience || !allowUnchanged && targetExperience == expected.Learning.Experience ||
+            targetExperience < expected.Learning.Experience ||
+            !allowUnchanged && targetExperience == expected.Learning.Experience ||
             !WithinLevel(targetLevel, targetExperience))
             return Fail(CharacterGrowthFailure.InvalidTarget);
 
@@ -112,7 +121,7 @@ internal sealed class CharacterGrowthPlan
         if (catalog.Learning is { } skills && expected.Learning.BonusSp.HasValue)
             learning = SkillPointLedger.Synchronize(expected.Job, expected.GrowType, targetLevel, learning, skills,
                 skills.ActiveExpertContractLevels(learning.ExpertContractExpiresAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
-        return new(CharacterGrowthFailure.None, new(expected, targetLevel, learning, spDelta, requestedExperience));
+        return new(CharacterGrowthFailure.None, new(expected, targetLevel, learning, spDelta, requestedExperience, catalog));
 
         bool WithinLevel(int level, ulong experience) => experience >= catalog.GetLevelStartExperience(level) &&
             experience < catalog.GetCumulativeExperienceBoundary(level);

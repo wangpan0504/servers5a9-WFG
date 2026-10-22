@@ -29,7 +29,7 @@ internal static class TutorialTests
             {
                 var created = repository.Create(owner, new NewCharacter("Cap" + remaining, new(38, 0, 1677, 222), null)
                 {
-                    Level = 95, Tutorial = new(7115),
+                    Level = 95, Tutorial = new(7115), DungeonState = CharacterDungeonState.NewOrdinary,
                     InitialLearning = new(cap - remaining, [new(0, 11, 3, []), new(1, 19, 4, [])])
                 });
                 var expected = repository.LoadCharacter(owner, created.Slot);
@@ -38,11 +38,13 @@ internal static class TutorialTests
                     new(expected.Inventory, expected.Inventory, "tutorial_settlement"),
                     expected.Tutorial! with { Completed = true }, expected.Position, candidate);
                 var saved = repository.CommitTutorialCheckpoint(owner, plan);
-                That(saved.Character.Learning.Experience == cap && saved.Character.Level == 95 &&
+                That(saved.Character.Learning.Experience == expected.Learning.Experience && saved.Character.Level == 95 &&
                     saved.Character.Revision == expected.Revision + 1 && saved.Character.Tutorial!.Completed &&
+                    saved.Character.DungeonState is { } proficiency &&
+                    (proficiency.ProficiencyLevel > 0 || proficiency.ProficiencyExperience == 100) &&
                     saved.Character.Learning.Trees.Select(tree => (tree.Context, tree.Sp, tree.Tp)).SequenceEqual(
                         expected.Learning.Trees.Select(tree => (tree.Context, tree.Sp, tree.Tp))),
-                    "训练奖励保留原额度，封顶只影响实际到账5或0，完成及双树余额正常提交");
+                    "满级训练奖励保留原额度且经验条不上浮，整笔经验进入熟练度，完成及双树余额正常提交");
                 That(repository.CommitTutorialCheckpoint(owner, plan).Duplicate &&
                     repository.LoadCharacter(owner, created.Slot).Revision == saved.Character.Revision,
                     "训练封顶结算回放不再次增加经验或revision");

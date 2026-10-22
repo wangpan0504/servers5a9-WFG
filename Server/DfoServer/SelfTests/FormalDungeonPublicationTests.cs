@@ -45,6 +45,7 @@ internal static class FormalDungeonPublicationTests
         await EntryRejectionAsync();
         await StorageFailureAsync(false);
         await StorageFailureAsync(true);
+        await MaxLevelExperienceNoticeAsync();
         foreach (int packet in new[] { 1, 2 }) await SendFailureAsync(packet);
         await ReselectDuringSendAsync();
         await ReturnDuringSendAsync();
@@ -214,6 +215,34 @@ internal static class FormalDungeonPublicationTests
             await commands.DispatchAsync(context, death);
             Check(f.Count() == 1 && f.Read().Learning.Experience == 104 && stream.Frames.Count == 2,
                 "确认后再次重试只审计忽略，不发第二份经验");
+        }
+
+        async Task MaxLevelExperienceNoticeAsync()
+        {
+            var maximum = CharacterGrowthCatalog.MaximumSupportedLevel;
+            var creation = CharacterCreation.Prepare("FormalMax", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get)
+                with
+                {
+                    ActiveMainQuests = [new(0, 3145, 1)],
+                    Level = checked((byte)maximum),
+                    InitialLearning = new CharacterLearningState(growth.GetLevelStartExperience(maximum),
+                        Array.AsReadOnly(new[] { new CharacterSkillTree(0, 3, 4, []), new CharacterSkillTree(1, 8, 5, []) }))
+                };
+            using var f = new Fixture(towns, characters, learning, quests, false, creation: creation);
+            var (_, death) = Enter(f);
+            var before = f.Read();
+            var commands = Registry(f);
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput();
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(84, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            Check(await commands.DispatchAsync(context, death) == CommandResult.Handled, "满级击杀正常提交");
+            var committed = f.Read();
+            Check(stream.Opcodes.SequenceEqual(new ushort[] { 38 }),
+                "满级击杀只发死亡通知，不再发NOTI37");
+            Check(committed.Level == maximum && committed.Learning.Experience == before.Learning.Experience &&
+                committed.DungeonState!.ProficiencyExperience > before.DungeonState!.ProficiencyExperience,
+                "停发通知不影响满级经验钳制与熟练度实际增长");
         }
 
         (FormalDungeonReceipt Receipt, DungeonPlannedMonster Boss) PrepareBoss(Fixture f)
@@ -706,14 +735,14 @@ internal static class FormalDungeonPublicationTests
         public ServerLog Log { get; }
         public LostResultRepository? LostResult { get; }
         public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool lostResult,
-            bool losePickup = false, bool loseDiscard = false)
+            bool losePickup = false, bool loseDiscard = false, NewCharacter? creation = null)
         {
             path = Path.Combine(root, "game.db");
             repository = new(path, quests);
             Owner = new AccountOwners().Acquire("formal-publication", () => { });
             LostResult = lostResult ? new(repository, loseGrowth: !losePickup && !loseDiscard, losePickup: losePickup, loseDiscard: loseDiscard) : null;
             Session = new(LostResult is null ? repository : LostResult, towns, Owner);
-            Created = repository.Create(Owner, CharacterCreation.Prepare("FormalSend", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get)
+            Created = repository.Create(Owner, creation ?? CharacterCreation.Prepare("FormalSend", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get)
                 with { ActiveMainQuests = [new(0,3145,1)] });
             Session.Select(Created.Slot);
             Session.MarkReady();
@@ -766,6 +795,10 @@ internal static class FormalDungeonPublicationTests
         public DfoServer.Game.Adventure.AdventureSnapshot CommitAdventureRepresentative(AccountOwners.Lease owner,
             DfoServer.Game.Adventure.AdventureRepresentativePlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.CommitAdventureRepresentative(owner, plan, catalog, now);
         public DfoServer.Game.Adventure.AdventureSnapshot ReadAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.ReadAdventure(owner, catalog, now);
+        public int ReadAdventureLevel(AccountOwners.Lease owner) => inner.ReadAdventureLevel(owner);
+        public System.Collections.Immutable.ImmutableArray<(uint Id, string Name)> ReadAdventureCharacterList(AccountOwners.Lease owner) => inner.ReadAdventureCharacterList(owner);
+        public System.Collections.Immutable.ImmutableArray<byte> ReadAdventureWeeklyConfig(AccountOwners.Lease owner) => inner.ReadAdventureWeeklyConfig(owner);
+        public void WriteAdventureWeeklyConfig(AccountOwners.Lease owner, System.Collections.Immutable.ImmutableArray<byte> slots) => inner.WriteAdventureWeeklyConfig(owner, slots);
         public void InitializeAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.InitializeAdventure(owner, catalog, now);
         public DfoServer.Game.Tutorials.TutorialCheckpointResult CommitTutorialCheckpoint(AccountOwners.Lease owner,
             DfoServer.Game.Tutorials.TutorialCheckpointPlan plan) => inner.CommitTutorialCheckpoint(owner, plan);
@@ -854,9 +887,9 @@ internal static class FormalDungeonPublicationTests
 
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
             PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,DungeonCardDelivery? premiumDelivery = null,
-            bool grantLuckyStar = false, int luckyStarLimit = 0, DfoServer.Game.Adventure.AdventureProgressionPlan? adventure = null)
+            bool grantLuckyStar = false, int luckyStarLimit = 0, bool recommendedClear = false)
         {
-            var result = inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit, adventure);
+            var result = inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit, recommendedClear);
             if (++settlementCalls == 1 && loseSettlement) throw new IOException("合成翻牌及经验已提交但返回结果丢失");
             return result;
         }

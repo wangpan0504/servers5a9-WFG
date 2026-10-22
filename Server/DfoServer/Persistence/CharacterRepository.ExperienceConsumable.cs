@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
 
@@ -39,6 +40,17 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("经验物品角色版本已变化");
         WriteLearning(db, tx, expected.Id, growth.Learning);
         WriteCanonicalSkills(db, tx, expected.Id, growth.Learning);
+        // 经验胶囊等经验物品按国服规则不计入冒险团，但推进角色里程，后续从新位置继续累计。
+        if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.ExcludedGrant, growth.RequestedExperience,
+                EffectivePosition(expected.Level, expected.Learning.Experience), expected.Level, growth.TargetLevel,
+                now) is { } credit)
+            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.ExcludedGrant, adventureCatalog!);
+        // 经验物品同样累积熟练度；满级溢出按同一规则计入。
+        var proficiencyGain = ProficiencyProgression.Gain(growth.PreviousLevel, growth.Before.Experience,
+            checked((uint)growth.RequestedExperience), growth.Catalog);
+        if (ProficiencyProgression.Advance(new(expected.DungeonState.ProficiencyLevel, expected.DungeonState.ProficiencyExperience),
+                proficiencyGain, growth.Catalog) is { } proficiency)
+            WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
         if (quests is not null)
             WriteQuestConditions(db, tx, expected.Id, committed.ActiveMainQuests,
                 QuestStateProgress.Refresh(committed.ActiveMainQuests, committed with { Level = growth.TargetLevel, Learning = growth.Learning }, quests));

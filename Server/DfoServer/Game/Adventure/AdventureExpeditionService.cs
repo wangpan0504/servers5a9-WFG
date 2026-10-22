@@ -10,7 +10,8 @@ internal sealed class AdventureExpeditionService(AdventureCatalog catalog, Adven
     public ImmutableArray<byte> AreaAttributes(byte index, DateTimeOffset now)
     {
         var area = expeditions.Areas[index];
-        long day = (long)(now.ToOffset(TimeSpan.FromHours(8)).Date - DateTime.UnixEpoch).TotalDays / expeditions.RotationDays;
+        // 公告：地下城属性每天06:00随机变更；06:00前仍沿用前一周期。
+        long day = (AdventurePeriod.ChinaDay(now).Ticks - DateTime.UnixEpoch.Ticks) / TimeSpan.TicksPerDay / expeditions.RotationDays;
         var local = new HashSet<string>();
         var global = new HashSet<string>();
         var result = ImmutableArray.CreateBuilder<byte>();
@@ -20,10 +21,13 @@ internal sealed class AdventureExpeditionService(AdventureCatalog catalog, Adven
             foreach (string group in current.Groups)
             {
                 string selected;
-                if (expeditions.Attributes.ContainsKey(group)) selected = group;
+                if (expeditions.Attributes.TryGetValue(group, out var attribute) && attribute.Id != byte.MaxValue)
+                    selected = group;
                 else
                 {
-                    var candidates = expeditions.AttributeGroups[group];
+                    // 组别名（如[GROUP C ALLOW]）先落到目标组，再按日选具体属性；255不能直接下发。
+                    string groupName = attribute.Group is { Length: > 0 } alias ? alias : group;
+                    var candidates = expeditions.AttributeGroups[groupName];
                     string? unique = current.Uniqueness.GetValueOrDefault(group);
                     var used = unique == "global" ? global : unique == "local" ? local : null;
                     selected = Enumerable.Range(0, candidates.Length).Select(offset => candidates[(int)((day + current.Index + offset) % candidates.Length)])
@@ -57,9 +61,9 @@ internal sealed class AdventureExpeditionService(AdventureCatalog catalog, Adven
         if (members.Count is < 1 or > 4) return (null, 22);
         var attributes = AreaAttributes(area, now);
         var supplied = members.SelectMany(row => expeditions.CharacterAttributes.GetValueOrDefault((row.Job, row.ProfessionGrow), []))
-            .Select(name => expeditions.Attributes[name]).ToArray();
-        int matches = attributes.Count(id => supplied.Any(row => row.Id == id) || expeditions.Attributes.Values.Any(wanted => wanted.Id == id &&
-            wanted.Group.Length != 0 && expeditions.AttributeGroups.GetValueOrDefault(wanted.Group, []).Any(name => supplied.Any(row => row.Name == name))));
+            .Select(name => expeditions.Attributes[name].Id).ToHashSet();
+        // 同一属性在多名成员上重复出现不重复计数；需求属性已展开为具体ID。
+        int matches = attributes.Count(supplied.Contains);
         float product = rate * expeditions.PartyRates[members.Count] * expeditions.AttributeRates[Math.Min(matches, expeditions.AttributeRates.Length - 1)];
         // ARAD 0421F0F0先按float32四舍五入，再乘extra rate并截断；该倍率不是额外再加一次的奖励。
         uint reward = checked((uint)((int)(product + 0.5f) * expeditions.ExtraRate));

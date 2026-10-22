@@ -19,6 +19,7 @@ internal enum ServerCommandKind
     TcpTest,
     Gm,
     PrepareCharacter,
+    PrepareBookCharacter,
     ImportCharacters
 }
 
@@ -50,6 +51,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --selftest-tcp [测试组]    隔离 TCP 回归
           --scan-quests              只读任务覆盖与依赖检查，输出JSON
           --gm [命令]               开发管理命令
+          --prepare-book <职业> <分支> <角色名> <审计目录> [账号]  开发用：创建指定职业分支的95级二觉角色
           --help                    显示帮助，不读取资源或创建数据库
         默认及相对路径以服务端程序所在目录为基准；运行参数放在命令之前。
         日志固定在程序目录的 Logs；切换存档目录使用该目录的 game.db，不自动搬迁数据。
@@ -100,11 +102,15 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
             "--selftest-tcp" => (ServerCommandKind.TcpTest, -1),
             "--gm" => (ServerCommandKind.Gm, -1),
             "--prepare-jianying" => (ServerCommandKind.PrepareCharacter, 2),
+            "--prepare-book" => (ServerCommandKind.PrepareBookCharacter, -1),
             "--import-characters" => (ServerCommandKind.ImportCharacters, 1),
             _ => throw new InvalidDataException("未知命令：" + action)
         };
         if (argumentCount >= 0 && arguments.Length != argumentCount)
             throw new InvalidDataException($"{action} 需要 {argumentCount} 个参数");
+        // 账号是可选尾部参数：4 个参数沿用开发账号，5 个参数建到指定账号。
+        if (kind == ServerCommandKind.PrepareBookCharacter && arguments.Length is not (4 or 5))
+            throw new InvalidDataException("--prepare-book 需要 4 或 5 个参数");
         if (kind == ServerCommandKind.TcpTest &&
             (arguments.Length > 1 || arguments.Length == 1 && !TcpRegressionTests.IsValidSelection(arguments[0])))
             throw new InvalidDataException("TCP 测试组必须是以下名称（多个组用逗号分隔，不得重复）：" + string.Join(',', TcpRegressionTests.GroupNames));

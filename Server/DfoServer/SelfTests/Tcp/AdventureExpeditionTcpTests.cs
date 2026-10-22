@@ -1,3 +1,4 @@
+using DfoServer.Game.Adventure;
 using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -15,7 +16,15 @@ internal static class AdventureExpeditionTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int checks = Count;
+        // 真实资源：属性行是线上ID、名称、组名、图片四项；255只是组别名，不能下发给客户端。
+        That(resources.Expeditions.Areas[1].Groups.SequenceEqual(new[] { "[GROUP C ALLOW]" }) &&
+            resources.Expeditions.Attributes["[TEMP_A_00]"] is { Id: 1, Group: "" } &&
+            resources.Expeditions.Attributes["[TEMP_C_03]"] is { Id: 23 } &&
+            resources.Expeditions.Attributes["[GROUP C ALLOW]"] is { Id: 255, Group: "[group C]" },
+            "真实资源远征属性按线上ID解析，组别名保留255");
         var clock = new Clock();
+        That(new AdventureExpeditionService(resources.Adventure, resources.Expeditions).AreaAttributes(1, clock.Now) is [>= 20 and <= 23],
+            "地区1的组别名展开为TEMP_C_00至TEMP_C_03的具体ID");
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "adventure-expeditions"), resources: resources, clock: clock);
         await fixture.StartAsync();
         ushort member;
@@ -29,6 +38,10 @@ internal static class AdventureExpeditionTcpTests
             peer.Create("ExpMember"); member = peer.Id;
             Execute("UPDATE characters SET level=95,grow_type=33 WHERE id=" + member);
             peer.Select();
+            That(peer.PlayerBody is [1, ..] player && U32(peer.AdventureInfo, 18) >= 1 &&
+                U32(player, player.Length - 11) == U32(peer.AdventureInfo, 18) &&
+                U32(player, player.Length - 7) == 0,
+                "入城Player尾部携带1343同一冒险团等级，胶囊计量保持0，不能写0清空常驻效果");
             peer.Send(441, [0]);
             var available = peer.Expect(1, 441).Body;
             That(U16(available, 13) == 1, "空闲候选只使用本账号合法代表");

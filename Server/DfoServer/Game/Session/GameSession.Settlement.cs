@@ -139,10 +139,16 @@ internal sealed partial class GameSession
         if (dungeon.Settlement is null)
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var bonuses = PlanExperience(Selected!, ExperienceEvent.Clear, reward.BaseExperience, reward.RankExperience, now, dungeon.Entry.DungeonId, dungeon.Entry.ExperienceEquipmentModule);
-            reward = reward with { TotalExperience = bonuses.Total, BonusParts = bonuses.Parts,
+            var bonuses = PlanExperience(Selected!, ExperienceEvent.Clear, reward.BaseExperience, reward.RankExperience, now,
+                dungeon.Entry.DungeonId, dungeon.Entry.ExperienceEquipmentModule);
+            // 冒险团「通关经验值增加」按账号当前等级计入基础经验；新手教程不是正式通关，不参与加成。
+            uint adventureBonus = adventure is null || dungeon.Entry.IsTutorial ? 0 :
+                AdventureBenefitPolicy.ClearExperienceBonus(reward.BaseExperience, repository.ReadAdventureLevel(owner), adventure);
+            // 没有分项时保留 default，避免“空数组”和“未记录分项”在 record 相等比较中被当成两份不同奖励。
+            reward = reward with { TotalExperience = checked(bonuses.Total + adventureBonus),
+                BonusParts = bonuses.Parts.IsDefaultOrEmpty ? default : bonuses.Parts,
                 GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
-                PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion) };
+                PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), AdventureExperience = adventureBonus };
         }
         if (dungeon.Settlement is null && !(dungeon.Entry.IsTutorial && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
@@ -172,19 +178,6 @@ internal sealed partial class GameSession
         {
             // 原owner内校验、提交并安装实际结果；异常时保留同一准备供持久receipt查询。
             var expected = settlement.Expected;
-            // 账号锁内只读一次账号冒险团快照并完成同步规划；未达等级上限时不产生额外读写。
-            AdventureProgressionPlan? progression = null;
-            ulong overflow = dungeon.Entry.IsTutorial ? 0 : AdventureProgression.MaximumLevelExperience(
-                expected.Level, expected.Learning.Experience, reward.TotalExperience,
-                CharacterGrowthCatalog.MaximumSupportedLevel,
-                growth.GetLevelStartExperience(CharacterGrowthCatalog.MaximumSupportedLevel));
-            if (adventure is not null && overflow > 0)
-            {
-                var adventureNow = DateTimeOffset.UtcNow;
-                repository.InitializeAdventure(owner, adventure, adventureNow);
-                progression = AdventureProgression.Plan(repository.ReadAdventure(owner, adventure, adventureNow),
-                    overflow, adventure, adventureNow);
-            }
             if (!ReferenceEquals(Selected, expected) || !ReferenceEquals(formalDungeon, dungeon) || fact.Identity.CharacterId != expected.Id ||
                 !dungeon.Run.IsPendingSettlement(prepared.Pending))
                 throw new InvalidOperationException("通关结算owner或待提交实例已失效");
@@ -201,10 +194,11 @@ internal sealed partial class GameSession
             }
             else
             {
-                bool grantLuckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(
+                // 同一±5等级区间既决定幸运星，也计作冒险团「推荐地下城通关」；教程与修炼场不走此分支。
+                bool recommended = DungeonLuckyStarPolicy.IsRecommendedLevel(
                     dungeons.Get(checked((int)dungeon.Entry.DungeonId)), expected.Level);
                 commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
-                    grantLuckyStar: grantLuckyStar, luckyStarLimit: luckyStarLimit, adventure: progression);
+                    grantLuckyStar: recommended, luckyStarLimit: luckyStarLimit, recommendedClear: recommended);
             }
             if (commit.Character.Id != expected.Id || commit.Character.Revision < expected.Revision ||
                 dungeon.Run.ConfirmCommittedSettlement(prepared.Pending) != DungeonRunOutcome.Accepted)

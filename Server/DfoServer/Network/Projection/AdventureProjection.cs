@@ -16,7 +16,7 @@ internal sealed class AdventureProjection(AdventureCatalog catalog)
         var snapshot = context.Session.ReadAdventure(catalog, DateTimeOffset.UtcNow);
         bool Guard() => context.Session.SelectionEpoch == epoch && ReferenceEquals(context.Session.Selected, selected) &&
             (selected is null ? context.Session.CheckState(UserState.CharacterSelect) : initialization || context.Session.Ready);
-        var body = AdventurePackets.Information(selected?.Id ?? 0, snapshot, catalog, snapshot.Representatives(catalog), context.Channel.ServerIndex, ack);
+        var body = AdventurePackets.Information(selected?.Id ?? 0, snapshot, catalog, snapshot.Representatives(catalog), ack);
         if (ack) await context.Reply(CmdPacketType.REQUEST_ADVENTURE_INFO, body, "adventure_information", Guard);
         else
         {

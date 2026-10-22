@@ -50,6 +50,9 @@ internal sealed partial class CharacterRepository
                 cmd.Parameters.AddWithValue("$value", request.Primary);
                 if (cmd.ExecuteNonQuery() != 1)
                     throw new InvalidOperationException("角色 revision 或所有者已变化");
+                // GM改等级属于排除来源：按改后有效位置改写里程，账号冒险团总量不变。
+                CreditExcludedState(db, tx, owner.Account, current, request.Primary,
+                    EffectivePosition(request.Primary, current.Learning.Experience));
                 break;
             case CharacterProgressField.Story:
                 cmd.CommandText = "UPDATE characters SET accepted_story_level=$value WHERE id=$id AND account=$account AND revision=$revision";
@@ -171,6 +174,8 @@ internal sealed partial class CharacterRepository
         if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("角色revision或所有者已变化");
         WriteLearning(db, tx, current.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, current.Id, plan.Learning);
+        // GM等级/转职重置属于排除来源：改写里程但不改变账号冒险团总量。
+        CreditExcludedState(db, tx, owner.Account, current, plan.Level, EffectivePosition(plan.Level, plan.Learning.Experience));
         var updated = Require(db, tx, owner.Account, current.Name);
         if (updated.Level != current.Level || updated.GrowType != current.GrowType ||
             updated.Learning.Experience != current.Learning.Experience)

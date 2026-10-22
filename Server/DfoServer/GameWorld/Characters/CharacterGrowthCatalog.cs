@@ -7,11 +7,14 @@ internal sealed class CharacterGrowthCatalog
     public const int MaximumSupportedLevel = 95;
     private readonly SkillCatalog points;
     public SkillLearningCatalog? Learning { get; private init; }
+    // 角色熟练度与等级成长共用同一份角色经验事实，资源表随成长目录一次装载。
+    public ProficiencyCatalog Proficiency { get; }
 
-    private CharacterGrowthCatalog(ulong[] experience, SkillCatalog points)
+    private CharacterGrowthCatalog(ulong[] experience, SkillCatalog points, ProficiencyCatalog proficiency)
     {
         CumulativeExperience = Array.AsReadOnly(experience);
         this.points = points;
+        Proficiency = proficiency;
     }
 
     // 0 是初始经验零，后续项是资源中的累计边界。
@@ -22,7 +25,7 @@ internal sealed class CharacterGrowthCatalog
         ulong[] experience = ParseExperienceTable(pvf.ReadTokens("character/exptable.tbl"));
         if (experience.Length != 100)
             throw new InvalidDataException("匹配经验表的99项累计边界改变");
-        return new CharacterGrowthCatalog(experience, SkillCatalog.Load(pvf)) { Learning = learning };
+        return new CharacterGrowthCatalog(experience, SkillCatalog.Load(pvf), ProficiencyCatalog.Load(pvf)) { Learning = learning };
     }
 
     public ulong GetLevelStartExperience(int level)

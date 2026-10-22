@@ -295,6 +295,10 @@ internal static class QuestCompletionRepositoryTests
         public DfoServer.Game.Adventure.AdventureSnapshot CommitAdventureRepresentative(AccountOwners.Lease owner,
             DfoServer.Game.Adventure.AdventureRepresentativePlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.CommitAdventureRepresentative(owner, plan, catalog, now);
         public DfoServer.Game.Adventure.AdventureSnapshot ReadAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.ReadAdventure(owner, catalog, now);
+        public int ReadAdventureLevel(AccountOwners.Lease owner) => inner.ReadAdventureLevel(owner);
+        public System.Collections.Immutable.ImmutableArray<(uint Id, string Name)> ReadAdventureCharacterList(AccountOwners.Lease owner) => inner.ReadAdventureCharacterList(owner);
+        public System.Collections.Immutable.ImmutableArray<byte> ReadAdventureWeeklyConfig(AccountOwners.Lease owner) => inner.ReadAdventureWeeklyConfig(owner);
+        public void WriteAdventureWeeklyConfig(AccountOwners.Lease owner, System.Collections.Immutable.ImmutableArray<byte> slots) => inner.WriteAdventureWeeklyConfig(owner, slots);
         public void InitializeAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.InitializeAdventure(owner, catalog, now);
         public DfoServer.Game.Tutorials.TutorialCheckpointResult CommitTutorialCheckpoint(AccountOwners.Lease owner,
             DfoServer.Game.Tutorials.TutorialCheckpointPlan plan) => inner.CommitTutorialCheckpoint(owner, plan);
@@ -388,8 +392,8 @@ internal static class QuestCompletionRepositoryTests
         public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState) => inner.CommitExpertJobGiveUp(owner, expected, wallet, giveUpState);
         public Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance) => inner.CommitExpertJobMachine(owner, expected, wallet, grade, endurance);
         public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,DungeonCardDelivery? premiumDelivery = null,
-            bool grantLuckyStar = false, int luckyStarLimit = 0, DfoServer.Game.Adventure.AdventureProgressionPlan? adventure = null)
-            => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit, adventure);
+            bool grantLuckyStar = false, int luckyStarLimit = 0, bool recommendedClear = false)
+            => inner.CommitDungeonSettlement(owner, expected, run, prepared, catalog, cardInventory, mailCardItem,premiumDelivery, grantLuckyStar, luckyStarLimit, recommendedClear);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
         public Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);

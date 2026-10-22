@@ -32,17 +32,84 @@ internal static class AdventureExpeditionTests
             "[reward info]", 6, 1.9f, "[/reward info]", "[/area]", "[/area info]",
             "[reward bonus info]", "[extra rate]", 0.5f, "[party member rate]", 1, 1, 1, 1, 1,
             "[attribute achieve rate]", 1, 1, 1.4f, 1.8f, 2.2f, "[/reward bonus info]",
-            "[area attribute rotation period]", 1, "[attribute data]", 1, "[A]", "", 0, 1, "Alias", "group", 50,
+            "[area attribute rotation period]", 1, "[attribute data]", 1, "[A]", "", 0, 255, "Alias", "group", 50,
             "[attribute group]", "[group]", "group", "[A]", "[/group]", "[/attribute group]",
             "[character attribute]", 0, 1, 2, "[A]", "[/character attribute]"]);
         return new(_ => expedition, id => strings[id]);
     }
+
+    // 轮换用例：地区1的指定属性是组别名，地区2是具体属性，地区3用于冒险团等级门禁。
+    static AdventureExpeditionCatalog RotationCatalog()
+    {
+        var strings = new List<string>();
+        int Add(string text) { strings.Add(text); return strings.Count - 1; }
+        // 真实资源里属性名与组名是字符串token；这里只把未列入文本的[]标签当作块标记。
+        bool Text(string text) => text is "[C]" or "[D]" or "[group C]" or "[GROUP C ALLOW]";
+        PvfToken Token(object value) => value switch
+        {
+            int number => new(0, number),
+            float number => new(2, BitConverter.SingleToInt32Bits(number)),
+            string text => new(text.StartsWith('[') && !Text(text) ? (byte)3 : (byte)6, Add(text)),
+            _ => throw new InvalidDataException()
+        };
+        PvfToken[] Document(object[] values) => values.Select(Token).ToArray();
+        var expedition = Document([
+            "[area info]",
+            "[area]", "[index]", 1, "[required level]", 1, "[designated attribute]", "[GROUP C ALLOW]", "[/designated attribute]",
+            "[reward info]", 6, 1.9f, "[/reward info]", "[/area]",
+            "[area]", "[index]", 2, "[required level]", 1, "[designated attribute]", "[C]", "[/designated attribute]",
+            "[reward info]", 6, 1.9f, "[/reward info]", "[/area]",
+            "[area]", "[index]", 3, "[required level]", 10, "[designated attribute]", "[C]", "[/designated attribute]",
+            "[reward info]", 6, 1.9f, "[/reward info]", "[/area]",
+            "[/area info]",
+            "[reward bonus info]", "[extra rate]", 0.5f, "[party member rate]", 1, 1, 1, 1, 1,
+            "[attribute achieve rate]", 1, 1, 1.4f, 1.8f, 2.2f, "[/reward bonus info]",
+            "[area attribute rotation period]", 1,
+            "[attribute data]", 20, "[C]", "", 0, 21, "[D]", "", 0, 255, "[GROUP C ALLOW]", "[group C]", 50,
+            "[attribute group]", "[group]", "[group C]", "[C]", "[D]", "[/group]", "[/attribute group]",
+            "[character attribute]", 0, 1, 2, "[C]", "[/character attribute]"]);
+        return new(_ => expedition, id => strings[id]);
+    }
+
+    // 并行用例：两名不同职业的代表，用于两个地区同时出发与落库。
+    static AdventureCatalog ParallelCatalog()
+    {
+        var strings = new List<string>();
+        int Add(string text) { strings.Add(text); return strings.Count - 1; }
+        PvfToken Token(object value) => value switch
+        {
+            int integer => new(0, integer),
+            float number => new(2, BitConverter.SingleToInt32Bits(number)),
+            string text => new(text.StartsWith('[') && text is not ("[swordman]" or "[fighter]") ? (byte)3 : (byte)6, Add(text)),
+            _ => throw new InvalidDataException()
+        };
+        PvfToken[] Document(object[] values) => values.Select(Token).ToArray();
+        var main = Document([
+            "[max adventure level]", 3, "[adventure exp rate]", 0.3f,
+            "[adventure exp table]", 1, "0", 2, "10", 3, "20", 4, "30", "[/adventure exp table]",
+            "[attribute list]", "[/attribute list]",
+            "[expert list]", "[group]", 0, "profession",
+            "[info]", "[swordman]", "second awakening", 1, 0, 0, 1,
+            "[info]", "[fighter]", "second awakening", 1, 0, 0, 1,
+            "[/group]", "[/expert list]",
+            "[adventurer shop list]", "[shop]", "[index]", 0, "[max shop point]", 250, "[exp to get shop point]", 5, 1,
+            "[adventurer shop purchase info]", "[/adventurer shop purchase info]", "[/shop]",
+            "[shop]", "[index]", 1, "[max shop point]", 9999, "[reset point]", "[adventurer shop purchase info]", "[/adventurer shop purchase info]", "[/shop]",
+            "[/adventurer shop list]", "[capsule need minimum exp]", 10, "[capsule max exp]", 100, "[capsule max count]", 2,
+            "[capsule limit level min]", 2, "[capsule limit level max]", 90, "[capsule give exp]", 50,
+            "[capsule update date]", "2018-02-22 06:00:00"]);
+        return new(_ => main, id => strings[id]);
+    }
+
     public static void RunCore()
     {
         int before = Count;
         var catalog = AdventureCoreTests.SyntheticCatalog();
         var expeditions = SyntheticCatalog();
         var service = new AdventureExpeditionService(catalog, expeditions);
+        That(expeditions.Attributes["[A]"] == new ExpeditionAttribute("[A]", "", 1) &&
+            expeditions.Attributes["Alias"] == new ExpeditionAttribute("Alias", "group", 255),
+            "远征属性按线上ID、名称、组名、图片四项解析，组别名保留255");
         var now = new DateTimeOffset(2026, 10, 11, 0, 0, 0, TimeSpan.Zero);
         var member = new AdventureMember(1, 0, "Hero", 0, 33, 95, 7, 0);
         var snapshot = new AdventureSnapshot(AdventureState.Initial("exp", now), [member]);
@@ -80,7 +147,92 @@ internal static class AdventureExpeditionTests
             body[15] == 1 && body[16] == 1, "远征表必须带area0空闲组，运行成员不重复列入空闲表");
         Persist(catalog, service, now);
         Migrate();
-        Console.WriteLine($"PASS {Count - before} 远征冻结、公式、资格、SQL原子性及领取断言");
+        Rotation(catalog);
+        Parallel();
+        ParallelPersist();
+        Console.WriteLine($"PASS {Count - before} 远征冻结、公式、资格、属性轮换、并行地区、SQL原子性及领取断言");
+    }
+
+    static void Rotation(AdventureCatalog catalog)
+    {
+        var service = new AdventureExpeditionService(catalog, RotationCatalog());
+        var noon = new DateTimeOffset(2026, 10, 10, 12, 0, 0, TimeSpan.FromHours(8));
+        var before = new DateTimeOffset(2026, 10, 11, 5, 59, 0, TimeSpan.FromHours(8));
+        var boundary = new DateTimeOffset(2026, 10, 11, 6, 0, 0, TimeSpan.FromHours(8));
+        var previous = service.AreaAttributes(1, noon);
+        // 06:00前仍属于上一周期，属性与前一天中午一致；06:00切换后候选翻转，组别名从不直接下发255。
+        That(previous is [>= 20 and <= 21] && service.AreaAttributes(1, before).SequenceEqual(previous) &&
+            service.AreaAttributes(1, boundary) is [>= 20 and <= 21] &&
+            !service.AreaAttributes(1, boundary).SequenceEqual(previous),
+            "远征属性按UTC+8的06:00切换，组别名展开为具体ID");
+        That(service.AreaAttributes(2, boundary).SequenceEqual(ImmutableArray.Create((byte)20)),
+            "普通指定属性直接下发线上ID");
+        var snapshot = new AdventureSnapshot(AdventureState.Initial("exp", boundary),
+            [new AdventureMember(1, 0, "Hero", 0, 33, 95, 0, 0)]);
+        That(service.Start(snapshot, 3, 21600, [(0, 0, 1)], boundary).Error == 7,
+            "远征地区按冒险团等级解锁，不足时拒绝出发");
+    }
+
+    static void Parallel()
+    {
+        var catalog = ParallelCatalog();
+        var expeditions = RotationCatalog();
+        var service = new AdventureExpeditionService(catalog, expeditions);
+        var now = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.FromHours(8));
+        var members = ImmutableArray.Create(new AdventureMember(1, 0, "Sword", 0, 33, 95, 0, 0),
+            new AdventureMember(2, 1, "Fighter", 1, 33, 95, 0, 0));
+        var snapshot = new AdventureSnapshot(AdventureState.Initial("exp", now), members);
+        var first = service.Start(snapshot, 1, 21600, [(0, 0, 1)], now);
+        That(first is { Plan: not null, Error: 0 } && first.Plan.After.Expeditions is [{ Area: 1 }],
+            "地区1由剑士代表出发");
+        var running = snapshot with { State = first.Plan!.After };
+        That(service.Start(running, 2, 21600, [(0, 0, 1)], now) is { Plan: null, Error: 22 } &&
+            service.Start(running, 1, 21600, [(0, 0, 1)], now).Error == 14,
+            "同一成员不能同时派往第二个地区，同一地区不能重复出发");
+        var second = service.Start(running, 2, 21600, [(1, 1, 1)], now);
+        That(second is { Plan: not null, Error: 0 } && second.Plan.After.Expeditions is [{ Area: 1 }, { Area: 2 }],
+            "两名代表可分别派往两个地区并行远征");
+        var both = running with { State = second.Plan!.After };
+        var claim = service.Finish(both, 1, true, now.AddHours(6));
+        That(claim is { Plan: not null, Reward: 1 } && claim.Plan.After.Expeditions is [{ Area: 2 }] && claim.Plan.After.Points[1] == 1,
+            "领取地区1只结算该地区，地区2保持运行");
+        var other = service.Finish(both with { State = claim.Plan!.After }, 2, true, now.AddHours(6));
+        That(other is { Plan: not null, Reward: 1 } && other.Plan.After.Expeditions.IsEmpty && other.Plan.After.Points[1] == 2,
+            "地区2按自己的冻结奖励独立领取");
+    }
+
+    static void ParallelPersist()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-exp-parallel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var catalog = ParallelCatalog();
+            var service = new AdventureExpeditionService(catalog, RotationCatalog());
+            var repo = new CharacterRepository(path);
+            new AuthenticationService(new AuthenticationRepository(path)).Create("parallel", "fixture-password");
+            using var owner = new AccountOwners().Acquire("parallel", () => { });
+            var sword = repo.Create(owner, new("Sword", new(1, 0, 10, 10), null) { GrowType = 33, Level = 95 });
+            var fighter = repo.Create(owner, new("Fighter", new(1, 0, 10, 10), null) { Job = 1, GrowType = 33, Level = 95 });
+            var now = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.FromHours(8));
+            repo.InitializeAdventure(owner, catalog, now);
+            var snapshot = repo.ReadAdventure(owner, catalog, now);
+            var first = service.Start(snapshot, 1, 21600, [(0, 0, 1)], now).Plan! with { ActorId = sword.Id };
+            var saved = repo.CommitAdventureExpedition(owner, first, catalog, now);
+            var second = service.Start(saved, 2, 21600, [(1, 1, 1)], now).Plan! with { ActorId = fighter.Id };
+            saved = repo.CommitAdventureExpedition(owner, second, catalog, now);
+            using var db = Open(path);
+            That(saved.State.Expeditions.Length == 2 &&
+                Query(db, "SELECT count(*) FROM account_adventure_expeditions") is 2L &&
+                Query(db, "SELECT count(DISTINCT character_id) FROM account_adventure_expedition_members") is 2L,
+                "两个地区并行落库，各自保留冻结成员");
+            var reopened = new CharacterRepository(path).ReadAdventure(owner, catalog, now);
+            That(reopened.State.Expeditions.Select(run => run.Area).SequenceEqual(new byte[] { 1, 2 }) &&
+                reopened.State.Expeditions.SelectMany(run => run.Members).Distinct().Count() == 2,
+                "重开库恢复两个并行地区");
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     static void Persist(AdventureCatalog catalog, AdventureExpeditionService service, DateTimeOffset now)

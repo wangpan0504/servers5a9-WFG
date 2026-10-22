@@ -51,8 +51,10 @@ internal static partial class DungeonSettlementTests
                 using var command=db.CreateCommand();
                 command.CommandText="SELECT other_bonus_experience,json_array_length(bonus_json) FROM character_dungeon_settlement_receipts";
                 using var reader=command.ExecuteReader();
-                Check(reader.Read() && reader.GetInt64(0)==110 && reader.GetInt64(1)==3,
-                    "秘药和公会等其他额度及完整冻结分项持久化，冷打开保持");
+                // 合并后账本单列秘药与冒险团分项，other_bonus 只保留其余来源（本例公会10）；
+                // 六项之和必须等于总经验，不能把秘药重复放入 other_bonus。
+                Check(reader.Read() && reader.GetInt64(0)==10 && reader.GetInt64(1)==3,
+                    "秘药与公会等其他额度分列持久化，冷打开保持");
             }
         }
         finally { Directory.Delete(root,true); }
@@ -74,5 +76,17 @@ internal static partial class DungeonSettlementTests
         Check(capped.BaseExperience == 100 && capped.RankExperience == 20 && capped.GrowthContractExperience == 7 &&
             capped.PotionExperience == 0 && capped.ExtraExperience == 7 && capped.TotalExperience == 127,
             "含多来源的通关封顶分项与实际经验一致");
+        // 线上 2026-10-22 未满级通关结算：基础380+评分76+成长契约76+组队19+冒险团加成38=实际到账589。
+        // 冒险团加成必须并入普通项，否则显示投影总额只有551，按实际589分摊会抛异常并断开连接。
+        var adventureClear = new DungeonClearExperienceReward(380, 76, 589, 4, "adventure-clear", "fixture")
+            { GrowthContractExperience = 76, AdventureExperience = 38,
+              BonusParts = [new(ExperienceBonusSource.GrowthContract, 76), new(ExperienceBonusSource.Party, 19)] };
+        var adventureBonuses = ExperienceBonuses.FromClearReward(adventureClear)!;
+        var adventureDisplay = adventureBonuses.Display(589);
+        Check(adventureBonuses.Total == 589 && adventureDisplay.GrowthContractExperience == 76 &&
+            adventureDisplay.PartyExperience == 19,
+            "冒险团通关加成并入普通项，冻结奖励按实际到账589完整分摊");
+        Check(ExperienceBonuses.FromClearReward(new DungeonClearExperienceReward(1, 0, 1, 0, "no-parts", "fixture")) is null,
+            "未冻结分项的历史结算保持旧口径投影");
     }
 }

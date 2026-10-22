@@ -53,6 +53,7 @@ internal static class TcpRegressionTests
         ("adventure-expeditions", AdventureExpeditionTcpTests.RunAsync),
         ("adventure-shop", AdventureShopTcpTests.RunAsync),
         ("adventure-capsules", AdventureCapsuleTcpTests.RunAsync),
+        ("adventure-weekly", AdventureWeeklyTcpTests.RunAsync),
         ("quest-gold-mail", QuestGoldMailTcpTests.RunAsync),
         ("quest-hell-challenge", QuestHellChallengeTcpTests.RunAsync),
         ("quest-continuation", QuestLifecycleTcpTests.RunContinuationAsync),

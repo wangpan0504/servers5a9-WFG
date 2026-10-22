@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using System.Buffers.Binary;
+using DfoServer.Game.Adventure;
 using DfoServer.GameWorld.Characters;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -24,7 +25,9 @@ internal static class AdventureCapsuleTcpTests
             peer.Send(1499, []); peer.Expect(1, 1499, [0, 19, 0]);
             peer.Create("CapLow"); peer.Create("CapTcp");
             Execute("UPDATE characters SET level=" + level + ",experience=" + initial + " WHERE name='CapTcp'");
-            Execute("UPDATE account_adventures SET capsule_experience=" + catalog.Capsule.MinimumExperience);
+            // 同步写入当前周四边界，避免载入时按公告把种下的胶囊进度清零。
+            Execute("UPDATE account_adventures SET capsule_experience=" + catalog.Capsule.MinimumExperience +
+                ",capsule_week=" + AdventurePeriod.CapsuleWeek(catalog, DateTimeOffset.UtcNow));
             peer.Select(0);
             peer.Send(1499, []); peer.Expect(1, 1499, [0, 14, 0]); peer.Barrier();
         }

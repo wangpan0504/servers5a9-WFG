@@ -235,13 +235,13 @@ internal static class QuestOrdinaryCompletionTests
                 } });
             f.Change(100,QuestLifecycleAction.Condition,new(null,0,0));
             var plan = f.Prepare(ushort.MaxValue).Plan!;
-            That(plan.ExperienceReward.Amount > left && plan.Growth.GainedExperience == left && plan.TargetLearning.Experience == cap,
-                "满级任务计划保留原奖励额度，只接纳封顶剩余经验");
+            That(plan.ExperienceReward.Amount > left && plan.Growth.GainedExperience == 0 && plan.TargetLearning.Experience == cap - left,
+                "满级任务保留原奖励额度，经验条保持在原值不再增长也不回退");
             var commit = f.Repository.CommitQuestCompletion(f.Owner,plan);
             var replay = f.Repository.CommitQuestCompletion(f.Owner,plan);
-            That(commit.Character.Level == 95 && commit.Character.Learning.Experience == cap && commit.Character.CompletedQuests.Contains(100) &&
-                commit.GainedExperience == left && replay.Duplicate && replay.GainedExperience == left && f.Receipts == 1 && Same(commit.Character,f.Read()),
-                "部分或零到账的满级任务仍完成，重放及独立读库不多发经验");
+            That(commit.Character.Level == 95 && commit.Character.Learning.Experience == cap - left && commit.Character.CompletedQuests.Contains(100) &&
+                commit.GainedExperience == 0 && replay.Duplicate && replay.GainedExperience == 0 && f.Receipts == 1 && Same(commit.Character,f.Read()),
+                "满级零到账任务仍完成，重放及独立读库不多发经验");
         }
         using (var f = Make(meeting, materialCount: 0))
         {

@@ -22,6 +22,18 @@ internal static class DungeonExperienceBonusSchema
         string actual = (string?)query.ExecuteScalar() ?? throw new InvalidDataException("缺少通关经验账本");
         string normalized = SqliteMigrations.NormalizeTable(actual, Table);
         if (normalized == SqliteMigrations.NormalizeTable(Sql, Table)) return;
+        // 目标结构已含秘药/冒险团分项（本步已执行或已由后续迁移补齐）时无事可做。
+        if (normalized == SqliteMigrations.NormalizeTable(SettlementBreakdownSchema.SettlementSql, Table)) return;
+        // 本地整合构建先于本步建出的结构：只缺其他加成与冻结分项。
+        if (normalized == SqliteMigrations.NormalizeTable(SettlementBreakdownSchema.PanelNumberedSettlementSql, Table))
+        {
+            SqliteMigrations.Execute(db, tx, "ALTER TABLE " + Table + " ADD COLUMN " + OtherColumn);
+            SqliteMigrations.Execute(db, tx, "ALTER TABLE " + Table + " ADD COLUMN " + JsonColumn);
+            SqliteMigrations.ReplaceTableConstraint(db, tx, Table,
+                "total_experience=base_experience+rank_experience+growth_contract_experience+potion_experience+adventure_experience)",
+                "total_experience=base_experience+rank_experience+growth_contract_experience+potion_experience+adventure_experience+other_bonus_experience)");
+            return;
+        }
         if (normalized != SqliteMigrations.NormalizeTable(DungeonSceneSettlementSchema.SettlementSql, Table))
             throw new InvalidDataException("经验加成迁移拒绝未知通关账本结构");
         SqliteMigrations.Execute(db, tx, "ALTER TABLE " + Table + " ADD COLUMN " + OtherColumn);

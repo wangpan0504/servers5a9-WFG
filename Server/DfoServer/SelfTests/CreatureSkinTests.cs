@@ -32,7 +32,7 @@ internal static class CreatureSkinTests
         CharacterStats stats = new(1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         foreach (byte flags in new byte[] { 0, 1, 16, 31, 32, 63, 255 })
         {
-            byte[] player = TownPackets.Player(character with { EquipmentSlotFlags = flags }, stats);
+            byte[] player = TownPackets.Player(character with { EquipmentSlotFlags = flags }, stats, 1);
             That(player[21] == ((flags & 32) == 0 ? 0 : 1) && player.AsSpan(5, 16).IndexOfAnyExcept((byte)0) < 0,
                 "Player原始17字节头的末字节与持久宠物幻化bit5一致，其他头字段保留");
         }

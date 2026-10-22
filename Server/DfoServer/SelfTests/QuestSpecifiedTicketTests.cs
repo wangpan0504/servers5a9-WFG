@@ -186,7 +186,7 @@ internal static class QuestSpecifiedTicketTests
                     "指定券真实Handler按ACK515→Player槽位绝对快照→活动/可接/完成发布");
                 Bytes(output.Frames[0].AsSpan(16),[1,65,0,0,130,0,0,0],"130成功ACK8B，无数量/附加奖励或NOTI14");
                 var after=f.Read();
-                Bytes(output.Frames[1].AsSpan(16),TownPackets.Player(after,new CharacterStatComputer(characters).Compute(after)),
+                Bytes(output.Frames[1].AsSpan(16),TownPackets.Player(after,new CharacterStatComputer(characters).Compute(after),1),
                     "Player正文使用已提交的全部角色状态，不只拼槽位字段");
                 output.Frames.Clear();
                 That(await commands.DispatchAsync(context,Use())==CommandResult.Handled &&

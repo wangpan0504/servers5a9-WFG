@@ -10,19 +10,23 @@ internal sealed record DungeonClearExperienceReward(
 {
     public uint GrowthContractExperience { get; init; }
     public uint PotionExperience { get; init; }
+    // 冒险团加成属于基础通关经验的一部分，拆分时紧跟基础项；其余顺序保持原到账优先级。
+    public uint AdventureExperience { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public ImmutableArray<ExperienceBonusPart> BonusParts { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
-    public uint ExtraExperience => BonusParts.IsDefault ? checked(GrowthContractExperience + PotionExperience) :
-        checked((uint)BonusParts.Aggregate(0UL, (total, part) => total + part.Amount));
+    public uint ExtraExperience =>
+        (BonusParts.IsDefault ? checked(GrowthContractExperience + PotionExperience) :
+            checked((uint)BonusParts.Aggregate(0UL, (total, part) => total + part.Amount))) + AdventureExperience;
     public DungeonClearExperienceReward Applied(uint amount)
     {
         if (amount > TotalExperience) throw new InvalidDataException("通关实际经验超过冻结额度");
         uint basis = Math.Min(BaseExperience, amount);
-        uint rank = Math.Min(RankExperience, amount - basis);
+        uint adventure = Math.Min(AdventureExperience, amount - basis);
+        uint rank = Math.Min(RankExperience, amount - basis - adventure);
         if (!BonusParts.IsDefault)
         {
-            uint remaining = amount - basis - rank;
+            uint remaining = amount - basis - adventure - rank;
             var parts = ImmutableArray.CreateBuilder<ExperienceBonusPart>();
             foreach (var part in BonusParts)
             {
@@ -31,13 +35,15 @@ internal sealed record DungeonClearExperienceReward(
                 remaining -= applied;
             }
             var actual = parts.ToImmutable();
-            return this with { BaseExperience = basis, RankExperience = rank, TotalExperience = amount, BonusParts = actual,
+            return this with { BaseExperience = basis, AdventureExperience = adventure, RankExperience = rank,
+                TotalExperience = amount, BonusParts = actual,
                 GrowthContractExperience = actual.Where(part => part.Source == ExperienceBonusSource.GrowthContract).Aggregate(0u, (sum, part) => checked(sum + part.Amount)),
                 PotionExperience = actual.Where(part => part.Source == ExperienceBonusSource.Potion).Aggregate(0u, (sum, part) => checked(sum + part.Amount)) };
         }
-        uint contract = Math.Min(GrowthContractExperience, amount - basis - rank);
-        return this with { BaseExperience = basis, RankExperience = rank, GrowthContractExperience = contract,
-            PotionExperience = amount - basis - rank - contract, TotalExperience = amount };
+        uint contract = Math.Min(GrowthContractExperience, amount - basis - adventure - rank);
+        return this with { BaseExperience = basis, AdventureExperience = adventure, RankExperience = rank,
+            GrowthContractExperience = contract, PotionExperience = amount - basis - adventure - rank - contract,
+            TotalExperience = amount };
     }
 }
 

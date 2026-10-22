@@ -155,15 +155,124 @@ internal static class SqliteMigrations
         new(63, "技能窗职业变更次数", static (db, tx) => Execute(db, tx, GrowUpChangeSchema)),
         new(64, "消耗品持续效果与冷却", static (db, tx) => Execute(db, tx, ConsumableStatesSchema)),
         new(65, "角色被拉黑有效计分", AddBlacklistCountColumn),
+        // 上游 #543：通关经验其他加成与冻结分项；保持上游已发布编号。
         new(66, "通关经验其他加成与冻结分项", DungeonExperienceBonusSchema.Upgrade),
+        // 上游 #561 的皮肤仓库与选择。
         new(67, "角色皮肤仓库与选择", AddSkinStorageStateColumn),
+        // 上游 #566 的属性石永久来源。
         new(68, "道具永久属性来源", static (db, tx) =>
         {
             // 旧皮肤测试分支曾占用v66；复用精确结构校验补齐主线经验列，不改版本冒充降级。
             DungeonExperienceBonusSchema.Upgrade(db, tx);
             Execute(db, tx, PermanentStatSchema.Sql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
         }),
+        // 成长胶囊累积经验按公告每周四06:00初始化；保存上次结算的周期边界，0 表示升级前未记录。
+        new(69, "冒险团成长胶囊周重置边界", AddAdventureCapsuleWeek),
+        // 通关回执补齐秘药与冒险团加成；旧行两项按0补齐，CHECK同步为五项之和。
+        new(70, "通关回执秘药与冒险团经验分项", SettlementBreakdownSchema.Upgrade),
+        // 冒险团基本信息：连续登录按06:00周期持久化，推荐地下城通关按角色累计后账号求和。
+        new(71, "冒险团连续登录与推荐地下城计数", AddAdventureActivity),
+        // 每周地下城信息页：客户端提交5槽位排列，按账号保存；不改写账号revision。
+        new(72, "冒险团每周地下城信息配置", EnsureAdventureWeeklyConfig),
+        // 国服95模型：账号累计所有角色经验；开启总量、排除累计与角色里程一次性建出，开启在启动时执行。
+        new(73, "冒险团经验账本", EnsureAdventureLedger),
     ];
+
+    // 早期真实库没有该表（v72首次引入），直接建出；从当前schema回退重放的夹具可能已带同结构表，
+    // 校验目标结构后跳过，不重复建表。同名视图或不同结构仍整笔失败回滚。
+    static void EnsureAdventureWeeklyConfig(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_adventure_weekly_config'";
+        if (query.ExecuteScalar() is string sql)
+        {
+            if (!sql.Contains("account TEXT PRIMARY KEY REFERENCES account_adventures(account)", StringComparison.Ordinal) ||
+                !sql.Contains("slots BLOB NOT NULL CHECK(typeof(slots)='blob' AND length(slots)=5)", StringComparison.Ordinal))
+                throw new InvalidDataException("每周地下城配置迁移拒绝未知表结构");
+            return;
+        }
+        Execute(db, tx, AdventureWeeklyConfigSchema);
+    }
+
+    // 与 v47/v48/v59/v69 相同，先查列再补；旧库两列按0补齐，首次登录重新计1。
+    static void AddAdventureActivity(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='login_streak_days'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE account_adventures ADD COLUMN login_streak_days INTEGER NOT NULL DEFAULT 0 CHECK(login_streak_days>=0)");
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='last_login_day'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE account_adventures ADD COLUMN last_login_day INTEGER NOT NULL DEFAULT 0 CHECK(last_login_day>=0)");
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('character_dungeon_state') WHERE name='recommended_dungeon_clears'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE character_dungeon_state ADD COLUMN recommended_dungeon_clears INTEGER NOT NULL DEFAULT 0 CHECK(recommended_dungeon_clears BETWEEN 0 AND 65535)");
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_adventures'";
+        if (query.ExecuteScalar() is not string account ||
+            !account.Contains("login_streak_days INTEGER NOT NULL DEFAULT 0 CHECK(login_streak_days>=0)", StringComparison.Ordinal) ||
+            !account.Contains("last_login_day INTEGER NOT NULL DEFAULT 0 CHECK(last_login_day>=0)", StringComparison.Ordinal))
+            throw new InvalidDataException("冒险团登录周期迁移拒绝未知列结构");
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_dungeon_state'";
+        if (query.ExecuteScalar() is not string state ||
+            !state.Contains("recommended_dungeon_clears INTEGER NOT NULL DEFAULT 0 CHECK(recommended_dungeon_clears BETWEEN 0 AND 65535)", StringComparison.Ordinal))
+            throw new InvalidDataException("推荐地下城计数迁移拒绝未知列结构");
+    }
+
+    const string AdventureOpeningColumn = "opening_experience TEXT NOT NULL DEFAULT '0' CHECK(typeof(opening_experience)='text')";
+    const string AdventureExcludedColumn = "excluded_experience TEXT NOT NULL DEFAULT '0' CHECK(typeof(excluded_experience)='text')";
+
+    // 旧库按0补齐开启量与排除额；账本两张表首次建出，从当前 schema 回退重放的夹具已带同结构时校验后跳过。
+    // 角色里程表以 character_id 为主键，账号列只用于按账号排查；删除角色时由 Delete 先折算贡献再删行。
+    static void EnsureAdventureLedger(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='opening_experience'";
+        if (query.ExecuteScalar() is 0L) Execute(db, tx, "ALTER TABLE account_adventures ADD COLUMN " + AdventureOpeningColumn);
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='excluded_experience'";
+        if (query.ExecuteScalar() is 0L) Execute(db, tx, "ALTER TABLE account_adventures ADD COLUMN " + AdventureExcludedColumn);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_adventures'";
+        if (query.ExecuteScalar() is not string account ||
+            !account.Contains(AdventureOpeningColumn, StringComparison.Ordinal) ||
+            !account.Contains(AdventureExcludedColumn, StringComparison.Ordinal))
+            throw new InvalidDataException("冒险团经验账本迁移拒绝未知列结构");
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_adventure_credits'";
+        if (query.ExecuteScalar() is 0L) Execute(db, tx, AdventureCreditsSchema);
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='adventure_ledger_meta'";
+        if (query.ExecuteScalar() is 0L) Execute(db, tx, AdventureLedgerMetaSchema);
+        if (!KnownTable(db, tx, "character_adventure_credits", AdventureCreditsSchema) ||
+            !KnownTable(db, tx, "adventure_ledger_meta", AdventureLedgerMetaSchema))
+            throw new InvalidDataException("冒险团经验账本迁移拒绝未知表结构");
+    }
+
+    const string AdventureCreditsSchema = """
+        CREATE TABLE character_adventure_credits(
+          character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,
+          baseline_experience INTEGER NOT NULL CHECK(baseline_experience>=0),
+          position_experience INTEGER NOT NULL CHECK(position_experience>=0),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE)
+        """;
+
+    const string AdventureLedgerMetaSchema = """
+        CREATE TABLE adventure_ledger_meta(
+          key TEXT NOT NULL PRIMARY KEY,value TEXT NOT NULL)
+        """;
+
+    // SQLite 没有 ADD COLUMN IF NOT EXISTS；与 v47/v48/v59 相同，先查列再补，并拒绝未知列结构。
+    static void AddAdventureCapsuleWeek(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='capsule_week'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE account_adventures ADD COLUMN capsule_week INTEGER NOT NULL DEFAULT 0 CHECK(capsule_week>=0)");
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_adventures'";
+        if (query.ExecuteScalar() is not string sql ||
+            !sql.Contains("capsule_week INTEGER NOT NULL DEFAULT 0 CHECK(capsule_week>=0)", StringComparison.Ordinal))
+            throw new InvalidDataException("冒险团胶囊周期迁移拒绝未知列结构");
+    }
 
     const string BlacklistCountColumn = "blacklist_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(blacklist_count)='integer' AND blacklist_count BETWEEN 0 AND 2147483647)";
     const string SkinStorageStateColumn = "weapon_skin_state TEXT NOT NULL DEFAULT '{\"Owned\":[],\"Selected\":0}' CHECK(json_valid(weapon_skin_state) AND json_type(weapon_skin_state)='object')";
@@ -712,6 +821,12 @@ internal static class SqliteMigrations
         CREATE TABLE account_adventure_purchases(
           account TEXT NOT NULL REFERENCES account_adventures(account),item_id INTEGER NOT NULL CHECK(item_id>0),
           count INTEGER NOT NULL CHECK(count BETWEEN 1 AND 4294967295),PRIMARY KEY(account,item_id));
+        """;
+
+    internal const string AdventureWeeklyConfigSchema = """
+        CREATE TABLE account_adventure_weekly_config(
+          account TEXT PRIMARY KEY REFERENCES account_adventures(account),
+          slots BLOB NOT NULL CHECK(typeof(slots)='blob' AND length(slots)=5));
         """;
 
     internal const string AdventureExpeditionSchema = """
@@ -1396,6 +1511,17 @@ internal static class SqliteMigrations
             query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'";
             if (query.ExecuteScalar() is 0L) version = 55;
         }
+        // 本地整合构建曾把冒险团四项记成v64–v67，上游随后把v64/v65用于消耗品与拉黑计分。
+        // 临时编号库有胶囊周期列却缺blacklist_count时按v63重跑；v64–v69的升级均可重复执行。
+        if (version is >= 64 and <= 70 && current >= 73)
+        {
+            query.CommandText = "SELECT (SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='capsule_week')*10+(SELECT count(*) FROM pragma_table_info('characters') WHERE name='blacklist_count')";
+            if (query.ExecuteScalar() is 10L) version = 63;
+            // 本地整合构建把冒险团迁移排在v64–v70：版本落在该段却有胶囊周期列、缺其他加成分项时，
+            // 说明用的是旧编号，回到v65按上游 #543、再按本分支账本步骤重放。
+            query.CommandText = "SELECT (SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='capsule_week')*10+(SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='other_bonus_experience')";
+            if (version >= 66 && query.ExecuteScalar() is 10L) version = 65;
+        }
         foreach (var step in steps)
         {
             if (step.Version <= version)
@@ -1439,7 +1565,7 @@ internal static class SqliteMigrations
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
-            ("character_dungeon_settlement_receipts",DungeonExperienceBonusSchema.Sql),
+            ("character_dungeon_settlement_receipts",SettlementBreakdownSchema.SettlementSql),
             ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
             ("character_dungeon_drop_pickups",DungeonDropCollectionSchema.PickupDefinition),
             ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema),
@@ -1487,7 +1613,10 @@ internal static class SqliteMigrations
         "SELECT account,area,ordinal,character_id,member_snapshot FROM account_adventure_expedition_members LIMIT 0",
         "SELECT account,event_id,character_id,action,amount,before_revision,revision FROM account_adventure_receipts LIMIT 0",
         "SELECT account,job,grow,character_id FROM account_adventure_representatives LIMIT 0",
-        "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month,name_initialized FROM account_adventures LIMIT 0",
+        "SELECT account,slots FROM account_adventure_weekly_config LIMIT 0",
+        "SELECT account,revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month,name_initialized,capsule_week,login_streak_days,last_login_day,opening_experience,excluded_experience FROM account_adventures LIMIT 0",
+        "SELECT character_id,account,baseline_experience,position_experience FROM character_adventure_credits LIMIT 0",
+        "SELECT key,value FROM adventure_ledger_meta LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",
         "SELECT blacklist_count FROM characters LIMIT 0",
         "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
@@ -1528,10 +1657,10 @@ internal static class SqliteMigrations
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,day,clear_count,daily_reward FROM character_crack_daily LIMIT 0",
         "SELECT character_id,account,change_count FROM character_growup_change LIMIT 0",
-        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision,other_bonus_experience,bonus_json FROM character_dungeon_settlement_receipts LIMIT 0",
+        "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision,potion_experience,adventure_experience,other_bonus_experience,bonus_json FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",
-        "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience FROM character_dungeon_state LIMIT 0",
+        "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience,recommended_dungeon_clears FROM character_dungeon_state LIMIT 0",
         "SELECT character_id,account,used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary FROM character_fatigue LIMIT 0",
         "SELECT character_id,account,instance_id,task_attempt,map_id,epoch,generation,rule_id,before_revision,revision,before_state,after_state FROM character_dungeon_fatigue_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision FROM character_dungeon_growth_receipts LIMIT 0",

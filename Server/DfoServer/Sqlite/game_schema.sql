@@ -86,7 +86,12 @@ CREATE TABLE account_adventures(
   remainder TEXT NOT NULL,capsule_experience INTEGER NOT NULL CHECK(capsule_experience>=0),
   brave_experience INTEGER NOT NULL CHECK(brave_experience>=0),points BLOB NOT NULL CHECK(length(points)=20),
   month INTEGER NOT NULL CHECK(month BETWEEN 190001 AND 999912),
-  name_initialized INTEGER NOT NULL DEFAULT 1 CHECK(name_initialized IN (0,1)));
+  name_initialized INTEGER NOT NULL DEFAULT 1 CHECK(name_initialized IN (0,1)),
+  capsule_week INTEGER NOT NULL DEFAULT 0 CHECK(capsule_week>=0),
+  login_streak_days INTEGER NOT NULL DEFAULT 0 CHECK(login_streak_days>=0),
+  last_login_day INTEGER NOT NULL DEFAULT 0 CHECK(last_login_day>=0),
+  opening_experience TEXT NOT NULL DEFAULT '0' CHECK(typeof(opening_experience)='text'),
+  excluded_experience TEXT NOT NULL DEFAULT '0' CHECK(typeof(excluded_experience)='text'));
 CREATE INDEX account_adventure_name ON account_adventures(name COLLATE NOCASE);
 
 CREATE TABLE character_tutorial_state(
@@ -116,6 +121,7 @@ CREATE TABLE character_dungeon_state(
     capsule_experience INTEGER NOT NULL CHECK(capsule_experience BETWEEN 0 AND 4294967295),
     proficiency_level INTEGER NOT NULL CHECK(proficiency_level BETWEEN 0 AND 4294967295),
     proficiency_experience INTEGER NOT NULL CHECK(proficiency_experience>=0),
+    recommended_dungeon_clears INTEGER NOT NULL DEFAULT 0 CHECK(recommended_dungeon_clears BETWEEN 0 AND 65535),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
 
@@ -629,7 +635,7 @@ CREATE TABLE character_dungeon_settlement_receipts(
   generation INTEGER NOT NULL CHECK(generation>0),
   base_experience INTEGER NOT NULL CHECK(base_experience BETWEEN 0 AND 4294967295),
   rank_experience INTEGER NOT NULL CHECK(rank_experience BETWEEN 0 AND 4294967295),
-  total_experience INTEGER NOT NULL CHECK(total_experience BETWEEN 1 AND 4294967295 AND total_experience=base_experience+rank_experience+growth_contract_experience+other_bonus_experience),
+  total_experience INTEGER NOT NULL CHECK(total_experience BETWEEN 1 AND 4294967295 AND total_experience=base_experience+rank_experience+growth_contract_experience+potion_experience+adventure_experience+other_bonus_experience),
   rank_bonus_index INTEGER NOT NULL CHECK(rank_bonus_index BETWEEN -1 AND 4),
   rule_id TEXT NOT NULL,resource_source TEXT NOT NULL,
   before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),
@@ -639,6 +645,8 @@ CREATE TABLE character_dungeon_settlement_receipts(
   revision INTEGER NOT NULL CHECK(revision>0),
   scene_operation_id TEXT,
   growth_contract_experience INTEGER NOT NULL DEFAULT 0 CHECK(growth_contract_experience BETWEEN 0 AND 4294967295),
+  potion_experience INTEGER NOT NULL DEFAULT 0 CHECK(potion_experience BETWEEN 0 AND 4294967295),
+  adventure_experience INTEGER NOT NULL DEFAULT 0 CHECK(adventure_experience BETWEEN 0 AND 4294967295),
   other_bonus_experience INTEGER NOT NULL DEFAULT 0 CHECK(other_bonus_experience BETWEEN 0 AND 4294967295),
   bonus_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(bonus_json) AND json_type(bonus_json)='array'),
   CHECK(length(death_events)>0 OR scene_operation_id IS NOT NULL),
@@ -850,6 +858,9 @@ CREATE TABLE account_adventure_representatives(
 CREATE TABLE account_adventure_purchases(
   account TEXT NOT NULL REFERENCES account_adventures(account),item_id INTEGER NOT NULL CHECK(item_id>0),
   count INTEGER NOT NULL CHECK(count BETWEEN 1 AND 4294967295),PRIMARY KEY(account,item_id));
+CREATE TABLE account_adventure_weekly_config(
+  account TEXT PRIMARY KEY REFERENCES account_adventures(account),
+  slots BLOB NOT NULL CHECK(typeof(slots)='blob' AND length(slots)=5));
 CREATE TABLE account_adventure_expeditions(
   account TEXT NOT NULL REFERENCES account_adventures(account),area INTEGER NOT NULL CHECK(area BETWEEN 1 AND 255),
   run_id TEXT NOT NULL UNIQUE CHECK(length(run_id)=32),started INTEGER NOT NULL CHECK(started>=0),
@@ -867,6 +878,15 @@ CREATE TABLE account_adventure_receipts(
   character_id INTEGER,action TEXT NOT NULL,amount INTEGER NOT NULL CHECK(amount>=0),
   before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision>before_revision),
   PRIMARY KEY(account,event_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+CREATE TABLE character_adventure_credits(
+  character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,
+  baseline_experience INTEGER NOT NULL CHECK(baseline_experience>=0),
+  position_experience INTEGER NOT NULL CHECK(position_experience>=0),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+CREATE TABLE adventure_ledger_meta(
+  key TEXT NOT NULL PRIMARY KEY,value TEXT NOT NULL
+);
 
 CREATE TABLE account_hotkey_settings(
   account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),

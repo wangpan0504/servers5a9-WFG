@@ -4,6 +4,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
@@ -181,6 +182,30 @@ internal static class DungeonDropCollectionRepositoryTests
                 "怪物掉落的64位内部UID原样入库和重放，不写入客户端装备品级或改变完整Core");
             That(ground.ConfirmPickup(highPickup) && SkillRepositoryTests.Equal(new CharacterRepository(path)
                 .LoadCharacter(owner, highResult.Character.Slot), highResult.Character), "高UID怪物拾取重开恢复完整资产");
+            // 满级角色的击杀经验不进经验条，但必须等额进入角色熟练度。
+            var seeded = SkillLearning.Initialize(0, characters.Get(0).Skills.ToArray(), learning);
+            That(seeded.Success, "熟练度fixture使用真实职业技能初始化");
+            var seedCharacter = new Character(0, 0, "ProfMax", 0, towns.Room, towns.InitialReturn)
+            { Level = 1, Learning = seeded.State! };
+            var maxPlan = CharacterGrowthPlan.Create(seedCharacter, 95, growth.GetLevelStartExperience(95), growth).Plan!;
+            var maxFixture = SkillRepositoryTests.Fixture("ProfMax", towns, characters, learning) with
+            {
+                Level = 95, InitialLearning = maxPlan.Learning, DungeonState = CharacterDungeonState.NewOrdinary,
+                ActiveMainQuests = [new(0, 3145, 1)]
+            };
+            var maxReserved = repository.ReserveDungeonAttempt(owner, repository.Create(owner, maxFixture), 600);
+            var maxEntry = new DungeonEntryPlan(maxReserved.Id, maxReserved.Revision, 3, 3145, 0, 0, maze, map, map);
+            That(SinglePlayerDungeonRun.TryCreate(maxEntry, 1, 1, new([plan], []), authority, out var maxRun, out _),
+                "满级熟练度fixture使用原Run入口");
+            maxRun!.CompleteLoading(maxRun.Snapshot.Identity, Guid.NewGuid());
+            var maxPending = maxRun.PrepareConfirmedDeath(authority.Death(maxRun.Snapshot.Identity, 20)).Pending!;
+            var maxGrowth = repository.CommitDungeonGrowth(owner, maxReserved, maxRun, maxPending, reward, growth);
+            That(maxGrowth.Character.Level == 95 && maxGrowth.Character.Learning.Experience == growth.GetLevelStartExperience(95) &&
+                maxGrowth.Character.DungeonState is { ProficiencyLevel: 0, ProficiencyExperience: 1 } &&
+                Query("SELECT proficiency_experience FROM character_dungeon_state WHERE character_id=" + maxReserved.Id) == 1L,
+                "满级击杀不涨经验条，熟练度按同额经验写入");
+            That(new CharacterRepository(path).LoadCharacter(owner, maxReserved.Slot).DungeonState is
+                { ProficiencyLevel: 0, ProficiencyExperience: 1 }, "重开库保留已提交的熟练度进度");
         }
         finally
         {

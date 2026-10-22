@@ -67,6 +67,11 @@ internal static class TownPackets
         }
     }
 
+    // 熟练等级与当前级经验属于角色附属owner的持久化进度，Actor 与本人 Player 是两个独立消费点：
+    // Actor 直接投影尾部字段，Player 通过17字节头覆盖同一组客户端字段，两处必须取同一份值。
+    static (uint Level, ulong Experience) Proficiency(Character character) =>
+        (character.DungeonState?.ProficiencyLevel ?? 0u, character.DungeonState?.ProficiencyExperience ?? 0UL);
+
     public static byte[] Actor(Character character, ChannelIdentity channel = default, long? utcSeconds = null,
         string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false)
     {
@@ -136,8 +141,12 @@ internal static class TownPackets
             writer.Write((ushort)0);
             writer.Write(new byte[2]);
             writer.Write((ushort)0); // 02678840.
-            writer.Write(0u);
-            writer.Write(0UL); // 026768F0.
+            // 026768F0 依次读 u32 熟练等级与 u64 熟练经验，经 01A16420/01A16470 写角色
+            // Data+42C/+430/+434；左下角HUD与「熟练Lv」窗口直接消费这三个字段。
+            // 满级停发NOTI37后没有其他同步通道，Actor 必须投影持久化的熟练状态。
+            var proficiency = Proficiency(character);
+            writer.Write(proficiency.Level);
+            writer.Write(proficiency.Experience);
             writer.Write(character.VisibilityFlags); // 保留原无关显示位，三项外观开关与当前角色主设置一致。
             writer.Write(0u);
             writer.Write((byte)0);
@@ -179,8 +188,8 @@ internal static class TownPackets
         }
     }
 
-    public static byte[] Player(Character character, CharacterStats attributes, ChannelIdentity channel = default,
-        DateTimeOffset? utcNow = null)
+    public static byte[] Player(Character character, CharacterStats attributes, int adventureLevel,
+        ChannelIdentity channel = default, DateTimeOffset? utcNow = null)
     {
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
@@ -189,7 +198,14 @@ internal static class TownPackets
             writer.Write((ushort)1);
             writer.Write(channel.ServerIndex);
             writer.Write(channel.Number);
-            writer.Write(new byte[16]);
+            // 0267C4F0 把紧随其后的17字节头读进 62DA598，02676970 再无条件用 header+2 的u32与
+            // header+6 的u64覆盖角色 Data+42C/+430/+434；本包全零会把Actor刚写入的熟练状态清成
+            // 「挑战者 0」。必须在这里投影与Actor相同的持久化熟练等级/当前级经验。
+            var progress = Proficiency(character);
+            byte[] proficiency = new byte[16];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(proficiency.AsSpan(2), progress.Level);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(proficiency.AsSpan(6), progress.Experience);
+            writer.Write(proficiency);
             // 0267C914/0267C924会以头部末字节重设幻化bit5，必须与后续装备栏标志一致。
             writer.Write((byte)((character.EquipmentSlotFlags & 32) == 0 ? 0 : 1));
             writer.Write(character.Id);
@@ -229,9 +245,12 @@ internal static class TownPackets
             writer.Write(new byte[4]); // Direct byte, then 02676300 count plus three bytes.
             writer.Write((byte)0);
             writer.Write(0u); // 02676410 / 02676510 empty lists.
-            writer.Write(0u);
-            writer.Write(0u); // Direct scalar, then 02675CD0.
+            // tail[10..13]：0267C8B6读u32后交02B644B0安装本人冒险团等级，02BE4710据等级重建常驻效果；
+            // 0被判为无效值并清除效果，所有本人Player刷新都必须带账号当前等级。
+            writer.Write(checked((uint)adventureLevel));
+            writer.Write(0u); // 02675CD0是成长胶囊计量经验，写player+0x4560，不能填冒险团等级。
             writer.Write(new byte[2]); // 0267B480及其后的独立u8。
+            // 0267AC80读类别数量后按类型展开；原先把空类别的计数字节并入上面的保留字节。
             SkinStoragePackets.WriteUserInfo(writer, character.Inventory.Skins, (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds());
             return stream.ToArray();
         }

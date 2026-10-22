@@ -30,7 +30,7 @@ internal static class PacketCompatibilityTests
         // 固定样本仅将 offset222 从职业0修正为初始城镇38，其余234B保持原合同。
         Match(selection, "4C0CC901DF0FA44EA4F658D90B0979D1FD45AAC6CE382086FE0EA3757D0D6E72", "selection initial town");
         Match(TownPackets.Actor(character), "70C8B1413118DC816BBE1113BDE7E3F7D3CF6BD7B2D489BD5EDD0C0454D27592", "actor");
-        Match(TownPackets.Player(character, new CharacterStatComputer(characters).Compute(character)), "F59CE65CDCA7929F745F6E04A6A4618BC00E865D4FA007C14299340D4ED0CEA9", "player");
+        Match(TownPackets.Player(character, new CharacterStatComputer(characters).Compute(character), 0), "F59CE65CDCA7929F745F6E04A6A4618BC00E865D4FA007C14299340D4ED0CEA9", "player");
         Match(TownPackets.CompletedQuests(character), "916C214DDBAA48F23D3C0708133B8DBB33E8869D3A2F72FDD0D9B2ABA6D8D25F", "completed quests");
         Match(TownPackets.StoryLevel(character), "5E0A69CDB91F050197DF9D0847F27C208C308526A65A5D035DAA88B209077F26", "story");
         Match(CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(character)]), "30F5769ED7013CE29FB5FBD5ABA8C882F211FFE63C94719451B7ADB5B145A5DF", "roster");

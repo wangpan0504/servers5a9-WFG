@@ -1,5 +1,7 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Characters;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
@@ -18,7 +20,7 @@ internal sealed partial class CharacterRepository
         "character_quest_stage_claims", "character_quest_stage_witnesses",
         "character_quest_completion_receipts", "character_quest_clear_receipts", "character_quest_drop_receipts",
         "character_dungeon_settlement_receipts", "character_dungeon_scene_clear_receipts",
-        "character_dungeon_growth_receipts",
+        "character_dungeon_growth_receipts", "character_adventure_credits",
         "character_dungeon_fatigue_receipts", "character_gold_card_uses",
         "character_quest_skip_receipts", "character_quest_lifecycle_receipts",
         "character_quest_special_reward_claims", "character_quest_effect_receipts",
@@ -73,6 +75,45 @@ internal sealed partial class CharacterRepository
         command.ExecuteNonQuery();
         command.CommandText = "DELETE FROM guilds WHERE master_character_id=$id";
         command.ExecuteNonQuery();
+        // 删除角色不减少账号冒险团总量：先把该角色里程净贡献折进开启经验，再由下方删除清单移除里程行。
+        bool adventureChanged = false;
+        if (adventureCatalog is { } catalog && growthCatalog is { } growth)
+        {
+            command.CommandText = """
+                SELECT baseline_experience,position_experience,
+                  (SELECT level FROM characters WHERE id=$id AND account=$account)
+                FROM character_adventure_credits WHERE character_id=$id AND account=$account
+                """;
+            ulong baseline = 0, position = 0;
+            int level = 0;
+            bool credited = false;
+            using (var reader = command.ExecuteReader())
+            {
+                if (reader.Read())
+                {
+                    baseline = checked((ulong)reader.GetInt64(0));
+                    position = checked((ulong)reader.GetInt64(1));
+                    level = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+                    credited = true;
+                }
+            }
+            if (credited)
+            {
+                ulong cap = growth.GetLevelStartExperience(CharacterGrowthCatalog.MaximumSupportedLevel);
+                decimal rate = catalog.ExperienceRate;
+                // 40级以下角色只有待追溯的自然经验，从未计入账号；删除时随角色一起作废，不折进开启经验。
+                decimal contribution = level < AdventureCredit.CountingLevel ? 0
+                    : AdventureCredit.Value(position, cap, rate) - AdventureCredit.Value(baseline, cap, rate);
+                command.CommandText = "SELECT opening_experience FROM account_adventures WHERE account=$account";
+                decimal opening = command.ExecuteScalar() is string text
+                    ? decimal.Parse(text, System.Globalization.CultureInfo.InvariantCulture) : 0;
+                command.CommandText = "UPDATE account_adventures SET opening_experience=$opening WHERE account=$account";
+                command.Parameters.AddWithValue("$opening", (opening + contribution).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                command.ExecuteNonQuery();
+                command.Parameters.RemoveAt("$opening");
+                adventureChanged = contribution != 0;
+            }
+        }
         foreach (string table in DeletionTables)
         {
             command.CommandText = "DELETE FROM " + table + " WHERE character_id=$id";
@@ -84,7 +125,7 @@ internal sealed partial class CharacterRepository
         command.CommandText = "UPDATE account_adventure_receipts SET character_id=NULL WHERE account=$account AND character_id=$id";
         command.ExecuteNonQuery();
         command.CommandText = "UPDATE account_adventure_representatives SET character_id=NULL WHERE account=$account AND character_id=$id";
-        if (command.ExecuteNonQuery() != 0)
+        if (command.ExecuteNonQuery() != 0 || adventureChanged)
         {
             command.CommandText = "UPDATE account_adventures SET revision=revision+1 WHERE account=$account";
             command.ExecuteNonQuery();

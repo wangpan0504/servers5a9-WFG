@@ -54,6 +54,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] AdventureName { get; private set; } = [];
     public string ActorAdventureName { get; private set; } = "";
     public byte[] AdventureInfo { get; private set; } = [];
+    public byte[] PlayerBody { get; private set; } = [];
     public byte[] AdventureRefresh { get; private set; } = [];
     public byte[] CardMembershipInformation { get; private set; } = [];
     public byte[] DevilService0 { get; private set; } = [];
@@ -551,6 +552,7 @@ internal sealed class TcpPeer : IDisposable
             }
             TestCheck.That(packet.Kind == expected[index].Kind && packet.Opcode == expected[index].Opcode,
                 $"entry packet order at {index}");
+            if (packet is { Kind: 0, Opcode: 2 } && packet.Body is [1, ..]) PlayerBody = packet.Body;
             middle.Add(packet);
         }
         var avatars = Expect(0, 13);

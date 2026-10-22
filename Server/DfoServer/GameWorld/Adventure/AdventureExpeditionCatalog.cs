@@ -53,15 +53,16 @@ internal sealed class AdventureExpeditionCatalog
         RotationDays = Scalar(expedition, "area attribute rotation period");
         var attributes = Required(expedition, "attribute data").Values;
         var data = new Dictionary<string, ExpeditionAttribute>();
-        // 第一项是版本；普通属性带图片索引，GROUP C ALLOW等组别名只有组名和线上ID。
-        if (attributes.Length < 1) throw new InvalidDataException("远征属性声明不完整");
-        for (int i = 1; i < attributes.Length;)
+        // 每条为线上ID、名称、组名、图片索引；普通属性组名为空，id 255是组别名并带目标组名。
+        if (attributes.Length < 4 || attributes.Length % 4 != 0) throw new InvalidDataException("远征属性声明不完整");
+        for (int i = 0; i < attributes.Length; i += 4)
         {
-            if (i + 2 >= attributes.Length) throw new InvalidDataException("远征属性行缺少组名或ID");
-            string name = String(attributes[i++]), group = String(attributes[i++]);
-            if (group.Length == 0) _ = Integer(attributes[i++]);
-            if (i >= attributes.Length) throw new InvalidDataException("远征属性行缺少线上ID");
-            data.Add(name, new(name, group, checked((byte)Integer(attributes[i++]))));
+            int id = Integer(attributes[i]);
+            string name = String(attributes[i + 1]), group = String(attributes[i + 2]);
+            _ = Integer(attributes[i + 3]);
+            if (id is <= 0 or > byte.MaxValue || (id == byte.MaxValue) != (group.Length != 0))
+                throw new InvalidDataException("远征属性行缺少组名或线上ID");
+            data.Add(name, new(name, group, checked((byte)id)));
         }
         Attributes = data.ToFrozenDictionary();
         AttributeGroups = Required(expedition, "attribute group").Children.Where(row => row.Name == "group")

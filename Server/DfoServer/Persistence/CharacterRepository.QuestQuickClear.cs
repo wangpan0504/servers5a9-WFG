@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
@@ -125,6 +126,12 @@ internal sealed partial class CharacterRepository
             command.CommandText="UPDATE characters SET level=$level,experience=$experience WHERE id=$id AND account=$account AND revision=$before+1";
             if (command.ExecuteNonQuery()!=1) throw new InvalidOperationException("升级券角色版本已变化");
             command.Parameters.RemoveAt("$level"); command.Parameters.RemoveAt("$experience");
+            // 升级券按国服规则不计入冒险团：直接把里程改写到券后有效位置，账号总量不变。
+            ulong position = EffectivePosition(plan.TargetLevel, plan.TargetLearning.Experience);
+            if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.ExcludedState, position,
+                    EffectivePosition(expected.Level, expected.Learning.Experience), expected.Level, plan.TargetLevel,
+                    DateTimeOffset.UtcNow) is { } credit)
+                WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.ExcludedState, adventureCatalog!);
         }
         if (plan.EquipmentSlotFlagsAfter != expected.EquipmentSlotFlags)
         {

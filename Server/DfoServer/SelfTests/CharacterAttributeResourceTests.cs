@@ -14,20 +14,24 @@ internal static class CharacterAttributeResourceTests
         weak = weak with { Inventory = weak.Inventory with { StaminaUntil = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 600 } };
         var baseStats = new CharacterStats(8550, 5150, 123, 45, 67, 89, -10, 20, -30, 40,
             480000, 525, 800, 100, 100, 6000, 100, 600);
-        byte[] weakPlayer = DfoServer.Network.Builders.TownPackets.Player(weak, baseStats);
+        byte[] weakPlayer = DfoServer.Network.Builders.TownPackets.Player(weak, baseStats, 1);
         Check(weakPlayer[36 + 84] == 10,
             $"全量Player保留真实10%虚弱，实际={weakPlayer[36 + 84]}");
+        byte[] leveledPlayer = DfoServer.Network.Builders.TownPackets.Player(weak, baseStats, 37);
+        Check(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(leveledPlayer.AsSpan(leveledPlayer.Length - 11)) == 37 &&
+            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(leveledPlayer.AsSpan(leveledPlayer.Length - 7)) == 0,
+            "Player尾部tail[10..13]写冒险团等级供02B644B0安装，tail[14..17]胶囊计量保持0");
         var now = DateTimeOffset.FromUnixTimeSeconds(1800000000);
         byte[] expectedStats = Convert.FromHexString(
             "662100001E1400007B002D0043005900F6FF1400E2FF28000000000000000000000000000000000000000000000000000000000000000000000000000053070000000D02200300006400640070176400580200006400000000");
         byte[] normalPlayer = DfoServer.Network.Builders.TownPackets.Player(
-            weak with { Inventory = weak.Inventory with { StaminaUntil = 0 } }, baseStats, utcNow: now);
+            weak with { Inventory = weak.Inventory with { StaminaUntil = 0 } }, baseStats, 1, utcNow: now);
         var diamond = weak with { Inventory = weak.Inventory with { StaminaUntil = now.ToUnixTimeSeconds() + 600,
             AccountWallet = weak.Inventory.AccountWallet.SetContractExpiry(56, now.ToUnixTimeSeconds() + 1) } };
-        byte[] diamondPlayer = DfoServer.Network.Builders.TownPackets.Player(diamond, baseStats, utcNow: now);
+        byte[] diamondPlayer = DfoServer.Network.Builders.TownPackets.Player(diamond, baseStats, 1, utcNow: now);
         Check(diamondPlayer.AsSpan(36, 89).SequenceEqual(expectedStats) && diamond.Inventory.StaminaUntil > 0,
             "有效黑钻的全量Player以100%投影存量误罚，不在只读构包中改写期限或缩放属性");
-        Check(DfoServer.Network.Builders.TownPackets.Player(diamond, baseStats, utcNow: now.AddSeconds(1))[36 + 84] == 10,
+        Check(DfoServer.Network.Builders.TownPackets.Player(diamond, baseStats, 1, utcNow: now.AddSeconds(1))[36 + 84] == 10,
             "黑钻到期端点不能继续掩盖未经用例修复的存量期限");
         foreach (var (seconds, expected) in new (long, byte)[]
             { (600, 10), (541, 10), (540, 19), (481, 19), (1, 91), (0, 100), (-1, 100) })
@@ -37,7 +41,7 @@ internal static class CharacterAttributeResourceTests
             var originalInventory = character.Inventory;
             for (int refresh = 0; refresh < 3; refresh++)
             {
-                byte[] player = DfoServer.Network.Builders.TownPackets.Player(character, baseStats, utcNow: now);
+                byte[] player = DfoServer.Network.Builders.TownPackets.Player(character, baseStats, 1, utcNow: now);
                 Check(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(player.AsSpan(32)) == 89 &&
                     player[36 + 84] == expected, $"Player完整包89B虚弱边界{seconds}s={expected}，重复刷新{refresh}");
                 expectedStats[84] = expected;
@@ -133,9 +137,9 @@ internal static class CharacterAttributeResourceTests
         var upgraded = OrdinaryCharacter(characters.Get(0).Skills, 2) with
         { Learning = OrdinaryCharacter(characters.Get(0).Skills, 2).Learning with { Experience = 1000 } };
         Check(computer.Compute(upgraded) == level2, "新Ordinary实际owner的生产基础投影合同");
-        var upgradedPlayer = DfoServer.Network.Builders.TownPackets.Player(upgraded, computer.Compute(upgraded));
+        var upgradedPlayer = DfoServer.Network.Builders.TownPackets.Player(upgraded, computer.Compute(upgraded), 1);
         var unknownOwner = upgraded with { DungeonState = null };
-        var unknownOwnerPlayer = DfoServer.Network.Builders.TownPackets.Player(unknownOwner, computer.Compute(unknownOwner));
+        var unknownOwnerPlayer = DfoServer.Network.Builders.TownPackets.Player(unknownOwner, computer.Compute(unknownOwner), 1);
         Check(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(upgradedPlayer.AsSpan(40)) == 1650 &&
             System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(upgradedPlayer.AsSpan(44)) == 123 &&
             System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(unknownOwnerPlayer.AsSpan(40)) == 1400,

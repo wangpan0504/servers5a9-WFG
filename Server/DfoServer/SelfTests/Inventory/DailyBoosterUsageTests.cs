@@ -70,7 +70,9 @@ internal static class DailyBoosterUsageTests
             using var command = db.CreateCommand();
             command.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage' AND dflt_value='''[]''' AND \"notnull\"=1";
             That((long)command.ExecuteScalar()! == 1, "当前schema包含独立每日礼盒非空数组列");
-            command.CommandText = "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('daily-old',0,'DailyOld',7,38,1,450,234,0,77); ALTER TABLE characters DROP COLUMN daily_booster_usage; PRAGMA user_version=55";
+            // 回退到55的夹具先真的删掉v72表，确保重放时走真实建表而不是按已有结构跳过。
+            DatabaseSchemaTests.RemoveAdventureWeekly(db);
+            command.CommandText = "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('daily-old',0,'DailyOld',7,38,1,450,234,0,77); ALTER TABLE characters DROP COLUMN daily_booster_usage; ALTER TABLE account_adventures DROP COLUMN capsule_week; PRAGMA user_version=55";
             command.ExecuteNonQuery();
             _ = new CharacterRepository(path);
             command.CommandText = "SELECT revision||':'||gold||':'||daily_booster_usage FROM characters WHERE name='DailyOld'";

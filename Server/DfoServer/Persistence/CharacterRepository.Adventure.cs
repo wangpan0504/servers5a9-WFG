@@ -18,28 +18,102 @@ internal sealed partial class CharacterRepository
         return ReadAdventure(db, tx, owner.Account, catalog, now);
     });
 
+    // 718服务器角色列表只读本账号名册，不装载背包、技能或冒险团进度。
+    public ImmutableArray<(uint Id, string Name)> ReadAdventureCharacterList(AccountOwners.Lease owner) => owner.Execute(() =>
+    {
+        using var db = database.Open();
+        using var query = db.CreateCommand();
+        query.Parameters.AddWithValue("$account", owner.Account);
+        query.CommandText = "SELECT id,name FROM characters WHERE account=$account ORDER BY slot,id";
+        var rows = ImmutableArray.CreateBuilder<(uint, string)>();
+        using var reader = query.ExecuteReader();
+        while (reader.Read()) rows.Add((checked((uint)reader.GetInt64(0)), reader.GetString(1)));
+        return rows.ToImmutable();
+    });
+
+    public ImmutableArray<byte> ReadAdventureWeeklyConfig(AccountOwners.Lease owner) => owner.Execute(() =>
+    {
+        using var db = database.Open();
+        using var query = db.CreateCommand();
+        query.Parameters.AddWithValue("$account", owner.Account);
+        query.CommandText = "SELECT slots FROM account_adventure_weekly_config WHERE account=$account";
+        return query.ExecuteScalar() is byte[] slots && slots.Length == AdventureWeekly.Slots
+            ? ImmutableArray.Create(slots) : AdventureWeekly.Default;
+    });
+
+    // 配置是账号级5字节排列，与账号revision及其他冒险团写入解耦，避免互相冲突。
+    public void WriteAdventureWeeklyConfig(AccountOwners.Lease owner, ImmutableArray<byte> slots) => owner.Execute(() =>
+    {
+        AdventureWeekly.Validate(slots);
+        using var db = database.Open(); using var tx = db.BeginTransaction();
+        using var command = db.CreateCommand(); command.Transaction = tx;
+        command.CommandText = """
+            INSERT INTO account_adventure_weekly_config(account,slots) VALUES($account,$slots)
+            ON CONFLICT(account) DO UPDATE SET slots=excluded.slots
+            """;
+        command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$slots", slots.ToArray());
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("每周地下城配置未写入");
+        tx.Commit();
+        return true;
+    });
+
+    public int ReadAdventureLevel(AccountOwners.Lease owner) => owner.Execute(() =>
+    {
+        using var db = database.Open();
+        using var query = db.CreateCommand();
+        query.Parameters.AddWithValue("$account", owner.Account);
+        query.CommandText = "SELECT level FROM account_adventures WHERE account=$account";
+        // 尚未初始化账号的首次结算按初始等级1处理：该级没有属性行，不产生加成。
+        return query.ExecuteScalar() is long level ? checked((int)level) : 1;
+    });
+
     public void InitializeAdventure(AccountOwners.Lease owner, AdventureCatalog catalog, DateTimeOffset now) => owner.Execute(() =>
     {
         using var db = database.Open();
+        int day = AdventurePeriod.LoginDay(now);
         using var query = db.CreateCommand(); query.Parameters.AddWithValue("$account", owner.Account);
-        query.CommandText = "SELECT count(*) FROM account_adventures WHERE account=$account";
-        if ((long)query.ExecuteScalar()! != 0) return true;
+        query.CommandText = "SELECT login_streak_days,last_login_day FROM account_adventures WHERE account=$account";
+        bool exists = false; int streak = 0, lastDay = 0;
+        using (var reader = query.ExecuteReader())
+            if (reader.Read()) { exists = true; streak = reader.GetInt32(0); lastDay = reader.GetInt32(1); }
+        // 已存在且同一06:00周期的账号保持只读：外部writer存在时也能完成初始化检查。
+        if (exists && day <= lastDay) return true;
         using var write = db.BeginWrite("CharacterRepository.InitializeAdventure");
         using var tx = write.Transaction;
-        var state = AdventureState.Initial(owner.Account, now);
-        state.Validate(catalog);
-        using var command = db.CreateCommand(); command.Transaction = tx;
-        command.CommandText = """
-            INSERT INTO account_adventures(account,revision,name,created_date,level,experience,remainder,
-                capsule_experience,brave_experience,points,month,name_initialized)
-            VALUES($account,0,$name,$date,1,0,'0',0,0,$points,$month,0)
-            """;
-        command.Parameters.AddWithValue("$account", owner.Account);
-        command.Parameters.AddWithValue("$name", state.Name);
-        command.Parameters.AddWithValue("$date", state.CreatedDate);
-        command.Parameters.AddWithValue("$points", new byte[20]);
-        command.Parameters.AddWithValue("$month", state.Month);
-        command.ExecuteNonQuery();
+        query.Transaction = tx;
+        using (var reader = query.ExecuteReader())
+        {
+            exists = reader.Read();
+            if (exists) { streak = reader.GetInt32(0); lastDay = reader.GetInt32(1); }
+        }
+        if (exists && day <= lastDay) { tx.Rollback(); return true; }
+        if (!exists)
+        {
+            var state = AdventureState.Initial(owner.Account, now) with { LoginStreakDays = 1, LastLoginDay = day };
+            state.Validate(catalog);
+            query.CommandText = """
+                INSERT INTO account_adventures(account,revision,name,created_date,level,experience,remainder,
+                    capsule_experience,brave_experience,points,month,name_initialized,login_streak_days,last_login_day)
+                VALUES($account,0,$name,$date,1,0,'0',0,0,$points,$month,0,$streak,$day)
+                """;
+            query.Parameters.AddWithValue("$name", state.Name);
+            query.Parameters.AddWithValue("$date", state.CreatedDate);
+            query.Parameters.AddWithValue("$points", new byte[20]);
+            query.Parameters.AddWithValue("$month", state.Month);
+            query.Parameters.AddWithValue("$streak", state.LoginStreakDays);
+            query.Parameters.AddWithValue("$day", day);
+            query.ExecuteNonQuery();
+        }
+        else
+        {
+            // 新的06:00周期才推进连续天数与账号版本；断一天或更久归零重计。
+            query.Parameters.AddWithValue("$streak", AdventurePeriod.NextLoginStreak(lastDay, streak, day));
+            query.Parameters.AddWithValue("$day", day);
+            query.Parameters.AddWithValue("$previous", lastDay);
+            query.CommandText = "UPDATE account_adventures SET login_streak_days=$streak,last_login_day=$day,revision=revision+1 WHERE account=$account AND last_login_day=$previous";
+            if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("冒险团登录周期已变化");
+        }
         tx.Commit();
         return true;
     });
@@ -47,7 +121,7 @@ internal sealed partial class CharacterRepository
     static AdventureSnapshot ReadAdventure(SqliteConnection db, SqliteTransaction tx, string account, AdventureCatalog catalog, DateTimeOffset now)
     {
         using var query = db.CreateCommand(); query.Transaction = tx; query.Parameters.AddWithValue("$account", account);
-        query.CommandText = "SELECT revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month,name_initialized FROM account_adventures WHERE account=$account";
+        query.CommandText = "SELECT revision,name,created_date,level,experience,remainder,capsule_experience,brave_experience,points,month,name_initialized,capsule_week,login_streak_days,last_login_day,opening_experience,excluded_experience FROM account_adventures WHERE account=$account";
         var state = AdventureState.Initial(account, now);
         using (var reader = query.ExecuteReader())
         {
@@ -60,7 +134,10 @@ internal sealed partial class CharacterRepository
                     Level = reader.GetInt32(3), Experience = checked((ulong)reader.GetInt64(4)),
                     Remainder = decimal.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
                     CapsuleExperience = checked((ulong)reader.GetInt64(6)), BraveExperience = checked((ulong)reader.GetInt64(7)),
-                    Points = points.ToImmutable(), Month = reader.GetInt32(9), NameInitialized = reader.GetBoolean(10) };
+                    Points = points.ToImmutable(), Month = reader.GetInt32(9), NameInitialized = reader.GetBoolean(10),
+                    CapsuleWeek = reader.GetInt32(11), LoginStreakDays = reader.GetInt32(12), LastLoginDay = reader.GetInt32(13),
+                    OpeningExperience = decimal.Parse(reader.GetString(14), CultureInfo.InvariantCulture),
+                    ExcludedExperience = decimal.Parse(reader.GetString(15), CultureInfo.InvariantCulture) };
             }
         }
         query.CommandText = "SELECT item_id,count FROM account_adventure_purchases WHERE account=$account ORDER BY item_id";
@@ -105,7 +182,11 @@ internal sealed partial class CharacterRepository
         using (var reader = query.ExecuteReader()) while (reader.Read()) roster.Add(new(checked((ushort)reader.GetInt32(0)),
             checked((ushort)reader.GetInt32(1)), reader.GetString(2), checked((byte)reader.GetInt32(3)),
             checked((byte)reader.GetInt32(4)), checked((byte)reader.GetInt32(5)), checked((uint)reader.GetInt64(6)), reader.GetInt64(7)));
-        return new(state, roster.ToImmutable());
+        // 推荐地下城按角色累计、账号求和；u16饱和与90CN一致，其余内容当前没有服务端来源，保持0。
+        query.CommandText = "SELECT coalesce(sum(recommended_dungeon_clears),0) FROM character_dungeon_state WHERE account=$account";
+        var counts = new ushort[AdventureContent.Count];
+        counts[AdventureContent.RecommendedDungeon] = (ushort)Math.Min((long)query.ExecuteScalar()!, ushort.MaxValue);
+        return new(state, roster.ToImmutable()) { ContentCounts = ImmutableArray.Create(counts) };
     }
 
 }

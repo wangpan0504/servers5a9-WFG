@@ -1,4 +1,15 @@
+using DfoServer.GameWorld.Characters;
+
 namespace DfoServer.Game.Characters;
+
+// 满级角色没有下一等级边界：客户端收到NOTI37后仍会在头顶显示绿色经验文本，且本地旧经验不再随升级推进。
+// 满级后停发该通知；经验、熟练度与冒险团进度仍按提交结果照常入账。
+internal static class CharacterExperienceNotice
+{
+    // 传入事件提交前的真实等级：跨入满级的那一次升级仍按正常通知发送。
+    public static bool ShouldPublish(int previousLevel) =>
+        previousLevel < CharacterGrowthCatalog.MaximumSupportedLevel;
+}
 
 // 附属状态必须由各自owner显式提供；不从角色经验、等级或金币推导，也不默认清零。
 internal sealed record CharacterGrowthAuxiliaryState(uint DuelVictoryPoints, uint GrowthCapsuleExperience,

@@ -68,11 +68,11 @@ internal static class ChannelCatalogTests
         var character = new Character(1, 0, "A", 0, new(38, 1, 450, 234), null);
         var stats = new CharacterStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         byte[] actor = TownPackets.Actor(character, catalog.GameIdentity);
-        byte[] player = TownPackets.Player(character, stats, catalog.GameIdentity);
+        byte[] player = TownPackets.Player(character, stats, 1, catalog.GameIdentity);
         Bytes(actor.AsSpan(0, 5), [0, 1, 0, 2, 10], "Actor按NOTI1身份进入本地角色表，不能沿用0/0");
         Bytes(player.AsSpan(0, 5), [1, 1, 0, 2, 10], "Player延续Actor的服务器和频道上下文");
         Bytes(actor.AsSpan(5), TownPackets.Actor(character).AsSpan(5), "身份修正不改变Actor其余字段");
-        Bytes(player.AsSpan(5), TownPackets.Player(character, stats).AsSpan(5), "身份修正不改变Player属性与装备布局");
+        Bytes(player.AsSpan(5), TownPackets.Player(character, stats, 1).AsSpan(5), "身份修正不改变Player属性与装备布局");
         That(actor[3] == body[344] && actor[4] == body[346] && player[3] == body[344] && player[4] == body[346],
             "复现原生本地/跨频道比较，登录和角色包选择同一个角色存储上下文");
         Console.WriteLine($"PASS {Count - before} 频道资源字段、原生名称引用与共享身份断言");

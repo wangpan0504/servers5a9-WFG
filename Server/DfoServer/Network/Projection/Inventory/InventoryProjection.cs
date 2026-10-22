@@ -125,9 +125,11 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
                             ? ActorSceneState.Dungeon : ActorSceneState.Town,
                         premiumPcRoom: context.Session.PremiumPcRoom), "equipment_actor", CanSend);
-            // 幻化选择的ACK已刷新战斗对象，Actor再同步城镇对象及成员快照；不额外重装本人属性。
+            // 幻化选择的ACK已刷新战斗对象，Actor再同步城镇对象及成员快照；Player仍须重发本人
+            // 全量属性与熟练状态，本条目原先的发送条件与上一层判定等价，合并不额外扩大刷新面。
             if (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null)
-                await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(current, stats.Compute(current), context.Channel), "equipment_player", CanSend);
+                await context.Notify(NotiPacketType.USERINFO,
+                    TownPackets.Player(current, stats.Compute(current), context.Session.ReadAdventureLevel(), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
                 if ((equipmentChanged || weaponSkinChanged) && CanSend() && context.Session.Phase == SessionPhase.Town)

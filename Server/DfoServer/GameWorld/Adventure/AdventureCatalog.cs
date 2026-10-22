@@ -6,7 +6,9 @@ using PvfLib;
 namespace DfoServer.GameWorld.Adventure;
 
 internal readonly record struct AdventureProfession(byte Job, byte Grow, byte Group, byte Awakening);
-internal sealed record AdventureBenefit(ImmutableDictionary<string, float> Stats, ImmutableDictionary<string, float> Growth);
+// 每级属性行同时声明四维、成长、功能与掉落；本版只解释可核验的成长与功能类加成。
+internal sealed record AdventureBenefit(ImmutableDictionary<string, float> Stats, ImmutableDictionary<string, float> Growth,
+    ImmutableDictionary<string, float> Etc, ImmutableDictionary<string, float> Items);
 internal sealed record AdventureProduct(byte Category, int ItemId, int RequiredLevel, uint Cost, uint Limit, int ResetType)
 {
     public int Index { get; init; }
@@ -50,7 +52,8 @@ internal sealed class AdventureCatalog
             throw new InvalidDataException("冒险团经验表缺少可用等级边界");
         Experience = experience.ToFrozenDictionary();
         Benefits = Required(main, "attribute list").Children.Where(row => row.Name == "attribute").ToFrozenDictionary(
-            row => Integer(row.Values.Single()), row => new AdventureBenefit(Values(row, "stat"), Values(row, "grow")));
+            row => Integer(row.Values.Single()), row => new AdventureBenefit(Values(row, "stat"), Values(row, "grow"),
+                Values(row, "etc"), Values(row, "item")));
         ImmutableDictionary<string, float> Values(PvfTokenSection row, string name) => row.Children.Where(child => child.Name == name)
             .ToImmutableDictionary(child => String(child.Values[1]), child => Number(child.Values[2]));
         var professions = new Dictionary<(byte, byte), AdventureProfession>();
@@ -100,10 +103,12 @@ internal sealed class AdventureCatalog
             CapsuleCapacity > long.MaxValue) throw new InvalidDataException("冒险团胶囊配置非法");
     }
 
-    public ulong CapsuleCapacity => checked(Capsule.GaugeExperience * Capsule.MaximumGauges);
+    // 资源中 [capsule max exp] 就是账号共享计量条的总容量；[capsule need minimum exp] 是每颗胶囊消耗的那一格。
+    public ulong CapsuleCapacity => Capsule.GaugeExperience;
     public AdventureBenefit Benefit(int level) => Benefits.GetValueOrDefault(level) ?? throw new InvalidDataException("冒险团等级缺少属性声明");
     // 外传角色的CHR首成长为0，而收藏/远征资源以分支1声明；仅转换本领域资源索引，不改Actor或技能树。
     public static byte ProfessionGrow(byte job, byte grow) => job is 9 or 10 && (grow & 15) == 0 ? (byte)1 : (byte)(grow & 15);
+    // 收藏资格以客户端帮助与改版公告为准：Lv90以上（含）且完成对应次觉醒。
     public bool Eligible(byte job, byte grow, byte level) => Professions.TryGetValue((job, ProfessionGrow(job, grow)), out var profession) &&
-        (grow >> 4) >= profession.Awakening && level == Characters.CharacterGrowthCatalog.MaximumSupportedLevel;
+        (grow >> 4) >= profession.Awakening && level >= 90;
 }

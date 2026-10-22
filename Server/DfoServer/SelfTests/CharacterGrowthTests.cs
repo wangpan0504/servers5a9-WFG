@@ -68,18 +68,22 @@ internal static class CharacterGrowthTests
         That(CharacterGrowthPlan.Create(lastLevel, 95, cap, catalog).Success &&
             CharacterGrowthPlan.Create(lastLevel, 95, catalog.GetCumulativeExperienceBoundary(95), catalog).Failure == CharacterGrowthFailure.InvalidTarget,
             "Lv95明确上界，达到未知Lv96范围不截断或夹取");
-        var nearCap = lastLevel with { Learning = lastLevel.Learning with { Experience = cap - 5 } };
-        var capped = CharacterGrowthPlan.AddExperience(nearCap, 100, catalog);
-        That(capped.Success && capped.Plan!.TargetLevel == 95 && capped.Plan.RequestedExperience == 100 &&
-            capped.Plan.GainedExperience == 5 && capped.Plan.Learning.Experience == cap &&
-            capped.Plan.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
-                nearCap.Learning.Trees.OrderBy(tree => tree.Context).Select(tree => (tree.Context,tree.Sp,tree.Tp))),
-            "奖励跨越上界只增加剩余5经验，不进入Lv96或额外发SP/TP");
-        var atCap = nearCap with { Learning = nearCap.Learning with { Experience = cap } };
-        var unchanged = CharacterGrowthPlan.AddExperience(atCap, 100, catalog);
-        That(unchanged.Success && unchanged.Plan!.GainedExperience == 0 && unchanged.Plan.RequestedExperience == 100 &&
-            unchanged.Plan.Learning.Experience == cap && unchanged.Plan.TargetLevel == 95,
-            "已满经验仍接受有合法奖励来源的零到账成长，供死亡和领奖事务使用");
+        ulong entry = catalog.GetLevelStartExperience(95);
+        var legacyHigh = lastLevel with { Learning = lastLevel.Learning with { Experience = cap - 5 } };
+        var normalized = CharacterGrowthPlan.AddExperience(legacyHigh, 100, catalog);
+        That(normalized.Success && normalized.Plan!.TargetLevel == 95 && normalized.Plan.RequestedExperience == 100 &&
+            normalized.Plan.GainedExperience == 0 && normalized.Plan.Learning.Experience == cap - 5 &&
+            normalized.Plan.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
+                legacyHigh.Learning.Trees.OrderBy(tree => tree.Context).Select(tree => (tree.Context,tree.Sp,tree.Tp))),
+            "满级旧高位经验原地保持不向下改写，实际到账0且不额外发SP/TP");
+        var pinned = CharacterGrowthPlan.AddExperience(lastLevel, 100, catalog);
+        That(pinned.Success && pinned.Plan!.TargetLevel == 95 && pinned.Plan.RequestedExperience == 100 &&
+            pinned.Plan.GainedExperience == 0 && pinned.Plan.Learning.Experience == entry,
+            "满级经验条钉在95级入口线，经验不再增长，请求额度只供熟练度与冒险团溢出");
+        var crossing = character with { Level = 94, Learning = State(entry - 50, 15, 25) };
+        var crossed = CharacterGrowthPlan.AddExperience(crossing, 100, catalog);
+        That(crossed.Success && crossed.Plan!.TargetLevel == 95 && crossed.Plan.Learning.Experience == entry &&
+            crossed.Plan.GainedExperience == 50, "94级跨过入口线的奖励只把线上部分到账并升到95");
         That(CharacterGrowthPlan.Create(character with { Learning = State(0, 7, 29) }, 3, 2035, catalog).Failure == CharacterGrowthFailure.InvalidSnapshot,
             "GM高等级零XP不作为正常成长快照修复");
         That(CharacterGrowthPlan.Create(character with { Learning = State(1000, ushort.MaxValue, 29) }, 3, 2035, catalog).Failure == CharacterGrowthFailure.PointOverflow &&
@@ -91,6 +95,24 @@ internal static class CharacterGrowthTests
         var malformed = character with { Learning = new(1000, Array.AsReadOnly(new[] { trees[0], trees[0] })) };
         That(CharacterGrowthPlan.Create(malformed, 3, 2035, catalog).Failure == CharacterGrowthFailure.InvalidSnapshot,
             "重复上下文快照拒绝");
+        // 熟练度表与推进：第1行是0级到1级所需，单笔可连升，289级封顶。
+        var proficiencyTable = catalog.Proficiency;
+        That(ProficiencyCatalog.MaximumLevel == 289 && proficiencyTable.Requirement(0) == 1_000_000 &&
+            proficiencyTable.Requirement(288) > 0, "熟练度经验表按289级装载");
+        That(ProficiencyProgression.Gain(95, entry, 100, catalog) == 100 &&
+            ProficiencyProgression.Gain(94, entry - 50, 100, catalog) == 50 &&
+            ProficiencyProgression.Gain(94, 0, 100, catalog) == 0,
+            "熟练度只计95级入口线以上、以及满级后的全部角色经验");
+        That(ProficiencyProgression.Advance(new(0, 0), 100, catalog) is { After.Level: 0, After.Experience: 100 },
+            "熟练度经验按当前级内进度累积");
+        var multiProficiency = ProficiencyProgression.Advance(new(0, 0),
+            proficiencyTable.Requirement(0) + proficiencyTable.Requirement(1) + 5, catalog);
+        That(multiProficiency is { After.Level: 2, After.Experience: 5 }, "单笔熟练度经验可连升多级");
+        That(ProficiencyProgression.Advance(new(288, proficiencyTable.Requirement(288) - 1), 1, catalog) is
+                { After.Level: 289, After.Experience: 0 } &&
+            ProficiencyProgression.Advance(new(289, 0), 100, catalog) is null &&
+            ProficiencyProgression.Advance(new(3, 10), 0, catalog) is null,
+            "289级封顶丢弃余量，满级与零增量不产生写入");
         firstSkills.Clear();
         secondSkills.Clear();
         trees.Clear();

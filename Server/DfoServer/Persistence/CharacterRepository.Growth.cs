@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
@@ -96,6 +97,19 @@ internal sealed partial class CharacterRepository
         // 自动等级、双树余额和既有主树投影随同一经验事实提交。
         WriteLearning(db, tx, expected.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
+        // 副本击杀经验计入冒险团：按角色更新前的有效位置推进里程，满级部分按资源倍率折算。
+        if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, amount,
+                EffectivePosition(current.Level, current.Learning.Experience), current.Level, plan.TargetLevel,
+                DateTimeOffset.UtcNow) is { } credit)
+            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
+        // 熟练度与角色经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
+        if (current.DungeonState is { } dungeonState)
+        {
+            var proficiencyBefore = new ProficiencyProgress(dungeonState.ProficiencyLevel, dungeonState.ProficiencyExperience);
+            var proficiencyGain = ProficiencyProgression.Gain(plan.PreviousLevel, plan.Before.Experience, checked((uint)amount), catalog);
+            if (ProficiencyProgression.Advance(proficiencyBefore, proficiencyGain, catalog) is { } proficiency)
+                WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
+        }
         WriteDungeonGrowthReceipt(db, tx, owner, expected, prepared, reward, plan);
         if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
         SaveDungeonLoot(db, tx, owner.Account, expected, prepared, loot);

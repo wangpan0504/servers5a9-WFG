@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Text;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Adventure;
 
 namespace DfoServer.Network.Parsers;
 
@@ -50,9 +52,11 @@ internal static class AdventureRequests
 
     public static (byte Job, byte Grow) Profession(ReadOnlySpan<byte> body)
     {
-        if (body.Length != 2 || (body[1] & 0x70) != 0x20 || body[0] > 15 || (body[1] & 15) == 0)
+        if (body.Length != 2 || (body[1] & 0x70) != 0x20 || body[0] > 15)
             throw new InvalidDataException("代表角色请求必须为职业及二觉打包成长类型");
-        return (body[0], (byte)(body[1] & 15));
+        // 外传职业（黑暗武士/缔造者）的CHR首成长为0，客户端实际按 0x20 上报；
+        // 收藏与远征资源以分支1声明，解析处统一归一化，不能按低半字节为0拒绝并断线。
+        return (body[0], AdventureCatalog.ProfessionGrow(body[0], body[1]));
     }
     public static (byte Region, ushort Character, byte Job, byte Grow) Representative(ReadOnlySpan<byte> body)
     {
@@ -70,5 +74,15 @@ internal static class AdventureRequests
     public static void Empty(ReadOnlySpan<byte> body)
     {
         if (!body.IsEmpty) throw new InvalidDataException("该冒险团请求没有附加正文");
+    }
+    public static byte ServerCharacters(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 1) throw new InvalidDataException("服务器角色列表请求必须为服务器u8");
+        return body[0];
+    }
+    public static ImmutableArray<byte> WeeklyConfig(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != AdventureWeekly.Slots) throw new InvalidDataException("每周地下城配置必须为5个槽位");
+        return body.ToImmutableArray();
     }
 }

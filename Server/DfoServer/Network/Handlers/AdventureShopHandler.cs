@@ -19,7 +19,7 @@ internal sealed class AdventureShopHandler(AdventureShopService service, Invento
         if (result.Accepted && result.Snapshot is { } snapshot && result.Inventory?.Receipt is { } committed)
         {
             await context.Notify(NotiPacketType.ADVENTURE_INFO, AdventurePackets.Information(committed.Character.Id, snapshot, service.Catalog,
-                snapshot.Representatives(service.Catalog), context.Channel.ServerIndex), "adventure_shop_information", Guard);
+                snapshot.Representatives(service.Catalog)), "adventure_shop_information", Guard);
             await context.Notify(NotiPacketType.ADVENTURE_LV_EXP, AdventurePackets.Refresh(committed.Character.Id, snapshot.State, service.Catalog),
                 "adventure_shop_actor", Guard);
         }

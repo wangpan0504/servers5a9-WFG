@@ -442,7 +442,7 @@ internal static class QuestCharacterRewardTests
             That(ack.Length == 18 && ack[9] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(ack.AsSpan(10)) == 0 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(ack.AsSpan(12)) == 100 && ack[16] == 0 && ack[17] == 0,
                 "槽奖励沿普通空物品ACK，Gold材料编码本次扣除量");
-            var player = TownPackets.Player(commit.Character,new CharacterStatComputer(characters).Compute(commit.Character));
+            var player = TownPackets.Player(commit.Character,new CharacterStatComputer(characters).Compute(commit.Character),1);
             That(player[125] == (0x20 | reward.Bit),"Player属性块后发送实际持久装备槽标志");
             f.Session.ReturnToRoster();f.Session.Select(0);f.Session.MarkReady();
             That(f.Read().EquipmentSlotFlags == commit.Character.EquipmentSlotFlags && f.Receipts == 1 &&

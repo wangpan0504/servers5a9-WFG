@@ -421,7 +421,8 @@ internal static class QuestLifecycleTcpTests
                     "归档后重复34不再次保存或制造奖励");
             }
             // 为猎杀隔离用例恢复本fixture的合法3145接取；不写现场库或据此证明完整剧情推进。
-            f.Sql("INSERT INTO character_dungeon_state VALUES($p0,$p1,$p2,$p3,$p4,$p5,$p6)", dungeonState);
+            f.Sql("INSERT INTO character_dungeon_state(character_id,account,next_object_key,last_attempt," +
+                "capsule_experience,proficiency_level,proficiency_experience) VALUES($p0,$p1,$p2,$p3,$p4,$p5,$p6)", dungeonState);
             f.Sql("DELETE FROM character_active_main_quests; DELETE FROM character_completed_quests WHERE quest_id=3145; INSERT INTO character_active_main_quests VALUES(1,0,3145,1,'1234567890abcdef1234567890abcdef')");
             using (var peer = Open(f))
             {

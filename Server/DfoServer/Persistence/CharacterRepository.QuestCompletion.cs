@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -127,6 +128,12 @@ internal sealed partial class CharacterRepository
             !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) || !current.CompletedQuests.SequenceEqual(expected.CompletedQuests) ||
             !QuestCycle.Same(current, expected))
             throw new InvalidOperationException("领奖原角色、场景、两树、任务或revision已变化");
+        // 熟练度按规划时的持久值推进；事务内旧值不符则整笔回滚，不覆盖他人已提交的进度。
+        if (plan.Proficiency is { } pendingProficiency &&
+            (current.DungeonState is not { } dungeonState ||
+             dungeonState.ProficiencyLevel != pendingProficiency.Before.Level ||
+             dungeonState.ProficiencyExperience != pendingProficiency.Before.Experience))
+            throw new InvalidOperationException("领奖熟练度前提已变化");
         if (plan.DailyPeriod != 0 && (plan.DailyPeriod != expected.QuestCycleDay || plan.DailyPeriod != QuestCycle.Day(DateTimeOffset.UtcNow)))
             throw new InvalidOperationException("每日领奖规划已经跨过游戏日边界");
         if (plan.Consumed.Any(row => row.Uid == 0 ? CurrencyWallet.RewardKind(row.ItemId) is not { } kind ||
@@ -160,6 +167,12 @@ internal sealed partial class CharacterRepository
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业类型没有写入当前角色");
         }
         if (plan.UpdatesLearning) { WriteLearning(db, tx, current.Id, plan.TargetLearning); WriteCanonicalSkills(db, tx, current.Id, plan.TargetLearning); }
+        if (plan.Proficiency is { } proficiency) WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
+        // 任务经验计入冒险团；同一接取的回执在上方提前返回，不会重复计入。
+        if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, plan.TotalRequestedExperience,
+                EffectivePosition(expected.Level, expected.Learning.Experience), expected.Level, plan.TargetLevel,
+                DateTimeOffset.UtcNow) is { } credit)
+            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         command.Parameters.AddWithValue("$slot", plan.QuestSlot);
         command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND slot=$slot AND quest_id=$quest AND acceptance_id=$acceptance";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("原接取活动任务不能原子清槽");

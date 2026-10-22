@@ -16,7 +16,7 @@ internal sealed partial class CharacterRepository
     public DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected,
         SinglePlayerDungeonRun run, PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog,
         InventoryPlan? cardInventory = null, bool mailCardItem = false, DungeonCardDelivery? premiumDelivery = null,
-        bool grantLuckyStar = false, int luckyStarLimit = 0, AdventureProgressionPlan? adventure = null) => owner.Execute(() =>
+        bool grantLuckyStar = false, int luckyStarLimit = 0, bool recommendedClear = false) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -30,7 +30,10 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("通关提交需要本角色当前实例的冻结清图事实与首份报告");
         var identity = prepared.Fact.Identity;
         var reward = prepared.Reward;
-        uint otherBonus = checked(reward.ExtraExperience - reward.GrowthContractExperience);
+        // 合并后账本仍保留秘药与冒险团分项列，CHECK 为六项之和：
+        // other_bonus 只能放除成长契约、秘药、冒险团之外的分项，否则会重复计入秘药。
+        uint otherBonus = checked(reward.ExtraExperience - reward.GrowthContractExperience -
+            reward.PotionExperience - reward.AdventureExperience);
         string bonusJson = reward.BonusParts.IsDefault ? "[]" : JsonSerializer.Serialize(reward.BonusParts);
         byte[] deaths = prepared.Fact.ConfirmedDeathEvents.SelectMany(value => value.ToByteArray()).ToArray();
         string? sceneOperation = prepared.Fact.PassiveSource?.OperationId.ToString("N");
@@ -49,7 +52,8 @@ internal sealed partial class CharacterRepository
         command.CommandText = """
             SELECT account,event_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,
               base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_experience,after_experience,
-              scene_operation_id,growth_contract_experience,other_bonus_experience,bonus_json
+              scene_operation_id,growth_contract_experience,potion_experience,adventure_experience,
+              other_bonus_experience,bonus_json
             FROM character_dungeon_settlement_receipts WHERE character_id=$id AND instance_id=$instance
             """;
         bool duplicate;
@@ -65,7 +69,9 @@ internal sealed partial class CharacterRepository
                 reader.GetInt64(9) != reward.BaseExperience || reader.GetInt64(10) != reward.RankExperience ||
                 reader.GetInt64(11) != reward.TotalExperience || reader.GetInt64(12) != reward.RankBonusIndex ||
                 reader.GetString(13) != reward.RuleId || reader.GetString(14) != reward.ResourceSource ||
-                (reader.IsDBNull(17) ? null : reader.GetString(17)) != sceneOperation || reader.GetInt64(18) != reward.GrowthContractExperience || reader.GetInt64(19) != otherBonus || reader.GetString(20) != bonusJson))
+                (reader.IsDBNull(17) ? null : reader.GetString(17)) != sceneOperation || reader.GetInt64(18) != reward.GrowthContractExperience ||
+                reader.GetInt64(19) != reward.PotionExperience || reader.GetInt64(20) != reward.AdventureExperience ||
+                reader.GetInt64(21) != otherBonus || reader.GetString(22) != bonusJson))
                 throw new InvalidDataException("同一通关实例的事实、报告或奖励被修改");
             if (duplicate) gained = checked((uint)(reader.GetInt64(16) - reader.GetInt64(15)));
         }
@@ -110,6 +116,36 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("通关成长revision或账号已变化");
         WriteLearning(db, tx, expected.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
+        // 通关结算经验计入冒险团；同一实例的重复报告在事务开头已返回，不会重复计入。
+        AdventureProgressionCommit? adventureCommit = null;
+        if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, reward.TotalExperience,
+                EffectivePosition(current.Level, current.Learning.Experience), current.Level, plan.TargetLevel,
+                DateTimeOffset.UtcNow) is { } credit)
+        {
+            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
+            if (credit.After != credit.Before)
+                adventureCommit = new(credit.After with { Revision = credit.Before.Revision + 1 }, credit.RawOverflow);
+        }
+        // 熟练度与通关经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
+        if (current.DungeonState is { } dungeonState)
+        {
+            var proficiencyBefore = new ProficiencyProgress(dungeonState.ProficiencyLevel, dungeonState.ProficiencyExperience);
+            var proficiencyGain = ProficiencyProgression.Gain(plan.PreviousLevel, plan.Before.Experience, reward.TotalExperience, catalog);
+            if (ProficiencyProgression.Advance(proficiencyBefore, proficiencyGain, catalog) is { } proficiency)
+                WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
+        }
+        // 推荐地下城通关按角色累计到u16上限，账号面板读取时求和；同一实例的重复报告已在上面提前返回。
+        if (recommendedClear)
+        {
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$id", expected.Id);
+            command.Parameters.AddWithValue("$account", owner.Account);
+            command.CommandText = """
+                UPDATE character_dungeon_state SET recommended_dungeon_clears=min(recommended_dungeon_clears+1,65535)
+                WHERE character_id=$id AND account=$account
+                """;
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("推荐地下城计数缺少角色副本状态");
+        }
         if (quests is not null)
             WriteQuestConditions(db,tx,current.Id,current.ActiveMainQuests,DfoServer.Game.Quests.QuestStateProgress.Refresh(
                 current.ActiveMainQuests,current with { Level = plan.TargetLevel, Learning = plan.Learning },quests));
@@ -131,6 +167,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$total", reward.TotalExperience);
         command.Parameters.AddWithValue("$sceneOperation", (object?)sceneOperation ?? DBNull.Value);
         command.Parameters.AddWithValue("$growthContract", reward.GrowthContractExperience);
+        command.Parameters.AddWithValue("$potion", reward.PotionExperience);
+        command.Parameters.AddWithValue("$adventure", reward.AdventureExperience);
         command.Parameters.AddWithValue("$otherBonus", otherBonus);
         command.Parameters.AddWithValue("$bonusJson", bonusJson);
         command.Parameters.AddWithValue("$bonus", reward.RankBonusIndex);
@@ -145,21 +183,12 @@ internal sealed partial class CharacterRepository
             INSERT INTO character_dungeon_settlement_receipts(character_id,account,event_id,instance_id,quest_id,
               task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,
               total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,
-              before_experience,after_experience,revision,scene_operation_id,growth_contract_experience,other_bonus_experience,bonus_json)
+              before_experience,after_experience,revision,scene_operation_id,growth_contract_experience,potion_experience,adventure_experience,
+              other_bonus_experience,bonus_json)
             VALUES($id,$account,$event,$instance,$quest,$attempt,$epoch,$dungeon,$map,$deaths,$report,$generation,
-              $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$otherBonus,$bonusJson)
+              $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$potion,$adventure,$otherBonus,$bonusJson)
             """;
         command.ExecuteNonQuery();
-        if (adventure is not null)
-        {
-            // 账号进度与角色成长同一事务：先核对事务内快照，再按同一规则重算增量，拒绝越界或伪造的计划。
-            var accountAdventure = ReadAdventure(db, tx, owner.Account, adventure.Catalog, adventure.Now);
-            if (JsonSerializer.Serialize(accountAdventure.State) != JsonSerializer.Serialize(adventure.Before.State) ||
-                JsonSerializer.Serialize(AdventureProgression.Advance(accountAdventure.State, adventure.MaximumLevelExperience,
-                    adventure.Catalog)) != JsonSerializer.Serialize(adventure.After))
-                throw new InvalidOperationException("通关冒险团进度快照或增量已变化");
-            WriteAdventureProgression(db, tx, owner.Account, accountAdventure.State, adventure.After, adventure.Catalog);
-        }
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久通关成长结果与候选不一致");
@@ -197,8 +226,7 @@ internal sealed partial class CharacterRepository
         return new DungeonSettlementCommit(committed, false, reward)
         {
             GainedExperience = checked((uint)plan.GainedExperience),
-            Adventure = adventure is null ? null : new(adventure.After with { Revision = adventure.Before.State.Revision + 1 },
-                adventure.MaximumLevelExperience),
+            Adventure = adventureCommit,
             LuckyStarGained = luckyStar.Granted,
             LuckyStarTotal = luckyStar.Total,
             Card = prepared.Card, Options = prepared.Options,

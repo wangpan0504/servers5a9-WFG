@@ -97,6 +97,18 @@ internal static class GrowthCubeContractTests
             BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(85)) == 123 &&
             BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(194)) == 1000 && packet.Length == 218,
             "35按ARAD的两组成长栏写实际通关与击杀加成，保留基础、评分、实例总经验和尾部读宽");
+        var split = new DungeonClearExperienceReward(100, 25, 155, 0, "test", "test")
+            { GrowthContractExperience = 20, AdventureExperience = 10 };
+        var partlyPaid = split.Applied(137);
+        That(partlyPaid is { BaseExperience: 100, AdventureExperience: 10, RankExperience: 25, GrowthContractExperience: 2,
+                PotionExperience: 0, TotalExperience: 137 } &&
+            BinaryPrimitives.ReadUInt32LittleEndian(DungeonSettlementPackets.EmptyCardReward(partlyPaid, 0)) == 110,
+            "冒险团加成紧随基础经验拆分并合并进35基础字段，实际到账不足时按拆分顺序截断");
+        var baseOnly = split.Applied(50);
+        var adventureEdge = split.Applied(105);
+        That(baseOnly is { BaseExperience: 50, AdventureExperience: 0, RankExperience: 0, GrowthContractExperience: 0, PotionExperience: 0 } &&
+            adventureEdge is { BaseExperience: 100, AdventureExperience: 5, RankExperience: 0 },
+            "基础经验先足额再计入冒险团，未超过基础时其余分项为零");
         var parsed = PremiumContractCatalog.Parse("""
             [type] 84 [target item] 1 [term] 1
             [item] 3 [term] 3 [bonus exp] 99 [/item]

@@ -22,12 +22,22 @@ internal static class AdventureShopTests
         var now = new DateTimeOffset(2026, 10, 11, 0, 0, 0, TimeSpan.Zero);
         That(AdventureRequests.Purchase([1, 0xE8, 3, 0, 0]) == (1, 1000), "商店保留u8类别和完整u32选择值");
         Reject<InvalidDataException>(() => AdventureRequests.Purchase([1, 0, 0, 0]), "商店不截断商品编号");
-        var state = AdventureState.Initial("shop", now) with { Purchases = new Dictionary<int, uint> { [1000] = 2 }.ToImmutableDictionary() };
-        var information = AdventurePackets.Information(1, new(state, []), catalog, [], 2);
+        // 周期列先对齐当前周四边界，才能断言同周期载入是零变化。
+        var state = AdventureState.Initial("shop", now) with { CapsuleWeek = AdventurePeriod.CapsuleWeek(catalog, now),
+            Purchases = new Dictionary<int, uint> { [1000] = 2 }.ToImmutableDictionary() };
+        var information = AdventurePackets.Information(1, new(state, []), catalog, []);
         That(BitConverter.ToUInt32(information, 18 + AdventurePackets.PurchasesOffset) == 1000 &&
             BitConverter.ToUInt32(information, 22 + AdventurePackets.PurchasesOffset) == 2, "7440B购买记录使用物品ID/次数而不是PVF序号");
         That(AdventurePeriod.Apply(state, catalog, now.AddMonths(1)).Purchases.IsEmpty &&
             ReferenceEquals(AdventurePeriod.Apply(state, catalog, now), state), "月限购只在新月份投影重置");
+        // 官方改版公告：骁勇/荣耀结晶购买次数与结晶数量在每月1日06:00初始化，月初零点至05:59仍属上月。
+        var beforeMonth = new DateTimeOffset(2026, 11, 1, 5, 59, 0, TimeSpan.FromHours(8));
+        var atMonth = new DateTimeOffset(2026, 11, 1, 6, 0, 0, TimeSpan.FromHours(8));
+        var cycle = state with { Points = [20, 40, 0, 0, 0], CapsuleWeek = AdventurePeriod.CapsuleWeek(catalog, beforeMonth) };
+        That(ReferenceEquals(AdventurePeriod.Apply(cycle, catalog, beforeMonth), cycle), "商店月重置按UTC+8每月1日06:00切换，05:59仍是上月");
+        var reset = AdventurePeriod.Apply(cycle, catalog, atMonth);
+        That(reset.Month == 202611 && reset.Points.ToArray().SequenceEqual(new uint[] { 20, 0, 0, 0, 0 }) && reset.Purchases.IsEmpty,
+            "06:00后清空荣耀结晶与类型3限购，保留骁勇结晶");
         string root = Path.Combine(Path.GetTempPath(), "s5a9-adventure-shop-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try

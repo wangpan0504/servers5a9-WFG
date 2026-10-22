@@ -24,10 +24,13 @@ internal static class AdventureCapsuleTests
         try
         {
             string path = Path.Combine(root, "game.db");
-            var repo = new CharacterRepository(path);
+            // 装配冒险团与成长资源后启用经验账本：胶囊属于排除来源，只推进角色里程。
+            var repo = new CharacterRepository(path, null, catalog, growth);
             new AuthenticationService(new AuthenticationRepository(path)).Create("capsule", "fixture-password");
             using var owner = new AccountOwners().Acquire("capsule", () => { });
-            byte level = checked((byte)catalog.Capsule.MinimumLevel);
+            // 胶囊资源的等级下限可能高于40级门槛，角色必须同时满足两者才能生成合法兑换计划；
+            // 40级门槛本身由 AdventureLedgerTests 覆盖，这里按胶囊下限取样。
+            byte level = checked((byte)Math.Max(catalog.Capsule.MinimumLevel, AdventureCredit.CountingLevel));
             var actor = repo.Create(owner, new("CapActor", new(1, 0, 10, 10), null)
             {
                 Level = level, DungeonState = CharacterDungeonState.NewOrdinary,
@@ -35,9 +38,11 @@ internal static class AdventureCapsuleTests
             });
             repo.InitializeAdventure(owner, catalog, now);
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open();
-            Execute("UPDATE account_adventures SET capsule_experience=" + catalog.Capsule.MinimumExperience);
+            // 周期列必须与当前周四边界一致：否则载入时按公告清空刚种下的胶囊进度。
+            Execute("UPDATE account_adventures SET capsule_experience=" + catalog.Capsule.MinimumExperience +
+                ",capsule_week=" + AdventurePeriod.CapsuleWeek(catalog, now));
             var snapshot = repo.ReadAdventure(owner, catalog, now);
-            That(service.Claim(snapshot, actor with { Level = (byte)(level - 1) }).Error == 14 &&
+            That(service.Claim(snapshot, actor with { Level = (byte)(catalog.Capsule.MinimumLevel - 1) }).Error == 14 &&
                 service.Claim(snapshot, actor with { Level = (byte)(catalog.Capsule.MaximumLevel + 1) }).Error == 13 &&
                 service.Claim(snapshot, actor with { DungeonState = null }).Error == 3 &&
                 service.Claim(snapshot, actor with { Learning = CharacterLearningState.Uninitialized }).Error == 3,
@@ -52,8 +57,12 @@ internal static class AdventureCapsuleTests
             var committed = repo.CommitAdventureCapsule(owner, plan, catalog, now);
             That(committed.Character.Learning.Experience == actor.Learning.Experience + catalog.Capsule.GrantedExperience &&
                 committed.Character.Learning.Trees[0].Sp - 10 == committed.Character.Learning.Trees[1].Sp - 20 &&
-                committed.Snapshot.State.CapsuleExperience == 0 && committed.Snapshot.State.Level == 1 && committed.Snapshot.State.Experience == 0,
-                "正式XP与两树贡献同笔提交，不递归增加账号经验或胶囊");
+                committed.Snapshot.State.CapsuleExperience == 0 && committed.Snapshot.State.Level == 1 && committed.Snapshot.State.Experience == 0 &&
+                // 胶囊兑换的角色经验不计入冒险团，按国服规则只累计排除额与角色里程。
+                committed.Snapshot.State.ExcludedExperience == catalog.Capsule.GrantedExperience &&
+                Convert.ToInt64(Query("SELECT position_experience FROM character_adventure_credits WHERE character_id=" + actor.Id +
+                    " AND account='capsule'")) == checked((long)(growth.GetLevelStartExperience(level) + catalog.Capsule.GrantedExperience)),
+                "正式XP与两树贡献同笔提交，胶囊经验只进排除额且不递归增加账号经验或胶囊");
             Reject<InvalidOperationException>(() => repo.CommitAdventureCapsule(owner, plan, catalog, now), "旧胶囊计划不重复扣除或发放");
             That(SkillRepositoryTests.Equal(new CharacterRepository(path).LoadCharacter(owner, actor.Slot), committed.Character) &&
                 Query("PRAGMA integrity_check") is "ok" && Query("SELECT count(*) FROM pragma_foreign_key_check") is 0L, "重开恢复完整成长与账号归属");

@@ -180,8 +180,17 @@ public static class ServerApplication
             }
 
             var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(itemResources.Creatures));
-            var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests));
+            // 冒险团经验账本与角色成长共用同一份等级经验表，必须在仓储建立前装配。
+            var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
+            var adventureCatalog = Load("Adventure resources", () => new DfoServer.GameWorld.Adventure.AdventureCatalog(pvf));
+            var growthCatalog = Load("Character growth resources", () => DfoServer.GameWorld.Characters.CharacterGrowthCatalog.Load(pvf, learning));
+            var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests, adventureCatalog, growthCatalog));
             log?.Write("startup", new { Stage = "Database schema", State = "complete", Version = SqliteMigrations.CurrentVersion });
+            if (command.Kind == ServerCommandKind.PrepareBookCharacter)
+            {
+                OfflineBookPreparation.Run(options, characters, towns, repository, command.Arguments);
+                return 0;
+            }
             if (command.Kind == ServerCommandKind.ImportCharacters)
             {
                 using var owner = new AccountOwners().Acquire(options.DevelopmentAccount, () =>
@@ -190,10 +199,14 @@ public static class ServerApplication
                 Console.WriteLine("Imported: " + LegacyCharacterImport.Run(repository, owner, towns, command.Arguments[0]));
                 return 0;
             }
-
-            var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
+            // 国服95模型开启账本：现存角色经验一次性折算进账号总量；标记已存在时不再补发。
+            var opening = Load("Adventure ledger opening", () => repository.OpenAdventureLedger(DateTimeOffset.UtcNow));
+            log?.Write("adventure_ledger", new { Stage = "Opening", opening.Ran, opening.Accounts, opening.Characters,
+                Opening = opening.Opening.ToString(CultureInfo.InvariantCulture), Honor = opening.Honor.ToString(CultureInfo.InvariantCulture),
+                Roster = opening.Roster.ToString(CultureInfo.InvariantCulture) });
             stage = "Runtime and listeners";
-            await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!);
+            await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!,
+                adventureCatalog, growthCatalog);
             return 0;
         }
         catch (Exception error) when (log is not null)

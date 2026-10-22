@@ -85,7 +85,8 @@ internal static class DungeonSettlementPackets
         // 所有动态名单和翻牌奖励为空。固定经验字段来自已经提交的同一次结算。
         // 本版固定尾部含八个独立bool，不能套用其他版本的210B正文。
         byte[] body = new byte[218];
-        BinaryPrimitives.WriteUInt32LittleEndian(body, reward.BaseExperience);
+        // 冒险团加成没有独立字段，按基础通关经验合并；拆分顺序保证两项之和不超过已到账经验。
+        BinaryPrimitives.WriteUInt32LittleEndian(body, checked(reward.BaseExperience + reward.AdventureExperience));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), reward.RankExperience);
         // 02393C80分别投影到结果页两组“成长之契约”栏；不是组队或评分经验。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(49), reward.GrowthContractExperience);

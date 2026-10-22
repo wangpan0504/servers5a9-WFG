@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Dungeons;
 using System.Collections.Immutable;
 
 namespace DfoServer.Game.Characters;
@@ -46,6 +47,12 @@ internal sealed record ExperienceBonuses(uint Ordinary, ImmutableArray<Experienc
             SeriaWelcomeExperience = A(ExperienceBonusSource.SeriaWelcome), FastGrowthExperience = A(ExperienceBonusSource.FastGrowth)
         };
     }
+
+    // 冻结通关奖励的唯一显示投影：本版协议没有冒险团加成字段，它属于基础通关经验，与基础、评分项一起并入普通项。
+    // 未冻结分项的历史结算返回 null，由调用方按旧口径展示。
+    public static ExperienceBonuses? FromClearReward(DungeonClearExperienceReward reward) =>
+        reward.BonusParts.IsDefault ? null : new(
+            checked(reward.BaseExperience + reward.AdventureExperience + reward.RankExperience), reward.BonusParts);
 
     public static ExperienceBonuses Calculate(uint ordinary, uint bonusBasis, IEnumerable<ExperienceBonusRate> rates)
     {

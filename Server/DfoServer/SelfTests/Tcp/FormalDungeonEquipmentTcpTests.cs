@@ -373,7 +373,9 @@ internal static partial class FormalDungeonTcpTests
                     byte[] report = Death(key, peer.Id, roomMap[offset + 12]);
                     if (boss) { report[55] = 1; SealDeath(report); }
                     peer.Send(39, report);
-                    peer.Expect(0, 38); peer.Expect(0, 37);
+                    peer.Expect(0, 38);
+                    // 满级角色停发 NOTI37（见 CharacterExperienceNotice.ShouldPublish），本夹具角色为满级。
+                    if (character.Level < CharacterGrowthCatalog.MaximumSupportedLevel) peer.Expect(0, 37);
                     if (boss) { peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]); peer.Expect(0, 31, []); }
                 }
                 peer.Barrier();

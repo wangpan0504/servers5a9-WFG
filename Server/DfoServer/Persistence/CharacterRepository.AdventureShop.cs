@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Adventure;
@@ -44,8 +45,20 @@ internal sealed partial class CharacterRepository
         for (int index = 0; index < 5; index++) BinaryPrimitives.WriteUInt32LittleEndian(points.AsSpan(index * 4), after.Points[index]);
         command.Parameters.AddWithValue("$points", points); command.Parameters.AddWithValue("$month", after.Month);
         command.Parameters.AddWithValue("$capsule", checked((long)after.CapsuleExperience));
+        command.Parameters.AddWithValue("$week", after.CapsuleWeek);
+        command.Parameters.AddWithValue("$level", after.Level);
+        command.Parameters.AddWithValue("$experience", checked((long)after.Experience));
+        command.Parameters.AddWithValue("$remainder", after.Remainder.ToString(CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$brave", checked((long)after.BraveExperience));
+        command.Parameters.AddWithValue("$excluded", after.ExcludedExperience.ToString(CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$before", before.Revision);
-        command.CommandText = "UPDATE account_adventures SET revision=revision+1,points=$points,month=$month,capsule_experience=$capsule WHERE account=$account AND revision=$before";
+        // 等级、经验、勇者经验与排除额随余额一并写入：冒险团经验来源与购买/胶囊/远征共用一次 revision 递增。
+        command.CommandText = """
+            UPDATE account_adventures SET revision=revision+1,level=$level,experience=$experience,remainder=$remainder,
+              brave_experience=$brave,excluded_experience=$excluded,points=$points,month=$month,
+              capsule_experience=$capsule,capsule_week=$week
+            WHERE account=$account AND revision=$before
+            """;
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("冒险团余额或周期版本失配");
         command.Parameters.Clear(); command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$item", 0);
         // ReadAdventure已投影周期；必须比较数据库原月份，不能保存新月份却遗漏清空旧限购。

@@ -355,6 +355,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             return CommandResult.Handled;
         }
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
+        var previousLevel = result.PreviousLevel ?? throw new InvalidOperationException("已提交死亡缺少原实际等级");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints), state.GrowthCapsuleExperience,
             state.ProficiencyLevel, state.ProficiencyExperience);
         uint plainKill = reward.Amount - reward.GrowthContractExperience - reward.PotionExperience;
@@ -368,7 +369,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool potionClear = result.ClearFact is not null && display.PotionExperience > 0;
         if (potionClear)
             await DungeonSettlementProjection.EnableAsync(context, result.MonsterKey);
-        await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
+        if (CharacterExperienceNotice.ShouldPublish(previousLevel))
+            await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
         if (result.QuestDropSlots.Count > 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main,[.. result.QuestDropSlots]),"formal_quest_drop_items",Guard);
@@ -384,7 +386,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                 Guard,
                 "formal_growth_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character,
-            result.PreviousLevel ?? throw new InvalidOperationException("已提交死亡缺少原实际等级"), "formal_level_committed", Guard,
+            previousLevel, "formal_level_committed", Guard,
             previousLearning: previousCharacter?.Learning);
         bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);
         if (!closed && result.PreviousQuests is { } previous && receipt.Character.ActiveMainQuests.Any(row => previous.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))

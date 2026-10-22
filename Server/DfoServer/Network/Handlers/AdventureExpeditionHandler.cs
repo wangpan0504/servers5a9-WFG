@@ -54,7 +54,7 @@ internal sealed class AdventureExpeditionHandler(AdventureExpeditionService serv
             var snapshot = result.Snapshot!; var selected = result.Selected!;
             bool Guard() => context.Session.CanPublishAdventureExpedition(result);
             await context.Notify(NotiPacketType.ADVENTURE_INFO, AdventurePackets.Information(selected.Id, snapshot, service.Catalog,
-                snapshot.Representatives(service.Catalog), context.Channel.ServerIndex), "expedition_account_information", Guard);
+                snapshot.Representatives(service.Catalog)), "expedition_account_information", Guard);
             await context.Notify(NotiPacketType.ADVENTURE_LV_EXP, AdventurePackets.Refresh(selected.Id, snapshot.State, service.Catalog),
                 "expedition_account_actor", Guard);
         }

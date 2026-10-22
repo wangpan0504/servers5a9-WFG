@@ -49,6 +49,25 @@ internal sealed partial class CharacterRepository
         command.ExecuteNonQuery();
     }
 
+    // 熟练度与角色经验在同一事务提交；用旧值做乐观校验，冲突时整笔回滚而不是覆盖。
+    static void WriteProficiency(SqliteConnection db, SqliteTransaction tx, string account, ushort id,
+        ProficiencyProgress before, ProficiencyProgress after)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$account", account);
+        command.Parameters.AddWithValue("$level", after.Level);
+        command.Parameters.AddWithValue("$experience", checked((long)after.Experience));
+        command.Parameters.AddWithValue("$oldLevel", before.Level);
+        command.Parameters.AddWithValue("$oldExperience", checked((long)before.Experience));
+        command.CommandText = """
+            UPDATE character_dungeon_state SET proficiency_level=$level,proficiency_experience=$experience
+            WHERE character_id=$id AND account=$account AND proficiency_level=$oldLevel AND proficiency_experience=$oldExperience
+            """;
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("熟练度状态已变化");
+    }
+
     public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => owner.Execute(() =>
     {
         var state = ReservationState(expected, nextObjectKey);

@@ -16,6 +16,7 @@ internal static class AdventureCoreTcpTests
             "本版2018资源包含真实经验表和第五转职，不采用旧linksystem表");
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "adventure"), resources: resources);
         await fixture.StartAsync();
+        ushort other;
         using (var peer = Open(fixture, "adventurea"))
         {
             That(fixture.Query("SELECT level,experience,revision FROM account_adventures WHERE account='adventurea'") is [[1L, 0L, 0L]],
@@ -30,7 +31,7 @@ internal static class AdventureCoreTcpTests
             That(query[0] == 1 && query.AsSpan(1).SequenceEqual(selection), "选角查询只读本账号，保持owner0且不发实体1349");
             peer.Create("GroupHero");
             peer.Create("GroupTwo");
-            ushort other = peer.Id;
+            other = peer.Id;
             Execute("UPDATE characters SET level=95,grow_type=33 WHERE id=" + other);
             // 非穿戴资产故意损坏；账号查询只能读取离线角色的身份与成长字段。
             Execute("INSERT INTO character_inventory_items(character_id,account,item_core) VALUES(" + other + ",'adventurea','{}'); " +
@@ -39,7 +40,7 @@ internal static class AdventureCoreTcpTests
             var roster = peer.Expect(1, 1403).Body.AsSpan(1).ToArray();
             Information(roster, 0, "adventurea", 2);
             That(U32(roster, 18 + 72 + 48) == 95 && roster[18 + 72] == 0 && roster[18 + 73] == 1 &&
-                roster[18 + 72 + 42] == 2, "轻量账号名册展示合法二觉角色及实际频道地域，不装载其坏背包");
+                roster[18 + 72 + 42] == 0, "轻量账号名册展示合法二觉角色及初始零熟练角标，不装载其坏背包");
             peer.Select();
             AccountName(peer.AdventureName, "");
             Information(peer.AdventureInfo, peer.Id, "adventurea", 2);
@@ -71,6 +72,14 @@ internal static class AdventureCoreTcpTests
             peer.Send(645); peer.Expect(1, 645, [1, 0]);
             AccountName(peer.Expect(0, 1375).Body, "测试团");
             Information(peer.Expect(0, 1343).Body, 0, "测试团", 2);
+            // 1343 名册行 offset42 是选角卡片熟练角标，客户端 010314C0 读入显示结构 +0x2C；
+            // 服务端投影角色持久熟练等级而不是频道地域。放在重开之后设置，避免把熟练度
+            // 计入账号开启经验，影响本用例对初始进度的断言。
+            Execute("UPDATE character_dungeon_state SET proficiency_level=188,proficiency_experience=871311064 WHERE character_id=" + other);
+            peer.Send(1403, [0, 0]);
+            var refreshed = peer.Expect(1, 1403).Body.AsSpan(1).ToArray();
+            That(U32(refreshed, 18 + 72 + 48) == 95 && refreshed[18 + 72 + 42] == 188,
+                "1343名册offset42投影角色持久熟练等级");
             peer.Send(692, Name("GroupProbe")); peer.Expect(1, 692, [1]);
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,

@@ -10,7 +10,10 @@ namespace DfoServer.Persistence;
 
 // 领域存储合同的实现集中在本仓储（邮件、拍卖行挂牌）：它们都要与角色资产共用同一个写事务，
 // 因此按合同声明的形状实现，而不是让每个模块各自持有第二个仓储实例（那会变成互相构造）。
-internal sealed partial class CharacterRepository(string path, DfoServer.GameWorld.Quests.QuestCatalog? quests = null)
+// 资源目录由 Runtime 装配后注入：冒险团经验账本与角色成长需要同一份等级经验表与倍率。
+internal sealed partial class CharacterRepository(string path, DfoServer.GameWorld.Quests.QuestCatalog? quests = null,
+    DfoServer.GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
+    DfoServer.GameWorld.Characters.CharacterGrowthCatalog? growthCatalog = null)
     : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore, IAuctionListingStore
 {
     readonly SqliteGameDatabase database = new(path);
@@ -131,6 +134,16 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         CreateDungeonState(db, transaction, owner.Account, id, character.DungeonState);
         CreateTutorial(db, transaction, owner.Account, id, character.Tutorial);
         if (character.DungeonState is not null) CreateFatigue(db, transaction, owner.Account, id);
+        // 新角色的初始经验不进冒险团；里程从当前有效位置起算，之后只累计本角色真实获得的经验。
+        if (adventureCatalog is not null && growthCatalog is not null)
+        {
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$id", id);
+            command.Parameters.AddWithValue("$account", owner.Account);
+            command.Parameters.AddWithValue("$position", checked((long)EffectivePosition(character.Level, character.InitialLearning.Experience)));
+            command.CommandText = "INSERT INTO character_adventure_credits(character_id,account,baseline_experience,position_experience) VALUES($id,$account,$position,$position) ON CONFLICT(character_id) DO NOTHING";
+            command.ExecuteNonQuery();
+        }
         var learning = ReadLearning(db, id, transaction);
         var fatigue = ReadFatigue(db, id, transaction);
         // 新角色尚无实体；读取同账号已有仓库后合入角色初始物品，不能重写共享资产。

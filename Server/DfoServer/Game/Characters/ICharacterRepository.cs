@@ -29,6 +29,12 @@ internal interface ICharacterRepository
     DfoServer.Game.Adventure.AdventureSnapshot CommitAdventureRepresentative(AccountOwners.Lease owner,
         DfoServer.Game.Adventure.AdventureRepresentativePlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now);
     DfoServer.Game.Adventure.AdventureSnapshot ReadAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now);
+    // 每周地下城信息页：718只读账号名册，791保存客户端提交的5槽位排列。
+    System.Collections.Immutable.ImmutableArray<(uint Id, string Name)> ReadAdventureCharacterList(AccountOwners.Lease owner);
+    System.Collections.Immutable.ImmutableArray<byte> ReadAdventureWeeklyConfig(AccountOwners.Lease owner);
+    void WriteAdventureWeeklyConfig(AccountOwners.Lease owner, System.Collections.Immutable.ImmutableArray<byte> slots);
+    // 结算加成只读取账号等级，不装载商店、代表与远征；未初始化账号按初始等级1处理。
+    int ReadAdventureLevel(AccountOwners.Lease owner);
     void InitializeAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now);
     DfoServer.Game.Tutorials.TutorialCheckpointResult CommitTutorialCheckpoint(AccountOwners.Lease owner,
         DfoServer.Game.Tutorials.TutorialCheckpointPlan plan);
@@ -78,7 +84,7 @@ internal interface ICharacterRepository
     DungeonSettlementCommit CommitDungeonSettlement(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonSettlement prepared, CharacterGrowthCatalog catalog, InventoryPlan? cardInventory = null, bool mailCardItem = false,
         DungeonCardDelivery? premiumDelivery = null, bool grantLuckyStar = false, int luckyStarLimit = 0,
-        DfoServer.Game.Adventure.AdventureProgressionPlan? adventure = null);
+        bool recommendedClear = false);
     DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
         DungeonGroundPickupPreparation prepared, InventoryPlan plan);
     Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared);

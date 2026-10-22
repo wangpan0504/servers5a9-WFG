@@ -8,7 +8,8 @@ namespace DfoServer.Network.Projection;
 internal sealed class CharacterLevelProjection(CharacterStatComputer stats, QuestProjection? quests = null)
 {
     public Task PlayerAsync(GameConnectionContext context, Character committed, string action, Func<bool> canSend) =>
-        context.Notify(NotiPacketType.USERINFO,TownPackets.Player(committed,stats.Compute(committed), context.Channel),action,canSend);
+        context.Notify(NotiPacketType.USERINFO,
+            TownPackets.Player(committed, stats.Compute(committed), context.Session.ReadAdventureLevel(), context.Channel), action, canSend);
 
     public async Task RefreshAsync(GameConnectionContext context, Character committed, byte previousLevel,
         string action, Func<bool> canSend, byte? previousGrowType = null, bool restoreCompletedQuests = true,

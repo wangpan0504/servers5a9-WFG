@@ -43,7 +43,8 @@ internal static class ServerRuntime
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
         GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
-        GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null)
+        GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null,
+        CharacterGrowthCatalog? growthCatalog = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures);
         var questStages = QuestStageGraph.Build(quests);
@@ -87,7 +88,7 @@ internal static class ServerRuntime
         expeditionCatalog ??= new GameWorld.Adventure.AdventureExpeditionCatalog(pvf);
         var expeditionService = new Game.Adventure.AdventureExpeditionService(adventureCatalog, expeditionCatalog);
         var expeditionProjection = new AdventureExpeditionProjection(expeditionService, clock);
-        var growth = CharacterGrowthCatalog.Load(pvf, learning);
+        var growth = growthCatalog ?? CharacterGrowthCatalog.Load(pvf, learning);
         var experienceBonuses = new Game.Characters.ExperienceBonusService(itemResources.Items, itemResources.RecoveryConsumables,
             GameWorld.Characters.ExperienceBonusCatalog.Load(pvf));
         tutorials ??= new TutorialCatalog(pvf);
@@ -243,6 +244,7 @@ internal static class ServerRuntime
             new AdventureShopHandler(new Game.Adventure.AdventureShopService(adventureCatalog, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, clock),
             new AdventureCapsuleHandler(new Game.Adventure.AdventureCapsuleService(adventureCatalog, growth), levelProjection, clock),
+            new AdventureWeeklyHandler(),
             new SkillHandler(learning, log),
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
             new TownHandler(projection, log),

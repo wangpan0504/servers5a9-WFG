@@ -1093,14 +1093,29 @@ internal static partial class FormalDungeonTcpTests
         }
         That(bossReport is not null && fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND quest_id=0", peer.Id)
             is [[32L]], "普通六房全部32个静态目标正式落库，机关子actor没有混入成长或清图事实");
+        // 结算必须真实覆盖非零冒险团加成：把账号冒险团等级提到2级（该级资源声明通关经验+10%）。
+        fixture.Sql("""
+            INSERT INTO account_adventures(account,revision,name,created_date,level,experience,remainder,
+              capsule_experience,brave_experience,points,month)
+            VALUES($p0,0,'FixtureGroup',20261022,2,0,'0',0,0,zeroblob(20),202610)
+            ON CONFLICT(account) DO UPDATE SET level=2
+            """, fixture.Options.DevelopmentAccount);
         byte[] resultReport = DungeonSettlementProtocolTests.Report(peer.Id, 90);
+        // 清图击杀经验已按账本推进账号冒险团等级；结算按提交前等级把资源声明的「通关经验值增加」计入整单奖励。
+        int adventureLevel = Convert.ToInt32(fixture.Query(
+            "SELECT coalesce((SELECT level FROM account_adventures WHERE account=$p0),1)",
+            fixture.Options.DevelopmentAccount).Single()[0]);
+        uint adventureBonus = DfoServer.Game.Adventure.AdventureBenefitPolicy.ClearExperienceBonus(
+            clearReward.BaseExperience, adventureLevel, resources.Adventure);
+        uint clearExperience = checked(clearReward.TotalExperience + adventureBonus);
         peer.Send(46, resultReport);
         That(peer.Expect(0, 34).Body[6] == 90, "普通真实Boss清图开启评分结果通知");
-        ReadGrowth(clearReward.TotalExperience);
+        ReadGrowth(clearExperience);
         peer.ReadCardMembershipState();
         byte[] clear = peer.Expect(0, 35).Body;
         ReadCommittedCard(fixture,peer,clear);
-        That(U32(clear, 0) == clearReward.BaseExperience && U32(clear, 4) == clearReward.RankExperience &&
+        // 35包没有独立冒险团字段，加成按基础通关经验合并展示（见 DungeonSettlementPackets.EmptyCardReward）。
+        That(U32(clear, 0) == checked(clearReward.BaseExperience + adventureBonus) && U32(clear, 4) == clearReward.RankExperience &&
             fixture.Query("SELECT quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0 AND quest_id=0", peer.Id) is [[0L]],
             "普通生产结算使用本路线经验与零任务账本，不复用任务结算资格");
         peer.Send(69);
@@ -1131,8 +1146,11 @@ internal static partial class FormalDungeonTcpTests
         {
             experience += delta;
             byte[] notice = peer.Expect(0, 37).Body;
-            That(notice.Length == 91 && U64(notice, 1) == experience && U32(notice, 9) == 0 && Experience(fixture, peer.Id) == experience,
-                "普通死亡和结算的实际完整经验通知与持久累计经验一致");
+            That(notice.Length == 91, $"普通经验通知长度应为91（实际{notice.Length}）");
+            That(U64(notice, 1) == experience, $"普通经验通知累计值应与持久累计经验一致（通知{U64(notice, 1)}，期望{experience}）");
+            That(U32(notice, 9) == 0, $"普通经验通知扩展字段应为0（实际{U32(notice, 9)}）");
+            That(Experience(fixture, peer.Id) == experience,
+                $"普通死亡和结算的实际完整经验通知与持久累计经验一致（库{Experience(fixture, peer.Id)}，期望{experience}）");
             if (notice[0] != currentLevel)
             {
                 ExpectLevelRefresh(peer, notice[0], experience, completedMainline: true);

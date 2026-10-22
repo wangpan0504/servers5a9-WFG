@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Adventure;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Adventure;
 
@@ -36,9 +37,22 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$id", expected.Id); command.Parameters.AddWithValue("$account", owner.Account); command.Parameters.AddWithValue("$revision", expected.Revision);
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("胶囊角色revision失配");
         WriteLearning(db, tx, expected.Id, growth.Learning); WriteCanonicalSkills(db, tx, expected.Id, growth.Learning);
+        // 成长胶囊给的角色经验同样累积熟练度。
+        var proficiencyGain = ProficiencyProgression.Gain(growth.PreviousLevel, growth.Before.Experience,
+            checked((uint)growth.RequestedExperience), growth.Catalog);
+        if (ProficiencyProgression.Advance(new(character.DungeonState.ProficiencyLevel, character.DungeonState.ProficiencyExperience),
+                proficiencyGain, growth.Catalog) is { } proficiency)
+            WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
         if (quests is not null) WriteQuestConditions(db, tx, expected.Id, character.ActiveMainQuests,
             QuestStateProgress.Refresh(character.ActiveMainQuests, character with { Level = growth.TargetLevel, Learning = growth.Learning }, quests));
-        WriteAdventureBalances(db, tx, owner.Account, current.State, plan.After, catalog);
+        // 成长胶囊兑换出的角色经验按国服规则不计入冒险团，只推进角色里程；排除额并入同一次余额写入。
+        var afterState = plan.After;
+        if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.ExcludedGrant,
+                growth.Learning.Experience - growth.Before.Experience,
+                EffectivePosition(character.Level, character.Learning.Experience), character.Level, growth.TargetLevel,
+                now) is { } credit)
+            afterState = afterState with { ExcludedExperience = credit.After.ExcludedExperience };
+        WriteAdventureBalances(db, tx, owner.Account, current.State, afterState, catalog);
         command.Parameters.Clear();
         command.CommandText = "INSERT INTO account_adventure_receipts VALUES($account,$event,$character,'capsule_claim',0,$before,$revision)";
         command.Parameters.AddWithValue("$account", owner.Account); command.Parameters.AddWithValue("$event", Guid.NewGuid().ToString("N"));

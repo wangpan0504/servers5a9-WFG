@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Tutorials;
 using DfoServer.Game.Inventory.Models;
@@ -130,6 +131,21 @@ internal sealed partial class CharacterRepository
         {
             WriteLearning(db, tx, expected.Id, progress.Learning);
             WriteCanonicalSkills(db, tx, expected.Id, progress.Learning);
+            // 训练击杀经验同样累积熟练度；先按训练前快照推进，再随同一事务提交。
+            if (expected.DungeonState is { } dungeonState)
+            {
+                var proficiencyGain = ProficiencyProgression.Gain(progress.PreviousLevel, progress.Before.Experience,
+                    checked((uint)progress.RequestedExperience), progress.Catalog);
+                if (ProficiencyProgression.Advance(new(dungeonState.ProficiencyLevel, dungeonState.ProficiencyExperience),
+                        proficiencyGain, progress.Catalog) is { } proficiency)
+                    WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
+            }
+            // 训练检查点击杀/通关经验属于经验获取，按同一模型计入冒险团。
+            if (plan.Experience > 0 &&
+                CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, plan.Experience,
+                    EffectivePosition(expected.Level, expected.Learning.Experience), expected.Level, progress.TargetLevel,
+                    DateTimeOffset.UtcNow) is { } credit)
+                WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         }
         command.Parameters.AddWithValue("$completed", plan.After.Completed); command.Parameters.AddWithValue("$reward", plan.After.RewardReceived);
         command.CommandText = "UPDATE character_tutorial_state SET completed=$completed,reward_received=$reward WHERE character_id=$id AND account=$account";

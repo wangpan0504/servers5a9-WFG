@@ -21,8 +21,10 @@ internal static partial class DatabaseSchemaTests
         if (Query(db, "SELECT count(*) FROM character_dungeon_settlement_receipts WHERE other_bonus_experience<>0 OR bonus_json<>'[]'") is not 0L)
             throw new InvalidOperationException("旧库夹具不能丢弃真实经验加成分项");
         using var tx = db.BeginTransaction();
+        // 回退到本分支账本迁移之前的结构：保留秘药/冒险团分项，只去掉上游 #543 的其他加成。
         SqliteMigrations.ReplaceTableConstraint(db, tx, DungeonExperienceBonusSchema.Table,
-            DungeonExperienceBonusSchema.NewTotal + ")", DungeonExperienceBonusSchema.OldTotal + ")");
+            "total_experience=base_experience+rank_experience+growth_contract_experience+potion_experience+adventure_experience+other_bonus_experience)",
+            "total_experience=base_experience+rank_experience+growth_contract_experience+potion_experience+adventure_experience)");
         SqliteMigrations.Execute(db, tx, "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN bonus_json");
         SqliteMigrations.Execute(db, tx, "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN other_bonus_experience");
         tx.Commit();
@@ -49,6 +51,44 @@ internal static partial class DatabaseSchemaTests
         Execute(db, "DROP INDEX IF EXISTS account_adventure_name");
         if (Query(db, "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='name_initialized'") is 1L)
             Execute(db, "ALTER TABLE account_adventures DROP COLUMN name_initialized");
+        RemoveAdventureCapsuleWeek(db);
+        RemoveAdventureActivity(db);
+        RemoveAdventureWeekly(db);
+        RemoveAdventureLedger(db);
+    }
+
+    // v72 只追加每周地下城配置表；回退到 v71 及更早的夹具应真的移除，确保重放时走真实建表而不是按已有结构跳过。
+    internal static void RemoveAdventureWeekly(SqliteConnection db) =>
+        Execute(db, "DROP TABLE IF EXISTS account_adventure_weekly_config");
+
+    // v73 追加开启/排除额两列与角色里程、开启标记两张表；回退到 v72 及更早的夹具必须真的移除，
+    // 否则真实 ALTER/CREATE 会被按已有结构跳过，旧版模拟失去意义。
+    internal static void RemoveAdventureLedger(SqliteConnection db)
+    {
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='opening_experience'") is 1L)
+            Execute(db, "ALTER TABLE account_adventures DROP COLUMN opening_experience");
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='excluded_experience'") is 1L)
+            Execute(db, "ALTER TABLE account_adventures DROP COLUMN excluded_experience");
+        Execute(db, "DROP TABLE IF EXISTS character_adventure_credits");
+        Execute(db, "DROP TABLE IF EXISTS adventure_ledger_meta");
+    }
+
+    // v69 只追加胶囊周期列；任何回退到 v70 及更早的夹具都必须真的移除该列，否则真实 ALTER 撞列。
+    internal static void RemoveAdventureCapsuleWeek(SqliteConnection db)
+    {
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='capsule_week'") is 1L)
+            Execute(db, "ALTER TABLE account_adventures DROP COLUMN capsule_week");
+    }
+
+    // v71 追加登录周期与推荐地下城计数；回退到 v70 及更早的夹具必须真的移除，否则迁移被跳过而未验证。
+    internal static void RemoveAdventureActivity(SqliteConnection db)
+    {
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='login_streak_days'") is 1L)
+            Execute(db, "ALTER TABLE account_adventures DROP COLUMN login_streak_days");
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='last_login_day'") is 1L)
+            Execute(db, "ALTER TABLE account_adventures DROP COLUMN last_login_day");
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_state') WHERE name='recommended_dungeon_clears'") is 1L)
+            Execute(db, "ALTER TABLE character_dungeon_state DROP COLUMN recommended_dungeon_clears");
     }
 
     // 旧结构夹具确实移除v40来源列和空场景表，保留旧清图、完成FK与历史行。
@@ -173,7 +213,8 @@ internal static partial class DatabaseSchemaTests
                 "DROP TABLE character_collectbox_expirations",
                 "DROP TABLE character_skill_switch_inventory_items",
                 "DROP TABLE character_skill_switch_inventory_items; DROP TABLE character_skill_switch_inventory",
-                "DROP INDEX auction_listings_expiry; DROP INDEX auction_listings_seller; DROP INDEX auction_listings_template; DROP TABLE auction_listings"
+                "DROP INDEX auction_listings_expiry; DROP INDEX auction_listings_seller; DROP INDEX auction_listings_template; DROP TABLE auction_listings",
+                "DROP TABLE account_adventure_weekly_config"
             })
             {
                 string rejected = Path.Combine(root, Guid.NewGuid().ToString("N") + ".db");
@@ -218,6 +259,9 @@ internal static partial class DatabaseSchemaTests
             VerifyQuestRentalCompletionMigration(root);
             VerifyQuestRentalCompletionMigration(root,45);
             VerifyDungeonSceneSettlementMigration(root);
+            VerifySettlementBreakdownMigration(root);
+            VerifyAdventureWeeklyMigration(root);
+            VerifyAdventureTemporaryNumberingCompatibility(root);
             VerifyPremiumContractsMigration(root);
             VerifyMasterQuest14Compatibility(root);
             VerifyQuestSystemMigration(root);
@@ -520,7 +564,7 @@ internal static partial class DatabaseSchemaTests
                 .Replace("12,19,25", "12,25", StringComparison.Ordinal));
     }
 
-    // v42仍是正死亡场景与结算；回退只接受没有v43新事实的夹具，不删除真实来源或奖励。
+    // v42仍是正死亡场景与结算；回退只接受没有v43/v70新事实的夹具，不删除真实来源或奖励。
     internal static void RewindDungeonSceneSettlement(SqliteConnection db)
     {
         RemoveExperienceBonusSchema(db);
@@ -528,20 +572,44 @@ internal static partial class DatabaseSchemaTests
         DropGuildSchema(db);
         const string settlement = "character_dungeon_settlement_receipts", scene = "character_dungeon_scene_clear_receipts";
         bool hasNewColumns = Query(db, "SELECT count(*) FROM pragma_table_info('" + settlement + "') WHERE name='scene_operation_id'") is 1L;
-        if (hasNewColumns && Query(db, "SELECT count(*) FROM " + settlement + " WHERE scene_operation_id IS NOT NULL OR growth_contract_experience<>0") is not 0L ||
+        bool hasBreakdown = Query(db, "SELECT count(*) FROM pragma_table_info('" + settlement + "') WHERE name='potion_experience'") is 1L;
+        if (hasBreakdown && !hasNewColumns) throw new InvalidOperationException("旧版本夹具遇到半份通关经验分项结构");
+        string breakdown = hasBreakdown ? " OR potion_experience<>0 OR adventure_experience<>0" : "";
+        if (hasNewColumns && Query(db, "SELECT count(*) FROM " + settlement + " WHERE scene_operation_id IS NOT NULL OR growth_contract_experience<>0" + breakdown) is not 0L ||
             Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='" + scene + "'") is 1L &&
             Query(db, "SELECT count(*) FROM " + scene + " WHERE length(death_events)=0") is not 0L)
-            throw new InvalidOperationException("旧版本夹具不能丢弃实际空场景来源或成长契约奖励");
+            throw new InvalidOperationException("旧版本夹具不能丢弃实际空场景来源、成长契约、秘药或冒险团经验");
         bool foreignKeys = Query(db, "PRAGMA foreign_keys") is 1L;
         Execute(db, "PRAGMA foreign_keys=OFF");
         try
         {
             if (hasNewColumns)
                 ChangeReceiptDefinition(db, settlement, _ => DungeonSceneSettlementSchema.PreviousSettlementSql,
-                    ColumnNames(db, settlement).Where(name => name is not "\"scene_operation_id\"" and not "\"growth_contract_experience\"").ToArray());
+                    ColumnNames(db, settlement).Where(name => name is not "\"scene_operation_id\"" and not "\"growth_contract_experience\""
+                        and not "\"potion_experience\"" and not "\"adventure_experience\"").ToArray());
             if (Query(db, "SELECT sql FROM sqlite_schema WHERE type='table' AND name='" + scene + "'") is string definition &&
                 !definition.Contains("length(death_events)>0", StringComparison.Ordinal))
                 ChangeReceiptDefinition(db, scene, _ => SqliteMigrations.QuestSceneClearSchema);
+        }
+        finally { if (foreignKeys) Execute(db, "PRAGMA foreign_keys=ON"); }
+    }
+
+    // v70 只追加秘药与冒险团分项；旧版本夹具必须真的移除两列，保留结算、翻牌历史及外键。
+    internal static void RewindSettlementBreakdown(SqliteConnection db)
+    {
+        const string settlement = "character_dungeon_settlement_receipts";
+        // 上游 #543 的其他加成分项（v66）先于本步（v70）；回退到 v69 前必须先移除这两列，
+        // 否则重建回执表时的复制列表引用了目标定义中不存在的列。
+        RemoveExperienceBonusSchema(db);
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('" + settlement + "') WHERE name='potion_experience'") is not 1L) return;
+        if (Query(db, "SELECT count(*) FROM " + settlement + " WHERE potion_experience<>0 OR adventure_experience<>0") is not 0L)
+            throw new InvalidOperationException("旧版本夹具不能丢弃实际秘药或冒险团经验");
+        bool foreignKeys = Query(db, "PRAGMA foreign_keys") is 1L;
+        Execute(db, "PRAGMA foreign_keys=OFF");
+        try
+        {
+            ChangeReceiptDefinition(db, settlement, _ => DungeonSceneSettlementSchema.SettlementSql,
+                ColumnNames(db, settlement).Where(name => name is not "\"potion_experience\"" and not "\"adventure_experience\"").ToArray());
         }
         finally { if (foreignKeys) Execute(db, "PRAGMA foreign_keys=ON"); }
     }
@@ -676,6 +744,169 @@ internal static partial class DatabaseSchemaTests
             Check(tables.All(table => Query(db, "SELECT count(*) FROM " + table) is 0L) &&
                 Query(db, "SELECT count(*) FROM characters") is 0L && Query(db, "SELECT rental_points FROM account_wallets") is 17L &&
                 Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L, "删角清理来源、结算、清图、完成和翻牌，保留账号钱包且无残留外键");
+    }
+
+    // v70 只追加秘药与冒险团经验分项：v69 历史行按0补齐，翻牌子表与索引触发器保留，非法分解拒绝。
+    private static void VerifySettlementBreakdownMigration(string root)
+    {
+        const string settlement = "character_dungeon_settlement_receipts";
+        string path = Path.Combine(root, "breakdown-v69.db");
+        _ = new CharacterRepository(path);
+        new AuthenticationService(new AuthenticationRepository(path)).Create("breakdown-history", "fixture-password");
+        using (var db = Open(path))
+        {
+            RewindSettlementBreakdown(db);
+            Execute(db, $$"""
+                INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction)
+                  VALUES('breakdown-history',0,'BreakdownHistory',7,38,1,450,234,0);
+                INSERT INTO character_dungeon_settlement_receipts(rowid,{{SettlementColumns}},scene_operation_id,growth_contract_experience)
+                  VALUES(11,1,'breakdown-history','event-before-v70','instance-before-v70',100,1,2,191,70407,
+                    zeroblob(16),X'0102',1,20,2,22,0,'history-rule','history-resource',1,1,60,82,8,NULL,0);
+                INSERT INTO character_dungeon_card_rewards(rowid,character_id,account,instance_id,plan_json,reward_json,revision,claimed)
+                  VALUES(17,1,'breakdown-history','instance-before-v70','{"Frozen":"card"}','{"History":"reward"}',8,0);
+                INSERT INTO character_dungeon_card_options(rowid,character_id,account,instance_id,options_json,black_diamond_reward_json)
+                  VALUES(19,1,'breakdown-history','instance-before-v70','{"Frozen":"option"}','{"History":"bonus"}');
+                CREATE INDEX breakdown_history_index ON character_dungeon_settlement_receipts(account);
+                CREATE TABLE breakdown_migration_audit(value TEXT);
+                CREATE TRIGGER breakdown_history_insert AFTER INSERT ON character_dungeon_settlement_receipts
+                  BEGIN INSERT INTO breakdown_migration_audit VALUES('settlement'); END;
+                PRAGMA user_version=66;
+                """);
+            Check(Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name IN('potion_experience','adventure_experience')") is 0L,
+                "v69夹具真实移除秘药与冒险团经验分项列");
+        }
+        foreach (string scenario in new[] { "late-failure", "unknown-definition", "unknown-child" })
+        {
+            string damaged = Path.Combine(root, "breakdown-v69-" + scenario + ".db");
+            using (var source = Open(path))
+            using (var target = Open(damaged)) source.BackupDatabase(target);
+            using (var db = Open(damaged))
+            {
+                Execute(db, "PRAGMA foreign_keys=OFF");
+                if (scenario == "late-failure") Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
+                else if (scenario == "unknown-definition")
+                    ChangeReceiptDefinition(db, settlement, sql => sql.Replace("rank_bonus_index BETWEEN -1 AND 4", "rank_bonus_index BETWEEN -1 AND 5", StringComparison.Ordinal));
+                else Execute(db, "CREATE TABLE unknown_breakdown_child(character_id INTEGER,instance_id TEXT,FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_settlement_receipts(character_id,instance_id))");
+                Execute(db, "PRAGMA foreign_keys=ON");
+            }
+            string before = Snapshot(damaged);
+            RejectDatabase(() => new CharacterRepository(damaged));
+            Check(Snapshot(damaged) == before, "v70分项迁移拒绝未知结构/依赖或末段校验失败，整笔保留原DDL、历史行与版本：" + scenario);
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "SELECT base_experience||':'||rank_experience||':'||growth_contract_experience||':'||potion_experience||':'||adventure_experience||':'||total_experience FROM " + settlement + " WHERE rowid=11") is "20:2:0:0:0:22",
+                "v70历史结算按0补齐秘药与冒险团分项，不改原奖励分解");
+            Check(Query(db, "SELECT plan_json||':'||reward_json||':'||claimed FROM character_dungeon_card_rewards WHERE rowid=17") is "{\"Frozen\":\"card\"}:{\"History\":\"reward\"}:0" &&
+                Query(db, "SELECT options_json||':'||black_diamond_reward_json FROM character_dungeon_card_options WHERE rowid=19") is "{\"Frozen\":\"option\"}:{\"History\":\"bonus\"}",
+                "v70重建父表时保留翻牌冻结计划、已发奖励与领取位");
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='breakdown_history_index'") is 1L &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='trigger' AND name='breakdown_history_insert'") is 1L &&
+                Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "v70恢复结算索引与触发器，版本、外键和完整性一致");
+            Execute(db, $$"""
+                INSERT INTO character_dungeon_settlement_receipts(rowid,{{SettlementColumns}},scene_operation_id,growth_contract_experience,potion_experience,adventure_experience)
+                  VALUES(31,1,'breakdown-history','event-after-v70','instance-after-v70',100,1,2,191,70407,
+                    zeroblob(16),X'0103',1,20,2,37,0,'history-rule','history-resource',1,1,60,97,8,NULL,5,3,7);
+                """);
+            Check(Query(db, "SELECT potion_experience||':'||adventure_experience||':'||total_experience FROM " + settlement + " WHERE rowid=31") is "3:7:37" &&
+                Query(db, "SELECT count(*) FROM breakdown_migration_audit") is 1L,
+                "v70新回执接受五项经验分解，恢复后的触发器只观察新提交");
+            foreach (string mutation in new[] { "potion_experience=4", "adventure_experience=6", "total_experience=38", "adventure_experience=-1" })
+                Reject<SqliteException>(() => Execute(db, "UPDATE " + settlement + " SET " + mutation + " WHERE rowid=31"),
+                    "v70拒绝与实际到账不一致的秘药或冒险团分解：" + mutation);
+        }
+        string stable = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == stable, "v70重开幂等，不重复重建结算或翻牌结构");
+    }
+
+    private static void VerifyAdventureWeeklyMigration(string root)
+    {
+        string path = Path.Combine(root, "weekly-v71.db");
+        _ = new CharacterRepository(path);
+        new AuthenticationService(new AuthenticationRepository(path)).Create("weekly-history", "fixture-password");
+        using (var db = Open(path))
+        {
+            Execute(db, """
+                INSERT INTO account_adventures(account,revision,name,created_date,level,experience,remainder,capsule_experience,
+                  brave_experience,points,month,name_initialized,capsule_week,login_streak_days,last_login_day)
+                  VALUES('weekly-history',3,'WeeklyHistory',20261020,1,0,'0',0,0,zeroblob(20),202610,1,0,0,0);
+                """);
+            RemoveAdventureWeekly(db);
+            Execute(db, "PRAGMA user_version=68");
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='account_adventure_weekly_config'") is 0L,
+                "v71夹具真实移除每周地下城配置表");
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='account_adventure_weekly_config'") is 1L &&
+                Query(db, "SELECT count(*) FROM pragma_table_info('account_adventure_weekly_config') WHERE name IN('account','slots')") is 2L &&
+                Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                "v72从v71只追加每周地下城配置表");
+            Reject<SqliteException>(() => Execute(db,
+                "INSERT INTO account_adventure_weekly_config(account,slots) VALUES('weekly-history',zeroblob(4))"),
+                "v72拒绝非5字节槽位");
+            Execute(db, "INSERT INTO account_adventure_weekly_config(account,slots) VALUES('weekly-history',X'00010203FF')");
+            Check(Query(db, "SELECT hex(slots) FROM account_adventure_weekly_config WHERE account='weekly-history'") is "00010203FF" &&
+                Query(db, "SELECT revision FROM account_adventures WHERE account='weekly-history'") is 3L &&
+                Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                "v72保存5槽位排列，旧账号进度行与外键不变");
+        }
+        // 撞名对象：v72必须拒绝并整笔回滚，不能改版本或删既有对象。
+        string collision = Path.Combine(root, "weekly-v71-collision.db");
+        using (var source = Open(path))
+        using (var target = Open(collision)) source.BackupDatabase(target);
+        using (var db = Open(collision))
+        {
+            RemoveAdventureWeekly(db);
+            Execute(db, "PRAGMA user_version=68");
+            Execute(db, "CREATE VIEW account_adventure_weekly_config AS SELECT 1 AS account, zeroblob(5) AS slots");
+        }
+        string before = Snapshot(collision);
+        RejectDatabase(() => new CharacterRepository(collision));
+        using (var db = Open(collision))
+            Check(Snapshot(collision) == before && Query(db, "PRAGMA user_version") is 68L &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='view' AND name='account_adventure_weekly_config'") is 1L,
+                "v72撞名失败回滚版本与既有对象");
+        string stable = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == stable, "v72重开幂等，不重写配置");
+    }
+
+    // 本地整合构建曾把冒险团四项记成v64–v67；上游随后占用v64/v65，这类库必须按v63重跑而不是只跑v68+。
+    private static void VerifyAdventureTemporaryNumberingCompatibility(string root)
+    {
+        string path = Path.Combine(root, "temp-numbering-v67.db");
+        _ = new CharacterRepository(path);
+        new AuthenticationService(new AuthenticationRepository(path)).Create("temp-numbering", "fixture-password");
+        using (var db = Open(path))
+        {
+            Execute(db, """
+                INSERT INTO account_adventures(account,revision,name,created_date,level,experience,remainder,capsule_experience,
+                  brave_experience,points,month,name_initialized,capsule_week,login_streak_days,last_login_day)
+                  VALUES('temp-numbering',5,'TempNumbering',20261020,1,0,'0',0,0,zeroblob(20),202610,1,7,3,20261020);
+                INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('temp-numbering',0,'Temp',9,38,1,450,234,0,456);
+                DROP TABLE character_consumable_states;
+                ALTER TABLE characters DROP COLUMN blacklist_count;
+                PRAGMA user_version=67;
+                """);
+        }
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_consumable_states'") is 1L &&
+                Query(db, "SELECT blacklist_count||':'||gold||':'||revision FROM characters WHERE name='Temp'") is "0:456:9" &&
+                Query(db, "SELECT capsule_week||':'||login_streak_days||':'||last_login_day FROM account_adventures WHERE account='temp-numbering'") is "7:3:20261020",
+                "临时编号v67库按v63重跑上游v64/v65与冒险团步骤，保留账号与角色资产");
+        }
+        string stable = Snapshot(path);
+        _ = new CharacterRepository(path);
+        Check(Snapshot(path) == stable, "临时编号兼容重跑后重开幂等");
     }
 
     private static void VerifyQuestRentalCompletionMigration(string root, int oldVersion = 41)
@@ -1463,7 +1694,7 @@ internal static partial class DatabaseSchemaTests
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
             DropLaterTables(db);
             Execute(db, "INSERT INTO character_quest_skip_receipts(rowid,character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot) VALUES(59,1,'history','34567890abcdef1234567890abcdef12',19,6217,6,7,'{\"Old\":true}')");
-            Execute(db, "INSERT INTO character_dungeon_state VALUES(1,'history',700,42,123,4,56)");
+            Execute(db, "INSERT INTO character_dungeon_state(character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience) VALUES(1,'history',700,42,123,4,56)");
             Execute(db, "INSERT INTO character_fatigue VALUES(1,'history',7,156,9,149,3,4)");
             Execute(db, "INSERT INTO character_dungeon_fatigue_receipts(rowid,character_id,account,instance_id,task_attempt,map_id,epoch,generation,rule_id,before_revision,revision,before_state,after_state) VALUES(81,1,'history','abcdef1234567890abcdef1234567890',42,76126,9,7,'fatigue-old',6,7,'{\"Used\":6}','{\"Used\":7}')");
             Execute(db, "INSERT INTO character_inventory_items(item_uid,character_id,account,item_core) VALUES(12345,1,'history','{\"Uid\":12345,\"Legacy\":true}')");
@@ -1626,7 +1857,8 @@ internal static partial class DatabaseSchemaTests
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction) VALUES
                   (1,'legacy',0,'Missing',11,39,5,284,276,0),(2,'legacy',1,'Consumed',12,39,5,284,276,0),
                   (3,'legacy',2,'Unknown',13,39,5,284,276,0),(4,'legacy',3,'ReceiptOnly',14,39,5,284,276,0);
-                INSERT INTO character_dungeon_state VALUES
+                INSERT INTO character_dungeon_state(character_id,account,next_object_key,last_attempt,
+                  capsule_experience,proficiency_level,proficiency_experience) VALUES
                   (1,'legacy',2753,47,123,4,56),(2,'legacy',700,42,123,4,56),(4,'legacy',900,42,123,4,56);
                 INSERT INTO character_fatigue VALUES(2,'legacy',7,156,9,149,3,4);
                 INSERT INTO character_dungeon_fatigue_receipts(rowid,character_id,account,instance_id,task_attempt,map_id,epoch,generation,
@@ -1971,6 +2203,8 @@ internal static partial class DatabaseSchemaTests
                     RewindPickupUids(db);
                     Execute(db, "DROP TABLE character_dungeon_passive_pickups");
                 }
+                // v70 追加结算经验分项；先回退到 v43 形状，再由 v43 回退处理更早版本。
+                if (oldVersion < 67) RewindSettlementBreakdown(db);
                 if (oldVersion < 43) RewindDungeonSceneSettlement(db);
                 if (oldVersion < 42) RewindQuestRentalCompletion(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold) VALUES('migrated',0,'Migrated',7,38,1,450,234,0,2,60,123)");
@@ -2045,6 +2279,11 @@ internal static partial class DatabaseSchemaTests
                 if (oldVersion < 30) RemoveAdventureRepresentatives(db);
                 if (oldVersion < 31) RemoveAdventureExpeditions(db);
                 if (oldVersion < 32) RemoveAdventurePurchases(db);
+                // v69/v71只追加列，v72只追加配置表；旧库必须确实缺列缺表，否则真实ALTER/CREATE会被跳过。
+                RemoveAdventureCapsuleWeek(db);
+                RemoveAdventureActivity(db);
+                RemoveAdventureWeekly(db);
+                if (oldVersion < 70) RemoveAdventureLedger(db);
                 Execute(db, $"PRAGMA user_version={oldVersion}");
                 if (oldVersion == 13)
                     AddDropDependencyFixture(db);

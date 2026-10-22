@@ -166,7 +166,7 @@ internal static class QuestAwakeningTicketTests
                 Bytes(output.Frames[0].AsSpan(16),SkillPackets.Initialized(after.Learning),"19来源与两树余额来自原子提交");
                 Bytes(output.Frames[1].AsSpan(16),[1,65,0,0,(byte)action,0,0,0],"ACK5158B，客户端自行减1，无14/34普通奖励");
                 Bytes(output.Frames[2].AsSpan(16),TownPackets.Actor(after),"Actor携带真实packed grow");
-                Bytes(output.Frames[3].AsSpan(16),TownPackets.Player(after,new CharacterStatComputer(characters).Compute(after)),"Player使用目标职业CHR属性");
+                Bytes(output.Frames[3].AsSpan(16),TownPackets.Player(after,new CharacterStatComputer(characters).Compute(after),1),"Player使用目标职业CHR属性");
                 output.Frames.Clear();
                 That(await commands.DispatchAsync(context,Use(action))==CommandResult.Handled &&
                     output.Opcodes.SequenceEqual(new ushort[] {19,2,2,574,21,356}) && Same(after,f.Read()) && Receipts(f)==1 &&

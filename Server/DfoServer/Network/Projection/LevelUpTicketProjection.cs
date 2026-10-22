@@ -42,8 +42,9 @@ internal sealed class LevelUpTicketProjection(InventoryProjection inventory, Cha
         var state = character.DungeonState ?? throw new InvalidOperationException("升级券缺少成长附属状态");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)character.Inventory.WinPoints),state.GrowthCapsuleExperience,
             state.ProficiencyLevel,state.ProficiencyExperience);
-        await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level,character.Learning,auxiliary,
-            CharacterExperienceDisplay.Ordinary), "level_up_ticket_growth", Guard);
+        if (CharacterExperienceNotice.ShouldPublish(plan.Expected.Level))
+            await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level,character.Learning,auxiliary,
+                CharacterExperienceDisplay.Ordinary), "level_up_ticket_growth", Guard);
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),"level_up_ticket_active",Guard);
         await levels.RefreshAsync(context,character,plan.Expected.Level,"level_up_ticket_level",Guard,
             previousGrowType:plan.Expected.GrowType,restoreCompletedQuests:false,previousLearning:plan.Expected.Learning);

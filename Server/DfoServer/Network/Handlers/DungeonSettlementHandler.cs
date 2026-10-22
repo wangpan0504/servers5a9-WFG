@@ -62,8 +62,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var reward = result.Reward ?? throw new InvalidOperationException("已提交结算缺少经验奖励");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints),
             state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
-        uint plainClear = reward.TotalExperience - reward.GrowthContractExperience - reward.PotionExperience;
-        var display = (reward.BonusParts.IsDefault ? null : new ExperienceBonuses(checked(reward.BaseExperience + reward.RankExperience), reward.BonusParts).Display(result.GainedExperience)) ?? CharacterExperienceDisplay.Ordinary with
+        // 本版协议没有独立的冒险团加成字段：它属于基础通关经验，和基础项一起作为普通经验展示。
+        uint plainClear = reward.TotalExperience - reward.GrowthContractExperience - reward.PotionExperience - reward.AdventureExperience;
+        var display = ExperienceBonuses.FromClearReward(reward)?.Display(result.GainedExperience) ?? CharacterExperienceDisplay.Ordinary with
         { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainClear, reward.GrowthContractExperience, result.GainedExperience),
             PotionExperience = ExpBonusPolicy.Shown(plainClear, reward.GrowthContractExperience, reward.PotionExperience, result.GainedExperience) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
@@ -71,8 +72,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         bool tournament = receipt.Entry.IsTournament;
         if (!tournament)
             await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
-        await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
+        if (CharacterExperienceNotice.ShouldPublish(previous.Level))
+            await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
         if (!previous.ActiveMainQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
                 "formal_clear_quest_conditions",Guard);
