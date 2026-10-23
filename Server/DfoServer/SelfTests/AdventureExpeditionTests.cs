@@ -145,6 +145,13 @@ internal static class AdventureExpeditionTests
             expeditions.Areas.Keys.ToDictionary(area => area, area => service.AreaAttributes(area, now).ToArray()), now);
         That(body[0] == 1 && body[1] == 2 && body[2] == 0 && BitConverter.ToUInt16(body, 13) == 0 &&
             body[15] == 1 && body[16] == 1, "远征表必须带area0空闲组，运行成员不重复列入空闲表");
+        var free = AdventurePackets.Expedition(snapshot, expeditions, snapshot.Representatives(catalog),
+            expeditions.Areas.Keys.ToDictionary(area => area, area => service.AreaAttributes(area, now).ToArray()), now);
+        // 成员行u32是熟练度：夹具熟练度7、等级95；空闲候选与运行地区都必须投影7，不能写等级95。
+        That(BitConverter.ToUInt16(free, 13) == 1 && BitConverter.ToUInt32(free, 25) == 7,
+            "空闲候选成员行下发熟练度而不是角色等级");
+        That(BitConverter.ToUInt16(body, 27) == 1 && BitConverter.ToUInt32(body, 39) == 7,
+            "运行地区冻结成员行按当前名册下发熟练度");
         Persist(catalog, service, now);
         Migrate();
         Rotation(catalog);

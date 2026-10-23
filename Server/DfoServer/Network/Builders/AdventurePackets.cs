@@ -161,6 +161,10 @@ internal static class AdventurePackets
         IReadOnlyDictionary<byte, byte[]> attributes, DateTimeOffset now, bool ack = true) => Build(writer =>
     {
         // NOTI同步和ACK441均先读一个success/状态字节，再消费同一远征信息列表。
+        // 成员行u32是角色熟练度而不是等级：客户端01111FA0把它装入远征视图，成员行写95（等级）时卡片恒显示
+        // 「熟练者46」（95属熟练者50–99档，95-49=46）。运行地区沿用冻结身份，熟练度按UID从当前名册投影；
+        // 冻结快照没有该字段，成员已不在名册时退回冻结等级，保持原显示与行宽。
+        var proficiency = snapshot.Members.ToDictionary(row => row.Id, row => row.Proficiency);
         if (ack) writer.Write((byte)1);
         writer.Write(checked((byte)(catalog.Areas.Count + 1)));
         WriteArea(0, null, [], representatives.Select((row, selector) => new ExpeditionMember(row.Id, checked((byte)selector),
@@ -180,7 +184,7 @@ internal static class AdventurePackets
             foreach (var member in members)
             {
                 writer.Write((ushort)member.Selector); PacketEncoding.WriteString(writer, member.Name);
-                writer.Write((uint)member.Level); writer.Write(member.Job); writer.Write(member.Grow); writer.Write((byte)0);
+                writer.Write(proficiency.GetValueOrDefault(member.Id, (uint)member.Level)); writer.Write(member.Job); writer.Write(member.Grow); writer.Write((byte)0);
             }
         }
     });
