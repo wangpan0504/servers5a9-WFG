@@ -17,6 +17,7 @@ internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, st
     public int DummyStageIndex { get; init; } = -1;
     public bool IsConditional { get; init; }
     public IReadOnlyList<int> CandidateIds { get; init; } = Array.Empty<int>();
+    public IReadOnlyList<int> CandidateWeights { get; init; } = Array.Empty<int>();
 }
 internal sealed record DungeonRawSection(string Tag, IReadOnlyList<PvfToken> Tokens);
 // 实验性（未在95客户端实证）：深渊派对房间 = （maze 内或副本头）[hell dungeon] 1 + [seal door map index]（深渊房间地图）+ [seal door pos]（该房间在迷宫内的坐标）。
@@ -104,7 +105,7 @@ internal sealed record DungeonMaze(
         left.Kind == right.Kind && left.Position == right.Position && left.Id == right.Id && left.Path == right.Path &&
         left.StoryStageIndex == right.StoryStageIndex && left.LayerIndex == right.LayerIndex && left.IsConditional == right.IsConditional &&
         left.DummyStageIndex == right.DummyStageIndex &&
-        left.CandidateIds.SequenceEqual(right.CandidateIds);
+        left.CandidateIds.SequenceEqual(right.CandidateIds) && left.CandidateWeights.SequenceEqual(right.CandidateWeights);
 
     // 只描述资源结构，不表示准入通过或可以向客户端发布初始化通知。
     public string MapStructure => MapSpecification is null ? "unsupported" : "explicit";
@@ -124,6 +125,14 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     // [crack of dimension dungeon] 正数：异次元裂缝副本，通关奖励读 etc/crackofdimensionlist.etc。
     public bool IsCrackOfDimension => RawSections.Where(row => row.Tag == "crack of dimension dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 }] }];
+    public bool IsCosmoDungeon => Id == 7191 &&
+        RawSections.Where(row => row.Tag == "cosmo dungeon").ToArray() is [{ Tokens.Count: 0 }];
+    public int CosmoInvitationCount => RawSections.Where(row => row.Tag == "hell party required item count").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } count] }] ? count.Value : 0;
+    public int CosmoStoneCount => RawSections.Where(row => row.Tag == "hell party required item count add").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: -1 }, { Type: 0, Value: > 0 and <= ushort.MaxValue } count] }] ? count.Value : 0;
+    public int CosmoQuestId => RawSections.Where(row => row.Tag == "cosmo quest").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } quest] }] ? quest.Value : 0;
     // [tournament dungeon] 1：魂·黄龙/青龙大会等比赛副本（实验性，依据来自 Go 项目反汇编）。
     public bool IsTournament => RawSections.Where(row => row.Tag == "tournament dungeon").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
     // 团本：raid dungeon=1，raid normal dungeon/anton dungeon 为无参标记。冒险团推荐通关不计团本。
@@ -325,7 +334,8 @@ internal sealed class DungeonCatalog
         {
             // 阶段首项固定；普通基础行已按坐标排除全部阶段地图。
             var ids = map.CandidateIds.Count == 0 ? new[] { map.Id } : map.CandidateIds.Distinct().ToArray();
-            int index = map.StoryStageIndex >= 0 || ids.Length == 1 ? 0 : draw(ids.Length);
+            int index = map.StoryStageIndex >= 0 || ids.Length == 1 ? 0 : map.CandidateWeights.Count == ids.Length
+                ? WeightedIndex(map.CandidateWeights, draw) : draw(ids.Length);
             if (index < 0 || index >= ids.Length) throw new InvalidDataException("显式地图随机索引越界");
             return Resolve(map,ids[index],map.StoryStageIndex < 0 && ids.Length > 1);
         }).ToArray();
@@ -366,6 +376,20 @@ internal sealed class DungeonCatalog
             if (id < 0 || !paths.TryGetValue(id,out var path) || !exists(path))
                 throw new InvalidDataException("选定地图不存在: " + id);
             return map with { Id = id,Path = path,CandidateIds = freeze ? Freeze(new[] { id }) : map.CandidateIds };
+        }
+
+        static int WeightedIndex(IReadOnlyList<int> weights, Func<int,int> random)
+        {
+            int total = checked(weights.Sum());
+            if (total <= 0 || weights.Any(weight => weight <= 0)) throw new InvalidDataException("地图候选权重无效");
+            int roll = random(total);
+            if (roll < 0 || roll >= total) throw new InvalidDataException("地图权重随机值越界");
+            for (int index = 0; index < weights.Count; index++)
+            {
+                if (roll < weights[index]) return index;
+                roll -= weights[index];
+            }
+            throw new InvalidDataException("地图权重抽取未命中候选");
         }
     }
 
@@ -543,26 +567,47 @@ internal sealed class DungeonCatalog
             var items = new List<DungeonMap>();
             for (int i = 0; i < values.Count;)
             {
-                if (values[i].Type != 6 || i + 3 >= values.Count)
+                if (values[i].Type != 6)
                     throw new NotSupportedException("unsupported: map specification 的类型标记未实现");
                 string kind = resolve(values[i].Value);
-                if (kind is not ("map" or "boss" or "layered"))
+                bool weightedBoss = kind == "boss_selection_probability";
+                if (kind is not ("map" or "boss" or "layered") && !weightedBoss)
                     throw new NotSupportedException("unsupported: map specification 类型 " + kind);
-                int[] numbers = Integers(values.Skip(i + 1).Take(3).ToArray());
+                if (i + (weightedBoss ? 2 : 3) >= values.Count)
+                    throw new NotSupportedException("unsupported: map specification 数值不完整");
+                int[] numbers = Integers(values.Skip(i + 1).Take(weightedBoss ? 2 : 3).ToArray());
                 var position = new DungeonPoint(numbers[0], numbers[1]);
                 ValidatePoint(position);
-                i += 4;
-                var ids = new List<int> { numbers[2] };
-                while (i < values.Count && values[i].Type == 0)
+                i += weightedBoss ? 3 : 4;
+                var ids = new List<int>();
+                var weights = new List<int>();
+                if (weightedBoss)
                 {
-                    if (values[i].Value < 0) throw new InvalidDataException("地图候选编号无效");
-                    ids.Add(values[i++].Value);
+                    while (i < values.Count && values[i].Type == 0)
+                    {
+                        if (i + 1 >= values.Count || values[i].Value <= 0 || values[i + 1].Type != 0 || values[i + 1].Value <= 0)
+                            throw new InvalidDataException("Boss候选权重行不完整");
+                        ids.Add(values[i++].Value);
+                        weights.Add(values[i++].Value);
+                    }
+                    if (ids.Count < 1) throw new InvalidDataException("Boss候选列表为空");
                 }
-                if (numbers[2] < 0) throw new InvalidDataException("地图候选编号无效");
-                string mapPath = mapPaths.GetValueOrDefault(numbers[2]) ?? "";
-                if (ids.Count == 1 && (mapPath.Length == 0 || !exists(mapPath)))
-                    throw new InvalidDataException("map specification 引用的地图不存在: " + numbers[2]);
-                var map = new DungeonMap(kind,position,numbers[2],mapPath) { CandidateIds = ids.AsReadOnly() };
+                else
+                {
+                    ids.Add(numbers[2]);
+                    while (i < values.Count && values[i].Type == 0)
+                    {
+                        if (values[i].Value < 0) throw new InvalidDataException("地图候选编号无效");
+                        ids.Add(values[i++].Value);
+                    }
+                }
+                if (!weightedBoss && numbers[2] < 0) throw new InvalidDataException("地图候选编号无效");
+                foreach (int candidateId in ids)
+                    if ((weightedBoss || ids.Count == 1) &&
+                        (!mapPaths.TryGetValue(candidateId, out var candidatePath) || !exists(candidatePath)))
+                        throw new InvalidDataException("map specification 引用的地图不存在: " + candidateId);
+                var map = new DungeonMap(weightedBoss ? "boss" : kind,position,ids[0],mapPaths.GetValueOrDefault(ids[0]) ?? "")
+                    { CandidateIds = ids.AsReadOnly(), CandidateWeights = weights.AsReadOnly() };
                 if (kind == "layered") layered.Add(map); else items.Add(map);
             }
 

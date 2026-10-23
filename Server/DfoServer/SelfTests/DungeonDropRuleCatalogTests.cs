@@ -152,6 +152,7 @@ internal static class DungeonDropRuleCatalogTests
         Reject<NotSupportedException>(() => { _ = Parse(changed).PartyBonus[^1].ReferenceDecimal; },
             "参考decimal范围不足只拒绝该参考解释，不能把合法原浮点声明判成资源非法");
         VerifyLegendEquipment(parsed, entry);
+        HarlemHellEpicDropTests.RunCore(parsed, entry);
         Console.WriteLine($"PASS {Count - checks} 全局掉落原始规则保真断言");
     }
 

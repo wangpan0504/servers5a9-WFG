@@ -52,9 +52,15 @@ internal sealed partial class GameSession
         });
     }
 
-    public DungeonSelectionReceipt? BeginClearedHellSelection() => owner.Execute<DungeonSelectionReceipt?>(() =>
+    public DungeonSelectionReceipt? BeginClearedHellSelection(uint dungeonIndex = 0) => owner.Execute<DungeonSelectionReceipt?>(() =>
     {
-        if (!Ready || Phase != SessionPhase.Dungeon || formalDungeon is null || !FormalReceipt().HellPartyRoomCleared)
+        // 时空祭坛回传当前副本编号；0兼容原选图入口，其他副本编号不能消费本次深渊出口。
+        if (!Ready || formalDungeon is not { } dungeon ||
+            (dungeonIndex != 0 && dungeonIndex != dungeon.Entry.DungeonId))
+            return null;
+        bool clearedHell = Phase == SessionPhase.Dungeon && FormalReceipt().HellPartyRoomCleared;
+        bool clearedCosmo = Phase == SessionPhase.Settlement && dungeon.Entry.IsCosmo && HasFinishedDungeon(dungeon);
+        if (!clearedHell && !clearedCosmo)
             return null;
         if (ReturnFromFormalDungeonCore(true) is null) return null;
         // 原入口安全点已保存，直接建立选图上下文；不把深渊房间伪造成Boss结算。

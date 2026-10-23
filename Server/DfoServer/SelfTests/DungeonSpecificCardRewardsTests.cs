@@ -10,7 +10,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class DungeonSpecificCardRewardsTests
+internal static partial class DungeonSpecificCardRewardsTests
 {
     public static void RunResources(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills)
@@ -51,11 +51,12 @@ internal static class DungeonSpecificCardRewardsTests
         var entry = fixture.Session.EnterFormalDungeon(7322, 0, 0, dungeons, rooms, pieces: items.EpicPieces);
         That(entry is { Entry.StartMap.Id: 311393, Entry.StartFatigue: 8 },
             "最新主线断头谷在任务及疲劳满足时进入真实起点：" + fixture.Session.LastFormalDungeonRejection);
-        VerifyClearedHellExit(towns, pvf, characters, items, quests, skills);
+        foreach (uint dungeonIndex in new uint[] { 0, 291100308 })
+            VerifyClearedHellExit(towns, pvf, characters, items, quests, skills, dungeonIndex);
     }
 
     static void VerifyClearedHellExit(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
-        QuestCatalog quests, SkillLearningCatalog skills)
+        QuestCatalog quests, SkillLearningCatalog skills, uint dungeonIndex)
     {
         var dungeons = DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
@@ -93,6 +94,10 @@ internal static class DungeonSpecificCardRewardsTests
             fixture.Session.EnableFormalDungeonSettlement() is null,
             "深渊房间清完只开放出口，不伪造Boss通关或翻牌");
         var before = fixture.Read();
+        foreach (uint otherDungeon in new uint[] { 291100268, uint.MaxValue })
+            That(OpenSelection(otherDungeon).Count == 0 && fixture.Session.DungeonSnapshot is not null &&
+                fixture.Session.CurrentDungeonSelection is null && fixture.Read().Revision == before.Revision,
+                "清完深渊也不接受其他副本编号，不退场、不保存或发布成功");
         var frames = OpenSelection();
         That(frames.Select(frame => System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1))).SequenceEqual(new ushort[] { 15, 3, 27 }) &&
             frames[0].AsSpan(16).SequenceEqual(new byte[] { 1 }) && frames[2].Length == 58 &&
@@ -101,7 +106,7 @@ internal static class DungeonSpecificCardRewardsTests
             "真实15处理器按ACK15、状态3、完整27返回选图，无撤退虚弱；旧实例和地面状态被回收");
         That(fixture.Session.BeginClearedHellSelection() is null, "重复出口不再次退场或发奖");
 
-        List<byte[]> OpenSelection()
+        List<byte[]> OpenSelection(uint? requestedDungeon = null)
         {
             string directory = Path.Combine(Path.GetTempPath(), "S5A9-hell-selection-" + Guid.NewGuid().ToString("N"));
             try { return Send().GetAwaiter().GetResult(); }
@@ -118,7 +123,9 @@ internal static class DungeonSpecificCardRewardsTests
                 var projection = new DfoServer.Network.Projection.TownProjection(towns, new CharacterStatComputer(characters), null, items.EpicPieces);
                 new DfoServer.Network.Handlers.DungeonSelectionHandler(projection, log, dungeons: dungeons).Register(commands);
                 commands.Seal();
-                await commands.DispatchAsync(context, new DfoServer.Network.Packet(1, 15, new byte[4]));
+                byte[] body = new byte[4];
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, requestedDungeon ?? dungeonIndex);
+                await commands.DispatchAsync(context, new DfoServer.Network.Packet(1, 15, body));
                 return output.Frames;
             }
         }

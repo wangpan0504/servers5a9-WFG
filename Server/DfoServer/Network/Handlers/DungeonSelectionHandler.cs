@@ -24,12 +24,14 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
-        if (context.Session.Phase == SessionPhase.Dungeon)
+        if (context.Session.Phase == SessionPhase.Dungeon ||
+            context.Session.Phase == SessionPhase.Settlement && context.Session.FormalDungeonResultFocus() is { Entry.IsCosmo: true })
         {
-            var hellSelection = entry.DungeonIndex == 0 ? context.Session.BeginClearedHellSelection() : null;
+            var hellSelection = context.Session.BeginClearedHellSelection(entry.DungeonIndex);
             if (hellSelection is null) return CommandResult.Unhandled;
             int target = dungeons is null ? 0 : context.Session.PrepareLegendDungeonSelection(dungeons);
-            log.Write("formal_hell_selection", new { Connection = context.Id, hellSelection.Character.Id, hellSelection.SelectionId, LegendDungeon = target });
+            log.Write("formal_hell_selection", new { Connection = context.Id, hellSelection.Character.Id, hellSelection.SelectionId,
+                entry.DungeonIndex, LegendDungeon = target });
             if (!await projection.DetachForDungeonSelectionAsync(context, hellSelection)) return CommandResult.Handled;
             bool Guard() => context.Session.CanPublishDungeonSelection(hellSelection);
             await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_hell_selection_opened", Guard);

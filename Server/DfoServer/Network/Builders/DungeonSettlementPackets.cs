@@ -17,6 +17,9 @@ internal static class DungeonSettlementPackets
 
     public static byte[] BossAccepted(ushort bossKey) => [1, 1, (byte)bossKey, (byte)(bossKey >> 8)];
 
+    // NOTI261读取u8写入结算页资格；9开放再挑战，0保留禁用状态，不负责切换场景。
+    public static byte[] RetryEligibility(bool available) => [available ? (byte)9 : (byte)0];
+
     public static byte[] PlayResult(ushort actorId, DungeonSettlementPresentation presentation)
     {
         byte[] body = new byte[16];

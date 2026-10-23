@@ -41,6 +41,10 @@ internal static class DungeonEntryCostTests
         That(dungeons.Get(3600).OrdinaryEntryTicket?.ItemId == 10004322 && dungeons.Get(7100).OrdinaryEntryTicket?.ItemId == 3332 &&
             dungeons.Get(11008).OrdinaryEntryTicket?.ItemId == 4473,
             "受影响的其他「物品 1 1」副本按资源解析入场票（3600/7100/11008）");
+        var cosmo = dungeons.Get(7191);
+        That(cosmo.IsCosmoDungeon && cosmo.CosmoInvitationCount == 40 && cosmo.CosmoStoneCount == 4 && cosmo.CosmoQuestId == 10112 &&
+            cosmo.StartFatigue == 8 && cosmo.TryGetDesignatedDifficulty(out byte cosmoDifficulty) && cosmoDifficulty == 4,
+            "超星空准入从7191 PVF严格解析40邀请函、4灵石、10112、固定难度4与8疲劳");
         var twoSections = tayberrs with { RawSections = [.. tayberrs.RawSections,
             new DungeonRawSection("use fatigue only start dungeon", [new PvfToken(0, 3)])] };
         var twoItems = tayberrs with { RawSections = [.. tayberrs.RawSections.Where(row => row.Tag != "required item"),
@@ -53,6 +57,52 @@ internal static class DungeonEntryCostTests
         // #511 泰波尔斯：未完成 6116 时两个副本都给出 selection-quest-required:6116。
         GateRejected(towns, characters, skills, growth, quests, dungeons, rooms, Tayberrs, 6116);
         GateRejected(towns, characters, skills, growth, quests, dungeons, rooms, TayberrsSecond, 6116);
+
+        var (cosmoDone, cosmoPosition) = Selection(towns, 7191);
+        cosmoDone.UnionWith(towns.DungeonMaps[AreaDungeonWorldMap(towns)].HellQuests);
+        cosmoDone.Add(cosmo.CosmoQuestId);
+        using (var cosmoPoor = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,[.. cosmoDone.Order()],position:cosmoPosition,
+            items:[(3330,40)],fatigueRemaining:100))
+        {
+            var before = cosmoPoor.Read();
+            That(cosmoPoor.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,pieces:items.EpicPieces,hellParty:true) is null &&
+                cosmoPoor.Session.LastFormalDungeonRejection == "hell-party-item-required" && cosmoPoor.Read().Revision == before.Revision &&
+                cosmoPoor.Read().Fatigue == before.Fatigue && cosmoPoor.Read().DungeonState == before.DungeonState &&
+                ItemCount(cosmoPoor.Read(),3330) == 40,
+                "超星空缺4个探测石时拒绝，先规划的40张邀请函与疲劳均不提交");
+        }
+        using (var cosmoTired = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,[.. cosmoDone.Order()],position:cosmoPosition,
+            items:[(3330,40),(10305821,4)],fatigueRemaining:7))
+        {
+            var before = cosmoTired.Read();
+            That(cosmoTired.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,pieces:items.EpicPieces,hellParty:true) is null &&
+                cosmoTired.Session.LastFormalDungeonRejection == "start-fatigue-insufficient:8" && cosmoTired.Read().Revision == before.Revision &&
+                cosmoTired.Read().Fatigue == before.Fatigue && cosmoTired.Read().DungeonState == before.DungeonState &&
+                ItemCount(cosmoTired.Read(),3330) == 40 && ItemCount(cosmoTired.Read(),10305821) == 4,
+                "超星空疲劳不足8点时拒绝，40张邀请函、4探测石与副本尝试状态不变");
+        }
+        using (var cosmoRich = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,[.. cosmoDone.Order()],position:cosmoPosition,
+            items:[(3330,40),(10305821,4)],fatigueRemaining:100))
+        {
+            var before = cosmoRich.Read();
+            var receipt = cosmoRich.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,pieces:items.EpicPieces,hellParty:true);
+            var after = cosmoRich.Read();
+            That(receipt is { Entry: { IsCosmo: true, Difficulty: 4, StartFatigue: 8, Maze.StaticTopology.Supported: true },
+                    HellTicket: { ItemId: 3330,Count: 40 },LegendTicket: { ItemId: 10305821,Count: 4 },EntryFatigueCharged: 8 } &&
+                receipt.Entry.Maze.MapSpecification?.Count == 4 && receipt.HellConsumedSlots.Length == 2 &&
+                ItemCount(after,3330) == 0 && ItemCount(after,10305821) == 0 && after.Fatigue?.Remaining == before.Fatigue!.Remaining - 8 &&
+                after.Fatigue?.Used == before.Fatigue.Used + 8 && after.DungeonState?.LastAttempt == before.DungeonState!.LastAttempt + 1,
+                "超星空入场同一提交扣40张邀请函、4灵石和8疲劳，并建立四房实例");
+            var info = DfoServer.Network.Builders.DungeonPackets.Information(receipt!.Entry);
+            var startMapHeader = DfoServer.Network.Builders.DungeonPackets.StartMap(receipt.Entry,1);
+            var startMap = DfoServer.Network.Builders.DungeonPackets.StartMap(receipt.Entry,receipt.Monsters,1);
+            That(info[10] == byte.MaxValue && info[11] == byte.MaxValue && info[14] == 1 && info[18] == 0x0B &&
+                startMapHeader[7] == 1 && startMapHeader[20] == 1 && startMap.AsSpan(0,18).SequenceEqual(startMapHeader.AsSpan(0,18)),
+                "超星空发送深渊模式标记但不伪造密门坐标");
+            var loaded = cosmoRich.Session.CompleteFormalDungeonLoading();
+            That(loaded is { Entry.IsCosmo: true } && loaded.Snapshot.ConsumedFatigue == 8 && cosmoRich.Read().Fatigue == after.Fatigue,
+                "超星空加载不重复扣疲劳，消耗计数仍为8");
+        }
 
         var (done, position) = Selection(towns, Tayberrs);
         done.Add(6116);
@@ -160,6 +210,10 @@ internal static class DungeonEntryCostTests
     }
 
     static int Stones(Character character) => character.Inventory.Items.Where(row => row.Core.ItemId == RefinedStone).Sum(row => row.Core.Count);
+    static int ItemCount(Character character,int itemId) => character.Inventory.Items.Where(row => row.Core.ItemId == itemId).Sum(row => row.Core.Count);
+
+    static int AreaDungeonWorldMap(TownCatalog towns, int dungeonId = 7191) => towns.Areas.Values.Single(row => row.DungeonWorldMap is { } world &&
+        towns.DungeonMaps.TryGetValue(world,out var map) && map.Options.Any(option => option.DungeonId == dungeonId)).DungeonWorldMap!.Value;
 
     static long Receipts(QuestSceneTests.Fixture fixture, string rule) =>
         (long)fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE rule_id='" + rule + "'")!;

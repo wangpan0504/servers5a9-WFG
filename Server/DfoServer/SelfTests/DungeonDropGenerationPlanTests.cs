@@ -17,6 +17,11 @@ internal static class DungeonDropGenerationPlanTests
         var result = plan.Generate(_ => 0, DateTimeOffset.FromUnixTimeSeconds(1800000000));
         That(plan.MaximumObjects == 3 && result.Select(asset => asset.Item!.Count).SequenceEqual(new[] { 3, 3, 1 }),
             "超单堆数量按原上限分成完整地面对象，总量不截断或另抽模板");
+        var individual = new DungeonDropGenerationPlan("合成逐个落地", [new(10000, pool, 1, 7, IndividualObjects: true)]);
+        That(individual.MaximumObjects == 7 && individual.Generate(bound => bound == 7 ? 6 : 0, DateTimeOffset.UnixEpoch)
+            .Select(row => row.Item!.Count).SequenceEqual(Enumerable.Repeat(1, 7)), "可变数量一次抽完后逐个落地，完整容量按物品数预留");
+        Reject<InvalidDataException>(() => new DungeonDropGenerationPlan("逐个超容量", [new(10000, pool, 501, 501, IndividualObjects: true)]),
+            "材料逐个落地不能通过原堆叠上限绕过500对象容量");
         var miss = plan.Generate(bound => bound - 1, DateTimeOffset.UtcNow);
         That(miss.IsEmpty, "可控随机未命中保持零结果，不通过增加触发率确保掉落");
         var equipment = stack with { Id = 2000, Kind = ItemKind.Equipment, StackLimit = 1, Durability = 41 };

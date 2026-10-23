@@ -7,7 +7,8 @@ namespace DfoServer.Game.Dungeons;
 // 当前PVF提供候选、权重与概率，本服采用90参考业务算法；不声称是原版抽样。
 internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, DungeonItemDropCatalog candidates,
     Func<int, DungeonMonsterDropDeclaration> resolveMonster, Func<int, ItemTemplate> resolveItem, DungeonSpecialDropCatalog? special = null,
-    EquipmentAmplificationDropPolicy? amplification = null, HarlemMaterialDropPolicy? materials = null)
+    EquipmentAmplificationDropPolicy? amplification = null, HarlemMaterialDropPolicy? materials = null,
+    HarlemHellEpicDropPolicy? harlemEpics = null, HarlemAbyssBonusDropPolicy? abyssBonuses = null)
 {
     public const string Rule = "pvf-monster-reference-v1";
     public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity rows[1..3]", "party member drop bonusrate",
@@ -18,11 +19,13 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     // 只在一次入图准备中复用不可变规则；对象编号、位置和实际随机结果仍归各只怪物。
     public Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareEntry(DungeonEntryPlan entry, DungeonHellRewardPolicy? hellRewards = null)
     {
-        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward), DungeonDropGenerationPlan>();
+        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare), DungeonDropGenerationPlan>();
+        var epicEquipment = harlemEpics?.Pool(entry);
         return monster =>
         {
             var key = (monster.MonsterId, monster.CandidateLevel, monster.RewardType, monster.SpawnType, monster.HellRewardRolls,
-                monster.IsBoss, monster.HellWave is not null, monster.CanReportDeath && !monster.IsFriendly && !monster.IsScriptedBoss);
+                monster.IsBoss, monster.HellWave is not null, monster.CanReportDeath && !monster.IsFriendly && !monster.IsScriptedBoss,
+                harlemEpics?.IsCosmoBoss(entry, monster) == true, harlemEpics?.IsLegendRare(entry, monster) == true);
             if (plans.TryGetValue(key, out var existing)) return existing;
             // APC 不套普通怪概率；深渊奖励与不带奖励的普通计划分别保存。
             var plan = monster.SpawnType > 3
@@ -30,22 +33,29 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                 : Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel);
             if (monster.HellRewardRolls > 0 && hellRewards is not null)
                 plan = hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode,
-                    monster.HellRewardRolls, entry.Difficulty, entry.IsHellLegend || materials?.UsesHarlemFragments(entry) == true);
-            if (entry.IsHellLegend) plan = RestrictLegendEpicEquipment(plan);
+                    monster.HellRewardRolls, entry.Difficulty, entry.IsHellLegend || materials?.UsesHarlemFragments(entry) == true,
+                    epicEquipment);
+            if (harlemEpics is not null) plan = harlemEpics.Extend(plan, entry, monster, hellRewards);
+            if (harlemEpics is not null) plan = harlemEpics.ExtendLegendRare(plan, entry, monster);
+            bool cosmo = harlemEpics?.IsCosmoEntry(entry) == true;
+            if (epicEquipment is not null || entry.IsHellLegend || cosmo)
+                plan = RestrictHellEquipment(plan, allow90: epicEquipment is not null && !cosmo,
+                    epicOnly: epicEquipment is not null || cosmo);
             if (materials is not null) plan = materials.Extend(plan, entry, monster);
+            if (abyssBonuses is not null) plan = abyssBonuses.Extend(plan, entry, monster);
             plans.Add(key, plan);
             return plan;
         };
     }
 
-    // 星空只掉95级史诗；普通通道、怪物专项和末波追加奖励都在入图准备时使用同一限制。
-    // 保留原概率、次数和剩余候选权重；没有95级候选时留空，不再回退到90级或另一稀有度。
-    static DungeonDropGenerationPlan RestrictLegendEpicEquipment(DungeonDropGenerationPlan plan)
+    // 三种哈林深渊只从通用装备池保留模式允许的史诗；材料与其它非装备掉落沿用原规则。
+    static DungeonDropGenerationPlan RestrictHellEquipment(DungeonDropGenerationPlan plan, bool allow90, bool epicOnly)
     {
-        DungeonItemDropPool Restrict(DungeonItemDropPool pool, bool epicOnly = false)
+        DungeonItemDropPool Restrict(DungeonItemDropPool pool, bool rarityEpic = false)
         {
-            bool Allowed(ItemTemplate item) => item.Kind != ItemKind.Equipment || (epicOnly
-                ? item.Rarity == 4 && item.MinimumLevel == 95 : item.Rarity != 4 || item.MinimumLevel == 95);
+            bool Level(ItemTemplate item) => item.MinimumLevel == 95 || allow90 && item.MinimumLevel == 90;
+            bool Allowed(ItemTemplate item) => item.Kind != ItemKind.Equipment ||
+                (!(epicOnly || rarityEpic) && item.Rarity != 4 || item.Rarity == 4 && Level(item));
             if (pool.Entries.All(entry => Allowed(entry.Template))) return pool;
             int previous = 0;
             var kept = new List<DungeonWeightedDropItem>();
@@ -57,11 +67,18 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             }
             return new(kept);
         }
-        return new(plan.ResourceSource, plan.Trials.Select(trial => trial with
+        return new(plan.ResourceSource, plan.Trials.Select(trial =>
         {
-            Items = trial.Items is { } items ? Restrict(items) : null,
-            RarityPools = trial.RarityPools.IsDefault ? default : trial.RarityPools.Select((row, rarity) =>
-                row with { Items = Restrict(row.Items, rarity == 4) }).ToImmutableArray()
+            var items = trial.Items is { } direct ? Restrict(direct) : null;
+            return trial with
+            {
+                Items = items,
+                ItemCounts = trial.ItemCounts is { } counts && items is not null
+                    ? items.Entries.ToImmutableDictionary(row => row.Template.Id, row => counts[row.Template.Id]) : trial.ItemCounts,
+                RarityPools = trial.RarityPools.IsDefault ? default : trial.RarityPools.Select((row, rarity) =>
+                    row with { Items = Restrict(row.Items, rarity == 4),
+                        AlternateItems = row.AlternateItems is { } alternate ? Restrict(alternate, rarity == 4) : null }).ToImmutableArray()
+            };
         }), plan.ReferenceQuality, plan.Amplification);
     }
 

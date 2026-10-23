@@ -291,10 +291,11 @@ internal static class HellPartyEntryTests
         foreach (int inferno in new[] { 7191, 7527, 7528, 7529, 7530, 7531, 7532, 7533, 7534, 7535, 7539, 7540, 7541, 7542 })
         {
             var infernoDungeon = dungeons.Get(inferno);
-            bool infernoPlan = DungeonEntryPlan.TryCreate(dungeons, character, (uint)inferno, 0, 0, out _, out var infernoReason, quests: quests, hellParty: true);
+            bool infernoPlan = DungeonEntryPlan.TryCreate(dungeons, character, (uint)inferno, 0, inferno == 7191 ? (byte)4 : (byte)0,
+                out _, out var infernoReason, quests: quests, hellParty: true);
             That(InfernoNoSeal(infernoDungeon) && infernoDungeon.Mazes.All(maze => maze.HellParty is null) &&
-                !infernoPlan && infernoReason == "hell-party-maze-unavailable",
-                "Inferno/时空裂缝 " + inferno + " 只有副本头 [hell dungeon]、没有 seal door，不编造深渊房间：" + infernoReason);
+                (inferno == 7191 ? infernoPlan && infernoReason == "resource-plan-ready" : !infernoPlan && infernoReason == "hell-party-maze-unavailable"),
+                (inferno == 7191 ? "超星空不伪造seal door房间，使用独立加权路线：" : "Inferno/时空裂缝不伪造seal door房间：") + inferno + "/" + infernoReason);
         }
 
         // 同一副本有多个深渊 maze（291100319：313166 / 313173，同在 (3,0)）：按抽签选其一，不再按“有歧义”拒绝。

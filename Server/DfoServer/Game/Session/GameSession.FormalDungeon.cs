@@ -38,7 +38,6 @@ internal sealed partial class GameSession
         public List<DungeonObjectExperience> KillObjectExperience { get; } = [];
         public uint ClearTimeMilliseconds { get; set; }
         public bool SettlementEnabled { get; set; }
-        public bool PracticeOtherSelectionRequested { get; set; }
         public FormalSettlement? Settlement { get; set; }
         public Dictionary<(DungeonMap Map, int Template, int Ordinal), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
@@ -141,7 +140,7 @@ internal sealed partial class GameSession
         // 票据在下面统一规划并随实例安装原子提交；组队规则未接入。
         if (hellParty)
         {
-            if (retry is not null || training || trainingRoom || classExperience || assault is not null || questId != 0 || (sealDoor && hellLegend))
+            if (retry is not null && !retry.Entry.IsCosmo || training || trainingRoom || classExperience || assault is not null || questId != 0 || (sealDoor && hellLegend))
                 return RejectFormal("hell-party-mode-unsupported");
             if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var hellArea) || hellArea.DungeonWorldMap is not { } hellWorld ||
                 !towns.DungeonMaps.TryGetValue(hellWorld, out var hellMap) || hellMap.Error is not null ||
@@ -151,6 +150,12 @@ internal sealed partial class GameSession
             var missingHellQuests = sealDoor ? [] : (hellLegend ? hellMap.HellQuests.Concat(hellMap.HellLegendQuests) : hellMap.HellQuests)
                 .Where(id => !done.Contains(id)).ToArray();
             if (missingHellQuests.Length > 0) return RejectFormal("hell-party-quest-required:" + missingHellQuests[0]);
+            if (dungeonId == DungeonCosmoRewardCatalog.DungeonId)
+            {
+                var cosmoDefinition = catalog.Get(checked((int)dungeonId));
+                if (!cosmoDefinition.IsCosmoDungeon || cosmoDefinition.CosmoQuestId <= 0 || !done.Contains(cosmoDefinition.CosmoQuestId))
+                    return RejectFormal("hell-party-quest-required:10112");
+            }
             if (hellLegend && (selection is null || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
                 selection.HellLegendDungeonId != dungeonId)) return RejectFormal("hell-party-legend-selection-mismatch");
         }
@@ -170,7 +175,7 @@ internal sealed partial class GameSession
             allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null,
             hellParty: hellParty,hellLegend: hellLegend,practice: practice))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
-        if (hellParty && entry!.HellParty is null) return RejectFormal("hell-party-room-unavailable");
+        if (hellParty && entry!.HellParty is null && !entry.IsCosmo) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
         HellPartyTicket? legendTicket = null;
         // 密门不收费；星空裂缝在原深渊邀请函之外消耗客户端指定的灵石，数量来自迷宫声明。
@@ -179,20 +184,22 @@ internal sealed partial class GameSession
             // 实验性：入场票。未配置 EpicPieceCatalog 时无法规划消耗，保守拒绝（不免费放行）。
             var hellTickets = towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var ticketArea) && ticketArea.DungeonWorldMap is { } ticketWorld &&
                 towns.DungeonMaps.TryGetValue(ticketWorld, out var ticketMap) ? ticketMap.HellItemConditions : [];
-            int ticketCount = HellPartyEntryCost.RequiredCount(entry!.HellParty!, catalog.Get(checked((int)dungeonId)).MinimumLevel);
+            var dungeonDefinition = catalog.Get(checked((int)dungeonId));
+            int ticketCount = entry!.IsCosmo ? dungeonDefinition.CosmoInvitationCount :
+                HellPartyEntryCost.RequiredCount(entry.HellParty!, dungeonDefinition.MinimumLevel);
             var ticketPlan = pieces is null ? (null, null) : HellPartyEntryCost.Plan(expected.Inventory, hellTickets, ticketCount, pieces, DateTimeOffset.UtcNow);
             if (ticketPlan.Item1 is null) return RejectFormal("hell-party-item-required");
             hellTicket = ticketPlan.Item1;
-            if (hellLegend)
+            if (hellLegend || entry.IsCosmo)
             {
-                int count = entry!.HellParty!.LegendRequiredCount;
+                int count = entry.IsCosmo ? dungeonDefinition.CosmoStoneCount : entry.HellParty!.LegendRequiredCount;
                 var stones = pieces is null || ticketPlan.Item2 is null ? (null, null) :
                     HellPartyEntryCost.Plan(ticketPlan.Item2.After, [HellPartyEntryCost.LegendStone], count, pieces, DateTimeOffset.UtcNow);
                 if (stones.Item1 is null) return RejectFormal("hell-party-item-required");
                 legendTicket = stones.Item1;
             }
             // 实验性：档位（A..D）= 请求没点名时按 etc/hellparty.etc [difficulty] 的 Probability 加权随机（95 PVF 里只有 A 有权重，所以实际总是 A）。
-            entry = entry with { HellPartyMode = rooms.HellParty.ResolveManualMode(RandomNumberGenerator.GetInt32) };
+            if (!entry.IsCosmo) entry = entry with { HellPartyMode = rooms.HellParty.ResolveManualMode(RandomNumberGenerator.GetInt32) };
         }
         // #233 强袭材料走自己的入场消耗；不叠加 [required item] / 入场一次性疲劳。
         if (assault is not null) entry = entry! with { EntryItem = null, StartFatigue = 0, EntryCostNote = null };

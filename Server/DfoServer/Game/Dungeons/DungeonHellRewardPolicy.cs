@@ -15,12 +15,13 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
     public static int EpicFragmentRolls(byte mode, byte dungeonDifficulty) => (mode == 1 ? 1 : 0) + new[] { 5, 6, 8, 9, 10 }[Math.Min((int)dungeonDifficulty, 4)];
 
     public DungeonDropGenerationPlan Extend(DungeonDropGenerationPlan plan, int basisLevel, byte mode, int rolls,
-        byte dungeonDifficulty = 0, bool suppressEpicFragments = false)
+        byte dungeonDifficulty = 0, bool suppressEpicFragments = false, DungeonItemDropPool? epicEquipment = null)
     {
         if (rolls <= 0 || rules.Rate(basisLevel, mode) is not { } rate || rules.Rarity(mode) is not { } rarity ||
             rules.GradeRange(basisLevel) is not { } range) return plan;
         var pools = Enumerable.Range(0, 7).Select(index => new DungeonDropRarityPool(rarity[index],
-            candidates.ReferencePool(true, range.Minimum, range.Maximum, index))).ToImmutableArray();
+            index == 4 && epicEquipment is not null ? epicEquipment :
+                candidates.ReferencePool(true, range.Minimum, range.Maximum, index))).ToImmutableArray();
         var trial = new DungeonDropTrial(Math.Clamp(rate + 1, 0, Denominator), null, 1, 1, ProbabilityDenominator: Denominator,
             RarityPools: pools, Attempts: rolls);
         var trials = plan.Trials.Append(trial);
@@ -30,6 +31,7 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
         if (!suppressEpicFragments && epicFragments is { TotalWeight: > 0 } && epicFragmentPermille > 0)
             trials = trials.Append(new DungeonDropTrial(Math.Min(epicFragmentPermille, 1000), epicFragments, 1, 1, ProbabilityDenominator: 1000,
                 Attempts: EpicFragmentRolls(mode, dungeonDifficulty)));
-        return new(plan.ResourceSource, trials, plan.ReferenceQuality, plan.Amplification);
+        return new(epicEquipment is null ? plan.ResourceSource : plan.ResourceSource + ";" + HarlemHellEpicDropPolicy.Rule,
+            trials, plan.ReferenceQuality, plan.Amplification);
     }
 }

@@ -32,15 +32,24 @@ internal static partial class HarlemMaterialDropTests
             { HellParty = new(100, map.Position) };
         var wave = new DungeonPlannedMonster(0, 10, 107010514, 95, null)
             { HellWave = new(2, 216, 107010514, 95, 0, 10, 0), HellRewardRolls = 8 };
+        HarlemAbyssBonusDropTests.RunCore(entry, wave);
         var now = DateTimeOffset.FromUnixTimeSeconds(1800000000);
         for (byte difficulty = 0; difficulty < 5; difficulty++)
         {
-            var normal = policy.Extend(empty, entry with { Difficulty = difficulty }, wave).Generate(_ => 0, now);
-            var legend = policy.Extend(empty, entry with { Difficulty = difficulty, IsHellLegend = true }, wave).Generate(_ => 0, now);
-            That(normal.Single().Item is { ItemId: HarlemMaterialDropPolicy.FragmentId } fragment && fragment.Count == rules.NormalFragments[difficulty] &&
-                legend.Single().Item is { ItemId: HarlemMaterialDropPolicy.FragmentId, Count: 15 },
-                "普通五档分别固定发放，星空各难度固定15；材料不再乘装备骰数");
+            var normalPlan = policy.Extend(empty, entry with { Difficulty = difficulty }, wave);
+            var legendPlan = policy.Extend(empty, entry with { Difficulty = difficulty, IsHellLegend = true }, wave);
+            var normal = normalPlan.Generate(_ => 0, now);
+            var legend = legendPlan.Generate(_ => 0, now);
+            That(normal.Length == rules.NormalFragments[difficulty] && normalPlan.MaximumObjects == normal.Length &&
+                normal.All(row => row.Item is { ItemId: HarlemMaterialDropPolicy.FragmentId, Count: 1 }) &&
+                legend.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.FragmentId) == 15 &&
+                legend.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.SkyWishId) == rules.SkyWishes[difficulty] &&
+                legend.All(row => row.Item!.Count == 1) && legendPlan.MaximumObjects == legend.Length,
+                "普通与星空材料逐个生成地面物品，五档总数量及完整对象容量不变；材料不乘装备骰数");
         }
+        var oversized = new HarlemMaterialDropPolicy(rules with { LegendFragments = 500 }, [291100308], Item);
+        Reject<InvalidDataException>(() => oversized.Extend(empty, entry with { IsHellLegend = true }, wave),
+            "逐个材料超过完整地面容量时在准备阶段拒绝，不截断数量或重新合堆");
         That(ReferenceEquals(policy.Extend(empty, entry, wave with { HellRewardRolls = 0 }), empty) &&
             ReferenceEquals(policy.Extend(empty, entry, wave with { HellWave = null }), empty) &&
             ReferenceEquals(policy.Extend(empty, entry, wave with { IsFriendly = true }), empty) &&

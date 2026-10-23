@@ -284,6 +284,25 @@ internal static class DungeonMapPoolTests
     {
         int checks = Count;
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var definition = catalog.Get(10);
+        var cosmoDefinition = catalog.Get(7191);
+        That(cosmoDefinition.IsCosmoDungeon && cosmoDefinition.CosmoInvitationCount == 40 && cosmoDefinition.CosmoStoneCount == 4 &&
+            cosmoDefinition.CosmoQuestId == 10112 && cosmoDefinition.StartFatigue == 8 && cosmoDefinition.TryGetDesignatedDifficulty(out byte cosmoDifficulty) &&
+            cosmoDifficulty == 4, "超星空准入按PVF解析40邀请函、4灵石、10112任务、固定难度4和8疲劳");
+        var cosmoMaze = cosmoDefinition.Mazes[0];
+        That(cosmoMaze.ResourceError is null && cosmoMaze.MapSpecification is { Count: 4 } &&
+            cosmoMaze.MapSpecification.Single(map => map.Position == new DungeonPoint(2,0)) is
+                { Kind: "boss", CandidateIds: [92689,92690,92697], CandidateWeights: [45,45,10] },
+            "超星空PVF boss_selection_probability解析为权重终点，不再标记maze不支持");
+        foreach (var result in new[] { (Roll:0, Boss:92689),(Roll:45, Boss:92690),(Roll:90, Boss:92697) })
+        {
+            var entryCharacter = new Character(98,0,"CosmoPlan",0,new(54,2,0,0),null) { Level = 95 };
+            int calls = 0;
+            int Draw(int bound) { calls++; return calls == 1 ? 0 : result.Roll; }
+            That(DungeonEntryPlan.TryCreate(catalog,entryCharacter,7191,0,4,out var cosmoEntry,out var cosmoReason,
+                    draw: Draw,hellParty: true) && cosmoEntry is { IsCosmo: true, IsOrdinary: true, HellParty: null, StartFatigue: 8 } &&
+                cosmoEntry.BossMap.Id == result.Boss && cosmoEntry.Maze.StaticTopology.Supported && cosmoReason == "resource-plan-ready",
+                "超星空正式入口随机抽六个可选迷宫并按45/45/10冻结终点 " + result.Boss + "/" + cosmoReason);
+        }
         var actual = definition.Mazes.Single(maze => maze.QuestConnectionTokens.Count == 0);
         That(ReferenceEquals(catalog.ResolveOrdinaryMaze(definition,actual,_ => throw new InvalidOperationException()),actual),
             "实际龙人之塔完整显式普通路线不进入地图池或重新抽图");

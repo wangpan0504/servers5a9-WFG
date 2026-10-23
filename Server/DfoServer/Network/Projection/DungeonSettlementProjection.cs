@@ -23,6 +23,18 @@ internal static class DungeonSettlementProjection
             await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(bossKey), "formal_boss_confirmed", Guard);
         bool enabled = false;
         await context.Notify(NotiPacketType.ENABLE_CLEAR_DUNGEON, [], "formal_clear_enabled", () => enabled = Guard());
-        if (enabled) context.Session.ConfirmFormalDungeonSettlementEnabled(completion.Receipt);
+        if (enabled)
+        {
+            context.Session.ConfirmFormalDungeonSettlementEnabled(completion.Receipt);
+            if (completion.Receipt.Entry.IsCosmo) await RefreshCosmoRetryAsync(context);
+        }
+    }
+
+    internal static async Task RefreshCosmoRetryAsync(GameConnectionContext context)
+    {
+        if (context.Session.FormalDungeonResultFocus() is not { Entry.IsCosmo: true } receipt) return;
+        await context.Notify(NotiPacketType.EPLP_RECHALLENGE,
+            DungeonSettlementPackets.RetryEligibility(context.Session.CanRetryCosmoDungeon(receipt)),
+            "formal_cosmo_retry_eligibility", () => context.Session.CanPublishDungeonSettlement(receipt));
     }
 }

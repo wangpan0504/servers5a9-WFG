@@ -21,6 +21,11 @@ internal sealed record DungeonHellDifficultyRule(char Letter, int RewardRollCoun
 
 internal sealed class DungeonHellPartyCatalog
 {
+    // 当前95PVF的星空末波：219至221配凯普洛斯，222至224配斯宾诺斯。
+    public static bool IsHarlemLegendRare(DungeonHellWaveMonster wave) => wave.Order == 2 && wave.Type == 0 &&
+        (wave.GroupId is >= 219 and <= 221 && wave.MonsterId == 107000276 ||
+         wave.GroupId is >= 222 and <= 224 && wave.MonsterId == 107000277);
+
     readonly Dictionary<int, Dictionary<char, List<(int Code, int EntityType)>>> groups = [];
     readonly Dictionary<char, DungeonHellDifficultyRule> rules = [];
 

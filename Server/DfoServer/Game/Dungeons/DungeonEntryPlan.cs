@@ -24,6 +24,7 @@ internal sealed record DungeonEntryPlan(
     public DungeonHellPartyRoom? HellParty { get; init; }
     public byte HellPartyMode { get; init; }
     public bool IsHellLegend { get; init; }
+    public bool IsCosmo { get; init; }
     public int? BasisLevel { get; init; }
     public int? PlayerTeam { get; init; }
     public bool IsTutorial { get; init; }
@@ -267,10 +268,15 @@ internal sealed record DungeonEntryPlan(
             }
         }
         // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
+        bool cosmo = hellParty && definition.IsCosmoDungeon;
+        if (cosmo && (definition.CosmoInvitationCount != 40 || definition.CosmoStoneCount != 4 ||
+            definition.CosmoQuestId != 10112 || !definition.TryGetDesignatedDifficulty(out byte cosmoDifficulty) || cosmoDifficulty != 4 ||
+            definition.StartFatigue != 8))
+        { reason = "cosmo-entry-contract-unsupported"; return false; }
         if (hellParty)
         {
-            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is not null &&
-                (!hellLegend || maze.HellParty.LegendMapId > 0 && maze.HellLegendPath is not null)).ToArray();
+            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && (cosmo || maze.HellParty is not null) &&
+                (cosmo || !hellLegend || maze.HellParty!.LegendMapId > 0 && maze.HellLegendPath is not null)).ToArray();
             ordinaryHunt = false; routeQuest = 0; quest = null; layoutQuest = null;
             if (candidates.Length == 0) { reason = "hell-party-maze-unavailable"; return false; }
             // 同一副本声明了多个带深渊房间的普通 maze（如 291100319 的 313166/313173）：与普通入场一样随机选一个。
@@ -436,9 +442,11 @@ internal sealed record DungeonEntryPlan(
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
             IsPractice = practice,
-            HellParty = hellParty ? activeHell : null,
-            IsHellLegend = hellParty && hellLegend,
+            HellParty = hellParty && !cosmo ? activeHell : null,
+            IsHellLegend = hellParty && !cosmo && hellLegend,
+            IsCosmo = cosmo,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
+            StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : (ushort)0,
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };

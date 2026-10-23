@@ -882,11 +882,32 @@ internal static partial class FormalDungeonTcpTests
             That(card.Length == 33 && card[0] == 1 && card[1] == 0 && DrainCardInventory(peer) > 0 &&
                 fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0", peer.Id) is [[1L]],
                 "普通六图免费牌实际发奖且领取位落库，不能仅凭35展示判定结算完成");
-            peer.Send(72, [1, 0]);
-            peer.Expect(1, 72, [1, 1, 0]);
-            peer.Expect(0, 27, new byte[42]);
+            if (dungeonId == 5)
+            {
+                string settled = OrdinaryPersistentState(fixture, peer.Id);
+                peer.Send(72, [2, 1]); peer.Expect(1, 72, [1, 2, 1]);
+                peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 1]);
+                peer.Expect(1, 15, [1]);
+                peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+                peer.Expect(0, 27, new byte[42]);
+                peer.Barrier();
+                That(OrdinaryPersistentState(fixture, peer.Id) == settled,
+                    "普通地图真实72序列直接返回选图，不借深渊资格、不附加扣费或奖励");
+                peer.Send(72, [1, 1]); peer.Send(72, [1, 3]); peer.Barrier();
+                That(OrdinaryPersistentState(fixture, peer.Id) == settled, "普通选图后旧结算确认重放不消费新上下文");
+                byte[] chosen = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(chosen, (uint)dungeonId);
+                peer.Send(15, chosen); peer.Expect(1, 15, [1]);
+                peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]); peer.Barrier();
+                peer.Send(16, selection);
+            }
+            else
+            {
+                peer.Send(72, [1, 0]);
+                peer.Expect(1, 72, [1, 1, 0]);
+                peer.Expect(0, 27, new byte[42]);
+            }
             That(U32(peer.Expect(0, 28).Body, 0) == dungeonId && U32(peer.Expect(0, 29).Body, 14) == startMap.Id,
-                "普通六图结算再挑战保持原资源路线，创建新的尝试");
+                "普通六图再挑战或重选后保持原资源路线，创建新的尝试");
             Load(peer);
             ExpectFatigue(visited.Count + 1);
             peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();

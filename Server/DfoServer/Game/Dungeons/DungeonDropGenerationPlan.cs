@@ -4,12 +4,13 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Dungeons;
 
-internal sealed record DungeonDropRarityPool(int Threshold, DungeonItemDropPool Items);
+internal sealed record DungeonDropRarityPool(int Threshold, DungeonItemDropPool Items,
+    DungeonItemDropPool? AlternateItems = null, int AlternatePermille = 0);
 internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Items,
     int MinimumCount, int MaximumCount, DungeonDropGoldReference? Gold = null, decimal GoldMultiplier = 1m,
     int ProbabilityDenominator = DungeonDropRatePlan.ProbabilityDenominator,
     ImmutableArray<DungeonDropRarityPool> RarityPools = default, bool ReferenceGold = false, int Attempts = 1,
-    bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null);
+    bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null, bool IndividualObjects = false);
 
 // 上游必须提供已解释的概率、数量与池；这里只按完整声明执行，不为未知资源列补类别。
 // 准备计划是不可变规则输入，不持有在线角色；原Run负责冻结实际随机结果。
@@ -46,7 +47,12 @@ internal sealed class DungeonDropGenerationPlan
                 sources != 1 || trial.GoldMultiplier <= 0 || trial.ReferenceGold && trial.Gold is null || trial.Attempts is < 1 or > ushort.MaxValue)
                 throw new InvalidDataException("掉落生成计划的概率、数量或物品/金币来源不完整");
             var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty ?
-                Array.Empty<DungeonItemDropPool>() : trial.RarityPools.Select(row => row.Items).ToArray();
+                Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row => row.AlternateItems is { } alternate ?
+                    new[] { row.Items, alternate } : new[] { row.Items }).ToArray();
+            if (!trial.RarityPools.IsDefaultOrEmpty && trial.RarityPools.Any(row => row.AlternatePermille is < 0 or > 1000 ||
+                row.AlternateItems is null && row.AlternatePermille != 0 ||
+                row.AlternateItems is { TotalWeight: <= 0 }))
+                throw new InvalidDataException("稀有度条件分支须提供非空候选及0至1000的明确概率");
             // 同一次互斥抽样可以为不同物品声明不同数量，不拆成两个独立概率导致同时掉落。
             if (trial.ItemCounts is { } counts && (trial.Items is null || trial.MinimumCount != 1 || trial.MaximumCount != 1 ||
                 counts.Values.Any(count => count <= 0) ||
@@ -67,7 +73,7 @@ internal sealed class DungeonDropGenerationPlan
             long objects = trial.Gold is not null ? trial.MaximumCount : pools.SelectMany(pool => pool.Entries).Select(entry =>
             {
                 int count = trial.ItemCounts?.GetValueOrDefault(entry.Template.Id) ?? trial.MaximumCount;
-                return entry.Template.Kind == ItemKind.Equipment ? count :
+                return entry.Template.Kind == ItemKind.Equipment || trial.IndividualObjects ? count :
                     ((long)count + entry.Template.StackLimit - 1) / entry.Template.StackLimit;
             }).DefaultIfEmpty(0).Max();
             objects *= trial.Attempts;
@@ -105,7 +111,9 @@ internal sealed class DungeonDropGenerationPlan
             if (!trial.RarityPools.IsDefaultOrEmpty)
             {
                 int rarityRoll = Sample(DungeonDropRatePlan.RarityDenominator) + 1;
-                pool = trial.RarityPools.First(row => rarityRoll <= row.Threshold).Items;
+                var rarity = trial.RarityPools.First(row => rarityRoll <= row.Threshold);
+                pool = rarity.AlternateItems is { } alternate && rarity.AlternatePermille > 0 &&
+                    Sample(1000) < rarity.AlternatePermille ? alternate : rarity.Items;
             }
             // 明确空候选池不会制造另一类别；参考回退已在资源准备阶段处理。
             if (pool!.TotalWeight == 0)
@@ -122,7 +130,7 @@ internal sealed class DungeonDropGenerationPlan
                 int remaining = count;
                 while (remaining > 0)
                 {
-                    int quantity = Math.Min(remaining, template.StackLimit);
+                    int quantity = Math.Min(remaining, trial.IndividualObjects ? 1 : template.StackLimit);
                     result.Add(new(DungeonDropCreation.Create(template, quantity, Sample, now)));
                     remaining -= quantity;
                 }

@@ -184,6 +184,8 @@ internal static class TcpRegressionTests
             DungeonSettlementTests.RunAdventureResources(resources.Archive);
             DungeonSettlementTests.RunProficiencyResources(resources.Archive);
             DungeonSettlementSessionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            HarlemMaterialDropTests.RunResources(resources.Towns, resources.Archive, resources.Characters,
+                resources.ItemResources, resources.Quests, resources.Learning);
             await FormalDungeonSessionTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             await FormalDungeonPublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         }),

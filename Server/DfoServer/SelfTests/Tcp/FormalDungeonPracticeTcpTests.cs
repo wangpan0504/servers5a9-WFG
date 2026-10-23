@@ -170,11 +170,12 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(72, [1, 1]);
                 peer.Expect(1, 72, [1, 1, 1]);
                 peer.Expect(1, 15, [1]);
+                peer.Expect(0, 3, [1, key[0], key[1], 1]);
+                peer.Expect(0, 27, new byte[42]);
                 peer.Barrier();
                 peer.Send(72, [1, 3]);
-                peer.Expect(1, 72, [1, 1, 3]);
                 peer.Barrier();
-                That(EmptyLedgers(), "练习选择其他地下城只释放原Run，不跟随活动任务自动继续主线");
+                That(EmptyLedgers(), "练习选择其他地下城直接完整选图，不跟随活动任务自动继续主线，旧尾包静默忽略");
             }
         }
         That(Stable() == stable && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[2L]],

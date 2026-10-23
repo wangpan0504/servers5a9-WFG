@@ -112,6 +112,14 @@ internal static class DungeonPackets
         {
             body[10] = checked((byte)hell.Room.X);
             body[11] = checked((byte)hell.Room.Y);
+        }
+        else if (plan.IsCosmo)
+        {
+            body[10] = byte.MaxValue;
+            body[11] = byte.MaxValue;
+        }
+        if (plan.HellParty is not null || plan.IsCosmo)
+        {
             BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(14), 1);
             body[18] = 0x0B;
         }
@@ -190,7 +198,7 @@ internal static class DungeonPackets
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), 1);
         // 实验性（未在95客户端实证；依据参考项目 dungeon_start_map.go / A21 DungeonNotificationBuilder.BuildStartMap）：
         // 深渊派对时 [7]=深渊模式（取请求标志，默认1）。
-        if (plan.HellParty is not null) body[7] = plan.HellPartyMode;
+        if (plan.HellParty is not null || plan.IsCosmo) body[7] = plan.HellPartyMode;
         body[13] = (byte)payload;
         if (payload == DungeonMapPayload.Cached)
         {
@@ -203,7 +211,7 @@ internal static class DungeonPackets
         // FIX(95 client static analysis, NOTI29 reader 0238EF70): the first trailing byte after the passive-item list ([20]) is the hell-mode flag:
         // it is stored in globals 062EF5AA/0643C40C/062DC504, and the minimap hell icon (03A095A6) is only drawn when 062EF5AA != 0.
         // [22] is the party-member selector (FF = none); the previous experimental value 1 there was wrong.
-        if (plan.HellParty is not null) body[20] = 1;
+        if (plan.HellParty is not null || plan.IsCosmo) body[20] = 1;
         var ridables = RoomRidables(plan);
         if (ridables.Count == 0)
         {

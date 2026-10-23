@@ -1878,11 +1878,15 @@ internal static class QuestLifecycleTcpTests
             }
             peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
             long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
-            peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,2]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            peer.Send(72,[2,1]); peer.Expect(1,72,[1,2,1]);
+            peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,1]); peer.Expect(1,15,[1]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,new byte[42]); peer.Barrier();
             string returned = fixture.Snapshot();
             peer.Send(72,[1,3]); peer.Barrier();
             That(fixture.Snapshot() == returned && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)
-                is [[long actual]] && actual == attempt,"无主线明确确认回城并忽略旧尾包，不再发选图或建立连图尝试");
+                is [[long actual]] && actual == attempt,"无主线的普通地图完整返回选图并忽略旧尾包，不建立剧情连图尝试");
+            peer.Send(132); peer.Expect(1,132,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
+            peer.Expect(0,23); peer.Expect(0,24); peer.Barrier();
             peer.Send(35,Move(400,249)); peer.Barrier();
             That(fixture.Query("SELECT x FROM characters WHERE id=$p0",peer.Id) is [[400L]],"回城完成后城镇移动恢复，连接保持可用");
         }

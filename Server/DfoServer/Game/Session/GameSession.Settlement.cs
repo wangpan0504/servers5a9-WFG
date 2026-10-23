@@ -26,7 +26,6 @@ internal sealed partial class GameSession
         public bool ScoreScrolled { get; set; }
         public bool CardsShown { get; set; }
         public byte? SelectedCard { get; set; }
-        public bool OtherSelectionRequested { get; set; }
         public DungeonCardReward? Card { get; set; }
         public uint? MailId { get; set; }
         public bool AutoRevealScheduled { get; set; }
@@ -154,10 +153,10 @@ internal sealed partial class GameSession
         if (dungeon.Settlement is null && !(dungeon.Entry.IsTutorial && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
-        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !dungeon.Entry.IsTutorial ? cards?.Prepare(
+        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo ? cards?.Prepare(
             dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count) : null);
         var options = dungeon.Settlement?.Pending.Options;
-        if (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && cards is not null)
+        if (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo && cards is not null)
         {
             var now = DateTimeOffset.UtcNow;
             var membership = repository.LoadCardMembership(owner,Selected!.Id,now);
@@ -175,7 +174,7 @@ internal sealed partial class GameSession
                 MonsterBossExperience = dungeon.KillBossExperience,
                 MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
             }, Selected!)
-            { CardPolicy = cards };
+            { CardPolicy = dungeon.Entry.IsCosmo ? null : cards };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
@@ -263,7 +262,8 @@ internal sealed partial class GameSession
 
     public FormalDungeonReceipt? AdvanceFormalDungeonCards(bool showCards) => owner.Execute(() =>
     {
-        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Settlement is not { Committed: true } settlement)
+        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true ||
+            formalDungeon?.Settlement is not { Committed: true } settlement)
             return null;
         if (showCards)
         {
@@ -276,7 +276,8 @@ internal sealed partial class GameSession
 
     public FormalFreeCardResult? SelectFormalDungeonFreeCard(byte row, byte card) => owner.Execute<FormalFreeCardResult?>(() =>
     {
-        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Settlement is not { Committed: true, CardsShown: true } settlement ||
+        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true ||
+            formalDungeon?.Settlement is not { Committed: true, CardsShown: true } settlement ||
             row != 0 || card != 0 || settlement.SelectedCard is { } old && old != card)
             return null;
         if (settlement.SelectedCard is not null)
@@ -325,7 +326,7 @@ internal sealed partial class GameSession
 
     bool MatchesCardInstance(FormalDungeonReceipt receipt) => Ready && Phase == SessionPhase.Settlement &&
         receipt.Generation == owner.Generation && receipt.SelectionEpoch == SelectionEpoch &&
-        formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity;
+        formalDungeon?.Entry.IsCosmo != true && formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity;
 
     // 牌面属于已提交实例，与之后德利拉物品服务产生的新库存revision无关。
     public bool CanPublishDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
@@ -405,7 +406,8 @@ internal sealed partial class GameSession
 
     bool HasPendingFormalCard => formalDungeon?.Settlement?.Claim is not null;
     static bool HasFinishedDungeon(FormalDungeon? dungeon) => dungeon is not null &&
-        (dungeon.Settlement is { Committed: true } || dungeon.Entry.IsPractice && dungeon.SettlementEnabled && dungeon.Run.ClearFact is not null);
+        (dungeon.Settlement is { Committed: true } || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo) &&
+            dungeon.SettlementEnabled && dungeon.Run.ClearFact is not null && !dungeon.Run.HasPendingSettlement);
 
     bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
         dungeon.Settlement is { Committed: true } && dungeon.Run.ClearFact is not null &&
@@ -417,18 +419,17 @@ internal sealed partial class GameSession
 
     // 强袭副本不支持原地重开（再次挑战需重新走 CMD1547 授权与扣券）；handler 据此把再次挑战按返回城镇处理，避免客户端无应答卡死。
     public bool IsFormalDungeonAssault() => owner.Execute(() => formalDungeon?.Assault is not null);
-    public FormalDungeonReceipt? BeginFormalDungeonOtherSelection() => owner.Execute(() =>
+    public DungeonSelectionReceipt? OpenFormalDungeonOtherSelection() => owner.Execute<DungeonSelectionReceipt?>(() =>
     {
-        if (!Ready || HasPendingFormalCard || Phase != SessionPhase.Settlement || !HasFinishedDungeon(formalDungeon))
+        if (!Ready || HasPendingFormalCard || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo != false ||
+            !HasFinishedDungeon(formalDungeon))
             return null;
-        if (formalDungeon!.Settlement is { } settlement) settlement.OtherSelectionRequested = true;
-        else formalDungeon.PracticeOtherSelectionRequested = true;
-        return FormalReceipt();
+        // 普通结算复用自己的退场合同；不借用深渊清波或祭坛免虚弱资格。
+        if (ReturnFromFormalDungeon() is null) return null;
+        CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position);
+        SetState(SessionPhase.MapSelect);
+        return new(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId);
     });
-
-    public TownTravelReceipt? ConfirmFormalDungeonOtherSelection() => owner.Execute(() =>
-        HasFinishedDungeon(formalDungeon) && (formalDungeon?.Settlement?.OtherSelectionRequested == true ||
-            formalDungeon?.PracticeOtherSelectionRequested == true) ? ReturnFromFormalDungeon() : null);
 
     public FormalDungeonReceipt? RetryFormalDungeon(FormalDungeonReceipt expected, DungeonCatalog dungeons,
         DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces = null)
@@ -440,6 +441,25 @@ internal sealed partial class GameSession
         // 复用不可变生成规则和随机源；新Run独立冻结结果，不继承旧地面对象。
         return EnterFormalDungeon(expected.Entry.DungeonId,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,
             draw: original.Draw, pieces: pieces, requiredCharacter: expected.Character,retry: expected,
-            prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards);
+            prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards,
+            hellParty: expected.Entry.IsCosmo);
     }
+
+    public bool CanRetryCosmoDungeon(FormalDungeonReceipt expected) => owner.Execute(() =>
+    {
+        if (!Ready || !expected.Entry.IsCosmo || !CanEnterFormalDungeon(expected) ||
+            formalDungeon is not { HellTicket: { } ticket, LegendTicket: { } stone, HellPieces: { } pieces } dungeon ||
+            Selected is not { } character) return false;
+        if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
+            debugSettings?.InfiniteFatigue != true && dungeon.Entry.StartFatigue > 0 &&
+            (character.Fatigue is not { } fatigue || fatigue.Remaining < dungeon.Entry.StartFatigue ||
+             FatigueForClient(character).Remaining < dungeon.Entry.StartFatigue)) return false;
+        if (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) ||
+            area.DungeonWorldMap is not { } world || !towns.DungeonMaps.TryGetValue(world, out var map)) return false;
+        // 只规划，不扣票；实际再挑战仍复验任务、资源，并在原入场事务内扣票与疲劳。
+        var now = DateTimeOffset.UtcNow;
+        var invitations = HellPartyEntryCost.Plan(character.Inventory, map.HellItemConditions, ticket.Count, pieces, now);
+        return invitations.Plan is { } plan &&
+            HellPartyEntryCost.Plan(plan.After, [stone.ItemId], stone.Count, pieces, now).Ticket is not null;
+    });
 }

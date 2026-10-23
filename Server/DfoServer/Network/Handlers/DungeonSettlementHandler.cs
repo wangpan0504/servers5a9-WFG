@@ -1,11 +1,13 @@
 using DfoServer.Game.Session;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Projection.Inventory;
@@ -72,7 +74,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
         // 大会副本没有普通结算页：不发 34/35，改发 NOTI388（见 TournamentReward 注释）。
         bool tournament = receipt.Entry.IsTournament;
-        if (!tournament)
+        // 超星空保留真实通关经验提交，但不发布普通结果页或翻牌奖励。
+        bool cosmo = receipt.Entry.IsCosmo;
+        if (!tournament && !cosmo)
             await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
         if (CharacterExperienceNotice.ShouldPublish(previous.Level))
@@ -92,7 +96,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard,
             previousLearning: previous.Learning);
-        if (!receipt.Entry.IsTutorial)
+        if (!receipt.Entry.IsTutorial && !cosmo)
             await DungeonCardMembershipProjection.RefreshAsync(context);
         if (tournament)
         {
@@ -100,7 +104,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Notify(NotiPacketType.TOURNAMENT_CLEAR_REWARD,
                 DungeonSettlementPackets.TournamentReward(DungeonTournamentPlan.RoundCount, effective), "formal_tournament_clear_reward", Guard);
         }
-        else
+        else if (!cosmo)
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(effective),
             result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
             result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
@@ -128,6 +132,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 await (inventoryProjection ?? throw new InvalidOperationException("次元裂缝奖励缺少库存投影")).RefreshAsync(context, crackInventory);
         }
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
+        if (cosmo) await DungeonSettlementProjection.RefreshCosmoRetryAsync(context);
         return CommandResult.Handled;
     }
 
@@ -252,7 +257,14 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 return CommandResult.Handled;
             }
             var retry = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items,pieces);
-            if (retry is null) return CommandResult.Unhandled;
+            if (retry is null)
+            {
+                if (!current.Entry.IsCosmo) return CommandResult.Unhandled;
+                log.Write("formal_cosmo_retry_rejected", new { Connection = context.Id, current.Snapshot.Identity,
+                    Reason = context.Session.LastFormalDungeonRejection });
+                await DungeonSettlementProjection.RefreshCosmoRetryAsync(context);
+                return CommandResult.Handled;
+            }
             bool RetryGuard() => context.Session.CanPublishDungeonSettlement(retry);
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_retry", RetryGuard);
             // 261只更新结算页的再挑战资格，不能结束旧Scene；27沿已核验入口切换场景并清理旧结算层。
@@ -260,12 +272,36 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(retry.Entry), "formal_retry_information", RetryGuard);
             await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed,
                 passiveItems: retry.PassiveItems), "formal_retry_start_map", RetryGuard);
+            if (!retry.HellConsumedSlots.IsDefaultOrEmpty)
+            {
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
+                    InventoryListType.Main, [.. retry.HellConsumedSlots]), "formal_retry_hell_items", RetryGuard);
+                log.Write("hell_party_entry_ticket_consumed", new { Connection = context.Id, retry.Entry.DungeonId,
+                    retry.HellTicket, retry.LegendTicket, retry.EntryFatigueCharged, retry.Snapshot.Identity });
+            }
             return CommandResult.Handled;
         }
         if (option == 1)
         {
+            if (current.Entry.IsCosmo)
+            {
+                // 实机菜单只发送72{1,1}，不会续发15；在此完成原子退场和完整选图。
+                var selection = context.Session.BeginClearedHellSelection(current.Entry.DungeonId);
+                if (selection is null) return CommandResult.Unhandled;
+                int target = context.Session.PrepareLegendDungeonSelection(dungeons);
+                if (!await town.DetachForDungeonSelectionAsync(context, selection)) return CommandResult.Handled;
+                bool SelectionGuard() => context.Session.CanPublishDungeonSelection(selection);
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "formal_cosmo_other_selection", SelectionGuard);
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_cosmo_selection_opened", SelectionGuard);
+                await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(selection.Character.Id), "formal_cosmo_selection_state", SelectionGuard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(target), "formal_cosmo_selection_notice", SelectionGuard);
+                log.Write("formal_hell_selection", new { Connection = context.Id, selection.Character.Id, selection.SelectionId,
+                    current.Entry.DungeonId, LegendDungeon = target });
+                return CommandResult.Handled;
+            }
             // 强袭没有主线后继。续图失败且原因不是 no-accepted-successor 时不回 ACK，结算页会停住。
-            if (!context.Session.IsFormalDungeonAssault())
+            if (!context.Session.IsFormalDungeonAssault() && current.Entry.RouteQuestId > 0)
             {
                 var continuation = context.Session.BeginFormalDungeonQuestContinuation(current,dungeons,rooms,drops,items,pieces,
                     out bool returnToTown,out string reason);
@@ -288,19 +324,30 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     return CommandResult.Handled;
                 }
             }
-            var opening = context.Session.BeginFormalDungeonOtherSelection();
+            var opening = context.Session.OpenFormalDungeonOtherSelection();
             if (opening is null) return CommandResult.Unhandled;
-            bool OpeningGuard() => context.Session.CanPublishDungeonSettlement(opening);
+            int legendTarget = context.Session.PrepareLegendDungeonSelection(dungeons);
+            if (!await town.DetachForDungeonSelectionAsync(context, opening)) return CommandResult.Handled;
+            bool OpeningGuard() => context.Session.CanPublishDungeonSelection(opening);
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_other_selection", OpeningGuard);
-            // 先唤醒结算页，由后续真实15建立完整选图，避免提前发布27。
+            // 普通地图实机同样不续发15；确认后发送完整选图，后续选中副本的15仍沿正常入口。
             await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_result_selector_wake", OpeningGuard);
+            await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(opening.Character.Id), "formal_result_selection_state", OpeningGuard);
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(legendTarget), "formal_result_selection_notice", OpeningGuard);
+            log.Write("formal_dungeon_other_selection", new { Connection = context.Id, current.Entry.DungeonId,
+                opening.Character.Id, opening.SelectionId, LegendDungeon = legendTarget });
             return CommandResult.Handled;
         }
         if (option == 3)
         {
-            var opening = context.Session.ConfirmFormalDungeonOtherSelection();
-            if (opening is null) return CommandResult.Unhandled;
-            await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_selector_confirm", () => context.Session.CanPublishTravel(opening));
+            if (current.Entry.IsCosmo)
+            {
+                // 未确认选项1前的尾包不能退场；选图完成后旧菜单包由阶段与实例守卫拒绝。
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "formal_cosmo_selector_confirm", () => context.Session.CanPublishDungeonSettlement(current));
+                return CommandResult.Handled;
+            }
+            // 选项1已完成退场，未确认前到达的旧尾包不能单独释放当前实例。
             return CommandResult.Handled;
         }
         var receipt = context.Session.ReturnFromFormalDungeon();

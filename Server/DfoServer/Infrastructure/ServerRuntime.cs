@@ -186,11 +186,25 @@ internal static class ServerRuntime
             string? configuredMaterials = Environment.GetEnvironmentVariable("DFO_HARLEM_MATERIAL_RULES");
             var materialRules = HarlemMaterialDropRules.Parse(configuredMaterials ?? "{}");
             var harlemDungeons = towns.DungeonMaps.Values.Where(map => map.HellDungeon && map.HellQuests.Contains(6080))
-                .SelectMany(map => map.Options).Select(option => checked((uint)option.DungeonId));
-            var materialDrops = new HarlemMaterialDropPolicy(materialRules, harlemDungeons, itemResources.Items.Get);
+                .SelectMany(map => map.Options).Select(option => checked((uint)option.DungeonId)).ToArray();
+            var hellEpicTable = DungeonHellEpicCatalog.Load(pvf);
+            string? configuredEpics = Environment.GetEnvironmentVariable("DFO_HARLEM_HELL_EPIC_RULES");
+            var epicRules = HarlemHellEpicRules.Parse(configuredEpics ?? "{}");
+            var cosmoRewards = DungeonCosmoRewardCatalog.Load(pvf, dungeonCatalog, rooms);
+            var harlemEpics = new HarlemHellEpicDropPolicy(harlemDungeons,
+                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.NormalList, itemResources.Items.Get),
+                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.WeaponList, itemResources.Items.Get),
+                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.TayberrsList, itemResources.Items.Get),
+                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.CosmoList, itemResources.Items.Get),
+                epicRules, cosmoRewards);
+            var materialDrops = new HarlemMaterialDropPolicy(materialRules, harlemDungeons, itemResources.Items.Get, harlemEpics);
+            string? configuredBonuses = Environment.GetEnvironmentVariable("DFO_HARLEM_ABYSS_BONUS_RULES");
+            var bonusRules = HarlemAbyssBonusRules.Parse(configuredBonuses ?? "{}");
+            var abyssBonuses = new HarlemAbyssBonusDropPolicy(bonusRules, harlemEpics, itemResources.Items.Get);
             log.Write("startup", new { Stage = "Harlem material rewards", State = "complete", Rule = HarlemMaterialDropPolicy.Rule,
                 materialRules.Enabled, Configured = configuredMaterials is not null });
-            var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get, specialDrops, amplificationDrops, materialDrops);
+            var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
+                specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses);
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = int.TryParse(Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE"), out int configuredPermille) ? Math.Clamp(configuredPermille, 0, 1000) : 0;
             DungeonItemDropPool? epicPool = null;
@@ -209,6 +223,14 @@ internal static class ServerRuntime
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
                 FifthProbabilityRows = dropRules.ProbabilityRows.Count(row => row.Values[4] != 0),
+                HellEpicRule = HarlemHellEpicDropPolicy.Rule, HellEpicSource = DungeonHellEpicCatalog.Path,
+                HellEpicArea = HarlemHellEpicDropPolicy.Area, NormalEpicList = HarlemHellEpicDropPolicy.NormalList,
+                LegendEpicList = HarlemHellEpicDropPolicy.NormalList, LegendRareRule = HarlemHellEpicDropPolicy.RareRule,
+                EpicBranches = epicRules, EpicBranchesConfigured = configuredEpics is not null,
+                AbyssBonusRule = HarlemAbyssBonusDropPolicy.Rule, AbyssBonusRules = bonusRules, AbyssBonusConfigured = configuredBonuses is not null,
+                WeaponCandidates = harlemEpics.Weapons!.Entries.Length, TayberrsCandidates = harlemEpics.Tayberrs!.Entries.Length,
+                CosmoCandidates = harlemEpics.Cosmo!.Entries.Length, CosmoRewardRolls = cosmoRewards.RewardRolls,
+                NormalEpicCandidates = harlemEpics.Normal.Entries.Length, LegendEpicCandidates = harlemEpics.Normal.Entries.Length,
                 specialDrops.Compatibility });
             var crackRewards = new CrackDimensionRewardServices(
                 CrackDimensionCatalog.Load(pvf, itemResources.Items.Contains),
