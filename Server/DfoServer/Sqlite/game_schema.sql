@@ -864,6 +864,12 @@ CREATE TABLE account_adventure_purchases(
 CREATE TABLE account_adventure_weekly_config(
   account TEXT PRIMARY KEY REFERENCES account_adventures(account),
   slots BLOB NOT NULL CHECK(typeof(slots)='blob' AND length(slots)=5));
+CREATE TABLE character_weekly_dungeon(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,week INTEGER NOT NULL CHECK(week BETWEEN 0 AND 99999999),
+  slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 8),used INTEGER NOT NULL CHECK(used BETWEEN 0 AND 1000000),
+  PRIMARY KEY(character_id,week,slot),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
+CREATE INDEX character_weekly_dungeon_account ON character_weekly_dungeon(account,week);
 CREATE TABLE account_adventure_expeditions(
   account TEXT NOT NULL REFERENCES account_adventures(account),area INTEGER NOT NULL CHECK(area BETWEEN 1 AND 255),
   run_id TEXT NOT NULL UNIQUE CHECK(length(run_id)=32),started INTEGER NOT NULL CHECK(started>=0),

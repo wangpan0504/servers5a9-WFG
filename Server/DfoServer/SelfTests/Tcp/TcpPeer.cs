@@ -56,6 +56,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] AdventureInfo { get; private set; } = [];
     public byte[] PlayerBody { get; private set; } = [];
     public byte[] AdventureRefresh { get; private set; } = [];
+    public byte[] WeeklyDungeonConfig { get; private set; } = [];
     public byte[] CardMembershipInformation { get; private set; } = [];
     public byte[] DevilService0 { get; private set; } = [];
     public Dictionary<byte, long> PremiumServices { get; private set; } = [];
@@ -467,6 +468,15 @@ internal sealed class TcpPeer : IDisposable
         }
     });
 
+    // 每周地下城：就绪后先下发720空正文清列表，再按账号配置回放721的5个槽位。
+    // 自定义入城读取器读到124后须调用本方法，避免把720/721留给后续断言。
+    public void ReadWeeklyDungeon()
+    {
+        Expect(0, 720, []);
+        WeeklyDungeonConfig = Expect(0, 721).Body;
+        TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");
+    }
+
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
         (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,
         byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false, ushort avatarExpansion = 105,
@@ -668,6 +678,7 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(expansionSlots % 8 == 0 && (expansionSlots >> 3) <= 3,
             "client expansion reader stays within its three-stage table");
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
+        ReadWeeklyDungeon();
         return packets.ToArray();
 
         void ReadSeriaInitialization()

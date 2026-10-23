@@ -113,7 +113,14 @@ internal static class GmWebAcceptTcpTests
         {
             client.Send(8, [255, 255, 2]);
             client.Send(4, Build(w => w.Write(slot)));
-            for (int i = 0; i < 400; i++) { var packet = client.Read(); if (packet.Kind == 0 && packet.Opcode == 124) return; }
+            for (int i = 0; i < 400; i++)
+            {
+                var packet = client.Read();
+                if (packet.Kind != 0 || packet.Opcode != 124) continue;
+                // 入城主流程在124后固定跟720/721；本组只看管理端，消费掉避免残留。
+                client.ReadWeeklyDungeon();
+                return;
+            }
             throw new InvalidOperationException("未读到入城完成包");
         }
 

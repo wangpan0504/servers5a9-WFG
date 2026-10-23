@@ -119,7 +119,11 @@ internal static class GuildPermitTcpTests
         {
             var packet = peer.Read();
             if (packet.Kind == 0 && packet.Opcode == 124)            // (0,124)：EnterAsync 的最后一条
+            {
+                // 入城完成后固定跟720空正文与721五槽；本组不校验内容，只消费以免污染后续应答。
+                peer.ReadWeeklyDungeon();
                 return;
+            }
         }
         throw new InvalidOperationException("入城序列没有在预期条数内结束");
     }

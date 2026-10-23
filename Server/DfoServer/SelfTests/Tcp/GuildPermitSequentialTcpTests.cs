@@ -62,8 +62,9 @@ internal static class GuildPermitSequentialTcpTests
         await WaitReleasedAsync(fixture, "10000");
         using (var invitee = Open(fixture, "20001"))
         {
-            Enter(invitee);
+            Enter(invitee, pendingPermit: true);
             invitee.Expect(0, 0x02AD, [.. Text("顺序公会"), 2, .. Text("SeqMaster"), .. Text("顺序介绍")]);
+            invitee.ReadWeeklyDungeon();
             invitee.Send(0x02E6, [0x00]);
             invitee.Expect(1, 0x02E6, [0x00, 0x22, 0x00]);
         }
@@ -87,8 +88,9 @@ internal static class GuildPermitSequentialTcpTests
         await WaitReleasedAsync(fixture, "10000");
         using (var invitee = Open(fixture, "20001"))
         {
-            Enter(invitee);
+            Enter(invitee, pendingPermit: true);
             invitee.Expect(0, 0x02AD, [.. Text("顺序公会"), 5, .. Text("SeqMaster"), .. Text("顺序介绍")]);
+            invitee.ReadWeeklyDungeon();
             invitee.Send(0x02E6, [0x01]);
             invitee.Expect(1, 0x02E6, [0x01]);
             GuildPermitTests.Entered(invitee.Expect(0, 58).Body, checked((ushort)inviteeId), "顺序公会", "SeqInvitee");
@@ -125,8 +127,10 @@ internal static class GuildPermitSequentialTcpTests
     /// 选角并消费整段入城序列，读到入城最后一条 `NOTI 124 ENTER_GAMEWORLD_COMPLETE` 为止；
     /// 认证补投的 `NOTI 0x2AD` 在该序列之后，由调用方按需读取（没有申请时用 <see cref="Barriered"/> 断言没有多余包）。
     /// 与 `guild-permit` 组同一手法：不依赖共享夹具的期望表。
+    /// 入城完成后固定跟720空正文与721五槽；有补投弹窗时0x2AD先到，调用方读弹窗后再调用
+    /// <see cref="TcpPeer.ReadWeeklyDungeon"/>。
     /// </summary>
-    static void Enter(TcpPeer peer, ushort slot = 0)
+    static void Enter(TcpPeer peer, ushort slot = 0, bool pendingPermit = false)
     {
         peer.Send(8, [255, 255, 2]);                                 // 客户端选角前请求名册
         peer.Send(4, Build(writer => writer.Write(slot)));           // (1,4) SELECT_CHARACTER
@@ -134,7 +138,10 @@ internal static class GuildPermitSequentialTcpTests
         {
             var packet = peer.Read();
             if (packet.Kind == 0 && packet.Opcode == 124)            // (0,124)：EnterAsync 的最后一条
+            {
+                if (!pendingPermit) peer.ReadWeeklyDungeon();
                 return;
+            }
         }
         throw new InvalidOperationException("入城序列没有在预期条数内结束");
     }

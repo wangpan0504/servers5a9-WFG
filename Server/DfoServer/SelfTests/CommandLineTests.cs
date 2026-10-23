@@ -83,7 +83,8 @@ internal static class CommandLineTests
             ["--packet-http-port", "23100"], ["--packet-http-port", "23101"],
             ["--gm-port", "23102", "--packet-http-port", "23102"],
             ["--channel-entry-port-base", "23103", "--packet-http-port", "23103"],
-            ["--dungeon-entry-probe", "Unknown"], ["--teleport-potion-gates", "open"], ["--teleport-potion-gates", "Strict"]
+            ["--dungeon-entry-probe", "Unknown"], ["--teleport-potion-gates", "open"], ["--teleport-potion-gates", "Strict"],
+            ["--adventure-weekly", "slots"], ["--adventure-weekly", "On"]
         ];
         foreach (string[] arguments in invalid)
             Reject(arguments);
@@ -91,6 +92,10 @@ internal static class CommandLineTests
         That(ServerOptions.Load().TeleportPotionGates == Game.Town.TeleportPotionGateMode.Open &&
             ServerOptions.Load(ServerCommand.Parse(["--teleport-potion-gates", "Pvf"]).Options).TeleportPotionGates == Game.Town.TeleportPotionGateMode.Pvf,
             "瞬间移动药剂入口默认全部开放，--teleport-potion-gates Pvf 恢复白名单");
+        That(ServerOptions.Load().AdventureWeekly == Game.Adventure.AdventureWeeklyMode.Slots &&
+            ServerOptions.Load(ServerCommand.Parse(["--adventure-weekly", "Full"]).Options).AdventureWeekly == Game.Adventure.AdventureWeeklyMode.Full &&
+            ServerOptions.Load(ServerCommand.Parse(["--adventure-weekly", "Off"]).Options).AdventureWeekly == Game.Adventure.AdventureWeeklyMode.Off,
+            "每周地下城默认只下发721/720，Full启用719，Off回退旧行为");
         Reject(["--data-dir", " "]);
         Reject(["--pvf-path", "one.pvf", "--pvf-path", "two.pvf"]);
         Reject(["--data-dir", "bad\0path"]);

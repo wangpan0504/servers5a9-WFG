@@ -179,6 +179,8 @@ internal static class SqliteMigrations
         // 满级入口线后角色经验到账为0，回执需保留同一笔经验记入熟练度的额度，结算显示与重复报告才能回放有效经验。
         new(74, "熟练度到账额度", SettlementProficiencySchema.Upgrade),
         new(75, "账号商城积分", AddMileageColumn),
+        // 冒险团每周地下城信息：按角色保存本周各列实际入场次数，与副本身份预留同一事务累加。
+        new(76, "冒险团每周地下城入场计数", EnsureWeeklyDungeonUsage),
     ];
 
     static void AddMileageColumn(SqliteConnection db, SqliteTransaction tx)
@@ -197,6 +199,24 @@ internal static class SqliteMigrations
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_wallets'";
         if (query.ExecuteScalar() is not string sql || !sql.Contains("CHECK(mileage BETWEEN 0 AND 2147483647)", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("商城积分列缺少正式数量约束");
+    }
+
+    // v76首次引入角色每周地下城计数表；从当前schema回退重放的夹具可能已带同结构表，
+    // 校验主键与外键后补建索引，不改既有行。同名视图或不同结构整笔失败回滚。
+    static void EnsureWeeklyDungeonUsage(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_weekly_dungeon'";
+        if (query.ExecuteScalar() is string sql)
+        {
+            if (!sql.Contains("PRIMARY KEY(character_id,week,slot)", StringComparison.Ordinal) ||
+                !sql.Contains("FOREIGN KEY(character_id,account) REFERENCES characters(id,account)", StringComparison.Ordinal))
+                throw new InvalidDataException("每周地下城计数迁移拒绝未知表结构");
+            Execute(db, tx, "CREATE INDEX IF NOT EXISTS character_weekly_dungeon_account ON character_weekly_dungeon(account,week)");
+            return;
+        }
+        Execute(db, tx, WeeklyDungeonUsageSchema);
     }
 
     // 早期真实库没有该表（v72首次引入），直接建出；从当前schema回退重放的夹具可能已带同结构表，
@@ -848,6 +868,16 @@ internal static class SqliteMigrations
         CREATE TABLE account_adventure_weekly_config(
           account TEXT PRIMARY KEY REFERENCES account_adventures(account),
           slots BLOB NOT NULL CHECK(typeof(slots)='blob' AND length(slots)=5));
+        """;
+
+    // 角色每周地下城入场次数：每个角色每周每列一行，旧周行保留用于历史排查；删除角色时级联删除。
+    internal const string WeeklyDungeonUsageSchema = """
+        CREATE TABLE character_weekly_dungeon(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,week INTEGER NOT NULL CHECK(week BETWEEN 0 AND 99999999),
+          slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 8),used INTEGER NOT NULL CHECK(used BETWEEN 0 AND 1000000),
+          PRIMARY KEY(character_id,week,slot),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
+        CREATE INDEX character_weekly_dungeon_account ON character_weekly_dungeon(account,week);
         """;
 
     internal const string AdventureExpeditionSchema = """

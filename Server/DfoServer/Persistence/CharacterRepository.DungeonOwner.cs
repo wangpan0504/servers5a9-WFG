@@ -68,13 +68,14 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("熟练度状态已变化");
     }
 
-    public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => owner.Execute(() =>
+    public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
+        WeeklyDungeonEntry? weekly = null) => owner.Execute(() =>
     {
         var state = ReservationState(expected, nextObjectKey);
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.ReserveDungeonAttempt");
         using var tx = write.Transaction;
-        ReserveInTransaction(db, tx, owner, expected, expected.Revision, state, nextObjectKey);
+        ReserveInTransaction(db, tx, owner, expected, expected.Revision, state, nextObjectKey, weekly: weekly);
         var committed = Require(db, tx, owner.Account, expected.Name);
         tx.Commit();
         return committed;
@@ -99,7 +100,7 @@ internal sealed partial class CharacterRepository
         using var write = db.BeginWrite("CharacterRepository.CommitDungeonEntry");
         using var tx = write.Transaction;
         long revision = charge.Items is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
-        ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore);
+        ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
         if (fatigueBefore is not null && fatigueAfter is not null)
         {
             using var command = db.CreateCommand();
@@ -140,9 +141,10 @@ internal sealed partial class CharacterRepository
         return state;
     }
 
-    // 只参与调用方事务：复核准入前提（revision 允许已被同事务的入场票提交推进到 revision），推进 revision 与尝试号。
+    // 只参与调用方事务：复核准入前提（revision 允许已被同事务的入场票提交推进到 revision），推进 revision 与尝试号，
+    // 并按本次入场累加冒险团每周地下城列；任一步失败整笔回滚，重复提交不会多计。
     void ReserveInTransaction(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner, Character expected, long revision,
-        CharacterDungeonState state, uint nextObjectKey, CharacterFatigueState? fatigue = null)
+        CharacterDungeonState state, uint nextObjectKey, CharacterFatigueState? fatigue = null, WeeklyDungeonEntry? weekly = null)
     {
         var current = Require(db, tx, owner.Account, expected.Name);
         if (fatigue is not null && current.Fatigue != fatigue)
@@ -169,5 +171,13 @@ internal sealed partial class CharacterRepository
             WHERE character_id=$id AND account=$account AND next_object_key=$oldKey AND last_attempt=$oldAttempt
             """;
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副本身份预留冲突");
+        if (weekly is null) return;
+        command.Parameters.AddWithValue("$week", weekly.Week);
+        command.Parameters.AddWithValue("$slot", weekly.Slot);
+        command.CommandText = """
+            INSERT INTO character_weekly_dungeon(character_id,account,week,slot,used) VALUES($id,$account,$week,$slot,1)
+            ON CONFLICT(character_id,week,slot) DO UPDATE SET used=used+1
+            """;
+        command.ExecuteNonQuery();
     }
 }

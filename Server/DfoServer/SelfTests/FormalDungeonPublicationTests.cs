@@ -800,7 +800,8 @@ internal static class FormalDungeonPublicationTests
             DfoServer.Game.Adventure.AdventureRepresentativePlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.CommitAdventureRepresentative(owner, plan, catalog, now);
         public DfoServer.Game.Adventure.AdventureSnapshot ReadAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.ReadAdventure(owner, catalog, now);
         public int ReadAdventureLevel(AccountOwners.Lease owner) => inner.ReadAdventureLevel(owner);
-        public System.Collections.Immutable.ImmutableArray<(uint Id, string Name)> ReadAdventureCharacterList(AccountOwners.Lease owner) => inner.ReadAdventureCharacterList(owner);
+        public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Adventure.AdventureWeeklyCharacter> ReadAdventureWeeklyRoster(
+            AccountOwners.Lease owner, int week) => inner.ReadAdventureWeeklyRoster(owner, week);
         public System.Collections.Immutable.ImmutableArray<byte> ReadAdventureWeeklyConfig(AccountOwners.Lease owner) => inner.ReadAdventureWeeklyConfig(owner);
         public void WriteAdventureWeeklyConfig(AccountOwners.Lease owner, System.Collections.Immutable.ImmutableArray<byte> slots) => inner.WriteAdventureWeeklyConfig(owner, slots);
         public void InitializeAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.InitializeAdventure(owner, catalog, now);
@@ -882,7 +883,8 @@ internal static class FormalDungeonPublicationTests
         public Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience) => inner.CommitExpertJobExperience(owner, expected, experience);
         public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState) => inner.CommitExpertJobGiveUp(owner, expected, wallet, giveUpState);
         public Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance) => inner.CommitExpertJobMachine(owner, expected, wallet, grade, endurance);
-        public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey);
+        public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
+            DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
         public Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan) => inner.CommitQuestCompletion(owner, plan);

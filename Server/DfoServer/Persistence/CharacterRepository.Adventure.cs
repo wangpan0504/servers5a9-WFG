@@ -5,6 +5,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Adventure;
 using Microsoft.Data.Sqlite;
 
@@ -18,18 +19,48 @@ internal sealed partial class CharacterRepository
         return ReadAdventure(db, tx, owner.Account, catalog, now);
     });
 
-    // 718服务器角色列表只读本账号名册，不装载背包、技能或冒险团进度。
-    public ImmutableArray<(uint Id, string Name)> ReadAdventureCharacterList(AccountOwners.Lease owner) => owner.Execute(() =>
+    // 718名册与719次数一次读出，只读本账号角色，不装载背包、技能或冒险团进度。
+    // 本周没有入场记录时已用次数为0；5号列没有副本来源，保持-1（客户端显示"-"）。
+    public ImmutableArray<AdventureWeeklyCharacter> ReadAdventureWeeklyRoster(AccountOwners.Lease owner, int week) => owner.Execute(() =>
     {
         using var db = database.Open();
-        using var query = db.CreateCommand();
-        query.Parameters.AddWithValue("$account", owner.Account);
-        query.CommandText = "SELECT id,name FROM characters WHERE account=$account ORDER BY slot,id";
-        var rows = ImmutableArray.CreateBuilder<(uint, string)>();
-        using var reader = query.ExecuteReader();
-        while (reader.Read()) rows.Add((checked((uint)reader.GetInt64(0)), reader.GetString(1)));
+        var usage = new Dictionary<ushort, int[]>();
+        using (var query = db.CreateCommand())
+        {
+            query.Parameters.AddWithValue("$account", owner.Account);
+            query.Parameters.AddWithValue("$week", week);
+            query.CommandText = "SELECT character_id,slot,used FROM character_weekly_dungeon WHERE account=$account AND week=$week";
+            using var reader = query.ExecuteReader();
+            while (reader.Read())
+            {
+                ushort id = checked((ushort)reader.GetInt64(0));
+                int slot = reader.GetInt32(1);
+                if (slot is < 0 or >= WeeklyDungeonPolicy.SlotCount) throw new InvalidDataException("每周地下城列号越界");
+                if (!usage.TryGetValue(id, out int[]? row)) usage.Add(id, row = EmptyWeeklyUsage());
+                row[slot] = checked((int)reader.GetInt64(2));
+            }
+        }
+        using var roster = db.CreateCommand();
+        roster.Parameters.AddWithValue("$account", owner.Account);
+        roster.CommandText = "SELECT id,name,level,job,grow_type FROM characters WHERE account=$account ORDER BY slot,id";
+        var rows = ImmutableArray.CreateBuilder<AdventureWeeklyCharacter>();
+        using var reader2 = roster.ExecuteReader();
+        while (reader2.Read())
+        {
+            ushort id = checked((ushort)reader2.GetInt64(0));
+            rows.Add(new(id, reader2.GetString(1), checked((ushort)reader2.GetInt32(2)), checked((byte)reader2.GetInt32(3)),
+                checked((byte)reader2.GetInt32(4)), usage.TryGetValue(id, out int[]? row) ? ImmutableArray.Create(row) : ImmutableArray.Create(EmptyWeeklyUsage())));
+        }
         return rows.ToImmutable();
     });
+
+    static int[] EmptyWeeklyUsage()
+    {
+        var row = new int[WeeklyDungeonPolicy.SlotCount];
+        Array.Fill(row, -1);
+        for (int slot = 0; slot < row.Length; slot++) if (WeeklyDungeonPolicy.Mapped(slot)) row[slot] = 0;
+        return row;
+    }
 
     public ImmutableArray<byte> ReadAdventureWeeklyConfig(AccountOwners.Lease owner) => owner.Execute(() =>
     {

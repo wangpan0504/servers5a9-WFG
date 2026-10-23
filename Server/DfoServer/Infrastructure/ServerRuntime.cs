@@ -84,6 +84,7 @@ internal static class ServerRuntime
         var titleProjection = new TitleProjection(titleService);
         adventureCatalog ??= new GameWorld.Adventure.AdventureCatalog(pvf);
         var adventureProjection = new AdventureProjection(adventureCatalog);
+        var adventureWeeklyProjection = new AdventureWeeklyProjection(options.AdventureWeekly, log);
         var adventureRepresentatives = new Game.Adventure.AdventureRepresentativeService(adventureCatalog);
         expeditionCatalog ??= new GameWorld.Adventure.AdventureExpeditionCatalog(pvf);
         var expeditionService = new Game.Adventure.AdventureExpeditionService(adventureCatalog, expeditionCatalog);
@@ -237,7 +238,8 @@ internal static class ServerRuntime
             new SessionHandler(projection, log),
             // 客户端保活：0x04FE/0x06BB 每 10 秒一次，服务端必须回同 opcode 帧（见 KeepaliveHandler）。
             new KeepaliveHandler(log),
-            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs),
+            new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
+                adventureWeeklyProjection),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
@@ -246,7 +248,7 @@ internal static class ServerRuntime
             new AdventureShopHandler(new Game.Adventure.AdventureShopService(adventureCatalog, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, clock),
             new AdventureCapsuleHandler(new Game.Adventure.AdventureCapsuleService(adventureCatalog, growth), levelProjection, clock),
-            new AdventureWeeklyHandler(),
+            new AdventureWeeklyHandler(adventureWeeklyProjection),
             new SkillHandler(learning, log),
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
             new TownHandler(projection, log),

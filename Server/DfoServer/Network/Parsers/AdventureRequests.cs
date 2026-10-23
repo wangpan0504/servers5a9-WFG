@@ -85,4 +85,26 @@ internal static class AdventureRequests
         if (body.Length != AdventureWeekly.Slots) throw new InvalidDataException("每周地下城配置必须为5个槽位");
         return body.ToImmutableArray();
     }
+    // 790：u8 key、u8 kind、u8 count，随后每行 u32 字节长度 + CP936 名称。
+    // key 原样用于回包，kind 由客户端带入但服务端不使用。
+    public static (byte Key, byte Kind, ImmutableArray<string> Names) WeeklyInfo(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 3) throw new InvalidDataException("每周地下城信息请求缺少固定字段");
+        int count = body[2];
+        var names = ImmutableArray.CreateBuilder<string>(count);
+        int at = 3;
+        for (int i = 0; i < count; i++)
+        {
+            if (body.Length < at + 4) throw new InvalidDataException("每周地下城信息请求名称长度越界");
+            int length = BinaryPrimitives.ReadInt32LittleEndian(body[at..]);
+            at += 4;
+            if (length is < 0 or > 64 || body.Length < at + length)
+                throw new InvalidDataException("每周地下城信息请求名称长度非法");
+            try { names.Add(CharacterName.Encoding.GetString(body.Slice(at, length))); }
+            catch (DecoderFallbackException error) { throw new InvalidDataException("每周地下城信息请求名称不是CP936", error); }
+            at += length;
+        }
+        if (at != body.Length) throw new InvalidDataException("每周地下城信息请求尾部有多余字节");
+        return (body[0], body[1], names.MoveToImmutable());
+    }
 }

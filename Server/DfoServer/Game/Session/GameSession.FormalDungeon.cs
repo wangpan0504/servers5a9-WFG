@@ -65,6 +65,8 @@ internal sealed partial class GameSession
     sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey)
     {
         public DungeonSelectionContext? ClassExperienceSelection { get; init; }
+        // 本次入场计入的冒险团每周地下城列；练习、训练、职业体验与比赛为 null。
+        public WeeklyDungeonEntry? Weekly { get; init; }
     }
     public DungeonRunSnapshot? DungeonSnapshot => owner.Execute(() => formalDungeon?.Run.Snapshot);
 
@@ -212,7 +214,12 @@ internal sealed partial class GameSession
                 questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return RejectFormal("route-quest-not-eligible");
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes,crackRewards);
-        return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null,
+        // 只有正式入场计入冒险团每周地下城信息：练习、训练、职业体验与比赛不消耗次数。
+        WeeklyDungeonEntry? weekly = null;
+        if (!entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
+            WeeklyDungeonPolicy.SlotOf(catalog.Get(checked((int)dungeonId))) is { } weeklySlot)
+            weekly = new(WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()), weeklySlot);
+        return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
             Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, EntryPieces = pieces } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
@@ -459,9 +466,10 @@ internal sealed partial class GameSession
         Character committed;
         if (entryItems is not null || entryFatigue > 0)
         {
-            // 入场票、入场一次性疲劳与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
+            // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             committed = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
-                new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id));
+                new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
+                    prepared.Weekly));
             if (installing.HellTicket is null) entrySlots = entryItems?.ChangedSlots ?? [];
             if (committed.Revision != installing.Entry.CharacterRevision)
             {
@@ -470,7 +478,7 @@ internal sealed partial class GameSession
                 installing = installing with { Entry = rebased };
             }
         }
-        else committed = repository.ReserveDungeonAttempt(owner,character,prepared.NextKey);
+        else committed = repository.ReserveDungeonAttempt(owner,character,prepared.NextKey,prepared.Weekly);
         prepared.Dungeon.Ground.PublishPassiveEntry();
         if (formalDungeon is { } previous)
         {

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Adventure;
 
 namespace DfoServer.Network.Builders;
@@ -179,17 +180,68 @@ internal static class AdventurePackets
         bytes.CopyTo(target);
     }
     public const int ServerCharacterNameMaxBytes = 29;
-    // 718服务器角色列表：server u8、count u8，每行u32角色、u32名称长度、CP936名称、尾u8 0。
-    public static byte[] ServerCharacters(byte server, IReadOnlyList<(uint Id, string Name)> rows) => Build(writer =>
+    // 718服务器角色列表：server u8、count u8，每行 u32角色、u32名称长度、CP936名称、u8标志、
+    // u16等级、u8职业、u8分支、u8二觉。客户端只把等级95的行装进面板，职业名按「职业、分支(<6)、二觉(<=2)」查表。
+    // 外传职业（黑暗武士9/缔造者10）的CHR资源没有分支与二觉名表，发送分支0、二觉0走基础名。
+    public static byte[] ServerCharacters(byte server, IReadOnlyList<AdventureWeeklyCharacter> rows) => Build(writer =>
     {
         int count = Math.Min(rows.Count, byte.MaxValue);
         writer.Write(server); writer.Write(checked((byte)count));
         for (int i = 0; i < count; i++)
         {
-            byte[] bytes = Prefix(rows[i].Name, ServerCharacterNameMaxBytes);
-            writer.Write(rows[i].Id); writer.Write(checked((uint)bytes.Length)); writer.Write(bytes); writer.Write((byte)0);
+            var row = rows[i];
+            byte[] bytes = Prefix(row.Name, ServerCharacterNameMaxBytes);
+            bool foreign = row.Job is 9 or 10;
+            writer.Write(row.Id); writer.Write(checked((uint)bytes.Length)); writer.Write(bytes);
+            writer.Write((byte)0); writer.Write(row.Level); writer.Write(row.Job);
+            writer.Write(foreign ? (byte)0 : AdventureCatalog.ProfessionGrow(row.Job, row.Grow));
+            writer.Write(foreign ? (byte)0 : (byte)(row.Grow >> 4));
         }
     });
+
+    // 721：5个槽位原样回放，0xFF表示未选择；不按服务端规则重排客户端提交的排列。
+    public static byte[] WeeklyConfig(IReadOnlyList<byte> slots) => Build(writer =>
+    {
+        foreach (byte slot in slots) writer.Write(slot);
+    });
+
+    // 720：空正文，清空客户端每周地下城信息列表。
+    public static byte[] WeeklyReset() => Build(_ => { });
+
+    // 719每周地下城信息：u8 key、u8 count，每行 u32名称长度 + CP936名称 + 0x51字节记录。
+    // 记录布局：A[9]u32已用次数@0、B[9]u32高亮阈值@0x24、C[9]u8是否参与显示@0x48。
+    // 客户端显示 max(列上限 - A, 0)；A==-1 或 C==0 显示"-"。次数来自角色本周实际入场，B没有服务端来源保持0。
+    // names 为空表示整份名册（客户端打开面板后仍会按可见行逐名请求，回复用请求里的 key）。
+    public static byte[] WeeklyDungeonInfo(byte key, IReadOnlyList<AdventureWeeklyCharacter> rows,
+        IReadOnlyList<string>? names = null) => Build(writer =>
+    {
+        var selected = names is null ? rows.ToArray() : Requested(rows, names);
+        int count = Math.Min(selected.Length, byte.MaxValue);
+        writer.Write(key); writer.Write(checked((byte)count));
+        var block = new byte[0x51];
+        for (int i = 0; i < WeeklyDungeonPolicy.SlotCount; i++) block[0x48 + i] = 1;
+        for (int i = 0; i < count; i++)
+        {
+            for (int slot = 0; slot < WeeklyDungeonPolicy.SlotCount; slot++)
+                U32(block, slot * 4, unchecked((uint)selected[i].UsedAt(slot)));
+            byte[] bytes = Prefix(selected[i].Name, ServerCharacterNameMaxBytes);
+            writer.Write(checked((uint)bytes.Length)); writer.Write(bytes); writer.Write(block);
+        }
+    });
+
+    // 按请求名的顺序回包；同名只回一条，未知名跳过（客户端可能缓存了刚删除的角色）。
+    static AdventureWeeklyCharacter[] Requested(IReadOnlyList<AdventureWeeklyCharacter> rows, IReadOnlyList<string> names)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var selected = new List<AdventureWeeklyCharacter>(names.Count);
+        foreach (string name in names)
+        {
+            if (!seen.Add(name)) continue;
+            foreach (var row in rows)
+                if (row.Name == name) { selected.Add(row); break; }
+        }
+        return selected.ToArray();
+    }
 
     // 旧库角色名可能超过角色列表的窄字段；按完整字符截断，不拆开双字节字符。
     static byte[] Prefix(string name, int limit)

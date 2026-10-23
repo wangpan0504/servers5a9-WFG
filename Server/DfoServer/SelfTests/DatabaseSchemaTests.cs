@@ -63,9 +63,10 @@ internal static partial class DatabaseSchemaTests
         RemoveAdventureLedger(db);
     }
 
-    // v72 只追加每周地下城配置表；回退到 v71 及更早的夹具应真的移除，确保重放时走真实建表而不是按已有结构跳过。
+    // v72 只追加每周地下城配置表、v76 追加角色每周计数表；回退到更早的夹具应真的移除，
+    // 确保重放时走真实建表而不是按已有结构跳过。
     internal static void RemoveAdventureWeekly(SqliteConnection db) =>
-        Execute(db, "DROP TABLE IF EXISTS account_adventure_weekly_config");
+        Execute(db, "DROP TABLE IF EXISTS character_weekly_dungeon; DROP TABLE IF EXISTS account_adventure_weekly_config");
 
     // v73 追加开启/排除额两列与角色里程、开启标记两张表；回退到 v72 及更早的夹具必须真的移除，
     // 否则真实 ALTER/CREATE 会被按已有结构跳过，旧版模拟失去意义。
@@ -267,6 +268,7 @@ internal static partial class DatabaseSchemaTests
             VerifyDungeonSceneSettlementMigration(root);
             VerifySettlementBreakdownMigration(root);
             VerifyAdventureWeeklyMigration(root);
+            VerifyWeeklyDungeonUsageMigration(root);
             VerifyAdventureTemporaryNumberingCompatibility(root);
             VerifyPremiumContractsMigration(root);
             VerifyMasterQuest14Compatibility(root);
@@ -881,6 +883,59 @@ internal static partial class DatabaseSchemaTests
         string stable = Snapshot(path);
         _ = new CharacterRepository(path);
         Check(Snapshot(path) == stable, "v72重开幂等，不重写配置");
+    }
+
+    // v76 只追加角色每周地下城计数表：从 v75 夹具必须真实缺表，升级后校验结构、约束、索引与外键。
+    private static void VerifyWeeklyDungeonUsageMigration(string root)
+    {
+        string path = Path.Combine(root, "weekly-usage-v75.db");
+        _ = new CharacterRepository(path);
+        new AuthenticationService(new AuthenticationRepository(path)).Create("weekly-usage", "fixture-password");
+        using (var db = Open(path))
+        {
+            Execute(db, """
+                INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
+                  VALUES('weekly-usage',0,'Usage',0,38,1,450,234,0,0);
+                DROP TABLE character_weekly_dungeon;
+                PRAGMA user_version=75;
+                """);
+            Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='character_weekly_dungeon'") is 0L,
+                "v76前置夹具真实移除每周地下城计数表");
+        }
+        long id;
+        _ = new CharacterRepository(path);
+        using (var db = Open(path))
+        {
+            Check(Query(db, "SELECT count(*) FROM pragma_table_info('character_weekly_dungeon') WHERE name IN('character_id','account','week','slot','used')") is 5L &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='character_weekly_dungeon_account'") is 1L &&
+                Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                "v76从v75只追加每周地下城计数表与账号索引");
+            id = (long)Query(db, "SELECT id FROM characters WHERE name='Usage'")!;
+            Reject<SqliteException>(() => Execute(db, $"INSERT INTO character_weekly_dungeon(character_id,account,week,slot,used) VALUES({id},'weekly-usage',20261022,9,1)"),
+                "v76拒绝9号以外的列号");
+            Reject<SqliteException>(() => Execute(db, $"INSERT INTO character_weekly_dungeon(character_id,account,week,slot,used) VALUES({id},'other',20261022,0,1)"),
+                "v76拒绝账号与角色不一致的计数行");
+            Execute(db, $"INSERT INTO character_weekly_dungeon(character_id,account,week,slot,used) VALUES({id},'weekly-usage',20261022,0,1)");
+            Reject<SqliteException>(() => Execute(db, $"INSERT INTO character_weekly_dungeon(character_id,account,week,slot,used) VALUES({id},'weekly-usage',20261022,0,2)"),
+                "v76同一角色同一周同一列只有一行");
+            Check(Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L, "v76计数行外键一致");
+        }
+        // 撞名视图：v76 必须整笔回滚，不改版本、不删既有对象。
+        string collision = Path.Combine(root, "weekly-usage-v75-collision.db");
+        using (var source = Open(path))
+        using (var target = Open(collision)) source.BackupDatabase(target);
+        using (var db = Open(collision))
+        {
+            Execute(db, "DROP TABLE character_weekly_dungeon");
+            Execute(db, "CREATE VIEW character_weekly_dungeon AS SELECT 1 AS character_id,'x' AS account,0 AS week,0 AS slot,0 AS used");
+            Execute(db, "PRAGMA user_version=75");
+        }
+        string before = Snapshot(collision);
+        RejectDatabase(() => new CharacterRepository(collision));
+        using (var db = Open(collision))
+            Check(Snapshot(collision) == before && Query(db, "PRAGMA user_version") is 75L &&
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='view' AND name='character_weekly_dungeon'") is 1L,
+                "v76撞名视图失败回滚版本与既有对象");
     }
 
     // 本地整合构建曾把冒险团四项记成v64–v67；上游随后占用v64/v65，这类库必须按v63重跑而不是只跑v68+。

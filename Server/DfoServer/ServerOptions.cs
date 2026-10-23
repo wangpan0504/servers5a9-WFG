@@ -36,6 +36,8 @@ internal sealed record ServerOptions
     public int AuctionSeedCount { get; init; }
     // 瞬间移动药剂地下城入口限制；默认 Open 开放全部入口，Pvf 恢复药剂 `[int data]` 白名单。见 Game/Town/Teleport.cs。
     public Game.Town.TeleportPotionGateMode TeleportPotionGates { get; init; }
+    // 每周地下城信息下发；默认 Slots（就绪后回读配置并下发721/720），Full 另发719，Off 回退旧行为。
+    public Game.Adventure.AdventureWeeklyMode AdventureWeekly { get; init; } = Game.Adventure.AdventureWeeklyMode.Slots;
     public int SessionTtlSeconds { get; init; } = 300;
     public string ProtocolVersion => "matched-client";
 
@@ -70,6 +72,7 @@ internal sealed record ServerOptions
                     "--auction-probe" => value with { DevelopmentAuctionProbe = argument },
                     "--auction-seed" => value with { AuctionSeedCount = Number(argument, name) },
                     "--teleport-potion-gates" => value with { TeleportPotionGates = Mode<Game.Town.TeleportPotionGateMode>(argument, name) },
+                    "--adventure-weekly" => value with { AdventureWeekly = Mode<Game.Adventure.AdventureWeeklyMode>(argument, name) },
                     _ => throw new InvalidDataException("未知运行参数：" + name)
                 };
             }

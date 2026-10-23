@@ -1,12 +1,15 @@
 using System.Collections.Immutable;
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    // 718只读本账号名册；选角期与已就绪角色都可查询，不改变会话阶段。
-    public ImmutableArray<(uint Id, string Name)> ReadAdventureCharacterList() => repository.ReadAdventureCharacterList(owner);
+    // 718名册与719次数共用：本周按周四06:00边界计算；选角期与已就绪角色都可查询，不改变会话阶段。
+    public ImmutableArray<AdventureWeeklyCharacter> ReadAdventureWeeklyRoster() =>
+        repository.ReadAdventureWeeklyRoster(owner, WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()));
     public ImmutableArray<byte> ReadAdventureWeeklyConfig() => repository.ReadAdventureWeeklyConfig(owner);
 
     // 每周地下城配置是账号级排列，保存后不推进冒险团信息包，也不重建Actor。

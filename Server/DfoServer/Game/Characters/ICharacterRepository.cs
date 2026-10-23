@@ -29,8 +29,9 @@ internal interface ICharacterRepository
     DfoServer.Game.Adventure.AdventureSnapshot CommitAdventureRepresentative(AccountOwners.Lease owner,
         DfoServer.Game.Adventure.AdventureRepresentativePlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now);
     DfoServer.Game.Adventure.AdventureSnapshot ReadAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now);
-    // 每周地下城信息页：718只读账号名册，791保存客户端提交的5槽位排列。
-    System.Collections.Immutable.ImmutableArray<(uint Id, string Name)> ReadAdventureCharacterList(AccountOwners.Lease owner);
+    // 每周地下城信息页：718名册含等级/职业/成长与本周各列已用次数，791保存客户端提交的5槽位排列。
+    System.Collections.Immutable.ImmutableArray<DfoServer.Game.Adventure.AdventureWeeklyCharacter> ReadAdventureWeeklyRoster(
+        AccountOwners.Lease owner, int week);
     System.Collections.Immutable.ImmutableArray<byte> ReadAdventureWeeklyConfig(AccountOwners.Lease owner);
     void WriteAdventureWeeklyConfig(AccountOwners.Lease owner, System.Collections.Immutable.ImmutableArray<byte> slots);
     // 结算加成只读取账号等级，不装载商店、代表与远征；未初始化账号按初始等级1处理。
@@ -73,7 +74,8 @@ internal interface ICharacterRepository
     Character CommitPermanentGrowth(AccountOwners.Lease owner, PermanentGrowthPlan plan, DateTimeOffset now);
     Character CommitLegacyStatusConsumable(AccountOwners.Lease owner, LegacyStatusConsumablePlan plan, DateTimeOffset now);
     Character CommitFatigueConsumable(AccountOwners.Lease owner, FatigueConsumablePlan plan, DateTimeOffset now);
-    Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey);
+    Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
+        WeeklyDungeonEntry? weekly = null);
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务提交。
     Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge);
     QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);
