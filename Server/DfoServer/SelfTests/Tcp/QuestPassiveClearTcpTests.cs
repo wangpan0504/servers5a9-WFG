@@ -412,7 +412,17 @@ internal static class QuestPassiveClearTcpTests
             peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
             That(State() == saved && enabled == 1,"3858已交付的46、39和34重放不重复任何资产或凭据");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
-            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356);
+            int dailyNotices=0;
+            drain(peer,packet =>
+            {
+                if(packet.Opcode!=574) return;
+                Bytes(packet.Body,Build(writer=> { writer.Write(1u); writer.Write((ushort)13056); writer.Write(1686u); }),
+                    "升到87级回城后完整574分配每日任务，不伪造31接取成功");
+                dailyNotices++;
+            });
+            That(dailyNotices==1 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id) is [[13056L,1686L]],
+                "3858奖励升级后仅分配一次真实每日，原剧情任务已经交付");
 
             void Move(DungeonPoint point,byte kind)
             {

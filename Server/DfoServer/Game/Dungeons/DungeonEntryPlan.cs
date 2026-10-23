@@ -499,6 +499,7 @@ internal sealed record DungeonEntryPlan(
         uint dungeonId, uint questId, byte difficulty)
     {
         bool listClear = quest.Grade == "[side]" && QuestDungeonClearProgress.MatchesAlternative(quest,dungeonId,difficulty);
+        bool autoDaily = QuestAutoDailyPlan.MatchesDungeon(quest,dungeonId,difficulty);
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
             quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
             // 支线杀怪保留0..3，列表通关沿正式0..4难度域；-1不限，仍须命中dungeon info。
@@ -507,13 +508,13 @@ internal sealed record DungeonEntryPlan(
                     listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
                 !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
-            quest.Grade is not ("[side]" or "[achievement]") ||
+            quest.Grade is not ("[side]" or "[achievement]") && !autoDaily ||
             definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
                 (maze.ConnectionQuestId is not { } connected || connected == questId))) return false;
         if (quest.Condition == "[hunt monster]")
         {
             if (!QuestHuntProgress.TryTargets(quest,out var targets) ||
-                targets.Any(target => target.MonsterId <= 0 && target.MonsterId != QuestHuntProgress.EliteMonsterSelector && target.MonsterId != -3 || target.DungeonId != -1 && target.DungeonId != dungeonId ||
+                targets.Any(target => target.MonsterId <= 0 && target.MonsterId != QuestHuntProgress.EliteMonsterSelector && target.MonsterId != -3 && !(autoDaily && target.MonsterId == -1) || target.DungeonId != -1 && target.DungeonId != dungeonId ||
                     target.MinimumDifficulty > difficulty)) return false;
         }
         // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。

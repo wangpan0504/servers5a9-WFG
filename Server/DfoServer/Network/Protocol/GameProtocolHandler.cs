@@ -111,6 +111,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     if (session.AdvanceQuestCycle(DateTimeOffset.UtcNow) is { } cycle)
                     {
                         bool Guard() => session.CanPublishQuestCycle(cycle);
+                        if (!cycle.Before.ActiveMainQuests.SequenceEqual(cycle.Character.ActiveMainQuests))
+                            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(cycle.Character.ActiveMainQuests), "quest_auto_daily_cycle", Guard);
                         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(cycle.Character), "quest_daily_cycle", Guard);
                         if (cycle.Phase == SessionPhase.Town && quests is not null)
                             await new QuestProjection(quests).RefreshAsync(context, cycle.Character, Guard);

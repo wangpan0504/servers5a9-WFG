@@ -38,7 +38,7 @@ internal static class GriefTowerAcceptanceTcpTests
         That(QuestEligibility.Evaluate(created, quest, resources.Quests).Eligible &&
             fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", created.Id) is [[0L]],
             "实际前置及90级仅准备接取资格，未预填活动槽或通关");
-        string acceptance = "", persisted = "";
+        string acceptance = "", persisted = "", dailyAcceptance = "";
         foreach (bool reconnect in new[] { false, true })
         {
             using var peer = Open(fixture);
@@ -48,14 +48,18 @@ internal static class GriefTowerAcceptanceTcpTests
                 "真实登录21包含2929及正确隔离角色");
             if (!reconnect)
             {
+                var daily = fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id);
+                That(daily is [[13056L,1686L,string]],"90级选角只自动分配地轨每日，不预填塔任务");
+                dailyAcceptance=(string)daily[0][2];
                 peer.Send(31, [31, 0, 0x71, 0x0B]);
                 var ack = peer.Expect(1, 31).Body;
                 That(ack.Length >= 8 && ack[0] == 1 && U16(ack, 1) == questId && U32(ack, 3) == 1,
                     "真实TCP31接取2929，初值pending1：" + Convert.ToHexString(ack));
                 QuestLifecycleTcpTests.DrainNotifications(peer);
-                var rows = fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0", created.Id);
-                That(rows is [[2929L, 1L, string]], "TCP31只提交2929的pending1活动槽");
-                acceptance = (string)rows[0][2];
+                var rows = fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", created.Id);
+                That(rows is [[13056L,1686L,string originalDaily],[2929L,1L,string]] && originalDaily==dailyAcceptance,
+                    "TCP31只新增2929 pending1，不改变已自动分配的每日任务");
+                acceptance = (string)rows[1][2];
                 That(Guid.TryParseExact(acceptance, "N", out var identity) && identity != Guid.Empty &&
                     fixture.Query("SELECT quest_id,acceptance_id FROM character_quest_lifecycle_receipts WHERE character_id=$p0", created.Id)
                         is [[2929L, string receipt]] && receipt == acceptance,
@@ -69,9 +73,9 @@ internal static class GriefTowerAcceptanceTcpTests
                     "新TCP连接恢复原2929身份和pending1，不重接或完成");
                 var active = packets.Single(packet => packet is { Kind: 1, Opcode: 4 }).Body;
                 That(active.Length == 235 && active[0] == 1 && Enumerable.Range(0, 30).All(slot =>
-                    U16(active, 22 + 6 * slot) == (slot == 0 ? questId : ushort.MaxValue) &&
-                    U32(active, 24 + 6 * slot) == (slot == 0 ? 1u : 0u)),
-                    "重登ACK4恢复真实2929 pending1和其余空槽");
+                    U16(active, 22 + 6 * slot) == (slot == 0 ? 13056 : slot == 1 ? questId : ushort.MaxValue) &&
+                    U32(active, 24 + 6 * slot) == (slot == 0 ? 1686u : slot == 1 ? 1u : 0u)),
+                    "重登ACK4完整恢复每日、塔任务pending1和其余空槽");
             }
             string before = State();
             peer.Send(33, [33, 0, 0x71, 0x0B, 0, 0]); peer.Expect(1, 33, [1, 0x71, 0x0B, 1, 0, 0, 0]); peer.Barrier();

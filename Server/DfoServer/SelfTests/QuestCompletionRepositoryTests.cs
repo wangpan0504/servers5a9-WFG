@@ -327,7 +327,7 @@ internal static class QuestCompletionRepositoryTests
         public DungeonFreeCardCommit CommitFreeDungeonCard(AccountOwners.Lease owner, Character expected,
             PreparedDungeonSettlement prepared, DungeonCardDelivery delivery)
             => inner.CommitFreeDungeonCard(owner, expected, prepared, delivery);
-        public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => inner.AdvanceQuestCycle(owner, expected, day);
+        public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day, QuestAutoDailyPlan? daily = null) => inner.AdvanceQuestCycle(owner, expected, day, daily);
         public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) =>
             inner.ConsumeDungeonRoomFatigue(owner, expected, run);
         QuestCompletionPlan? first;

@@ -138,8 +138,12 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
                 throw new InvalidOperationException("Selection published roster identity changed");
             character = repository.GrantBlackDiamondFatigue(owner, character, DateTimeOffset.UtcNow);
-            if (questCatalog is not null && character.QuestCycleDay != DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow))
-                character = repository.AdvanceQuestCycle(owner, character, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow));
+            if (questCatalog is not null)
+            {
+                int day = DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow);
+                character = repository.AdvanceQuestCycle(owner, character, day,
+                    DfoServer.Game.Quests.QuestAutoDailyPlan.Prepare(character,questCatalog,day,allowAssignment: true));
+            }
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
             character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumeTown, items, timeProvider);
             character = ReconcileSkillSwitchInventory(character);

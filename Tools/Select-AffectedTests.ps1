@@ -72,7 +72,7 @@ $schemaGroups = @('database-schema','settings-storage','inventory-persistence','
 
 # 路径关键词到测试组；同时补充对应的资源定向组（这些组按需运行，不在默认全量 TCP 中）。
 $keywordGroups = [ordered]@{
-    'Quest'      = 'quest-lifecycle','quest-extras','quest-chains','quest-chain-settlement','quest-metro','quest-gold-mail','quest-question-state','quest-continuation','quest-core-rewards','quest-initialization','story-digest'
+    'Quest'      = 'quest-lifecycle','quest-extras','quest-chains','quest-chain-settlement','quest-metro','quest-auto-daily','quest-gold-mail','quest-question-state','quest-continuation','quest-core-rewards','quest-initialization','story-digest'
     'Story'      = 'story-digest','story-cinematic','story-scenes','story-quest-entry','story-publication'
     'Dungeon'    = 'formal-dungeon','dungeon-training','class-experience','dungeon-revive','hero-tomb-entry','dungeon-probe','dungeon-settlement','dungeon-entry-plan'
     'Booster'    = 'booster','booster-selection','booster-equipment','daily-retained-booster'

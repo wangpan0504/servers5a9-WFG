@@ -11,6 +11,7 @@ internal static partial class FormalDungeonTcpTests
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root,"hero-tomb-entry"),resources: resources);
         await fixture.StartAsync();
+        string active = "";
         using (var peer = Open(fixture))
         {
             peer.Create("Hero111",13);
@@ -25,7 +26,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(31,[31,0,168,12]);
             peer.Expect(1,31,[1,168,12,1,0,0,0,0]);
             RefreshedQuests(peer);
-            string active = fixture.Snapshot("SELECT * FROM character_active_main_quests");
+            active = fixture.Snapshot("SELECT * FROM character_active_main_quests");
             string assets = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue");
             SelectMap(peer);
@@ -74,8 +75,9 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(prepared: true);
-            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests") is [[3240L,1L]],
-                "重连保留尚未通关的向暗黑城前进任务");
+            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests ORDER BY slot") is [[13056L,1686L],[3240L,1L]] &&
+                fixture.Snapshot("SELECT * FROM character_active_main_quests")==active,
+                "重连完整保留地轨每日及尚未通关的向暗黑城任务，身份与进度不重建");
             peer.Barrier();
         }
         await fixture.StopAsync();

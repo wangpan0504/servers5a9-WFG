@@ -39,6 +39,8 @@ internal static class QuestHellChallengeTcpTests
             using (var peer = Open(fixture,account))
             {
                 peer.Select(prepared: true);
+                That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[13056L,1686L]],"90级仅自动分配每日，资格任务仍等待31");
+                string daily=fixture.Snapshot("SELECT slot,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=13056",created.Id);
                 That(QuestLifecycleTcpTests.List(peer.AvailableQuests,90).Contains(scenario.Quest) == scenario.Prerequisite,
                     "实际21保留Ep6前置资格，不因奖励支持直接放行");
                 string before = State();
@@ -85,7 +87,8 @@ internal static class QuestHellChallengeTcpTests
                     fixture.Query("SELECT condition_type,acceptance_id,experience_amount,gold_amount FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1",created.Id,scenario.Quest)
                         is [[4L,string receipt,long experience,long granted]] && receipt == acceptance && experience == U32(ack,4) && granted == goldAfter - gold &&
                     fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,scenario.Quest) is [[long done]] && done == scenario.Quest &&
-                    fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]],
+                    fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>13056",created.Id) is [[0L]] &&
+                    fixture.Snapshot("SELECT slot,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=13056",created.Id)==daily,
                     "34完整提交原AcceptanceId、真实成长金币、唯一完成位及清槽");
                 That(System.Text.Json.JsonSerializer.Serialize(inventory) == System.Text.Json.JsonSerializer.Serialize(
                     fixture.Query("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id)),

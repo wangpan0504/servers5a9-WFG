@@ -223,7 +223,7 @@ internal static class QuestCoverage
             var missing = references.Where(id => id > 0 && !catalog.TryGet(id, out _)).Distinct().Order().ToImmutableArray();
             if (access.Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !(access.Entry == QuestResourceEntry.Dialogue && QuestRelationProgress.DialogueChild(quest,catalog)) &&
                 !(access.Entry == QuestResourceEntry.Hidden && QuestHiddenEntry.Direct(quest,catalog)) &&
-                !(access.Entry == QuestResourceEntry.Profession && QuestExpertJobProgress.Tutorial(quest)))
+                !(access.Entry == QuestResourceEntry.Profession && QuestExpertJobProgress.Tutorial(quest)) && !QuestAutoDailyPlan.Supports(quest))
                 reasons.Add(access.Reason);
             if (definition is null || definition.Diagnostics.Length != 0) reasons.AddRange(definition?.Diagnostics ?? ["缺少完整定义"]);
             if (pending.Length != 0) reasons.Add("存在未确认声明");

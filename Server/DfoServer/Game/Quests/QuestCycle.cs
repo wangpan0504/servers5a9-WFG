@@ -5,7 +5,7 @@ namespace DfoServer.Game.Quests;
 
 internal static class QuestCycle
 {
-    public static bool Daily(StoryQuest quest) => quest.Grade is "[daily]" or "[special daily]";
+    public static bool Daily(StoryQuest quest) => quest.Grade is "[daily]" or "[special daily]" || QuestAutoDailyPlan.Supports(quest);
     public static bool Repeat(StoryQuest quest) => quest.Grade == "[normaly repeat]";
 
     // 参考两端的游戏日：UTC+8 06:00，00:00–05:59仍属于上一天。

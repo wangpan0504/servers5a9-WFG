@@ -104,8 +104,8 @@ internal static class MetroQuestEntryCoverageTests
         var daily = quests.Get(13056);
         That(!cases.Any(row => row.Quest.Id == daily.Id) && daily.Grade == "[auto daily mission]" &&
                 daily.Definition!.Dungeons.Count(row => row.DungeonId is >= 310 and <= 314) == 5 &&
-                !QuestHuntProgress.TryTargets(daily, out _) && QuestEligibility.InspectResource(daily).Entry == QuestResourceEntry.Dedicated,
-            "13056无连接专用每日合同单列，不能强塞普通31或计入59条完成");
+                QuestAutoDailyPlan.Supports(daily) && QuestHuntProgress.Initial(daily) == 1686 && QuestEligibility.InspectResource(daily).Entry == QuestResourceEntry.Dedicated,
+            "13056单列自动每日兼容入口和PVF目标初值，不能强塞普通31或计入59条完成");
         Console.WriteLine($"PASS {Count - checks} 地轨59条入场、21个OR臂及40条原任务清图交付（死亡为合成输入；自然剧情、物件和13056专用每日仍未核销）");
 
         QuestSceneTests.Fixture Make(EntryCase row, int[] group)

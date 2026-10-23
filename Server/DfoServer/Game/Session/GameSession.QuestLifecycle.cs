@@ -227,12 +227,15 @@ internal sealed partial class GameSession
 
     public QuestCycleReceipt? AdvanceQuestCycle(DateTimeOffset now) => owner.Execute(() =>
     {
-        if (questCatalog is null || !Ready || Selected is not { } expected || expected.QuestCycleDay >= QuestCycle.Day(now) ||
+        if (questCatalog is null || !Ready || Selected is not { } expected || expected.QuestCycleDay > QuestCycle.Day(now) ||
             pendingRental is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } || HasPendingQuestScene ||
             HasActiveDungeonContinuation || HasPendingQuestReplay ||
             HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true)
             return null;
-        Selected = repository.AdvanceQuestCycle(owner, expected, QuestCycle.Day(now));
+        int day = QuestCycle.Day(now);
+        var daily = QuestAutoDailyPlan.Prepare(expected,questCatalog,day,allowAssignment: Phase == SessionPhase.Town);
+        if (expected.QuestCycleDay == day && daily is null) return null;
+        Selected = repository.AdvanceQuestCycle(owner, expected, day, daily);
         completed = QuestEligibility.Completed(Selected);
         return new QuestCycleReceipt(expected, Selected, owner.Generation, SelectionEpoch, Phase);
     });

@@ -23,6 +23,11 @@ internal static class QuestHuntProgress
     public static bool TryTargets(StoryQuest quest, out ImmutableArray<QuestHuntTarget> targets)
     {
         targets = [];
+        if (QuestAutoDailyPlan.Supports(quest))
+        {
+            targets = [new(-1,-1,-1,quest.IntData[4]), new(-1,-1,-3,quest.IntData[9])];
+            return true;
+        }
         bool monsterOnly = quest.Condition == "[hunt monster]";
         int stride = monsterOnly ? 4 : 5;
         if (quest.Condition is not ("[hunt enemy]" or "[hunt monster]") || quest.SubType != -1 || !QuestCoverage.HasOrdinaryDeclarations(quest) ||
@@ -58,7 +63,8 @@ internal static class QuestHuntProgress
 
     public static ImmutableArray<ActiveMainQuest> MonsterDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
         QuestCatalog quests, DungeonPlannedMonster monster) => monster.AiCharacter is null
-        ? Death(active,entry,quests,monster.MonsterId,1,monster.SpawnType == 3,monster.SpawnType is 1 or 2)
+        ? Death(active,entry,quests,monster.MonsterId,1,monster.SpawnType == 3,monster.SpawnType is 1 or 2,
+            QuestAutoDailyPlan.CountableMonster(monster))
         : active.ToImmutableArray();
 
     public static ImmutableArray<ActiveMainQuest> AiCharacterDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
@@ -95,17 +101,20 @@ internal static class QuestHuntProgress
     }
 
     private static ImmutableArray<ActiveMainQuest> Death(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
-        QuestCatalog quests, int templateId, int enemyType, bool ordinaryBoss = false, bool elite = false) => active.Select(row =>
+        QuestCatalog quests, int templateId, int enemyType, bool ordinaryBoss = false, bool elite = false, bool dailyMonster = false) => active.Select(row =>
     {
         if (!Bound(row,entry) || !quests.TryGet(row.QuestId,out var quest) || !TryTargets(quest,out var targets) ||
             !ValidScalar(quest,row.ConditionState)) return row;
+        bool daily = QuestAutoDailyPlan.Supports(quest);
+        if (daily && (!dailyMonster || !QuestAutoDailyPlan.MatchesDungeon(quest,entry.DungeonId,entry.Difficulty))) return row;
         uint scalar = row.ConditionState;
         for (int at = 0; at < targets.Length; at++)
         {
             var target = targets[at]; uint count = scalar >> (at * 9) & 511;
             // Full03 type2的-3只接已确认普通SpawnType3；APC的rank8来源未闭合，不能并入。
             if (count != 0 && target.EnemyType == enemyType && (target.MonsterId > 0 && target.MonsterId == templateId || target.MonsterId == -5 ||
-                target.MonsterId == -3 && ordinaryBoss || target.MonsterId == EliteMonsterSelector && elite) &&
+                target.MonsterId == -3 && ordinaryBoss || target.MonsterId == EliteMonsterSelector && elite ||
+                daily && target.MonsterId == -1 && !ordinaryBoss && templateId is not (>= 50000 and <= 51000) and not (>= 56000 and <= 60000)) &&
                 (target.DungeonId == -1 || target.DungeonId == entry.DungeonId) &&
                 (target.MinimumDifficulty == -1 || entry.Difficulty >= target.MinimumDifficulty)) scalar -= 1u << (at * 9);
         }

@@ -224,7 +224,7 @@ internal sealed class QuestCompletionPlan
             if (active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
                 QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
                 QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
-                    !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) ||
+                    !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) && !QuestAutoDailyPlan.Supports(quest) ||
                 completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests).Eligible)
                 throw new InvalidDataException("任务接取身份、完成位或当前资格不符");
             if (completedParent is not null)

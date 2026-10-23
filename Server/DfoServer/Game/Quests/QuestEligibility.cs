@@ -141,6 +141,7 @@ internal static class QuestEligibility
             return new(true, includeActive && active.Contains(quest.Id), "等待父任务对话入口");
         }
         bool visible = (access.Entry == QuestResourceEntry.Ordinary ||
+            includeActive && active.Contains(quest.Id) && QuestAutoDailyPlan.Supports(quest) ||
             access.Entry == QuestResourceEntry.Profession && definition.ExposedByNpc && OrdinaryGrade(quest.Grade) ||
             access.Entry == QuestResourceEntry.Creature && definition.ExposedByNpc && OrdinaryGrade(quest.Grade)) &&
             !definition.HideOnCompletedQuests.Any(completed.Contains);

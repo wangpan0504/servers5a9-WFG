@@ -31,6 +31,7 @@ internal static class TcpRegressionTests
         ("quest-chains", QuestLifecycleTcpTests.RunChainsAsync),
         ("quest-chain-settlement", QuestLifecycleTcpTests.RunChainSettlementAsync),
         ("quest-metro", QuestLifecycleTcpTests.RunMetroAsync),
+        ("quest-auto-daily", MetroQuestEntryTcpTests.RunAutoDailyAsync),
         ("class-change-rules", (_, _, resources) =>
         {
             ClassChangeTests.RunResources(resources);

@@ -17,6 +17,12 @@ namespace DfoServer.Testing;
 
 internal static class MetroQuestEntryTcpTests
 {
+    internal static async Task RunAutoDailyAsync(ServerOptions options,string root,TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(options,Path.Combine(root,"metro-auto-daily"),resources:resources);
+        await fixture.StartAsync();
+        Verify(fixture,resources,SelfTestCatalogs.Growth(resources.Archive,resources.Learning),QuestLifecycleTcpTests.DrainNotifications,dailyOnly:true);
+    }
     internal static async Task RunStadiumAsync(ServerOptions options,string root,TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(options,Path.Combine(root,"stadium-quest"),resources:resources);
@@ -39,12 +45,13 @@ internal static class MetroQuestEntryTcpTests
 
     // 共用quests组的隔离服务；入口等级与前置可准备，目标接取、回答、会面和移动全部走wire。
     internal static void Verify(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
-        Action<TcpPeer, Action<WirePacket>?> drain,bool stadiumOnly=false)
+        Action<TcpPeer, Action<WirePacket>?> drain,bool stadiumOnly=false,bool dailyOnly=false)
     {
         int checks = Count;
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         if (stadiumOnly) { VerifyStadium(); return; }
+        if (dailyOnly) { VerifyAutoDaily(); return; }
         VerifyFaction(0, 3868, 3871, 3873);
         VerifyFaction(11, 3869, 3872, 3874);
         VerifyTerraDropChain(3954,3956,3871);
@@ -64,6 +71,82 @@ internal static class MetroQuestEntryTcpTests
         VerifyMetroTerminalBusiness(3973, 310, 88);
         VerifyMetroTerminalBusiness(4872, 314, 89);
         Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、两条泰拉石收集交付链、父子阶段、3640首子入场、层/warp、3988→3991连续交付、3987→3992材料、3993→3995→3998及3994/3996独立路线掉落交付、3973/4872末图交付（不代表自然ACT或完整剧情通关）");
+
+        void VerifyAutoDaily()
+        {
+            const ushort id=13056;
+            const string account="metro-auto-daily";
+            var quest=resources.Quests.Get(id);
+            That(QuestAutoDailyPlan.Supports(quest) && quest.Rewards.Select(row=>row.Value).SequenceEqual([10163959,15]),
+                "真实Q13056资源仍为两个目标及15份奖励，不替换PVF");
+            var done=new HashSet<int>(); var entrance=Entrance(id,310,done);
+            var created=Create(account,"MetroDaily",0,88,done,entrance);
+            using var peer=Open(fixture,account);
+            Select(peer,created);
+            string acceptance=Identity(peer.Id,id);
+            That(Scalar(peer.Id,id)==1686,"真实选角自动创建每日任务，无测试预填目标进度");
+            RejectAccept(peer,id);
+            peer.Send(34,[34,0,0,51,255,255,1,0,255,255]);
+            var denied=peer.Expect(1,34).Body;
+            That(denied[0]==0,"未击杀不能提前手动领奖"); drain(peer,null);
+            int normal=0,boss=0;
+            for(int attempt=0;attempt<12 && Scalar(peer.Id,id)!=0;attempt++)
+            {
+                SelectMap(peer); peer.Send(16,Selection(310,attempt==0?id:(ushort)0));
+                var information=peer.Expect(0,28).Body;
+                var map=peer.Expect(0,29).Body;
+                var definition=dungeons.Get(310);
+                var maze=dungeons.ResolveOrdinaryMaze(definition,definition.Mazes.Single(row=>row.SourceOrdinal==information[7]));
+                That(maze.QuestConnectionTokens.Count==0,"每日任务显式和普通0入场均使用真实普通迷宫");
+                FormalDungeonTcpTests.Load(peer); drain(peer,null);
+                var visited=new HashSet<DungeonPoint>();
+                var targets=maze.MapSpecification!.Select(row=>row.Position).Distinct().Where(point=>point!=maze.Bosses.Single()).Append(maze.Bosses.Single()).ToArray();
+                foreach(var target in targets)
+                {
+                    var path=QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),target);
+                    foreach(var point in path.Skip(1))
+                    {
+                        KillRoom(); map=MoveMap(peer,point,0); FormalDungeonTcpTests.Load(peer); drain(peer,null);
+                    }
+                    // Boss房最后击杀，避免把已通关状态当成普通行走。
+                    if(target!=maze.Bosses.Single()) KillRoom();
+                }
+                KillRoom(); Return(peer);
+                That(Identity(peer.Id,id)==acceptance,"多次进图保留同一天接取身份");
+
+                void KillRoom()
+                {
+                    var point=new DungeonPoint(map[0],map[1]);
+                    if(!visited.Add(point)) return;
+                    for(int index=0;index<map[18];index++)
+                    {
+                        int offset=19+22*index;
+                        if(map[offset+21]!=0 || map[offset+13]==9) continue;
+                        uint before=Scalar(peer.Id,id);
+                        var report=FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12]);
+                        peer.Send(39,report); drain(peer,null);
+                        uint after=Scalar(peer.Id,id);
+                        normal+=checked((int)((before&511)-(after&511)));
+                        boss+=checked((int)((before>>9)-(after>>9)));
+                        peer.Send(39,report); drain(peer,null);
+                        That(Scalar(peer.Id,id)==after,"同一已下发对象死亡重放不重复计数");
+                    }
+                }
+            }
+            That(Scalar(peer.Id,id)==0 && normal==150 && boss==3,"真实多实例合成死亡累计准确150普通与3Boss，未预填完成状态");
+            long rewardBefore=Reward();
+            Finish(peer,id,2);
+            That(Reward()==rewardBefore+15 && fixture.Query("SELECT daily_period FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,id) is [[long day]] && day==QuestCycle.Day(DateTimeOffset.UtcNow),
+                "手动34原子发放PVF15份奖励并保存游戏日");
+            peer.Send(34,[34,0,0,51,255,255,1,0,255,255]); peer.Expect(1,34); drain(peer,null);
+            That(Reward()==rewardBefore+15,"重复领取不重复发奖");
+            peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2);
+            peer.Select(RoleIndex(peer.Roster,created),prepared:true);
+            That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,id) is [[0L]],"同日重新选角不再次分配已领奖任务");
+            Cleanup(peer,created,account);
+            Console.WriteLine($"PASS {Count-checks} Q13056真实PVF自动接取、150+3死亡、手动领奖和同日隔离TCP断言（死亡是合成请求）");
+            long Reward()=>Convert.ToInt64(fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10163959",peer.Id).Single()[0]);
+        }
 
         void VerifyTerraDropChain(ushort first,ushort second,int faction)
         {
@@ -387,21 +470,21 @@ internal static class MetroQuestEntryTcpTests
                     string archivedChildren = fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id IN (3972,3973) ORDER BY quest_id", peer.Id);
                     Finish(peer, 3971, 44);
                     That(fixture.Query("SELECT acceptance_id,condition_type,consumed FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3971", peer.Id)
-                            is [[string completedParent, 44L, "[]"]] && completedParent == parentAcceptance && Active(peer.Id) == "[]",
+                            is [[string completedParent, 44L, "[]"]] && completedParent == parentAcceptance && MissionActive(peer.Id) == "[]",
                         "父34独立唯一交付原3971");
                     That(fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id IN (3972,3973) ORDER BY quest_id", peer.Id) == archivedChildren &&
                         peer.CompletedQuestHistory[4 + 3972] == 1 && peer.CompletedQuestHistory[4 + 3973] == 1,
                         "父34保留原3972/3973完整交付回执与历史位，不覆盖子任务原接取");
                     RejectFinish(peer, 3971); RejectFinish(peer, id);
                 }
-                else That(Active(peer.Id) == "[]", "4872完成后没有新增或遗留活动任务");
+                else That(MissionActive(peer.Id) == "[]", "4872完成后没有遗留主线活动任务，每日任务单列");
                 savedQuests = QuestState(peer.Id); savedAssets = StableAssets();
                 savedGrowth = PersistentGrowth();
             }
             using (var peer = Open(fixture, account))
             {
                 Select(peer, created); peer.Barrier();
-                That(QuestState(peer.Id) == savedQuests && StableAssets() == savedAssets && PersistentGrowth() == savedGrowth && Active(peer.Id) == "[]" &&
+                That(QuestState(peer.Id) == savedQuests && StableAssets() == savedAssets && PersistentGrowth() == savedGrowth && MissionActive(peer.Id) == "[]" &&
                     peer.CompletedQuestHistory[4 + id] == 1 && (!child || peer.CompletedQuestHistory[4 + 3971] == 1),
                     "最终再次重连恢复父/单任务真实34结果与唯一资产回执");
                 RejectFinish(peer, id);
@@ -702,7 +785,7 @@ internal static class MetroQuestEntryTcpTests
             using (var peer = Open(fixture, account))
             {
                 Select(peer, created); peer.Barrier();
-                That(Active(peer.Id) == "[]" && new[] { 3988, 3989, 3990, 3991 }.All(id => peer.CompletedQuestHistory[4 + id] == 1) &&
+                That(MissionActive(peer.Id) == "[]" && new[] { 3988, 3989, 3990, 3991 }.All(id => peer.CompletedQuestHistory[4 + id] == 1) &&
                     peer.CompletedQuestHistory[4 + 3992] == 0 && fixture.Query(
                         "SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id", peer.Id) is [[3988L], [3989L], [3990L], [3991L]],
                     "重连恢复四次真实交付，3992仅开放候选；合成演出输入不代表客户端自然发包");
@@ -1063,7 +1146,7 @@ internal static class MetroQuestEntryTcpTests
             using (var peer = Open(fixture, account))
             {
                 Select(peer, created); peer.Barrier();
-                That(Active(peer.Id) == "[]" && peer.CompletedQuestHistory[4 + 3987] == 1 && peer.CompletedQuestHistory[4 + 3992] == 1 &&
+                That(MissionActive(peer.Id) == "[]" && peer.CompletedQuestHistory[4 + 3987] == 1 && peer.CompletedQuestHistory[4 + 3992] == 1 &&
                     Materials(10164808).Length == 0 && Materials(10164806).Length == 0 &&
                     Materials(10164803) is [[long uid, 1L]] && uid == rewardUid && bellUid != rewardUid &&
                     fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id", peer.Id) is [[3987L], [3992L]],
@@ -1307,7 +1390,7 @@ internal static class MetroQuestEntryTcpTests
             using (var peer = Open(fixture, account))
             {
                 Select(peer, created); peer.Barrier();
-                That(Active(peer.Id) == "[]" && scenarios.All(row => peer.CompletedQuestHistory[4 + row.Quest] == 1) &&
+                That(MissionActive(peer.Id) == "[]" && scenarios.All(row => peer.CompletedQuestHistory[4 + row.Quest] == 1) &&
                     fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id", peer.Id)
                         .Select(row => (long)row[0]).SequenceEqual(scenarios.Select(row => (long)row.Quest).Order()),
                     "重选恢复本分支实际交付的唯一回执及历史，不借另一任务编号");
@@ -1712,7 +1795,7 @@ internal static class MetroQuestEntryTcpTests
             using var peer = Open(fixture, account);
             Select(peer, created);
             Accept(peer, id, 1);
-            string accepted = Active(peer.Id);
+            string accepted = MissionActive(peer.Id);
             var maze = dungeons.Get(checked((int)dungeon)).Mazes.Single(row => row.ConnectsQuest(id));
             if (layerMap is { } terminal)
                 That(quest.IntData.SequenceEqual([terminal]) && maze.Bosses.Single() == destination &&
@@ -1757,12 +1840,12 @@ internal static class MetroQuestEntryTcpTests
                     That(map[2] == 1 && U32(map, 14) == layer, "7958真实kind1下发655667及完整原演员");
                     FormalDungeonTcpTests.Load(peer); Drain();
                 }
-                That(enabled == 0 && Active(peer.Id) == accepted && NoClear(peer.Id) &&
+                That(enabled == 0 && MissionActive(peer.Id) == accepted && NoClear(peer.Id) &&
                     fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND task_attempt=$p1", peer.Id,
                         Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id).Single()[0])) is [[long count]] && count == confirmed,
                     "只记录实际前房死亡；到达层/warp不制造任务清图或结算：" + id);
                 Return(peer);
-                That(Active(peer.Id) == accepted && NoClear(peer.Id), "未击杀目标的45代表退出不完成任务：" + id);
+                That(MissionActive(peer.Id) == accepted && NoClear(peer.Id), "未击杀目标的45代表退出不完成任务：" + id);
 
                 void Drain() => drain(peer, packet => { if (packet.Opcode == 31) enabled++; });
             }
@@ -1779,7 +1862,7 @@ internal static class MetroQuestEntryTcpTests
                 { Experience = growth.GetLevelStartExperience(level) }, resources.Learning);
             var created = new CharacterRepository(fixture.Database).Create(owner, candidate with
                 { Level = level, AcceptedStoryLevel = level, CompletedQuests = done.Order().ToArray(), InitialLearning = learning });
-            That(Active(created.Id) == "[]", "新角色不预填活动槽、目标条件或接取UUID：" + name);
+            That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]], "新角色不预填活动槽、目标条件或接取UUID：" + name);
             return created;
         }
 
@@ -1969,8 +2052,9 @@ internal static class MetroQuestEntryTcpTests
             "SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", character, quest).Single()[0]);
         string Identity(ushort character, ushort quest) => (string)fixture.Query(
             "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", character, quest).Single()[0];
-        string Active(ushort id) => fixture.Snapshot("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", id);
-        string QuestState(ushort id) => Active(id) + fixture.Snapshot("SELECT * FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", id) +
+        // 任务链断言只比较链本身；Q13056可随同一批合法战斗独立计数，由quest-auto-daily完整核验。
+        string MissionActive(ushort id) => fixture.Snapshot("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>13056 ORDER BY slot", id);
+        string QuestState(ushort id) => MissionActive(id) + fixture.Snapshot("SELECT * FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", id) +
             fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY revision", id);
         string State(ushort id) => QuestState(id) + fixture.Snapshot("SELECT * FROM characters WHERE id=$p0", id) +
             fixture.Snapshot("SELECT * FROM character_quest_lifecycle_receipts WHERE character_id=$p0 ORDER BY revision", id);

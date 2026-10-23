@@ -142,11 +142,13 @@ internal sealed partial class CharacterRepository
         return new QuestLifecycleCommit(committed, plan, false, true);
     });
 
-    public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day) => owner.Execute(() =>
+    public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day, QuestAutoDailyPlan? daily = null) => owner.Execute(() =>
     {
         if (day is < 19000101 or > 99991231 || day < expected.QuestCycleDay)
             throw new InvalidDataException("游戏日不能逆向切换");
-        if (day == expected.QuestCycleDay) return expected;
+        if (daily is not null && (!ReferenceEquals(daily.Expected,expected) || daily.Day != day))
+            throw new InvalidOperationException("自动每日规划不属于本次角色和游戏日");
+        if (day == expected.QuestCycleDay && daily is null) return expected;
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.AdvanceQuestCycle", deferred: true);
         using var tx = write.Transaction;
@@ -162,9 +164,25 @@ internal sealed partial class CharacterRepository
         command.ExecuteNonQuery();
         command.CommandText = "DELETE FROM account_completed_quests WHERE account=$account AND daily_period>0 AND daily_period<$day";
         command.ExecuteNonQuery();
+        if (daily is not null)
+        {
+            command.Parameters.AddWithValue("$quest", QuestAutoDailyPlan.QuestId);
+            command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND quest_id=$quest";
+            command.ExecuteNonQuery();
+            if (daily.ActiveAfter.SingleOrDefault(row => row.QuestId == QuestAutoDailyPlan.QuestId) is { } assigned)
+            {
+                command.Parameters.AddWithValue("$slot",assigned.Slot);
+                command.Parameters.AddWithValue("$scalar",assigned.ConditionState);
+                command.Parameters.AddWithValue("$acceptance",assigned.AcceptanceId.ToString("N"));
+                command.CommandText = "INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES($id,$slot,$quest,$scalar,$acceptance)";
+                command.ExecuteNonQuery();
+            }
+        }
         command.CommandText = "UPDATE characters SET quest_cycle_day=$day,revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("任务周期revision已变化");
         var committed = Require(db, tx, owner.Account, expected.Name);
+        if (daily is not null && !committed.ActiveMainQuests.SequenceEqual(daily.ActiveAfter))
+            throw new InvalidOperationException("每日任务提交与规划的接取身份不符");
         tx.Commit();
         return committed;
     });
