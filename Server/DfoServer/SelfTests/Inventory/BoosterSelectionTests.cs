@@ -24,6 +24,7 @@ internal static class BoosterSelectionTests
     public static void RunCore()
     {
         int checks = Count;
+        RunCustomAbilityGradeDeclarations();
         const string empty = "[default select]\n0\n[booster equipment upgrade]\n10\n[stackable]\n[/stackable]";
         const string reward = "[etc]\n1106 1\n[/etc]";
         string Text(string first, string second, string dimensions = "[booster category num]\n2 2 2\n", int count = 1,
@@ -68,6 +69,46 @@ internal static class BoosterSelectionTests
         })
             That(!BoosterCatalog.Parse(text).Available, "冲突、未知、残缺或根资格不完整的重复分类仍整盒拒绝");
         Console.WriteLine($"PASS {Count - checks} equivalent duplicate selection parser assertions");
+    }
+
+    static void RunCustomAbilityGradeDeclarations()
+    {
+        const string box = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n1\n" +
+            "[booster select category]\n0 0\n[equipment]\n16400 1\n[/equipment]\n[/booster select category]\n";
+        const string grade = "[custom ability grade]\n3\n";
+        foreach (string text in new[]
+        {
+            box, grade + box, "[custom ability grade]\n0\n" + box,
+            "[custom ability grade]\n2147483647\n" + box,
+            grade.ToUpperInvariant().Replace("\n", "\r\n") + box,
+            "[name]\n`[custom ability grade] [/custom ability grade]`\n" + box,
+            "[outer]\n[/outer]\n" + grade + "[outer]\n[/outer]\n" + box,
+            box + grade, "[grade]\n1\n" + grade + "[rarity]\n2\n" + box
+        })
+        {
+            var definition = BoosterCatalog.Parse(text);
+            That(definition.Available && definition.Selection!.Categories.Single().Rewards.Single() == new BoosterChoice(16400, 1),
+                "单个根级品级声明不改变合法奖励，引用中的标签文字不算声明");
+        }
+        foreach (string declaration in new[]
+        {
+            "[custom ability grade]\n-1\n", "[custom ability grade]\nabc\n", "[custom ability grade]\n",
+            "[custom ability grade]\n3 4\n", "[custom ability grade]\n2147483648\n", "[custom ability grade]\n`3`\n",
+            grade + grade, grade + "[custom ability grade]\n-1\n", grade + "[custom ability grade]\nabc\n",
+            grade + "[custom ability grade]\n", grade + "[custom ability grade\n-1\n",
+            "[/custom ability grade]\n" + grade, grade + "[/custom ability grade]\n",
+            "[custom ability grade\n3\n", "[custom ability grade extra]\n3\n", "[ custom ability grade]\n3\n",
+            "[outer]\n" + grade + "[/outer]\n",
+            "[outer]\n[outer]\n[/outer]\n" + grade + "[/outer]\n",
+            "[outer]\n[inner]\n[/outer]\n" + grade + "[/inner]\n"
+        })
+        {
+            var definition = BoosterCatalog.Parse(declaration + box);
+            That(!definition.Available && definition.PendingRule == "custom ability grade",
+                "重复、冲突、残缺、嵌套及多余闭标签的品级声明整盒拒绝: " + declaration);
+        }
+        That(!BoosterCatalog.Parse(box.Replace("0 0\n[equipment]", "0 0\n" + grade + "[equipment]")).Available,
+            "分类内的品级声明不能冒充根级声明");
     }
 
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
@@ -722,6 +763,29 @@ internal static class BoosterSelectionTests
             "[booster info]\n[equipment]\n1 401030066 1 1\n[/equipment]\n[/booster info]");
         That(!guarded.Open(syntheticRole, new(3, 1), out _, now).Accepted,
             "随机奖池不进入选择盒的限定兼容范围");
+
+        foreach (string value in new[] { "0", "3" })
+        {
+            definitions[10000743] = BoosterCatalog.Parse(Text("[equipment]\n16400 1\n[/equipment]",
+                "[custom ability grade]\n" + value + "\n"));
+            var opened = guarded.Open(syntheticRole, Select(3, [16400]), out var receipt, now);
+            That(opened.Accepted && receipt!.Rewards.Single() == new BoosterGrantedItem(16400, 1) &&
+                opened.Plan!.After.Items.Single().Core == InventoryRewardGrantService.Create(catalog.Get(16400), utcNow: now) &&
+                JsonSerializer.Serialize(syntheticRole) == beforeCrossedDeclaration,
+                "合法根级品级声明沿真实开箱发完整模板实例，数值不改奖励或输入资产");
+        }
+        foreach (string declaration in new[]
+        {
+            "[custom ability grade]\n3\n[custom ability grade]\n-1\n",
+            "[outer]\n[custom ability grade]\n3\n[/outer]\n"
+        })
+        {
+            definitions[10000743] = BoosterCatalog.Parse(Text(safe, declaration));
+            var rejected = guarded.Open(syntheticRole, Select(3, [401030066]), out var receipt, now);
+            That(!rejected.Accepted && rejected.Plan is null && receipt is null &&
+                JsonSerializer.Serialize(syntheticRole) == beforeCrossedDeclaration,
+                "畸形品级声明经真实开箱整盒拒绝，无计划、无回执且全部输入资产不变");
+        }
     }
 
     static BoosterDefinition Parse(string category, int count = 1) => BoosterCatalog.Parse("[stackable type]\n`[booster selection]` 0\n" +

@@ -94,9 +94,21 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 return new([], tag);
         // [custom ability grade] 规定发放装备的品级。本服没有实例级品级字段，只校验声明形态，
         // 数值不写入实例，也不据此收窄可领取范围；形态不合法仍整包拒绝。
-        if (tags.Contains("[custom ability grade]", StringComparison.OrdinalIgnoreCase) &&
-            (!int.TryParse(PvfScript.Section(text, "custom ability grade").Trim(), out int abilityGrade) || abilityGrade < 0))
-            return new([], "custom ability grade");
+        var gradeDeclarations = Regex.Matches(tags,
+            @"\[\s*/?\s*custom\s+ability\s+grade[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (gradeDeclarations.Count != 0)
+        {
+            if (gradeDeclarations.Count != 1)
+                return new([], "custom ability grade");
+            var declaration = gradeDeclarations[0];
+            int end = declaration.Index + declaration.Length;
+            int next = tags.IndexOf('[', end);
+            if (!declaration.Value.Equals("[custom ability grade]", StringComparison.OrdinalIgnoreCase) ||
+                !IsRootDeclaration(tags, declaration.Index) ||
+                !int.TryParse(text[end..(next < 0 ? text.Length : next)].Trim(), NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out int abilityGrade) || abilityGrade < 0)
+                return new([], "custom ability grade");
+        }
         if (type == "upgradable legacy")
         {
             // 此类型经独立的CMD27入口一次抽取一行；不能交给CMD160忽略其回包合同。
