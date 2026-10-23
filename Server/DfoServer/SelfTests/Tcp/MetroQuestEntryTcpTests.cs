@@ -47,6 +47,8 @@ internal static class MetroQuestEntryTcpTests
         if (stadiumOnly) { VerifyStadium(); return; }
         VerifyFaction(0, 3868, 3871, 3873);
         VerifyFaction(11, 3869, 3872, 3874);
+        VerifyTerraDropChain(3954,3956,3871);
+        VerifyTerraDropChain(3955,3957,3870);
         VerifySequential(3971, [(3972, 455)], 3973, 310, 88);
         VerifySequential(3547, [(3566, 59)], 3567, 84, 69);
         VerifySequential(3540, [(3564, 57)], 3565, 83, 68);
@@ -61,7 +63,120 @@ internal static class MetroQuestEntryTcpTests
         VerifyBellFeathers();
         VerifyMetroTerminalBusiness(3973, 310, 88);
         VerifyMetroTerminalBusiness(4872, 314, 89);
-        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、父子阶段、3640首子入场、层/warp、3988→3991连续交付、3987→3992材料、3993→3995→3998及3994/3996独立路线掉落交付、3973/4872末图交付（不代表自然ACT或完整剧情通关）");
+        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、两条泰拉石收集交付链、父子阶段、3640首子入场、层/warp、3988→3991连续交付、3987→3992材料、3993→3995→3998及3994/3996独立路线掉落交付、3973/4872末图交付（不代表自然ACT或完整剧情通关）");
+
+        void VerifyTerraDropChain(ushort first,ushort second,int faction)
+        {
+            // 复用已授权的地图额度兼容规则；74B正文为合成输入，不证明逐演员身份或自然客户端行为。
+            string account = "metro-terra-"+first;
+            var done = new HashSet<int> { 3953,faction };
+            var entrance = Entrance(first,310,done);
+            That(!done.Overlaps([3954,3955,3956,3957]) && Enumerable.Range(3870,5).Count(done.Contains)==1,
+                "泰拉石只准备所选阵营与前置，不填目标任务或材料");
+            var created = Create(account,"Terra"+first,0,88,done,entrance);
+            using (var peer = Open(fixture,account))
+            {
+                Select(peer,created);
+                foreach (ushort id in new[] { first,second })
+                {
+                    bool dual = id==second;
+                    var quest = resources.Quests.Get(id);
+                    That(quest.Condition=="[seeking]" && quest.IntData.SequenceEqual(dual
+                        ? new[]{10164805,20,10164804,10} : new[]{10164804,10}) &&
+                        quest.Definition!.PrerequisiteGroups.Any(group=>group.Contains(faction) && group.Contains(dual ? first : 3953)),
+                        "两条阵营线使用各自真实前置、任务号和寻物目标："+id);
+                    That(quest.Definition!.Drops.Length==(dual ? 2 : 1) && quest.Definition.Drops.All(drop=>
+                        drop is { TemplateId:85176,EnemyType:3,DungeonId:310,Difficulty:-1,Rate:100 } &&
+                        (drop.ItemId==10164804 && drop.Count==1 && drop.MaximumHeld==10 ||
+                         dual && drop.ItemId==10164805 && drop.Count==2 && drop.MaximumHeld==20)),
+                        "PVF限定每次1/2份、100%和10/20持有上限，不修改普通物件掉落");
+                    That(Quantity(10164804)==0 && Quantity(10164805)==0,"接取不预填材料，前一交付实际消费原库存");
+                    Accept(peer,id,1);
+                    string acceptance=Identity(peer.Id,id);
+                    var definition=dungeons.Get(310);
+                    var maze=dungeons.ResolveOrdinaryMaze(definition,definition.Mazes.Single(row=>row.ConnectsQuest(id)));
+                    var maps=maze.MapSpecification ?? throw new InvalidOperationException("泰拉石路线缺少地图名册");
+                    int firstMap=id switch {3954=>76720,3955=>76730,3956=>76740,_=>76750};
+                    int[] copies=id switch {3954=>[0,3,2,3,5,4,4,2,4],3955=>[0,3,3,5,5,2,2,2,5],
+                        3956=>[0,3,4,3,4,2,3,6],_=>[0,4,4,4,5,3,2,3]};
+                    That(maps.Select(row=>row.Id).SequenceEqual(Enumerable.Range(firstMap,copies.Length)) &&
+                        maps.All(row=>rooms.Get(row,requirePassiveDefinitions:false).PassiveObjects.Count(source=>source.ObjectId==85176)==copies[row.Id-firstMap]),
+                        "四条真实地图名册及每房泰拉石数量与独立资源读回相同："+id);
+                    byte[] map=Enter(peer,id,310,dual ? (ushort)0 : id,maze);
+                    FormalDungeonTcpTests.Load(peer); Drain();
+                    string before=Assets(); peer.Send(39,Report(1)); Drain();
+                    That(Assets()==before,"无泰拉石的实际起点拒绝物件报告");
+                    foreach (var target in maps.Where(row=>copies[row.Id-firstMap]>0))
+                    {
+                        var path=QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),target.Position);
+                        foreach (var next in path.Skip(1))
+                        {
+                            foreach (int offset in Enumerable.Range(0,map[18]).Select(at=>19+22*at)
+                                .Where(at=>map[at+21]==0 && map[at+13]!=9))
+                            {
+                                peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12])); Drain();
+                            }
+                            var move=new byte[100]; move[0]=checked((byte)next.X); move[1]=checked((byte)next.Y);
+                            peer.Send(45,move); peer.Expect(1,45,[1]); map=peer.Expect(0,29).Body;
+                            FormalDungeonTcpTests.Load(peer); Drain();
+                        }
+                        That(U32(map,14)==target.Id && Identity(peer.Id,id)==acceptance,"换房保留本任务原接取");
+                        if (Quantity(10164804)==0)
+                        {
+                            before=Assets(); var damaged=Report(1); damaged[^1]^=1; peer.Send(39,damaged); Drain();
+                            peer.Send(34,[34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+                            That(Assets()==before,"坏摘要与材料不足交付都不能消费地图额度或改资产");
+                        }
+                        for (ushort index=1;index<=copies[target.Id-firstMap];index++)
+                        {
+                            int one=Quantity(10164804),two=Quantity(10164805);
+                            byte[] body=Report(index); peer.Send(39,body); Drain();
+                            That(Quantity(10164804)==Math.Min(10,one+1) && Quantity(10164805)==(dual ? Math.Min(20,two+2) : 0),
+                                "同模板不同正文按PVF同时发1/2份材料，并分别封顶："+id);
+                            before=Assets(); peer.Send(39,body); Drain();
+                            That(Assets()==before,"同房完整正文重放不消费下一槽、不重复发材料");
+                        }
+                        before=Assets(); peer.Send(39,Report(300)); Drain();
+                        That(Assets()==before,"本房额度耗尽或目标材料已满后，新正文也不额外发放");
+                        if (Quantity(10164804)==10 && (!dual || Quantity(10164805)==20)) break;
+                    }
+                    That(Quantity(10164804)==10 && Quantity(10164805)==(dual ? 20 : 0) && Scalar(peer.Id,id)==0 &&
+                        Identity(peer.Id,id)==acceptance,"实际入包达到两个目标后，原接取状态才归零");
+                    Return(peer);
+                    Finish(peer,id,0);
+                    using var consumed=JsonDocument.Parse((string)fixture.Query(
+                        "SELECT consumed FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1",peer.Id,id)[0][0]);
+                    var actual=consumed.RootElement.EnumerateArray().ToDictionary(row=>row.GetProperty("ItemId").GetInt32(),row=>row.GetProperty("Count").GetInt32());
+                    That(actual.Count==(dual ? 2 : 1) && actual[10164804]==10 && (!dual || actual[10164805]==20) &&
+                        Quantity(10164804)==0 && Quantity(10164805)==0,"34回执独立证明原10/20份材料被一次消费");
+                    before=Assets();
+                    peer.Send(34,[34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+                    peer.Send(39,Report(301)); Drain();
+                    That(Assets()==before,"重复交付和回城后的物件报告不重复材料或奖励");
+                }
+                void Drain()=>drain(peer,null);
+            }
+            using (var peer=Open(fixture,account))
+            {
+                Select(peer,created); peer.Barrier();
+                That(peer.CompletedQuestHistory[4+first]==1 && peer.CompletedQuestHistory[4+second]==1 &&
+                    Quantity(10164804)==0 && Quantity(10164805)==0,"重连恢复整条阵营线完成和材料消费结果");
+                Cleanup(peer,created,account);
+            }
+            int Quantity(int item)=>checked((int)(long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1",created.Id,item)[0][0]);
+            string Assets()=>State(created.Id)+fixture.Snapshot("SELECT * FROM character_quest_lifecycle_receipts WHERE character_id=$p0 ORDER BY revision",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_quest_drop_receipts WHERE character_id=$p0 ORDER BY event_id",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id)+
+                fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index",created.Id)+
+                fixture.Snapshot("SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind",account);
+            static byte[] Report(ushort value)
+            {
+                var body=QuestPassiveClearTcpTests.PassiveDeath(85176,74);
+                // 合成不同合法正文；这个未知字段与摘要都不是客户端物件实例号。
+                BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(39),value); FormalDungeonTcpTests.SealDeath(body);
+                return body;
+            }
+        }
 
         void VerifyMetroTerminalBusiness(ushort id, uint dungeon, byte level)
         {

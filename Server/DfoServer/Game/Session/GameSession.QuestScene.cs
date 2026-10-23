@@ -31,12 +31,29 @@ internal sealed partial class GameSession
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || pendingQuestCompletion is not null) return "存在未完成的死亡/结算/任务完成操作";
         var snapshot = dungeon.Run.Snapshot;
         var room = dungeon.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;
-        var same = room.PassiveObjects.Where(source => source.ObjectId == templateId).ToArray();
+        var same = PassiveQuestSources(room,resources,true).Where(row => row.source.ObjectId == templateId).ToArray();
         if (same.Length == 0) return $"当前房间 {snapshot.CurrentMap.Id} 没有物件模板 {templateId}";
-        if (same.Length > 1) return $"当前房间 {snapshot.CurrentMap.Id} 有 {same.Length} 份物件模板 {templateId}。39 与迷宫终末仍要求唯一行；猎杀 33 只消费尚未使用的放置行，已满、未接取或目标不匹配时拒绝";
-        if (!resources.ReportsQuestDeath(same[0]) && !resources.ReportsQuestItemReward(same[0])) return $"物件模板 {templateId} 无 [quest type] [must be destroyed] 或 [reward type] [quest item]，仅在任务触发通道或迷宫清图条件下才会记录";
+        int used = dungeon.QuestSceneEvents.Count(pair => pair.Key.Map == snapshot.CurrentMap && pair.Key.Template == (int)templateId && pair.Value.Committed);
+        if (used == same.Length) return $"当前房间 {snapshot.CurrentMap.Id} 的物件模板 {templateId} 已消费全部 {used} 个资源槽";
+        if (same.Length > 1 && !resources.ReportsQuestItemReward(same[0].source)) return $"当前房间 {snapshot.CurrentMap.Id} 有 {same.Length} 份物件模板 {templateId}，39 无任务物品声明且不能确定唯一来源";
+        if (!resources.ReportsQuestDeath(same[0].source) && !resources.ReportsQuestItemReward(same[0].source)) return $"物件模板 {templateId} 无 [quest type] [must be destroyed] 或 [reward type] [quest item]，仅在任务触发通道或迷宫清图条件下才会记录";
         return "条件未满足（任务未接取/未绑定本次入场/目标不匹配/等待中的事件指纹不同）";
     });
+
+    // 普通行保持原序号；特殊父物件占独立资源槽。此序号只标记服务端消费额度，不是39中的演员编号。
+    private static IEnumerable<(DungeonRoomPassiveObject source,int ordinal)> PassiveQuestSources(
+        DungeonRoomDefinition room,DungeonRoomCatalog resources,bool includeSpecialRewards)
+    {
+        for (int ordinal = 0; ordinal < room.PassiveObjects.Count; ordinal++)
+            yield return (room.PassiveObjects[ordinal],ordinal);
+        if (!includeSpecialRewards) yield break;
+        foreach (var parent in room.SpecialObjects)
+        {
+            var source = new DungeonRoomPassiveObject(parent.ObjectId,parent.RawValues,parent.Path);
+            if (resources.ReportsQuestItemReward(source))
+                yield return (source,checked(room.PassiveObjects.Count + parent.SourceOrdinal));
+        }
+    }
     public QuestLifecycleReceipt? ObserveFormalPassiveTrigger(ushort questId, QuestClientCondition condition,
         string fingerprint, DungeonRoomCatalog resources)
     {
@@ -71,20 +88,28 @@ internal sealed partial class GameSession
             return null;
         if (reportedQuest is { } questId && !expected.ActiveMainQuests.Any(active => active.QuestId == questId &&
             QuestHuntProgress.Bound(active,current.Entry))) return null;
-        var matches = capture.Room.PassiveObjects.Select((source,ordinal) => (source,ordinal))
+        bool questItemDrop = reportedQuest is null && current.QuestDrops is { } dropResources &&
+            expected.ActiveMainQuests.Any(active => QuestHuntProgress.Bound(active,current.Entry) &&
+                dropResources.Quests.TryGetValue(active.QuestId,out var quest) &&
+                quest.Condition is "[seeking]" or "[seek n meet npc]" && QuestLifecyclePlan.ValidSeeking(quest) &&
+                quest.Definition!.Drops.Any(drop => drop.Matches(current.Entry.DungeonId,current.Entry.Difficulty,(int)templateId,3,false)));
+        var matches = PassiveQuestSources(capture.Room,resources,questItemDrop)
             .Where(row => row.source.ObjectId == templateId).ToArray();
         if (matches.Length == 0) return null;
-        // 39 与迷宫终末仍要求本图唯一模板行。猎杀 33 不带实例；0200F950 在活动 scalar 非 0 时，每次匹配销毁都发送同一条通道 33。
-        // 按本图放置行逐次消费，不超过放置份数。序号是服务端消费槽，不是报文里的实例号。
+        // 寻物39只在明确[quest item]声明下消费同模板的等价资源槽，额度来自MAP普通行与特殊父物件。
+        // 同房完整正文只提交一次；跨房可以有相同正文，不能以Unknown39或正文指纹推断客户端实例身份。
+        // 猎杀33沿用原活动scalar合同；迷宫清图仍由Run的唯一普通行门禁决定。
         PendingQuestScene? pending = null;
         int selected;
+        var rows = current.QuestSceneEvents.Where(pair => pair.Key.Map == scene.CurrentMap && pair.Key.Template == (int)templateId).ToArray();
+        if (reportedQuest is null && rows.Any(pair => pair.Value.Committed && pair.Value.Plan.SceneEvent?.Fingerprint == fingerprint))
+            return null;
         if (matches.Length == 1)
             selected = matches[0].ordinal;
-        else if (reportedQuest is null)
+        else if (reportedQuest is null && (!questItemDrop || !resources.ReportsQuestItemReward(matches[0].source)))
             return null;
         else
         {
-            var rows = current.QuestSceneEvents.Where(pair => pair.Key.Map == scene.CurrentMap && pair.Key.Template == (int)templateId).ToArray();
             var open = rows.Where(pair => !pair.Value.Committed && pair.Value.Plan.SceneEvent?.Fingerprint == fingerprint).ToArray();
             if (open.Length == 1)
             {
