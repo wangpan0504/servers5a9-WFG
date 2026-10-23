@@ -541,6 +541,7 @@ internal sealed partial class GameSession
         {
             if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading ||
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
+                dungeon.Run.HasScriptedTransit && ScriptedNavigationBlocked(dungeon) ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
             if (dungeon.Entry.UsesRoomFatigue && debugSettings?.InfiniteFatigue != true)
             {
@@ -563,14 +564,17 @@ internal sealed partial class GameSession
         if (dungeon.Run.HasScriptedReturn)
             return CanUseScriptedReturn(dungeon) && dungeon.Run.ConfirmScriptedReturnBase(dungeon.Run.Snapshot.Identity,new(x,y));
         return Ready && Selected is not null && Phase is SessionPhase.Loading or SessionPhase.Dungeon &&
-            !HasPendingQuestScene && dungeon.Run.ConfirmLayerBase(dungeon.Run.Snapshot.Identity,new(x,y));
+            !HasPendingQuestScene && (!dungeon.Run.HasScriptedTransit || !ScriptedNavigationBlocked(dungeon)) &&
+            dungeon.Run.ConfirmLayerBase(dungeon.Run.Snapshot.Identity,new(x,y));
     });
 
     bool CanUseScriptedReturn(FormalDungeon dungeon) => Ready && Selected is not null &&
-        Phase is SessionPhase.Dungeon or SessionPhase.Settlement && !dungeon.CharacterDead &&
-        !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null && !HasPendingQuestScene &&
-        !dungeon.HasPendingFatigue && !HasPendingTownQuestCommit && !HasPendingFormalCard &&
-        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement;
+        Phase is SessionPhase.Dungeon or SessionPhase.Settlement && !ScriptedNavigationBlocked(dungeon);
+
+    bool ScriptedNavigationBlocked(FormalDungeon dungeon) => dungeon.CharacterDead ||
+        dungeon.Ground.HasPendingOperation || dungeon.PendingTutorialClear is not null || HasPendingQuestScene ||
+        dungeon.HasPendingFatigue || HasPendingTownQuestCommit || HasPendingFormalCard ||
+        dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement;
 
     public void ConfirmScriptedReturnLoading(FormalDungeonReceipt receipt) => owner.Execute(() =>
     {
@@ -614,6 +618,7 @@ internal sealed partial class GameSession
         if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.CharacterDead ||
             dungeon.Ground.HasPendingOperation || dungeon.PendingTutorialClear is not null || HasPendingQuestScene) return null;
         if (moveKind > 1) return null;
+        if (dungeon.Run.HasScriptedTransit && !CanUseScriptedReturn(dungeon)) return null;
         // 上车后放弃或重接任务也不能沿用旧接取的移动资格。
         if (!Selected.ActiveMainQuests.Any(active => active.QuestId == dungeon.Entry.RouteQuestId && QuestHuntProgress.Bound(active,dungeon.Entry)))
             dungeon.Run.CancelRidable();

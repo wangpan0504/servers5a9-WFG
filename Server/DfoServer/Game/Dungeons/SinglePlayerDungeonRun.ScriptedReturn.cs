@@ -4,6 +4,27 @@ namespace DfoServer.Game.Dungeons;
 
 internal sealed partial class SinglePlayerDungeonRun
 {
+    private readonly DungeonMap? scriptedTransitLayer;
+    internal bool HasScriptedTransit => scriptedTransitLayer is not null;
+
+    // 同ID演出层声明返回基础格时，资源Boss格仍是清图目标；返回本身不证明演员死亡。
+    private static DungeonMap? ResolveScriptedTransitLayer(DungeonEntryPlan entry, DungeonFixedRoute route)
+    {
+        if (entry.QuestClearMap is not null || entry.TerminalLayerMap is not { } layer || entry.RouteQuestId != entry.TerminalLayerQuestId ||
+            route.Rooms.SingleOrDefault(room => room.Room.Map == layer)?.Room is not { } room ||
+            room.ScriptedLayerReturn is not { } action || action.MapId != layer.Id || action.MapPath != layer.Path ||
+            action.X != layer.Position.X || action.Y != layer.Position.Y || action.SceneFlag != 1 ||
+            action.ActionIndex < 0 || action.ActionPath.Length == 0 ||
+            action.ObjectOrdinal < 0 || action.ObjectOrdinal >= room.PassiveObjects.Count)
+            return null;
+        var actor = room.PassiveObjects[action.ObjectOrdinal];
+        return actor.ObjectId == action.ObjectId && actor.Path == action.ObjectPath ? layer : null;
+    }
+
+    private bool CanReturnFromScriptedTransit(DungeonPoint target) =>
+        scriptedTransitLayer is not null && current.Plan.Room.Map == scriptedTransitLayer &&
+        current.Loaded && layerSources.TryGetValue(target, out var source) && source.Loaded;
+
     // 仅描述客户端呈现；实际房间、死亡候选、epoch和结算仍归原末层。
     private sealed class ScriptedReturn(DungeonPoint target)
     {

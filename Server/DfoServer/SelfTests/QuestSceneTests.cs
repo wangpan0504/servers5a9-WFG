@@ -623,12 +623,13 @@ internal static class QuestSceneTests
         f.Sql("UPDATE character_active_main_quests SET condition_state=1 WHERE quest_id=6032");
         Reselect();
         var opening = f.Session.EnterFormalDungeon(291100319,0,0,dungeons,rooms);
-        That(opening is { Entry.TerminalLayerMap: { Position.X: 2, Position.Y: 0, Id: 59914 } } &&
-            opening.Entry.TerminalLayerQuestId == original.QuestId && opening.Entry.TerminalLayerQuestSlot == original.Slot &&
-            opening.Entry.TerminalLayerAcceptanceId == original.AcceptanceId,
-            "普通0冻结实际layout任务三元组，不把请求0当目标任务");
+        That(opening is { Entry.TerminalLayerMap: null, Entry.BossMap.Position.X: 3, Entry.BossMap.Id: 59914 } &&
+            opening.Entry.QuestAcceptances.Any(row => row.QuestId == original.QuestId && row.Slot == original.Slot &&
+                row.AcceptanceId == original.AcceptanceId),
+            "普通0保留原接取三元组，6032演出返回声明恢复资源Boss清图目标");
         var receipt = opening ?? throw new InvalidOperationException("末层任务实例未建立");
-        var target = receipt.Entry.TerminalLayerMap!;
+        var target = receipt.Entry.BossMap;
+        var scene = receipt.Entry.Maze.LayeredMaps.Single(map => map.Id == target.Id);
         ClearTerminal(receipt);
         var first = f.Session.ReadClearedQuest(6032)?.Clear;
         That(first is not null && first.AcceptanceId == original.AcceptanceId && f.Session.Phase == SessionPhase.Settlement,
@@ -636,7 +637,8 @@ internal static class QuestSceneTests
         That(f.Session.ReturnFromFormalDungeon() is not null,"未交付任务可沿原退出回城");
         Reselect();
         var repeated = f.Session.EnterFormalDungeon(291100319,0,0,dungeons,rooms);
-        That(repeated is not null && repeated.Entry.TerminalLayerMap == target && repeated.Entry.TerminalLayerAcceptanceId == original.AcceptanceId &&
+        That(repeated is not null && repeated.Entry.BossMap == target && repeated.Entry.TerminalLayerMap is null &&
+            repeated.Entry.QuestAcceptances.Any(row => row.AcceptanceId == original.AcceptanceId) &&
             f.Repository.LoadQuestClear(f.Owner,f.Session.Selected!,6032) == first &&
             f.Read().ActiveMainQuests.Single(row => row.QuestId == 6032).ConditionState == 0,
             "同接取已达成未34后普通0凭原持久账本重入，保留末层及首清图凭据");
@@ -646,7 +648,7 @@ internal static class QuestSceneTests
 
         void ClearTerminal(FormalDungeonReceipt entered)
         {
-            var path = QuestStoryRouteTests.Path(entered.Entry.Maze.StaticTopology,entered.Entry.StartMap.Position,target.Position);
+            var path = QuestStoryRouteTests.Path(entered.Entry.Maze.StaticTopology,entered.Entry.StartMap.Position,scene.Position);
             for (int index = 0; index < path.Length; index++)
             {
                 var loaded = f.Session.CompleteFormalDungeonLoading()!;
@@ -656,8 +658,13 @@ internal static class QuestSceneTests
                     "真实路线按原连接到达末层入口");
             }
             That(f.Session.Phase == SessionPhase.Dungeon &&
-                f.Session.MoveFormalDungeon(checked((byte)target.Position.X),checked((byte)target.Position.Y),1) is not null,
+                f.Session.MoveFormalDungeon(checked((byte)scene.Position.X),checked((byte)scene.Position.Y),1) is not null,
                 "中途清房不结算，按原kind1进入真实末层");
+            That(f.Session.CompleteFormalDungeonLoading() is not null &&
+                f.Session.MoveFormalDungeon(checked((byte)scene.Position.X),checked((byte)scene.Position.Y),0) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null &&
+                f.Session.MoveFormalDungeon(checked((byte)target.Position.X),checked((byte)target.Position.Y)) is not null,
+                "6032演出层无需合成死亡即可返回并继续资源Boss房");
             Clear(f.Session.CompleteFormalDungeonLoading()!);
         }
 

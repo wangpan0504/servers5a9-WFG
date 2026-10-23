@@ -22,6 +22,31 @@ internal static class DungeonScriptedReturnSessionTests
     {
         using (var pending = new Fixture()) Verify(pending,["lifecycle", "communication", "quickclear"]);
         using (var card = new Fixture(clear:true)) Verify(card,["card"]);
+        using (var transit = new Fixture(transit:true)) VerifyTransit(transit);
+    }
+
+    static void VerifyTransit(Fixture f)
+    {
+        foreach (string pending in new[] { "lifecycle", "communication", "quickclear" })
+        {
+            f.Pending(pending,true);
+            f.Unchanged(() => That(f.Session.MoveFormalDungeon(1,0,0) is null,
+                pending+"未决时6032真实返回不能绕过事务门禁"));
+            f.Pending(pending,false);
+        }
+        That(f.Session.MoveFormalDungeon(1,0,0) is { Snapshot.CurrentMap.Kind: "map" } && f.Run.ClearFact is null,
+            "Session沿真实换层恢复基础房，不制造清图");
+        foreach (string pending in new[] { "lifecycle", "communication", "quickclear" })
+        {
+            f.Pending(pending,true);
+            f.Unchanged(() => That(f.Session.CompleteFormalDungeonLoading() is null &&
+                !f.Session.ConfirmFormalDungeonLayerBase(1,0),pending+"未决时返回加载及kind1确认均保留原状态"));
+            f.Pending(pending,false);
+        }
+        That(f.Session.CompleteFormalDungeonLoading() is not null && f.Session.ConfirmFormalDungeonLayerBase(1,0) &&
+            f.Session.MoveFormalDungeon(2,0,0) is not null && f.Session.CompleteFormalDungeonLoading() is not null &&
+            f.Run.ClearFact is null && f.Session.Selected!.ActiveMainQuests.Single().AcceptanceId == f.Acceptance,
+            "未决事务解除后可继续资源Boss房，保留原接取且尚无清图事实");
     }
 
     static void Verify(Fixture f,string[] kinds)
@@ -88,7 +113,7 @@ internal static class DungeonScriptedReturnSessionTests
         public DungeonRunIdentity OriginalIdentity { get; }
         public DungeonClearFact? OriginalClear { get; }
 
-        public Fixture(bool clear = false)
+        public Fixture(bool clear = false,bool transit = false)
         {
             path = Path.Combine(root, "game.db");
             var point = new Location(14, 1, 50, 50);
@@ -117,7 +142,7 @@ internal static class DungeonScriptedReturnSessionTests
             var entry = new DungeonEntryPlan(expected.Id, expected.Revision + 1, 99, 6032, 0, 0, maze, start, boss)
             {
                 HasExplicitClearMap = true, QuestAcceptanceId = Acceptance, QuestAcceptances = [.. expected.ActiveMainQuests],
-                QuestClearMap = Layer, TerminalLayerMap = Layer, TerminalLayerQuestId = 6032,
+                QuestClearMap = transit ? null : Layer, TerminalLayerMap = Layer, TerminalLayerQuestId = 6032,
                 TerminalLayerQuestSlot = 0, TerminalLayerAcceptanceId = Acceptance
             };
             var declaration = new DungeonScriptedLayerReturn(Layer.Id, Layer.Path, 0, 109000009,
@@ -132,7 +157,7 @@ internal static class DungeonScriptedReturnSessionTests
             That(SinglePlayerDungeonRun.TryCreate(entry, 1, Session.SelectionEpoch, route, authority, out var run, out _) &&
                 authority.BindTo(run!), "合成Run使用正式combat authority但不生成死亡");
             Run = run!;
-            dungeon = Nested("FormalDungeon", entry, route, Run, authority, 1u,
+            dungeon = Nested("FormalDungeon", Run.Entry, route, Run, authority, 1u,
                 new DungeonGroundState(Run, route.Rooms, [], ""), new Dictionary<int, DungeonExplicitDropPool>(),
                 (Func<int, int>)(_ => 0), null, ImmutableDictionary<ushort, DungeonDropGenerationPlan>.Empty);
             var prepared = Nested("PreparedFormalDungeon", expected, Session.SelectionEpoch, dungeon, 31u);

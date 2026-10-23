@@ -36,6 +36,37 @@ internal static class DungeonScriptedLayerReturnTests
         var evidence = new DungeonScriptedLayerReturn(layer.Id,layer.Path,0,109000009,"passiveobject/event.obj",0,
             "passiveobject/action/6032_3.act",1,0,406,209,1);
         foreach (bool ordinary in new[] { false,true })
+        {
+            var transit = entry with { QuestClearMap = null };
+            if (ordinary) transit = transit with { QuestId=0,ActiveQuestSlot=255,QuestAcceptanceId=Guid.Empty };
+            var (run,authority) = Create(transit,evidence);
+            var old = run.Snapshot.Identity;
+            That(run.Entry.TerminalLayerMap is null && run.Entry.IsTerminalMap(boss) && !run.Entry.IsTerminalMap(layer),
+                "6032有资源返回声明的同ID演出层不覆盖基础Boss清图目标");
+            var pending = run.PrepareConfirmedDeath(authority.Death(old,30));
+            That(pending.Pending is not null && run.MoveLayer(old,Guid.NewGuid(),source.Position,false).Outcome == DungeonRunOutcome.Rejected,
+                "演出层死亡事务未决时不能返回基础房");
+            run.CancelUncommittedDeath(pending.Pending!);
+            var back = run.MoveLayer(old,Guid.NewGuid(),source.Position,false);
+            That(back is { Outcome:DungeonRunOutcome.Accepted,Snapshot.MapOperation:DungeonMapOperation.RestoreBase,
+                Snapshot.MapPayload:DungeonMapPayload.Cached } && run.Snapshot.CurrentMap == source && run.ClearFact is null,
+                "自然ACT kind0真实恢复缓存基础房，不制造死亡或清图");
+            That(run.AcceptConfirmedDeath(authority.Death(old,30)).Outcome == DungeonRunOutcome.Rejected,
+                "返回后演出层旧epoch死亡不能提交");
+            var restored = run.Snapshot.Identity;
+            That(run.ConfirmLayerBase(restored,source.Position) && run.Snapshot.Identity == restored,
+                "kind1返回确认不再次换层或推进epoch");
+            run.CompleteLoading(restored,Guid.NewGuid());
+            That(run.MoveLayer(run.Snapshot.Identity,Guid.NewGuid(),source.Position,true).Outcome == DungeonRunOutcome.Rejected &&
+                run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,30)).Outcome == DungeonRunOutcome.Rejected,
+                "已访问演出层不重建，旧演员key不能借新epoch复活");
+            That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),boss.Position).Outcome == DungeonRunOutcome.Accepted,
+                "演出返回后允许继续进入资源Boss房");
+            run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+            That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,20)).Outcome == DungeonRunOutcome.Accepted &&
+                run.ClearFact?.ClearMap == boss,"只有基础Boss房的实际死亡形成清图");
+        }
+        foreach (bool ordinary in new[] { false,true })
         foreach (int order in new[] { 0,1,2 })
         {
             var selected = ordinary ? entry with { QuestId=0,ActiveQuestSlot=255,QuestAcceptanceId=Guid.Empty } : entry;

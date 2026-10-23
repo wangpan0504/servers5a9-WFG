@@ -213,6 +213,10 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private SinglePlayerDungeonRun(DungeonEntryPlan entry, long attempt, long epoch, DungeonFixedRoute route, DungeonCombatAuthority authority)
     {
+        scriptedTransitLayer = ResolveScriptedTransitLayer(entry, route);
+        if (scriptedTransitLayer is not null)
+            entry = entry with { TerminalLayerMap = null, TerminalLayerQuestId = 0,
+                TerminalLayerQuestSlot = byte.MaxValue, TerminalLayerAcceptanceId = Guid.Empty };
         this.entry = entry;
         this.authority = authority;
         var baseRooms = route.Rooms.Where(plan => entry.Maze.MapSpecification!.Contains(plan.Room.Map)).Select(plan => new Room(
@@ -496,7 +500,8 @@ internal sealed partial class SinglePlayerDungeonRun
         else
         {
             if (current.Plan.Room.Map.Kind != "layered" || HasPendingLayer() ||
-                !current.Cleared && !(nextLayer && CanReturnFromCinematic(target))) return Result(DungeonRunOutcome.Rejected);
+                !current.Cleared && !(nextLayer && CanReturnFromCinematic(target)) &&
+                !(!nextLayer && CanReturnFromScriptedTransit(target))) return Result(DungeonRunOutcome.Rejected);
             next = layerSources[target];
             mapOperation = DungeonMapOperation.RestoreBase;
             mapPayload = DungeonMapPayload.Cached;
