@@ -219,9 +219,18 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
                 if (markers is not [{ Tag: "story mode", Tokens.Count: 0 },{ Tag: "/story mode", Tokens.Count: 0 }])
                     return false;
                 int start = RawSections.ToList().FindIndex(section => section.Tag == "story mode");
-                var size = RawSections.Skip(start + 1).TakeWhile(section => section.Tag != "/story mode")
-                    .Where(section => section.Tag == "difficulty size").ToArray();
-                return size.Length == 1 && size[0].Tokens is [{ Type: 0, Value: >= 1 and <= 5 }] && difficulty < size[0].Tokens[0].Value;
+                var block = RawSections.Skip(start + 1).TakeWhile(section => section.Tag != "/story mode").ToArray();
+                var size = block.Where(section => section.Tag == "difficulty size").ToArray();
+                if (size.Length != 1 || size[0].Tokens is not [{ Type: 0, Value: >= 1 and <= 5 }]) return false;
+                var lists = block.Where(section => section.Tag == "quest list").ToArray();
+                var ends = block.Where(section => section.Tag == "/quest list").ToArray();
+                // 仅完整、无歧义的整数名册能证明本任务不属于故事块；未知引用保持原兼容范围。
+                bool outside = connectionQuestId is > 0 && lists is [{ Tokens.Count: > 0 }] &&
+                    lists[0].Tokens.All(token => token.Type == 0 && token.Value > 0) &&
+                    lists[0].Tokens.Select(token => token.Value).Distinct().Count() == lists[0].Tokens.Count &&
+                    ends is [{ Tokens.Count: 0 }] && Array.IndexOf(block,ends[0]) == Array.IndexOf(block,lists[0]) + 1 &&
+                    lists[0].Tokens.All(token => token.Value != connectionQuestId);
+                if (!outside) return difficulty < size[0].Tokens[0].Value;
             }
         }
         var designated = RawSections.Where(section => section.Tag == "designate dungeon difficulty").ToArray();

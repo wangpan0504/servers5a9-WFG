@@ -48,9 +48,9 @@ internal sealed partial class GameSession
         if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort?)?)null;
         if (dungeon.Entry.IsTutorial && dungeon.TutorialClearTarget is { } tutorialTarget)
             return (FormalReceipt(), tutorialTarget);
-        // 剧情终点可以只有普通阻挡敌人；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。
+        // 剧情终点可以只有普通敌对APC；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。
         var terminal = dungeon.Route.Rooms.Single(room => room.Room.Map == snapshot.CurrentMap).Monsters
-            .Where(monster => monster.CanReportDeath && (monster.IsBoss || monster.IsBlocking) &&
+            .Where(monster => monster.CanReportDeath &&
                 !snapshot.LivingMonsters.Contains(monster.ObjectKey) && !dungeon.Run.IsCulledMonster(monster.ObjectKey)).ToArray();
         var boss = terminal.FirstOrDefault(monster => monster.ObjectKey == reportedBossKey) ??
             terminal.FirstOrDefault(monster => monster.IsBoss) ?? terminal.FirstOrDefault();

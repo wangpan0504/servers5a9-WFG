@@ -130,6 +130,7 @@ internal static class TcpRegressionTests
         ("story-cinematic", (_, _, resources) =>
         {
             QuestCinematicSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
+            QuestAdventureSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             return Task.CompletedTask;
         }),
         ("story-scenes", (_, _, resources) =>

@@ -917,6 +917,10 @@ internal sealed partial class SinglePlayerDungeonRun
         if (!IsTerminalRoom() || !HasCommittedPassiveBaseDeaths() || HasPendingBossDeaths(preparedMonsterKey) ||
             passiveClearTarget is not null && !HasCommittedPassiveClearCondition && !passiveConfirmed)
             return false;
+        // 无Boss的终点仍须等待真实敌对APC；它们不阻挡普通过房，但不能被当作空终点。
+        if (!current.Plan.Monsters.Any(monster => monster.IsBoss) &&
+            current.Plan.Monsters.Any(monster => monster.AiCharacter is not null && monster.CanReportDeath &&
+                !current.Dead.Contains(monster.ObjectKey) && monster.ObjectKey != preparedMonsterKey)) return false;
         if (entry.IsTutorial && current.Plan.Room.TutorialCinematics.Any(movie => movie.DestroyTargets.Count > 0) &&
             current.Plan.Monsters.Any(monster => monster.IsBlocking && !current.Dead.Contains(monster.ObjectKey) &&
                 monster.ObjectKey != preparedMonsterKey)) return false;

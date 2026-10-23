@@ -857,6 +857,7 @@ internal static class QuestLifecycleTcpTests
                 else if (part == QuestPart.ChainSettlement)
                 {
                     VerifyPassiveTerminalSettlement(extra,resources,growth);
+                    QuestAdventureSettlementTcpTests.Verify(extra,resources,growth,DrainNotifications);
                     var verifySideDiagnostics = DefaultSideQuestTcpTests.Verify(extra,resources,growth,DrainNotifications);
                     ForestChildAcceptanceTcpTests.Verify(extra,resources,growth,DrainNotifications);
                     MiddleQuestEntryTcpTests.Verify(extra,resources,growth);

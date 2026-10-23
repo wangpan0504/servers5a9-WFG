@@ -336,6 +336,7 @@ internal static class SelfTestRunner
         QuestStoryRouteTests.Run(towns, pvf, characters, itemResources,sharedQuests,sharedSkills);
         QuestTownSceneTests.Run(towns, pvf, characters, itemResources,sharedQuests,sharedSkills);
         QuestCinematicSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        QuestAdventureSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestMainlineTests.Run(towns, pvf, characters, itemResources,sharedQuests,sharedSkills);
         QuestRewardParameterTests.RunResources(pvf);
         QuestCompletionPlanTests.RunResources(pvf, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);

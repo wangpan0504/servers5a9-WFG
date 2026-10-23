@@ -234,6 +234,39 @@ internal static class SinglePlayerDungeonRunTests
             apcRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] { 31 }) &&
             apcRun.AcceptConfirmedDeath(apcDeath).Outcome == DungeonRunOutcome.Duplicate,
             "APC真实死亡仅确认一次，友方仍在场，清图事件与普通事务共用同一事实");
+        foreach (var rank in new[] { "[normal]", "[champion]", "[super champion]" })
+        {
+            var ordinaryApc = DungeonMonsterPlan.FromRoom(new(boss,[],[],[])
+                { AiCharacters = [ai with { RankKind = rank },
+                    ai with { Id = 2005,RawValues = [2005,500,264,0,0,0],RankKind = rank },
+                    ai with { Id = 2010,RawValues = [2010,500,264,0,0,0],Faction = "[character]" }] },99,30);
+            var ordinaryMaze = maze with { Width = 3,MapSpecification = [start,boss],Starts = [start.Position],Bosses = [boss.Position] };
+            var first = start with { Position = new(1,0) };
+            ordinaryMaze = ordinaryMaze with { MapSpecification = [first,boss],Starts = [first.Position] };
+            var ordinaryEntry = entry with { Maze = ordinaryMaze,StartMap = first,BaseBossMap = boss,BossMap = boss };
+            var ordinaryRoute = new DungeonFixedRoute([Plan(first,10),ordinaryApc],[new(first.Position,boss.Position)]);
+            That(SinglePlayerDungeonRun.TryCreate(ordinaryEntry,7,700,ordinaryRoute,authority,out var ordinaryRun,out _),
+                "非Boss敌对APC终点保留普通路线及友方");
+            ordinaryRun!.CompleteLoading(ordinaryRun.Snapshot.Identity,Guid.NewGuid());
+            ordinaryRun.AcceptConfirmedDeath(authority.Death(ordinaryRun.Snapshot.Identity,10,1));
+            ordinaryRun.Move(ordinaryRun.Snapshot.Identity,Guid.NewGuid(),boss.Position);
+            That(ordinaryRun.CompleteLoading(ordinaryRun.Snapshot.Identity,Guid.NewGuid()).ClearFact is null &&
+                ordinaryRun.Phase == SinglePlayerDungeonPhase.Dungeon,"前房死亡不能让仍有敌对普通APC的终点提前结算");
+            That(ordinaryRun.AcceptConfirmedDeath(authority.Death(ordinaryRun.Snapshot.Identity,30,2)).ClearFact is null,
+                "多名普通敌对APC须全部实际死亡，不能由首个死亡提前清图");
+            var ordinaryPending = ordinaryRun.PrepareConfirmedDeath(authority.Death(ordinaryRun.Snapshot.Identity,31,3)).Pending!;
+            That(ordinaryPending.Result.ClearFact is { ConfirmedDeathEvents.Count:3 } && ordinaryRun.ClearFact is null,
+                "普通APC末次死亡准备不提前安装ClearFact");
+            That(ordinaryRun.ConfirmCommittedDeath(ordinaryPending).ClearFact is not null &&
+                ordinaryRun.Snapshot.LivingMonsters.SequenceEqual(new ushort[] {32}),"提交真实普通APC死亡后清图，不删除友方");
+        }
+        var bossWithApc = DungeonMonsterPlan.FromRoom(BossPlan(boss,40).Room with
+            { AiCharacters = [ai with { RankKind = "[normal]" }] },99,40);
+        That(SinglePlayerDungeonRun.TryCreate(terminalEntry,8,800,new([bossWithApc],[]),authority,out var bossWithApcRun,out _),
+            "真实Boss和普通敌对APC可共处同一终点");
+        bossWithApcRun!.CompleteLoading(bossWithApcRun.Snapshot.Identity,Guid.NewGuid());
+        That(bossWithApcRun.AcceptConfirmedDeath(authority.Death(bossWithApcRun.Snapshot.Identity,40,1)).ClearFact is not null &&
+            bossWithApcRun.Snapshot.LivingMonsters.Contains((ushort)41),"真实Boss死亡仍按原合同清图，不把普通APC提升为第二个Boss");
         var side = new DungeonMap("map", new(0, 1), 4, "map/fixture-side.map");
         var sideMaze = new DungeonMaze(0, 3, 2, "fixture-uncleared-side", [start.Position], [boss.Position], [start, friendly, boss, side], []);
         var sideRoute = route with

@@ -62,6 +62,23 @@ internal static class DungeonCatalogTests
             That(!invalid.AllowsDifficulty(0,true,6206),"任一故事块归属、边界或难度不明确时拒绝，不能只验证已选块");
         That(Definition(start,size,secondQuests with { Tokens = [new(7,1)] },questEnd,end).AllowsDifficulty(0,true,6206),
             "单故事块保留既有不解释任务引用token的兼容合同");
+        var boundedStory = Definition(start,size,firstQuests,questEnd,end,levels);
+        That(Enumerable.Range(0,5).All(value => boundedStory.AllowsDifficulty((byte)value,true,6206) == (value == 0)) &&
+            Enumerable.Range(0,5).All(value => boundedStory.AllowsDifficulty((byte)value,true,7930)),
+            "单故事块的明确名册只约束所属任务，其他任务沿普通难度表");
+        That(!boundedStory.AllowsDifficulty(1,true) && !boundedStory.AllowsDifficulty(5,true,7930) &&
+            !Definition(start,size,firstQuests,questEnd,end,designated,levels).AllowsDifficulty(1,true,7930) &&
+            Definition(start,size,firstQuests,questEnd,end,designated,levels).AllowsDifficulty(2,true,7930),
+            "缺少任务身份不猜归属，非故事任务仍复核普通指定难度及协议上限");
+        foreach (var malformed in new[]
+        {
+            Definition(start,size,firstQuests,end,levels),
+            Definition(start,size,firstQuests,firstQuests,questEnd,end,levels),
+            Definition(start,size,firstQuests, new("unknown",[]),questEnd,end,levels),
+            Definition(start,size,firstQuests with { Tokens = [new(0,6206),new(0,6206)] },questEnd,end,levels),
+            Definition(start,size,firstQuests with { Tokens = [new(7,6206)] },questEnd,end,levels)
+        })
+            That(!malformed.AllowsDifficulty(1,true,7930),"损坏或未知名册不能作为放行普通高难度的证据");
         That(Enumerable.Range(0,5).All(value => withoutStory.AllowsDifficulty((byte)value,true) == withoutStory.AllowsDifficulty((byte)value,false)),
             "未声明故事块的任务连接仍沿既有普通难度合同");
         foreach (var invalid in new[] { Definition(start,size),Definition(end),Definition(end,start,size,end),Definition(start,size,end,start,size,end),
