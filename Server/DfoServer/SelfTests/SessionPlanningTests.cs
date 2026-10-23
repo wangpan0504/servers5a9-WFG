@@ -33,6 +33,7 @@ internal static class SessionPlanningTests
         PublishedRosterIdentity();
         SlotChange();
         Initialization();
+        ExpertJobStoreLifecycle();
         Learning();
         Layout();
         await CreationRacesAsync();
@@ -67,6 +68,65 @@ internal static class SessionPlanningTests
         f.Select();
         Reject<InvalidDataException>(() => f.Session.CreateCharacter("Selected", Profile, (_, _) => throw new Exception("不应解析")),
             "选角后建角在资源读取前拒绝");
+    }
+
+    static void ExpertJobStoreLifecycle()
+    {
+        using var f = new Fixture();
+        var id = f.Read().Id;
+        f.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES({id},'planning',3,51)");
+        f.Select();
+        var store = new DfoServer.Game.ExpertJob.ExpertJobStoreRecord(id, 3, 0, "", 25, 0, 0, 0, 1, 300);
+        That(f.Session.OpenExpertJobStore(), "副职业生命周期夹具开店");
+        f.Session.QuoteExpertJobStore(store);
+        That(f.Session.MatchesExpertJobStoreQuote(store), "进入保存原店铺报价");
+        f.Session.ReturnToRoster(); f.Select();
+        That(!f.Session.ExpertJobStoreOpen && !f.Session.MatchesExpertJobStoreQuote(store), "小退重选不复活旧店铺或报价");
+        That(f.Session.OpenExpertJobStore(), "重新开店明确授权新生命周期");
+        f.Session.QuoteExpertJobStore(store);
+        That(f.Session.LeaveRoom() && !f.Session.ExpertJobStoreOpen && !f.Session.MatchesExpertJobStoreQuote(store),
+            "离开场景同时清除开店资格和旧报价");
+        var repriced = new DfoServer.Game.ExpertJob.ExpertJobStoreRecord(id, 3, 0, "", 50, 0, 0, 0, 1, 300);
+        f.Session.QuoteExpertJobStore(store);
+        That(!f.Session.MatchesExpertJobStoreQuote(repriced) && f.Session.MatchesExpertJobStoreQuote(store with { Endurance = 299 }),
+            "改价更换实例而消耗耐久不改变原报价身份");
+        using var customerLease = f.Owners.Acquire("store-customer", () => { });
+        var created = f.Repository.Create(customerLease, new("StoreBuyer", f.Towns.Room, f.Towns.InitialReturn)
+        { Level = 10, Inventory = new([new(0, new(InventoryListType.Main, 121), new ItemCore(10014751, ItemKind.Material, 2))]) });
+        var customerSession = new GameSession(f.Repository, f.Towns, customerLease);
+        customerSession.Select(created.Slot); customerSession.MarkReady();
+        var beforeCustomer = customerSession.Selected!;
+        var beforeOwner = f.Session.Selected!;
+        var item = beforeCustomer.Inventory.Items.Single();
+        var plan = new DfoServer.Game.ExpertJob.ExpertJobTradePlan(beforeCustomer, beforeOwner,
+            new(beforeCustomer.Inventory, beforeCustomer.Inventory with { Items = beforeCustomer.Inventory.Items.Replace(item,
+                item with { Core = item.Core with { Value = 1 } }) }, "trade-race"),
+            new(beforeOwner.Inventory, beforeOwner.Inventory, "trade-race-owner"),
+            beforeOwner.ExpertJobExperience + 1, beforeOwner.ExpertMachineEndurance - 1, 0);
+        That(f.Session.OpenExpertJobStore(), "竞态测试重新开店");
+        f.Session.CloseExpertJobStore();
+        That(GameSession.CommitExpertJobTrade(customerSession, f.Session, plan, () => true) is null &&
+            f.Read().Revision == beforeOwner.Revision, "规划完成后关店在双锁提交前拒绝，双方不消费");
+        f.Session.OpenExpertJobStore();
+        var board = new DfoServer.Game.ExpertJob.ExpertJobStoreBoard(); board.Open(store);
+        customerSession.QuoteExpertJobStore(store);
+        board.Open(repriced);
+        That(GameSession.CommitExpertJobTrade(customerSession, f.Session, plan, () =>
+            board.TryGet(id, out var live) && ReferenceEquals(live, store) && customerSession.MatchesExpertJobStoreQuote(live)) is null &&
+            f.Repository.LoadCharacter(customerLease, created.Slot).Revision == beforeCustomer.Revision,
+            "规划完成后改价拒绝旧报价且不扣顾客源");
+        f.Session.ExpertJobStoreClosed = actor => board.TryClose(actor, out _);
+        using var replacementOwner = f.Owners.Acquire(f.Owner.Account, () => { });
+        var replacementSession = new GameSession(f.Repository, f.Towns, replacementOwner);
+        replacementSession.Select(0); replacementSession.MarkReady(); replacementSession.OpenExpertJobStore();
+        var replacementStore = repriced with { Instance = Guid.NewGuid() }; board.Open(replacementStore);
+        f.Session.End();
+        That(board.TryGet(id, out var survivingStore) && ReferenceEquals(survivingStore, replacementStore) &&
+            replacementSession.ExpertJobStoreOpen, "旧generation迟到End只清旧会话，不触发回调关闭新generation同角色店铺");
+        Reject<InvalidOperationException>(() => GameSession.CommitExpertJobTrade(customerSession, f.Session, plan, () => true),
+            "规划完成后店主断线使旧租约双锁提交失败");
+        That(f.Repository.LoadCharacter(customerLease, created.Slot).Inventory.Items.Single().Core.Value == 2,
+            "断线拒绝保留顾客原物品数量");
     }
 
     static void Initialization()
@@ -704,7 +764,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_teleport_cooldowns VALUES({{id}},'planning',2000000000000,2000000420000);
                 INSERT INTO character_exp_bonus VALUES({{id}},'planning',2000007200,1000);
                 INSERT INTO character_consumable_states VALUES({{id}},'planning',0,10087825,2000000000000,7,5);
-                INSERT INTO character_expert_job VALUES({{id}},'planning',1,0);
+                INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES({{id}},'planning',1,0);
                 INSERT INTO character_expert_meta VALUES({{id}},'planning',0,1,300);
                 INSERT INTO character_assault_daily VALUES({{id}},'planning',740000,2,1);
                 INSERT INTO character_crack_daily(character_id,account,day,clear_count,daily_reward) VALUES({{id}},'planning',740000,1,0);

@@ -15,10 +15,10 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class ExpertJobHandler(QuestCatalog quests, ExpertJobScriptCatalog scripts, ItemCatalog items,
+internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScriptCatalog scripts, ItemCatalog items,
     GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, InventoryProjection inventory, ServerLog log,
     TownPresence? presence = null, ExpertJobStoreBoard? stores = null,
-    InventoryEnchantmentService? enchantments = null) : IGameCommandModule
+    InventoryEnchantmentService? enchantments = null, ExpertJobDisassembly? disassembly = null, ExpertJobEnchanting? cardEnchanting = null, OnlineSessionDirectory? online = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -154,36 +154,53 @@ internal sealed class ExpertJobHandler(QuestCatalog quests, ExpertJobScriptCatal
         }
         var parsed = ExpertJobRequests.ReadEnchantStore(packet.Body);
         var current = context.Owner.Execute(() => context.Session.Selected);
+        if (current is not null && parsed.First != current.Id && parsed.Third == 2 && parsed.Fourth == 0 && parsed.Sixth == 0 &&
+            parsed.Second <= int.MaxValue && parsed.Fifth <= short.MaxValue && parsed.Seventh <= short.MaxValue)
+            return await TradeStoreAsync(context, parsed.First, 1, candidate => cardEnchanting?.Plan(candidate,
+                (int)parsed.Second, new(InventoryListType.Main, (short)parsed.Fifth), new(InventoryListType.Main, (short)parsed.Seventh)));
         ushort error = 19;
-        if (enchantments is null || current is not { ExpertJobType: 1 } ||
-            !ExpertJobCraft.TryPlanEnchant(current, enchantments, scripts, parsed.Fourth, parsed.Fifth, parsed.Sixth,
-                parsed.Seventh, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), out var plan, out int experience, out error))
+        ExpertJobActionPlan? action = null;
+        InventoryResult committed;
+        // 本人路径与跨玩家店主路径必须区分；不能把客人的卡/金币当成店主操作结算。
+        if (current is null || parsed.First != current.Id || parsed.Third != 2 || parsed.Fourth != 0 || parsed.Sixth != 0 ||
+            parsed.Second > int.MaxValue || parsed.Fifth > short.MaxValue || parsed.Seventh > short.MaxValue)
+            committed = InventoryResult.Reject(19);
+        else if (cardEnchanting?.Plan(current, (int)parsed.Second, new(InventoryListType.Main, (short)parsed.Fifth),
+            new(InventoryListType.Main, (short)parsed.Seventh)) is { } cardPlan)
         {
-            await context.Reply(CmdPacketType.USE_ENCHANT_STORE, ExpertJobPackets.Fail(error == 0 ? (ushort)19 : error),
-                "expert_job_enchant_rejected");
-            return CommandResult.Handled;
+            action = cardPlan;
+            committed = context.Session.CommitExpertJobAction(cardPlan);
         }
-        var committed = context.Session.CommitExpertJobCraft(plan, experience);
+        else if (enchantments is not null && ExpertJobCraft.TryPlanEnchant(current, enchantments, scripts,
+            parsed.Fourth, parsed.Fifth, parsed.Sixth, parsed.Seventh, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            out var beadPlan, out int experience, out error))
+            committed = context.Session.CommitExpertJobCraft(beadPlan, experience);
+        else committed = InventoryResult.Reject(error == 0 ? (ushort)19 : error);
         if (!committed.Accepted || committed.Receipt is not { } craftedReceipt)
         {
-            await context.Reply(CmdPacketType.USE_ENCHANT_STORE, ExpertJobPackets.Fail(19), "expert_job_enchant_commit");
+            await context.Reply(CmdPacketType.USE_ENCHANT_STORE, ExpertJobPackets.Fail(committed.Error), "expert_job_enchant_rejected");
             return CommandResult.Handled;
         }
         bool Crafted() => context.Session.CanPublishInventory(craftedReceipt);
+        if (stores is not null && stores.TryGet(craftedReceipt.Character.Id, out var ownStore))
+            stores.Open(ownStore with { Endurance = (uint)craftedReceipt.Character.ExpertMachineEndurance });
         await inventory.RefreshAsync(context, committed);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_enchant_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_enchant_info");
-        var observed = context.Session.ObserveExpertJobTutorial(QuestExpertJobProgress.Enchanter, quests);
+        await context.Reply(CmdPacketType.USE_ENCHANT_STORE, ExpertJobPackets.EnchantStoreSuccess((uint)craftedReceipt.Character.ExpertMachineEndurance,
+            (uint)scripts.Level(1, action is null && scripts.LearnedRarities(current!.ExpertJobRecipes).Length == 0
+                ? current.ExpertJobExperience : craftedReceipt.Character.ExpertJobExperience),
+            action?.EnchantRarity ?? scripts.LearnedRarities(current!.ExpertJobRecipes).FirstOrDefault(), action?.Succeeded != false), "expert_job_enchant_crafted",
+            Crafted);
+        var observed = action?.Succeeded == false ? null : context.Session.ObserveExpertJobTutorial(QuestExpertJobProgress.Enchanter, quests);
         if (observed is { Outcome: QuestLifecycleOutcome.Committed or QuestLifecycleOutcome.Unchanged } &&
             observed.Commit is { ProjectionCurrent: false })
             return CommandResult.CloseConnection;
         if (observed is { Commit: not null })
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(observed.Character.ActiveMainQuests),
                 "expert_job_enchant_quest", () => context.Session.CanPublishQuestLifecycle(observed));
-        await context.Reply(CmdPacketType.USE_ENCHANT_STORE, ExpertJobPackets.EnchantStoreSuccess(), "expert_job_enchant_crafted",
-            Crafted);
         return CommandResult.Handled;
     }
 
@@ -239,42 +256,49 @@ internal sealed class ExpertJobHandler(QuestCatalog quests, ExpertJobScriptCatal
                 Length = packet.Body.Length, Body = Convert.ToHexString(packet.Body), Experimental = true });
             return CommandResult.Handled;
         }
-        try { _ = ExpertJobRequests.ReadDisjoint(packet.Body); }
+        ExpertJobDisjointRequest request;
+        try { request = ExpertJobRequests.ReadDisjoint(packet.Body); }
         catch (InvalidDataException)
         {
             await context.Reply(CmdPacketType.REQUEST_DISJOINT_ITEM, ExpertJobPackets.Fail(19), "expert_job_disjoint_malformed");
             return CommandResult.Handled;
         }
-        if (context.Activity?.BlocksTownActions == true)
+        var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool Guard() => context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, captured.Selected) &&
+            context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase);
+        var current = captured.Selected;
+        if (current is not null && request.OwnerActor != current.Id && request.SourceList == 0 && request.SourceSlot <= short.MaxValue)
+            return await TradeStoreAsync(context, request.OwnerActor, 3, candidate => disassembly?.Plan(candidate,
+                new(InventoryListType.Main, (short)request.SourceSlot), ownMachine: false));
+        // 本人机器与跨玩家店铺分别结算，后者必须双账号原子提交。
+        var plan = current is not null && request.OwnerActor == current.Id && request.SourceList == 0 &&
+            request.SourceSlot <= short.MaxValue && context.Activity?.BlocksTownActions != true
+            ? disassembly?.Plan(current, new(InventoryListType.Main, (short)request.SourceSlot)) : null;
+        var committed = plan is null ? InventoryResult.Reject(19) : context.Session.CommitExpertJobAction(plan);
+        if (!committed.Accepted || committed.Receipt is not { } receipt || plan?.Disjoint is not { } products)
         {
-            await context.Reply(CmdPacketType.REQUEST_DISJOINT_ITEM, ExpertJobPackets.Fail(19), "expert_job_disjoint_blocked");
+            await context.Reply(CmdPacketType.REQUEST_DISJOINT_ITEM, ExpertJobPackets.Fail(19), "expert_job_disjoint_rejected", Guard);
             return CommandResult.Handled;
         }
-        var receipt = context.Session.ObserveExpertJobTutorial(QuestExpertJobProgress.Disjointer, quests);
-        if (receipt is not { Outcome: QuestLifecycleOutcome.Committed or QuestLifecycleOutcome.Unchanged })
-        {
-            await context.Reply(CmdPacketType.REQUEST_DISJOINT_ITEM, ExpertJobPackets.Fail(19), "expert_job_disjoint_rejected");
-            return CommandResult.Handled;
-        }
-        if (receipt.Commit is { ProjectionCurrent: false }) return CommandResult.CloseConnection;
-        bool Guard() => context.Session.CanPublishQuestLifecycle(receipt);
-        if (receipt.Commit is not null)
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
-                "expert_job_disjoint_quest", Guard);
-        var before = context.Owner.Execute(() => context.Session.Selected);
-        if (before is { ExpertJobType: 3 })
-        {
-            int experience = ExpertJobCraft.DisjointExperience(before, scripts, Random.Shared.Next);
-            if (experience != before.ExpertJobExperience && context.Session.CommitExpertJobExperience(experience) is { } updated)
-            {
-                bool Experienced() => context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, updated));
-                await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(updated, context.Channel,
-                    adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
-                    "expert_job_disjoint_actor", Experienced);
-                await NotifyInfo(context, updated, Experienced, "expert_job_disjoint_info");
-            }
-        }
-        await context.Reply(CmdPacketType.REQUEST_DISJOINT_ITEM, ExpertJobPackets.DisjointEmpty(), "expert_job_disjoint_observed", Guard);
+        bool Current() => context.Session.CanPublishInventory(receipt);
+        // ACK235自身消费源和安装主背包产物，不能再用增量包叠加同一份奖励。
+        await context.Reply(CmdPacketType.REQUEST_DISJOINT_ITEM,
+            ExpertJobPackets.DisjointResult(current!.Id, products, receipt.Character.Inventory.Gold, (uint)receipt.Character.ExpertMachineEndurance),
+            "expert_job_machine_disjoint", Current);
+        var acknowledged = plan.Inventory.ChangedSlots.Where(slot => slot.List == InventoryListType.Main).ToHashSet();
+        foreach (var kind in plan.Inventory.ChangedCurrencies)
+            if (ItemSlotBoundService.CurrencySlot(kind) is { } slot) acknowledged.Add(new(InventoryListType.Main, slot));
+        await inventory.RefreshAsync(context, committed, acknowledgedSlots: acknowledged);
+        if (stores is not null && stores.TryGet(current.Id, out var ownStore))
+            stores.Open(ownStore with { Endurance = (uint)receipt.Character.ExpertMachineEndurance });
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Channel,
+            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "expert_job_disjoint_actor", Current);
+        await NotifyInfo(context, receipt.Character, Current, "expert_job_disjoint_info");
+        var observed = context.Session.ObserveExpertJobTutorial(QuestExpertJobProgress.Disjointer, quests);
+        if (observed is { Commit: not null })
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(observed.Character.ActiveMainQuests),
+                "expert_job_disjoint_quest", () => context.Session.CanPublishQuestLifecycle(observed));
+        log.Write("expert_job_disjoint", new { Character = current.Id, Accepted = true, Rule = "compatibility", receipt.Character.ExpertMachineEndurance });
         return CommandResult.Handled;
     }
 
@@ -338,6 +362,16 @@ internal sealed class ExpertJobHandler(QuestCatalog quests, ExpertJobScriptCatal
             await context.Reply(CmdPacketType.ENTER_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_enter_missing");
             return CommandResult.Handled;
         }
+        var customer = context.Session.CaptureExpertJobTrade();
+        if (customer is null || actor != customer.Id &&
+            (online?.FindConnectionByCharacterId(actor) is not { } provider || !provider.Session.ExpertJobStoreOpen ||
+                provider.Session.CaptureExpertJobTrade() is not { } owner || presence?.CanInteract(context.Owner, customer.Id,
+                    provider.Session.ExpertJobOwner, owner.Id) != true))
+        {
+            await context.Reply(CmdPacketType.ENTER_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_enter_unavailable");
+            return CommandResult.Handled;
+        }
+        context.Session.QuoteExpertJobStore(store);
         byte[] body = store.Mode == 3
             ? ExpertJobPackets.EnterStoreKind3(store.OwnerId, store.Endurance)
             : ExpertJobPackets.EnterStoreKind0(store.Grade, store.First, store.Endurance);

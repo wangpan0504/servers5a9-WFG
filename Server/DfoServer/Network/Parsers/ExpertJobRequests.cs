@@ -4,7 +4,7 @@ namespace DfoServer.Network.Parsers;
 
 internal readonly record struct ExpertJobCompoundRequest(uint First, ushort Second, ushort Third);
 internal readonly record struct ExpertJobEnchantStoreRequest(ushort First, uint Second, byte Third, byte Fourth, ushort Fifth, byte Sixth, ushort Seventh);
-internal readonly record struct ExpertJobDisjointRequest(ushort First, ushort Second, byte Third);
+internal readonly record struct ExpertJobDisjointRequest(ushort OwnerActor, ushort SourceSlot, byte SourceList);
 internal readonly record struct ExpertJobCreateStoreRequest(byte Mode, string Name, uint First, ushort Second, ushort Third, ushort Fourth);
 internal readonly record struct ExpertJobExtractionRequest(byte ExtractorType, short ExtractorSlot, byte TargetList, short TargetSlot);
 
@@ -50,7 +50,7 @@ internal static class ExpertJobRequests
         return actor;
     }
 
-    // C2S 235 029D5A85：u16 ebp+0xC、u16 ebp+8、对齐后的 u8。
+    // C2S 235 029D5A85：店主演员 u16、源槽 u16、源列表 u8；0373D219 的个人入口使用本人演员号。
     public static ExpertJobDisjointRequest ReadDisjoint(byte[] body)
     {
         using var reader = Open(body, 5);

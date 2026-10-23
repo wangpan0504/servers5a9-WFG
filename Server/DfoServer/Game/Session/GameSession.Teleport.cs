@@ -35,6 +35,7 @@ internal sealed partial class GameSession
                 plan.Cooldowns.AuraUntil == character.TeleportCooldowns.AuraUntil ? plan.Cooldowns.AuraUntil : checked(plan.Cooldowns.AuraUntil + elapsed)) };
             Selected = repository.CommitTeleport(owner, plan);
             InvalidateImageCommunication();
+            InvalidateExpertJobStore();
             var inventory = new InventoryResult(true, 0, plan.Inventory)
             {
                 Receipt = new(Selected, owner.Generation, SelectionEpoch)

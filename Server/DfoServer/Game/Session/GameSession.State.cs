@@ -16,7 +16,11 @@ internal sealed partial class GameSession
         if (!UserStatePolicy.CanTransition(Phase, next))
             throw new InvalidOperationException($"非法会话状态切换：{Phase} -> {next}");
         _ = ReadState(next);
-        if (Phase == SessionPhase.Town && next != SessionPhase.Town) InvalidateImageCommunication();
+        if (Phase == SessionPhase.Town && next != SessionPhase.Town)
+        {
+            InvalidateImageCommunication();
+            InvalidateExpertJobStore();
+        }
         Phase = next;
     }
 }

@@ -10,14 +10,20 @@ internal sealed record ExpertJobRecipe(int RecipeId, int ProductId, int Required
 internal readonly record struct ExpertJobScriptResult(int KeyA, int KeyB, int KeyC, int ItemId, double Multiplier);
 internal readonly record struct ExpertJobMonsterCardExp(int Level, int Min, int Max);
 
+internal sealed record ExpertJobCardRecipe(int CardId, int BeadId, int RecipeId, int RequiredLevel, byte Rarity, (int ItemId, int Count)[] Materials);
+
+internal sealed record ExpertJobLearnableRecipe(int ItemId, byte Job, int RequiredLevel, byte? Rarity);
+
 internal sealed class ExpertJobScriptCatalog
 {
     static readonly Regex Number = new(@"[-+]?\d+(?:\.\d+)?", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     readonly Dictionary<byte, JobScript> jobs;
+    readonly Dictionary<int, ExpertJobLearnableRecipe> learnable = new();
+    readonly Dictionary<int, ExpertJobCardRecipe> cardRecipes = new();
 
     ExpertJobScriptCatalog(Dictionary<byte, JobScript> jobs) => this.jobs = jobs;
 
-    public static ExpertJobScriptCatalog Load(PvfArchive pvf, ItemCatalog items)
+    public static ExpertJobScriptCatalog Load(PvfArchive pvf, ItemCatalog items, IReadOnlyDictionary<int, string> stackable)
     {
         var jobs = new Dictionary<byte, JobScript>();
         foreach (var (id, path) in PvfScript.List(pvf.ReadText("character/expertjob.lst")))
@@ -26,8 +32,45 @@ internal sealed class ExpertJobScriptCatalog
             string text = pvf.ReadText("character/" + path);
             jobs[(byte)id] = JobScript.Parse(text, items);
         }
-        return new(jobs);
+        var result = new ExpertJobScriptCatalog(jobs);
+        if (jobs.TryGetValue(1, out var enchanter))
+        {
+            foreach (var candidate in enchanter.LearningRecipes.Values)
+            {
+                if (!stackable.TryGetValue(candidate.ItemId, out var path)) continue;
+                var declaration = ExpertRecipeFile.Parse(candidate.ItemId, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
+                if (!declaration.Supported || declaration.Skills is not [{ ItemId: 191 }] ||
+                    declaration.Skills[0].Count > candidate.RequiredLevel ||
+                    (candidate.Rarity is not null) != (declaration.RecipeKind == "[enchant]")) continue;
+                result.learnable.Add(candidate.ItemId, candidate);
+                if (candidate.Rarity is { } rarity)
+                {
+                    var recipe = ItemRecipeFile.Parse(candidate.ItemId, path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
+                    if (!recipe.Diagnostics.IsEmpty || recipe.Inputs.IsEmpty || recipe.Inputs.Any(row => row.ItemId < 0 || row.Count <= 0)) continue;
+                    foreach (var pair in enchanter.CardProducts.Where(row => row.Value.RecipeId == candidate.ItemId))
+                        result.cardRecipes.Add(pair.Key, new(pair.Key, pair.Value.BeadId, candidate.ItemId, candidate.RequiredLevel, rarity,
+                            recipe.Inputs.Select(row => (row.ItemId, row.Count)).ToArray()));
+                }
+
+            }
+        }
+        return result;
     }
+
+    public bool TryCardRecipe(int cardId, out ExpertJobCardRecipe recipe) => cardRecipes.TryGetValue(cardId, out recipe!);
+
+    // 六列成功率与0/1/2/3/4/6稀有度的对应为明确声明的兼容推断，可由配置覆盖。
+    public int CardSuccessPercent(int level, byte rarity)
+    {
+        int column = rarity switch { 0 => 0, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 6 => 5, _ => -1 };
+        if (column < 0 || !jobs.TryGetValue(1, out var job) || !job.CardSuccess.TryGetValue(level, out var values)) return 0;
+        return Math.Clamp(values[column], 0, 100);
+    }
+
+    public bool TryLearningRecipe(int itemId, out ExpertJobLearnableRecipe recipe) => learnable.TryGetValue(itemId, out recipe!);
+
+    public byte[] LearnedRarities(IEnumerable<int> recipes) => recipes.Select(id => learnable.GetValueOrDefault(id)?.Rarity)
+        .Where(rarity => rarity.HasValue).Select(rarity => rarity!.Value).Distinct().Order().ToArray();
 
     public int Level(byte job, int experience) => jobs.TryGetValue(job, out var script) ? script.Level(experience) : 1;
 
@@ -136,6 +179,7 @@ internal sealed class ExpertJobScriptCatalog
 
     sealed class JobScript
     {
+        public Dictionary<int, ExpertJobLearnableRecipe> LearningRecipes { get; init; } = [];
         public ExpertJobRate[] Rates { get; init; } = [];
         public Dictionary<int, ExpertJobRecipe> Recipes { get; init; } = [];
         public (int Min, int Max) Gain { get; init; }
@@ -150,6 +194,8 @@ internal sealed class ExpertJobScriptCatalog
         public ExpertJobScriptResult[] DisjointResults { get; init; } = [];
         public HashSet<int> KnownCards { get; init; } = [];
         public ExpertJobMonsterCardExp[] MonsterCard { get; init; } = [];
+        public Dictionary<int, (int RecipeId, int BeadId)> CardProducts { get; init; } = new();
+        public Dictionary<int, int[]> CardSuccess { get; init; } = new();
         public int[] ShopItems { get; init; } = [];
 
         public int Level(int experience)
@@ -184,6 +230,28 @@ internal sealed class ExpertJobScriptCatalog
             var extract = new Dictionary<int, (int Min, int Max)>();
             for (int index = 0; index + 2 < extractExp.Length; index += 3)
                 extract[extractExp[index]] = (extractExp[index + 1], extractExp[index + 2]);
+            var learning = new Dictionary<int, ExpertJobLearnableRecipe>();
+            var cardProducts = new Dictionary<int, (int RecipeId, int BeadId)>();
+            if (rows.Length % 4 == 0)
+                for (int index = 0; index < rows.Length; index += 4)
+                    if (rows[index + 1] > 0 && rows[index + 3] > 0)
+                        learning[rows[index + 1]] = new(rows[index + 1], 1, rows[index + 3], null);
+            foreach (Match match in Regex.Matches(Field(text, "rarity recipe"), @"\[rarity\](.*?)\[/rarity\]", RegexOptions.Singleline))
+            {
+                string block = match.Groups[1].Value;
+                int[] rarity = PvfScript.Integers(block.Split('[', 2)[0]);
+                int[] recipe = PvfScript.Integers(PvfScript.Section(block, "recipe"));
+                int[] level = PvfScript.Integers(PvfScript.Section(block, "expert job level"));
+                if (rarity is [{ } value] && value is >= 0 and <= byte.MaxValue && recipe is [> 0] && level is [> 0])
+                {
+                    learning[recipe[0]] = new(recipe[0], 1, level[0], (byte)value);
+                    int[] products = PvfScript.Integers(PvfScript.BlockAllowingIdenticalDuplicates(block, "base result"));
+                    if (products.Length % 2 == 0)
+                        for (int at = 0; at < products.Length; at += 2)
+                            if (products[at] > 0 && products[at + 1] > 0)
+                                cardProducts[products[at]] = (recipe[0], products[at + 1]);
+                }
+            }
             var recipes = new Dictionary<int, ExpertJobRecipe>();
             if (rows.Length % 4 == 0)
             {
@@ -219,15 +287,22 @@ internal sealed class ExpertJobScriptCatalog
                     if (values[index] > 0) cards.Add(values[index]);
             }
             var monsterRows = new List<ExpertJobMonsterCardExp>();
+            var cardSuccess = new Dictionary<int, int[]>();
             if (monster.Length % 9 == 0)
                 for (int index = 0; index + 8 < monster.Length; index += 9)
+                {
                     monsterRows.Add(new(monster[index], monster[index + 7], monster[index + 8]));
+                    cardSuccess[monster[index]] = monster[(index + 1)..(index + 7)];
+                }
             var shopItems = new List<int>();
             if (shop.Length % 2 == 0)
                 for (int index = 0; index + 1 < shop.Length; index += 2)
                     if (shop[index + 1] > 0) shopItems.Add(shop[index + 1]);
             return new()
             {
+                LearningRecipes = learning,
+                CardProducts = cardProducts,
+                CardSuccess = cardSuccess,
                 Thresholds = thresholds,
                 Gain = gain.Length >= 2 ? (gain[0], gain[1]) : (0, 0),
                 Rates = parsedRates.ToArray(),

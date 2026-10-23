@@ -44,6 +44,8 @@ internal sealed class ItemResources
     public AvatarDyeCatalog AvatarDyes { get; }
     public TeleportCatalog Teleports { get; }
     public SkinStorageCatalog Skins { get; }
+    readonly Lazy<ExpertJobScriptCatalog> expertJobs;
+    public ExpertJobScriptCatalog ExpertJobs => expertJobs.Value;
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
     readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
     public DungeonItemDropCatalog DungeonDropItems => dungeonDropItems.Value;
@@ -68,6 +70,7 @@ internal sealed class ItemResources
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures);
+        expertJobs = new(() => ExpertJobScriptCatalog.Load(archive, Items, stackable));
         CollectBoxes = new(archive, Items);
         CashShop = CashShopCatalog.Load(archive);
         DevilContracts = new(archive, stackable, CashShop);

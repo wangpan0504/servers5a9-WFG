@@ -12,6 +12,8 @@ internal sealed class AccountOwners
     readonly Dictionary<string, AccountState> accounts = new(StringComparer.Ordinal);
     long generation;
     [ThreadStatic] static AccountState? executing;
+    [ThreadStatic] static AccountState? pairFirst;
+    [ThreadStatic] static AccountState? pairSecond;
 
     internal sealed class AccountState
     {
@@ -33,7 +35,8 @@ internal sealed class AccountOwners
 
     static void CheckLockOrder(AccountState state)
     {
-        if (executing is not null && !ReferenceEquals(executing, state))
+        if (executing is not null && !ReferenceEquals(executing, state) &&
+            !ReferenceEquals(pairFirst, state) && !ReferenceEquals(pairSecond, state))
             throw new InvalidOperationException("Cannot nest different account locks");
     }
 
@@ -107,6 +110,41 @@ internal sealed class AccountOwners
         public long Generation => generation;
         // 仅供发布可见性查询；业务写入仍必须使用 Execute，不可用此快照代替锁。
         public bool IsCurrent => ReferenceEquals(Volatile.Read(ref state.Current), this);
+
+        AccountState State => state;
+        AccountOwners Registry => owner;
+
+        // 双账号交易唯一入口：锁按账号名排序，普通单锁不能升级，也不能引入第三账号。
+        public static T ExecuteTogether<T>(Lease first, Lease second, Func<T> action)
+        {
+            if (ReferenceEquals(first.State, second.State) || first.Account == second.Account ||
+                !ReferenceEquals(first.Registry, second.Registry))
+                throw new InvalidOperationException("双账号事务必须属于同一目录中的两个不同账号");
+            if (pairFirst is not null)
+            {
+                if (!(ReferenceEquals(pairFirst, first.State) && ReferenceEquals(pairSecond, second.State) ||
+                    ReferenceEquals(pairFirst, second.State) && ReferenceEquals(pairSecond, first.State)))
+                    throw new InvalidOperationException("双账号事务不能嵌入第三账号");
+                RequireCurrent();
+                return action();
+            }
+            if (executing is not null) throw new InvalidOperationException("不能从单账号锁升级到双账号锁");
+            var low = string.CompareOrdinal(first.Account, second.Account) < 0 ? first : second;
+            var high = ReferenceEquals(low, first) ? second : first;
+            lock (low.State.Gate)
+            lock (high.State.Gate)
+            {
+                RequireCurrent();
+                executing = pairFirst = low.State;
+                pairSecond = high.State;
+                try { return action(); }
+                finally { executing = pairFirst = pairSecond = null; }
+            }
+            void RequireCurrent()
+            {
+                if (!first.IsCurrent || !second.IsCurrent) throw new InvalidOperationException("双账号事务租约已失效");
+            }
+        }
 
         internal void Disconnect() => disconnect();
         public T Execute<T>(Func<T> action)

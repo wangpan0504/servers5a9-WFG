@@ -47,6 +47,7 @@ internal sealed partial class GameSession
             return null;
         Selected = repository.Save(owner, Selected!, plan.Position!, plan.Return);
         InvalidateImageCommunication();
+        InvalidateExpertJobStore();
         return new(Selected, owner.Generation, SelectionEpoch);
     }
 

@@ -184,6 +184,7 @@ internal static class SqliteMigrations
         new(77, "角色制作熟练度", AddItemMakingSkills),
         new(78, "零经验副本死亡与通关回执", ZeroExperienceDungeonSchema.Upgrade),
         new(79, "普通副本任务每日通关计数", static (db, tx) => Execute(db, tx, QuestDailyClearSchema)),
+        new(80, "副职业已学设计图", AddExpertJobRecipes),
     ];
 
     internal const string QuestDailyClearSchema = """
@@ -197,6 +198,21 @@ internal static class SqliteMigrations
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
         """;
+
+    const string ExpertRecipesColumn = "learned_recipes TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(learned_recipes) AND json_type(learned_recipes)='array' AND json_array_length(learned_recipes)<=255)";
+
+    static void AddExpertJobRecipes(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('character_expert_job') WHERE name='learned_recipes'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE character_expert_job ADD COLUMN " + ExpertRecipesColumn);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE name='character_expert_job'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains(ExpertRecipesColumn, StringComparison.Ordinal))
+            throw new InvalidDataException("副职业已学设计图列结构不兼容");
+    }
+
 
     static void AddItemMakingSkills(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1725,7 +1741,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,potion_until,aura_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
-        "SELECT character_id,account,job_type,expertness FROM character_expert_job LIMIT 0",
+        "SELECT character_id,account,job_type,expertness,learned_recipes FROM character_expert_job LIMIT 0",
         "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,day,clear_count,daily_reward FROM character_crack_daily LIMIT 0",

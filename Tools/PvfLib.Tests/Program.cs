@@ -24,6 +24,7 @@ AvatarTypeSelectionTests.Run();
 TutorialFileTests.Run();
 RecoveryConsumableTests.Run();
 RecipeFileTests.Run();
+ExpertRecipeFileTests.Run();
 CreatureFileTests.Run();
 Console.WriteLine($"PASS {TestCheck.Count} PvfLib assertions");
 return 0;

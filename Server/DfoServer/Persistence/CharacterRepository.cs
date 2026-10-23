@@ -315,6 +315,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             ExpBonusPermille = expBonus.Permille,
             ExpertJobType = expertJob.Type,
             ExpertJobExperience = expertJob.Experience,
+            ExpertJobRecipes = expertJob.Recipes,
             ExpertGiveUpState = expertMeta.GiveUpState,
             ExpertMachineGrade = expertMeta.Grade,
             ExpertMachineEndurance = expertMeta.Endurance,

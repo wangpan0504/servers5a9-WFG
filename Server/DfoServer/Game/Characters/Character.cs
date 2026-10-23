@@ -49,6 +49,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public byte ExpertJobType { get; init; }
     // 副职业累计熟练度。Actor 在类型字节后写 u32，客户端装回 I+3B4，按 [expertness exp] 阈值自己显示等级。
     public int ExpertJobExperience { get; init; }
+    public ImmutableHashSet<int> ExpertJobRecipes { get; init; } = ImmutableHashSet<int>.Empty;
     // 放弃次数档。存在 character_expert_meta，删除 character_expert_job 后仍保留。
     public int ExpertGiveUpState { get; init; }
     // 分解机当前档；脚本 [upgrade cost] 首键为 1。

@@ -5,11 +5,12 @@ using DfoServer.Network.Builders;
 using DfoServer.GameWorld.Channels;
 using DfoServer.Game.Town;
 using DfoServer.Game.Settings;
+using DfoServer.Game.ExpertJob;
 
 namespace DfoServer.Network.Projection;
 
 internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = default, TimeProvider? clock = null,
-    GameDebugSettings? debugSettings = null)
+    GameDebugSettings? debugSettings = null, ExpertJobStoreBoard? expertStores = null)
 {
     sealed record Scene(ChannelIdentity Channel, byte Town, byte Area, string Map, string? RoomAccount);
     sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, string adventureName)
@@ -28,6 +29,14 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     readonly Dictionary<ushort, Member> characters = [];
     readonly Dictionary<Scene, HashSet<Member>> scenes = [];
     long serial;
+    public bool CanInteract(AccountOwners.Lease first, ushort firstId, AccountOwners.Lease second, ushort secondId)
+    {
+        lock (gate)
+            return characters.TryGetValue(firstId, out var a) && characters.TryGetValue(secondId, out var b) &&
+                ReferenceEquals(a.Owner, first) && ReferenceEquals(b.Owner, second) && first.IsCurrent && second.IsCurrent &&
+                a.Scene == b.Scene && a.Scene.RoomAccount is null;
+    }
+
     Scene SceneOf(AccountOwners.Lease owner, Character character, ChannelIdentity identity)
     {
         // 与聊天共用 TownCatalog.Scene 的场景定位（PVF 地图阶段 + 房间判定），避免两处各算一份；
@@ -65,6 +74,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         if (!members.Remove(sender, out var departed))
             return;
         characters.Remove(departed.Character.Id);
+        expertStores?.TryClose(departed.Character.Id, out _);
         var scene = scenes[departed.Scene];
         scene.Remove(departed);
         if (scene.Count == 0)
@@ -98,6 +108,11 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             {
                 sender.Enter(Projection(peer, joined, Capture(peer)));
                 peer.Sender.Enter(Projection(joined, peer, bodies));
+                if (expertStores?.TryGet(peer.Character.Id, out var store) == true)
+                    sender.Post(0, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE,
+                        ExpertJobPackets.CreateStoreNotice(store.Mode, store.OwnerId, store.Name, null, 0,
+                            store.First, store.Second, store.Third, store.Fourth), "expert_job_existing_store",
+                        () => Visible(peer, joined) && expertStores.TryGet(store.OwnerId, out var live) && live.Instance == store.Instance);
             }
 
             return true;

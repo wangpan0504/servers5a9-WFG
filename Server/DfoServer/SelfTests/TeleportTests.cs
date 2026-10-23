@@ -23,6 +23,17 @@ internal static class TeleportTests
 
     public static void RunCore()
     {
+        using (var store = new Fixture())
+        {
+            store.Sql("INSERT INTO character_expert_job(character_id,account,job_type,expertness) SELECT id,account,3,51 FROM characters");
+            store.Session.Select(0); store.Session.MarkReady();
+            var quote = new DfoServer.Game.ExpertJob.ExpertJobStoreRecord(store.Session.Selected!.Id, 3, 0, "", 1, 0, 0, 0, 1, 300);
+            That(store.Session.OpenExpertJobStore(), "传送夹具开设副职业店");
+            store.Session.QuoteExpertJobStore(quote);
+            var result = store.Session.TeleportPotion(store.Request, store.Service);
+            That(result.Receipt is not null && !store.Session.ExpertJobStoreOpen && !store.Session.MatchesExpertJobStoreQuote(quote),
+                "Town内传送也清除旧店铺与旧报价");
+        }
         PendingQuestTransactions();
         PotionGateModes();
         var potion = TeleportRequests.Potion(Convert.FromHexString("41004EAC27000026002F05EA0001"));

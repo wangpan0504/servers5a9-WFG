@@ -2,21 +2,26 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Town;
 using Microsoft.Data.Sqlite;
+using System.Collections.Immutable;
+using System.Text.Json;
 
 namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
-    static (byte Type, int Experience) ReadExpertJob(SqliteConnection db, ushort id, SqliteTransaction? tx)
+    static (byte Type, int Experience, ImmutableHashSet<int> Recipes) ReadExpertJob(SqliteConnection db, ushort id, SqliteTransaction? tx)
     {
         using var query = db.CreateCommand(); query.Transaction = tx;
-        query.CommandText = "SELECT job_type,expertness FROM character_expert_job WHERE character_id=$id";
+        query.CommandText = "SELECT job_type,expertness,learned_recipes FROM character_expert_job WHERE character_id=$id";
         query.Parameters.AddWithValue("$id", id);
         using var reader = query.ExecuteReader();
-        if (!reader.Read()) return (0, 0);
+        if (!reader.Read()) return (0, 0, ImmutableHashSet<int>.Empty);
         int type = reader.GetInt32(0), experience = reader.GetInt32(1);
         if (type is < 1 or > 4 || experience < 0) throw new InvalidDataException("副职业类型超出已确认范围");
-        return ((byte)type, experience);
+        int[] recipes = JsonSerializer.Deserialize<int[]>(reader.GetString(2)) ?? throw new InvalidDataException("副职业配方为空值");
+        if (recipes.Length > byte.MaxValue || recipes.Any(id => id <= 0) || recipes.Distinct().Count() != recipes.Length)
+            throw new InvalidDataException("副职业已学设计图集合非法");
+        return ((byte)type, experience, recipes.ToImmutableHashSet());
     }
 
     static (int GiveUpState, int Grade, int Endurance) ReadExpertMeta(SqliteConnection db, ushort id, SqliteTransaction? tx)

@@ -168,41 +168,16 @@ internal static class ExpertJobCraft
         var result = enchantments.Plan(character, use, utcSeconds);
         if (!result.Accepted || result.Plan is null)
         {
-            if (!TryPlanCardEnchant(character, scripts, source, target, utcSeconds, out inventory, out experience))
-            {
-                error = result.Error == 0 ? (ushort)19 : result.Error;
-                return false;
-            }
-            return true;
+            // 卡片路径还需配方、材料、费用和目标适用约束，不能把任意已知卡直接写进装备冒充附魔成功。
+            // 已有宝珠服务的完整校验保持不变；未闭合卡片结算不扣源、不增长熟练度。
+            error = result.Error == 0 ? (ushort)19 : result.Error;
+            return false;
         }
+
         inventory = result.Plan;
         var bead = character.Inventory.Find(source);
         if (bead is not null)
             experience = AddCardExp(character, scripts, experience, _ => 0);
-        return true;
-    }
-
-    static bool TryPlanCardEnchant(Character character, ExpertJobScriptCatalog scripts, InventorySlot source,
-        InventorySlot target, long utcSeconds, out InventoryPlan inventory, out int experience)
-    {
-        inventory = null!;
-        experience = character.ExpertJobExperience;
-        var card = character.Inventory.Find(source);
-        var gear = character.Inventory.Find(target);
-        if (card is null || gear is null || card.Uid <= 0 || gear.Uid <= 0 || source == target ||
-            !scripts.IsKnownCard(1, card.Core.ItemId) || gear.Core.Kind != ItemKind.Equipment ||
-            gear.Core.IsStackable || card.Core.EquipmentLockId != 0 || gear.Core.EquipmentLockId != 0 ||
-            card.IsExpired(utcSeconds) || gear.IsExpired(utcSeconds))
-            return false;
-        var consumed = InventoryDeleteService.Plan(character.Inventory, source, card.Core.ItemId, 1);
-        if (!consumed.Accepted || consumed.Plan is null) return false;
-        var changed = gear with { Core = gear.Core with { EnchantCardId = card.Core.ItemId, EnchantUpgrade = 0 } };
-        var after = consumed.Plan.After.Find(target) is { } remaining
-            ? consumed.Plan.After with { Items = consumed.Plan.After.Items.Replace(remaining, changed) }
-            : consumed.Plan.After;
-        after.Validate();
-        inventory = new(character.Inventory, after, "expert_job_enchant_card");
-        experience = AddCardExp(character, scripts, character.ExpertJobExperience, _ => 0);
         return true;
     }
 

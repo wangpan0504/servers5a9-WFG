@@ -14,12 +14,38 @@ namespace DfoServer.Network.Handlers.Inventory;
 internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, ServerLog log,
     TutorialCatalog? tutorials = null, ItemCatalog? items = null, InventoryProjection? inventory = null,
     InventoryPremiumContractUseService? contracts = null, Game.Creatures.CreatureService? creatures = null,
-    Projection.CreatureProjection? creatureProjection = null, Projection.TownProjection? town = null) : IGameCommandModule
+    Projection.CreatureProjection? creatureProjection = null, Projection.TownProjection? town = null,
+    Game.ExpertJob.ExpertJobLearning? expertLearning = null, ExpertJobScriptCatalog? expertJobs = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE, Handle, nameof(ConsumableUseHandler));
 
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
     {
+        var recipeRequest = expertLearning is not null && packet.Body.Length == 15 ? StackableUseRequests.Parse(packet.Body) : null;
+        if (recipeRequest is not null && expertLearning!.Recognizes(recipeRequest.ItemId) && expertJobs is not null)
+        {
+            var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+            var learned = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(123) :
+                context.Session.LearnExpertJobRecipe(recipeRequest.Position, recipeRequest.ItemId, expertLearning);
+            bool Guard() => learned.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
+                context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, captured.Selected) &&
+                    context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase);
+            log.Write("consumable_use", new { Connection = context.Id, Item = recipeRequest.ItemId, Slot = recipeRequest.Position.Index,
+                Accepted = learned.Accepted, Reason = "expert-job-recipe", Character = captured.Selected?.Id });
+            await context.Reply(CmdPacketType.USE_STACKABLE, StackableUsePackets.Result((ushort)recipeRequest.Position.Index,
+                0, recipeRequest.Token, recipeRequest.ItemId, learned.Error), "expert_job_recipe_learned", Guard);
+            if (learned.Accepted && learned.Receipt is { } committed)
+            {
+                if (inventory is not null) await inventory.RefreshAsync(context, learned,
+                    acknowledgedSlots: new HashSet<InventorySlot> { recipeRequest.Position });
+                expertJobs.TryLearningRecipe(recipeRequest.ItemId, out var definition);
+                // 205 的配方列表重建，稀有度列表只追加；成功时只发送本次新资格，避免重复通知持续追加。
+                await context.Notify(NotiPacketType.EXPERT_JOB_INFO,
+                    ExpertJobPackets.Info(committed.Character, expertJobs, learnedRarity: definition.Rarity),
+                    "expert_job_recipe_info", Guard);
+            }
+            return CommandResult.Handled;
+        }
         if (creatures is not null && packet.Body.Length == 15)
         {
             var feedRequest = ConsumableUseRequests.Read(packet.Body);

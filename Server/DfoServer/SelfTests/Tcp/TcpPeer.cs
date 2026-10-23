@@ -483,7 +483,7 @@ internal sealed class TcpPeer : IDisposable
         byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false, ushort avatarExpansion = 105,
         (int[] Owned, int Selected)? weaponSkins = null,
         (SkinOwnership[] Owned, int Selected)? damageFonts = null,
-        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null)
+        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null)
     {
         if (!resumeTown && !requestedRoster)
             Send(8, [255, 255, 2]);
@@ -684,6 +684,7 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(expansionSlots % 8 == 0 && (expansionSlots >> 3) <= 3,
             "client expansion reader stays within its three-stage table");
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
+        if (expertJobInfo is not null) Expect(0, 205, expertJobInfo);
         ReadWeeklyDungeon();
         return packets.ToArray();
 

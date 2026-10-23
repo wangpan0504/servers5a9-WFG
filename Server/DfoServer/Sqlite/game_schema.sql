@@ -73,6 +73,7 @@ CREATE TABLE character_expert_job(
   account TEXT NOT NULL,
   job_type INTEGER NOT NULL CHECK(job_type BETWEEN 1 AND 4),
   expertness INTEGER NOT NULL DEFAULT 0 CHECK(expertness>=0),
+  learned_recipes TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(learned_recipes) AND json_type(learned_recipes)='array' AND json_array_length(learned_recipes)<=255),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
 CREATE TABLE character_expert_meta(

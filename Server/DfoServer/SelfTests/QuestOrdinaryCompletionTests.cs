@@ -856,7 +856,8 @@ internal static class QuestOrdinaryCompletionTests
         var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
         var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
-        var scripts = ExpertJobScriptCatalog.Load(pvf, items.Items);
+        var scripts = items.ExpertJobs;
+        ExpertJobLearningTests.Run(towns, items, scripts);
         NewCharacter Level20(NewCharacter source) => source with
         {
             Level = 20,

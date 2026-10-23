@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Chat;
+using DfoServer.Game.Inventory.Models;
 using System.Collections.Concurrent;
 
 namespace DfoServer.Game.Session;
@@ -12,7 +13,10 @@ internal sealed record OnlineCharacterSnapshot(string Account, ushort CharacterI
 /// （opcode 由调用方决定：<c>0x000C</c>/<c>0x03E2</c>/<c>0x06AD</c>，见 <see cref="Network.Builders.ChatProbes"/>
 /// 与 <see cref="Network.Builders.ServerNoticePackets"/>）。
 /// </summary>
-internal sealed record ChatProbeConnection(int ConnectionId, GameSession Session, Action<ushort, byte[], string> Probe);
+internal sealed record OnlineExpertJobConnection(Func<bool> TryReserve, Action Release,
+    Func<bool> BlocksActions, Action Disconnect, Func<InventoryResult, byte[], Task> Publish);
+internal sealed record ChatProbeConnection(int ConnectionId, GameSession Session, Action<ushort, byte[], string> Probe,
+    OnlineExpertJobConnection? ExpertJob = null);
 
 // GM、在线协议与聊天共用同一会话索引，不复制角色或就绪状态。
 internal sealed class OnlineSessionDirectory
@@ -28,8 +32,8 @@ internal sealed class OnlineSessionDirectory
     public GameSession? Find(string account) => sessions.TryGetValue(account, out var session) ? session : null;
 
     /// <summary>登记一条已认证连接；<paramref name="probe"/> 只负责把 opcode 与正文入本连接发送队列。</summary>
-    public void RegisterConnection(int connectionId, GameSession session, Action<ushort, byte[], string> probe) =>
-        connections[connectionId] = new(connectionId, session, probe);
+    public void RegisterConnection(int connectionId, GameSession session, Action<ushort, byte[], string> probe, OnlineExpertJobConnection? expertJob = null) =>
+        connections[connectionId] = new(connectionId, session, probe, expertJob);
 
     /// <summary>按连接号查找在线会话；找不到返回 <c>null</c>（GM 据此回 ERR，不抛异常）。</summary>
     public ChatProbeConnection? FindConnection(int connectionId) =>
@@ -39,6 +43,9 @@ internal sealed class OnlineSessionDirectory
     /// 按角色名定位当前在线连接（GM <c>notice &lt;角色名&gt;</c> 的定向公告）。
     /// 只比较已选角会话的角色名；角色不在线返回 <c>null</c>，由调用方回 ERR。
     /// </summary>
+    public ChatProbeConnection? FindConnectionByCharacterId(ushort id) =>
+        connections.Values.FirstOrDefault(connection => connection.Session.OnlineCharacter()?.CharacterId == id);
+
     public ChatProbeConnection? FindConnectionByCharacterName(string name) =>
         connections.Values.FirstOrDefault(connection =>
             string.Equals(connection.Session.OnlineCharacter()?.Name, name, StringComparison.OrdinalIgnoreCase));

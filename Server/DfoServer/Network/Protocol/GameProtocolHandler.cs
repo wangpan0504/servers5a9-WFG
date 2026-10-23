@@ -23,7 +23,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.GameWorld.Quests.QuestStageGraph? stageGraph = null, DfoServer.GameWorld.Items.BoosterCatalog? boosters = null,
     NativeChannel? native = null, DfoServer.GameWorld.Items.ItemCatalog? items = null,
     ExperienceBonusService? experienceBonuses = null,
-    DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null) : IConnectionProtocol
+    DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null, DfoServer.Game.ExpertJob.ExpertJobStoreBoard? expertStores = null,
+    TownPresence? presence = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -71,6 +72,12 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         // 聊天投递入口绑定本条连接：服务端从在线会话目录按快照选中本会话后，由这里把 0x0C/0x76 入本连接队列。
         session.ChatNoticeArrived = notice => ChatProjection.Notice(context, notice);
+        session.ExpertJobStoreClosed = id =>
+        {
+            if (expertStores?.TryClose(id, out _) == true)
+                presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.CLOSE_EXPERT_JOB_STORE,
+                    ExpertJobPackets.CloseStoreNotice(id), "expert_job_store_invalidated");
+        };
         NativeChannel.Registration? nativeRegistration = null;
         try
         {
@@ -78,7 +85,23 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             // GM 聊天帧注入按连接号定位：回调只把候选 opcode/正文入本连接队列，就绪与角色守卫在发送泵内复核。
             online.RegisterConnection(connection.Id, session, (opcode, body, action) =>
                 sender.Post(0, opcode, body, action,
-                    () => session.Ready && session.Selected is not null));
+                    () => session.Ready && session.Selected is not null),
+                new OnlineExpertJobConnection(
+                    () => !connection.Stop.IsCancellationRequested && context.CommandGate.Wait(0),
+                    () => context.CommandGate.Release(),
+                    () => connection.Stop.IsCancellationRequested || context.Activity?.BlocksTownActions == true,
+                    context.Disconnect,
+                    async (result, info) =>
+                    {
+                        if (result.Receipt is not { } receipt || inventory is null) return;
+                        bool Guard() => session.CanPublishInventory(receipt);
+                        await inventory.RefreshAsync(context, result);
+                        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Channel,
+                            adventureName: session.ReadAdventureName(), premiumPcRoom: session.PremiumPcRoom),
+                            "expert_job_customer_owner_actor", Guard);
+                        await context.Notify(NotiPacketType.EXPERT_JOB_INFO, info, "expert_job_customer_owner_info", Guard);
+                        projection.Refresh(context);
+                    }));
             nativeRegistration = native?.Register(context);
             adventure?.Prepare(context);
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options),
@@ -108,6 +131,10 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 // 成功应答在提交之后才发送，重试期间客户端不会先收到成功。
                 var (dispatched, result) = await SqliteBusyRetry.TryExecuteAsync(async () =>
                 {
+                    // 另一连接的副职业交易会保留本门禁到发布完成；日周期也不能绕过它替换 Selected。
+                    await context.CommandGate.WaitAsync(connection.Stop);
+                    try
+                    {
                     if (session.AdvanceQuestCycle(DateTimeOffset.UtcNow) is { } cycle)
                     {
                         bool Guard() => session.CanPublishQuestCycle(cycle);
@@ -117,6 +144,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         if (cycle.Phase == SessionPhase.Town && quests is not null)
                             await new QuestProjection(quests).RefreshAsync(context, cycle.Character, Guard);
                     }
+                    }
+                    finally { context.CommandGate.Release(); }
                     return await commands.DispatchAsync(context, request);
                 }, connection.Stop, (error, attempts) => LogBusy("dispatch", request, name, attempts, error));
                 // 瞬时忙锁不是连接故障：丢掉这一包继续读下一帧，会话保持在线；其它数据库错误仍按原语义关闭连接。

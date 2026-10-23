@@ -17,10 +17,9 @@ internal static class ExpertJobProtocolTests
             "ACK 239 重载写入实际金币与放弃档");
         That(ExpertJobPackets.CompoundEmpty() is [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             "ACK 238 count=0 仍带两个 u32 和一个 u8");
-        That(ExpertJobPackets.EnchantStoreSuccess() is [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            "ACK 601 成功是 flag:u8 + u32 + u8 + 三个 u32");
-        That(ExpertJobPackets.DisjointEmpty() is [1, 0, 0, 0, 0, 0, 0] && ExpertJobPackets.CreateStoreSuccess() is [1],
-            "ACK 235 空产物与 ACK 598 无附加正文");
+        That(ExpertJobPackets.EnchantStoreSuccess(299, 5, 1) is [1, 1, 0, 0, 0, 0, 0, 43, 1, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0],
+            "ACK601第一个尾u32必须为真实耐久，不得用0覆盖205");
+        That(ExpertJobPackets.CreateStoreSuccess() is [1], "ACK 598 无附加正文");
         That(ExpertJobPackets.CloseStoreNotice(0x1234) is [0x34, 0x12], "NOTI 539 只有 actor:u16");
         That(ExpertJobPackets.CreateStoreNotice(0, 0x1234) is
                 [0, 0x34, 0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -36,6 +35,11 @@ internal static class ExpertJobProtocolTests
             "NOTI 205 炼金是 3+4n");
         That(ExpertJobPackets.Info(1, [], 1, 0) is [0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
             "NOTI 205 附魔师即使 m=0 也带资格表和两个 u32");
+        That(ExpertJobPackets.Info(1, [10015129], 1, 300, [0], 2) is
+            [2, 1, 1, 153, 209, 152, 0, 1, 0, 1, 0, 0, 0, 44, 1, 0, 0],
+            "205完整投影已学设计图、稀有度资格、放弃档和耐久");
+        Reject<InvalidDataException>(() => ExpertJobPackets.Info(1, Enumerable.Range(1, 256).ToArray()),
+            "205不得静默截断已学列表");
         var extraction = ExpertJobRequests.ReadExtraction([2, 3, 0, 0, 4, 0]);
         That(extraction is { ExtractorType: 2, ExtractorSlot: 3, TargetList: 0, TargetSlot: 4 },
             "C2S 416 是 u8+i16+u8+i16");
@@ -49,7 +53,9 @@ internal static class ExpertJobProtocolTests
         That(enchant is { First: 1, Second: 2, Third: 2, Fourth: 0, Fifth: 3, Sixth: 0, Seventh: 4 },
             "C2S 601 是 u16+u32+u8+u8+u16+u8+u16");
         var disjoint = ExpertJobRequests.ReadDisjoint([1, 0, 2, 0, 3]);
-        That(disjoint is { First: 1, Second: 2, Third: 3 }, "C2S 235 是 u16+u16+u8");
+        That(disjoint is { OwnerActor: 1, SourceSlot: 2, SourceList: 3 }, "C2S 235 是店主演员、源槽和源列表");
+        Reject<InvalidDataException>(() => ExpertJobRequests.ReadDisjoint([1, 0, 2, 0]), "235 拒绝缺失源列表");
+        Reject<InvalidDataException>(() => ExpertJobRequests.ReadDisjoint([1, 0, 2, 0, 0, 0]), "235 拒绝多余尾部");
         var store = ExpertJobRequests.ReadCreateStore([0, 0, 0, 0, 0, 7, 0, 0, 0, 8, 0, 9, 0, 10, 0]);
         That(store is { Mode: 0, Name: "", First: 7, Second: 8, Third: 9, Fourth: 10 },
             "C2S 598 是 mode:u8 + 03BDF850 字符串 + u32 + 三个 u16");

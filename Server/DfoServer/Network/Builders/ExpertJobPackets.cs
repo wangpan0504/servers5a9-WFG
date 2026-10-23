@@ -25,6 +25,21 @@ internal static class ExpertJobPackets
         return stream.ToArray();
     }
 
+    // ACK235 必须带金币和耐久尾部；所有产物都来自已提交的实际回执。
+    public static byte[] DisjointResult(ushort owner, DfoServer.Game.Inventory.Models.DisjointReceipt receipt, uint gold, uint endurance)
+    {
+        if (receipt.Rewards.Length > byte.MaxValue || receipt.Rewards.Any(row => row.Slot < 0 || row.ItemId <= 0 || row.Count <= 0))
+            throw new InvalidDataException("机器分解回执超出已确认包体");
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1); writer.Write((ushort)receipt.Request.Position.Index);
+        writer.Write((byte)receipt.Request.Position.List); writer.Write(owner); writer.Write((byte)receipt.Rewards.Length);
+        foreach (var row in receipt.Rewards)
+        { writer.Write((ushort)row.Slot); writer.Write(row.ItemId); writer.Write(row.Count); }
+        writer.Write(gold); writer.Write(endurance);
+        return stream.ToArray();
+    }
+
     // ACK 238 0236F770：count 次 (物品 u32, 数量 u32)，随后两个 u32 和一个 u8。
     public static byte[] CompoundResult(IReadOnlyList<(int ItemId, int Count)> items, uint successCount, uint failureCount)
     {
@@ -49,30 +64,17 @@ internal static class ExpertJobPackets
     public static byte[] CompoundEmpty() => CompoundResult([], 0, 0);
 
     // ACK 601 0234FE71：u8 标志非 0 才 event17(11009)，随后 u32、u8、三个 u32。
-    public static byte[] EnchantStoreSuccess()
+    public static byte[] EnchantStoreSuccess(uint endurance, uint level, uint rarity, bool succeeded = true)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write((byte)1);
-        writer.Write((byte)1);
+        writer.Write((byte)(succeeded ? 1 : 0));
         writer.Write(0u);
         writer.Write((byte)0);
-        writer.Write(0u);
-        writer.Write(0u);
-        writer.Write(0u);
-        return stream.ToArray();
-    }
-
-    // ACK 235 0236FE2E：u16、u8、u16，再 u8 条目计数；0 跳过产物循环。
-    public static byte[] DisjointEmpty()
-    {
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream);
-        writer.Write((byte)1);
-        writer.Write((ushort)0);
-        writer.Write((byte)0);
-        writer.Write((ushort)0);
-        writer.Write((byte)0);
+        writer.Write(endurance);
+        writer.Write(level);
+        writer.Write(rarity);
         return stream.ToArray();
     }
 
@@ -134,13 +136,16 @@ internal static class ExpertJobPackets
     }
 
     // NOTI 205 023D81A0：state:u8、mode:u8。mode1 为 n×u32 配方、m×u8 资格、再两个 u32；mode2/4 只有配方；mode3 是档位+耐久。
-    public static byte[] Info(byte mode, IReadOnlyList<int> recipes, uint first = 0, uint second = 0)
+    public static byte[] Info(byte mode, IReadOnlyList<int> recipes, uint first = 0, uint second = 0,
+        IReadOnlyList<byte>? rarities = null, byte giveUpState = 0)
     {
         if (mode is 0 or > 4) throw new InvalidDataException("NOTI 205 不使用 mode 0 发布副职业");
-        var list = recipes.Count > byte.MaxValue ? recipes.Take(byte.MaxValue).ToArray() : recipes;
+        if (recipes.Count > byte.MaxValue || rarities?.Count > byte.MaxValue)
+            throw new InvalidDataException("副职业学习列表超出协议容量");
+        var list = recipes;
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
-        writer.Write((byte)0);
+        writer.Write(giveUpState);
         writer.Write(mode);
         if (mode is 1 or 2 or 4)
         {
@@ -148,7 +153,9 @@ internal static class ExpertJobPackets
             foreach (int id in list) writer.Write((uint)id);
             if (mode == 1)
             {
-                writer.Write((byte)0);
+                writer.Write(checked((byte)(rarities?.Count ?? 0)));
+                if (rarities is not null)
+                    foreach (byte rarity in rarities) writer.Write(rarity);
                 writer.Write(first);
                 writer.Write(second);
             }
@@ -161,16 +168,18 @@ internal static class ExpertJobPackets
         return stream.ToArray();
     }
 
-    public static byte[] Info(DfoServer.Game.Characters.Character character, DfoServer.GameWorld.Items.ExpertJobScriptCatalog scripts)
+    public static byte[] Info(DfoServer.Game.Characters.Character character, DfoServer.GameWorld.Items.ExpertJobScriptCatalog scripts,
+        bool includeQualifications = false, byte? learnedRarity = null)
     {
         byte mode = character.ExpertJobType;
         int level = scripts.Level(mode, character.ExpertJobExperience);
-        var recipes = scripts.UnlockedRecipes(mode, level);
+        var recipes = mode == 1 ? character.ExpertJobRecipes.Order().ToArray() : scripts.UnlockedRecipes(mode, level);
+        byte[] rarities = includeQualifications ? scripts.LearnedRarities(recipes) : learnedRarity is { } rarity ? [rarity] : [];
         return mode switch
         {
-            3 => Info(3, [], (uint)character.ExpertMachineGrade, (uint)character.ExpertMachineEndurance),
-            1 => Info(1, recipes, (uint)level, (uint)character.ExpertMachineEndurance),
-            2 or 4 => Info(mode, recipes),
+            3 => Info(3, [], (uint)character.ExpertMachineGrade, (uint)character.ExpertMachineEndurance, giveUpState: (byte)character.ExpertGiveUpState),
+            1 => Info(1, recipes, (uint)level, (uint)character.ExpertMachineEndurance, rarities, (byte)character.ExpertGiveUpState),
+            2 or 4 => Info(mode, recipes, giveUpState: (byte)character.ExpertGiveUpState),
             _ => throw new InvalidDataException("NOTI 205 只发布类型 1–4")
         };
     }

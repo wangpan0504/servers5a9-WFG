@@ -132,6 +132,29 @@ internal static class DisjointTcpTests
             peer.Send(26, new byte[8]);
             peer.Closed();
         }
+        fixture.Sql("INSERT INTO character_expert_job(character_id,account,job_type,expertness) " +
+            "SELECT id,account,3,51 FROM characters");
+        fixture.Sql("INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) " +
+            "SELECT id,0,10021,1,'11223344556677889900112233445566' FROM characters");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(inventoryNotices: [(1, 713), (0, 251)], expertJobInfo: [0, 3, 1, 0, 0, 0, 44, 1, 0, 0]);
+            peer.Send(598, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            peer.Expect(1, 598, [1]);
+            string before = ProfessionSnapshot();
+            foreach (byte[] request in new byte[][]
+            {
+                Build(writer => { writer.Write(peer.Id); writer.Write((ushort)12); writer.Write((byte)0); }),
+                Build(writer => { writer.Write(peer.Id); writer.Write(ushort.MaxValue); writer.Write((byte)0); }),
+                [1, 0, 2, 0], [1, 0, 2, 0, 0, 0]
+            })
+            {
+                peer.Send(235, request);
+                peer.Expect(1, 235, [0, 19, 0]);
+                peer.Barrier();
+                That(ProfessionSnapshot() == before, "235 拒绝保持源装备、钱包、revision、熟练度、耐久与教程条件，不发送截断成功");
+            }
+        }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "disjoint TCP database integrity");
@@ -185,6 +208,9 @@ internal static class DisjointTcpTests
                 U32(full, legendary + 2) == 10099775 && U32(full, legendary + 6) == totals[10099775],
                 "epic and legendary wallet rows retain item identity across reconnect");
         }
+        string ProfessionSnapshot() => Snapshot() + fixture.Snapshot("SELECT * FROM character_expert_job") +
+            fixture.Snapshot("SELECT * FROM character_expert_meta") +
+            fixture.Snapshot("SELECT * FROM character_active_main_quests");
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT currency_kind,balance FROM account_currency_balances ORDER BY currency_kind")) +

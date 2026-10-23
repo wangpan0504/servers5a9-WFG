@@ -1,4 +1,6 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Items;
@@ -11,7 +13,51 @@ internal sealed record ExpertJobGiveUpResult(ushort Error, string Reason, Charac
 
 internal sealed partial class GameSession
 {
+    internal AccountOwners.Lease ExpertJobOwner => owner;
+    ICharacterRepository ExpertJobRepository => repository;
+    public Character? CaptureExpertJobTrade() => owner.Execute(() => CanUseExpertJob() ? Selected : null);
+
+    public static (InventoryResult Customer, InventoryResult Owner)? CommitExpertJobTrade(
+        GameSession customer, GameSession provider, ExpertJobTradePlan plan, Func<bool> eligible)
+    {
+        return AccountOwners.Lease.ExecuteTogether<(InventoryResult, InventoryResult)?>(customer.ExpertJobOwner, provider.ExpertJobOwner, () =>
+        {
+            if (!ReferenceEquals(customer.ExpertJobRepository, provider.ExpertJobRepository) || !customer.CanUseExpertJob() || !provider.CanUseExpertJob() ||
+                !provider.expertJobStoreOpen || !ReferenceEquals(customer.Selected, plan.CustomerExpected) ||
+                !ReferenceEquals(provider.Selected, plan.OwnerExpected) || !eligible()) return null;
+            ExpertJobTradeCommit committed;
+            try { committed = customer.ExpertJobRepository.CommitExpertJobTrade(customer.ExpertJobOwner, provider.ExpertJobOwner, plan); }
+            catch (InventoryQualificationExpiredException) { return null; }
+            customer.Selected = committed.Customer;
+            provider.Selected = committed.Owner;
+            return (Result(customer, committed.Customer, plan.CustomerExpected, plan.CustomerInventory),
+                Result(provider, committed.Owner, plan.OwnerExpected, plan.OwnerInventory));
+        });
+        static InventoryResult Result(GameSession session, Character current, Character before, InventoryPlan inventory) =>
+            new(true, 0, inventory)
+            {
+                Receipt = new(current, session.ExpertJobOwner.Generation, session.SelectionEpoch)
+                { Phase = session.Phase, PreviousQuests = before.ActiveMainQuests, PreviousSkillSwitchInventory = before.SkillSwitchInventory }
+            };
+    }
+
+    public Action<ushort>? ExpertJobStoreClosed { get; set; }
+    void InvalidateExpertJobStore(bool publish = true)
+    {
+        bool wasOpen = expertJobStoreOpen;
+        expertJobStoreOpen = false; expertJobStoreQuote = null;
+        if (publish && wasOpen && owner.IsCurrent && Selected is { } character) ExpertJobStoreClosed?.Invoke(character.Id);
+    }
     bool expertJobStoreOpen;
+    (ushort Owner, Guid Instance, long Epoch)? expertJobStoreQuote;
+    public void QuoteExpertJobStore(ExpertJobStoreRecord store) => owner.Execute(() =>
+    {
+        expertJobStoreQuote = (store.OwnerId, store.Instance, SelectionEpoch);
+        return true;
+    });
+    public bool MatchesExpertJobStoreQuote(ExpertJobStoreRecord store) => owner.Execute(() =>
+        expertJobStoreQuote is { } quote && quote.Owner == store.OwnerId && quote.Instance == store.Instance && quote.Epoch == SelectionEpoch);
+
 
     public bool ExpertJobStoreOpen => owner.Execute(() => expertJobStoreOpen);
 
@@ -73,6 +119,44 @@ internal sealed partial class GameSession
         Selected = committed;
         return committed;
     });
+
+    public InventoryResult CommitExpertJobAction(DfoServer.Game.ExpertJob.ExpertJobActionPlan plan) => owner.Execute(() =>
+    {
+        if (!CanUseExpertJob() || !ReferenceEquals(Selected, plan.Expected)) return InventoryResult.Reject(19);
+        Character committed;
+        try { committed = repository.CommitExpertJobAction(owner, plan); }
+        catch (InventoryQualificationExpiredException) { return InventoryResult.Reject(19); }
+        Selected = committed;
+        return new InventoryResult(true, 0, plan.Inventory)
+        {
+            Receipt = new(committed, owner.Generation, SelectionEpoch)
+            { Phase = Phase, PreviousQuests = plan.Expected.ActiveMainQuests, PreviousSkillSwitchInventory = plan.Expected.SkillSwitchInventory }
+        };
+    });
+
+    public InventoryResult LearnExpertJobRecipe(InventorySlot slot, int itemId, DfoServer.Game.ExpertJob.ExpertJobLearning learning)
+    {
+        var captured = owner.Execute(() => (Character: CanUseExpertJob() ? Selected : null, SelectionEpoch, Phase));
+        if (captured.Character is not { } expected || learning.Plan(expected, slot, itemId) is not { } plan)
+            return InventoryResult.Reject(123);
+        return owner.Execute(() =>
+        {
+            if (!CanUseExpertJob() || SelectionEpoch != captured.SelectionEpoch || Phase != captured.Phase ||
+                !ReferenceEquals(Selected, expected)) return InventoryResult.Reject(123);
+            Character committed;
+            try { committed = repository.CommitExpertJobLearning(owner, plan); }
+            catch (InventoryQualificationExpiredException) { return InventoryResult.Reject(123); }
+            Selected = committed;
+            return new InventoryResult(true, 0, plan.Inventory)
+            {
+                Receipt = new(committed, owner.Generation, SelectionEpoch)
+                {
+                    Phase = Phase, PreviousQuests = expected.ActiveMainQuests,
+                    PreviousSkillSwitchInventory = expected.SkillSwitchInventory
+                }
+            };
+        });
+    }
 
     public bool CanPublishExpertJobGiveUp(ExpertJobGiveUpResult result) => owner.Execute(() =>
         result.Generation == owner.Generation && result.Epoch == SelectionEpoch && result.Phase == Phase &&
