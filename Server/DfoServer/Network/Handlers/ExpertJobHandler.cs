@@ -304,34 +304,33 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
 
     async Task<CommandResult> CreateStoreAsync(GameConnectionContext context, Packet packet)
     {
-        try { _ = ExpertJobRequests.ReadCreateStore(packet.Body); }
+        ExpertJobCreateStoreRequest parsed;
+        try { parsed = ExpertJobRequests.ReadCreateStore(packet.Body); }
         catch (InvalidDataException)
         {
             await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_store_malformed");
             return CommandResult.Handled;
         }
-        if (context.Activity?.BlocksTownActions == true || !context.Session.OpenExpertJobStore())
-        {
-            await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_store_rejected");
-            return CommandResult.Handled;
-        }
-        var parsed = ExpertJobRequests.ReadCreateStore(packet.Body);
         var character = context.Owner.Execute(() => context.Session.Selected);
-        if (character is null)
+        if (character is null || character.ExpertJobType == 3 && parsed.Mode != 0 ||
+            character.ExpertJobType == 1 && parsed.Mode != 3 || context.Activity?.BlocksTownActions == true ||
+            !context.Session.OpenExpertJobStore())
         {
             await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_store_rejected");
             return CommandResult.Handled;
         }
-        stores?.Open(new(character.Id, character.ExpertJobType, parsed.Mode, parsed.Name, parsed.First, parsed.Second,
-            parsed.Third, parsed.Fourth, (byte)Math.Clamp(character.ExpertMachineGrade, 0, 255),
-            (uint)Math.Max(0, character.ExpertMachineEndurance)));
-        byte[] notice = ExpertJobPackets.CreateStoreNotice(parsed.Mode, character.Id, parsed.Name, extra: null, flag: 0,
-            first: parsed.First, second: parsed.Second, third: parsed.Third, fourth: parsed.Fourth);
+        byte grade = checked((byte)(character.ExpertJobType == 3 ? character.ExpertMachineGrade
+            : scripts.Level(character.ExpertJobType, character.ExpertJobExperience)));
+        var store = new ExpertJobStoreRecord(character.Id, character.ExpertJobType, parsed.Mode, ((char)grade).ToString(),
+            parsed.First, parsed.Second, parsed.Third, parsed.Fourth, grade, (uint)Math.Max(0, character.ExpertMachineEndurance))
+        { Town = character.Position.Town, Area = character.Position.Area };
+        stores?.Open(store);
+        byte[] notice = ExpertJobPackets.CreateStoreNotice(store);
         presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE, notice,
             "expert_job_store_created");
         if (parsed.Mode == 3)
             presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.UPDATE_EXPERT_JOB_STORE,
-                ExpertJobPackets.UpdateStoreNotice(parsed.Mode, character.Id, parsed.Name), "expert_job_store_goods");
+                ExpertJobPackets.UpdateStoreNotice(parsed.Mode, character.Id, store.Name), "expert_job_store_goods");
         await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.CreateStoreSuccess(), "expert_job_store_opened");
         return CommandResult.Handled;
     }

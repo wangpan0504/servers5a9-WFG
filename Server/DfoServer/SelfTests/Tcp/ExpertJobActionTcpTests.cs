@@ -50,6 +50,7 @@ internal static class ExpertJobActionTcpTests
         fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness) SELECT id,account,3,51 FROM characters WHERE id={machineId}");
         fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness,learned_recipes) SELECT id,account,1,{startingExperience},'[{recipe.RecipeId}]' FROM characters WHERE id={enchanterId}");
         fixture.Sql($"INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES({enchanterId},0,11009,1,'11223344556677889900112233445566')");
+        fixture.Sql($"INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES({machineId},0,10021,1,'22334455667788990011223344556677')");
         Directory.CreateDirectory(fixture.Options.DataDirectory);
         File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "expert-job-compatibility.json"),
             "{\"SelfServiceRewardPercent\":100,\"EnchantSuccessPercent\":100}");
@@ -57,14 +58,22 @@ internal static class ExpertJobActionTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(expertJobInfo: MachineInfo(300));
+            peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)1); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); }));
+            peer.Expect(1, 598, [0, 19, 0]);
             UseMachine(peer, 3, machineId); ReadMachine(peer, 3, 299);
+            That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={machineId}") is [[1L]],
+                "错类型开店被拒绝且不残留open，个人分解仍可用但不冒充店铺教学操作");
             string before = Snapshot();
             UseMachine(peer, 3, machineId); peer.Expect(1, 235, [0, 19, 0]); peer.Barrier();
             That(Snapshot() == before, "个人分解重放空源不重复发奖");
             UseMachine(peer, 4, enchanterId); peer.Expect(1, 235, [0, 19, 0]); peer.Barrier();
             That(Snapshot() == before, "跨玩家机主明确拒绝，不扣源不扣另一角色耐久");
-            peer.Send(598, new byte[15]); peer.Expect(1, 598, [1]);
-            UseMachine(peer, 4, machineId); ReadMachine(peer, 4, 298);
+            peer.Send(598, Build(w => { w.Write((byte)0); w.Write(1); w.Write((byte)1); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); peer.Expect(1, 598, [1]);
+            peer.Send(599, Build(w => w.Write(machineId)));
+            peer.Expect(1, 599, [1, 0, 1, 0, 0, 0, 0, 43, 1, 0, 0]);
+            UseMachine(peer, 4, machineId); ReadMachine(peer, 4, 298, tutorial: true);
+            That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={machineId}") is [[0L]],
+                "进行中10021教学经开店、进入本人分解机、真实分解后归零");
             before = Snapshot();
             fixture.Sql("CREATE TRIGGER fail_action_tcp BEFORE INSERT ON character_expert_meta BEGIN SELECT RAISE(ABORT,'machine tcp failure'); END");
             UseMachine(peer, 5, machineId); peer.Closed();
@@ -83,7 +92,7 @@ internal static class ExpertJobActionTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1, expertJobInfo: EnchantInfo(300));
-            peer.Send(598, new byte[15]); peer.Expect(1, 598, [1]);
+            peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); peer.Expect(1, 598, [1]);
             string before = Snapshot();
             SendEnchant(peer, machineId); peer.Expect(1, 601, [0, 19, 0]); peer.Barrier();
             That(Snapshot() == before, "附魔跨玩家请求不冒充本人结算");
@@ -95,7 +104,7 @@ internal static class ExpertJobActionTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1, expertJobInfo: EnchantInfo(300));
-            peer.Send(598, new byte[15]); peer.Expect(1, 598, [1]);
+            peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); peer.Expect(1, 598, [1]);
             SendEnchant(peer, enchanterId);
             peer.Expect(0, 14); peer.Expect(0, 2); peer.Expect(0, 205, EnchantInfo(299, false));
             peer.Expect(1, 601, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write(0u); w.Write((byte)0); w.Write(299u); w.Write(5u); w.Write((uint)recipe.Rarity); }));
@@ -120,7 +129,7 @@ internal static class ExpertJobActionTcpTests
         string Snapshot() => JsonSerializer.Serialize(new[] { fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid"),
             fixture.Query("SELECT * FROM character_expert_job ORDER BY character_id"), fixture.Query("SELECT * FROM character_expert_meta ORDER BY character_id"),
             fixture.Query("SELECT id,revision,gold FROM characters ORDER BY id"), fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") });
-        void ReadMachine(TcpPeer peer, ushort slot, uint endurance)
+        void ReadMachine(TcpPeer peer, ushort slot, uint endurance, bool tutorial = false)
         {
             byte[] ack = peer.Expect(1, 235).Body;
             int count = ack[6];
@@ -128,7 +137,9 @@ internal static class ExpertJobActionTcpTests
                 U32(ack, ack.Length - 8) == 999 && U32(ack, ack.Length - 4) == endurance, "235完整源头、实际产物数组、绝对金币与耐久尾部");
             That(Enumerable.Range(0, count).Any(i => U32(ack, 9 + 10 * i) == 2610045 && U32(ack, 13 + 10 * i) == 1),
                 "自用零件在已提交的ACK产物中以增量1出现");
-            peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(endurance)); peer.Barrier();
+            peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(endurance));
+            if (tutorial) peer.Expect(0, 574);
+            peer.Barrier();
         }
     }
     static InventorySlot Bag(int slot) => new(InventoryListType.Main, (short)slot);

@@ -52,7 +52,12 @@ internal static class ExpertJobTradeTcpTests
             That(Drain(buyer).Single(p => p.Opcode == 599).Body.SequenceEqual(new byte[] { 0, 19, 0 }), "隔离房间不能进入他人机器");
             machine.Send(1426); Drain(machine); OpenShop(machine, 25); Drain(machine);
             buyer.Send(1426);
-            That(Drain(buyer).Any(p => p.Opcode == 538), "后进入同屏的顾客也能收到既有店铺展示");
+            var joined = Drain(buyer);
+            var existing = joined.Single(p => p.Opcode == 538).Body;
+            var area = joined.Last(p => p.Opcode == 24).Body;
+            That(existing.Length == 22 && existing[0] == 0 && U16(existing, 1) == machineId &&
+                U32(existing, 3) == 1 && existing[7] == 1 && existing[8] == area[0] && U32(existing, 9) == area[1] &&
+                U32(existing, 17) == 25, "后入场538真实等级、同屏场景和服务费正确，不再Lv0或费用错位");
             Drain(machine);
             Enter(buyer, machineId);
             long beforeBuyer = Gold(customerId), beforeOwner = Gold(machineId);
@@ -79,13 +84,16 @@ internal static class ExpertJobTradeTcpTests
             That(packets.Single(p => p.Opcode == 235).Body[0] == 1 && Gold(machineId) == beforeOwner + 75 && Endurance(machineId) == 298,
                 "新报价进入后仅按新价收费一次");
         }
+        // 店主客户端关闭套接字后，服务端要先处理离场（NOTI6 + 撤店）才会拒绝；先等离场，不把仍在线窗口内的成功应答当成残留授权。
+        WaitForLeave(buyer, machineId);
         Drain(buyer);
         buyer.Send(599, Build(w => w.Write(machineId)));
-        That(Drain(buyer).Single(p => p.Opcode == 599).Body[0] == 0, "店主断开后残留展示不授权交易");
+        // ACK599成功首字节为1，失败为0+错误码19；按完整失败包体断言，旧的首字节0会与kind0成功混淆。
+        That(Drain(buyer).Single(p => p.Opcode == 599).Body.SequenceEqual(new byte[] { 0, 19, 0 }), "店主断开后残留展示不授权交易");
         using (var enchanter = Open(fixture, "gamma"))
         {
             enchanter.Select(expertJobInfo: EnchantInfo(300)); enchanter.Send(1426); Drain(enchanter); Drain(buyer);
-            OpenShop(enchanter, 35); Drain(enchanter); Drain(buyer); Enter(buyer, enchantId);
+            OpenShop(enchanter, 35, mode: 3, grade: 4); Drain(enchanter); Drain(buyer); Enter(buyer, enchantId, mode: 3);
             long ownerGold = Gold(enchantId);
             buyer.Send(601, Build(w => { w.Write(enchantId); w.Write(recipe.RecipeId); w.Write((byte)2);
                 w.Write((byte)0); w.Write((ushort)5); w.Write((byte)0); w.Write((ushort)cardSlot); }));
@@ -124,13 +132,25 @@ internal static class ExpertJobTradeTcpTests
     }
     static InventorySlot Bag(int slot) => new(InventoryListType.Main, (short)slot);
     static byte[] MachineInfo(uint endurance) => Build(w => { w.Write((byte)0); w.Write((byte)3); w.Write(1u); w.Write(endurance); });
-    static void OpenShop(TcpPeer peer, uint fee) => peer.Send(598, Build(w => { w.Write((byte)0); w.Write(0); w.Write(fee); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); }));
-    static void Enter(TcpPeer peer, ushort actor)
+    static void OpenShop(TcpPeer peer, uint fee, byte mode = 0, byte grade = 1) => peer.Send(598, Build(w => { w.Write(mode); w.Write(1); w.Write(grade); w.Write(fee); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); }));
+    static void Enter(TcpPeer peer, ushort actor, byte mode = 0)
     {
         peer.Send(599, Build(w => w.Write(actor)));
-        That(Drain(peer).Single(p => p.Opcode == 599).Body.Length > 3, "同屏已开店可进入并记住报价");
+        var ack = Drain(peer).Single(p => p.Opcode == 599).Body;
+        That(mode == 0 ? ack is [1, 0, 1, _, _, _, _, _, _, _, _] :
+            ack is [1, 3, _, _, 44, 1, 0, 0] && U16(ack, 2) == actor,
+            "同屏店铺完整success/kind/真实等级不得移位，可进入并记住报价");
     }
     static void UseMachine(TcpPeer peer, ushort actor, ushort slot) => peer.Send(235, Build(w => { w.Write(actor); w.Write(slot); w.Write((byte)0); }));
+    static void WaitForLeave(TcpPeer peer, ushort actor)
+    {
+        for (int i = 0; i < 512; i++)
+        {
+            var packet = peer.Read();
+            if (packet is { Kind: 0, Opcode: 6 } && packet.Body.Length == 2 && U16(packet.Body) == actor) return;
+        }
+        That(false, "店主断开后同屏顾客收到离场通知");
+    }
     static WirePacket[] Drain(TcpPeer peer)
     {
         peer.SendBarrier();

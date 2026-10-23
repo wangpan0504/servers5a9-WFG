@@ -111,8 +111,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
                 peer.Sender.Enter(Projection(joined, peer, bodies));
                 if (expertStores?.TryGet(peer.Character.Id, out var store) == true)
                     sender.Post(0, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE,
-                        ExpertJobPackets.CreateStoreNotice(store.Mode, store.OwnerId, store.Name, null, 0,
-                            store.First, store.Second, store.Third, store.Fourth), "expert_job_existing_store",
+                        ExpertJobPackets.CreateStoreNotice(store), "expert_job_existing_store",
                         () => Visible(peer, joined) && expertStores.TryGet(store.OwnerId, out var live) && live.Instance == store.Instance);
             }
 

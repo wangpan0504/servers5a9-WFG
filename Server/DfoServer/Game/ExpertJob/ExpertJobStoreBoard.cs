@@ -5,6 +5,9 @@ namespace DfoServer.Game.ExpertJob;
 internal sealed record ExpertJobStoreRecord(ushort OwnerId, byte JobType, byte Mode, string Name,
     uint First, ushort Second, ushort Third, ushort Fourth, byte Grade, uint Endurance)
 {
+    // 开店时的可信场景身份，不能把请求中的服务费当作场景编号。
+    public byte Town { get; init; }
+    public byte Area { get; init; }
     public Guid Instance { get; init; } = Guid.NewGuid();
 }
 

@@ -90,8 +90,16 @@ internal static class ExpertJobPackets
         return stream.ToArray();
     }
 
+    // 538的可变字段是等级字节串，不是玩家店名；场景、坐标与费用不能照抄598字段序。
+    public static byte[] CreateStoreNotice(DfoServer.Game.ExpertJob.ExpertJobStoreRecord store)
+    {
+        if (store.Grade is < 1 or > 11) throw new InvalidDataException("副职业商店等级不合法");
+        return CreateStoreNotice(store.Mode, store.OwnerId, ((char)store.Grade).ToString(), null,
+            store.Town, store.Area, store.Second, store.Third, store.First);
+    }
+
     // NOTI 538 023DA6E0：mode:u8（0/3）+ actor:u16 + 03BE25F0 的 u32 长度+字节 + u8 + u32 + u16 + u16 + u32 + u8。
-    // mode==3 时再跟 count:u8 和 count 个 u8。后六个标量尚未从对象字段取业务名；写入客户端原值，缺省 0。
+    // mode3追加资格数组；标量依次为场景、区域、X、Y、服务费、对象类别。等级串使用原始1..11字节，不是ASCII数字。
     public static byte[] CreateStoreNotice(byte mode, ushort actor, string name = "", byte[]? extra = null,
         byte flag = 0, uint first = 0, ushort second = 0, ushort third = 0, uint fourth = 0, byte last = 0)
     {
@@ -229,11 +237,13 @@ internal static class ExpertJobPackets
     // ACK 611 02350080：成功不读附加字段。
     public static byte[] RepairStoreSuccess() => [1];
 
-    // ACK 599 02367800：kind==3 为 u8+owner u16+endurance u32；kind==0 为 u8+grade u8+cost u32+endurance u32。
+    // ACK599先由公共分派消费success:u8；02367836检查success，023678D4再读kind。
+    // 成功尾部kind3为owner:u16+endurance:u32，kind0为grade:u8+cost:u32+endurance:u32。
     public static byte[] EnterStoreKind0(byte grade, uint cost, uint endurance)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
         writer.Write((byte)0);
         writer.Write(grade);
         writer.Write(cost);
@@ -245,6 +255,7 @@ internal static class ExpertJobPackets
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
         writer.Write((byte)3);
         writer.Write(owner);
         writer.Write(endurance);

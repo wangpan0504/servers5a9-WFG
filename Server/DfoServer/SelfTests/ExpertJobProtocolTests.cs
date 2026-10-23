@@ -20,6 +20,10 @@ internal static class ExpertJobProtocolTests
         That(ExpertJobPackets.EnchantStoreSuccess(299, 5, 1) is [1, 1, 0, 0, 0, 0, 0, 43, 1, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0],
             "ACK601第一个尾u32必须为真实耐久，不得用0覆盖205");
         That(ExpertJobPackets.CreateStoreSuccess() is [1], "ACK 598 无附加正文");
+        That(ExpertJobPackets.EnterStoreKind0(2, 257, 299) is [1, 0, 2, 1, 1, 0, 0, 43, 1, 0, 0],
+            "ACK599分解店先写success1，再写kind0及等级费用耐久，不能把kind0当失败标志");
+        That(ExpertJobPackets.EnterStoreKind3(0x1234, 299) is [1, 3, 0x34, 0x12, 43, 1, 0, 0],
+            "ACK599附魔店同样保留公共success1，kind3不得被吞作success");
         That(ExpertJobPackets.CloseStoreNotice(0x1234) is [0x34, 0x12], "NOTI 539 只有 actor:u16");
         That(ExpertJobPackets.CreateStoreNotice(0, 0x1234) is
                 [0, 0x34, 0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -27,6 +31,10 @@ internal static class ExpertJobProtocolTests
         That(ExpertJobPackets.CreateStoreNotice(3, 1, "", [9, 8]) is
                 [3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 9, 8],
             "NOTI 538 mode3 在固定尾后再跟 count:u8 和字节");
+        var storeNotice = ExpertJobPackets.CreateStoreNotice(new DfoServer.Game.ExpertJob.ExpertJobStoreRecord(
+            0x1234, 3, 0, "not-a-shop-name", 257, 0x102, 0x304, 9, 2, 299) { Town = 38, Area = 1 });
+        That(storeNotice is [0, 0x34, 0x12, 1, 0, 0, 0, 2, 38, 1, 0, 0, 0, 2, 1, 4, 3, 1, 1, 0, 0, 0],
+            "538可信等级原始字节、Town/Area、坐标和服务费逐字段匹配消费者，不回显名称或错抄598字段");
         That(ExpertJobPackets.UpdateStoreNotice(0, 7) is [0, 7, 0, 0, 0, 0, 0],
             "NOTI 544 非 3 是 u8+u16+空字符串，没有附加列表");
         That(ExpertJobPackets.Info(3, [], 1, 300) is [0, 3, 1, 0, 0, 0, 44, 1, 0, 0],
