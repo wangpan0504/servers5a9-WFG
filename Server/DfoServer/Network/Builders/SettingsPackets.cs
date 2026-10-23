@@ -32,25 +32,46 @@ internal static class SettingsPackets
         return body;
     }
 
-    public static byte[] GameOptions(ImmutableArray<byte> options)
+    public static byte[] GameOptions(ImmutableArray<byte> options, ImmutableArray<byte> quickChat0 = default,
+        ImmutableArray<byte> quickChat1 = default)
     {
         if (options.IsDefault || options.Length != 204)
             throw new InvalidDataException("主设置回放长度不匹配");
-        // 主设置后保留两个空快捷聊天银行的长度字段。
-        byte[] body = new byte[checked(options.Length + 12)];
+        return Compose(options.AsSpan(), quickChat0, quickChat1);
+    }
+
+    public static byte[] GameOptionsInitialization(ImmutableArray<byte> quickChat0 = default,
+        ImmutableArray<byte> quickChat1 = default)
+    {
+        // 匹配客户端将全部 7FFF 识别为未设置，采用原生默认并完成模型初始化。
+        byte[] options = new byte[204];
+        for (int offset = 0; offset < options.Length; offset += 2)
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(offset), 0x7FFF);
+        return Compose(options, quickChat0, quickChat1);
+    }
+
+    // 账号通知固定为：主设置u32长度+原文，随后两个带u32长度的快捷聊天银行；缺省银行写0长度。
+    static byte[] Compose(ReadOnlySpan<byte> options, ImmutableArray<byte> quickChat0, ImmutableArray<byte> quickChat1)
+    {
+        int bank0 = BankLength(quickChat0), bank1 = BankLength(quickChat1);
+        byte[] body = new byte[checked(4 + options.Length + 4 + bank0 + 4 + bank1)];
         BinaryPrimitives.WriteUInt32LittleEndian(body, checked((uint)options.Length));
-        options.AsSpan().CopyTo(body.AsSpan(4));
+        options.CopyTo(body.AsSpan(4));
+        int offset = 4 + options.Length;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset), checked((uint)bank0));
+        if (bank0 > 0) quickChat0.AsSpan().CopyTo(body.AsSpan(offset + 4));
+        offset += 4 + bank0;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset), checked((uint)bank1));
+        if (bank1 > 0) quickChat1.AsSpan().CopyTo(body.AsSpan(offset + 4));
         return body;
     }
 
-    public static byte[] GameOptionsInitialization()
+    static int BankLength(ImmutableArray<byte> bank)
     {
-        // 匹配客户端将全部 7FFF 识别为未设置，采用原生默认并完成模型初始化。
-        byte[] body = new byte[216];
-        BinaryPrimitives.WriteUInt32LittleEndian(body, 204);
-        for (int offset = 4; offset < 208; offset += 2)
-            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(offset), 0x7FFF);
-        return body;
+        if (bank.IsDefault) return 0;
+        if (bank.Length != DfoServer.Game.Settings.ClientSettingsService.QuickChatLength)
+            throw new InvalidDataException("快捷聊天银行回放长度不匹配");
+        return bank.Length;
     }
 
     public static byte[] CharacterOptions(ImmutableArray<byte> options)

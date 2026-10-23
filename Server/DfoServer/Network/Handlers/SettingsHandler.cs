@@ -15,6 +15,7 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_1, SaveGameAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_CHARACTER_OPTION, SaveCharacterAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_2, SaveHotkeysAsync, nameof(SettingsHandler));
+        commands.Register(CmdPacketType.SAVE_GAME_OPTION_QUICKCHATTING, SaveQuickChatAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.CHANGE_EMOTION, ChangeEmotionAsync, nameof(SettingsHandler));
     }
 
@@ -55,6 +56,15 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         bool changed = context.Session.SaveHotkeys(settings, text);
         log.Write("client_settings_saved", new { Connection = context.Id, Scope = "account_hotkeys", Bytes = text.Length, Changed = changed });
         // 454会重置原生键位模型，仅在选角回放；保存时不发ACK或即时刷新。
+        return Task.FromResult(CommandResult.Handled);
+    }
+
+    Task<CommandResult> SaveQuickChatAsync(GameConnectionContext context, Packet packet)
+    {
+        var (bank, text) = SettingsRequests.QuickChat(packet.Body);
+        bool changed = context.Session.SaveQuickChat(settings, bank, text);
+        log.Write("client_settings_saved", new { Connection = context.Id, Scope = "account_quick_chat", Bank = bank, Bytes = text.Length, Changed = changed });
+        // 368没有专用成功ACK；重新登录时由173按两个银行回放。
         return Task.FromResult(CommandResult.Handled);
     }
 

@@ -186,6 +186,8 @@ internal static class SqliteMigrations
         new(79, "普通副本任务每日通关计数", static (db, tx) => Execute(db, tx, QuestDailyClearSchema)),
         new(80, "副职业已学设计图", AddExpertJobRecipes),
         new(81, "光环传送独立冷却", AddAuraCooldowns),
+        // 客户端368按银行分别提交300B快捷聊天原文；账号级保存，173按两段长度回放。
+        new(82, "账号快捷聊天银行", static (db, tx) => Execute(db, tx, QuickChatSchema)),
     ];
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
@@ -1758,6 +1760,7 @@ internal static class SqliteMigrations
         "SELECT blacklist_count FROM characters LIMIT 0",
         "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
+        "SELECT account,bank,quick_chat FROM account_quick_chat LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",
         "SELECT character_id,account,event_id,kind,instance_id,task_attempt,epoch,map_id,subject,experience,before_revision,revision,plan_snapshot FROM character_tutorial_receipts LIMIT 0",
         "SELECT character_id,account,list_type,slot_index,item_uid FROM character_title_book_slots LIMIT 0",
@@ -1908,6 +1911,16 @@ internal static class SqliteMigrations
             account TEXT NOT NULL,
             character_options BLOB NOT NULL CHECK(typeof(character_options)='blob' AND length(character_options)=512),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    // 快捷聊天按银行存客户端原始300B；缺省不建行，两个银行互不影响。
+    internal const string QuickChatSchema = """
+        CREATE TABLE IF NOT EXISTS account_quick_chat(
+            account TEXT NOT NULL REFERENCES accounts(account_id),
+            bank INTEGER NOT NULL CHECK(bank IN (0,1)),
+            quick_chat BLOB NOT NULL CHECK(typeof(quick_chat)='blob' AND length(quick_chat)=300),
+            PRIMARY KEY(account,bank)
         );
         """;
 

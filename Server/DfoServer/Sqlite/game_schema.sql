@@ -930,6 +930,10 @@ CREATE TABLE account_hotkey_settings(
   account TEXT NOT NULL REFERENCES accounts(account_id),profile INTEGER NOT NULL CHECK(profile IN (0,1)),
   hotkeys BLOB NOT NULL CHECK(typeof(hotkeys)='blob' AND length(hotkeys) BETWEEN 1 AND 1399),
   PRIMARY KEY(account,profile));
+CREATE TABLE account_quick_chat(
+  account TEXT NOT NULL REFERENCES accounts(account_id),bank INTEGER NOT NULL CHECK(bank IN (0,1)),
+  quick_chat BLOB NOT NULL CHECK(typeof(quick_chat)='blob' AND length(quick_chat)=300),
+  PRIMARY KEY(account,bank));
 CREATE TABLE character_dungeon_passive_pickups(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,
   ground_key INTEGER NOT NULL CHECK(ground_key BETWEEN 1 AND 65535),

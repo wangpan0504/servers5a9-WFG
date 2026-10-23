@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DfoServer.Game.Settings;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -163,6 +164,7 @@ internal static class ClientSettingsTcpTests
         }
         FirstEntry(fixture);
         HotkeyScope(fixture);
+        QuickChatScope(fixture);
         await CharacterScopeAsync(fixture);
         using (var peer = Open(fixture, HotkeyAccount))
         {
@@ -273,6 +275,78 @@ internal static class ClientSettingsTcpTests
     }
 
     static byte[] Payload(int length, int seed) => Enumerable.Range(0, length).Select(i => (byte)(i * 37 + seed)).ToArray();
+
+    const string QuickChatAccount = "chatowner";
+
+    static void QuickChatScope(TcpTestFixture fixture)
+    {
+        byte[] main = Payload(ClientSettingsService.GameOptionLength, 41);
+        byte[] bank0 = Payload(ClientSettingsService.QuickChatLength, 43), bank1 = Payload(ClientSettingsService.QuickChatLength, 151);
+        using (var peer = Open(fixture, QuickChatAccount))
+        {
+            peer.Create("ChatBankOne");
+            peer.Create("ChatBankTwo");
+            peer.Select();
+            Save(peer, 197, main);
+            peer.Barrier();
+            string assets = Assets(fixture);
+            peer.Send(368, [0, .. Blob(bank0)]);
+            peer.Barrier();
+            That(fixture.Query("SELECT bank,hex(quick_chat) FROM account_quick_chat WHERE account=$p0 ORDER BY bank", QuickChatAccount)
+                is [[0L, string text]] && text == Convert.ToHexString(bank0) && Assets(fixture) == assets,
+                "368真实分派静默保存银行0完整300B，不回包、不写主设置或角色资产");
+            peer.Send(368, [1, .. Blob(bank1)]);
+            peer.Barrier();
+            That(fixture.Query("SELECT bank,hex(quick_chat) FROM account_quick_chat WHERE account=$p0 ORDER BY bank", QuickChatAccount)
+                is [[0L, string bank0Text], [1L, string bank1Text]] && bank0Text == Convert.ToHexString(bank0) && bank1Text == Convert.ToHexString(bank1),
+                "两个银行各存一行原始300B");
+            peer.Send(368, [0, .. Blob(bank0)]);
+            peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM account_quick_chat WHERE account=$p0", QuickChatAccount) is [[2L]], "相同银行重复提交不新增行");
+            ReturnSelection(peer);
+            SelectQuickChat(peer, 0, main, bank0, bank1);
+            ReturnSelection(peer);
+            SelectQuickChat(peer, 1, main, bank0, bank1);
+            Exit(peer);
+        }
+        using (var peer = Open(fixture, "otherchat"))
+        {
+            peer.Create("OtherChat");
+            peer.Select();
+            That(peer.InitialGameOptions.Length == 216, "其他账号不接收已存快捷聊天，初始化仍是216B空银行");
+            Exit(peer);
+        }
+        using (var peer = Open(fixture, QuickChatAccount))
+        {
+            SelectQuickChat(peer, 0, main, bank0, bank1);
+            fixture.Sql("CREATE TRIGGER quick_chat_tcp_fail BEFORE UPDATE ON account_quick_chat BEGIN SELECT RAISE(ABORT,'quick chat failure'); END");
+            try
+            {
+                peer.Send(368, [0, .. Blob(bank1)]);
+                peer.Closed();
+                That(fixture.Query("SELECT hex(quick_chat) FROM account_quick_chat WHERE account=$p0 AND bank=0", QuickChatAccount)
+                    is [[string text]] && text == Convert.ToHexString(bank0), "368 SQL失败关闭连接且不改变原银行原文");
+            }
+            finally { fixture.Sql("DROP TRIGGER quick_chat_tcp_fail"); }
+        }
+        using (var peer = Open(fixture, QuickChatAccount))
+        {
+            SelectQuickChat(peer, 0, main, bank0, bank1);
+            peer.Send(368, [0, .. Blob(bank0), 0]);
+            peer.Closed();
+            That(fixture.Query("SELECT hex(quick_chat) FROM account_quick_chat WHERE account=$p0 AND bank=0", QuickChatAccount)
+                is [[string text]] && text == Convert.ToHexString(bank0), "368多余尾部断开连接，畸形请求不覆盖银行");
+        }
+    }
+
+    static void SelectQuickChat(TcpPeer peer, ushort slot, byte[] main, byte[] bank0, byte[] bank1)
+    {
+        byte[] body = [.. Blob(main), .. Blob(bank0), .. Blob(bank1)];
+        peer.Select(slot, settings: [(173, body)], appearanceFlags: Flags(main));
+        That(peer.InitialGameOptions.SequenceEqual(body), "本人实体前173在已存主设置后回放两个银行，长度头与顺序精确");
+        That(peer.ClientSettings is [{ Opcode: 173 }], "后段仅回放173，不重复初始化客户端模型");
+        peer.Barrier();
+    }
     static byte[] Blob(byte[] payload) => Build(w =>
     {
         w.Write((uint)payload.Length);
@@ -516,8 +590,9 @@ internal static class ClientSettingsTcpTests
     static string Settings(TcpTestFixture fixture) => fixture.Snapshot("SELECT * FROM account_client_settings ORDER BY account") +
         fixture.Snapshot("SELECT * FROM character_client_settings ORDER BY character_id") +
         fixture.Snapshot("SELECT * FROM character_game_settings ORDER BY character_id") +
-        fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile");
+        fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile") +
+        fixture.Snapshot("SELECT * FROM account_quick_chat ORDER BY account,bank");
     static string Assets(TcpTestFixture fixture) => JsonSerializer.Serialize(fixture.Query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings') ORDER BY name")
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat') ORDER BY name")
         .Select(row => fixture.Query($"SELECT * FROM [{row[0]}] ORDER BY rowid")));
 }

@@ -24,6 +24,7 @@ internal static class ClientSettingsStoreTests
         CharacterGameSnapshots();
         RawAccountAndCanonicalCharacter();
         HotkeyStorage();
+        QuickChatStorage();
         ReadOnlyAndRollback();
         Migration();
         Console.WriteLine($"PASS {TestCheck.Count - before} 客户端设置规则、归属、持久化与迁移断言");
@@ -61,11 +62,12 @@ internal static class ClientSettingsStoreTests
         Check(Same(reopened.Load(replacement, f.First.Id).Hotkeys, keys), "拒绝旧owner后存档仍可恢复");
 
         DatabaseSchemaTests.RemoveAdventureSchema(f.Path);
-        f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; PRAGMA user_version=26");
+        f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; DROP TABLE account_quick_chat; PRAGMA user_version=26");
         string existing = f.ExistingSettings();
         _ = new ClientSettingsRepository(f.Path);
         Check(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.Query("SELECT count(*) FROM account_hotkey_settings") is 0L &&
-            f.ExistingSettings() == existing && f.Assets() == assets, "v26增量只建空键位表，保留称号进度、训练状态、原设置与资产");
+            f.Query("SELECT count(*) FROM account_quick_chat") is 0L &&
+            f.ExistingSettings() == existing && f.Assets() == assets, "v26增量只建空键位与快捷聊天表，保留称号进度、训练状态、原设置与资产");
         string legacyAssets = f.Assets(includeAcceptance: false);
         f.Execute($"UPDATE characters SET stamina_until=1 WHERE id={f.First.Id}");
         Check(f.Assets() != assets && f.Assets(includeAcceptance: false) != legacyAssets,
@@ -78,6 +80,56 @@ internal static class ClientSettingsStoreTests
         Check(f.Query("PRAGMA user_version") is 26L && f.Assets() == rollbackAssets, "键位DDL失败回滚版本并保留资产");
         f.Execute("DROP TABLE account_hotkey_settings");
         _ = new ClientSettingsRepository(f.Path);
+        f.Integrity();
+    }
+
+    static void QuickChatStorage()
+    {
+        using var f = new Fixture();
+        string assets = f.Assets();
+        var bank0 = ImmutableArray.Create(Enumerable.Range(0, ClientSettingsService.QuickChatLength).Select(index => (byte)(index * 7 + 5)).ToArray());
+        var bank1 = ImmutableArray.Create(Enumerable.Range(0, ClientSettingsService.QuickChatLength).Select(index => (byte)(255 - index)).ToArray());
+        Check(f.Query("SELECT count(*) FROM account_quick_chat") is 0L && f.Service.Load(f.Owner, f.First.Id).QuickChat0.IsDefault,
+            "缺省快捷聊天不建行、不生成默认字节");
+        foreach (int length in new[] { 0, 299, 301 })
+            Reject<InvalidDataException>(() => f.Service.SaveQuickChat(f.Owner, 0, Pattern(length, 0)), "拒绝不匹配快捷聊天长度");
+        Reject<InvalidDataException>(() => f.Service.SaveQuickChat(f.Owner, 0, default), "拒绝未初始化快捷聊天");
+        Reject<InvalidDataException>(() => f.Service.SaveQuickChat(f.Owner, 2, bank0), "未知银行编号不能保存");
+        Reject<SqliteException>(() => f.Execute("INSERT INTO account_quick_chat(account,bank,quick_chat) VALUES('settings-b',0,zeroblob(299))"),
+            "数据库拒绝不匹配长度的快捷聊天");
+        Reject<SqliteException>(() => f.Execute("INSERT INTO account_quick_chat(account,bank,quick_chat) VALUES('settings-b',2,zeroblob(300))"),
+            "数据库拒绝未知银行");
+        Reject<SqliteException>(() => f.Execute("INSERT INTO account_quick_chat(account,bank,quick_chat) VALUES('missing-quick-chat',0,zeroblob(300))"),
+            "数据库外键拒绝不存在的账号");
+        Check(f.Query("SELECT count(*) FROM account_quick_chat") is 0L && f.Assets() == assets, "非法快捷聊天不写库或改变角色资产");
+
+        Check(f.Service.SaveQuickChat(f.Owner, 0, bank0) && !f.Service.SaveQuickChat(f.Owner, 0, bank0), "银行0首次持久化及相同字节零变化");
+        var first = f.Service.Load(f.Owner, f.First.Id);
+        Check(Same(first.QuickChat0, bank0) && first.QuickChat1.IsDefault && first.IsDefault, "银行0由本账号全部角色共享，缺省银行1不生成字节或主设置");
+        Check(Same(f.Service.Load(f.Owner, f.Second.Id).QuickChat0, bank0) && f.Service.Load(f.OtherOwner, f.Other.Id).QuickChat0.IsDefault,
+            "同账号另一角色读取银行0，其他账号保持缺省");
+        Check(f.Service.SaveQuickChat(f.Owner, 1, bank1) && Same(f.Service.Load(f.Owner, f.First.Id).QuickChat0, bank0) &&
+            Same(f.Service.Load(f.Owner, f.First.Id).QuickChat1, bank1), "两个银行独立保存，互不覆盖");
+        Check(f.Service.SaveQuickChat(f.Owner, 0, bank1) && Same(f.Service.Load(f.Owner, f.Second.Id).QuickChat0, bank1),
+            "银行0更新立即由同账号另一角色读取");
+        Check(f.Query("SELECT count(*) FROM account_quick_chat") is 2L && f.Assets() == assets, "快捷聊天只写账号两行，不改变角色revision及资产");
+
+        f.Execute("CREATE TRIGGER quick_chat_fail BEFORE UPDATE ON account_quick_chat BEGIN SELECT RAISE(ABORT,'quick chat rollback'); END");
+        Reject<SqliteException>(() => f.Service.SaveQuickChat(f.Owner, 0, bank0), "快捷聊天SQL失败传播");
+        Check(Same(f.Service.Load(f.Owner, f.First.Id).QuickChat0, bank1) && Same(f.Service.Load(f.Owner, f.First.Id).QuickChat1, bank1) &&
+            f.Assets() == assets, "失败保留原两个银行字节及全部资产");
+        f.Execute("DROP TRIGGER quick_chat_fail");
+        f.Execute("CREATE TRIGGER quick_chat_insert_fail BEFORE INSERT ON account_quick_chat BEGIN SELECT RAISE(ABORT,'quick chat insert failure'); END");
+        Reject<SqliteException>(() => f.Service.SaveQuickChat(f.OtherOwner, 0, bank0), "首次银行插入失败回滚新行");
+        Check(f.Service.Load(f.OtherOwner, f.Other.Id).QuickChat0.IsDefault && f.Query("SELECT count(*) FROM account_quick_chat") is 2L,
+            "首次保存失败不遗留其他账号的快捷聊天行");
+        f.Execute("DROP TRIGGER quick_chat_insert_fail");
+        var reopened = new ClientSettingsService(new ClientSettingsRepository(f.Path));
+        Check(Same(reopened.Load(f.Owner, f.First.Id).QuickChat0, bank1) && Same(reopened.Load(f.Owner, f.First.Id).QuickChat1, bank1),
+            "重开仓储恢复两个银行完整300B原文");
+        using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
+        Reject<InvalidOperationException>(() => f.Service.SaveQuickChat(f.Owner, 0, bank0), "旧generation不能覆盖新账号快捷聊天");
+        Check(Same(new ClientSettingsRepository(f.Path).Load(replacement, f.First.Id).QuickChat0, bank1), "拒绝旧owner后存档仍可恢复");
         f.Integrity();
     }
 
@@ -463,7 +515,7 @@ internal static class ClientSettingsStoreTests
         {
             using var db = Open(Path);
             using var tables = db.CreateCommand();
-            tables.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings') ORDER BY name";
+            tables.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat') ORDER BY name";
             var names = new List<string>();
             using (var reader = tables.ExecuteReader())
                 while (reader.Read()) names.Add(reader.GetString(0));

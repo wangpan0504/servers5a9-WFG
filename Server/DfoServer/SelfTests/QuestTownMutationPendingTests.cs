@@ -200,6 +200,8 @@ internal static class QuestTownMutationPendingTests
             throw new InvalidOperationException("只读设置替身不接受保存");
         public bool SaveHotkeys(AccountOwners.Lease owner,byte profile,ImmutableArray<byte> text) =>
             throw new InvalidOperationException("只读设置替身不接受保存");
+        public bool SaveQuickChat(AccountOwners.Lease owner,byte bank,ImmutableArray<byte> text) =>
+            throw new InvalidOperationException("只读设置替身不接受保存");
         public bool SaveEmotion(AccountOwners.Lease owner,ushort characterId,ushort emotion) =>
             throw new InvalidOperationException("只读设置替身不接受保存");
     }

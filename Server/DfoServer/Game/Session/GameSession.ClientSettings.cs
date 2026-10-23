@@ -24,6 +24,9 @@ internal sealed partial class GameSession
         return settings.SaveHotkeys(owner, HotkeySettingsRules.Profile(character.Job), text);
     });
 
+    public bool SaveQuickChat(ClientSettingsService settings, byte bank, ImmutableArray<byte> text) => owner.Execute(() =>
+        settings.SaveQuickChat(owner, bank, text));
+
     public bool SaveGameOptions(ClientSettingsService settings, ImmutableArray<byte> options) => owner.Execute(() =>
     {
         if (pendingRental is not null || HasPendingTownQuestCommit) return false;

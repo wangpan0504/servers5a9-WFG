@@ -54,6 +54,7 @@ internal static class SettingsProtocolTests
         SelectionGuard(game, character);
         RoleScopedValues();
         HotkeyProtocol();
+        QuickChatProtocol(game, character);
         TownVisibility();
         Console.WriteLine($"PASS {Count - before} client settings parser, projection and selection assertions");
     }
@@ -78,6 +79,49 @@ internal static class SettingsProtocolTests
         That(ClientSettingsRules.Project(saved).Hotkeys == parsed && !new ClientSettingsSnapshot(default, default, Hotkeys: parsed).IsDefault,
             "角色主区协调不丢失独立账号键位，也不生成未保存主区");
         Reject<InvalidDataException>(() => SettingsPackets.Hotkeys(2, parsed), "未知配置不能回放到另一原生键位bank");
+    }
+
+    static void QuickChatProtocol(byte[] game, byte[] character)
+    {
+        byte[] bank0 = Enumerable.Range(0, ClientSettingsService.QuickChatLength).Select(index => (byte)(index * 7 + 5)).ToArray();
+        byte[] bank1 = Enumerable.Range(0, ClientSettingsService.QuickChatLength).Select(index => (byte)(255 - index * 5)).ToArray();
+        foreach (var (bank, text) in new (byte, byte[])[] { (0, bank0), (1, bank1) })
+        {
+            byte[] request = [bank, .. Body(text)];
+            var parsed = SettingsRequests.QuickChat(request);
+            That(parsed.Bank == bank && parsed.Text.AsSpan().SequenceEqual(text), "368按银行号解析完整300B原文，两个银行互不混用");
+            byte[] unknown = request.ToArray();
+            unknown[0] = 2;
+            Reject<InvalidDataException>(() => SettingsRequests.QuickChat(unknown), "368未知银行拒绝");
+            byte[] wrong = request.ToArray();
+            BinaryPrimitives.WriteUInt32LittleEndian(wrong.AsSpan(1), 299);
+            Reject<InvalidDataException>(() => SettingsRequests.QuickChat(wrong), "368长度头必须等于300");
+        }
+        byte[] valid = [0, .. Body(bank0)];
+        byte[] extra = [.. valid, 0];
+        foreach (byte[] bad in new[] { Array.Empty<byte>(), valid[..4], valid[..^1], extra })
+            Reject<InvalidDataException>(() => SettingsRequests.QuickChat(bad), "368空包、截断或多余尾部拒绝");
+        byte[] oneBank = [.. Body(game), .. Body(bank0), 0, 0, 0, 0];
+        That(SettingsPackets.GameOptions(game.ToImmutableArray(), [.. bank0]).SequenceEqual(oneBank),
+            "173主设置后回放银行0完整原文，缺省银行1保留零长度");
+        byte[] twoBanks = [.. Body(game), .. Body(bank0), .. Body(bank1)];
+        That(SettingsPackets.GameOptions(game.ToImmutableArray(), [.. bank0], [.. bank1]).SequenceEqual(twoBanks),
+            "173两段银行按0、1顺序各自带长度头");
+        byte[] init = SettingsPackets.GameOptionsInitialization([.. bank0], [.. bank1]);
+        byte[] unsetMain = SettingsPackets.GameOptionsInitialization();
+        That(init.Length == 816 && init.AsSpan(0, 208).SequenceEqual(unsetMain.AsSpan(0, 208)) &&
+            BinaryPrimitives.ReadUInt32LittleEndian(init.AsSpan(208)) == 300 && init.AsSpan(212, 300).SequenceEqual(bank0) &&
+            BinaryPrimitives.ReadUInt32LittleEndian(init.AsSpan(512)) == 300 && init.AsSpan(516).SequenceEqual(bank1),
+            "无主设置存档时初始化主区原样加两个完整银行，缺省仍为216B");
+        Reject<InvalidDataException>(() => SettingsPackets.GameOptions(game.ToImmutableArray(), [0]), "损坏的快捷聊天银行不能随主设置回放");
+        Reject<InvalidDataException>(() => SettingsPackets.GameOptionsInitialization(default, [0]), "初始化回放同样拒绝损坏银行");
+        var onlyChat = new ClientSettingsSnapshot(default, default, QuickChat0: [.. bank0]);
+        That(onlyChat.IsDefault && ClientSettingsRules.Project(onlyChat).QuickChat0.AsSpan().SequenceEqual(bank0),
+            "只有快捷聊天存档时不合成主区，银行原样保留");
+        var projected = ClientSettingsRules.Project(new(game.ToImmutableArray(), character.ToImmutableArray(),
+            QuickChat0: [.. bank0], QuickChat1: [.. bank1]));
+        That(projected.QuickChat0.AsSpan().SequenceEqual(bank0) && projected.QuickChat1.AsSpan().SequenceEqual(bank1),
+            "角色设置投影不丢失两个账号快捷聊天银行");
     }
 
     static void SelectionGuard(byte[] game, byte[] character)
@@ -159,7 +203,14 @@ internal static class SettingsProtocolTests
         readonly Dictionary<ushort, ImmutableArray<byte>> characters = [];
         readonly Dictionary<ushort, ImmutableArray<byte>> roleMain = [];
         ImmutableArray<byte> hotkeys;
-        public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort id) => new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id), hotkeys);
+        ImmutableArray<byte> quickChat0, quickChat1;
+        public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort id) =>
+            new(main, characters.GetValueOrDefault(id), roleMain.GetValueOrDefault(id), hotkeys, quickChat0, quickChat1);
+        public bool SaveQuickChat(AccountOwners.Lease owner, byte bank, ImmutableArray<byte> text)
+        {
+            if (bank == 0) quickChat0 = text; else quickChat1 = text;
+            return true;
+        }
         public bool SaveGameOptions(AccountOwners.Lease owner, ImmutableArray<byte> payload, ushort? id = null, ImmutableArray<byte> characterGameOptions = default)
         {
             main = payload;

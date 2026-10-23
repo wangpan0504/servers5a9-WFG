@@ -31,11 +31,13 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            SELECT a.game_options,c.character_options,g.game_options,h.hotkeys FROM characters r
+            SELECT a.game_options,c.character_options,g.game_options,h.hotkeys,q0.quick_chat,q1.quick_chat FROM characters r
             LEFT JOIN account_client_settings a ON a.account=r.account
             LEFT JOIN character_client_settings c ON c.character_id=r.id AND c.account=r.account
             LEFT JOIN character_game_settings g ON g.character_id=r.id AND g.account=r.account
             LEFT JOIN account_hotkey_settings h ON h.account=r.account AND h.profile=CASE WHEN r.job=10 THEN 1 ELSE 0 END
+            LEFT JOIN account_quick_chat q0 ON q0.account=r.account AND q0.bank=0
+            LEFT JOIN account_quick_chat q1 ON q1.account=r.account AND q1.bank=1
             WHERE r.id=$id AND r.account=$account
             """;
         command.Parameters.AddWithValue("$id", characterId);
@@ -43,7 +45,8 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         using var reader = command.ExecuteReader();
         if (!reader.Read())
             throw new InvalidDataException("设置角色不属于当前账号");
-        return new ClientSettingsSnapshot(Read(reader, 0), Read(reader, 1), Read(reader, 2), Read(reader, 3));
+        return new ClientSettingsSnapshot(Read(reader, 0), Read(reader, 1), Read(reader, 2), Read(reader, 3),
+            Read(reader, 4), Read(reader, 5));
     });
 
     public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text) => owner.Execute(() =>
@@ -72,6 +75,40 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         command.Parameters.AddWithValue("$profile", profile);
         command.Parameters.Add("$text", SqliteType.Blob).Value = text.ToArray();
         if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("账号键位未提交");
+        tx.Commit();
+        return true;
+    });
+
+    public bool SaveQuickChat(AccountOwners.Lease owner, byte bank, ImmutableArray<byte> text) => owner.Execute(() =>
+    {
+        using var db = database.Open();
+        using (var read = db.BeginRead())
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = read;
+            query.CommandText = """
+                SELECT q.quick_chat FROM accounts a
+                LEFT JOIN account_quick_chat q ON q.account=a.account_id AND q.bank=$bank
+                WHERE a.account_id=$account
+                """;
+            query.Parameters.AddWithValue("$bank", bank);
+            query.Parameters.AddWithValue("$account", owner.Account);
+            using var reader = query.ExecuteReader();
+            if (!reader.Read()) throw new InvalidDataException("快捷聊天账号不存在");
+            if (!reader.IsDBNull(0) && text.AsSpan().SequenceEqual((byte[])reader.GetValue(0))) return false;
+        }
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveQuickChat");
+        using var tx = write.Transaction;
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            INSERT INTO account_quick_chat(account,bank,quick_chat) VALUES($account,$bank,$text)
+            ON CONFLICT(account,bank) DO UPDATE SET quick_chat=excluded.quick_chat
+            """;
+        command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$bank", bank);
+        command.Parameters.Add("$text", SqliteType.Blob).Value = text.ToArray();
+        if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("账号快捷聊天未提交");
         tx.Commit();
         return true;
     });
