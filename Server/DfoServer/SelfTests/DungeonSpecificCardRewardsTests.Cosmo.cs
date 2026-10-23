@@ -45,15 +45,30 @@ internal static partial class DungeonSpecificCardRewardsTests
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)),
             checked((ushort)(bounds.Y + bounds.Height / 2)));
+        var now = DateTimeOffset.Parse("2026-10-23T00:00:00Z");
         using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
             done.ToArray(), position: position, items: [(3330, bossRoll == 0 ? 40 : 80), (10305821, bossRoll == 0 ? 4 : 8)],
-            fatigueRemaining: bossRoll == 0 ? (ushort)8 : (ushort)16);
-        // 合成单件材料只验证结算之后的拾取，不改变生产掉率或材料数量。
-        var pool = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(items.Items.Get(HarlemMaterialDropPolicy.SkyWishId), 1) });
-        var generation = new DungeonDropGenerationPlan("超星空结算拾取回归", [new(10000, pool, 1, 1)]);
+            fatigueRemaining: bossRoll == 0 ? (ushort)8 : (ushort)16,
+            timeProvider: new Testing.Inventory.DailyBoosterTestClock(now));
+        // 使用生产装配的完整奖励，覆盖三种领主与再挑战后的真实地面对象容量。
+        var epicTable = DungeonHellEpicCatalog.Load(pvf);
+        var harlem = towns.DungeonMaps.Values.Where(map => map.HellDungeon && map.HellQuests.Contains(6080))
+            .SelectMany(map => map.Options).Select(option => checked((uint)option.DungeonId)).ToArray();
+        var epics = new HarlemHellEpicDropPolicy(harlem, epicTable.Pool(54, 1, items.Items.Get),
+            epicTable.Pool(54, 3, items.Items.Get), epicTable.Pool(54, 4, items.Items.Get),
+            epicTable.Pool(54, 2, items.Items.Get), cosmo: DungeonCosmoRewardCatalog.Load(pvf, dungeons, rooms));
+        var resourceDrops = new DungeonResourceDropPolicy(Testing.SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
+            drops.Get, items.Items.Get, items.DungeonSpecialDrops, new EquipmentAmplificationDropPolicy(items.Amplifications.Rules),
+            new HarlemMaterialDropPolicy(new(), harlem, items.Items.Get, epics), epics,
+            new HarlemAbyssBonusDropPolicy(new(), epics, items.Items.Get));
+        var hell = new DungeonHellRewardPolicy(DungeonHellDropRules.TryLoad(pvf)!, items.DungeonDropItems);
+        That(items.Items.Get(490014159).Expiration.Resolve(now) == 1582149600,
+            "真实过期活动候选保留原2020年截止，不以商城期限开关改写");
+        // 终点仍受控选择；其余抽样固定种子，复现历史过期活动候选命中。
+        var random = new Random(653 + bossRoll);
         var receipt = fixture.Session.EnterFormalDungeon(7191, 0, 4, dungeons, rooms, drops, items.Items,
-            draw: bound => bound == 100 ? bossRoll : 0, pieces: items.EpicPieces, hellParty: true,
-            prepareDrops: _ => monster => monster.IsBoss ? generation : new("超星空非领主回归", []))!;
+            draw: bound => bound == 100 ? bossRoll : random.Next(bound), pieces: items.EpicPieces, hellParty: true,
+            prepareDrops: entry => resourceDrops.PrepareEntry(entry, hell))!;
         That(receipt is { Entry.IsCosmo: true }, "超星空结算回归沿真实准入：" + fixture.Session.LastFormalDungeonRejection);
         That(receipt.Entry.BossMap.Id == (bossRoll == 0 ? 92689 : bossRoll == 45 ? 92690 : 92697),
             "结算回归分别覆盖三个带权重终点");
@@ -81,6 +96,7 @@ internal static partial class DungeonSpecificCardRewardsTests
             uint groundKey = 0;
             async Task ClearDungeon()
             {
+                groundKey = 0;
                 var path = QuestStoryRouteTests.Path(receipt.Entry.Maze.StaticTopology, receipt.Entry.StartMap.Position, receipt.Entry.BossMap.Position);
                 foreach (var point in path)
                 {
@@ -90,7 +106,20 @@ internal static partial class DungeonSpecificCardRewardsTests
                         var death = fixture.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);
                         That(death is { Outcome: DungeonRunOutcome.Accepted, Receipt: not null }, "超星空真实路线逐怪提交");
                         receipt = death.Receipt!;
-                        if (death.Drops.Length > 0) groundKey = death.Drops.Single().Reservation.GroundKey;
+                        That(death.Drops.All(row => row.Content.Item is not { } item || !item.IsExpired(now.ToUnixTimeSeconds())),
+                            "死亡提交只冻结有效资产，历史过期候选不进入地面账本");
+                        if (monster.IsBoss)
+                        {
+                            var saved = fixture.Read();
+                            var duplicate = fixture.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);
+                            That(duplicate.Outcome == DungeonRunOutcome.Duplicate && duplicate.Drops.IsEmpty &&
+                                QuestCompletionRepositoryTests.Same(saved, fixture.Read()), "终点死亡重报不重抽或重复发放奖励");
+                        }
+                        if (death.Drops.FirstOrDefault(row => row.Content.Item?.ItemId == HarlemMaterialDropPolicy.SkyWishId) is { } wish)
+                            groundKey = wish.Reservation.GroundKey;
+                        var rows = death.Drops.Select(row => new DungeonDropPacketItem(row.Reservation.GroundKey,
+                            row.Reservation.RecordSlot, row.Content.Item, 0, 0) { GoldAmount = row.GoldAmount }).ToArray();
+                        _ = ExclusiveDropPackets.MonsterDeath(death.MonsterKey, rows, 7191, death.BossPositionUpdate);
                     }
                     if (point == receipt.Entry.BossMap.Position) break;
                     var next = path[Array.IndexOf(path, point) + 1];
@@ -174,7 +203,7 @@ internal static partial class DungeonSpecificCardRewardsTests
                 receipt = retried;
                 await ClearDungeon();
                 That(fixture.Session.PickFormalDungeonItem(groundKey, items.Items, items.EpicPieces, items.GoldLimits)
-                    is { Outcome: DungeonRunOutcome.Accepted }, "再挑战后的独立地面奖励可拾取");
+                    is { Outcome: DungeonRunOutcome.Accepted, Commit.Duplicate: false }, "再挑战后的独立地面奖励可拾取");
             }
             if (bossRoll is 0 or 90)
             {

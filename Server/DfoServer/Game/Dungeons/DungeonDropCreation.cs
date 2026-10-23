@@ -29,7 +29,7 @@ internal static class DungeonDropCreation
         }
         core.Validate();
         if (core.IsExpired(now.ToUnixTimeSeconds()))
-            throw new InvalidDataException("已过期的资源模板不能生成地面奖励");
+            throw new InvalidDataException($"已过期的资源模板不能生成地面奖励: item={template.Id}, expires={core.ExpireTime}, now={now.ToUnixTimeSeconds()}");
         return core;
     }
 }

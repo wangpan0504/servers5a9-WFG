@@ -119,6 +119,10 @@ internal sealed class DungeonDropGenerationPlan
             if (pool!.TotalWeight == 0)
                 continue;
             var template = pool.Select(Sample(pool.TotalWeight));
+            // 保留原池权重：过期活动物品命中只冻结为空，不重抽、不续期，也不阻断其它奖励及死亡提交。
+            int expiresAt = template.Expiration.Resolve(now);
+            if (expiresAt > 0 && expiresAt <= now.ToUnixTimeSeconds())
+                continue;
             if (trial.ItemCounts is { } counts) count = counts[template.Id];
             if (template.Kind == ItemKind.Equipment)
             {

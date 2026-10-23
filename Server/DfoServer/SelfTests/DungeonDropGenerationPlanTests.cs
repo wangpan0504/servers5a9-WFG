@@ -38,6 +38,25 @@ internal static class DungeonDropGenerationPlanTests
         That(independent.Generate(bound => bound == 1000000 ? 499999 : 0, DateTimeOffset.UtcNow).Length == 1 &&
             independent.Generate(bound => bound == 1000000 ? 500000 : 0, DateTimeOffset.UtcNow).IsEmpty,
             "不同随机分母保留原临界值，百万分母不能被固定万分母截断");
+        var deadline = DateTimeOffset.FromUnixTimeSeconds(1800000000);
+        var expired = stack with { Id = 3000, Expiration = new(deadline.ToUnixTimeSeconds()) };
+        var mixed = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(expired, 1), new(stack, 1) });
+        var dated = new DungeonDropGenerationPlan("合成到期候选与合法奖励", [new(10000, mixed, 1, 1), new(10000, pool, 1, 1)]);
+        int draws = 0;
+        var afterExpiry = dated.Generate(_ => { draws++; return 0; }, deadline);
+        That(afterExpiry.Length == 1 && afterExpiry.Single().Item!.ItemId == stack.Id && draws == 4 && mixed.TotalWeight == 2,
+            "命中过期候选不重抽、不改权重，后续合法奖励仍完整生成");
+        That(dated.Generate(_ => 0, deadline.AddSeconds(-1)).Select(row => row.Item!.ItemId).SequenceEqual(new[] { expired.Id, stack.Id }),
+            "截止之前仍可生成有效活动物品，不能在启动或入图时永久删掉候选");
+        var emptyPlan = new DungeonDropGenerationPlan("全部候选到期", [new(10000, mixed, 1, 1)]);
+        That(emptyPlan.Generate(_ => 0, deadline.AddSeconds(1)).IsEmpty,
+            "全部抽样到期可冻结空集合，不制造替代物或抛出连接异常");
+        var relative = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(expired with { Expiration = new(deadline.ToUnixTimeSeconds(), Days: 1) }, 1) });
+        var relativePlan = new DungeonDropGenerationPlan("相对期限优先", [new(10000, relative, 1, 1)]);
+        That(relativePlan.Generate(_ => 0, deadline).Single().Item!.ExpireTime == deadline.ToUnixTimeSeconds() + 86400,
+            "绝对日期已过但相对期限有效时不误删奖励");
+        Reject<InvalidDataException>(() => DungeonDropCreation.Create(expired, 1, _ => 0, deadline),
+            "底层创建仍拒绝过期资产，不借掉落容错延长其它入口期限");
         Console.WriteLine($"PASS {Count - before} 完整掉落生成数量、未命中及独立装备属性断言");
     }
 }
