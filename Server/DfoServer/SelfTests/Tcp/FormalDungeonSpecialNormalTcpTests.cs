@@ -66,7 +66,7 @@ internal static partial class FormalDungeonTcpTests
             SelectMap(peer);
             byte[] request = Selection(0);
             BinaryPrimitives.WriteUInt32LittleEndian(request,(uint)sample.Id);
-            request.AsSpan(16,4).Clear();
+            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),questId);
             string before = fixture.Snapshot();
             peer.Send(16,request); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
             That(fixture.Snapshot() == before,"非指定难度拒绝不扣票、疲劳或预留实例");
@@ -109,7 +109,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Send(39,report);
                     var packets = Drain();
                     foreach (var notice in packets.Where(packet => packet.Kind == 0 && packet.Opcode == 38))
-                        PickupResourceDrops(fixture,peer,notice.Body,0);
+                        PickupResourceDrops(fixture,peer,notice.Body,questId);
                     var state = fixture.Snapshot();
                     peer.Send(39,report);
                     Drain();

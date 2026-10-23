@@ -294,6 +294,7 @@ internal sealed record DungeonEntryPlan(
                 candidates = [candidates[index]];
                 ordinaryHunt = true;
                 routeQuest = 0;
+                layoutQuest = null;
             }
         }
         // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
@@ -351,7 +352,7 @@ internal sealed record DungeonEntryPlan(
         // 不能要求DGN重复写boss种类；只改本次计划，地图与怪物身份仍由原资源及Run复验。
         // 任务路线继续要求明确的清图目标，叠层、条件和多阶段路线保留原合同。
         bool ordinaryBossCell = !definition.IsTutorial && !definition.IsClassExperience && !definition.IsTournament && dungeonId != 5000 &&
-            routeQuest == 0 && questId == 0 && layoutQuest is null &&
+            routeQuest == 0 && (questId == 0 || ordinaryHunt) && layoutQuest is null &&
             maze.QuestConnectionTokens.Count == 0 && maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.DummyStages.Count == 0;
         if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && (ordinaryBossCell || layoutQuest is not null &&
             QuestClearEligibility.IsSingleMap(layoutQuest) && (bosses[0].Id == layoutQuest.IntData[0] ||
@@ -507,15 +508,21 @@ internal sealed record DungeonEntryPlan(
     {
         bool listClear = quest.Grade == "[side]" && QuestDungeonClearProgress.MatchesAlternative(quest,dungeonId,difficulty);
         bool autoDaily = QuestAutoDailyPlan.MatchesDungeon(quest,dungeonId,difficulty);
+        // 已支持的材料每日与每日累计通关任务保留接取身份，但不要求原资源不存在的任务迷宫。
+        bool normalMission = QuestCycle.NormalDungeonMission(quest) && quest.Definition!.Dungeons.Any(row =>
+            row.DungeonId == dungeonId && (row.Parameter == -1 || row.Parameter is >= 0 and <= 4 && row.Parameter <= difficulty));
+        bool dailyClear = QuestDungeonClearProgress.CountOncePerDay(quest) &&
+            quest.Grade is "[side]" or "[mission]" && QuestDungeonClearProgress.TryTarget(quest,out var target) &&
+            target.DungeonId == dungeonId && (target.MinimumDifficulty == -1 || target.MinimumDifficulty <= difficulty);
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
-            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
+            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
             // 支线杀怪保留0..3，列表通关沿正式0..4难度域；-1不限，仍须命中dungeon info。
-            quest.Grade == "[side]" && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
+            quest.Grade == "[side]" && !dailyClear && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
                 (row.Parameter == -1 || (quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 ||
                     listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
                 !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
-            quest.Grade is not ("[side]" or "[achievement]") && !autoDaily ||
+            quest.Grade is not ("[side]" or "[achievement]") && !autoDaily && !normalMission && !dailyClear ||
             definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
                 (maze.ConnectionQuestId is not { } connected || connected == questId))) return false;
         if (quest.Condition == "[hunt monster]")
@@ -526,8 +533,8 @@ internal sealed record DungeonEntryPlan(
         }
         // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。
         // #256黑市EXP的6053/6056/6059（seeking sub type 0）同样只借用普通路线，材料来自任务声明的本图怪物掉落。
-        else if (!listClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
-                QuestLifecyclePlan.HarlemSeeking(quest)) ||
+        else if (!listClear && !dailyClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
+                QuestLifecyclePlan.HarlemSeeking(quest) || normalMission) ||
             !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)))) return false;
         var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
         return active.AcceptanceId != Guid.Empty &&

@@ -1,5 +1,6 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Testing;
@@ -59,6 +60,44 @@ internal static class SpecialNormalDungeonEntryTests
                 (uint)id,0,2,out _,out var levelReason,quests: quests) && levelReason == "dungeon-level-too-low",
                 $"普通副本{id}保留最低等级限制");
         }
+        foreach (ushort questId in new ushort[] { 2683,10019,2902,13200,8683 })
+        {
+            var quest = quests.Get(questId);
+            bool daily = QuestCycle.NormalDungeonMission(quest);
+            var accepted = new ActiveMainQuest(0,questId,daily ? 1u : 5u) { AcceptanceId = Guid.NewGuid() };
+            var owner = character with { ActiveMainQuests = [accepted] };
+            var targets = daily ? quest.Definition!.Dungeons.Select(row => row.DungeonId).ToArray() : [quest.IntData[0]];
+            foreach (int id in targets.Where(DungeonIds.Contains))
+            {
+                var definition = catalog.Get(id);
+                That(DungeonEntryPlan.TryCreate(catalog,owner,(uint)id,questId,2,out var explicitPlan,out var reason,
+                    quest:quest,quests:quests,draw:_ => 0),$"任务{questId}显式进入普通副本{id}：{reason}");
+                That(explicitPlan is { IsOrdinary:true,RouteQuestId:0,Difficulty:2 } &&
+                    explicitPlan.QuestId == questId && explicitPlan.QuestAcceptanceId == accepted.AcceptanceId &&
+                    explicitPlan.EntryItem == definition.OrdinaryEntryTicket && explicitPlan.StartFatigue == definition.StartFatigue,
+                    "普通任务路线保留真实接取、原门票和一次疲劳，不转成免票剧情副本");
+                That(DungeonEntryPlan.TryCreate(catalog,owner,(uint)id,0,2,out var zeroPlan,out _,quests:quests,draw:_ => 0) &&
+                    zeroPlan!.BossMap == explicitPlan!.BossMap,"显式任务与零任务编号选中同一普通Boss路线");
+                That(!DungeonEntryPlan.TryCreate(catalog,character,(uint)id,questId,2,out _,out var inactive,
+                    quest:quest,quests:quests) && inactive == "quest-not-active","放弃后不能再使用旧任务身份进图");
+                foreach (byte wrong in new byte[] { 0,1,3,4 })
+                    That(!DungeonEntryPlan.TryCreate(catalog,owner,(uint)id,questId,wrong,out _,out _,quest:quest,quests:quests),
+                        "显式任务不能绕过普通副本指定难度");
+                That(!DungeonEntryPlan.TryCreate(catalog,owner with { ActiveMainQuests = [accepted with { AcceptanceId = Guid.Empty }] },
+                    (uint)id,questId,2,out _,out _,quest:quest,quests:quests),"空接取身份不借普通路线");
+            }
+            int wrongDungeon = questId == 13200 ? 9595 : 9607;
+            That(!DungeonEntryPlan.TryCreate(catalog,owner,(uint)wrongDungeon,questId,2,out _,out _,quest:quest,quests:quests),
+                "无关目标副本不能借用另一任务的普通路线");
+            var foreign = quest with { Id=29999 };
+            That(!DungeonEntryPlan.TryCreate(catalog,character with { ActiveMainQuests = [accepted with { QuestId=29999 }] },
+                (uint)targets[0],29999,2,out _,out _,quest:foreign,quests:quests),"不把已确认任务合同扩展到未知每日或通关任务");
+        }
+        var two = character with { ActiveMainQuests = [
+            new(0,2683,1) { AcceptanceId=Guid.NewGuid() },new(1,10019,1) { AcceptanceId=Guid.NewGuid() }] };
+        foreach (uint id in new uint[] { 2683,10019 })
+            That(DungeonEntryPlan.TryCreate(catalog,two,9599,id,2,out var paired,out _,quest:quests.Get((int)id),quests:quests) &&
+                paired!.QuestAcceptances.Length == 2,"同图两项材料任务均保留原接取，不相互覆盖");
         That(failures.Count == 0,"普通副本全路线准入：" + string.Join("; ",failures));
         Console.WriteLine($"PASS {Count-checks} 安徒恩、卢克与超时空普通副本资源及正式Run断言（非客户端实机）");
     }

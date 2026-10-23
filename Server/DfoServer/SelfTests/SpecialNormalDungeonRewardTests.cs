@@ -77,7 +77,7 @@ internal static class SpecialNormalDungeonRewardTests
             Play(fixture, id);
         }
 
-        void Play(QuestSceneTests.Fixture fixture, int id)
+        void Play(QuestSceneTests.Fixture fixture, int id, uint questId = 0)
         {
             var definition = dungeons.Get(id);
             var fee = definition.OrdinaryEntryTicket;
@@ -85,7 +85,7 @@ internal static class SpecialNormalDungeonRewardTests
             long beforeFee = fee is { } cost ? CountItem(cost.ItemId) : 0;
             var random = new Random(id);
             bool rollbackChecked = false;
-            var entry = fixture.Session.EnterFormalDungeon((uint)id, 0, 2, dungeons, rooms, monsters, items.Items,
+            var entry = fixture.Session.EnterFormalDungeon((uint)id, questId, 2, dungeons, rooms, monsters, items.Items,
                 draw: bound => id == 400000016 && bound == 1000000 ? 0 : random.Next(bound),
                 pieces: items.EpicPieces, prepareDrops: value => drops.PrepareEntry(value));
             That(entry is not null, $"{id}真实掉落准备后入场：{fixture.Session.LastFormalDungeonRejection}");
@@ -197,6 +197,9 @@ internal static class SpecialNormalDungeonRewardTests
             var accept = fixture.Session.ChangeQuest((ushort)questId, QuestLifecycleAction.Accept, resources.Quests,
                 items.Items, items.GoldLimits, items.EpicPieces);
             That(accept?.Commit is not null, $"{questId}原资源接取：{QuestEligibility.Evaluate(fixture.Read(), quest, resources.Quests).Reason}");
+            if (questId == 10019)
+                That(fixture.Session.ChangeQuest(2683,QuestLifecycleAction.Accept,resources.Quests,
+                    items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,"神经细胞与高级塔尔坦材料任务可同时接取");
             var original = fixture.Read().ActiveMainQuests.Single(row => row.QuestId == questId);
             bool daily = QuestCycle.NormalDungeonMission(quest);
             That(original.ConditionState == (daily ? 1 : 5), "寻物或五次通关采用对应的初始条件");
@@ -212,14 +215,14 @@ internal static class SpecialNormalDungeonRewardTests
                     fixture.Sql($"UPDATE character_quest_daily_clear SET day={QuestCycle.Day(DateTimeOffset.UtcNow.AddDays(-1))} WHERE quest_id={questId}; UPDATE character_fatigue SET used=0,remaining=maximum");
                     fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
                 }
-                Play(fixture, route[index]);
+                Play(fixture, route[index], (uint)questId);
                 var active = fixture.Read().ActiveMainQuests.Single(row => row.QuestId == questId);
                 That(active.AcceptanceId == original.AcceptanceId, "多次入场保留同一真实接取身份");
                 if (!daily) That(active.ConditionState == 4 - index, "每次真实通关只减一次，重放不额外计数");
                 if (dailyClear && index == 0)
                 {
                     fixture.Session.ReturnToRoster(); fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
-                    Play(fixture,route[index]);
+                    Play(fixture,route[index], (uint)questId);
                     That(fixture.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == 4,
                         "重登后同日第二个真实实例仍不累计；下一轮只把账本日期设为前日来复核跨日资格");
                 }
@@ -236,6 +239,14 @@ internal static class SpecialNormalDungeonRewardTests
                     That(fixture.Read().Inventory.Items.Where(row => row.Core.ItemId == quest.IntData[at]).Sum(row => row.Core.Count) == quest.IntData[at + 1],
                         "任务材料按原掉落行和持有上限获得完整数量");
             }
+            if (daily)
+                That(DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),(uint)route[^1],(uint)questId,2,out var ready,out _,
+                    quest:quest,quests:resources.Quests) && ready is { IsOrdinary:true },
+                    "材料收齐但未交付仍可携带原任务身份进入普通路线");
+            if (questId == 10019)
+                That(fixture.Read().ActiveMainQuests.Any(row => row.QuestId == 2683 && row.ConditionState == 1) &&
+                    fixture.Read().Inventory.Items.Any(row => row.Core.ItemId == 10093923),
+                    "同一次真实能源通关也推进另一材料任务，但缺少其余材料不能提前达成");
             var rewardPairs = daily ? quest.Rewards : quest.Definition!.SelectRewards.Take(2).ToArray();
             var expectedRewards = Enumerable.Range(0, rewardPairs.Count / 2)
                 .Select(at => (Item: rewardPairs[at * 2].Value, Count: rewardPairs[at * 2 + 1].Value)).ToArray();
