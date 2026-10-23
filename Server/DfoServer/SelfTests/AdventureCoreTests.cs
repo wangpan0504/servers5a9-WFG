@@ -16,14 +16,18 @@ namespace DfoServer;
 
 internal static class AdventureCoreTests
 {
-    internal static AdventureCatalog SyntheticCatalog()
+    // secondSwordman 为 true 时分类0声明两个转职，用于区分“已收集但未集齐”与“整类集齐”两种按钮状态。
+    internal static AdventureCatalog SyntheticCatalog(bool secondSwordman = false)
     {
         var strings = new List<string>();
+        object[] swordman = secondSwordman
+            ? ["[info]", "[swordman]", "second awakening", 1, 0, 0, 1, "[info]", "[swordman]", "second awakening", 2, 0, 0, 1]
+            : ["[info]", "[swordman]", "second awakening", 1, 0, 0, 1];
         PvfToken Token(object value) => value switch
         {
             int integer => new(0, integer),
             float number => new(2, BitConverter.SingleToInt32Bits(number)),
-            string text => new(text.StartsWith('[') && !text.StartsWith("[swordman]") && !text.StartsWith("[A]") ? (byte)3 : (byte)6, Add(text)),
+            string text => new(text.StartsWith('[') && !text.StartsWith("[swordman]") && !text.StartsWith("[fighter]") && !text.StartsWith("[A]") ? (byte)3 : (byte)6, Add(text)),
             _ => throw new InvalidDataException()
         };
         int Add(string text) { strings.Add(text); return strings.Count - 1; }
@@ -36,7 +40,8 @@ internal static class AdventureCoreTests
             "[etc]", 2, "add tower of despair enter count", 1, "+%d", 1,
             "[item]", 20, "antonium drop", 60, "+%.2f%%", 1,
             "[/attribute]", "[attribute]", 3, "[/attribute]", "[/attribute list]",
-            "[expert list]", "[group]", 0, "profession", "[info]", "[swordman]", "second awakening", 1, 0, 0, 1, "[/group]", "[/expert list]",
+            "[expert list]", "[group]", 0, "profession", .. swordman, "[/group]",
+            "[group]", 1, "[info]", "[fighter]", "second awakening", 1, 0, 0, 1, "[/group]", "[/expert list]",
             "[adventurer shop list]", "[shop]", "[index]", 0, "[max shop point]", 250, "[exp to get shop point]", 5, 1,
             "[adventurer shop purchase info]", 1000, 1, 1, 2, 3, "[/adventurer shop purchase info]", "[/shop]",
             "[shop]", "[index]", 1, "[max shop point]", 9999, "[reset point]", "[adventurer shop purchase info]", "[/adventurer shop purchase info]", "[/shop]",
@@ -106,9 +111,27 @@ internal static class AdventureCoreTests
                 AdventurePackets.PreyRaidClearOffset, AdventurePackets.DuelWinOffset,
                 AdventurePackets.DespairTowerClearOffset, AdventurePackets.LamentTowerClearOffset
             }.All(offset => BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(18 + offset)) == 0) &&
-            BinaryPrimitives.ReadUInt16LittleEndian(info.AsSpan(18 + 7360)) == 0 && info[18 + 7362] == 0 &&
-            info[18 + 7360 + 3 + 2] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(info.AsSpan(18 + 7360 + 3)) == 0,
-            "1343完整7440B、账号数量、连续登录、七项内容熟练度u32、收藏分类表结构及u64经验");
+            info[18 + AdventurePackets.ContentCountsOffset] == 0 &&
+            info[18 + AdventurePackets.ContentCountsOffset + 1] == 1 &&
+            info[18 + AdventurePackets.ContentCountsOffset + 2] == 1 &&
+            info[18 + AdventurePackets.ContentCountsOffset + 3] == 1 &&
+            info[18 + AdventurePackets.ContentCountsOffset + 4] == 0 &&
+            info[18 + AdventurePackets.ContentCountsOffset + 5] == 0,
+            "1343完整7440B、账号数量、连续登录、七项内容熟练度u32、收藏分类按整类集齐下发（type:u8@0、count:u8@1、complete:u8@2）及u64经验");
+        var sameBranch = snapshot with { Members = members.Add(new AdventureMember(4, 3, "HeroC", 0, 33, 95, 5, 0)) };
+        That(sameBranch.Collections(catalog)[0] is { Count: 1, Complete: true },
+            "收藏分类计数按不同转职去重，同一分支的多个角色只计一次，整类集齐时complete=1");
+        var crossGroup = snapshot with { Members = members.Add(new AdventureMember(4, 3, "FighterC", 1, 33, 95, 5, 0)) };
+        var crossCounts = crossGroup.Collections(catalog);
+        That(crossCounts[0] is { Count: 1, Complete: true } && crossCounts[1] is { Count: 1, Complete: true } &&
+            crossCounts[2] is { Count: 0, Complete: false },
+            "收藏分类状态按PVF expert list分组，未收集的分类保持0且不点亮");
+        // 分类声明两个转职时，只收集其中一个不能点亮；集齐整类才下发complete，对应客户端FUN_00D8F1C0的byte2判定。
+        var wide = SyntheticCatalog(secondSwordman: true);
+        var partial = snapshot.Collections(wide);
+        var full = (snapshot with { Members = members.Add(new AdventureMember(5, 4, "HeroD", 0, 34, 95, 3, 0)) }).Collections(wide);
+        That(partial[0] is { Count: 1, Complete: false } && full[0] is { Count: 2, Complete: true },
+            "整类未集齐时按钮保持灰色，集齐全部转职后complete才为1");
         // 角标是u8：熟练等级超过255时客户端只能显示最高档，服务端按上限饱和，不能截断成回绕值。
         var capped = snapshot with { Members = ImmutableArray.Create(new AdventureMember(2, 1, "HeroB", 0, 33, 95, 300, 0)) };
         That(AdventurePackets.Information(42, capped, catalog, capped.Representatives(catalog))[18 + 72 + 42] == 255,

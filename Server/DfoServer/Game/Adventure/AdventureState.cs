@@ -49,17 +49,40 @@ internal sealed record AdventureState(long Revision, string Name, int CreatedDat
     }
 }
 // 内容通关累计按内容类型索引；type0为推荐地下城。当前只有推荐地下城有服务端通关来源（写入1343的u32@16），
-// 其余内容未接入时不伪造数值；该数组不再写入20组收藏分类表。
+// 其余内容未接入时不伪造数值；收藏分类状态不使用该数组，见AdventureSnapshot.Collections。
 internal static class AdventureContent
 {
     public const int Count = 20;
     public const int RecommendedDungeon = 0;
 }
+// 收藏分类状态：Count 是已收集的不同转职数，Complete 表示该类在资源里声明的转职已全部收集。
+internal readonly record struct AdventureCollection(ushort Count, bool Complete);
 
 internal sealed record AdventureSnapshot(AdventureState State, ImmutableArray<AdventureMember> Members)
 {
     // 内容通关累计按账号汇总；默认全零，读取时由角色级计数填充。
     public ImmutableArray<ushort> ContentCounts { get; init; } = ImmutableArray.Create(new ushort[AdventureContent.Count]);
+
+    // 收藏分类状态：按PVF [expert list] 分类统计已收集的不同转职数，同一分支的多个角色只计一次。
+    // 角色簿左侧分类按钮由客户端FUN_00D8F1C0按显示槽3字节判定：有符号byte0>=0、有符号byte1>0才记为已收集，
+    // byte2非0才金色且可点；因此Complete必须是整类集齐，而不是计数的一部分。没有收集的分类保持0，不伪造。
+    public ImmutableArray<AdventureCollection> Collections(AdventureCatalog catalog)
+    {
+        var counts = new ushort[AdventureCatalog.CollectionGroupCount];
+        foreach (var group in Members.Where(row => catalog.Eligible(row.Job, row.Grow, row.Level))
+            .GroupBy(row => (row.Job, Grow: row.ProfessionGrow)))
+        {
+            if (!catalog.Professions.TryGetValue(group.Key, out var profession)) continue;
+            if (counts[profession.Group] < ushort.MaxValue) counts[profession.Group]++;
+        }
+        var result = ImmutableArray.CreateBuilder<AdventureCollection>(AdventureCatalog.CollectionGroupCount);
+        for (int group = 0; group < AdventureCatalog.CollectionGroupCount; group++)
+        {
+            int total = catalog.CollectionTotals.GetValueOrDefault((byte)group);
+            result.Add(new AdventureCollection(counts[group], total > 0 && counts[group] >= total));
+        }
+        return result.MoveToImmutable();
+    }
 
     public ImmutableArray<AdventureMember> Representatives(AdventureCatalog catalog)
     {

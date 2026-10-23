@@ -90,10 +90,19 @@ internal static class AdventurePackets
         {
             U32(raw, PurchasesOffset + at * 8, checked((uint)pair.Key)); U32(raw, PurchasesOffset + at++ * 8 + 4, pair.Value);
         }
-        // 20组分类计数：count u16在前、type u8在后。90CN同源结构把该表用于收藏分类而非内容熟练度
-        // （内容熟练度已改为上面的独立u32）；本版暂无收藏统计来源，计数保持0，不借内容累计充当。
-        for (byte type = 0; type < AdventureContent.Count; type++)
-            raw[ContentCountsOffset + type * 3 + 2] = type;
+        // 20组收藏分类状态：每组type:u8@0、count:u8@1、complete:u8@2。客户端01034220按4块×15B把该表整体复制到收藏对象+0x98，
+        // 显示侧FUN_00D8F4B0逐槽取u16@0与byte@2到角色簿显示槽+0x12C/+0x12D/+0x12E，
+        // FUN_00D8F1C0再按“有符号byte0>=0、有符号byte1>0、byte2!=0”决定左侧分类按钮金色且可点，否则置灰禁用。
+        // 因此count只能占1字节（超过127会被当作负数），byte2是整类集齐标志而不是计数高字节。
+        // 1477回包由01034DC0用同一3字节结构按byte0匹配分类并写回该槽，两处布局必须一致。
+        // 该表不是内容熟练度，后者是上面的独立u32；未收集分类的count与complete都写0。
+        var collection = snapshot.Collections(catalog);
+        for (int type = 0; type < AdventureCatalog.CollectionGroupCount; type++)
+        {
+            raw[ContentCountsOffset + type * 3] = (byte)type;
+            raw[ContentCountsOffset + type * 3 + 1] = (byte)Math.Min((int)collection[type].Count, 127);
+            raw[ContentCountsOffset + type * 3 + 2] = collection[type].Complete ? (byte)1 : (byte)0;
+        }
         U64(raw, CapsuleOffset, snapshot.State.CapsuleExperience);
         U32(raw, ClaimsOffset, Claims(snapshot.State, catalog));
         writer.Write(raw.Length); writer.Write(raw); PacketEncoding.WriteString(writer, snapshot.State.Name);
@@ -123,9 +132,13 @@ internal static class AdventurePackets
             Name(row.AsSpan(20, 30), member.Name); writer.Write(row);
         }
     });
-    public static byte[] Representative(AdventureProfession profession, ushort count, AdventureMember member) => Build(writer =>
+    // 1477成功回包：ACK、分类结构长度u32=3、type:u8、count:u8、complete:u8、收藏行长度u32=52、52B行。
+    // 客户端01034DC0把这3字节整体写回收藏表对应槽并复用显示刷新，布局必须与1343表完全一致；
+    // count超过127会被显示侧当作负数而置灰，宽度写错还会让52B行整体错位。
+    public static byte[] Representative(AdventureProfession profession, AdventureCollection collection, AdventureMember member) => Build(writer =>
     {
-        writer.Write((byte)1); writer.Write(3u); writer.Write(profession.Group); writer.Write(count);
+        writer.Write((byte)1); writer.Write(3u); writer.Write(profession.Group);
+        writer.Write((byte)Math.Min((int)collection.Count, 127)); writer.Write(collection.Complete ? (byte)1 : (byte)0);
         var row = new byte[52]; WriteCollection(row, member);
         writer.Write(52u); writer.Write(row);
     });

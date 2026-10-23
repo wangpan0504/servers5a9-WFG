@@ -19,6 +19,8 @@ internal sealed record AdventureCapsule(ulong MinimumExperience, ulong GaugeExpe
 internal sealed class AdventureCatalog
 {
     public const string ResourcePath = "etc/adventurersystem/adventurersystem2018.etc";
+    // 1343 RAW+7360 固定下发20组收藏分类，客户端01034220按4块×15B复制到收藏对象+0x98。
+    public const int CollectionGroupCount = 20;
     static readonly string[] Jobs = ["swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief", "at fighter",
         "at mage", "demonic swordman", "creator mage", "at swordman", "knight", "demonic lancer", "at priest", "gun blader"];
     public int MaximumLevel { get; }
@@ -26,6 +28,8 @@ internal sealed class AdventureCatalog
     public FrozenDictionary<int, ulong> Experience { get; }
     public FrozenDictionary<int, AdventureBenefit> Benefits { get; }
     public FrozenDictionary<(byte Job, byte Grow), AdventureProfession> Professions { get; }
+    // 每个收藏分类在资源里声明的转职总数；客户端角色簿按整类集齐才点亮左侧分类按钮。
+    public FrozenDictionary<byte, int> CollectionTotals { get; }
     public FrozenDictionary<byte, AdventureShop> Shops { get; }
     public FrozenDictionary<(byte Category, int Item), AdventureProduct> Products { get; }
     public AdventureCapsule Capsule { get; }
@@ -60,7 +64,7 @@ internal sealed class AdventureCatalog
         foreach (var group in Required(main, "expert list").Children.Where(row => row.Name == "group"))
         {
             byte classification = checked((byte)Integer(group.Values[0]));
-            if (classification >= 20) throw new InvalidDataException("冒险团职业分类超过本版20项");
+            if (classification >= CollectionGroupCount) throw new InvalidDataException("冒险团职业分类超过本版20项");
             foreach (var row in group.Children.Where(row => row.Name == "info"))
             {
                 int job = Array.IndexOf(Jobs, String(row.Values[0]).Trim('[', ']'));
@@ -72,6 +76,8 @@ internal sealed class AdventureCatalog
             }
         }
         Professions = professions.ToFrozenDictionary();
+        CollectionTotals = professions.Values.GroupBy(row => row.Group)
+            .ToFrozenDictionary(group => group.Key, group => group.Count());
         var shops = new Dictionary<byte, AdventureShop>();
         var products = new Dictionary<(byte, int), AdventureProduct>();
         foreach (var shop in Required(main, "adventurer shop list").Children.Where(row => row.Name == "shop"))

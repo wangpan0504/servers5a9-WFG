@@ -34,9 +34,9 @@ internal sealed partial class AdventureHandler
         {
             var profession = representatives.Catalog.Professions[(request.Job, request.Grow)];
             var member = snapshot.Representatives(representatives.Catalog).Single(row => row.Job == request.Job && row.ProfessionGrow == request.Grow);
-            ushort count = checked((ushort)snapshot.Members.Count(row => representatives.Catalog.Eligible(row.Job, row.Grow, row.Level) &&
-                representatives.Catalog.Professions[(row.Job, row.ProfessionGrow)].Group == profession.Group));
-            body = AdventurePackets.Representative(profession, count, member);
+            // 1477与1343使用同一收藏口径：按分类统计不同转职数，并用整类集齐标志点亮左侧分类按钮。
+            var collection = snapshot.Collections(representatives.Catalog)[profession.Group];
+            body = AdventurePackets.Representative(profession, collection, member);
         }
         await context.Reply(CmdPacketType.SET_REPRESENT_CHARAC_JOB, body, "adventure_representative_set",
             result.Accepted ? () => context.Session.CanPublishAdventureRepresentative(result) : null);
