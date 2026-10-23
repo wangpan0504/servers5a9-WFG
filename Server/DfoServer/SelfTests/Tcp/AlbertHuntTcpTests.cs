@@ -57,7 +57,7 @@ internal static class AlbertHuntTcpTests
         byte[] lastDeath = [];
         using (var owner = new AccountOwners().Acquire(account,() => { }))
         {
-            // 登录前只准备等级与入口前置；父子活动槽、猎杀计数、清图及领奖都从真实请求建立。
+            // 登录前只准备等级、入口前置和已有2碎片；父子活动槽、猎杀计数、清图及领奖都从真实请求建立。
             var candidate = CharacterCreation.Prepare(name,resources.Characters.Get(0),position,position,resources.Learning.Get);
             var learning = SkillPointLedger.Synchronize(0,0,58,candidate.InitialLearning with
                 { Experience = growth.GetLevelStartExperience(58) },resources.Learning);
@@ -65,13 +65,16 @@ internal static class AlbertHuntTcpTests
             rewardSlot = checked((ushort)Enumerable.Range(range.Start,range.End-range.Start+1)
                 .First(index => candidate.Inventory.Find(new(InventoryListType.Main,checked((short)index))) is null));
             created = new CharacterRepository(fixture.Database).Create(owner,candidate with
-                { Level = 58,AcceptedStoryLevel = 1,CompletedQuests = done.ToArray(),InitialLearning = learning });
+                { Level = 58,AcceptedStoryLevel = 1,CompletedQuests = done.ToArray(),InitialLearning = learning,
+                    Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0,
+                        new(InventoryListType.Main,checked((short)rewardSlot)),
+                        InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10164800),2))) } });
         }
         using (var peer = Open(fixture,account))
         {
             Roster(peer.Roster,true,created);
             peer.Select(0,prepared:true,resumeTown:true,room:false);
-            That(peer.Id == created.Id && Materials() == 0,"独立账号唯一名册行0对应自建角色，初始没有任务碎片");
+            That(peer.Id == created.Id && Materials() == 2,"独立账号唯一名册行0对应自建角色，初始已有2个任务碎片");
             peer.Send(31,[31,0,130,13]); peer.Expect(1,31,[1,130,13,2,0,0,0,0]); drain(peer,null);
             peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[1,144,13,25,2,0,0,0]); drain(peer,null);
             string identities = Identities();
@@ -79,7 +82,7 @@ internal static class AlbertHuntTcpTests
             huntAcceptance = (string)fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3472",created.Id)[0][0];
             Progress(537);
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); peer.Barrier();
-            That(Identities() == identities && Materials() == 0 && Completions() is [[0L]],
+            That(Identities() == identities && Materials() == 2 && Completions() is [[0L]],
                 "未猎杀前真实34拒绝，不把等级或父接取变成已达成子任务");
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
             peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,new byte[42]);
@@ -140,7 +143,7 @@ internal static class AlbertHuntTcpTests
                     peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
                 }
             }
-            That(deaths == 56 && targetDeaths == 34 && passiveObjects == 121 && scalar == 0 && Materials() == 0 &&
+            That(deaths == 56 && targetDeaths == 34 && passiveObjects == 121 && scalar == 0 && Materials() == 2 &&
                 fixture.Query("SELECT count(*),count(DISTINCT event_id),count(DISTINCT monster_key),count(DISTINCT instance_id) FROM character_dungeon_growth_receipts WHERE character_id=$p0",created.Id)
                     is [[56L,56L,56L,1L]] &&
                 fixture.Query("SELECT monster_id,count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 GROUP BY monster_id ORDER BY monster_id",created.Id)
@@ -153,13 +156,17 @@ internal static class AlbertHuntTcpTests
                 writer.Write(10164800u); writer.Write(2u); writer.Write(new byte[9]); }));
             var balance = peer.Expect(0,14).Body;
             That(balance.Length == 126 && balance[0] == 0 && U16(balance,1) == 1 && U16(balance,3) == rewardSlot &&
-                U32(balance,5) == 10164800 && U32(balance,9) == 2,"猎杀子34之后以完整Main行投影真实碎片2");
+                U32(balance,5) == 10164800 && U32(balance,9) == 4,"猎杀子34之后以完整Main行投影已有2加奖励2的真实碎片4");
             peer.Expect(0,574,Convert.FromHexString("01000000820D01000000")); peer.Expect(0,21);
             That(peer.Expect(0,356).Body[4+3472] == 1,"正式交付后才发布3472完成位"); peer.Barrier();
             Delivered();
             string delivered = State();
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); peer.Barrier();
             That(State() == delivered,"重复猎杀子34不重复发碎片或关闭父任务");
+            peer.Send(31,[31,0,145,13]); peer.Expect(1,31,[1,145,13,0,0,0,0,0]);
+            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
+            peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            That(Materials() == 4 && Completions() is [[1L]],"Boss及猎杀奖励后立即接真实末子，4/3只归零父子条件、不自动消费或领奖");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
             peer.Expect(0,24); drain(peer,null);
             peer.Send(3,[0]); peer.Expect(1,3,[1]); peer.Closed();
@@ -168,10 +175,17 @@ internal static class AlbertHuntTcpTests
         {
             Roster(peer.Roster,true,created);
             var selected = peer.Select(0,prepared:true,resumeTown:true,room:false);
-            That(peer.Id == created.Id && U16(selected[0].Body,22) == 3458 && U32(selected[0].Body,24) == 1 &&
-                peer.CompletedQuestHistory[4+3472] == 1,"重连选角回放原父1和真实猎杀子完成，不预置重连结果");
-            Delivered();
+            That(peer.Id == created.Id && U16(selected[0].Body,22) == 3458 && U32(selected[0].Body,24) == 0 &&
+                U16(selected[0].Body,28) == 3473 && U32(selected[0].Body,30) == 0 &&
+                peer.CompletedQuestHistory[4+3472] == 1 && Materials() == 4 && Completions() is [[1L]],
+                "自然接取后重连选角回放父0末子0和真实猎杀完成，不预置重连结果或重发奖励");
             Duplicate(peer,lastDeath,"重连后的旧实例Boss迟到死亡");
+            string ready = State();
+            for (int repeat = 0; repeat < 3; repeat++)
+            {
+                peer.Send(33,[33,0,145,13,0,0]); peer.Expect(1,33,[1,145,13,0,0,0,0]); peer.Barrier();
+                That(State() == ready && Materials() == 4,"真实死亡与子奖励后4/3正常寻物重复33仅回权威0，不发奖或刷新循环");
+            }
             // 所有断言成功后才删本条自建角色；选角阶段以真实名册/692确认，不发送1347。
             peer.Send(7); peer.Expect(1,7,[1]); Roster(peer.Expect(0,2).Body,true,created);
             peer.Send(6,Build(writer => { writer.Write((ushort)0); writer.Write(Name(name)); }));
@@ -188,14 +202,14 @@ internal static class AlbertHuntTcpTests
         string Identities() => fixture.Snapshot("SELECT slot,quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id);
         long Materials() => (long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10164800",created.Id)[0][0];
         object[][] Completions() => fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0",created.Id);
-        void Delivered() => That(Materials() == 2 && Completions() is [[1L]] &&
+        void Delivered() => That(Materials() == 4 && Completions() is [[1L]] &&
             fixture.Query("SELECT quest_id,condition_type,experience_amount,acceptance_id FROM character_quest_completion_receipts WHERE character_id=$p0",created.Id)
                 is [[3472L,2L,0L,string saved]] && saved == huntAcceptance &&
             fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",created.Id) is [[56L]] &&
             fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[3458L,1L]] &&
             fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3458",created.Id) == parentAcceptance &&
             fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id IN(3458,3472,3473)",created.Id) is [[3472L]],
-            "真实猎杀34仅父2→1、子完成和碎片2，原父接取不变，不自动接3473或交父奖励");
+            "真实猎杀34仅父2→1、子完成和碎片4，原父接取不变，不自动接3473或交父奖励");
         void Duplicate(TcpPeer peer,byte[] death,string label)
         {
             string before = State(); peer.Send(39,death); drain(peer,null);

@@ -189,7 +189,10 @@ internal sealed partial class GameSession
             if (condition is { Channel: 0x10, Value: 0, Reserved: 0 } && QuestDazzlementStorage.Matches(quest) &&
                 capture.Phase == SessionPhase.Town && HasDialogueNpc(quest.Npc))
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
-            if (condition is not { Channel: null, Value: 0, Reserved: 0 } ||
+            // 普通寻物不足时原生0202C532发送value1；两种Boolean都只触发实际库存重算。
+            // 会面仍只接受value0，不能借寻物的回退形状推进其它条件。
+            if (condition is not { Channel: null, Value: 0 or 1, Reserved: 0 } ||
+                condition is { Value: 1 } && quest.Condition != "[seeking]" ||
                 capture.Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 quest.Definition is not { Diagnostics.Length: 0 } || !QuestLifecyclePlan.SeekingSubtype(quest) ||
                 QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&

@@ -981,10 +981,31 @@ internal static class QuestLifecycleTcpTests
             peer.Select(poor.Slot,prepared:true);
             peer.Send(31,[31,0,145,13]); peer.Expect(1,31,Convert.FromHexString("01910D0100000000")); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             string before = State(poor.Id);
+            // 0202C51C 在材料不足且本地旧状态为0时发送 value1；服务端按库存回放，不信任报告值。
+            peer.Send(33,[33,0,145,13,1,0]); peer.Expect(1,33,[1,145,13,1,0,0,0]); peer.Barrier();
+            That(State(poor.Id) == before,"真实3473缺料回退33重放权威1，重复请求不写库或发奖励");
+            peer.Send(33,[33,0,145,13,2,0]); peer.Expect(1,33,[0,19,0]); peer.Barrier();
+            That(State(poor.Id) == before,"普通寻物只接受原生Boolean形状，不把任意value当作刷新许可");
             peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(State(poor.Id) == before && Materials(poor.Id) == 2,"真实3473库存2/3拒绝交付且连接可继续，父子与资产不变");
             peer.Send(34,[34,0,130,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(State(poor.Id) == before,"原生父34同样不能用旧末子条件绕过2/3材料");
+        }
+
+        // 保留实际接取身份，只模拟旧快照的已满足标记；不把客户端value1直接保存为权威进度。
+        fixture.Sql("UPDATE character_active_main_quests SET condition_state=0 WHERE character_id=$p0 AND quest_id=3473",poor.Id);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(poor.Slot,prepared:true);
+            string identity = fixture.Snapshot("SELECT quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",poor.Id);
+            That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3473",poor.Id)
+                is [[0L]],"旧子0在选角后仍保留，后续必须由真实33按缺料事实修正");
+            peer.Send(33,[33,0,145,13,1,0]); peer.Expect(1,33,[1,145,13,1,0,0,0]); peer.Barrier();
+            That(Materials(poor.Id) == 2 && fixture.Query(
+                "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",poor.Id)
+                    is [[3458L,1L],[3473L,1L]] && identity == fixture.Snapshot(
+                "SELECT quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",poor.Id),
+                "真实3473重登后缺料33修正旧子0，保留父剩余1、实际库存与原父子接取身份");
         }
 
         // 断线后复用同一隔离角色准备报告中的旧存档，避免额外占用共享fixture的角色槽。
@@ -996,7 +1017,21 @@ internal static class QuestLifecycleTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(native.Slot,prepared:true);
+            peer.Send(33,[33,0,145,13,1,0]); peer.Expect(1,33,[1,145,13,0,0,0,0]); peer.Barrier();
+            That(Materials(native.Id) == 4 && fixture.Query(
+                "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",native.Id)
+                    is [[3458L,0L],[3473L,0L]] &&
+                fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3473",native.Id)
+                    is [[string retained]] && retained == nativeAcceptance &&
+                fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0",native.Id) is [[0L]],
+                "真实3473足额首个33校准旧父1到0，但不信任缺料报告、不改接取或发奖励");
             string before = State(native.Id);
+            for (int repeat = 0; repeat < 3; repeat++)
+            {
+                peer.Send(33,[33,0,145,13,1,0]); peer.Expect(1,33,[1,145,13,0,0,0,0]); peer.Barrier();
+                That(State(native.Id) == before && Materials(native.Id) == 4,
+                    "真实3473足额时即使客户端报告缺料仍回权威0，不重复写库、扣料、发奖或全量刷新");
+            }
             // 重放报告中的31顺序，恢复父显示，不把重接请求当作扣料或领奖。
             foreach (byte child in new byte[] {144,145})
             {
