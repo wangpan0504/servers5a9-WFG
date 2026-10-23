@@ -134,14 +134,15 @@ internal static class QuestCinematicSettlementTests
         Console.WriteLine($"PASS {Count-checks} 真实演出路线、物件终末、交付与结算回归（非实机）");
     }
 
-    // 74652的die cinematic声明2843/down，另外两条MAP ACT在开图时声明2845/2863；这里只合成39/33，不推断客户端45顺序。
+    // 74652的die cinematic声明2843/down；3991按实收换层时序合成33/37/39，仍不代表修复后实机验收。
     static void VerifyMetroCinematics(TownCatalog towns,CharacterCatalog characters,ItemResources items,QuestCatalog quests,
         SkillLearningCatalog skills,CharacterGrowthCatalog growth,DungeonCatalog dungeons,DungeonRoomCatalog rooms,
         DungeonKillExperienceCatalog kills,DungeonClearExperienceCatalog clears,QuestRewardParameterCatalog parameters)
     {
         foreach (var scenario in new[] { (Quest:3984,Dungeon:312u,Request:3984u,Ordinal:8,Map:76979,Movie:2843),
             (Quest:3987,Dungeon:312u,Request:0u,Ordinal:10,Map:76997,Movie:2845),
-            (Quest:3991,Dungeon:313u,Request:0u,Ordinal:4,Map:77037,Movie:2863) })
+            (Quest:3991,Dungeon:313u,Request:0u,Ordinal:4,Map:77037,Movie:2863),
+            (Quest:3991,Dungeon:313u,Request:3991u,Ordinal:4,Map:77037,Movie:2863) })
         {
             ushort id = checked((ushort)scenario.Quest);
             var quest = quests.Get(id);
@@ -233,14 +234,24 @@ internal static class QuestCinematicSettlementTests
             else
             {
                 That(receipt.Monsters.Monsters is [{ MonsterId:74657,IsFriendly:true,CanReportDeath:false }] &&
-                    opening.Entry.Maze.LayeredMaps.Single().Id == 77038 && f.Session.Phase == SessionPhase.Settlement,
-                    "3991前房战斗后加载全友方77037形成合法终点，保留77038层且不造其dummy死亡");
+                    opening.Entry.CinematicClearTerminalMap?.Id == 77038 && f.Session.Phase == SessionPhase.Dungeon,
+                    "3991全友方77037只是演出入口，原77038层才是实际Boss终点");
                 before = f.Read();
                 That(f.Session.EnableFormalDungeonSettlement() is null && Settle().Outcome == DungeonRunOutcome.Rejected &&
-                    QuestCompletionRepositoryTests.Same(before,f.Read()),"3991本次演出scalar1时不许空31或提前46");
+                    Finish().Outcome == QuestFinishOutcome.Rejected && QuestCompletionRepositoryTests.Same(before,f.Read()),
+                    "3991本次演出scalar1时不许空31或提前46/34");
+                That(f.Session.MoveFormalDungeon(7,0,1) is not null && f.Session.Phase == SessionPhase.Loading,
+                    "3991从已加载77037进入实际77038，终末33沿日志在37前到达");
+                before = f.Read();
+                That(f.Session.ChangeQuest(id,QuestLifecycleAction.Giveup,quests,items.Items,items.GoldLimits,items.EpicPieces) is null &&
+                    f.Session.ChangeQuest(id,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(0x10,0,0)) is null &&
+                    QuestCompletionRepositoryTests.Same(before,f.Read()),"换层Loading不放行放弃或错误通道，不改写接取");
             }
             before = f.Read();
-            That(Finish().Outcome == QuestFinishOutcome.Rejected && QuestCompletionRepositoryTests.Same(before,f.Read()),"已通关也不能跳过演出终末34："+id);
+            var premature = Finish();
+            That((id == 3991 ? premature is { Outcome: QuestFinishOutcome.Unsupported, Failure: QuestCompletionFailure.EligibilityChanged }
+                    : premature.Outcome == QuestFinishOutcome.Rejected) && QuestCompletionRepositoryTests.Same(before,f.Read()),
+                "未达成演出不交付；换层Loading仍沿原34阶段门禁，不改变资产："+id);
             var identity = f.Session.DungeonSnapshot!.Identity;
             var progress = Condition();
             var after = f.Read();
@@ -248,10 +259,23 @@ internal static class QuestCinematicSettlementTests
                 progress.Commit?.Plan.AcceptanceId == accepted.AcceptanceId &&
                 after.ActiveMainQuests.Single(row => row.QuestId == id).ConditionState == 0 &&
                 QuestCompletionRepositoryTests.Same(before with { Revision=after.Revision,ActiveMainQuests=after.ActiveMainQuests },after),
-                "匹配基础MAP的终末33只保存原接取scalar，不另造清图或资产："+id);
+                "匹配演出或已批准换层的终末33只保存原接取scalar，不另造清图或资产："+id);
             That(Condition()?.Outcome == QuestLifecycleOutcome.Unchanged && QuestCompletionRepositoryTests.Same(after,f.Read()),"重复演出33只返回已存进度："+id);
+            if (id == 3991)
+            {
+                That(f.Session.EnableFormalDungeonSettlement() is null && Settle().Outcome == DungeonRunOutcome.Rejected,
+                    "Loading中的终末33不代替37或末层Boss退场");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+                var boss = receipt.Monsters.Monsters.Single(row => row.MonsterId == 75100);
+                That(receipt.Snapshot.CurrentMap.Id == 77038 && boss is { IsBoss: true, IsScriptedBoss: true } &&
+                    f.Session.EnableFormalDungeonSettlement() is null,"77038加载后仍等待原75100死亡");
+                var death = f.Session.ObserveFormalDungeonScriptedDeath(new(boss.ObjectKey,0x81,true,new string('F',64)),kills,growth);
+                That(death is { Outcome: DungeonRunOutcome.Accepted, ClearFact.ClearMap.Id: 77038 } &&
+                    death.ClearFact.ConfirmedDeathEvents.Count == deaths + 1,"75100实际退场才提交末层清图事实");
+                expectedBoss = boss.ObjectKey;
+            }
             var enabled = f.Session.EnableFormalDungeonSettlement();
-            That(enabled is not null && enabled.Value.BossKey == expectedBoss,"结算许可只引用实际死亡Boss，3991保持空key："+id);
+            That(enabled is not null && enabled.Value.BossKey == expectedBoss,"结算许可只引用实际死亡Boss："+id);
             f.Session.ConfirmFormalDungeonSettlementEnabled(enabled!.Value.Receipt);
             That(f.Session.EnableFormalDungeonSettlement() is null,"同实例结算许可确认后不重复："+id);
             if (id != 3984) That(Settle().Outcome == DungeonRunOutcome.Accepted,"终末许可后沿原46结算："+id);

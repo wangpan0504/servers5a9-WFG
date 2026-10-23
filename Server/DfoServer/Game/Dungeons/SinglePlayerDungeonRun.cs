@@ -228,6 +228,8 @@ internal sealed partial class SinglePlayerDungeonRun
         passiveClearTarget = route.PassiveClearTarget;
         if (ResolvePassiveLayerTerminal() is { } passiveTerminal)
             this.entry = entry with { PassiveClearTerminalMap = passiveTerminal.Plan.Room.Map };
+        else if (ResolveCinematicLayerTerminal() is { } cinematicTerminal)
+            this.entry = entry with { CinematicClearTerminalMap = cinematicTerminal.Plan.Room.Map };
         else if (ResolveLayeredBossTerminal() is { } terminal)
             this.entry = entry with { BossMap = terminal.Plan.Room.Map };
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
@@ -248,9 +250,9 @@ internal sealed partial class SinglePlayerDungeonRun
         if (approvedRoute is null || combatAuthority is null)
             return false;
         // 此字段只由本Run依据完整批准路线派生，调用方不能预先声明一个任意末层。
-        if (entry.PassiveClearTerminalMap is not null)
+        if (entry.PassiveClearTerminalMap is not null || entry.CinematicClearTerminalMap is not null)
         {
-            reason = "invalid: 被动物件末层终点只能由原实例批准路线冻结";
+            reason = "invalid: 物件或演出末层终点只能由原实例批准路线冻结";
             return false;
         }
         if (!ValidExplicitTerminalLayer(entry, approvedRoute))
@@ -815,6 +817,25 @@ internal sealed partial class SinglePlayerDungeonRun
         var bosses = terminal.Plan.Monsters.Where(monster => monster.IsBoss).ToArray();
         if (bosses.Length == 0 || bosses.Any(monster => monster.IsScriptedBoss || monster.AiCharacter is not null) ||
             !source.Select(monster => monster.MonsterId).ToHashSet().SetEquals(bosses.Select(monster => monster.MonsterId))) return null;
+        return terminal;
+    }
+
+    private Room? ResolveCinematicLayerTerminal()
+    {
+        if (entry.IsTutorial || entry.IsClassExperience || entry.IsPractice || entry.IsQuestReplay ||
+            entry.HasExplicitClearMap || entry.QuestClearMap is not null || entry.TerminalLayerMap is not null ||
+            entry.BossMap != entry.BaseBossMap || storyRooms.Length != 0 || conditionalRooms.Count != 0 ||
+            entry.Maze.DummyStages.Count != 0 || entry.Maze.ClearConditions.Count != 0 || entry.RouteQuestId is 0 or >= 30000 ||
+            !entry.Maze.ConnectsQuest(entry.RouteQuestId,entry.Difficulty) ||
+            !entry.QuestAcceptances.Any(active => active.QuestId == entry.RouteQuestId && active.AcceptanceId != Guid.Empty)) return null;
+        var basis = rooms[entry.BaseBossMap.Position];
+        // 全非战斗基础图的ON START MAP演出明确CHANGE MAP，且只有一个同坐标Boss层。
+        if (basis.Plan.Monsters.Any(monster => monster.IsBlocking) ||
+            basis.Plan.Room.CinematicLayerReturn is not { IsOnStartMap: true, ActorId: null } ||
+            entry.Maze.LayeredMaps.Where(map => map.Position == entry.BaseBossMap.Position).ToArray() is not [var layer] ||
+            !layeredRooms.TryGetValue(layer,out var terminal) || terminal.Plan.Room.DeclaredType != "[boss]" ||
+            terminal.Plan.Monsters.Where(monster => monster.IsBlocking).ToArray() is not
+                [{ IsBoss: true, IsScriptedBoss: true, CanReportDeath: true, IsFriendly: false, AiCharacter: null }]) return null;
         return terminal;
     }
 

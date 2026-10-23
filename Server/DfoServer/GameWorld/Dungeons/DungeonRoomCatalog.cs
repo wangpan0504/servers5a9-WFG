@@ -103,11 +103,12 @@ internal sealed class DungeonRoomCatalog
         var tokens = archive.ReadTokens(path);
         var room = ParseResource(map with { Path = path }, tokens, archive.ResolveString, monsters, passiveObjects, archive.Contains,
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
-        return room.Map.Kind == "layered" ? room with
+        // 基础图的ON START MAP也可声明向下换层；和末层返回共用同一严格ACT/CMT识别。
+        return room with
         {
             CinematicLayerReturn = ReadCinematicLayerReturn(room,tokens),
-            ScriptedLayerReturn = ReadScriptedLayerReturn(room)
-        } : room;
+            ScriptedLayerReturn = room.Map.Kind == "layered" ? ReadScriptedLayerReturn(room) : null
+        };
     }
 
     DungeonScriptedLayerReturn? ReadScriptedLayerReturn(DungeonRoomDefinition room)

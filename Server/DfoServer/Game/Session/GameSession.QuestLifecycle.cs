@@ -24,11 +24,22 @@ internal sealed partial class GameSession
     {
         var capture = owner.Execute(() =>
         {
-            Character? character = Ready && Selected is not null && Phase is not (SessionPhase.Unselected or SessionPhase.Loading) &&
+            // CMT在发送换层45后即可终末，33会早于新层37；只复用已加载基础图及本次批准换层身份。
+            bool cinematicTransition = action == QuestLifecycleAction.Condition && condition is { Channel: null, Value: 0, Reserved: 0 } &&
+                Phase == SessionPhase.Loading && formalDungeon is { } changing &&
+                changing.Run.Phase == SinglePlayerDungeonPhase.Loading &&
+                changing.Entry.CinematicClearTerminalMap == changing.Run.Snapshot.CurrentMap &&
+                changing.Run.LastLoadingFact?.Map == changing.Entry.BaseBossMap &&
+                quests.TryGet(questId,out var movie) && QuestClientSceneProgress.DungeonCinematic(movie) &&
+                movie.CinematicMapId == changing.Entry.BaseBossMap.Id &&
+                changing.Route.Rooms.Single(row => row.Room.Map == changing.Entry.BaseBossMap).Room.CinematicLayerReturn is { } source &&
+                source.CinematicId == movie.IntData[0] && source.CinematicPath == movie.CinematicPath;
+            Character? character = Ready && Selected is not null && Phase != SessionPhase.Unselected &&
+                (Phase != SessionPhase.Loading || cinematicTransition) &&
                 pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null && pendingQuestQuickClear is not { CommitStarted: true } &&
                 !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
-            var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
+            var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement || cinematicTransition ? formalDungeon?.Run.Snapshot.Identity : null;
             var room = instance is not null && formalDungeon is { } dungeon
                 ? dungeon.Route.Rooms.Single(row => row.Room.Map == dungeon.Run.Snapshot.CurrentMap).Room : null;
             // 加载事实记录的是Advance前epoch；当前phase和完整Map确认已加载，提交再复验当前RunIdentity。
@@ -36,7 +47,8 @@ internal sealed partial class GameSession
                 current.Run.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
                 current.Run.LastLoadingFact is { } loading && loading.Map == current.Run.Snapshot.CurrentMap;
             return (Character: character, SelectionEpoch, Phase, Identity: instance, Entry: formalDungeon?.Entry,
-                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear, Room: room, Loaded: loaded, Communication: CommunicationSources(Selected));
+                Pending: pendingQuestLifecycle,Skip: pendingQuestQuickClear, Room: room, Loaded: loaded,
+                CinematicTransition: cinematicTransition, Communication: CommunicationSources(Selected));
         });
         if (capture.Character is not { } expected) return null;
         var refusal = new QuestLifecycleReceipt(expected, null, owner.Generation, capture.SelectionEpoch, capture.Phase, capture.Identity, "任务资格不符");
@@ -165,8 +177,8 @@ internal sealed partial class GameSession
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
             // 0102A20F→0203D070→event42→02011B80：33是演出终末/关闭通知，不含CMT或接取身份，也不签发清图。
             if (condition is { Channel: null, Value: 0, Reserved: 0 } &&
-                QuestClientSceneProgress.DungeonCinematic(quest) && capture.Loaded &&
-                capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && capture.Entry is { } cinematicEntry &&
+                QuestClientSceneProgress.DungeonCinematic(quest) && (capture.Loaded || capture.CinematicTransition) &&
+                (capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement || capture.CinematicTransition) && capture.Entry is { } cinematicEntry &&
                 capture.Room is { } cinematicRoom && QuestClientSceneProgress.OnDungeonCinematicMap(quest,cinematicEntry,cinematicRoom.Map) &&
                 quest.Definition!.Dungeons.Any(row => row.DungeonId == cinematicEntry.DungeonId) &&
                 expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,cinematicEntry)))

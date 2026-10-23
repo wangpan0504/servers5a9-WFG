@@ -656,18 +656,38 @@ internal static class MetroQuestEntryTcpTests
                 peer.Send(34, [34, 0, (byte)id, (byte)(id >> 8), 255, 255, 1, 0, 255, 255]); peer.Expect(1, 34, [0, 19, 0]); Drain();
                 SendCondition(0x10); peer.Expect(1, 33, [0, 19, 0]); Drain();
                 That(Assets() == unchanged && enabled == 0 && bossChecks == 0 && removed == 0, "友方终点提前46/34及错误通道33均不签发许可、退场或奖励");
+                var layer = plans.Single(row => row.Room.Map.Id == 77038);
+                var boss = layer.Monsters.Single(row => row.MonsterId == 75100);
+                That(boss is { IsBoss: true, IsScriptedBoss: true, CanReportDeath: true } &&
+                    layer.Room.DeclaredType == "[boss]", "实际末层保留原75100及三件地面物品");
+                map = MoveMap(peer, path[^1], 1); Actors(peer, map, layer, id);
+                // 实收包序45→1425→33→37→39；1425没有已确认ACK，不能靠它伪造终末或死亡。
+                peer.Send(1425, [0x2F, 0x0B]);
                 SendCondition(0); peer.Expect(1, 33, [1, (byte)id, (byte)(id >> 8), 0, 0, 0, 0]); Drain();
-                That(Scalar(peer.Id, id) == 0 && Identity(peer.Id, id) == acceptance && enabled == 1 && bossChecks == 0 && removed == 0 &&
+                That(Scalar(peer.Id, id) == 0 && Identity(peer.Id, id) == acceptance && enabled == 0 && bossChecks == 0 && removed == 0 &&
                     fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND task_attempt=$p1 AND map_id=77037", peer.Id, attempt) is [[0L]] &&
                     fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0 AND quest_id=3991", peer.Id) is [[0L]],
-                    "匹配2863的合成终末33提交原接取后发布唯一空31，不制造友方死亡或怪物清图凭据");
+                    "37之前的2863终末33提交原接取，但不提前清图、退场或结算");
                 unchanged = Assets(); SendCondition(0); peer.Expect(1, 33, [1, (byte)id, (byte)(id >> 8), 0, 0, 0, 0]); Drain();
-                That(Assets() == unchanged && enabled == 1 && bossChecks == 0 && removed == 0, "重复终末33只回原进度，不重发许可、退场或资产");
+                That(Assets() == unchanged && enabled == 0 && bossChecks == 0 && removed == 0, "重复终末33只回原进度，不重发许可、退场或资产");
+                FormalDungeonTcpTests.Load(peer); Drain();
+                unchanged = Assets(); peer.Send(46, report); Drain();
+                That(Assets() == unchanged && enabled == 0 && bossChecks == 0, "37完成仍不能越过实际75100提前46");
+                byte[] finalDeath = Convert.FromHexString("535800000100000000000000000000000000AAE66D05000000000CA204000081FF02FF000000005B2C015B000000E0DB6D050000000081FF02FF000000000000000000000000F35FAEF0");
+                BinaryPrimitives.WriteUInt32LittleEndian(finalDeath, boss.ObjectKey);
+                BinaryPrimitives.WriteUInt16LittleEndian(finalDeath.AsSpan(4), peer.Id);
+                FormalDungeonTcpTests.SealDeath(finalDeath);
+                peer.Send(39, finalDeath); Drain();
+                That(enabled == 1 && bossChecks == 1 && removed == 1 && fixture.Query(
+                    "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND task_attempt=$p1 AND map_id=77038 AND monster_key=$p2",
+                    peer.Id, attempt, boss.ObjectKey) is [[1L]], "实收形状的75100脚本39提交真实死亡后仅发布一次115及空31");
+                unchanged = Assets(); peer.Send(39, finalDeath); Drain();
+                That(Assets() == unchanged && enabled == 1 && bossChecks == 1 && removed == 1, "重复75100退场不重发许可、成长或掉落");
                 peer.Send(46, report); Drain();
                 That(fixture.Query("SELECT quest_id,map_id,task_attempt FROM character_dungeon_settlement_receipts WHERE character_id=$p0 AND task_attempt=$p1", peer.Id, attempt)
-                    is [[0L, 77037L, long savedAttempt]] && savedAttempt == attempt, "实际46沿普通0实例在77037合法结算");
+                    is [[0L, 77038L, long savedAttempt]] && savedAttempt == attempt, "实际46沿普通0实例在77038合法结算");
                 unchanged = Assets(); peer.Send(46, report); Drain();
-                That(Assets() == unchanged && removed == 0, "演出46及重复请求不退场友方或增加重复奖励");
+                That(Assets() == unchanged && removed == 1, "演出46及重复请求不退场友方或增加重复奖励");
                 bool nextCandidate = false;
                 Finish(peer, id, 65, packet =>
                 {
@@ -675,7 +695,7 @@ internal static class MetroQuestEntryTcpTests
                     if (packet.Opcode == 21) nextCandidate = QuestLifecycleTcpTests.List(packet.Body, checked((byte)(long)fixture.Query(
                         "SELECT level FROM characters WHERE id=$p0", peer.Id).Single()[0])).Contains(3992);
                 });
-                That(nextCandidate && removed == 0 && fixture.Query("SELECT acceptance_id,condition_type FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3991", peer.Id)
+                That(nextCandidate && removed == 1 && fixture.Query("SELECT acceptance_id,condition_type FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3991", peer.Id)
                     is [[string original, 65L]] && original == acceptance, "真实34唯一交付原type65接取，再由21开放3992");
                 Return(peer);
 
