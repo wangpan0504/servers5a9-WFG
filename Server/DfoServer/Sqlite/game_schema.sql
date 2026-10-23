@@ -89,6 +89,8 @@ CREATE TABLE character_teleport_cooldowns(
   account TEXT NOT NULL,
   potion_until INTEGER NOT NULL CHECK(potion_until>=0),
   aura_until INTEGER NOT NULL CHECK(aura_until>=0),
+  upgrade_aura_until INTEGER NOT NULL DEFAULT 0 CHECK(upgrade_aura_until>=0),
+  party_aura_until INTEGER NOT NULL DEFAULT 0 CHECK(party_aura_until>=0),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
 CREATE TABLE cube_premium(

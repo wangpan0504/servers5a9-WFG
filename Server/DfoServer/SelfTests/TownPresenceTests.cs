@@ -253,7 +253,7 @@ internal static class TownPresenceTests
             using var newerDelta = owners.Acquire("delta", () =>
             {
             });
-            presence.Remove(dSend);
+            presence.Remove(dSend, [1, 1, (byte)cd.Id, (byte)(cd.Id >> 8)]);
             gStream.Release();
             await waiting;
             await gSend.Send(1, 1347, [1], "drain-expired-source");
@@ -420,12 +420,59 @@ internal static class TownPresenceTests
             };
             presence.Join(p, pSend, cp);
             presence.Join(q, qSend, cq);
+            presence.Publish(p, pSend, 379, [2, 1, (byte)cp.Id, (byte)(cp.Id >> 8)], "phase_effect");
             await pSend.Send(1, 1347, [1], "phase-barrier");
             await qSend.Send(1, 1347, [1], "phase-barrier");
             That(Frames(pStream).All(f => f.Opcode == 1347) && Frames(qStream).All(f => f.Opcode == 1347), "same town/area with different PVF phases does not share actors");
-            presence.Remove(pSend);
+            presence.Remove(pSend, [1, 1, (byte)cp.Id, (byte)(cp.Id >> 8)]);
             presence.Remove(qSend);
+            await qSend.Send(1, 1347, [1], "phase-effect-barrier");
+            That(Frames(qStream).All(f => f.Opcode == 1347), "不同PVF阶段不接收传送到达或出发特效");
             That(presence.Count == 0, "phase fixture cleans up both memberships");
+            foreach (string scenario in new[] { "current", "stale-source", "stale-view" })
+            foreach (bool partyPreparation in new[] { false, true })
+            {
+                using var targetCancel = new CancellationTokenSource();
+                using var effectSourceCancel = new CancellationTokenSource();
+                using var targetOwner = owners.Acquire("effect-target-" + scenario, targetCancel.Cancel);
+                using var effectOwner = owners.Acquire("effect-source-" + scenario, effectSourceCancel.Cancel);
+                using var targetStream = new HeldStream(holdOpcode: 1347);
+                await using var targetSender = new GameConnectionSender(targetOwner, targetStream, targetCancel, 0, (_, _, _, _, _) => { });
+                await using var effectSender = new GameConnectionSender(effectOwner, Stream.Null, effectSourceCancel, 0, (_, _, _, _, _) => { });
+                var effectCharacter = ca with { Id = 65000, Position = towns.InitialReturn };
+                presence.Join(targetOwner, targetSender, ca with { Id = 65001, Position = towns.InitialReturn });
+                presence.Join(effectOwner, effectSender, effectCharacter);
+                await targetSender.Send(1, 65000, [], "effect-before-hold");
+                Task heldEffect = targetSender.Send(1, 1347, [1], "effect-held-receiver");
+                await targetStream.WriteStarted.WaitAsync(TimeSpan.FromSeconds(2));
+                presence.Remove(effectSender, [1, 1, 232, 253], partyPreparation ? new byte[] { 3, 1, 232, 253 } : null);
+                That(targetSender.PendingBytes == 17 + 20 + 18 + (partyPreparation ? 20 : 0), "准备、出发与离场帧完整计入慢接收者字节预算");
+                using var replacementOwner = scenario == "stale-source" ? owners.Acquire(effectOwner.Account, () => { }) : null;
+                Task clearEffect = Task.CompletedTask;
+                if (scenario == "current")
+                {
+                    presence.Join(effectOwner, effectSender, effectCharacter);
+                    presence.Publish(effectOwner, effectSender, 379, [2, 1, 232, 253], "effect-after-rejoin");
+                }
+                else if (scenario == "stale-view")
+                {
+                    presence.Remove(targetSender);
+                    clearEffect = targetSender.ClearScene();
+                }
+                targetStream.Release();
+                await heldEffect.WaitAsync(TimeSpan.FromSeconds(2));
+                await clearEffect.WaitAsync(TimeSpan.FromSeconds(2));
+                await targetSender.Send(1, 65000, [], "effect-after-hold");
+                var effectFrames = Frames(targetStream).SkipWhile(frame => frame.Opcode != 1347).Skip(1).ToArray();
+                That(effectFrames.Select(frame => frame.Opcode).SequenceEqual(scenario == "current"
+                    ? (partyPreparation ? new ushort[] { 379, 379, 6, 2, 3, 23, 22, 379, 65000 } : new ushort[] { 379, 6, 2, 3, 23, 22, 379, 65000 })
+                    : new ushort[] { 6, 65000 }),
+                    "慢接收者保留旧Actor的出发→离场→新入场→到达顺序；过期源或目标视图不播放特效：" + scenario);
+                That(!targetCancel.IsCancellationRequested && targetSender.PendingBytes == 0,
+                    "特效投递及失效跳过释放全部队列预算，不因目标慢写阻塞源成员迁移");
+                presence.Remove(effectSender);
+                presence.Remove(targetSender);
+            }
         }
         finally
         {

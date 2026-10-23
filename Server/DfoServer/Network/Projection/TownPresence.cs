@@ -69,7 +69,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     // 只枚举当前场景，固定接收者快照后入队。
     Member[] Peers(Member source) => scenes[source.Scene].Where(member => !ReferenceEquals(member, source)).ToArray();
 
-    void RemoveCore(GameConnectionSender sender)
+    void RemoveCore(GameConnectionSender sender, byte[]? departureEffect = null, byte[]? prepareEffect = null)
     {
         if (!members.Remove(sender, out var departed))
             return;
@@ -82,7 +82,8 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         sender.InvalidateScene();
         // 取消回调在异步执行时也按精确成员身份清理。
         foreach (var target in scene.ToArray())
-            target.Sender.Leave(departed.Character.Id, departed.Serial);
+            target.Sender.Leave(departed.Character.Id, departed.Serial, departureEffect,
+                departureEffect is null ? null : () => departed.Owner.IsCurrent, prepareEffect);
     }
 
     public void Join(AccountOwners.Lease owner, GameConnectionSender sender, Character character, ChannelIdentity? entry = null,
@@ -155,10 +156,10 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         }
     });
     // 精确清理仅持成员锁，不获取任何账号锁。
-    public void Remove(GameConnectionSender sender)
+    public void Remove(GameConnectionSender sender, byte[]? departureEffect = null, byte[]? prepareEffect = null)
     {
         lock (gate)
-            RemoveCore(sender);
+            RemoveCore(sender, departureEffect, prepareEffect);
     }
     public int Count { get { lock (gate) return members.Count; } }
 

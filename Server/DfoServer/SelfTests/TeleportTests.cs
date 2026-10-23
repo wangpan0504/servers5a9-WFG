@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
@@ -19,7 +20,7 @@ namespace DfoServer;
 internal static class TeleportTests
 {
     const string PotionText = "[stackable type]\n`[teleport potion]` 0\n[minimum level]\n60\n[cool time]\n10000\n[int data]\n1 2\n[/int data]";
-    const string AuraText = "[equipment type]\n`[aurora avatar]` 0\n[aura ability]\n`[solo teleport]` 420";
+    const string AuraText = "[equipment type]\n`[aurora avatar]` 0\n[aura ability]\n`[solo teleport]` 420\n[/aura ability]";
 
     public static void RunCore()
     {
@@ -36,6 +37,8 @@ internal static class TeleportTests
         }
         PendingQuestTransactions();
         PotionGateModes();
+        AuraVariants();
+        SingleMemberParty();
         var potion = TeleportRequests.Potion(Convert.FromHexString("41004EAC27000026002F05EA0001"));
         That(potion == new PotionTeleportRequest(65, 2600014, 0, new(38, 0, 1327, 234, 1)), "原生237请求完整保留源槽、模板、模式和目的地");
         That(TeleportRequests.Solo(Convert.FromHexString("FFFFFFFF0700000027030F03CD0005")) ==
@@ -45,9 +48,16 @@ internal static class TeleportTests
         Reject<InvalidDataException>(() => TeleportRequests.Potion(new byte[13]), "237短包不能被当成功");
         Reject<InvalidDataException>(() => TeleportRequests.Solo(new byte[16]), "470未知追加字段拒绝");
         That(TeleportCatalog.ReadPotion(new(PotionText)) is { MinimumLevel: 60, CoolTime: 10000 } &&
-            TeleportCatalog.ReadAura(new(AuraText)) == new SoloTeleportDefinition(420), "资源药剂毫秒与光环秒分别保留");
+            TeleportCatalog.ReadAura(new(AuraText)) == new AuraAbilityDefinition(AuraAbilityKind.SoloTeleport, 420), "资源药剂毫秒与光环秒分别保留");
         That(TeleportCatalog.ReadAura(new(AuraText.Replace("[solo teleport]", "[none]"))) is null,
             "无传送能力的光环不能获得传送资格");
+        That(TeleportRequests.Party(Convert.FromHexString("27030F03CD000501")) == new PartyTeleportRequest(new(39, 3, 783, 205, 5), 1) &&
+            Convert.ToHexString(TeleportPackets.PartyRejected(new(new(39, 3, 783, 205, 5), 1))) == "001300270000000001",
+            "本版434请求8B，失败正文保留公共u16错误、town、剩余秒和请求来源");
+        Reject<InvalidDataException>(() => TeleportRequests.Party(new byte[7]), "旧版7B组队请求不能照搬到本版");
+        That(TeleportPackets.AuraEffect(65000, arrival: false).SequenceEqual(new byte[] { 1, 1, 232, 253 }) &&
+            TeleportPackets.AuraEffect(65000, arrival: true).SequenceEqual(new byte[] { 2, 1, 232, 253 }),
+            "原生379仅含阶段、角色数量和完整u16 ID，不混用物品ID或坐标");
         That(TeleportCatalog.ReadPotion(new(PotionText + "\n[need material]\n1 2")) is { MinimumLevel:60, CoolTime:10000 } exchangePotion &&
             exchangePotion.DungeonMaps.SetEquals([1,2]),
             "商店兑换材料不构成瞬移药的使用门禁");
@@ -84,6 +94,15 @@ internal static class TeleportTests
             fixture.Service.Solo(character, new(-1, -1, new(1, 0, 10, 10, 5)), null, fixture.Clock.Now).Reason == "private-room-target" &&
             fixture.Service.Solo(character, new(-1, -1, new(2, 0, 30, 30, 5)), null, fixture.Clock.Now).Reason == "ready",
             "未知NPC与私有房间目标拒绝；双-1按请求坐标传送");
+        var npcLanding = new DfoServer.GameWorld.Towns.Location(2, 0, 20, 101, 5);
+        That(!fixture.Towns.IsPosition(npcLanding) && fixture.Service.Solo(character, new(-1, 7, npcLanding), null, fixture.Clock.Now)
+            .Plan?.Position == npcLanding && fixture.Service.Solo(character, new(-1, 7, npcLanding with { Town = 3 }), null, fixture.Clock.Now)
+            .Reason == "target-quest-required",
+            "NPC固定落点可在通用步行矩形外，坐标原样保留，但目的地任务权限不放宽");
+        That(fixture.Service.Solo(character, new(-1, -1, npcLanding), null, fixture.Clock.Now).Reason == "target-position-unavailable" &&
+            fixture.Service.Potion(character, fixture.Request with { Target = npcLanding }, fixture.Clock.Now + 10000).Reason == "target-position-unavailable" &&
+            TownTravel.Walk(character, new(20, 101, 0, 0, 0, 0), fixture.Towns, new HashSet<int>()) is null,
+            "NPC传送豁免不扩大到普通地图点选、药剂或城镇行走");
         var aura = session.TeleportSolo(new(-1, 7, new(2, 0, 30, 30)), fixture.Service, null);
         That(aura.Accepted && fixture.Read().TeleportCooldowns.AuraUntil == fixture.Clock.Now + 420000 &&
             TeleportPackets.Cooldown(aura.Receipt!.Travel.Character, fixture.Clock.Now).SequenceEqual(new byte[] { 1, 2, 164, 1, 0, 0 }),
@@ -92,6 +111,120 @@ internal static class TeleportTests
         Reject<InvalidOperationException>(() => session.TeleportPotion(fixture.Request, fixture.Service), "旧generation不能传送");
         That(new CharacterRepository(fixture.Database).LoadCharacter(replacement, 0).TeleportCooldowns.AuraUntil == fixture.Clock.Now + 420000,
             "新仓储和新owner恢复已提交光环冷却");
+    }
+
+    static void AuraVariants()
+    {
+        foreach (var (tag, kind) in new[] { ("party teleport", AuraAbilityKind.PartyTeleport),
+            ("solo teleport", AuraAbilityKind.SoloTeleport), ("upgrade solo teleport", AuraAbilityKind.UpgradeSoloTeleport) })
+        {
+            foreach (int seconds in new[] { 0, 300, 420, 600 })
+                That(TeleportCatalog.ReadAura(new(AuraText.Replace("[solo teleport]` 420", "[" + tag + "]` " + seconds))) == new AuraAbilityDefinition(kind, seconds),
+                    "三类能力分别解析PVF冷却，不硬编码个人420或组队600");
+        }
+        foreach (string body in new[] { "`[unknown]` 300", "`[upgrade solo teleport]` -1", "`[solo teleport]` 2147484", "`[none]` 0", "`[solo teleport]`" })
+            That(TeleportCatalog.ReadAura(new("[equipment type]\n`[aurora avatar]` 0\n[aura ability]\n" + body + "\n[/aura ability]")) is null,
+                "未知、负值、原生毫秒溢出及缺失参数不取得传送能力");
+        using var fixture = new Fixture();
+        var session = fixture.Session;
+        session.Select(0); session.MarkReady();
+        var request = new SoloTeleportRequest(-1, -1, new(2, 0, 30, 30, 5));
+        That(session.TeleportSolo(request, fixture.Service, null).Accepted, "普通个人传送仍使用原入口");
+        var ordinary = session.Selected!;
+        var replacement = ordinary.Inventory with { Items = ordinary.Inventory.Items.Select(item => item.Position == new InventorySlot(InventoryListType.Equipment, 9)
+            ? item with { Core = item.Core with { ItemId = 65051 } } : item).ToImmutableArray() };
+        fixture.Repository.CommitInventory(fixture.Owner, ordinary, new(ordinary.Inventory, replacement, "aura_fixture_swap"));
+        session.ReturnToRoster(); session.Select(0); session.MarkReady();
+        var before = session.Selected!;
+        fixture.Sql("CREATE TRIGGER upgraded_teleport_fail BEFORE UPDATE ON character_teleport_cooldowns BEGIN SELECT RAISE(ABORT,'upgraded rollback'); END");
+        Reject<SqliteException>(() => session.TeleportSolo(request, fixture.Service, null), "升级个人传送冷却末段SQL失败");
+        That(ReferenceEquals(before, session.Selected) && fixture.Read().TeleportCooldowns == before.TeleportCooldowns &&
+            fixture.Read().Position == before.Position && fixture.Read().Revision == before.Revision,
+            "升级传送失败回滚位置、旧普通冷却、新冷却及revision，不发布新快照");
+        fixture.Sql("DROP TRIGGER upgraded_teleport_fail");
+        That(session.CanPrecheckTeleport(fixture.Service), "普通个人仍在冷却不占用ARAD的升级个人type3计时器");
+        var upgraded = session.TeleportSolo(request, fixture.Service, null);
+        var after = fixture.Read();
+        That(upgraded.Accepted && upgraded.Receipt!.AuraKind == AuraAbilityKind.UpgradeSoloTeleport &&
+            after.TeleportCooldowns.UpgradeAuraUntil == fixture.Clock.Now + 300000 && after.TeleportCooldowns.AuraUntil == ordinary.TeleportCooldowns.AuraUntil &&
+            TeleportPackets.Cooldown(after, fixture.Clock.Now).SequenceEqual(new byte[] { 2, 2, 164, 1, 0, 0, 3, 44, 1, 0, 0 }),
+            "升级个人以PVF300秒启动type3，恢复时保留type2和type3独立计时器");
+        That(!session.TeleportSolo(request, fixture.Service, null).Accepted && !session.CanPrecheckTeleport(fixture.Service),
+            "升级请求重放和玩家位置预检查都受本类型持久冷却限制");
+        var boundary = after with { TeleportCooldowns = new(0, fixture.Clock.Now + 1, long.MaxValue) };
+        That(TeleportPackets.Cooldown(boundary, fixture.Clock.Now).SequenceEqual(new byte[] { 2, 2, 1, 0, 0, 0, 3, 155, 196, 32, 0 }) &&
+            TeleportPackets.Cooldown(after with { TeleportCooldowns = new() }, fixture.Clock.Now, AuraAbilityKind.UpgradeSoloTeleport)
+                .SequenceEqual(new byte[] { 1, 3, 0, 0, 0, 0 }),
+            "不足1秒向上取整，历史超长截止值钳至原生毫秒范围，零冷却也按实际type3刷新");
+        session.ReturnToRoster(); session.Select(0); session.MarkReady();
+        That(session.Selected!.TeleportCooldowns == after.TeleportCooldowns && !session.TeleportSolo(request, fixture.Service, null).Accepted,
+            "重新选角不丢升级个人冷却，也不覆盖普通个人冷却");
+        var party = after with { Inventory = after.Inventory with { Items = after.Inventory.Items.Select(item => item.Position == new InventorySlot(InventoryListType.Equipment, 9)
+            ? item with { Core = item.Core with { ItemId = 65052 } } : item).ToImmutableArray() } };
+        That(fixture.Service.Aura(party, fixture.Clock.Now)?.Kind == AuraAbilityKind.PartyTeleport &&
+            fixture.Service.Solo(party, request, null, fixture.Clock.Now).Reason == "personal-aura-unavailable",
+            "组队声明已注册，但不能借个人470绕过队伍上下文");
+        var expired = after with { Inventory = after.Inventory with { Items = after.Inventory.Items.Select(item => item.Avatar is not null
+            ? item with { Avatar = item.Avatar with { ExpireTime = checked((int)(fixture.Clock.Now / 1000)) } } : item).ToImmutableArray() } };
+        That(fixture.Service.Aura(expired, fixture.Clock.Now) is null, "已过期升级光环没有资格");
+        fixture.Clock.Now += 300000;
+        That(session.TeleportSolo(request, fixture.Service, null).Accepted, "升级个人300秒到期即可再次使用，不套用普通420秒");
+    }
+
+    static void SingleMemberParty()
+    {
+        using var fixture = new Fixture();
+        var session = fixture.Session;
+        var request = new PartyTeleportRequest(new(2, 0, 30, 30, 5), 1);
+        That(!session.TeleportSingleMemberParty(request, fixture.Service).Accepted, "未选角不接受组队光环传送");
+        session.Select(0); session.MarkReady();
+        That(session.TeleportSingleMemberParty(request, fixture.Service).Reason == "party-context-unavailable", "无队伍不能把自己当成整队");
+        var settings = new DfoServer.Game.Parties.SoloPartyRequest(0, new(3, null, 4, 0, 5, 0, 0, 0, 0, 7));
+        session.SetSoloParty(settings);
+        That(session.TeleportSingleMemberParty(request, fixture.Service).Reason == "party-aura-unavailable", "已建队仍须穿戴实际组队光环");
+        var original = session.Selected!;
+        var equipped = original.Inventory with { Items = original.Inventory.Items.Select(item => item.Position == new InventorySlot(InventoryListType.Equipment, 9)
+            ? item with { Core = item.Core with { ItemId = 65052 } } : item).ToImmutableArray() };
+        fixture.Repository.CommitInventory(fixture.Owner, original, new(original.Inventory, equipped, "party_aura_fixture"));
+        session.ReturnToRoster(); session.Select(0); session.MarkReady(); session.SetSoloParty(settings);
+        var before = session.Selected!;
+        foreach (var invalid in new[] { request with { Source = 0 }, request with { Target = new(1, 0, 20, 20, 5) },
+            request with { Target = new(3, 0, 20, 20, 5) }, request with { Target = new(2, 0, 200, 200, 5) } })
+            That(!session.TeleportSingleMemberParty(invalid, fixture.Service).Accepted && ReferenceEquals(before, session.Selected),
+                "来源、私有房间、任务与坐标不符合时不移动或写入冷却");
+        That(!session.TeleportSingleMemberParty(request, fixture.Service, blocked: true).Accepted, "交互占用时不启动组队传送");
+        fixture.OnAuraRead = () =>
+        {
+            fixture.OnAuraRead = null;
+            session.LeaveSoloParty(); session.SetSoloParty(settings);
+        };
+        That(session.TeleportSingleMemberParty(request, fixture.Service).Reason == "party-context-changed" && ReferenceEquals(before, session.Selected),
+            "锁外资源规划期间退队重建，旧队伍授权不能移动新队伍");
+        fixture.Sql("CREATE TRIGGER party_teleport_fail BEFORE INSERT ON character_teleport_cooldowns BEGIN SELECT RAISE(ABORT,'party rollback'); END");
+        Reject<SqliteException>(() => session.TeleportSingleMemberParty(request, fixture.Service), "组队光环冷却末段失败");
+        That(ReferenceEquals(before, session.Selected) && fixture.Read().Position == before.Position && fixture.Read().Revision == before.Revision &&
+            fixture.Read().TeleportCooldowns == before.TeleportCooldowns, "组队传送SQL失败时位置、冷却和在线角色一起回滚");
+        fixture.Sql("DROP TRIGGER party_teleport_fail");
+        var party = session.ReadSoloParty();
+        var result = session.TeleportSingleMemberParty(request, fixture.Service);
+        var actual = fixture.Read();
+        That(result.Accepted && result.Receipt!.AuraKind == AuraAbilityKind.PartyTeleport && actual.Position == request.Target &&
+            actual.Revision == before.Revision + 1 && actual.TeleportCooldowns == new TeleportCooldowns(0, 0, 0, fixture.Clock.Now + 600000) &&
+            ReferenceEquals(party, session.ReadSoloParty()) && session.GetState() == UserState.Town,
+            "唯一队长已同意后整队移动，队伍不解散，Town状态不变，独立600秒冷却与位置同事务");
+        That(Convert.ToHexString(TeleportPackets.PartyReady(actual with { Id = 65000 })) ==
+            "0201010000E8FD01FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF0000" &&
+            Convert.ToHexString(TeleportPackets.PrepareAuraEffect(65000)) == "0301E8FD" &&
+            Convert.ToHexString(TeleportPackets.Cooldown(actual, fixture.Clock.Now)) == "010058020000" &&
+            Convert.ToHexString(TeleportPackets.PartyRejected(request, 600, 22)) == "001600025802000001",
+            "原生377固定八行且队长槽0，379准备阶段3，378独立type0，434冷却失败保留实际剩余秒");
+        session.LeaveSoloParty(); session.SetSoloParty(settings);
+        That(session.TeleportSingleMemberParty(request, fixture.Service).Reason == "aura-cooldown", "退队重建不能重置角色组队光环冷却");
+        session.ReturnToRoster(); session.Select(0); session.MarkReady(); session.SetSoloParty(settings);
+        That(session.Selected!.TeleportCooldowns == actual.TeleportCooldowns &&
+            session.TeleportSingleMemberParty(request, fixture.Service).Reason == "aura-cooldown", "重选恢复组队冷却，不因队伍上下文重建而清零");
+        fixture.Clock.Now += 600000;
+        That(session.TeleportSingleMemberParty(request, fixture.Service).Accepted, "PVF600秒到期后单人队伍可再次传送");
     }
 
     // 合成入口区域：world map 49 不在药剂 int data（1 2）内。默认开放，Pvf 模式恢复白名单拒绝；其余准入照常。
@@ -118,6 +251,15 @@ internal static class TeleportTests
     // 真实PVF：黑市入口 54/2（[dungeon gate] 49 哈林）不在 2600014 的 int data 内。
     public static void RunResources(TownCatalog towns, DfoServer.Infrastructure.ItemResources itemResources)
     {
+        foreach (var (id, expected) in new[]
+        {
+            (101590218, new AuraAbilityDefinition(AuraAbilityKind.None, 0)),
+            (101590229, new AuraAbilityDefinition(AuraAbilityKind.PartyTeleport, 600)),
+            (101590011, new AuraAbilityDefinition(AuraAbilityKind.SoloTeleport, 420)),
+            (101590301, new AuraAbilityDefinition(AuraAbilityKind.UpgradeSoloTeleport, 600)),
+            (401590036, new AuraAbilityDefinition(AuraAbilityKind.UpgradeSoloTeleport, 300))
+        })
+            That(itemResources.Teleports.Aura(id) == expected, "实际EQU四类光环能力及不同冷却按PVF声明读取：" + id);
         var character = new Character(1, 0, "Gate", 1, new(54, 1, 1599, 567, 1), null) { Level = 90, CompletedQuests = [5936],
             Inventory = new([new(1, new(InventoryListType.Main, 65), new(2600014, ItemKind.Consumable, 3))]) };
         var request = new PotionTeleportRequest(65, 2600014, 0, new(54, 2, 892, 230, 1));
@@ -241,6 +383,7 @@ internal static class TeleportTests
         public Clock Clock { get; } = new();
         public QuestCatalog Quests { get; }
         public TownCatalog Towns { get; }
+        public Action? OnAuraRead { get; set; }
         public AreaRequest TravelRequest => new(Session.Selected!.Position.Town == 1 ? (byte)2 : (byte)1, 0,
             20, 20, 0, Session.Selected.Position.Town, Session.Selected.Position.Area, 0);
         readonly GoldLimitCatalog limits = new("[gold limit from level]\n0 100000\n1 100000\n[/gold limit from level]");
@@ -256,9 +399,15 @@ internal static class TeleportTests
             var towns = new TownCatalog(new() { [(1, 0)] = Area(1, true, []), [(2, 0)] = Area(2, false, []), [(3, 0)] = Area(3, false, [42]) },
                 new(1, 0, 10, 10), new(2, 0, 10, 10), new(0, [], []), [], new Dictionary<uint, uint[]>());
             Towns = towns;
-            var definitions = new TeleportCatalog(path => path.StartsWith("stackable", StringComparison.Ordinal) ? PotionText : AuraText,
-                new Dictionary<int, string> { [101590011] = "aura.equ" }, new Dictionary<int, string> { [2600014] = "potion.stk" });
-            Service = new(towns, definitions, id => new(id, ItemKind.Avatar, 9, 1, 0, 1, 0, 2, 1, "free", ushort.MaxValue, 0, "Aura"), Clock);
+            var definitions = new TeleportCatalog(path => path.StartsWith("stackable", StringComparison.Ordinal) ? PotionText :
+                path.EndsWith("upgrade.equ", StringComparison.Ordinal) ? AuraText.Replace("[solo teleport]` 420", "[upgrade solo teleport]` 300") :
+                path.EndsWith("party.equ", StringComparison.Ordinal) ? AuraText.Replace("[solo teleport]` 420", "[party teleport]` 600") : AuraText,
+                new Dictionary<int, string> { [101590011] = "aura.equ", [65051] = "upgrade.equ", [65052] = "party.equ" }, new Dictionary<int, string> { [2600014] = "potion.stk" });
+            Service = new(towns, definitions, id =>
+            {
+                OnAuraRead?.Invoke();
+                return new(id, ItemKind.Avatar, 9, 1, 0, 1, 0, 2, 1, "free", ushort.MaxValue, 0, "Aura");
+            }, Clock);
             Repository.Create(Owner, new("Teleport", new(2, 0, 10, 10), towns.InitialReturn)
             {
                 Level = 60,

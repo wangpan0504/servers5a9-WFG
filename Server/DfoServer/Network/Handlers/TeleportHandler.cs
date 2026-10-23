@@ -16,6 +16,7 @@ internal sealed class TeleportHandler(TeleportService service, TownProjection to
         commands.Register(CmdPacketType.TELEPORT, PotionAsync, nameof(TeleportHandler));
         commands.Register(CmdPacketType.PRECHECK_SOLO_TELEPOART, PrecheckAsync, nameof(TeleportHandler));
         commands.Register(CmdPacketType.SOLO_TELEPOART, SoloAsync, nameof(TeleportHandler));
+        commands.Register(CmdPacketType.PARTY_TELEPORT, PartyAsync, nameof(TeleportHandler));
     }
 
     async Task<CommandResult> PotionAsync(GameConnectionContext context, Packet packet)
@@ -60,13 +61,37 @@ internal sealed class TeleportHandler(TeleportService service, TownProjection to
         }
         bool CanSend() => context.Session.CanPublishTravel(receipt.Travel);
         await context.Reply(CmdPacketType.SOLO_TELEPOART, new byte[] { 1 }, "teleport_aura_committed", CanSend);
+        await town.TravelAsync(context, receipt.Travel, auraTeleport: true);
         await context.Notify(NotiPacketType.AURA_TYPE_COOLTIME, TeleportPackets.Cooldown(receipt.Travel.Character,
-            service.Clock.GetUtcNow().ToUnixTimeMilliseconds()), "teleport_aura_cooldown", CanSend);
-        await town.TravelAsync(context, receipt.Travel);
+            service.Clock.GetUtcNow().ToUnixTimeMilliseconds(), receipt.AuraKind), "teleport_aura_cooldown", CanSend);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> PartyAsync(GameConnectionContext context, Packet packet)
+    {
+        var request = TeleportRequests.Party(packet.Body);
+        var result = context.Session.TeleportSingleMemberParty(request, service, context.BlocksTownActions);
+        Log(context, packet, result);
+        long now = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();
+        if (result.Receipt is not { } receipt)
+        {
+            int remaining = TeleportPackets.RemainingSeconds(context.Session.Selected?.TeleportCooldowns.PartyAuraUntil ?? 0, now);
+            await context.Reply(CmdPacketType.PARTY_TELEPORT,
+                TeleportPackets.PartyRejected(request, remaining, result.Reason == "aura-cooldown" ? (ushort)22 : (ushort)19),
+                "teleport_party_rejected");
+            return CommandResult.Handled;
+        }
+        bool CanSend() => context.Session.CanPublishTravel(receipt.Travel);
+        await context.Reply(CmdPacketType.PARTY_TELEPORT, [1], "teleport_party_committed", CanSend);
+        await town.TravelAsync(context, receipt.Travel, auraTeleport: true, partyTeleport: true);
+        await context.Notify(NotiPacketType.AURA_TYPE_COOLTIME, TeleportPackets.Cooldown(receipt.Travel.Character,
+            service.Clock.GetUtcNow().ToUnixTimeMilliseconds(), receipt.AuraKind), "teleport_party_cooldown", CanSend);
         return CommandResult.Handled;
     }
 
     void Log(GameConnectionContext context, Packet packet, TeleportResult result) => log.Write("teleport",
         new { Connection = context.Id, packet.Opcode, result.Accepted, result.Reason,
-            context.Session.Selected?.Id, context.Session.Selected?.Position, context.Session.Selected?.Revision });
+            context.Session.Selected?.Id, context.Session.Selected?.Position, context.Session.Selected?.Revision,
+            AuraItem = context.Session.Selected?.Inventory.Find(new(DfoServer.Game.Inventory.Models.InventoryListType.Equipment, 9))?.Core.ItemId,
+            Body = Convert.ToHexString(packet.Body) });
 }

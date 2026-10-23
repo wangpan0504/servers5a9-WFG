@@ -157,6 +157,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            AuraCooldownUpgrade(root);
             ZeroExperienceUpgrade(root);
             ItemMakingUpgrade(root);
             PassiveItemsUpgrade(root);
@@ -205,6 +206,7 @@ internal static partial class DatabaseSchemaTests
                 "DROP TABLE schema_metadata", "UPDATE schema_metadata SET value='another-database'",
                 "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
                 "ALTER TABLE characters DROP COLUMN blacklist_count",
+                "ALTER TABLE character_teleport_cooldowns DROP COLUMN upgrade_aura_until",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
                 "DROP TABLE character_game_settings",
                 "DROP TABLE cube_premium", "ALTER TABLE cube_premium DROP COLUMN cube_type",
@@ -1068,7 +1070,7 @@ internal static partial class DatabaseSchemaTests
                   VALUES('cube-history',0,'CubeHistory',7,38,1,450,234,0,123);
                 INSERT INTO account_wallets(account,revision,premium_contracts)
                   VALUES('cube-history',5,'{"84":1800000000,"97":1900000000}');
-                INSERT INTO character_teleport_cooldowns VALUES(1,'cube-history',1000,2000);
+                INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until) VALUES(1,'cube-history',1000,2000);
                 DROP TABLE cube_premium;
                 PRAGMA user_version=40;
                 """);

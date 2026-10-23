@@ -761,7 +761,7 @@ internal static class SessionPlanningTests
                   capsule_experience,proficiency_level,proficiency_experience) VALUES({{id}},'planning',256,1,0,0,0);
                 INSERT INTO character_adventure_credits VALUES({{id}},'planning',10,20);
                 INSERT INTO character_fatigue VALUES({{id}},'planning',0,156,0,156,0,0);
-                INSERT INTO character_teleport_cooldowns VALUES({{id}},'planning',2000000000000,2000000420000);
+                INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until) VALUES({{id}},'planning',2000000000000,2000000420000);
                 INSERT INTO character_exp_bonus VALUES({{id}},'planning',2000007200,1000);
                 INSERT INTO character_consumable_states VALUES({{id}},'planning',0,10087825,2000000000000,7,5);
                 INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES({{id}},'planning',1,0);

@@ -273,6 +273,7 @@ internal static class ServerRuntime
             new SessionHandler(projection, log),
             // 客户端保活：0x04FE/0x06BB 每 10 秒一次，服务端必须回同 opcode 帧（见 KeepaliveHandler）。
             new KeepaliveHandler(log),
+            new SoloPartyHandler(log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock),

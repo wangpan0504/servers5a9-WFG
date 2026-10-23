@@ -207,6 +207,7 @@ internal static class TcpRegressionTests
         ("consumable-use", ConsumableUseTcpTests.RunAsync),
         ("consumable-effects", ConsumableUseTcpTests.RunEffectsAsync),
         ("teleport", TeleportTcpTests.RunAsync),
+        ("solo-party", SoloPartyTcpTests.RunAsync),
         ("consumable-use-rules", (_, _, resources) =>
         {
             ConsumableUseTests.RunResources(resources.ItemResources);

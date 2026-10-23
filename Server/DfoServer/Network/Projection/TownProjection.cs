@@ -67,7 +67,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.SRC_AVATAR_INFO_OF_CLONE, ClearAvatarPackets.Sources(c.Inventory), "clear_avatar_sources_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Pet), "pet_inventory_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.GuildMedal), "medal_inventory_initialize");
-        if (c.TeleportCooldowns.AuraUntil > timer.GetUtcNow().ToUnixTimeMilliseconds())
+        if (Math.Max(c.TeleportCooldowns.PartyAuraUntil, Math.Max(c.TeleportCooldowns.AuraUntil, c.TeleportCooldowns.UpgradeAuraUntil)) >
+            timer.GetUtcNow().ToUnixTimeMilliseconds())
             await context.Notify(NotiPacketType.AURA_TYPE_COOLTIME, TeleportPackets.Cooldown(c, timer.GetUtcNow().ToUnixTimeMilliseconds()),
                 "teleport_aura_cooldown_initialize");
         await InventoryProjection.RestoreLocksAsync(context, c.Inventory, c.Inventory.Items.Select(item => item.Position));
@@ -139,15 +140,27 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await context.Notify(NotiPacketType.PREV_VILLAGE, TownPackets.RoomReturnTown(back), "room_return_town", canSend);
     }
 
-    public async Task TravelAsync(GameConnectionContext context, TownTravelReceipt receipt)
+    public async Task TravelAsync(GameConnectionContext context, TownTravelReceipt receipt, bool auraTeleport = false, bool partyTeleport = false)
     {
         bool CanSend() => context.Session.CanPublishTravel(receipt);
+        auraTeleport |= partyTeleport;
+        byte[]? prepare = partyTeleport ? TeleportPackets.PrepareAuraEffect(receipt.Character.Id) : null;
+        byte[]? departure = auraTeleport ? TeleportPackets.AuraEffect(receipt.Character.Id, arrival: false) : null;
+        byte[]? arrival = auraTeleport ? TeleportPackets.AuraEffect(receipt.Character.Id, arrival: true) : null;
+        if (prepare is not null)
+        {
+            await context.Notify(NotiPacketType.SHOW_EFFECT, prepare, "teleport_party_prepare", CanSend);
+            await context.Notify(NotiPacketType.PARTY_TELEPORT_STATUS, TeleportPackets.PartyReady(receipt.Character),
+                "teleport_party_ready", CanSend);
+        }
+        if (departure is not null)
+            await context.Notify(NotiPacketType.SHOW_EFFECT, departure, "teleport_aura_departure", CanSend);
         // 清场也绑定原提交；不能用迟到的旅行结果移除同连接后来加入的角色。
         Task? detached = context.Owner.Execute(() =>
         {
             if (!CanSend())
                 return null;
-            Remove(context);
+            presence?.Remove(context.Sender, departure, prepare);
             return context.Sender.ClearScene();
         });
         if (detached is null)
@@ -157,9 +170,16 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Owner.Execute(() =>
         {
             if (CanSend())
+            {
                 presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName());
+                if (arrival is not null)
+                    presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival_peer");
+            }
             return true;
         });
+        // Join已排入远端Actor/区域入场；本人和同屏接收者都在目标角色建立后才收到到达特效。
+        if (arrival is not null)
+            await context.Notify(NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival", CanSend);
     }
 
     public void Join(GameConnectionContext context)
@@ -170,15 +190,22 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
 
     public async Task ReturnToSelectionAsync(GameConnectionContext context, Func<bool>? canReturn = null)
     {
+        Game.Parties.SingleMemberParty? departedParty = null;
+        long returnedEpoch = 0;
         bool returning = context.Owner.Execute(() =>
         {
             if (canReturn?.Invoke() == false) return false;
+            departedParty = context.Session.ReadSoloParty();
             context.Session.ReturnToRoster();
+            returnedEpoch = context.Session.SelectionEpoch;
             context.Activity?.Reset();
             return true;
         });
         if (!returning) return;
         await DetachAsync(context);
+        if (departedParty is not null)
+            await context.Notify(NotiPacketType.PARTY_INFO, PartyPackets.Cleared(departedParty.Id, context.Channel), "solo_party_return_selection",
+                () => context.Session.Selected is null && context.Session.SelectionEpoch == returnedEpoch);
         context.RosterRequested = true;
         context.SelectionRosterPushed = true;
         await context.Reply(CmdPacketType.RETURN_SELECT_CHARACTER, SessionPackets.ReturnToSelection(), "return_selection_ack");

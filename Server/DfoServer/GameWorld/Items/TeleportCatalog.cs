@@ -1,24 +1,27 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using System.Text.RegularExpressions;
 using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
 internal sealed record TeleportPotionDefinition(int MinimumLevel, int CoolTime, ImmutableHashSet<int> DungeonMaps);
-internal sealed record SoloTeleportDefinition(int CoolSeconds);
+internal enum AuraAbilityKind { None, PartyTeleport, SoloTeleport, UpgradeSoloTeleport }
+internal sealed record AuraAbilityDefinition(AuraAbilityKind Kind, int CoolSeconds)
+{
+    public bool Personal => Kind is AuraAbilityKind.SoloTeleport or AuraAbilityKind.UpgradeSoloTeleport;
+}
 
 // 与物品目录共享LST及归档；只解析本次实际请求涉及的脚本。
 internal sealed class TeleportCatalog(Func<string, string> read, IReadOnlyDictionary<int, string> equipment,
     IReadOnlyDictionary<int, string> stackable)
 {
     readonly ConcurrentDictionary<int, Lazy<TeleportPotionDefinition?>> potions = new();
-    readonly ConcurrentDictionary<int, Lazy<SoloTeleportDefinition?>> auras = new();
+    readonly ConcurrentDictionary<int, Lazy<AuraAbilityDefinition?>> auras = new();
 
     public TeleportPotionDefinition? Potion(int id) => !stackable.ContainsKey(id) ? null : potions.GetOrAdd(id, key => new(() =>
         ReadPotion(new PvfDocument(read("stackable/" + stackable[key]))))).Value;
 
-    public SoloTeleportDefinition? Aura(int id) => !equipment.ContainsKey(id) ? null : auras.GetOrAdd(id, key => new(() =>
+    public AuraAbilityDefinition? Aura(int id) => !equipment.ContainsKey(id) ? null : auras.GetOrAdd(id, key => new(() =>
         ReadAura(EquipmentFile.ReadScript(read, "equipment/" + equipment[key])))).Value;
 
     internal static TeleportPotionDefinition? ReadPotion(PvfDocument document)
@@ -33,11 +36,23 @@ internal sealed class TeleportCatalog(Func<string, string> read, IReadOnlyDictio
         return new(minimum[0], cool[0], maps.ToImmutableHashSet());
     }
 
-    internal static SoloTeleportDefinition? ReadAura(PvfDocument document)
+    internal static AuraAbilityDefinition? ReadAura(PvfDocument document)
     {
         if (document.Section("equipment type").Trim() != "`[aurora avatar]` 0") return null;
-        var match = Regex.Match(document.Section("aura ability"), @"^\s*`\[solo teleport\]`\s+(\d+)\s*$");
-        return match.Success && int.TryParse(match.Groups[1].Value, out int seconds) && seconds is > 0 and <= 86400
-            ? new(seconds) : null;
+        var declaration = EquipmentAuraAbility.Read(document);
+        if (declaration is null) return null;
+        AuraAbilityKind? kind = declaration.Label switch
+        {
+            "[none]" => AuraAbilityKind.None,
+            "[party teleport]" => AuraAbilityKind.PartyTeleport,
+            "[solo teleport]" => AuraAbilityKind.SoloTeleport,
+            "[upgrade solo teleport]" => AuraAbilityKind.UpgradeSoloTeleport,
+            _ => null
+        };
+        if (kind is null) return null;
+        if (kind == AuraAbilityKind.None)
+            return declaration.Parameter is null ? new(kind.Value, 0) : null;
+        // ARAD计时器将秒数乘1000后存入i32；0秒为有效的无冷却声明。
+        return declaration.Parameter is >= 0 and <= int.MaxValue / 1000 ? new(kind.Value, declaration.Parameter.Value) : null;
     }
 }

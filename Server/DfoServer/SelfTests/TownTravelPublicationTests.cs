@@ -63,6 +63,11 @@ internal static class TownTravelPublicationTests
                 "入房保留23/24/1379顺序，不追加选角124");
             TestCheck.That(repository.LoadCharacter(owner, 0).Revision == returned!.Character.Revision &&
                 session.CanPublishTravel(returned), "发布不会再次提交旅行或改变回执");
+            session.ReturnToRoster(); session.Select(0); session.MarkReady(); projection.Join(context);
+            sent.Clear();
+            await projection.TravelAsync(context, returned, auraTeleport: true);
+            TestCheck.That(sent.Count == 0 && presence.Count == 1,
+                "旧选角回执不发送出发、到达或切图，也不移除新会话成员");
             projection.Remove(context);
         }
 

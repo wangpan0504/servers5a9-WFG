@@ -17,6 +17,7 @@ ArchiveIndexTests.Run();
 ArchiveBoundaryTests.Run();
 ScriptTests.Run();
 ItemModelTests.Run();
+EquipmentAuraAbilityTests.Run();
 StackableActionTests.Run();
 RandomOptionFileTests.Run();
 AmplificationFileTests.Run();

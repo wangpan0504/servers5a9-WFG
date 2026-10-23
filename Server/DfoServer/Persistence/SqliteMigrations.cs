@@ -185,7 +185,32 @@ internal static class SqliteMigrations
         new(78, "零经验副本死亡与通关回执", ZeroExperienceDungeonSchema.Upgrade),
         new(79, "普通副本任务每日通关计数", static (db, tx) => Execute(db, tx, QuestDailyClearSchema)),
         new(80, "副职业已学设计图", AddExpertJobRecipes),
+        new(81, "光环传送独立冷却", AddAuraCooldowns),
     ];
+
+    static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
+    {
+        AddAuraCooldown(db, tx, "upgrade_aura_until");
+        AddAuraCooldown(db, tx, "party_aura_until");
+    }
+
+    static void AddAuraCooldown(SqliteConnection db, SqliteTransaction tx, string column)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = $"SELECT count(*) FROM pragma_table_info('character_teleport_cooldowns') WHERE name='{column}'";
+        if (Convert.ToInt32(command.ExecuteScalar()) == 0)
+        {
+            Execute(db, tx, $"ALTER TABLE character_teleport_cooldowns ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0 CHECK({column}>=0)");
+            return;
+        }
+        command.CommandText = $"SELECT count(*) FROM pragma_table_info('character_teleport_cooldowns') WHERE name='{column}' AND upper(type)='INTEGER' AND \"notnull\"=1 AND dflt_value='0'";
+        if (Convert.ToInt32(command.ExecuteScalar()) != 1) throw new InvalidDataException("光环传送冷却列结构不符：" + column);
+        command.CommandText = "SELECT sql FROM sqlite_schema WHERE name='character_teleport_cooldowns' AND type='table'";
+        string sql = string.Concat(((string)command.ExecuteScalar()!).Where(value => !char.IsWhiteSpace(value)));
+        if (!sql.Contains($"CHECK({column}>=0)", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("光环传送冷却列缺少范围约束：" + column);
+    }
 
     internal const string QuestDailyClearSchema = """
         CREATE TABLE IF NOT EXISTS character_quest_daily_clear(
@@ -1584,6 +1609,8 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        // 仅精确匹配已知预览结构时补齐正式迁移，保留原冷却与资产。
+        if (version is 78 or 79 && current >= 81 && IsAuraCooldownPreview(db, tx, version)) version = 77;
         // #233 验收构建曾把强袭表作为v47发布：该库v47有强袭表却缺master的角色栏扩展，视为v46，重跑v47起（v50强袭建表幂等）。
         if (version == 47 && current >= 50 && IsAcceptanceAssaultV47(db, tx)) version = 46;
         bool existingFatigue = version == 14 && HasPublishedFatigue(db, tx);
@@ -1629,6 +1656,27 @@ internal static class SqliteMigrations
         command.Parameters.AddWithValue("$baseline", BaselineId);
         command.ExecuteNonQuery();
         Execute(db, tx, $"PRAGMA user_version={CurrentVersion}");
+    }
+
+    static bool IsAuraCooldownPreview(SqliteConnection db, SqliteTransaction tx, long version)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_teleport_cooldowns'";
+        string? actual = query.ExecuteScalar() as string;
+        string party = version == 79 ? ",party_aura_until INTEGER NOT NULL DEFAULT 0 CHECK(party_aura_until>=0)" : "";
+        string expected = """
+            CREATE TABLE character_teleport_cooldowns(
+              character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,
+              potion_until INTEGER NOT NULL CHECK(potion_until>=0),aura_until INTEGER NOT NULL CHECK(aura_until>=0),
+              upgrade_aura_until INTEGER NOT NULL DEFAULT 0 CHECK(upgrade_aura_until>=0)
+            """ + party + ",FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE)";
+        if (actual is null || NormalizeTable(actual, "character_teleport_cooldowns") != NormalizeTable(expected, "character_teleport_cooldowns"))
+            return false;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_quest_daily_clear'";
+        if (query.ExecuteScalar() is not 0L) return false;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_dungeon_settlement_receipts'";
+        return query.ExecuteScalar() is string settlement && NormalizeTable(settlement, SettlementProficiencySchema.Settlement) ==
+            NormalizeTable(SettlementProficiencySchema.SettlementSql, SettlementProficiencySchema.Settlement);
     }
 
     internal static void Execute(SqliteConnection db, SqliteTransaction tx, string sql)
@@ -1738,7 +1786,7 @@ internal static class SqliteMigrations
         "SELECT character_id,bonus_sp FROM character_skill_point_sources LIMIT 0",
         "SELECT account,expires_at FROM account_expert_contracts LIMIT 0",
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
-        "SELECT character_id,account,potion_until,aura_until FROM character_teleport_cooldowns LIMIT 0",
+        "SELECT character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
         "SELECT character_id,account,job_type,expertness,learned_recipes FROM character_expert_job LIMIT 0",

@@ -49,10 +49,10 @@ internal sealed partial class CharacterRepository
     static TeleportCooldowns ReadTeleportCooldowns(SqliteConnection db, ushort id, SqliteTransaction? tx)
     {
         using var query = db.CreateCommand(); query.Transaction = tx;
-        query.CommandText = "SELECT potion_until,aura_until FROM character_teleport_cooldowns WHERE character_id=$id";
+        query.CommandText = "SELECT potion_until,aura_until,upgrade_aura_until,party_aura_until FROM character_teleport_cooldowns WHERE character_id=$id";
         query.Parameters.AddWithValue("$id", id);
         using var reader = query.ExecuteReader();
-        return reader.Read() ? new(reader.GetInt64(0), reader.GetInt64(1)) : new();
+        return reader.Read() ? new(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3)) : new();
     }
 
     public Character CommitTeleport(AccountOwners.Lease owner, TeleportPlan plan) => owner.Execute(() =>
@@ -81,14 +81,17 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("传送角色版本已变化");
         command.Parameters.Clear();
         command.CommandText = """
-            INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until)
-            VALUES($id,$account,$potion,$aura)
-            ON CONFLICT(character_id) DO UPDATE SET potion_until=excluded.potion_until,aura_until=excluded.aura_until;
+            INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until)
+            VALUES($id,$account,$potion,$aura,$upgrade,$party)
+            ON CONFLICT(character_id) DO UPDATE SET potion_until=excluded.potion_until,aura_until=excluded.aura_until,
+                upgrade_aura_until=excluded.upgrade_aura_until,party_aura_until=excluded.party_aura_until;
             """;
         command.Parameters.AddWithValue("$id", current.Id);
         command.Parameters.AddWithValue("$account", owner.Account);
         command.Parameters.AddWithValue("$potion", plan.Cooldowns.PotionUntil);
         command.Parameters.AddWithValue("$aura", plan.Cooldowns.AuraUntil);
+        command.Parameters.AddWithValue("$upgrade", plan.Cooldowns.UpgradeAuraUntil);
+        command.Parameters.AddWithValue("$party", plan.Cooldowns.PartyAuraUntil);
         command.ExecuteNonQuery();
         tx.Commit();
         return current with { Revision = expected.Revision + 1, Position = plan.Position, Return = plan.Return, TeleportCooldowns = plan.Cooldowns };

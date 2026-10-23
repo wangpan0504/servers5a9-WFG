@@ -18,6 +18,12 @@ internal static class TeleportRequests
         return new(BinaryPrimitives.ReadInt32LittleEndian(body), BinaryPrimitives.ReadInt32LittleEndian(body[4..]), Position(body[8..]));
     }
 
+    public static PartyTeleportRequest Party(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 8) throw new InvalidDataException("组队传送请求必须为8字节");
+        return new(Position(body[..7]), body[7]);
+    }
+
     static Location Position(ReadOnlySpan<byte> body) => new(body[0], body[1],
         BinaryPrimitives.ReadUInt16LittleEndian(body[2..]), BinaryPrimitives.ReadUInt16LittleEndian(body[4..]), body[6]);
 }

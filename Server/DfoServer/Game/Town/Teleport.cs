@@ -10,14 +10,30 @@ namespace DfoServer.Game.Town;
 // Open（默认）：瞬间移动药剂不按 `[int data]` 地下城选择地图白名单限制有 `[dungeon gate]` 的区域；Pvf：恢复严格白名单。
 internal enum TeleportPotionGateMode { Open, Pvf }
 
-internal sealed record TeleportCooldowns(long PotionUntil = 0, long AuraUntil = 0);
+internal sealed record TeleportCooldowns(long PotionUntil = 0, long AuraUntil = 0, long UpgradeAuraUntil = 0, long PartyAuraUntil = 0)
+{
+    public long Until(AuraAbilityKind kind) => kind switch
+    {
+        AuraAbilityKind.PartyTeleport => PartyAuraUntil,
+        AuraAbilityKind.SoloTeleport => AuraUntil,
+        AuraAbilityKind.UpgradeSoloTeleport => UpgradeAuraUntil,
+        _ => throw new InvalidOperationException("该能力没有传送冷却")
+    };
+}
 internal sealed record PotionTeleportRequest(short Slot, int ItemId, byte Mode, Location Target);
 internal sealed record SoloTeleportRequest(int CharacterId, int NpcId, Location Target);
+internal sealed record PartyTeleportRequest(Location Target, byte Source);
 internal sealed record TeleportTarget(ushort CharacterId, string Name, Location Position, ChannelIdentity Channel, long Serial,
     byte Level, byte Job, byte GrowType);
 internal sealed record TeleportPlan(Character Expected, Location Position, Location Return, InventoryPlan Inventory,
-    TeleportCooldowns Cooldowns, long Now);
-internal sealed record TeleportReceipt(TownTravelReceipt Travel, InventoryResult Inventory);
+    TeleportCooldowns Cooldowns, long Now)
+{
+    public AuraAbilityKind? AuraKind { get; init; }
+}
+internal sealed record TeleportReceipt(TownTravelReceipt Travel, InventoryResult Inventory)
+{
+    public AuraAbilityKind? AuraKind { get; init; }
+}
 internal sealed record TeleportResult(string Reason, TeleportReceipt? Receipt = null)
 {
     public bool Accepted => Receipt is not null;
@@ -27,12 +43,13 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
     TeleportPotionGateMode potionGates = TeleportPotionGateMode.Open)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
-    public SoloTeleportDefinition? Aura(Character character, long now)
+    public AuraAbilityDefinition? Aura(Character character, long now)
     {
         var aura = character.Inventory.Find(new(InventoryListType.Equipment, 9));
         if (aura is not { Avatar: not null, Core.Kind: ItemKind.Avatar } || aura.IsExpired(now / 1000)) return null;
         var template = item(aura.Core.ItemId);
-        return template.EquipmentSlot == 9 && character.Level >= template.MinimumLevel ? definitions.Aura(aura.Core.ItemId) : null;
+        var ability = template.EquipmentSlot == 9 && character.Level >= template.MinimumLevel ? definitions.Aura(aura.Core.ItemId) : null;
+        return ability is { Kind: not AuraAbilityKind.None } ? ability : null;
     }
 
     public (string Reason, TeleportPlan? Plan) Potion(Character character, PotionTeleportRequest request, long now)
@@ -61,13 +78,14 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
     public (string Reason, TeleportPlan? Plan) Solo(Character character, SoloTeleportRequest request, TeleportTarget? player, long now)
     {
         var definition = Aura(character, now);
-        if (definition is null) return ("aura-unavailable", null);
-        if (character.TeleportCooldowns.AuraUntil > now) return ("aura-cooldown", null);
+        if (definition?.Personal != true) return ("personal-aura-unavailable", null);
+        if (character.TeleportCooldowns.Until(definition.Kind) > now) return ("aura-cooldown", null);
+        bool npcTarget = request.CharacterId == -1 && request.NpcId > 0;
         Location target;
         // 实机个人传送点选城镇时两个 i32 都是 -1，目的地在随后的 town/area/坐标。不是玩家目标。
         if (request.CharacterId == -1 && request.NpcId == -1)
             target = request.Target;
-        else if (request.CharacterId == -1 && request.NpcId > 0)
+        else if (npcTarget)
         {
             target = request.Target;
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
@@ -79,22 +97,46 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
             // 玩家位置只取当前城镇成员；客户端预检查之后移动的旧坐标不能覆盖它。
             target = player.Position;
         else return ("player-target-unavailable", null);
-        string access = Destination(character, target);
+        string access = Destination(character, target, npcTarget);
         if (access != "ready") return (access, null);
-        var equipped = character.Inventory.Find(new(InventoryListType.Equipment, 9))!;
-        return ("ready", Plan(character, target, new(character.Inventory, character.Inventory, "teleport_aura",
-            new(character, equipped.ExpireTime == 0 ? null : equipped.ExpireTime)),
-            character.TeleportCooldowns with { AuraUntil = checked(now + definition.CoolSeconds * 1000L) }, now));
+        return ("ready", AuraPlan(character, target, definition, now));
     }
 
-    string Destination(Character character, Location target)
+    public (string Reason, TeleportPlan? Plan) Party(Character character, PartyTeleportRequest request, long now)
+    {
+        if (request.Source != 1) return ("party-teleport-source-unavailable", null);
+        var definition = Aura(character, now);
+        if (definition?.Kind != AuraAbilityKind.PartyTeleport) return ("party-aura-unavailable", null);
+        if (character.TeleportCooldowns.PartyAuraUntil > now) return ("aura-cooldown", null);
+        string access = Destination(character, request.Target);
+        return access == "ready" ? ("ready", AuraPlan(character, request.Target, definition, now)) : (access, null);
+    }
+
+    TeleportPlan AuraPlan(Character character, Location target, AuraAbilityDefinition definition, long now)
+    {
+        var equipped = character.Inventory.Find(new(InventoryListType.Equipment, 9))!;
+        long until = checked(now + definition.CoolSeconds * 1000L);
+        var cooldowns = definition.Kind switch
+        {
+            AuraAbilityKind.PartyTeleport => character.TeleportCooldowns with { PartyAuraUntil = until },
+            AuraAbilityKind.SoloTeleport => character.TeleportCooldowns with { AuraUntil = until },
+            AuraAbilityKind.UpgradeSoloTeleport => character.TeleportCooldowns with { UpgradeAuraUntil = until },
+            _ => throw new InvalidOperationException("光环没有传送能力")
+        };
+        return Plan(character, target, new(character.Inventory, character.Inventory, "teleport_aura",
+            new(character, equipped.ExpireTime == 0 ? null : equipped.ExpireTime)),
+            cooldowns, now) with { AuraKind = definition.Kind };
+    }
+
+    string Destination(Character character, Location target, bool npcTarget = false)
     {
         if (target.Direction > 9) return "target-direction-unavailable";
         var completed = DfoServer.Game.Quests.QuestEligibility.Completed(character);
         string admission = towns.DestinationAdmission(target, character.Level, completed);
         if (admission != "ready") return admission;
         if (towns.IsRoom(target, completed)) return "private-room-target";
-        return towns.IsPosition(target, completed) ? "ready" : "target-position-unavailable";
+        // ARAD的NPC导航落点可在步行矩形外；已核对当前地图的NPC身份，不再用行走边界拒绝或改写坐标。
+        return npcTarget || towns.IsPosition(target, completed) ? "ready" : "target-position-unavailable";
     }
 
     TeleportPlan Plan(Character character, Location target, InventoryPlan inventory, TeleportCooldowns cooldowns, long now) =>

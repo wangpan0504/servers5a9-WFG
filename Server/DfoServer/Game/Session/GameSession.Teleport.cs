@@ -17,9 +17,20 @@ internal sealed partial class GameSession
         Func<bool>? targetCurrent = null, bool blocked = false) => PlanTeleport(character =>
         service.Solo(character, request, target, service.Clock.GetUtcNow().ToUnixTimeMilliseconds()), service.Clock, blocked, targetCurrent);
 
-    TeleportResult PlanTeleport(Func<Character, (string Reason, TeleportPlan? Plan)> prepare, TimeProvider clock, bool blocked, Func<bool>? targetCurrent = null)
+    public TeleportResult TeleportSingleMemberParty(PartyTeleportRequest request, TeleportService service, bool blocked = false)
     {
-        var capture = owner.Execute(() => (Character: CanTeleport() && !blocked ? Selected : null, SelectionEpoch));
+        var captured = owner.Execute(() => (Party: singleParty, Version: singlePartyVersion));
+        if (captured.Party is null) return new("party-context-unavailable");
+        // 原生流程将队长视为已同意；当前队伍确实只有本人，不创建虚假的待确认成员。
+        return PlanTeleport(character => service.Party(character, request, service.Clock.GetUtcNow().ToUnixTimeMilliseconds()),
+            service.Clock, blocked, contextCurrent: () => ReferenceEquals(singleParty, captured.Party) &&
+                singlePartyVersion == captured.Version && Selected?.Id == captured.Party.LeaderId);
+    }
+
+    TeleportResult PlanTeleport(Func<Character, (string Reason, TeleportPlan? Plan)> prepare, TimeProvider clock, bool blocked,
+        Func<bool>? targetCurrent = null, Func<bool>? contextCurrent = null)
+    {
+        var capture = owner.Execute(() => (Character: CanTeleport() && !blocked && contextCurrent?.Invoke() != false ? Selected : null, SelectionEpoch));
         if (capture.Character is not { } character) return new("invalid-state");
         var prepared = prepare(character);
         return owner.Execute(() =>
@@ -27,12 +38,15 @@ internal sealed partial class GameSession
             if (!CanTeleport() || SelectionEpoch != capture.SelectionEpoch || !ReferenceEquals(Selected, character))
                 throw new InvalidOperationException("传送规划期间角色状态已变化");
             if (prepared.Plan is not { } plan) return new TeleportResult(prepared.Reason);
+            if (contextCurrent?.Invoke() == false) return new TeleportResult("party-context-changed");
             if (targetCurrent?.Invoke() == false) return new TeleportResult("player-target-changed");
             // 冷资源解析耗时不占用成功后的冷却时长；只平移本次实际启动的那一类。
             long elapsed = Math.Max(0, clock.GetUtcNow().ToUnixTimeMilliseconds() - plan.Now);
             plan = plan with { Cooldowns = new(
                 plan.Cooldowns.PotionUntil == character.TeleportCooldowns.PotionUntil ? plan.Cooldowns.PotionUntil : checked(plan.Cooldowns.PotionUntil + elapsed),
-                plan.Cooldowns.AuraUntil == character.TeleportCooldowns.AuraUntil ? plan.Cooldowns.AuraUntil : checked(plan.Cooldowns.AuraUntil + elapsed)) };
+                plan.Cooldowns.AuraUntil == character.TeleportCooldowns.AuraUntil ? plan.Cooldowns.AuraUntil : checked(plan.Cooldowns.AuraUntil + elapsed),
+                plan.Cooldowns.UpgradeAuraUntil == character.TeleportCooldowns.UpgradeAuraUntil ? plan.Cooldowns.UpgradeAuraUntil : checked(plan.Cooldowns.UpgradeAuraUntil + elapsed),
+                plan.Cooldowns.PartyAuraUntil == character.TeleportCooldowns.PartyAuraUntil ? plan.Cooldowns.PartyAuraUntil : checked(plan.Cooldowns.PartyAuraUntil + elapsed)) };
             Selected = repository.CommitTeleport(owner, plan);
             InvalidateImageCommunication();
             InvalidateExpertJobStore();
@@ -44,7 +58,7 @@ internal sealed partial class GameSession
                     PreviousSkillSwitchInventory = character.SkillSwitchInventory
                 }
             };
-            return new TeleportResult("committed", new(new(Selected, owner.Generation, SelectionEpoch), inventory));
+            return new TeleportResult("committed", new(new(Selected, owner.Generation, SelectionEpoch), inventory) { AuraKind = plan.AuraKind });
         });
     }
 
@@ -53,7 +67,8 @@ internal sealed partial class GameSession
         var captured = owner.Execute(() => CanTeleport() && !blocked ? Selected : null);
         if (captured is null) return false;
         long now = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();
-        bool qualified = service.Aura(captured, now) is not null && captured.TeleportCooldowns.AuraUntil <= now;
+        var ability = service.Aura(captured, now);
+        bool qualified = ability?.Personal == true && captured.TeleportCooldowns.Until(ability.Kind) <= now;
         return owner.Execute(() => qualified && CanTeleport() && ReferenceEquals(Selected, captured));
     }
 }

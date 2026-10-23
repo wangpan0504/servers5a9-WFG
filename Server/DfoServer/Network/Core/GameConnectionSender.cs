@@ -14,7 +14,9 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     // 按包体及帧头计费，包含活动消息；共享包体在每个接收连接独立计费。
     internal const long MaxPendingBytes = 2 * 1024 * 1024;
     sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false);
-    sealed record Message(long Epoch, Output? Own = null, RemoteTownActor? Enter = null, (ushort, long)? Move = null, (ushort, long)? Leave = null, TaskCompletionSource? Clear = null, RemoteTownActor? Refresh = null, long Bytes = 0);
+    sealed record Message(long Epoch, Output? Own = null, RemoteTownActor? Enter = null, (ushort, long)? Move = null,
+        (ushort Id, long Membership, byte[]? Effect, Func<bool>? Current, byte[]? Prepare)? Leave = null,
+        TaskCompletionSource? Clear = null, RemoteTownActor? Refresh = null, long Bytes = 0);
     readonly AccountOwners.Lease owner;
     readonly Stream stream;
     readonly CancellationTokenSource connection;
@@ -85,7 +87,8 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     public void InvalidateScene() => Interlocked.Increment(ref epoch);
     public void Enter(RemoteTownActor actor) => Enqueue(new(Epoch, Enter: actor));
     public void Refresh(RemoteTownActor actor) => Enqueue(new(Epoch, Refresh: actor));
-    public void Leave(ushort id, long membership) => Enqueue(new(Epoch, Leave: (id, membership)));
+    public void Leave(ushort id, long membership, byte[]? departureEffect = null, Func<bool>? current = null, byte[]? prepareEffect = null) =>
+        Enqueue(new(Epoch, Leave: (id, membership, departureEffect, current, prepareEffect)));
     public void Move(RemoteTownActor actor)
     {
         var key = (actor.Id, actor.Membership);
@@ -122,7 +125,9 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     {
         long bytes = message.Own is { } own ? own.Body.Length + 16L :
             message.Enter is { } enter ? ActorBytes(enter) :
-            message.Refresh is { } refresh ? ActorBytes(refresh) : 18;
+            message.Refresh is { } refresh ? ActorBytes(refresh) :
+            message.Leave is { } left ? 18L + (left.Effect is { } effect ? 16L + effect.Length : 0) +
+                (left.Prepare is { } prepare ? 16L + prepare.Length : 0) : 18;
         bool accepted;
         lock (queueGate)
             accepted = TryEnqueue(message with { Bytes = bytes }, bytes);
@@ -242,10 +247,18 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                         if (latest is not null && await EnsureActor(latest, message.Epoch) && Visible(latest, message.Epoch))
                             await Write(0, (ushort)NotiPacketType.USER_POSITION, latest.Position, "town_peer_position");
                     }
-                    else if (message.Leave is { } left && Epoch == message.Epoch && known.GetValueOrDefault(left.Item1) == left.Item2)
+                    else if (message.Leave is { } left && Epoch == message.Epoch && known.GetValueOrDefault(left.Id) == left.Membership)
                     {
-                        await Write(0, (ushort)NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(left.Item1), "town_peer_leave");
-                        known.Remove(left.Item1);
+                        // 出发事件与旧成员离场同队列：源已离场不抹掉已提交事件，未知Actor、旧目标视图或旧源owner仍跳过。
+                        if (left.Prepare is { } prepare && owner.Execute(() => Epoch == message.Epoch && left.Current?.Invoke() != false))
+                            await Write(0, (ushort)NotiPacketType.SHOW_EFFECT, prepare, "teleport_party_prepare_peer");
+                        if (left.Effect is { } effect && owner.Execute(() => Epoch == message.Epoch && left.Current?.Invoke() != false))
+                            await Write(0, (ushort)NotiPacketType.SHOW_EFFECT, effect, "teleport_aura_departure_peer");
+                        if (Epoch == message.Epoch)
+                        {
+                            await Write(0, (ushort)NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(left.Id), "town_peer_leave");
+                            known.Remove(left.Id);
+                        }
                     }
                 }
                 finally

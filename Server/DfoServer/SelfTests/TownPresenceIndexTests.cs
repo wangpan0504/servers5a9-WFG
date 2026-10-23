@@ -129,15 +129,18 @@ internal static class TownPresenceIndexTests
             That(peers[1].Sent.Count(row => row.Opcode == 2) == 1 &&
                 peers.Skip(2).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "外观刷新不向其他频道或服务器分组传输");
             Clear();
-            presence.Remove(peers[0].Sender);
+            presence.Remove(peers[0].Sender, [1, 1, 1, 0]);
             await peers[0].Sender.ClearScene();
             presence.Join(peers[0].Owner, peers[0].Sender, source, channels[2]);
+            presence.Publish(peers[0].Owner, peers[0].Sender, 379, [2, 1, 1, 0], "teleport_arrival_test");
             await Drain();
-            That(peers[1].Sent.Count(row => row.Opcode == 6) == 1 && peers[1].Sent.All(row => row.Opcode != 2),
-                "换频道只向原频道可见者发送一次离场");
+            That(peers[1].Sent.Where(row => row.Opcode != 1347).Select(row => row.Opcode).SequenceEqual(new ushort[] { 379, 6 }) &&
+                Body(1, 379).Span.SequenceEqual(new byte[] { 1, 1, 1, 0 }),
+                "光环离场按原频道的已知membership先发出发特效再发离场，不广播到其他分组或频道");
             That(peers.Skip(2).Take(2).All(peer => peer.Sent.Where(row => row.Opcode != 1347)
-                .Select(row => row.Opcode).SequenceEqual(new ushort[] { 2, 3, 23, 22 })) &&
-                peers.Skip(4).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "换频道只向新频道同场景发送完整入场");
+                .Select(row => row.Opcode).SequenceEqual(new ushort[] { 2, 3, 23, 22, 379 })) &&
+                Body(2, 379).Span.SequenceEqual(new byte[] { 2, 1, 1, 0 }) &&
+                peers.Skip(4).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "光环到达特效仅在新频道同场景的角色入场序列之后发送");
             That(Body(2, 2).Equals(Body(3, 2)), "同频道入场共享只读Actor包体");
             Clear();
             source = source with { Position = first with { X = (ushort)(first.X + 2) } };
