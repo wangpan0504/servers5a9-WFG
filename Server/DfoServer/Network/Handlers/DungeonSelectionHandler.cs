@@ -40,26 +40,42 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Handled;
         }
         var continuation = context.Session.CompleteFormalDungeonContinuation(entry.DungeonIndex);
+        if (continuation.Pending && continuation.Selection is { } continuationSelection)
+        {
+            if (!await projection.DetachForDungeonSelectionAsync(context,continuationSelection)) return CommandResult.Handled;
+            bool Guard() => context.Session.CanPublishDungeonSelection(continuationSelection);
+            log.Write("formal_quest_continuation_selection",new { Connection = context.Id, entry.DungeonIndex,
+                continuation.Opened, continuationSelection.SelectionId });
+            // 27隐藏旧Scene界面并切换场景模块；ACK15/state1不能替代，缺少它会保留旧结算页。
+            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_confirm",Guard);
+            if (continuation.Opened)
+            {
+                await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(continuationSelection.Character.Id),"formal_next_quest_entry_state",Guard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.EmptySelectNotice(),"formal_next_quest_scene_transition",Guard);
+            }
+            return CommandResult.Handled;
+        }
+        if (continuation.Pending && continuation.Replay is { } replay)
+        {
+            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_replay",
+                () => context.Session.CanPublishFormalDungeon(replay));
+            return CommandResult.Handled;
+        }
         if (continuation.Pending)
         {
-            if (continuation.Selection is { } selected)
+            // 连图无法继续时不能静默吞掉15：城镇内退回普通选图，其余状态明确拒绝，客户端不能停在旧副本。
+            log.Write("formal_quest_continuation_closed",new { Connection = context.Id, continuation.Cancelled, continuation.Reason,
+                entry.DungeonIndex });
+            bool fallback = context.Owner.Execute(() => continuation.Cancelled && !context.BlocksTownActions &&
+                context.Session.Ready && context.Session.Phase == SessionPhase.Town);
+            if (!fallback)
             {
-                if (!await projection.DetachForDungeonSelectionAsync(context,selected)) return CommandResult.Handled;
-                bool Guard() => context.Session.CanPublishDungeonSelection(selected);
-                log.Write("formal_quest_continuation_selection",new { Connection = context.Id, entry.DungeonIndex,
-                    continuation.Opened, selected.SelectionId });
-                // 27隐藏旧Scene界面并切换场景模块；ACK15/state1不能替代，缺少它会保留旧结算页。
-                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_confirm",Guard);
-                if (continuation.Opened)
-                {
-                    await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(selected.Character.Id),"formal_next_quest_entry_state",Guard);
-                    await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.EmptySelectNotice(),"formal_next_quest_scene_transition",Guard);
-                }
+                var before = context.Owner.Execute(() => (context.Session.Ready,context.Session.SelectionEpoch,context.Session.Phase));
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionUnavailable(),"formal_next_quest_entry_rejected",
+                    () => context.Owner.Execute(() => before.Ready && context.Session.Ready &&
+                        context.Session.SelectionEpoch == before.SelectionEpoch && context.Session.Phase == before.Phase));
+                return CommandResult.Handled;
             }
-            else if (continuation.Replay is { } replay)
-                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionOpened(),"formal_next_quest_entry_replay",
-                    () => context.Session.CanPublishFormalDungeon(replay));
-            return CommandResult.Handled;
         }
         var replayBefore = context.Owner.Execute(() => (context.Session.Selected,context.Session.Ready,
             context.Session.SelectionEpoch,context.Session.Phase,Identity: context.Session.DungeonSnapshot?.Identity));

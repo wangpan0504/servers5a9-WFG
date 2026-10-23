@@ -1,3 +1,4 @@
+using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Town;
 using DfoServer.GameWorld.Dungeons;
@@ -22,6 +23,35 @@ internal sealed partial class GameSession
     {
         if (pendingDungeonContinuation is { } pending)
             pendingDungeonContinuation = pending with { Cancelled = true, Dungeon = null, Return = null, Entered = null, Selection = null };
+    }
+
+    // 连图等待期间同一角色仍可能提交新的持久状态（例如退场边界清理商城药效果后再次保存）。
+    // 角色快照 id 相同且 revision 前进视为已提交历史的延续，重绑到最新快照并重基后继规划；
+    // 同 revision 换对象、换角或快照倒退一律返回 null，由调用方把连图终态化。
+    PendingDungeonContinuation? RebindContinuation(PendingDungeonContinuation pending,Character updated)
+    {
+        static bool Commits(Character snapshot,Character updated) => ReferenceEquals(snapshot,updated) ||
+            snapshot.Id == updated.Id && snapshot.Revision < updated.Revision;
+        if (!Commits(pending.Previous.Character,updated)) return null;
+        if (pending.Return is { } returning && !Commits(returning.Character,updated)) return null;
+        if (pending.Entered is { } entered && !Commits(entered.Character,updated)) return null;
+        var prepared = pending.Dungeon;
+        if (prepared is not null && !Commits(prepared.Character,updated)) return null;
+        if (prepared is not null && !ReferenceEquals(prepared.Character,updated))
+        {
+            // 已安装的run可能已接受动作，不能再重基；未安装的规划只同步尚未提交的入场revision。
+            if (pending.Entered is not null) return null;
+            var entry = prepared.Dungeon.Entry with { CharacterRevision = checked(updated.Revision + 1) };
+            prepared.Dungeon.Run.RebasePreparedRevision(entry.CharacterRevision);
+            prepared = prepared with { Character = updated, Dungeon = prepared.Dungeon with { Entry = entry } };
+        }
+        return pending with
+        {
+            Previous = ReferenceEquals(pending.Previous.Character,updated) ? pending.Previous : pending.Previous with { Character = updated },
+            Dungeon = prepared,
+            Return = pending.Return is { } retainedReturn && !ReferenceEquals(retainedReturn.Character,updated) ? retainedReturn with { Character = updated } : pending.Return,
+            Entered = pending.Entered is { } retainedEntered && !ReferenceEquals(retainedEntered.Character,updated) ? retainedEntered with { Character = updated } : pending.Entered
+        };
     }
 
     public bool ConfirmNewDungeonSelection(DungeonSelectionReceipt receipt) => owner.Execute(() =>
@@ -83,7 +113,12 @@ internal sealed partial class GameSession
                 ? previous : null;
         if (!Ready || !CanEnterFormalDungeon(pending.Previous)) return null;
         var returning = ReturnFromFormalDungeon();
-        if (returning is not null) pendingDungeonContinuation = pending with { Return = returning };
+        if (returning is null) return null;
+        // 退场保存可能替换角色快照（边界清理商城药效果等）；按提交结果重绑，旧快照不能再冒充后继规划。
+        if (RebindContinuation(pending,returning.Character) is { } rebound)
+            pendingDungeonContinuation = rebound with { Return = returning };
+        else
+            CancelDungeonContinuation();
         return returning;
     });
 
@@ -95,36 +130,52 @@ internal sealed partial class GameSession
             pendingDungeonContinuation.Entered is { } entered && CanPublishFormalDungeon(entered)));
 
     // 15只建立客户端选图上下文；真实16复验原规划后才提交attempt并发布28/29。
-    public (bool Pending, DungeonSelectionReceipt? Selection, bool Opened, FormalDungeonReceipt? Replay) CompleteFormalDungeonContinuation(uint dungeonId = 0) => owner.Execute(() =>
+    // Cancelled 表示本次调用把连图终态化，调用方必须给出明确回复，不能再静默丢弃；Reason 只进日志。
+    public (bool Pending, DungeonSelectionReceipt? Selection, bool Opened, FormalDungeonReceipt? Replay, bool Cancelled, string Reason)
+        CompleteFormalDungeonContinuation(uint dungeonId = 0) => owner.Execute(() =>
     {
-        if (pendingDungeonContinuation is not { Cancelled: false } pending) return (false,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+        if (pendingDungeonContinuation is not { Cancelled: false } pending) return (false,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null,false,"none");
         if (pending.Entered is { } installed)
             return Ready && Phase == SessionPhase.Loading && CanPublishFormalDungeon(installed)
-                ? (true,(DungeonSelectionReceipt?)null,false,installed)
-                : (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
-        if (pending.Return is not { } returning) return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
-        if (!Ready || Phase is not (SessionPhase.Town or SessionPhase.MapSelect) || formalDungeon is not null || returning.Generation != owner.Generation ||
-            returning.SelectionEpoch != SelectionEpoch || !ReferenceEquals(Selected,returning.Character) ||
-            pending.Dungeon is not { } prepared || !ReferenceEquals(prepared.Character,Selected) || prepared.SelectionEpoch != SelectionEpoch)
+                ? (true,(DungeonSelectionReceipt?)null,false,installed,false,"installed-replay")
+                : (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null,false,"installed-unavailable");
+        if (pending.Return is not { } returning) return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null,false,"return-missing");
+        if (!Ready || Selected is not { } selected || Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
+            formalDungeon is not null || returning.Generation != owner.Generation || returning.SelectionEpoch != SelectionEpoch ||
+            pending.Dungeon is not { } prepared || prepared.SelectionEpoch != SelectionEpoch)
         {
             CancelDungeonContinuation();
-            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null,true,"state-changed");
+        }
+        if (!ReferenceEquals(selected,returning.Character) || !ReferenceEquals(selected,prepared.Character))
+        {
+            // 等待期间同一角色提交了新状态（如退场边界清理商城药效果）：按提交历史重绑最新快照；
+            // 同 revision 换对象、换角或快照倒退仍视为原请求失效。
+            if (RebindContinuation(pending,selected) is not { Return: { } reboundReturn, Dungeon: { } reboundDungeon } rebound)
+            {
+                CancelDungeonContinuation();
+                return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null,true,"snapshot-changed");
+            }
+            pendingDungeonContinuation = pending = rebound;
+            returning = reboundReturn;
+            prepared = reboundDungeon;
         }
         if (dungeonId != 0 && dungeonId != prepared.Dungeon.Entry.DungeonId)
-            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null,false,"dungeon-mismatch");
         bool opened = pending.Selection is null;
         if (opened)
         {
             if (Phase != SessionPhase.Town || CurrentDungeonSelection is not null)
-                return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
-            CurrentDungeonSelection = new(++dungeonSelectionId,SelectionEpoch,Selected!.Id,Selected.Position,Selected.Position);
+                return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null,false,"selection-conflict");
+            CurrentDungeonSelection = new(++dungeonSelectionId,SelectionEpoch,selected.Id,selected.Position,selected.Position);
             pendingDungeonContinuation = pending with { Selection = CurrentDungeonSelection };
         }
         else if (Phase != SessionPhase.MapSelect || !ReferenceEquals(CurrentDungeonSelection,pending.Selection))
-            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null);
+            return (true,(DungeonSelectionReceipt?)null,false,(FormalDungeonReceipt?)null,false,"selection-changed");
         ValidateDungeonSelection();
         SetState(SessionPhase.MapSelect);
-        return (true,new DungeonSelectionReceipt(Selected!,owner.Generation,SelectionEpoch,dungeonSelectionId),opened,(FormalDungeonReceipt?)null);
+        return (true,new DungeonSelectionReceipt(selected,owner.Generation,SelectionEpoch,dungeonSelectionId),opened,(FormalDungeonReceipt?)null,false,
+            opened ? "opened" : "confirmed");
     });
 
     public FormalDungeonReceipt? EnterFormalDungeonContinuation(uint dungeonId,uint questId,byte difficulty) => owner.Execute(() =>

@@ -1799,14 +1799,25 @@ internal static class QuestLifecycleTcpTests
                 resources.Towns.InitialReturn,resources.Learning.Get);
             var learning = SkillPointLedger.Synchronize(0,0,3,candidate.InitialLearning with {
                 Experience = growth.GetLevelStartExperience(3) },resources.Learning);
+            // #665 回归：主线副本内使用商城增益药（Maintenance=0），退场边界会丢弃效果并提交新 revision。
+            var items = candidate.Inventory.Items
+                .Add(new(0,new(DfoServer.Game.Inventory.Models.InventoryListType.Main,65),
+                    DfoServer.Game.Inventory.Services.InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(490703930),2)))
+                .Add(new(0,new(DfoServer.Game.Inventory.Models.InventoryListType.Main,66),
+                    DfoServer.Game.Inventory.Services.InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(490703931),2)));
             new CharacterRepository(fixture.Database).Create(owner,candidate with {
-                Level = 3, AcceptedStoryLevel = 1, CompletedQuests = [3145,4873,3157], InitialLearning = learning });
+                Level = 3, AcceptedStoryLevel = 1, CompletedQuests = [3145,4873,3157], InitialLearning = learning,
+                Inventory = candidate.Inventory with { Items = items } });
         }
         using (var peer = Open(fixture))
         {
             peer.Select(prepared: true); FormalDungeonTcpTests.EntryTown(peer);
             var map = FormalDungeonTcpTests.Enter(peer,3146); FormalDungeonTcpTests.Load(peer);
             That(U32(map,14) == 76131,"独立连图fixture按真实3146路线进入，未重跑Lv1前缀");
+            peer.Send(44,UseConsumable(65,490703930)); peer.Expect(1,44,UseConsumableAck(65,490703930)); peer.Barrier();
+            peer.Send(44,UseConsumable(66,490703931)); peer.Expect(1,44,UseConsumableAck(66,490703931)); peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0",peer.Id) is [[2L]],
+                "商城增益药在主线副本内真实使用并持久两条效果，退场将因边界清理再保存");
             peer.Send(31,[31,0,238,11]); peer.Expect(1,31,[1,238,11,1,0,0,0,0]); DrainNotifications(peer);
             var path = new (byte X,byte Y)[] { (0,1),(1,1),(2,1),(3,1),(4,1) };
             for (int room = 0; room <= path.Length; room++)
@@ -1928,6 +1939,11 @@ internal static class QuestLifecycleTcpTests
         peer.Expect(0,27,new byte[42]);
         peer.Barrier();
         That(Attempt() == attempt,"连图真实15只打开选择阶段，16前不预留attempt或发送28/29");
+        // 连图中错误目标必须明确回失败ACK15；静默Handled会让客户端停在旧副本选图前。
+        byte[] wrongDungeon = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(wrongDungeon,12345);
+        peer.Send(15,wrongDungeon); peer.Expect(1,15,[0,1,0]); peer.Barrier();
+        That(Attempt() == attempt && fixture.Snapshot() == retired,
+            "错误连图目标只回失败ACK15，不建立尝试、不改变持久状态或后继规划");
         byte[] chosen = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(chosen,6);
         peer.Send(15,chosen); peer.Expect(1,15,[1]); peer.Barrier();
         That(Attempt() == attempt,"连图15(0)后的15(dungeon)只确认原选择，不重复选图或安装实例");
@@ -1967,6 +1983,10 @@ internal static class QuestLifecycleTcpTests
     }
 
     static WirePacket Finished(TcpPeer peer, byte[]? expected = null) => peer.Expect(1,34,expected);
+
+    // op44 请求与成功ACK同 ConsumableUseTcpTests：槽位/列表/check/源ID/参数，成功标志1同槽位回显。
+    static byte[] UseConsumable(ushort slot,int id) => Build(w => { w.Write(slot); w.Write((byte)0); w.Write(0u); w.Write(id); w.Write(0); });
+    static byte[] UseConsumableAck(ushort slot,int id) => Build(w => { w.Write((byte)1); w.Write(slot); w.Write((byte)0); w.Write(0u); w.Write(id); });
 
     internal static void DrainNotifications(TcpPeer peer, Action<WirePacket>? observe = null)
     {

@@ -3,6 +3,8 @@ using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
 using DfoServer.Game.Town;
@@ -171,8 +173,26 @@ internal static class QuestCycleContinuationTests
             // 同槽位同qid重新接取仍替换原快照，不能复用旧规划。
             var changed = character with { ActiveMainQuests = [character.ActiveMainQuests[0] with { AcceptanceId = Guid.NewGuid() }] };
             typeof(GameSession).GetProperty(nameof(GameSession.Selected))!.SetValue(f.Session,changed);
-            That(f.Session.EnterFormalDungeonContinuation(1,101,0) is null && Same(character,f.Read()),
-                "原快照失效不能安装后继或预留attempt");
+            var blocked = f.Session.CompleteFormalDungeonContinuation();
+            That(blocked is { Pending:true,Cancelled:true,Selection:null } &&
+                f.Session.EnterFormalDungeonContinuation(1,101,0) is null && Same(character,f.Read()),
+                "同revision换对象仍是原快照失效，15明确终止且不能安装后继或预留attempt");
+        }
+        using (var f = new Fixture(before))
+        {
+            var beforePotion = f.Session.Selected!;
+            f.PrepareContinuation();
+            var returned = f.CommitConsumableReturn(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            That(returned.Revision > beforePotion.Revision+1 && returned.Inventory.ConsumableStates.Length == 0 && Same(returned,f.Read()),
+                "副本内商城增益药与退场边界各提交一次库存保存，城镇边界后持久效果为空");
+            var opening = f.Session.CompleteFormalDungeonContinuation();
+            That(opening is { Pending:true,Cancelled:false,Selection:not null,Opened:true } &&
+                f.Session.Phase == SessionPhase.MapSelect,
+                "退场保存产生新revision快照后仍打开后继选图，不被误判为失效");
+            var entered = f.Session.EnterFormalDungeonContinuation(1,101,0);
+            That(entered is not null && entered.Character.Revision == returned.Revision+1 &&
+                entered.Entry.CharacterRevision == entered.Character.Revision && Same(entered.Character,f.Read()),
+                "后继16按最新revision只预留一次尝试，规划与持久状态一致");
         }
         using (var f = new Fixture(DateTimeOffset.UtcNow))
         {
@@ -294,9 +314,6 @@ internal static class QuestCycleContinuationTests
                 authority.BindTo(run!),"单房合成资源建立独立正式run，不读取或推进真实主线");
             var ground = new DungeonGroundState(run!,route.Rooms,[]);
             // 仅种下已退场的内部准备边界；后续安装、重放、加载和周期提交全部调用实际Session。
-            object Create(string name,params object?[] args) => typeof(GameSession).GetNestedType(name,BindingFlags.NonPublic)!
-                .GetConstructors(BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic)
-                .Single(constructor => constructor.GetParameters().Length == args.Length).Invoke(args);
             var dungeon = Create("FormalDungeon",entry,route,run,authority,1u,ground,
                 new Dictionary<int,DungeonExplicitDropPool>(),(Func<int,int>)(_ => 0),null,
                 ImmutableDictionary<ushort,DungeonDropGenerationPlan>.Empty);
@@ -313,6 +330,37 @@ internal static class QuestCycleContinuationTests
             typeof(GameSession).GetField("pendingDungeonContinuation",BindingFlags.Instance|BindingFlags.NonPublic)!
                 .SetValue(Session,Create("PendingDungeonContinuation",previous,prepared,returning,null));
         }
+
+        // 复现 #665：主线副本内使用 Maintenance=0 的商城增益药后，退场 CrossBoundary(Town) 丢弃效果行，
+        // ReturnFromFormalDungeon 因 inventory 变化保存并替换角色快照；旧实现的连图回执仍指向旧 revision。
+        public Character CommitConsumableReturn(long now)
+        {
+            var character = Session.Selected!;
+            var definition = new DfoServer.GameWorld.Items.RecoveryConsumableDefinition(490703930,0,300000,61)
+                { EffectMilliseconds = 300000 };
+            var charged = ConsumableStatePolicy.Activate(character.Inventory,definition,now);
+            That(charged is not null && charged.ConsumableStates.Length == 1,"合成商城增益药真实写入一条Maintenance=0效果");
+            var used = repository.Save(owner,character,character.Position,character.Return,
+                new InventoryPlan(character.Inventory,charged!,"consumable_use",new(character)));
+            typeof(GameSession).GetProperty(nameof(GameSession.Selected))!.SetValue(Session,used);
+            var cleared = ConsumableStatePolicy.CrossBoundary(used.Inventory,ConsumableMaintenance.Town,now+1);
+            That(cleared.ConsumableStates.Length == 0 && cleared != used.Inventory,"城镇边界丢弃非Town维持的效果，退场必然再保存一次");
+            var returned = repository.Save(owner,used,used.Position,used.Return,
+                new InventoryPlan(used.Inventory,cleared,"dungeon_retreat_stamina",new(used)));
+            typeof(GameSession).GetProperty(nameof(GameSession.Selected))!.SetValue(Session,returned);
+            // 这里直接构造旧实现留下的状态：只有 Return 换成退场提交回执，Previous/Dungeon 仍指向用药前快照，
+            // 以独立验证 CompleteFormalDungeonContinuation 自身也能按提交历史重绑，而不只依赖退场入口。
+            var field = typeof(GameSession).GetField("pendingDungeonContinuation",BindingFlags.Instance|BindingFlags.NonPublic)!;
+            var pending = field.GetValue(Session)!;
+            object Part(string name) => pending.GetType().GetProperty(name)!.GetValue(pending)!;
+            field.SetValue(Session,Create("PendingDungeonContinuation",Part("Previous"),Part("Dungeon"),
+                new TownTravelReceipt(returned,owner.Generation,Session.SelectionEpoch),Part("Entered")));
+            return returned;
+        }
+
+        static object Create(string name,params object?[] args) => typeof(GameSession).GetNestedType(name,BindingFlags.NonPublic)!
+            .GetConstructors(BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic)
+            .Single(constructor => constructor.GetParameters().Length == args.Length).Invoke(args);
 
         public void Dispose() { Session.End(); owner.Dispose(); Directory.Delete(root,true); }
     }
