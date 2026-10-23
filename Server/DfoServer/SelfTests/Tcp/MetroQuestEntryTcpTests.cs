@@ -54,12 +54,14 @@ internal static class MetroQuestEntryTcpTests
         VerifyYoungGizelEntry();
         VerifyMovement(7958, 311, 95, new(2, 0), 655666, 655667);
         VerifyMovement(3969, 311, 88, new(3, 0), 76886, null);
-        VerifyGustDropChain();
+        VerifyGustDropChain(3995, 3871, 77079, fullChain: true);
+        VerifyGustDropChain(3994, 3870, 77069, fullChain: false);
+        VerifyGustDropChain(3996, 3873, 77089, fullChain: false);
         VerifyGustClearChain();
         VerifyBellFeathers();
         VerifyMetroTerminalBusiness(3973, 310, 88);
         VerifyMetroTerminalBusiness(4872, 314, 89);
-        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、父子阶段、3640首子入场、层/warp、3988→3991连续交付、3987→3992材料及3993→3995→3998掉落及3973/4872实际末图与交付（不代表自然ACT或完整剧情通关）");
+        Console.WriteLine($"PASS {Count - checks} 任务代表TCP：真实OR回答、父子阶段、3640首子入场、层/warp、3988→3991连续交付、3987→3992材料、3993→3995→3998及3994/3996独立路线掉落交付、3973/4872末图交付（不代表自然ACT或完整剧情通关）");
 
         void VerifyMetroTerminalBusiness(ushort id, uint dungeon, byte level)
         {
@@ -973,22 +975,30 @@ internal static class MetroQuestEntryTcpTests
                 fixture.Snapshot("SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind", account);
         }
 
-        void VerifyGustDropChain()
+        void VerifyGustDropChain(ushort branch, int faction, int terminalMap, bool fullChain)
         {
-            // 只准备入口和一个原OR臂；三个目标经同一角色实际wire提交。合成39不证明2865自然演出或客户端死亡顺序。
-            const string account = "metro-gust-chain";
-            var done = new HashSet<int> { 3992, 3871 };
-            var entrance = Entrance(3993, 313, done);
-            That(!done.Overlaps([3993, 3995, 3998, 3872]), "阵风链不准备目标完成或另一个阵营臂");
-            var created = Create(account, "MetroGust", 0, 89, done, entrance);
+            // 保留原三任务连续链；两个未覆盖分支只跑本任务，不重复前后任务。共用原服务夹具。
+            // 资格可准备，目标接取、独立迷宫的原Boss路线、材料掉落和交付均走wire；合成39不证明自然演出。
+            string account = "metro-gust-" + branch;
+            var done = new HashSet<int> { fullChain ? 3992 : 3993, faction };
+            var entrance = Entrance(fullChain ? (ushort)3993 : branch, 313, done);
+            That(!done.Contains(branch) && !done.Contains(3998) && (!fullChain || !done.Contains(3993)) &&
+                Enumerable.Range(3870, 5).Count(done.Contains) == 1, "只准备原入口和一个合法阵营，不预填目标完成");
+            var created = Create(account, "MetroG" + branch, 0, 89, done, entrance);
             var deaths = new List<(ushort Quest, byte[] Body)>();
+            var scenarios = fullChain
+                ? new (ushort Quest, int Boss, int Map, int Item, int Rooms)[]
+                    { (3993, 74658, 77058, 10164785, 9), (branch, 74659, terminalMap, 10164814, 10), (3998, 74657, 77109, 0, 10) }
+                : [(branch, 74659, terminalMap, 10164814, 10)];
             using (var peer = Open(fixture, account))
             {
                 Select(peer, created);
-                foreach (var scenario in new (ushort Quest, int Boss, int Map, int Item, int Rooms)[]
-                    { (3993, 74658, 77058, 10164785, 9), (3995, 74659, 77079, 10164814, 10), (3998, 74657, 77109, 0, 10) })
+                foreach (var scenario in scenarios)
                 {
                     var quest = resources.Quests.Get(scenario.Quest);
+                    if (scenario.Quest == branch)
+                        That(quest.Definition!.PrerequisiteGroups.Any(group => group.SequenceEqual(new[] { 3993, faction })),
+                            "原分支保留独立任务号和所选阵营前置，不借3995资格：" + branch);
                     That(quest.MinimumLevel == 89 && quest.MainQuest is null && quest.RewardType == "[item]" &&
                         quest.Rewards is [{ Type: 0, Value: 0 }, { Type: 0, Value: 0 }] && (scenario.Item == 0
                             ? quest.Condition == "[clear map]" && quest.IntData.SequenceEqual([scenario.Map])
@@ -1016,6 +1026,8 @@ internal static class MetroQuestEntryTcpTests
                     long attempt = (long)fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0];
                     That(attempt == previousAttempt + 1 && Identity(peer.Id, scenario.Quest) == acceptance,
                         "每条真实16只建立一次独立attempt并保留原接取");
+                    string? runInstance = null;
+                    long runGeneration = 0;
                     var path = QuestStoryRouteTests.Path(maze.StaticTopology, maze.Starts.Single(), maze.Bosses.Single());
                     int enabled = 0, bossChecks = 0, inventoryNotices = 0, conditionNotices = 0;
                     var report = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99);
@@ -1024,7 +1036,7 @@ internal static class MetroQuestEntryTcpTests
                         var plan = plans.Single(row => row.Room.Map.Position == path[at]);
                         Actors(peer, map, plan, scenario.Quest);
                         FormalDungeonTcpTests.Load(peer); Drain();
-                        foreach (var actor in plan.Monsters.Where(row => row.CanReportDeath && !row.IsBoss)) Kill(actor);
+                        foreach (var actor in plan.Monsters.Where(row => row.CanReportDeath && !row.IsBoss)) Kill(actor, plan.Room.Map.Id);
                         That(Materials(10164785).Length == 0 && Materials(10164814).Length == 0 &&
                             Scalar(peer.Id, scenario.Quest) == 1 && Identity(peer.Id, scenario.Quest) == acceptance && enabled == 0 && bossChecks == 0,
                             "普通怪及加载不能掉目标Boss材料、推进原接取或许可结算：" + plan.Room.Map.Id);
@@ -1032,18 +1044,19 @@ internal static class MetroQuestEntryTcpTests
                     }
                     var terminal = plans.Single(row => row.Room.Map.Id == scenario.Map);
                     var boss = terminal.Monsters.Single(row => row.MonsterId == scenario.Boss);
+                    That(runInstance is not null, "末图Boss之前已由原路线普通怪确认回执固定实例，不能由目标掉落反填");
                     That(boss.IsBoss && boss.CanReportDeath && !boss.IsScriptedBoss && !boss.IsFriendly &&
                         terminal.Monsters.Count(row => row.IsBoss) == 1 &&
                         (scenario.Quest != 3998 || terminal.Monsters.Count(row => row.AiCharacter is not null) == 1) &&
                         terminal.Monsters.Where(row => row.AiCharacter is not null)
-                            .All(row => row.MonsterId == 16802 && row.IsFriendly && !row.CanReportDeath),
-                        "末图只报告真实普通Boss，保留友方16802，不将2865销毁85197当作Boss死亡");
+                            .All(row => (!fullChain || row.MonsterId == 16802) && row.IsFriendly && !row.CanReportDeath),
+                        "末图只报告真实普通Boss，保留本图友方，原3998仍核对16802及演出边界");
                     RejectFinish();
                     string before = ChainState(); peer.Send(46, report); Drain();
                     That(ChainState() == before && enabled == 0, "Boss末击前46不能将演出、加载或普通击杀变成通关奖励");
                     int itemsBeforeBoss = inventoryNotices, conditionsBeforeBoss = conditionNotices;
                     byte[] death = FormalDungeonTcpTests.Death(boss.ObjectKey, peer.Id, checked((byte)boss.CandidateLevel));
-                    Kill(boss); deaths.Add((scenario.Quest, death));
+                    Kill(boss, scenario.Map); deaths.Add((scenario.Quest, death));
                     That(enabled == 1 && bossChecks == 1 && Scalar(peer.Id, scenario.Quest) == 0 &&
                         Identity(peer.Id, scenario.Quest) == acceptance, "真实末击才达成本次接取并发唯一115/空31");
                     long materialUid = 0;
@@ -1054,18 +1067,23 @@ internal static class MetroQuestEntryTcpTests
                             "任务材料直接入包并发布14/574，拥有唯一真实UID及一件数量，不经过43");
                         materialUid = (long)material.Single()[0];
                         var source = fixture.Query("""
-                            SELECT d.plan_snapshot,d.changed_items,d.revision,g.revision,g.instance_id,g.task_attempt,g.epoch
+                            SELECT d.plan_snapshot,d.changed_items,d.revision,g.revision,g.instance_id,g.task_attempt,g.epoch,g.generation
                             FROM character_quest_drop_receipts d JOIN character_dungeon_growth_receipts g
                               ON g.character_id=d.character_id AND g.event_id=d.event_id
                             WHERE g.character_id=$p0 AND g.quest_id=$p1 AND g.monster_id=$p2 AND g.map_id=$p3
                             """, peer.Id, scenario.Quest, scenario.Boss, scenario.Map);
-                        That(source is [[string, string, long revision, long growthRevision, string, long savedAttempt, long]] &&
-                            revision == growthRevision && savedAttempt == attempt, "材料与目标Boss成长沿同一event/事务revision提交一次");
+                        That(source is [[string, string, long revision, long growthRevision, string savedInstance, long savedAttempt, long, long savedGeneration]] &&
+                            revision == growthRevision && savedAttempt == attempt && savedInstance == runInstance && savedGeneration == runGeneration,
+                            "材料与目标Boss成长沿同一event/事务revision提交，仍属原入场实例");
                         using var snapshot = JsonDocument.Parse((string)source.Single()[0]);
                         var frozen = snapshot.RootElement;
                         var outcome = frozen.GetProperty("Outcomes").EnumerateArray().Single();
                         That(frozen.GetProperty("MapId").GetInt32() == scenario.Map && frozen.GetProperty("TemplateId").GetInt32() == scenario.Boss &&
                             frozen.GetProperty("EnemyType").GetInt32() == 1 && frozen.GetProperty("Identity").GetProperty("QuestId").GetInt32() == scenario.Quest &&
+                            frozen.GetProperty("Identity").GetProperty("CharacterId").GetInt32() == peer.Id &&
+                            frozen.GetProperty("Identity").GetProperty("InstanceId").GetGuid().ToString("N") == runInstance &&
+                            frozen.GetProperty("Identity").GetProperty("TaskAttempt").GetInt64() == attempt &&
+                            frozen.GetProperty("Identity").GetProperty("Epoch").GetInt64() == (long)source.Single()[6] &&
                             outcome.GetProperty("QuestId").GetInt32() == scenario.Quest &&
                             outcome.GetProperty("AcceptanceId").GetGuid().ToString("N") == acceptance &&
                             outcome.GetProperty("Rolled").GetInt32() == 1 && outcome.GetProperty("Granted").GetInt32() == 1 &&
@@ -1086,7 +1104,7 @@ internal static class MetroQuestEntryTcpTests
                             """, peer.Id);
                         That(clear is [[string original, long savedSlot, long epoch, long growthEpoch, string instance, string growthInstance,
                             long savedAttempt, long growthAttempt]] && original == acceptance && savedSlot == slot && epoch == growthEpoch + 1 &&
-                            instance == growthInstance && savedAttempt == attempt && savedAttempt == growthAttempt,
+                            instance == growthInstance && instance == runInstance && savedAttempt == attempt && savedAttempt == growthAttempt,
                             "3998清图只来自74657末击，绑定原槽、Acceptance、instance、attempt及growth下一epoch");
                         peer.Send(46, report); Drain();
                         That(fixture.Query("SELECT quest_id,map_id,instance_id,task_attempt,epoch FROM character_dungeon_settlement_receipts WHERE character_id=$p0", peer.Id)
@@ -1115,11 +1133,25 @@ internal static class MetroQuestEntryTcpTests
                     That(ChainState() == before, "34后迟到Boss39不能再次发材料或增长资产");
                     Return(peer);
 
-                    void Kill(DungeonPlannedMonster actor)
+                    void Kill(DungeonPlannedMonster actor, int sourceMap)
                     {
                         That(actor.AiCharacter is null && actor.Source is { SpecialChild: null, ScriptedRetirement: false } &&
                             actor.CanReportDeath && !actor.IsScriptedBoss, "只向当前真实可报告普通怪物发送明确合成39");
                         peer.Send(39, FormalDungeonTcpTests.Death(actor.ObjectKey, peer.Id, checked((byte)actor.CandidateLevel))); Drain();
+                        var confirmed = fixture.Query("""
+                            SELECT instance_id,generation FROM character_dungeon_growth_receipts
+                            WHERE character_id=$p0 AND task_attempt=$p1 AND map_id=$p2 AND monster_key=$p3
+                            """, peer.Id, attempt, sourceMap, actor.ObjectKey);
+                        That(confirmed is [[string confirmedInstance, long confirmedGeneration]] &&
+                            Guid.TryParseExact(confirmedInstance, "N", out var instance) && instance != Guid.Empty && confirmedGeneration > 0,
+                            "已下发对象实际39只产生本attempt及原规划地图的一条确认回执");
+                        if (runInstance is null)
+                        {
+                            runInstance = (string)confirmed.Single()[0];
+                            runGeneration = (long)confirmed.Single()[1];
+                        }
+                        That((string)confirmed.Single()[0] == runInstance && (long)confirmed.Single()[1] == runGeneration,
+                            "原路线跨房确认回执保留同一实例和owner代次");
                     }
                     void Drain() => drain(peer, packet =>
                     {
@@ -1140,9 +1172,10 @@ internal static class MetroQuestEntryTcpTests
             using (var peer = Open(fixture, account))
             {
                 Select(peer, created); peer.Barrier();
-                That(Active(peer.Id) == "[]" && new[] { 3993, 3995, 3998 }.All(id => peer.CompletedQuestHistory[4 + id] == 1) &&
+                That(Active(peer.Id) == "[]" && scenarios.All(row => peer.CompletedQuestHistory[4 + row.Quest] == 1) &&
                     fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id", peer.Id)
-                        is [[3993L], [3995L], [3998L]], "重选恢复连续三任务唯一交付历史，没有遗留活动槽");
+                        .Select(row => (long)row[0]).SequenceEqual(scenarios.Select(row => (long)row.Quest).Order()),
+                    "重选恢复本分支实际交付的唯一回执及历史，不借另一任务编号");
                 string before = ChainState();
                 foreach (var old in deaths)
                 {
@@ -1150,7 +1183,7 @@ internal static class MetroQuestEntryTcpTests
                     peer.Send(34, [34, 0, (byte)old.Quest, (byte)(old.Quest >> 8), 255, 255, 1, 0, 255, 255]);
                     peer.Expect(1, 34, [0, 19, 0]); drain(peer, null);
                 }
-                That(ChainState() == before, "重选后的三个旧实例39及重复34不能恢复旧掉落或重复领奖");
+                That(ChainState() == before, "重选后的本分支旧实例39及重复34不能恢复旧掉落或重复领奖");
                 Cleanup(peer, created, account);
             }
 

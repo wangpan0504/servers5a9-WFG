@@ -13,7 +13,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-// 真实目录逐任务验证入场；不完成副本、不替代剧情演出或客户端验收。
+// 真实目录逐任务验证入场，并补尚缺的清图交付；合成死亡不替代自然演出或客户端验收。
 internal static class MetroQuestEntryCoverageTests
 {
     sealed record EntryCase(StoryQuest Quest, uint Dungeon, DungeonMaze Maze);
@@ -26,7 +26,14 @@ internal static class MetroQuestEntryCoverageTests
         var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
         var answeredFactions = new HashSet<int>();
+        // 六条已有完整TCP末图交付，保留原用例，不在本矩阵重复其战斗与奖励。
+        int[] terminalCovered = [3973, 3988, 3989, 3990, 3998, 4872];
+        int[] remainingClear = [3946,3947,3949,3950,3951,3960,3961,3962,3963,3964,3965,3966,3967,3969,3970,
+            3974,3975,3976,3978,3979,3980,3981,3985,3997,3999,4830,4831,4836,4837,4838,4839,4840,4842,4847,
+            7947,7948,7949,7956,7958,7960];
+        var terminalVerified = new HashSet<int>();
         var connections = Enumerable.Range(310, 5).SelectMany(id => dungeons.Get(id).Mazes
             .Where(maze => maze.QuestConnectionTokens.Count != 0).Select(maze => (Dungeon: (uint)id, Maze: maze))).ToArray();
         That(connections.Length == 63 && connections.All(row => row.Maze.ConnectionQuestId is not null &&
@@ -44,6 +51,9 @@ internal static class MetroQuestEntryCoverageTests
             "全部59个有效连接均进入业务矩阵，保留Lv90与Lv95任务");
         That(cases.Where(row => row.Quest.MainQuest is not null).Select(row => row.Quest.Id).SequenceEqual(new[] { 3973 }),
             "3973是矩阵唯一顺序子任务，不能用普通前置快照直接接取");
+        That(cases.Where(row => row.Quest.Condition == "[clear map]").Select(row => row.Quest.Id).ToHashSet()
+                .SetEquals(remainingClear.Concat(terminalCovered)) && remainingClear.Length == 40,
+            "46条清图按原任务编号单列，与九条寻物、三条演出及一条物件计数分开");
 
         int additionalArms = 0;
         foreach (var row in cases.Where(row => row.Quest.MainQuest is null))
@@ -64,6 +74,8 @@ internal static class MetroQuestEntryCoverageTests
                 {
                     Accept(f, row.Quest.Id);
                     Exercise(f, row, row.Quest.Id, [checked((uint)row.Quest.Id), 0]);
+                    if (remainingClear.Contains(row.Quest.Id))
+                        CompleteClear(f, row);
                 }
                 else
                 {
@@ -86,13 +98,15 @@ internal static class MetroQuestEntryCoverageTests
         That(additionalArms == 13, "八条OR任务的21个臂分层覆盖，额外13臂不重复完整副本准备");
         That(answeredFactions.SetEquals(Enumerable.Range(3870, 5)), "五个合法职业/回答阵营分支均由真实问题与会面事务建立");
         Sequential(cases.Single(row => row.Quest.Id == 3973));
+        That(terminalVerified.SetEquals(remainingClear),
+            "其余40条真实清图任务均走原接取、逐房死亡、末图凭据及交付，不以入场覆盖代替");
 
         var daily = quests.Get(13056);
         That(!cases.Any(row => row.Quest.Id == daily.Id) && daily.Grade == "[auto daily mission]" &&
                 daily.Definition!.Dungeons.Count(row => row.DungeonId is >= 310 and <= 314) == 5 &&
                 !QuestHuntProgress.TryTargets(daily, out _) && QuestEligibility.InspectResource(daily).Entry == QuestResourceEntry.Dedicated,
             "13056无连接专用每日合同单列，不能强塞普通31或计入59条完成");
-        Console.WriteLine($"PASS {Count - checks} 地轨59条有效任务显式/0入场与21个OR臂、真实阵营回答及3971父子阶段（非剧情通关；13056专用每日仍未核销）");
+        Console.WriteLine($"PASS {Count - checks} 地轨59条入场、21个OR臂及40条原任务清图交付（死亡为合成输入；自然剧情、物件和13056专用每日仍未核销）");
 
         QuestSceneTests.Fixture Make(EntryCase row, int[] group)
         {
@@ -285,6 +299,107 @@ internal static class MetroQuestEntryCoverageTests
                     f.Repository.LoadQuestClear(f.Owner, after, checked((ushort)row.Quest.Id)) is null,
                     "入场/加载/退出不制造任务进度、清图、答案或奖励：" + row.Quest.Id);
             }
+        }
+
+        void CompleteClear(QuestSceneTests.Fixture f, EntryCase row)
+        {
+            ushort id = checked((ushort)row.Quest.Id);
+            var accepted = f.Read().ActiveMainQuests.Single(active => active.QuestId == id);
+            That(accepted.ConditionState == 1 && f.Repository.LoadQuestClear(f.Owner, f.Read(), id) is null,
+                "入场矩阵没有预填本次清图条件或凭据：" + id);
+            ushort selector = QuestFixedRewardDefinition.Parse(row.Quest with { Rewards = row.Quest.Definition!.SelectRewards })
+                .ForJob(f.Read().Job, f.Read().GrowType).Length == 0 ? ushort.MaxValue : (ushort)0;
+            QuestFinishResult FinishClear() => f.Session.FinishQuest(id, selector, quests, parameters,
+                items.Items, items.GoldLimits, items.EpicPieces, growth);
+            var before = f.Read();
+            That(FinishClear().Outcome == QuestFinishOutcome.Rejected && QuestCompletionRepositoryTests.Same(before, f.Read()),
+                "尚无末图事实时34拒绝且不改变资产：" + id);
+            var opening = f.Session.EnterFormalDungeon(row.Dungeon, 0, 0, dungeons, rooms)
+                ?? throw new InvalidOperationException("清图任务普通0入场失败：" + id);
+            var target = opening.Entry.QuestClearMap ?? opening.Entry.TerminalLayerMap ?? opening.Entry.BossMap;
+            That(target.Id == row.Quest.IntData.Single() && opening.Entry.RouteQuestId == id &&
+                opening.Entry.QuestAcceptances.Any(active => active.AcceptanceId == accepted.AcceptanceId),
+                "清图路线独立匹配QST目标和原AcceptanceId：" + id);
+            var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, target.Position);
+            var receipt = f.Session.CompleteFormalDungeonLoading()!;
+            NativeDungeonDeathObservation? previousRoomDeath = null;
+            ushort? clearCause = null;
+            for (int at = 0; at < path.Length; at++)
+            {
+                if (at == path.Length - 1 && receipt.Snapshot.CurrentMap != target)
+                {
+                    That(target.Kind == "layered" && f.Session.MoveFormalDungeon(checked((byte)target.Position.X),
+                        checked((byte)target.Position.Y), 1) is not null, "真实目标层沿原kind1进入，不击杀基础层替代：" + id);
+                    receipt = f.Session.CompleteFormalDungeonLoading()!;
+                }
+                That(receipt.Snapshot.CurrentMap.Position == path[at] && receipt.Generation == f.Owner.Generation &&
+                    receipt.Snapshot.Identity.InstanceId == opening.Snapshot.Identity.InstanceId,
+                    "逐房沿原门墙抵达目标坐标并保留原owner及实例：" + id);
+                before = f.Read();
+                var active = before.ActiveMainQuests.Single(active => active.QuestId == id);
+                That(active.AcceptanceId == accepted.AcceptanceId && active.Slot == accepted.Slot && active.ConditionState == 1 &&
+                    f.Repository.LoadQuestClear(f.Owner, before, id) is null && FinishClear().Outcome == QuestFinishOutcome.Rejected &&
+                    QuestCompletionRepositoryTests.Same(before, f.Read()), "加载与换房不能预填末图凭据或提前34：" + id);
+                if (previousRoomDeath is { } old)
+                {
+                    before = f.Read();
+                    var stale = f.Session.ObserveFormalDungeonDeath(old, kills, growth);
+                    That(stale.Reward is null && stale.Receipt is null && stale.ClearFact is null &&
+                        f.Repository.LoadQuestClear(f.Owner, f.Read(), id) is null && QuestCompletionRepositoryTests.Same(before, f.Read()),
+                        "旧房实际key重报不能给当前房签发清图或资产：" + id);
+                }
+                foreach (var monster in receipt.Monsters.Monsters.Where(actor => actor.IsBlocking).OrderBy(actor => actor.IsBoss))
+                {
+                    That(monster.CanReportDeath && !monster.IsFriendly, "清图只报告本图真实敌人，不杀友方或装饰物：" + id);
+                    var observation = FormalDungeonSessionTests.Observation(receipt, monster);
+                    var result = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                    That(result.Outcome == DungeonRunOutcome.Accepted, "本图已下发对象沿原死亡事务提交：" + id);
+                    var deathClear = f.Repository.LoadQuestClear(f.Owner, f.Read(), id);
+                    if (deathClear is not null && clearCause is null)
+                    {
+                        That(at == path.Length - 1 && result.ClearFact is { } fact &&
+                            fact.ConfirmedDeathEvents.Contains(deathClear.EventId) && result.MonsterKey == monster.ObjectKey,
+                            "清图凭据首次产生于实际末图本次已确认死亡，不由加载或旧房补写：" + id);
+                        clearCause = monster.ObjectKey;
+                    }
+                    before = f.Read();
+                    That(f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate &&
+                        f.Repository.LoadQuestClear(f.Owner, f.Read(), id) == deathClear && QuestCompletionRepositoryTests.Same(before, f.Read()),
+                        "同一死亡重复输入不重复清图凭据、进度或奖励：" + id);
+                    previousRoomDeath = observation;
+                }
+                if (at == path.Length - 1) break;
+                That(f.Read().ActiveMainQuests.Single(active => active.QuestId == id).ConditionState == 1 &&
+                    f.Repository.LoadQuestClear(f.Owner, f.Read(), id) is null, "前房死亡不能代替QST末图：" + id);
+                var next = path[at + 1];
+                That(f.Session.MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null,
+                    "真实清图路线按原门墙及warp条件换房：" + id);
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+            }
+            var clear = f.Repository.LoadQuestClear(f.Owner, f.Read(), id);
+            That(clearCause is not null && clear is not null && clear.AcceptanceId == accepted.AcceptanceId && clear.QuestSlot == accepted.Slot &&
+                clear.MapId == row.Quest.IntData.Single() && clear.DungeonId == row.Dungeon &&
+                clear.InstanceId == opening.Snapshot.Identity.InstanceId && clear.TaskAttempt == opening.Snapshot.Identity.TaskAttempt &&
+                f.Read().ActiveMainQuests.Single(active => active.QuestId == id).ConditionState == 0,
+                "实际末图清图凭据绑定本次实例、原槽、Acceptance及尝试：" + id);
+            before = f.Read();
+            var finished = FinishClear();
+            That(finished.Outcome == QuestFinishOutcome.Committed && finished.Receipt?.Commit is { Duplicate: false } commit &&
+                commit.AcceptanceId == accepted.AcceptanceId && commit.Clear == clear && commit.ConditionType == 3 &&
+                (ulong)f.Read().Inventory.Gold == (ulong)before.Inventory.Gold + commit.DirectGoldAmount &&
+                f.Read().Learning.Experience == before.Learning.Experience + commit.GainedExperience &&
+                f.Read().CompletedQuests.Contains(id) && f.Read().ActiveMainQuests.All(active => active.QuestId != id),
+                "原34按原凭据交付，金币和实际经验与唯一提交一致：" + id);
+            before = f.Read();
+            That(FinishClear().Outcome == QuestFinishOutcome.AlreadyCompleted && QuestCompletionRepositoryTests.Same(before, f.Read()) &&
+                f.Query($"SELECT count(*) FROM character_quest_completion_receipts WHERE character_id={before.Id} AND quest_id={id}") is 1L,
+                "重复34不重复发奖且仅一条完成回执：" + id);
+            That(f.Session.ReturnFromFormalDungeon() is not null, "清图交付后沿原返回流程退出：" + id);
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            That(f.Read().CompletedQuests.Contains(id) && f.Read().ActiveMainQuests.All(active => active.QuestId != id) &&
+                f.Query($"SELECT count(*) FROM character_quest_completion_receipts WHERE character_id={before.Id} AND quest_id={id}") is 1L,
+                "重新选角从持久化恢复唯一交付，不注入完成快照：" + id);
+            That(terminalVerified.Add(id), "每条未覆盖清图任务仅验证一次原末图交付：" + id);
         }
 
         static void Binding(DungeonEntryPlan entry, Character character, EntryCase row, int routeQuest, uint request,
