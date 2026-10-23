@@ -27,9 +27,13 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
     async Task<CommandResult> MoveAsync(GameConnectionContext context, Packet packet)
     {
         var request = InventoryRequests.Move(packet.Body);
-        var result = context.Session.MutateInventory(character => inventory.Move(character, request),
+        var result = context.Session.MutateInventory(
+            character => inventory.Move(character, request, context.Session.LoginWearRestatementWindowOpen),
             requireTown: IsCargo(request.Source.List) || IsCargo(request.Destination.List));
-        await context.Reply(CmdPacketType.MOVE_ITEMSPACE, InventoryPackets.Move(request, result), result.Accepted ? "move_item_committed" : "move_item_rejected",
+        var outcome = !result.Accepted ? "move_item_rejected"
+            : result.Plan?.Reason == InventoryMoveService.LoginWearRestatementReason ? "move_item_restatement_absorbed"
+            : "move_item_committed";
+        await context.Reply(CmdPacketType.MOVE_ITEMSPACE, InventoryPackets.Move(request, result), outcome,
             result.Receipt is { } receipt ? () => context.Session.CanPublishInventory(receipt) : null);
         // ACK19已转移普通穿戴槽；宠物26–29仍保留专属槽位同步。
         var acknowledgedSlots = result.Plan?.ChangedSlots

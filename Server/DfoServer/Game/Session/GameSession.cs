@@ -160,6 +160,13 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         MatchesRoster(receipt.Roster) &&
         Selected is null && Phase == SessionPhase.Unselected);
 
+    // 客户端每次选角入城后约0.3秒会把已穿装备按登录态复述一次 Main→Equipment 搬移（源格为空、源物品编号为0）。
+    // 该形状与真实卸装相同，只在入城窗口内吸收；窗口外仍按原顺序校验，不吞掉玩家主动卸装。
+    const long LoginWearRestatementWindowMillis = 5000;
+    long loginWearRestatementUntil;
+    public bool LoginWearRestatementWindowOpen => loginWearRestatementUntil >
+        (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
+
     public void MarkReady()
     {
         owner.Execute(() =>
@@ -169,6 +176,9 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (Ready || Phase != SessionPhase.Unselected)
                 throw new InvalidOperationException("入城就绪只能由当前未完成的选角初始化推进");
             Ready = true;
+            // 窗口只随选角入城开启；副本返回城镇不重开，避免把城镇内的真实卸装当成复述。
+            loginWearRestatementUntil = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds() +
+                LoginWearRestatementWindowMillis;
             SetState(SessionPhase.Town);
             return true;
         });

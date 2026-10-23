@@ -93,7 +93,52 @@ internal static class InventoryBehaviorTests
         Testing.TestCheck.That(InventoryMoveService.WearLevelSatisfied(withContract, broom with { MinimumLevel = 255 }, now, largeAllowance) &&
             InventoryMoveService.WearLevelSatisfied(enchantress with { Level = 255 }, broom with { MinimumLevel = 255 }, now),
             "极大PVF增量用宽整数计算，byte原等级上界仍保留原本合格资格");
+        LoginWearRestatement();
         ExpiredEquipmentMove();
+    }
+
+    // 选角入城后客户端会把已穿武器复述一次：Main空源格（编号0，数量1）→ Equipment/12 目标编号一致。
+    // 复述与真实卸装同形：只在入城窗口内吸收为无变化，窗口外仍按原顺序卸装，源格占用仍拒绝。
+    static void LoginWearRestatement()
+    {
+        const int weaponId = 100312577;
+        const int bagId = 22003;
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        {
+            [weaponId] = new(weaponId, ItemKind.Equipment, 12, 1, 20, 1, 0, 0, 0, "[free]", 1, 0, "复述武器"),
+            [bagId] = new(bagId, ItemKind.Equipment, 14, 1, 20, 1, 0, 0, 0, "[free]", 1, 0, "占格上衣")
+        });
+        const long now = 2_000_000_000;
+        var worn = new InventoryItem(11, new(InventoryListType.Equipment, 12),
+            new ItemCore(weaponId, ItemKind.Equipment, InventoryRewardGrantService.InitialQuality));
+        var blocker = new InventoryItem(12, Bag(9), new ItemCore(bagId, ItemKind.Equipment, InventoryRewardGrantService.InitialQuality));
+        var character = new Character(1, 0, "Restated", 0, new(0, 0, 0, 0), null)
+        { Job = 0, Level = 20, Inventory = new([worn]) };
+        var restatement = new InventoryMoveRequest(Bag(9), 0, 1, new(InventoryListType.Equipment, 12), weaponId, 0, -1, 0, 0);
+        var occupied = character with { Inventory = new([worn, blocker]) };
+        var absorbedOccupied = InventoryMoveService.Plan(occupied, restatement, catalog, now, loginWearRestatement: true);
+        Testing.TestCheck.That(absorbedOccupied.Accepted && absorbedOccupied.Plan!.Changed == false &&
+            absorbedOccupied.Plan.After.Find(worn.Position)?.Uid == worn.Uid,
+            "login wear restatement with occupied main slot stays equipped without error 23");
+        var absorbedEmpty = InventoryMoveService.Plan(character, restatement, catalog, now, loginWearRestatement: true);
+        Testing.TestCheck.That(absorbedEmpty.Accepted && absorbedEmpty.Plan!.Changed == false &&
+            absorbedEmpty.Plan.After.Find(Bag(9)) is null && absorbedEmpty.Plan.After.Find(worn.Position)?.Uid == worn.Uid,
+            "login wear restatement with empty main slot does not unequip");
+        var outsideWindow = InventoryMoveService.Plan(character, restatement, catalog, now);
+        Testing.TestCheck.That(outsideWindow.Accepted && outsideWindow.Plan!.After.Find(Bag(9))?.Uid == worn.Uid,
+            "outside the login window the same shape still unequips");
+        Testing.TestCheck.That(!InventoryMoveService.Plan(occupied, restatement, catalog, now).Accepted,
+            "outside the login window an occupied main slot still rejects");
+        Testing.TestCheck.That(!InventoryMoveService.Plan(character, restatement with { DestinationItemId = 0 },
+            catalog, now, loginWearRestatement: true).Accepted,
+            "login window does not absorb a restatement whose worn target does not match");
+        var carried = new InventoryItem(13, Bag(9), new ItemCore(weaponId, ItemKind.Equipment, InventoryRewardGrantService.InitialQuality));
+        var wear = new InventoryMoveRequest(Bag(9), weaponId, 1, new(InventoryListType.Equipment, 12), 0, 0, -1, 0, 0);
+        var wornNow = InventoryMoveService.Plan(character with { Inventory = new([carried]) }, wear, catalog, now, loginWearRestatement: true);
+        Testing.TestCheck.That(wornNow.Accepted && wornNow.Plan!.After.Find(new(InventoryListType.Equipment, 12))?.Uid == carried.Uid &&
+            wornNow.Plan.After.Find(Bag(9)) is null,
+            "login window does not absorb a genuine wear with a source item id");
     }
 
     // Codeberg #449：过期「先行体验」装备不能卸下/更换。核心自测没有 PVF，用 PrefillTemplates

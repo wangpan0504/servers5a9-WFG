@@ -9,8 +9,8 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
     PremiumContractCatalog? contracts = null)
 {
-    public InventoryResult Move(Character character, InventoryMoveRequest request) => InventoryMoveService.Plan(character, request, catalog,
-        DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts);
+    public InventoryResult Move(Character character, InventoryMoveRequest request, bool loginWearRestatement = false) =>
+        InventoryMoveService.Plan(character, request, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts, loginWearRestatement);
     public InventoryResult Sort(Character character, ItemKind kind, byte condition) => InventorySortService.Plan(character.Inventory, kind, condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     public InventoryResult Sort(Character character, InventorySortRequest request) => InventorySortService.Plan(character.Inventory,
         request.Kind, request.Condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), request.List);

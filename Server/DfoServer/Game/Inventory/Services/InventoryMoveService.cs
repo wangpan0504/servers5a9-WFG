@@ -13,8 +13,10 @@ internal static class InventoryMoveService
     internal const byte SupportSlotFlag = 1, MagicStoneSlotFlag = 2, EarringSlotFlag = 16;
     internal const byte ExpansionSlotFlags = SupportSlotFlag | MagicStoneSlotFlag | EarringSlotFlag;
 
+    internal const string LoginWearRestatementReason = "move_login_wear_restatement";
+
     public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds,
-        PremiumContractCatalog? contracts = null)
+        PremiumContractCatalog? contracts = null, bool loginWearRestatement = false)
     {
         if (request.Source == new InventorySlot(InventoryListType.Equipment, 30) ||
             request.Destination == new InventorySlot(InventoryListType.Equipment, 30))
@@ -45,6 +47,10 @@ internal static class InventoryMoveService
             IsCargo(request.Destination.List) &&
             destination.Core.ItemId != request.DestinationItemId &&
             (request.DestinationItemId == 0 || CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho);
+        // 入城复述与真实卸装同形：源格为空（编号0）时直接按原顺序解析会把复述执行成卸装，
+        // 源格被占用时又因编号不匹配回23弹「无法移动该物品」。只在入城窗口内吸收为无变化回执，不落库。
+        if (loginWearRestatement && IsLoginWearRestatement(request, destination))
+            return new(true, 0, new(before, before, LoginWearRestatementReason));
         if (request.Actor is not (-1 or 0) || request.Flag0 != 0 || request.Flag1 != 0 || request.DestinationCount != 0 ||
             !sourceMatches || !destinationMatches)
             return InventoryResult.Reject(CannotMoveItem);
@@ -183,6 +189,14 @@ internal static class InventoryMoveService
     }
 
     static bool IsCargo(InventoryListType list) => list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo;
+
+    // 复述包固定为：Main空源格(编号0) 数量1 → 已穿装备槽12–25，保留字段为 -1/0/0；目标必须与当前实例一致。
+    static bool IsLoginWearRestatement(InventoryMoveRequest request, InventoryItem? destination) =>
+        request.SourceItemId == 0 && request.Count == 1 && request.DestinationCount == 0 &&
+        request.Actor is -1 or 0 && request.Flag0 == 0 && request.Flag1 == 0 &&
+        request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.Equipment &&
+        request.Destination.Index is >= 12 and <= 25 &&
+        destination is not null && destination.Core.ItemId == request.DestinationItemId;
 
     static bool CargoCell(InventorySlot slot, int requestedId) =>
         IsCargo(slot.List) && slot.Index > 0 && requestedId == slot.Index;
