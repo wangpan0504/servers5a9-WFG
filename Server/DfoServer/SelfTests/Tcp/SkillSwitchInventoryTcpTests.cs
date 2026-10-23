@@ -55,6 +55,11 @@ internal static class SkillSwitchInventoryTcpTests
         long selectedRevision;
         using (var peer = Open(fixture))
         {
+            string beforeSelection = Snapshot();
+            peer.Send(Command, Request(profile.Skill, 36, 47, ushort.MaxValue));
+            peer.Expect(1, Command, []);
+            That(Snapshot() == beforeSelection,
+                "尚未选角的登记只回空ACK，不发登记快照且不写库");
             var entry = peer.Select();
             var initial = ReadUserInfoSection(entry[3].Body);
             That(initial.SkillId == 0 && initial.Items.Length == 0,
@@ -107,6 +112,21 @@ internal static class SkillSwitchInventoryTcpTests
                 """, created.Id) is [[string moved]] &&
                 moved.StartsWith(movedSlot + ":", StringComparison.Ordinal),
                 "普通背包移动保留UID绑定并发布登记新位置");
+
+            peer.Send(7);
+            peer.Expect(1, 7, [1]);
+            peer.Expect(0, 2);
+            string beforeLateRequest = Snapshot();
+            peer.Send(Command, Request(ushort.MaxValue, 36, 47, ushort.MaxValue));
+            peer.Expect(1, Command, []);
+            That(Snapshot() == beforeLateRequest,
+                "返回选角后的迟到登记不清除原绑定、不增加revision且不发1372/1373");
+            var reselected = ReadUserInfoSection(peer.Select()[3].Body);
+            That(reselected.SkillId == profile.Skill && reselected.Items is
+                [{ List: 0, Slot: var reselectedSlot, ItemId: var reselectedId }] &&
+                reselectedSlot == movedSlot && reselectedId == template.Id,
+                "迟到登记拒绝后同连接重新选角回放原技能与物品绑定");
+            peer.Barrier();
         }
 
         await fixture.StopAsync();

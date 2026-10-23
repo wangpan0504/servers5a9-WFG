@@ -66,23 +66,25 @@ internal sealed partial class GameSession
 
     public SkillLearningResult BeginAutoCombo(byte context, SkillLearningCatalog catalog)
     {
-        var captured = owner.Execute(() => (Character: Selected ?? throw new InvalidOperationException("No selected character"),
+        // 返回选角后的迟到自动组合请求沿已有拒绝路径处理，不创建排列窗口或关闭连接。
+        var captured = owner.Execute(() => (Character: Selected,
             SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
-        if (!captured.Allowed || captured.Character.Job != 9 || !captured.Character.Learning.Initialized || context > 1)
+        if (!captured.Allowed || captured.Character is not { } character ||
+            character.Job != 9 || !character.Learning.Initialized || context > 1)
             return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
         // 目录查询只读，规划放锁外；回锁后按选择代次重新校验。
         SkillLearningResult planned;
-        try { planned = SkillCustomization.PrepareAutoCombo(captured.Character.Job, captured.Character.Learning, context, catalog); }
+        try { planned = SkillCustomization.PrepareAutoCombo(character.Job, character.Learning, context, catalog); }
         catch (KeyNotFoundException) { planned = new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>())); }
         return owner.Execute(() =>
         {
             if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext ||
-                Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character))
+                Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
                 throw new InvalidOperationException("Stale auto combo state");
             if (!planned.Success)
                 return planned;
-            if (!ReferenceEquals(planned.State, captured.Character.Learning))
-                Selected = repository.CommitSkillLayout(owner, captured.Character, planned.State!);
+            if (!ReferenceEquals(planned.State, character.Learning))
+                Selected = repository.CommitSkillLayout(owner, character, planned.State!);
             // 实测客户端在收到510回执后立即回传508；5秒窗口足够且不会误伤随后的手工编辑。
             autoComboPending = (context, DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeSeconds(), captured.SelectionEpoch);
             return new SkillLearningResult(SkillLearningFailure.None, Selected!.Learning,

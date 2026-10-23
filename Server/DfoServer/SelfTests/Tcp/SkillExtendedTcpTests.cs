@@ -129,16 +129,22 @@ internal static class SkillExtendedTcpTests
         }
         using (var peer = Open(fixture))
         {
-            peer.Select(1, combos: SkillPackets.Combos(Role(1).Learning));
-            long revision = Role(1).Revision;
+            var beforeSelection = Role(1);
+            peer.Send(510, [0, 0]);
+            peer.Select(1, combos: SkillPackets.Combos(beforeSelection.Learning));
+            That(SkillRepositoryTests.Equal(Role(1), beforeSelection),
+                "尚未选角的510不写技能或角色，连接可继续选角且没有成功回包");
+            var beforeLateRequests = Role(1);
             peer.Send(7);
             peer.Expect(1, 7, [1]);
             peer.Expect(0, 2);
-            // 返回选角后客户端会补发迟到的连招保存与槽位变更：服务端只拒绝，不写库，也不关闭连接（#428）。
+            // 返回选角后客户端会补发迟到的自动组合、连招保存与槽位变更：服务端只拒绝，不写库，也不关闭连接（#428）。
+            peer.Send(510, [0, 0]);
             peer.Send(508, [0, 2, 118, 0, 2, 46, 0, 77, 0, 119, 0, 1, 77, 0, 0]);
             peer.Send(28, [0, 0, 198, 255, 255, 255, 255, 0]);
-            peer.Select(1, combos: SkillPackets.Combos(Role(1).Learning));
-            That(Role(1).Revision == revision, "返回选角后的迟到508/28被拒绝：不写库且连接可继续使用");
+            peer.Select(1, combos: SkillPackets.Combos(beforeLateRequests.Learning));
+            That(SkillRepositoryTests.Equal(Role(1), beforeLateRequests),
+                "返回选角后的迟到510/508/28被拒绝：技能与revision不变且连接可继续使用");
             peer.Barrier();
         }
         using (var peer = Open(fixture))

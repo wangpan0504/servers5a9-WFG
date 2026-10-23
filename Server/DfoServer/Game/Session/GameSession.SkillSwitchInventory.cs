@@ -10,21 +10,21 @@ internal sealed partial class GameSession
         SkillSwitchInventoryService service)
     {
         var captured = owner.Execute(() => (
-            Character: Selected ?? throw new InvalidOperationException("No selected character"),
+            Character: Selected,
             SelectionEpoch,
             Phase,
             Allowed: Ready && Phase == SessionPhase.Town && pendingRental is null &&
                 !HasPendingTownQuestCommit && !HasClassExperienceContext));
-        if (!captured.Allowed)
+        if (!captured.Allowed || captured.Character is not { } character)
             return new(SkillSwitchInventoryFailure.UnsupportedState);
-        SkillSwitchInventoryResult planned = service.Plan(captured.Character, request);
+        SkillSwitchInventoryResult planned = service.Plan(character, request);
         return owner.Execute(() =>
         {
             if (!Ready || Phase != captured.Phase || Phase != SessionPhase.Town ||
                 pendingRental is not null || HasPendingTownQuestCommit || HasClassExperienceContext ||
-                SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, captured.Character))
+                SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
                 throw new InvalidOperationException("Buff强化登记规划状态已变化");
-            Character committed = captured.Character;
+            Character committed = character;
             if (planned.Accepted)
             {
                 var plan = planned.Plan ?? throw new InvalidOperationException("Buff强化登记成功结果缺少规划");
@@ -34,7 +34,7 @@ internal sealed partial class GameSession
             }
             var receipt = new SkillSwitchInventoryReceipt(
                 committed,
-                captured.Character.SkillSwitchInventory,
+                character.SkillSwitchInventory,
                 owner.Generation,
                 SelectionEpoch,
                 Phase);
