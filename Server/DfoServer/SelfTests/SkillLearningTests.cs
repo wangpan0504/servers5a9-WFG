@@ -129,8 +129,10 @@ internal static class SkillLearningTests
         var contractTp = new SkillLearningDefinition(0, 22, "skill/contract-tp-fixture.skl", SkillType.Active,
             [0], Enumerable.Repeat(1, 6).ToArray(), Enumerable.Repeat(1, 6).ToArray(), 17, 0, [], new int[6], true, false, [],
             skillClass: 3, tpCosts: [1]);
-        That(SkillLearning.Plan(0, 0, 10, source, Request(22), (_, _) => contractTp, contractLevels: 7).Failure == SkillLearningFailure.RequiredLevel,
-            "TP技能不借用任何达人声明加成，仍按实际角色等级检查");
+        That(SkillLearning.Plan(0, 0, 10, source, Request(22), (_, _) => contractTp, contractLevels: 7).Success &&
+            SkillLearning.Plan(0, 0, 10, source, Request(22), (_, _) => contractTp, contractLevels: 6).Failure == SkillLearningFailure.RequiredLevel &&
+            SkillLearning.Plan(0, 0, 10, source, Request(22), (_, _) => contractTp, contractLevels: 0).Failure == SkillLearningFailure.RequiredLevel,
+            "TP技能与SP同样借用达人声明加成，恰好达到门槛才放行");
         var fixedContract = new SkillLearningDefinition(0, 23, "skill/contract-fixed-fixture.skl", SkillType.Active,
             [0], Enumerable.Repeat(20, 6).ToArray(), Enumerable.Repeat(20, 6).ToArray(), 1, 2, [], new int[6], false, false, [],
             fixedLevel: new(2, 1, true), skillFitnessGrowtypes: [0]);

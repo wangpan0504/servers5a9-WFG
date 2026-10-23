@@ -87,7 +87,8 @@ internal static class SkillPointLedger
                 if (resource.FixedLevel is not null)
                     target = Math.Max(resource.GetFixedLevel(level, growth, contractLevels),
                         catalog.FreeSkills(job, growth).FirstOrDefault(value => value.Id == skill.Id)?.Level ?? 0);
-                else if (state.ExpertContractExpiresAt > 0 && contractLevels == 0 && resource.SupportsOrdinarySpLearning)
+                // 契约到期后普通 SP 与 feature TP 都要按实际角色等级回退超门槛的等级。
+                else if (state.ExpertContractExpiresAt > 0 && contractLevels == 0 && resource.SupportsPointLearning)
                 {
                     int cap = Math.Min(resource.GetMaximum(growth), resource.DeclaredMaximumLevels![growth & 15]);
                     while (cap > 0 && resource.GetOrdinaryNextRequiredCharacterLevel(cap - 1) > level) cap--;

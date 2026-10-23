@@ -177,7 +177,8 @@ internal static class SkillLearning
                 return Fail(SkillLearningFailure.Unsupported);
             if (target > maximum || target > byte.MaxValue || !entry.Decrease && target <= level)
                 return Fail(SkillLearningFailure.Mastered);
-            if (!entry.Decrease && (long)characterLevel + (resource.IsFeatureSkill ? 0 : contractLevels) < resource.GetOrdinaryNextRequiredCharacterLevel(target - 1))
+            // 02D52330 的减五分支先于资源类型判断，达人契约对普通 SP 与 feature TP 的门槛同样生效。
+            if (!entry.Decrease && (long)characterLevel + contractLevels < resource.GetOrdinaryNextRequiredCharacterLevel(target - 1))
                 return Fail(SkillLearningFailure.RequiredLevel);
             foreach (SkillPrerequisite prerequisite in entry.Decrease ? [] : resource.Prerequisites!)
             {
