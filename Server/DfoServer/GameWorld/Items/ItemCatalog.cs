@@ -23,6 +23,7 @@ internal sealed class ItemCatalog
     readonly ConcurrentDictionary<int, Lazy<LegacyStatusConsumableDefinition?>> legacyStatusConsumables = new();
     readonly ConcurrentDictionary<int, Lazy<FatigueConsumableDefinition?>> fatigueConsumables = new();
     readonly ConcurrentDictionary<int, Lazy<ActionConsumableDefinition?>> actionConsumables = new();
+    readonly ConcurrentDictionary<int, Lazy<EquipmentPeriodChangeDefinition?>> periodChanges = new();
     readonly ConcurrentDictionary<int, Lazy<StackableFile>> stackableDefinitions = new();
     readonly ConcurrentDictionary<int, Lazy<LevelUpByTableDefinition?>> levelUpTables = new();
     readonly ConcurrentDictionary<int, Lazy<ClassChangeTicketDefinition?>> classChangeTickets = new();
@@ -224,6 +225,23 @@ internal sealed class ItemCatalog
     }
 
     public StackableActionIdentity? StackableAction(int id) => StackableDefinition(id) is { } raw ? StackableActionCatalog.Read(raw) : null;
+
+    // 誓约之缚武器改造只认成对声明；[need material]是商店卖价，不参与使用成本。
+    public EquipmentPeriodChangeDefinition? EquipmentPeriodChange(int id)
+    {
+        if (periodChanges.TryGetValue(id, out var prefilled)) return prefilled.Value;
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return periodChanges.GetOrAdd(id, key => new(() => EquipmentPeriodChangeDefinition.Parse(
+            RecoveryConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString),
+            Get(key)))).Value;
+    }
+
+    /// <summary>预置改造定义（**仅供核心自测**）：与 <see cref="PrefillTemplates"/> 同一套做法。</summary>
+    internal void PrefillPeriodChanges(IEnumerable<KeyValuePair<int, EquipmentPeriodChangeDefinition>> prefilled)
+    {
+        foreach (var (id, definition) in prefilled)
+            periodChanges[id] = new(definition);
+    }
 
     public ActionConsumableDefinition? ActionConsumable(int id)
     {

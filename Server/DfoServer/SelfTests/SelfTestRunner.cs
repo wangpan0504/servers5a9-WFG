@@ -117,6 +117,7 @@ internal static class SelfTestRunner
         FatigueConsumableTests.RunCore();
         StackableActionTests.RunCore();
         ActionConsumableTests.RunCore();
+        EquipmentPeriodChangeTests.RunCore();
         MileageTests.RunCore();
         PermanentGrowthTests.RunCore();
         DatabaseSchemaTests.RunPermanentStats();

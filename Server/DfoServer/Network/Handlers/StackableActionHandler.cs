@@ -22,10 +22,11 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     CreatureChangeService? creatureChanges=null,LevelUpTicketHandler? levelUpTickets=null,
     Inventory.SkinStorageHandler? skinStorage=null,FatigueConsumableHandler? fatigueConsumables=null,
     RentalHandler? rental=null,CreatureHandler? creatures=null,InventoryPeriodExtensionService? periodExtensions=null,
-    InventoryMileageService? mileage=null) : IGameCommandModule
+    InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
+    const uint EquipmentPeriodChangeAction = 136;
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.USE_STACKABLE_ACTION,UseAsync,nameof(StackableActionHandler));
 
     async Task<CommandResult> UseAsync(GameConnectionContext context,Packet packet)
@@ -69,6 +70,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             return await ExtendPeriodAsync(context, request, items.ActionConsumable(source!.Core.ItemId));
         if (request.Action == InventorySkinStorageService.AddAction)
             return skinStorage is not null ? await skinStorage.UseAsync(context,request) : CommandResult.Unhandled;
+        if (request.Action == EquipmentPeriodChangeAction)
+            return periodChanges is not null ? await ChangeEquipmentAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == CreatureSkinAction)
             return await UseCreatureSkinAsync(context, request);
         if (request.Action == InventoryCreatureSkinService.AuraAction)
@@ -172,6 +175,35 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
             result.Accepted ? "item_period_extended" : "item_period_extension_rejected", Guard);
         // 原生69成功ACK自行扣一张源券；随后只更新目标完整核心，不重复扣源或播报新获得。
+        if (inventoryProjection is not null)
+            await inventoryProjection.RefreshAsync(context, result, new HashSet<InventorySlot> { source }, suppressMainNotice: true);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ChangeEquipmentAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
+        var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool valid = request.List == 0 && request.Slot <= short.MaxValue && request.Reserved == 0 &&
+            request.FirstArgument <= byte.MaxValue && request.SecondArgument <= short.MaxValue &&
+            periodChanges is not null && inventoryProjection is not null;
+        var source = new InventorySlot(InventoryListType.Main, unchecked((short)request.Slot));
+        var target = new InventorySlot((InventoryListType)request.FirstArgument, unchecked((short)request.SecondArgument));
+        var result = !valid || context.BlocksTownActions ? InventoryResult.Reject(19) :
+            context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, before.Selected)
+                ? periodChanges!.Plan(character, source, target, before.Phase == Game.Session.SessionPhase.Town)
+                : InventoryResult.Reject(19), 19, requireTown: false, requiredPhase: before.Phase);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
+            context.Session.Phase == before.Phase);
+        log.Write("equipment_period_change", new { Connection = context.Id, Source = source.Index,
+            TargetList = target.List, Target = target.Index, result.Accepted, result.Error,
+            Before = before.Selected?.Inventory.Find(target)?.Core.ItemId,
+            After = result.Receipt?.Character.Inventory.Find(target)?.Core.ItemId,
+            Revision = result.Receipt?.Character.Revision });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
+            result.Accepted ? "equipment_period_changed" : "equipment_period_change_rejected", Guard);
+        // 成功ACK由客户端自行扣一张源；随后只发布目标新ID与源槽剩余量，不重复扣源。
         if (inventoryProjection is not null)
             await inventoryProjection.RefreshAsync(context, result, new HashSet<InventorySlot> { source }, suppressMainNotice: true);
         return CommandResult.Handled;
