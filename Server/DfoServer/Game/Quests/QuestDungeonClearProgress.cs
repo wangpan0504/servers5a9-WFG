@@ -11,6 +11,11 @@ internal static class QuestDungeonClearProgress
 {
     public static bool Supports(StoryQuest quest) => TryTarget(quest,out _) || HasDungeonAlternatives(quest);
 
+    // 两份原任务文本明确每天只累计一次；不把这个限制推广到其它sub6任务。
+    public static bool CountOncePerDay(StoryQuest quest) => quest.SubType == 6 && TryTarget(quest,out var target) &&
+        target.Count == 5 && target.MinimumDifficulty == -1 &&
+        (quest.Id == 13200 && target.DungeonId == 9607 || quest.Id == 8683 && target.DungeonId == 400000016);
+
     static bool HasDungeonAlternatives(StoryQuest quest)
     {
         if (quest.Condition != "[clear a dungeon]" || quest.SubType != 6 || quest.IntData.Count < 2 || quest.IntData.Count % 2 != 0)

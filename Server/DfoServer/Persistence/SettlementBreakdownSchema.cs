@@ -53,6 +53,7 @@ internal static class SettlementBreakdownSchema
             }
         if (!schemas.TryGetValue(Settlement, out string? actual)) throw new InvalidDataException("通关分项迁移缺少结算回执表");
         string canonical = SqliteMigrations.NormalizeTable(actual, Settlement);
+        if (canonical == SqliteMigrations.NormalizeTable(ZeroExperienceDungeonSchema.SettlementSql, Settlement)) return;
         if (canonical == SqliteMigrations.NormalizeTable(SettlementSql, Settlement)) return;
         // 上游 #543 先合入时回执已带其他加成分项列；本步在其结构上继续补秘药与冒险团分项。
         bool extended = canonical == SqliteMigrations.NormalizeTable(ExtendedPreviousSettlementSql, Settlement);

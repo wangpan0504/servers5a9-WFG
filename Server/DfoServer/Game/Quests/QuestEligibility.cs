@@ -43,7 +43,7 @@ internal static class QuestEligibility
             return new(QuestResourceEntry.Dialogue, "子任务需要父任务及资源顺序的真实入口");
         if (QuestHiddenEntry.ImmediateShape(quest))
             return new(QuestResourceEntry.Hidden, "隐藏任务通过合格21候选和884请求开启");
-        if (!definition.ExposedByNpc || !OrdinaryGrade(quest.Grade))
+        if (!definition.ExposedByNpc || !OrdinaryGrade(quest.Grade) && !QuestCycle.NormalDungeonMission(quest))
             return new(QuestResourceEntry.Dedicated, "隐藏或专用分类任务需要对应入口");
         return new(QuestResourceEntry.Ordinary, "普通任务候选；仍须核对角色、前置及完成状态");
     }

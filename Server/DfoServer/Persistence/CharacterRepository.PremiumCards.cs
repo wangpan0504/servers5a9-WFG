@@ -15,6 +15,7 @@ internal sealed partial class CharacterRepository
         PreparedDungeonSettlement prepared,DungeonCardDelivery delivery,DateTimeOffset now) => owner.Execute<DungeonPaidCardCommit>(() =>
     {
         var options = prepared.Options ?? throw new InvalidDataException("本次通关没有付费牌计划");
+        if (options.PaidDisabled) return new(false);
         if (prepared.Fact.Identity.CharacterId != expected.Id) throw new InvalidDataException("付费牌不是当前角色实例");
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitPaidDungeonCard", deferred: true);

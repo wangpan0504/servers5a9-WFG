@@ -22,10 +22,11 @@ internal sealed partial class CharacterRepository
         ArgumentNullException.ThrowIfNull(reward);
         ArgumentNullException.ThrowIfNull(catalog);
         ulong amount = reward.Amount;
-        if (!run.IsPendingDeath(prepared) || prepared.Death.Identity.CharacterId != expected.Id || amount == 0 ||
+        if (!run.IsPendingDeath(prepared) || prepared.Death.Identity.CharacterId != expected.Id ||
+            (run.Entry.DisableMonsterAndClearExperience ? amount != 0 : amount == 0) ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 || reward.MonsterId != prepared.Monster.MonsterId ||
             reward.MonsterLevel != prepared.Monster.CandidateLevel || reward.ResourceSource != DungeonKillExperienceCatalog.ResourcePath)
-            throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡和明确正经验");
+            throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡及符合副本声明的经验");
         var death = prepared.Death;
         var identity = death.Identity;
         if (questDrops is not null && (!ReferenceEquals(questDrops.Expected,expected) || questDrops.EventId != death.EventId ||
@@ -74,7 +75,7 @@ internal sealed partial class CharacterRepository
             tx.Commit();
             return new DungeonGrowthCommit(current, true, gained, proficiencyGained);
         }
-        var result = CharacterGrowthPlan.AddExperience(expected, amount, catalog);
+        var result = amount == 0 ? CharacterGrowthPlan.WithoutExperience(expected, catalog) : CharacterGrowthPlan.AddExperience(expected, amount, catalog);
         if (!result.Success)
             throw new InvalidDataException("成长候选被拒绝: " + result.Failure);
         var plan = result.Plan!;

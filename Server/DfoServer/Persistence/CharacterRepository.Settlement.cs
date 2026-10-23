@@ -100,7 +100,8 @@ internal sealed partial class CharacterRepository
                 throw new InvalidDataException("宠物通关成长不是同一角色当前装备实例的冻结计划");
             WriteInventory(db, tx, owner, expected.Id, creatureInventory, creatureInventory.After);
         }
-        var result = CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, catalog);
+        var result = reward.TotalExperience == 0 && run.Entry.DisableMonsterAndClearExperience
+            ? CharacterGrowthPlan.WithoutExperience(expected, catalog) : CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, catalog);
         if (!result.Success)
             throw new InvalidDataException("通关成长候选被拒绝: " + result.Failure);
         var plan = result.Plan!;

@@ -21,6 +21,7 @@ internal static class DungeonExperienceBonusSchema
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='" + Table + "'";
         string actual = (string?)query.ExecuteScalar() ?? throw new InvalidDataException("缺少通关经验账本");
         string normalized = SqliteMigrations.NormalizeTable(actual, Table);
+        if (normalized == SqliteMigrations.NormalizeTable(ZeroExperienceDungeonSchema.SettlementSql, Table)) return;
         if (normalized == SqliteMigrations.NormalizeTable(Sql, Table)) return;
         // 从当前 schema 回退重放的夹具可能已带 v74 追加的熟练度到账列，本步视为已应用。
         if (normalized == SqliteMigrations.NormalizeTable(SettlementProficiencySchema.SettlementSql, Table)) return;

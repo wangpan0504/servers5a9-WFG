@@ -235,6 +235,16 @@ CREATE TABLE character_active_main_quests(
     PRIMARY KEY(character_id,slot)
 );
 
+CREATE TABLE character_quest_daily_clear(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,
+  quest_id INTEGER NOT NULL CHECK(quest_id IN(13200,8683)),
+  day INTEGER NOT NULL CHECK(day BETWEEN 19000101 AND 99991231),
+  event_id TEXT NOT NULL CHECK(length(event_id)=32 AND event_id NOT GLOB '*[^0-9a-f]*'),
+  revision INTEGER NOT NULL CHECK(revision>0),
+  PRIMARY KEY(character_id,quest_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
 CREATE TABLE character_quest_clear_receipts(
     character_id INTEGER NOT NULL,account TEXT NOT NULL,
     acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
@@ -572,7 +582,7 @@ instance_id TEXT NOT NULL,quest_id INTEGER NOT NULL CHECK(quest_id>=0),
 task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
 map_id INTEGER NOT NULL,monster_key INTEGER NOT NULL CHECK(monster_key BETWEEN 0 AND 65535),
 combat_sequence INTEGER NOT NULL CHECK(combat_sequence>0),
-generation INTEGER NOT NULL CHECK(generation>0),amount INTEGER NOT NULL CHECK(amount>0),
+generation INTEGER NOT NULL CHECK(generation>0),amount INTEGER NOT NULL CHECK(amount>=0),
 rule_id TEXT NOT NULL,resource_source TEXT NOT NULL,
 monster_id INTEGER NOT NULL,monster_level INTEGER NOT NULL CHECK(monster_level BETWEEN 1 AND 255),
 before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),
@@ -653,7 +663,7 @@ CREATE TABLE character_dungeon_settlement_receipts(
   generation INTEGER NOT NULL CHECK(generation>0),
   base_experience INTEGER NOT NULL CHECK(base_experience BETWEEN 0 AND 4294967295),
   rank_experience INTEGER NOT NULL CHECK(rank_experience BETWEEN 0 AND 4294967295),
-  total_experience INTEGER NOT NULL CHECK(total_experience BETWEEN 1 AND 4294967295 AND total_experience=base_experience+rank_experience+growth_contract_experience+potion_experience+adventure_experience+other_bonus_experience),
+  total_experience INTEGER NOT NULL CHECK(total_experience BETWEEN 0 AND 4294967295 AND total_experience=base_experience+rank_experience+growth_contract_experience+potion_experience+adventure_experience+other_bonus_experience),
   rank_bonus_index INTEGER NOT NULL CHECK(rank_bonus_index BETWEEN -1 AND 4),
   rule_id TEXT NOT NULL,resource_source TEXT NOT NULL,
   before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),

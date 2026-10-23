@@ -70,6 +70,7 @@ internal static partial class DatabaseSchemaTests
 
         static void RemoveProficiencySchema(SqliteConnection db)
         {
+            RewindZeroExperience(db);
             if (Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='proficiency_gain'") is 1L)
                 Execute(db, "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN proficiency_gain");
             if (Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_growth_receipts') WHERE name='proficiency_gain'") is 1L)

@@ -168,6 +168,7 @@ internal static class TcpRegressionTests
         ("dungeon-practice", FormalDungeonTcpTests.RunPracticeAsync),
         ("dungeon-revive", FormalDungeonTcpTests.RunReviveAsync),
         ("hero-tomb-entry", FormalDungeonTcpTests.RunHeroTombAsync),
+        ("special-normal-entry", FormalDungeonTcpTests.RunSpecialNormalAsync),
         ("dungeon-entry-plan", (_, _, resources) =>
         {
             QuestReplayTests.RunCore();

@@ -60,10 +60,10 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         long amount = checked((long)decimal.Floor(basis * DifficultyRates[difficulty] * confirmedKills));
         amount += (Next(gold.VariancePercent * 2 + 1) - gold.VariancePercent) * amount / 100;
         var now = utcNow ?? DateTimeOffset.UtcNow;
-        if (dungeon.DungeonType == "crackofdaybreak dungeon")
+        if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOrdinaryAnton || dungeon.IsNormalFiendwar)
         {
             if (prices is null || !prices.SpecificRewards.TryGetValue(dungeon.Id, out var specific))
-                throw new NotSupportedException("黎明裂缝缺少已解释的专用翻牌行，不能退回普通装备池");
+                throw new NotSupportedException("副本缺少已解释的专用翻牌行，不能退回普通装备池");
             int roll = Next(10000);
             foreach (var row in specific)
             {
@@ -74,7 +74,7 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
                 declared.Validate();
                 return declared;
             }
-            throw new InvalidDataException("黎明裂缝翻牌奖励未命中已验证权重池");
+            throw new InvalidDataException("副本翻牌奖励未命中已验证权重池");
         }
         int rarity = DungeonDropRatePlan.Rarity(rules, 0, Next(DungeonDropRatePlan.RarityDenominator));
         var pool = candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, rarity);
@@ -96,8 +96,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             Events.ServerEventService.RequireRegistered(goldCardEvent.Schedule.EventId);
             goldCardEvent.Schedule.Validate();
         }
-        bool golden = membership.GoldCardAvailable(now.ToUnixTimeSeconds());
-        bool doubled = goldCardEvent?.Active == true;
+        bool golden = !dungeon.DisablePaidCard && membership.GoldCardAvailable(now.ToUnixTimeSeconds());
+        bool doubled = !dungeon.DisablePaidCard && goldCardEvent?.Active == true;
         var paid = Prepare(dungeon,difficulty,confirmedKills,utcNow:now) with { Gold = 0 };
         if (doubled) paid = DoubleItems(paid);
         return new(paid,
@@ -105,6 +105,7 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             membership.BlackDiamondActive(now.ToUnixTimeSeconds()) && !dungeon.DisableBlackDiamondCardReward
                 ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now) : null)
         {
+            PaidDisabled = dungeon.DisablePaidCard,
             DoublePaidItems = doubled,
             GoldCardEventRevision = goldCardEvent?.Schedule.Revision ?? 0
         };

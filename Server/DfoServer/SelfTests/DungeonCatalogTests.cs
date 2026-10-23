@@ -88,8 +88,18 @@ internal static class DungeonCatalogTests
             That(!invalid.AllowsDifficulty(0,true),"不完整、重复或未知故事难度不能放行");
         That(!Definition(designated,designated,levels).AllowsDifficulty(2,false) &&
             !Definition(designated,levels,levels with { Tokens = [new(0,0),new(0,0),new(0,0),new(0,0),new(0,0)] }).AllowsDifficulty(2,false) &&
-            !Definition(designated).AllowsDifficulty(2,false),
-            "普通重复指定、冲突难度表和缺省难度边界保持原规则");
+            Definition(designated).AllowsDifficulty(2,false),
+            "普通重复指定与冲突难度表仍拒绝，唯一指定难度无需另写difficulty");
+        foreach (int value in Enumerable.Range(0,5))
+        {
+            var fixedOnly = Definition(designated with { Tokens = [new(0,value)] });
+            That(Enumerable.Range(0,5).All(request => fixedOnly.AllowsDifficulty((byte)request,false) == (request == value)),
+                "仅声明指定难度时只接受指定值");
+            foreach (var invalidPlain in new[] { new DungeonRawSection("difficulty",[new(0,(value+1)%5)]),
+                new DungeonRawSection("difficulty",[new(7,value)]),new DungeonRawSection("difficulty",[]) })
+                That(!Definition(designated with { Tokens = [new(0,value)] },invalidPlain).AllowsDifficulty((byte)value,false),
+                    "同时出现的未知或冲突difficulty仍拒绝");
+        }
         var riftDifficulty = Definition(new DungeonRawSection("difficulty",[new(0,3)]), designated with { Tokens = [new(0,3)] });
         That(Enumerable.Range(0,5).All(value => riftDifficulty.AllowsDifficulty((byte)value,false) == (value == 3)),
             "difficulty 与 designate dungeon difficulty 同为 3 且没有难度表时只放行难度 3");

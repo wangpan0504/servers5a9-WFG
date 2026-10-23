@@ -182,7 +182,21 @@ internal static class SqliteMigrations
         // 冒险团每周地下城信息：按角色保存本周各列实际入场次数，与副本身份预留同一事务累加。
         new(76, "冒险团每周地下城入场计数", EnsureWeeklyDungeonUsage),
         new(77, "角色制作熟练度", AddItemMakingSkills),
+        new(78, "零经验副本死亡与通关回执", ZeroExperienceDungeonSchema.Upgrade),
+        new(79, "普通副本任务每日通关计数", static (db, tx) => Execute(db, tx, QuestDailyClearSchema)),
     ];
+
+    internal const string QuestDailyClearSchema = """
+        CREATE TABLE IF NOT EXISTS character_quest_daily_clear(
+          character_id INTEGER NOT NULL,account TEXT NOT NULL,
+          quest_id INTEGER NOT NULL CHECK(quest_id IN(13200,8683)),
+          day INTEGER NOT NULL CHECK(day BETWEEN 19000101 AND 99991231),
+          event_id TEXT NOT NULL CHECK(length(event_id)=32 AND event_id NOT GLOB '*[^0-9a-f]*'),
+          revision INTEGER NOT NULL CHECK(revision>0),
+          PRIMARY KEY(character_id,quest_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
 
     static void AddItemMakingSkills(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1622,8 +1636,9 @@ internal static class SqliteMigrations
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
+            ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
-            ("character_dungeon_settlement_receipts",SettlementProficiencySchema.SettlementSql),
+            ("character_dungeon_settlement_receipts",ZeroExperienceDungeonSchema.SettlementSql),
             ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
             ("character_dungeon_drop_pickups",DungeonDropCollectionSchema.PickupDefinition),
             ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema),

@@ -150,7 +150,7 @@ internal sealed partial class GameSession
                 GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
                 PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), AdventureExperience = adventureBonus };
         }
-        if (dungeon.Settlement is null && !(dungeon.Entry.IsTutorial && reward.TotalExperience == 0) &&
+        if (dungeon.Settlement is null && !((dungeon.Entry.IsTutorial || dungeon.Entry.DisableMonsterAndClearExperience) && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo ? cards?.Prepare(
@@ -345,7 +345,7 @@ internal sealed partial class GameSession
     {
         if (row is not (1 or 2) || member != 0 || !Ready || Phase != SessionPhase.Settlement || Selected is null ||
             formalDungeon?.Settlement is not { Committed:true,CardsShown:true } settlement || settlement.Pending.Options is not { } options ||
-            settlement.Claim is { Side: not 1 })
+            options.PaidDisabled || settlement.Claim is { Side: not 1 })
             return null;
         var now = utcNow ?? DateTimeOffset.UtcNow;
         if (settlement.Paid is not null) return new FormalPaidCardResult(FormalReceipt(),settlement.Paid,null,null,true);

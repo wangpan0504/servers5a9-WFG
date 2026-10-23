@@ -82,6 +82,8 @@ internal sealed class DungeonClearExperienceCatalog
             throw new NotSupportedException("副本基准等级没有通关经验表记录");
         if (difficulty >= difficultyRates.Length)
             throw new NotSupportedException("副本难度没有通关经验倍率");
+        if (dungeon.DisableMonsterAndClearExperience)
+            return new(0, 0, 0, -1, RuleId, dungeon.Path);
         decimal weight = DungeonWeight(dungeon);
         int bonusIndex = -1;
         // 资源另有三个低档阈值；五项经验倍率只对应前五档，最高档使用末项倍率。

@@ -6,7 +6,7 @@ namespace DfoServer.GameWorld.Dungeons;
 
 internal readonly record struct DungeonPoint(int X, int Y);
 // 0409B7E0 按物品编号写入定义 +0xDCC，后两个整数落在节点 +0x10 和 +0x14。
-// Third 只保留资源原值；消耗、免费、AND/OR 都还没有消费者证明。
+// Third 保留资源原值；018E6EDC区分非零消耗/零持有，多行AND/OR仍未接入。
 internal readonly record struct DungeonRequiredItemRow(int ItemId, int Count, int Third);
 // 迷宫 [randomized object creation] 中已闭合的单对象行。世界坐标来自 [pos]，[map] 只表示所在格。
 internal sealed record DungeonRandomizedObject(DungeonPoint Map, int ObjectId, string Team, int PositionX, int PositionY);
@@ -166,8 +166,15 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         }
     }
     public bool DeclaresRequiredItem => RawSections.Any(row => row.Tag == "required item");
-    // #510/#511 普通入场票：只认唯一一段 [required item] 且恰为一行「物品 1 1」。第三列含义未证明，其他形状不当作入场票。
-    public DungeonRequiredItemRow? OrdinaryEntryTicket => RequiredItemRows is [{ Count: 1, Third: 1 } ticket] ? ticket : null;
+    public bool IsOrdinaryAnton => Marker("anton dungeon") && Marker("raid normal dungeon");
+    public string? WarriorsDungeon { get; init; }
+    public bool IsNormalFiendwar => Id == 400000016 && WarriorsDungeon == "normalfiend";
+    // 普通安徒恩保留完整消耗数量；第三列1为消耗，不能把数量8忽略成免费入场。
+    public DungeonRequiredItemRow? OrdinaryEntryTicket => RequiredItemRows is [{ Count: > 0, Third: 1 } ticket] &&
+        (ticket.Count == 1 || IsOrdinaryAnton) ? ticket : null;
+    public bool DisablePaidCard => RawSections.Where(row => row.Tag == "gold card use").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: 0 }] }];
+    public bool DisableMonsterAndClearExperience => Marker("no experience monster and result");
     public bool DeclaresStartFatigue => RawSections.Any(row => row.Tag == "use fatigue only start dungeon");
     // #511 [use fatigue only start dungeon] N：只认唯一一段且恰为一个 1..65535 的整数；其他形状返回 null（保持逐房扣点）。
     public ushort? StartFatigue => RawSections.Where(row => row.Tag == "use fatigue only start dungeon").ToArray() is
@@ -243,15 +250,13 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             designated = [designated[0]];
         if (designated.Length > 1 || designated.Length == 1 && (designated[0].Tokens is not [{ Type: 0, Value: >= -1 and <= 4 }] ||
             designated[0].Tokens[0].Value >= 0 && designated[0].Tokens[0].Value != difficulty)) return false;
-        // 无难度表时：比赛副本沿用唯一指定难度；[difficulty] 与 [designate dungeon difficulty] 写成同一个 0–4 时只放行该难度
-        // （魔界裂缝、黎明裂缝都是 3，客户端入场参数也是 3）。其余仍只放行难度 0。
+        // 无难度表时，明确的指定难度本身就是唯一合法值；普通卢克只声明该字段，不能再要求额外的 difficulty。
+        // 同时声明 difficulty 时仍核对一致性，未知、重复或冲突声明不能扩成任意难度。
         if (levels.Length == 0)
         {
             var plain = RawSections.Where(section => section.Tag == "difficulty").ToArray();
-            if (designated.Length == 1 && plain.Length == 1 &&
-                designated[0].Tokens is [{ Type: 0, Value: >= 0 and <= 4 } locked] &&
-                plain[0].Tokens is [{ Type: 0, Value: >= 0 and <= 4 } shown] && locked.Value == shown.Value)
-                return difficulty == locked.Value;
+            if (designated.Length == 1 && designated[0].Tokens is [{ Type: 0, Value: >= 0 and <= 4 } locked])
+                return difficulty == locked.Value && (plain.Length == 0 || plain is [{ Tokens: [{ Type: 0, Value: var shown }] }] && shown == locked.Value);
             return IsTournament && designated.Length == 1 || difficulty == 0;
         }
         // 部分副本重复声明同一难度表；内容相同不构成冲突，未知或不一致声明仍拒绝。
@@ -510,6 +515,8 @@ internal sealed class DungeonCatalog
         return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections))
         {
             DungeonType = dungeonType,
+            WarriorsDungeon = sections.Where(section => section.Tag == "warriors dungeon").ToArray() is
+                [{ Tokens: [{ Type: 6 } warriors] }] ? resolve(warriors.Value) : null,
             RoomMoveKeepState = Flag("room move keep state"),
             IndividualMapMovement = Flag("individual map movement"),
             DisableFatigueConsumption = sections.Any(section => section.Tag == "no fatigue" && section.Tokens.Count == 0),

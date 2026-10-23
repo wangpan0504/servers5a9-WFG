@@ -29,6 +29,7 @@ internal sealed record DungeonEntryPlan(
     public int? PlayerTeam { get; init; }
     public bool IsTutorial { get; init; }
     public bool DisableClearReward { get; init; }
+    public bool DisableMonsterAndClearExperience { get; init; }
     public bool DisableGiveupPenalty { get; init; }
     public bool DisableFatigueConsumption { get; init; }
     public Guid QuestAcceptanceId { get; init; }
@@ -346,10 +347,15 @@ internal sealed record DungeonEntryPlan(
         if (maze.StoryStages.Count > 0 && starts.Length > 1)
             starts = [starts.FirstOrDefault(map => map.StoryStageIndex < 0) ?? starts[0]];
         var bosses = maze.StoryStages.Count > 0 ? new[] { maze.StoryStages[^1] } : maps.Where(map => map.Position == boss).ToArray();
-        // 显式清图目标等于 Boss 坐标的基础图或叠层时，基础格可以只声明为 map；仅在本次计划中投影为 Boss，保留原资源身份。
-        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && layoutQuest is not null &&
+        // 02A17ABB..02A17AE4：Boss坐标的boss候选为空时使用该格map候选。普通路线按资源声明的坐标投影，
+        // 不能要求DGN重复写boss种类；只改本次计划，地图与怪物身份仍由原资源及Run复验。
+        // 任务路线继续要求明确的清图目标，叠层、条件和多阶段路线保留原合同。
+        bool ordinaryBossCell = !definition.IsTutorial && !definition.IsClassExperience && !definition.IsTournament && dungeonId != 5000 &&
+            routeQuest == 0 && questId == 0 && layoutQuest is null &&
+            maze.QuestConnectionTokens.Count == 0 && maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.DummyStages.Count == 0;
+        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && (ordinaryBossCell || layoutQuest is not null &&
             QuestClearEligibility.IsSingleMap(layoutQuest) && (bosses[0].Id == layoutQuest.IntData[0] ||
-                maze.LayeredMaps.Any(map => map.Position == boss && map.Id == layoutQuest.IntData[0])))
+                maze.LayeredMaps.Any(map => map.Position == boss && map.Id == layoutQuest.IntData[0]))))
         {
             var promoted = bosses[0] with { Kind = "boss" };
             maze = maze with
@@ -441,6 +447,7 @@ internal sealed record DungeonEntryPlan(
             PlayerTeam = 0,
             IsTutorial = definition.IsTutorial,
             DisableClearReward = definition.DisableClearReward,
+            DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience,
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
             MonsterBasisLevel = definition.BasisLevel,

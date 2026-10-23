@@ -153,7 +153,9 @@ internal static class QuestHarlemExpTests
         // 不扩大放行：同为seeking子类型0的其它任务、改动形状的6053均不借用该合同。
         foreach (int other in new[] { 2901, 2902, 10019, 4745 })
             if (catalog.TryGet(other,out var quest))
-                That(!QuestLifecyclePlan.HarlemSeeking(quest) && !QuestLifecyclePlan.SeekingSubtype(quest),"其它seeking子类型0任务仍不放行：" + other);
+                That(!QuestLifecyclePlan.HarlemSeeking(quest) &&
+                    QuestLifecyclePlan.SeekingSubtype(quest) == QuestCycle.NormalDungeonMission(quest),
+                    "其它seeking子类型0任务只由各自已核对合同放行：" + other);
         var real = catalog.Get(6053);
         foreach (var altered in new[]
         {

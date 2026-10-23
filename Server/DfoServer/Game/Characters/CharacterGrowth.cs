@@ -73,6 +73,9 @@ internal sealed class CharacterGrowthPlan
     }
 
     // 累计经验与等级来自调用方明确的权威候选；这里不生成击杀、任务或其他经验来源。
+    internal static CharacterGrowthResult WithoutExperience(Character expected, CharacterGrowthCatalog catalog) =>
+        CreateCore(expected, expected.Level, expected.Learning.Experience, catalog, 0, allowUnchanged: true);
+
     public static CharacterGrowthResult Create(Character expected, byte targetLevel, ulong targetExperience,
         CharacterGrowthCatalog catalog)
     {

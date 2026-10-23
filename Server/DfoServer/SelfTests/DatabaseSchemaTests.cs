@@ -17,6 +17,7 @@ internal static partial class DatabaseSchemaTests
 
     internal static void RemoveExperienceBonusSchema(SqliteConnection db)
     {
+        RewindZeroExperience(db);
         bool bonus = Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='other_bonus_experience'") is 1L;
         bool proficiency = Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='proficiency_gain'") is 1L;
         if (!bonus && !proficiency) return;
@@ -156,6 +157,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            ZeroExperienceUpgrade(root);
             ItemMakingUpgrade(root);
             PassiveItemsUpgrade(root);
             PickupUidUpgrade(root);

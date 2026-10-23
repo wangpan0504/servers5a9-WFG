@@ -57,6 +57,7 @@ internal static class DungeonEntryPlanTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
+        SpecialNormalDungeonEntryTests.Run(pvf);
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var ekern = new Character(17, 0, "Ekern", 1, new Location(35, 1, 0, 0, 0), null) { Level = 90 };

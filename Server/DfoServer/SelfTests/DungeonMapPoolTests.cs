@@ -368,9 +368,9 @@ internal static class DungeonMapPoolTests
             "5054 没有证明过的迷宫选择器，15 张无任务连接的迷宫不能猜一张进去");
         That(!DungeonEntryPlan.TryCreate(catalog, eligible, 5101, 0, 0, out _, out string lukeNormalReason) &&
             lukeNormalReason == "difficulty-unsupported" &&
-            !DungeonEntryPlan.TryCreate(catalog, eligible, 5101, 0, 2, out _, out string lukeDesignated) &&
-            lukeDesignated == "difficulty-unsupported",
-            "5101 指定难度 2，但没有难度表或成对的 difficulty 标记，现有合同拒绝难度 0 和 2");
+            DungeonEntryPlan.TryCreate(catalog, eligible, 5101, 0, 2, out var lukeEntry, out _) &&
+            lukeEntry is { Difficulty: 2,StartMap.Id: 55916,BossMap.Id: 55918 },
+            "5101 按唯一指定难度2进入原普通路线，仍拒绝难度0");
         var lukeChannel = Infrastructure.ServerRuntime.LoadChannels(Path.Combine(Path.GetTempPath(), "no-such-channel-" + Guid.NewGuid().ToString("N")))
             .Channels.Single(row => row.Number == 20);
         That(lukeChannel.Type == 32 && lukeChannel.Group == "[luke_raid]" && lukeChannel.NameReference == "<chn_channel_info_037>",

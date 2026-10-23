@@ -137,6 +137,22 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$acceptance", "");
         foreach (var target in targets)
         {
+            if (QuestDungeonClearProgress.CountOncePerDay(quests!.Get(target.QuestId)))
+            {
+                using var daily = db.CreateCommand(); daily.Transaction = tx;
+                daily.Parameters.AddWithValue("$id",current.Id); daily.Parameters.AddWithValue("$account",owner.Account);
+                daily.Parameters.AddWithValue("$quest",target.QuestId); daily.Parameters.AddWithValue("$day",current.QuestCycleDay);
+                daily.Parameters.AddWithValue("$event",prepared.Death.EventId.ToString("N"));
+                daily.Parameters.AddWithValue("$revision",checked(current.Revision+1));
+                // 角色级账本不随放弃或重接删除；与原死亡和scalar共用事务，重登不能重置当天资格。
+                daily.CommandText = """
+                    INSERT INTO character_quest_daily_clear(character_id,account,quest_id,day,event_id,revision)
+                    VALUES($id,$account,$quest,$day,$event,$revision)
+                    ON CONFLICT(character_id,quest_id) DO UPDATE SET day=excluded.day,event_id=excluded.event_id,revision=excluded.revision
+                    WHERE account=excluded.account AND day<excluded.day
+                    """;
+                if (daily.ExecuteNonQuery() == 0) continue;
+            }
             command.Parameters["$slot"].Value = target.Slot; command.Parameters["$quest"].Value = target.QuestId;
             command.Parameters["$acceptance"].Value = target.AcceptanceId.ToString("N");
             command.Parameters["$before"].Value = (long)target.ConditionState;

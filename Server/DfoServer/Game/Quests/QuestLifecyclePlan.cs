@@ -315,7 +315,8 @@ internal sealed class QuestLifecyclePlan
     // （单个物品/数量对+怪物掉落行只产出该物品）。因此只对这三个任务的精确形状按sub type -1处理，不放行其它sub type 0寻物。
     internal static readonly int[] HarlemSeekingIds = [6053, 6056, 6059];
 
-    internal static bool SeekingSubtype(StoryQuest quest) => quest.SubType == -1 || quest.SubType == 0 && HarlemSeeking(quest);
+    internal static bool SeekingSubtype(StoryQuest quest) => quest.SubType == -1 || quest.SubType == 0 &&
+        (HarlemSeeking(quest) || QuestCycle.NormalDungeonMission(quest));
 
     internal static bool HarlemSeeking(StoryQuest quest) => quest is { Condition: "[seeking]", SubType: 0, Grade: "[side]", RewardType: "[item]" } &&
         HarlemSeekingIds.Contains(quest.Id) && quest.MainQuest is null && quest.IntData.Count == 2 && quest.IntData[1] == 3 && ValidSeeking(quest) &&

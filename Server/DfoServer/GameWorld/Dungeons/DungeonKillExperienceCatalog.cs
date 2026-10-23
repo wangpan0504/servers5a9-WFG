@@ -53,6 +53,7 @@ internal sealed class DungeonKillExperienceCatalog
 
     public static float GetDungeonWeight(DungeonDefinition dungeon)
     {
+        if (dungeon.DisableMonsterAndClearExperience) return 0;
         var sections = dungeon.RawSections.Where(section => section.Tag == "experience increasing point").ToArray();
         if (sections.Length == 0) return 1;
         if (sections.Length != 1 || sections[0].Tokens.Count != 1)

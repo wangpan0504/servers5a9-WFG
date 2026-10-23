@@ -35,6 +35,8 @@ internal sealed record DungeonCardOptions(DungeonCardReward Paid, int Price, boo
     CardMembership Membership, DungeonCardReward? BlackDiamond = null)
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool PaidDisabled { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool DoublePaidItems { get; init; }
     // 保留旧JSON形状供唯一回执核对，不投影成客户端回归标志。
     [JsonPropertyName("ReturningPlayer")]

@@ -712,6 +712,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_weekly_dungeon(character_id,account,week,slot,used) VALUES({{id}},'planning',20261022,0,3);
                 INSERT INTO character_dungeon_fatigue_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,1,1,1,'test',0,1,'{}','{}');
                 INSERT INTO character_gold_card_uses VALUES({{id}},'planning',20261011,2);
+                INSERT INTO character_quest_daily_clear VALUES({{id}},'planning',13200,20261011,'1234567890abcdef1234567890abcdef',1);
                 INSERT INTO mailbox_sent_gold VALUES({{id}},20261011,12);
                 INSERT INTO character_quest_lifecycle_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','Accept',30,
                   '1234567890abcdef1234567890abcdef',0,1,'[]','[]','[]',NULL,NULL,NULL);
