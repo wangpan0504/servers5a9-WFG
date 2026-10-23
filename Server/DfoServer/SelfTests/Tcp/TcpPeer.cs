@@ -41,6 +41,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[][] Mailbox { get; private set; } = [];
     public byte[] TitleProgress { get; private set; } = [];
     public byte[] AssaultDailyInfo { get; private set; } = [];
+    public byte[] ItemMakingSkills { get; private set; } = [];
     public WirePacket[] CollectBoxes { get; private set; } = [];
     public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
@@ -530,6 +531,11 @@ internal sealed class TcpPeer : IDisposable
             var packet = Read();
             if (index == 5)
             {
+                TestCheck.That(packet.Kind == 0 && packet.Opcode == 351 && packet.Body.Length == 34 && packet.Body[0] == 11 &&
+                    Enumerable.Range(0, 11).All(type => packet.Body[1 + type * 3] == type && U16(packet.Body, 2 + type * 3) <= 1000),
+                    "制作熟练度在Main之后恢复十一类别，不能借用角色满级熟练度");
+                ItemMakingSkills = packet.Body;
+                packet = Read();
                 while (packet is { Kind: 0, Opcode: 172 or 174 })
                 {
                     TestCheck.That(RestoredConsumableStates.Count < 2 && (RestoredConsumableStates.Count == 0 ||

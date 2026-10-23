@@ -152,6 +152,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             ShopPurchases = before.ShopPurchases, EpicPieces = before.EpicPieces, Items = character.Inventory.Items.AddRange(before.Items) };
         var plan = new InventoryPlan(before, initial, "character_starter");
         var inventory = WriteInventory(db, transaction, owner, id, plan, initial);
+        WriteItemMakingSkills(db, transaction, id, owner.Account, plan);
         inventory = WriteWallet(db, transaction, owner, id, plan, inventory);
         inventory = WriteCargo(db, transaction, owner, id, plan, inventory);
         var accountQuests = ReadAccountQuests(db, id, transaction);

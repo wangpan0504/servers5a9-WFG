@@ -1,57 +1,73 @@
 using System.Collections.Immutable;
-using System.Text.RegularExpressions;
-using static PvfLib.PvfScript;
 
 namespace PvfLib;
 
-// [recipe] 设计图的原始声明：
-//   [input item]  二元组「道具 id、数量」列表，第一对是被改造的装备，其余是固定材料
-//   [output item] 二元组「道具 id、数量」，本版配方只有一件产物
-//   [maintain ability] / [maintain socket stat] 表示产物保留原实例的对应属性
-// 这里只还原声明结构，准入与保留策略由玩法层判断。
 public sealed record ItemRecipeEntry(int ItemId, int Count);
-
-public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, ImmutableArray<ItemRecipeEntry> Inputs,
-    ItemRecipeEntry? Output, string? MaintainAbility, bool MaintainSocketStat, ImmutableArray<string> Diagnostics)
+public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int SourceType,
+    ImmutableArray<ItemRecipeEntry> Inputs, ImmutableArray<ItemRecipeEntry> Outputs,
+    string? MaintainAbility, bool MaintainSocketStat, int SuccessPercent, string? MakingType, int MakingLevel,
+    ImmutableArray<ItemRecipeEntry> Skills, ImmutableArray<string> Diagnostics)
 {
-    public static ItemRecipeFile Parse(int id, string path, string text)
+    public static ItemRecipeFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
-        var errors = ImmutableArray.CreateBuilder<string>();
-        if (!Section(text, "stackable type").Contains("[recipe]", StringComparison.Ordinal))
-            errors.Add("非[recipe]堆叠类型");
-        var inputs = Pairs(Section(text, "input item"), "配方输入", errors);
-        var outputs = Pairs(Section(text, "output item"), "配方产物", errors);
-        if (inputs.Length < 2)
-            errors.Add("配方输入不足");
-        if (outputs.Length != 1)
-            errors.Add("配方产物必须唯一");
-        var ability = Regex.Match(Section(text, "maintain ability"), @"`([^`]*)`");
-        return new(id, path, inputs, outputs.Length == 1 ? outputs[0] : null,
-            ability.Success ? ability.Groups[1].Value.Trim() : null,
-            Regex.IsMatch(text, @"\[maintain socket stat\]", RegexOptions.IgnoreCase), errors.ToImmutable());
-    }
-
-    static ImmutableArray<ItemRecipeEntry> Pairs(string value, string name, ImmutableArray<string>.Builder errors)
-    {
-        var tokens = Regex.Matches(value, @"-?\d+").Select(match => match.Value).ToArray();
-        if (tokens.Length == 0)
-            return [];
-        if (tokens.Length % 2 != 0)
+        var document = new PvfTokenDocument(tokens, resolve);
+        var errors = document.Diagnostics.ToBuilder();
+        PvfTokenSection? Field(string name)
         {
-            errors.Add(name + "行宽为奇数");
-            return [];
+            var fields = document.Sections.Where(section => section.Name == name).ToArray();
+            if (fields.Length == 0) return null;
+            if (fields is [{ Children.Length: 0 } field]) return field;
+            errors.Add("配方声明重复或嵌套：" + name);
+            return null;
         }
-        var entries = ImmutableArray.CreateBuilder<ItemRecipeEntry>();
-        for (int at = 0; at < tokens.Length; at += 2)
+        ImmutableArray<ItemRecipeEntry> Pairs(string name, bool allowZero)
         {
-            if (!int.TryParse(tokens[at], out int itemId) || itemId <= 0 ||
-                !int.TryParse(tokens[at + 1], out int count) || count <= 0)
+            if (Field(name) is not { } field) return [];
+            var values = field.Values;
+            if (values.Length % 2 != 0 || values.Any(value => value.Type != 0))
+            { errors.Add("配方二元组不完整：" + name); return []; }
+            var result = ImmutableArray.CreateBuilder<ItemRecipeEntry>();
+            for (int at = 0; at < values.Length; at += 2)
             {
-                errors.Add(name + "编号或数量无效");
-                return [];
+                int item = values[at].Value, count = values[at + 1].Value;
+                if (item < (allowZero ? 0 : 1) || count <= 0) errors.Add("配方编号或数量无效：" + name);
+                result.Add(new(item, count));
             }
-            entries.Add(new(itemId, count));
+            return result.ToImmutable();
         }
-        return entries.ToImmutable();
+        int sourceType = -1;
+        if (Field("stackable type") is { Values: [{ Type: 6 } label, { Type: 0 } mode] } && resolve(label.Value) == "[recipe]")
+            sourceType = mode.Value;
+        else errors.Add("非完整[recipe]声明");
+        string? maintain = null;
+        if (Field("maintain ability") is { } ability)
+        {
+            if (ability.Values is [{ Type: 6 } value]) maintain = resolve(value.Value);
+            else errors.Add("配方属性保留声明无效");
+        }
+        bool sockets = false;
+        if (Field("maintain socket stat") is { } socket)
+        {
+            sockets = socket.Values.IsEmpty;
+            if (!sockets) errors.Add("配方孔位保留声明无效");
+        }
+        int chance = 0;
+        if (Field("success rate") is { } rate)
+        {
+            if (rate.Values is [{ Type: 0 } value]) chance = value.Value;
+            else errors.Add("配方成功率声明无效");
+        }
+        string? makingType = null;
+        int makingLevel = 0;
+        if (Field("minimum itemmaking level") is { } making)
+        {
+            if (making.Values is [{ Type: 6 } type, { Type: 0 } level])
+            { makingType = resolve(type.Value); makingLevel = level.Value; }
+            else errors.Add("制作熟练度声明无效");
+        }
+        var inputs = Pairs("input item", true);
+        var outputs = Pairs("output item", false);
+        var skills = Pairs("need skill", true);
+        return new(id, path, sourceType, inputs, outputs, maintain, sockets, chance, makingType, makingLevel, skills, errors.ToImmutable());
     }
 }

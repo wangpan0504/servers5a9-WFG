@@ -27,6 +27,7 @@ internal sealed class ItemResources
     public RecoveryConsumableCatalog RecoveryConsumables { get; }
     public UpgradeChronicleCatalog UpgradeChronicles { get; }
     public ItemRecipeCatalog ItemRecipes { get; }
+    public ItemMakingSkillCatalog ItemMakingSkills { get; }
     public LimitCubeCatalog LimitCubes { get; }
     public EnchantmentCatalog Enchantments { get; }
     public EnhancementCatalog Enhancements { get; }
@@ -72,6 +73,7 @@ internal sealed class ItemResources
         RecoveryConsumables = new(archive, stackable, Items);
         UpgradeChronicles = new(archive, stackable);
         ItemRecipes = new(archive, stackable);
+        ItemMakingSkills = new(archive);
         LimitCubes = new(archive, stackable, equipment);
         Enchantments = new(archive, stackable);
         Enhancements = new(archive, stackable, equipment);

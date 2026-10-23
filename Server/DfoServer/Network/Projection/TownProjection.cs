@@ -46,6 +46,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (c.Guild is { } membership)
             await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
+        await context.Notify(NotiPacketType.TOTAL_ITEM_MAKING_SKILL_POINT, CompoundPackets.MakingSkills(c.Inventory.ItemMakingSkills), "item_making_skills_initialize");
         long consumableNow = timer.GetUtcNow().ToUnixTimeMilliseconds();
         if (ConsumableStatePackets.Restore(c.Inventory, DfoServer.Game.Inventory.Models.ConsumableStateKind.Cooldown, consumableNow) is { } cooldowns)
             await context.Notify(NotiPacketType.LOAD_COOLTIME_ITEM_INFO, cooldowns, "consumable_cooldowns_initialize");

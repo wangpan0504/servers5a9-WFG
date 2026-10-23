@@ -181,7 +181,14 @@ internal static class SqliteMigrations
         new(75, "账号商城积分", AddMileageColumn),
         // 冒险团每周地下城信息：按角色保存本周各列实际入场次数，与副本身份预留同一事务累加。
         new(76, "冒险团每周地下城入场计数", EnsureWeeklyDungeonUsage),
+        new(77, "角色制作熟练度", AddItemMakingSkills),
     ];
+
+    static void AddItemMakingSkills(SqliteConnection db, SqliteTransaction tx)
+    {
+        // 未发布的制作测试库曾占用v76。仅在制作表精确匹配已知定义时，补齐同号正式迁移而保留已有点数。
+        if (ItemMakingSkillSchema.Upgrade(db, tx)) EnsureWeeklyDungeonUsage(db, tx);
+    }
 
     static void AddMileageColumn(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1729,6 +1736,7 @@ internal static class SqliteMigrations
         "SELECT [character_id],[context],[slot],[skill_id],[level] FROM [character_skill_bindings] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[list_type],[slot_index],[item_uid_before],[item_uid_after],[item_id_before],[item_id_after],[value_before],[value_after],[item_kind_before],[item_kind_after],[count_before],[count_after],[count_delta],[core_hash_before],[core_hash_after] FROM [inventory_audit_log] LIMIT 0",
         "SELECT [account],[revision],[rental_points],[mileage],[seria_luck],[premium_contracts],[character_slots] FROM [account_wallets] LIMIT 0",
+        "SELECT charac_no,account,weapon,cloth,leather,light_armor,heavy_armor,plate,amulet,wrist,ring,support,magic_stone FROM item_making_skill_info LIMIT 0",
         "SELECT avatar_expansion FROM characters LIMIT 0",
         "SELECT devil_usage,stamina_until FROM characters LIMIT 0",
         "SELECT daily_booster_usage FROM characters LIMIT 0",

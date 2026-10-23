@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -7,15 +9,14 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-// [recipe] 设计图制造的行为断言：按配方扣设计图与材料、产物沿用原实例、
-// 以及缺少被改造装备、材料不足、目标被锁、非配方物品时整单拒绝。
 internal static class RecipeCraftServiceTests
 {
-    const int Blueprint = 65001, Target = 65002, Output = 65003, Cube = 65004, Cloth = 65005;
-    static readonly InventorySlot BlueprintSlot = new(InventoryListType.Main, 5);
-    static readonly InventorySlot TargetSlot = new(InventoryListType.Main, 6);
-    static readonly InventorySlot CubeSlot = new(InventoryListType.Main, 7);
-    static readonly InventorySlot ClothSlot = new(InventoryListType.Main, 8);
+    const int Blueprint = 65001, Target = 65002, Output = 65003, Cube = 65004, Cloth = 65005,
+        Ordinary = 65006, Npc = 65007, Failed = 65008;
+    static readonly InventorySlot BlueprintSlot = new(InventoryListType.Main, 65);
+    static readonly InventorySlot TargetSlot = new(InventoryListType.Main, 9);
+    static readonly InventorySlot CubeSlot = new(InventoryListType.Main, 121);
+    static readonly InventorySlot ClothSlot = new(InventoryListType.Main, 122);
 
     public static void RunCore()
     {
@@ -24,15 +25,25 @@ internal static class RecipeCraftServiceTests
         catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
         {
             [Blueprint] = new(Blueprint, ItemKind.Consumable, 0, 90, 0, 999, 10, 4, 90, "[trade]", 255, 0, "设计图"),
-            [Target] = new(Target, ItemKind.Equipment, 14, 90, 0, 0, 10, 6, 90, "[trade]", 255, 0, "原装备"),
-            [Output] = new(Output, ItemKind.Equipment, 14, 90, 0, 0, 10, 4, 90, "[trade]", 255, 0, "产物"),
+            [Ordinary] = new(Ordinary, ItemKind.Consumable, 0, 1, 0, 999, 120, 4, 1, "[trade]", 255, 0, "普通图"),
+            [Npc] = new(Npc, ItemKind.Consumable, 0, 1, 0, 999, 9999, 4, 1, "[trade]", 255, 0, "NPC配方"),
+            [Failed] = new(Failed, ItemKind.Consumable, 0, 1, 0, 999, 0, 4, 1, "[trade]", 255, 0, "概率配方"),
+            [Target] = new(Target, ItemKind.Equipment, 14, 90, 0, 1, 10, 6, 90, "[sealing]", 255, 0, "原装备"),
+            [Output] = new(Output, ItemKind.Equipment, 14, 90, 0, 1, 10, 4, 90, "[sealing]", 255, 0, "产物"),
             [Cube] = new(Cube, ItemKind.Material, 0, 1, 0, 999, 0, 3, 1, "[trade]", 255, 0, "晶块"),
             [Cloth] = new(Cloth, ItemKind.Material, 0, 1, 0, 999, 0, 3, 1, "[trade]", 255, 0, "布片")
         });
-        var recipes = new ItemRecipeCatalog([new ItemRecipeDefinition(Blueprint, Target,
-            [new ItemMaterialCost(Cube, 100), new ItemMaterialCost(Cloth, 20)], Output, 1)]);
+        var ordinary = new ItemRecipeDefinition(Ordinary, false, [new(Cube, 10), new(Cloth, 2), new(0, 200)], [new(Output, 1)])
+            { MakingType = 2, MakingLevel = 1 };
+        var making = new ItemMakingSkillCatalog(new PvfLib.ItemMakingSkillFile([new(0, 1), new(20, 20), new(40, 30)], 1, 3, 2,
+            [new(1, 4, 6, 9700, 6, 12, 300), new(2, 5, 7, 9700, 6, 12, 300)]));
+        var recipes = new ItemRecipeCatalog([new ItemRecipeDefinition(Blueprint, false,
+            [new(Target, 1), new(Cube, 100), new(Cloth, 20)], [new(Output, 1)]) { MaintainAbility = "normal", MaintainSocketStat = true },
+            ordinary, new(Npc, true, [new(Cloth, 1), new(0, 200)], [new(Cube, 1)]) { Skills = [new(900, 1)] },
+            new(Failed, false, [new(Cloth, 1)], [new(Cube, 1)]) { SuccessPercent = 1 }]);
         var service = new InventoryRecipeCraftService(recipes, catalog,
-            new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"));
+            new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
+            new GoldLimitCatalog("[gold limit from level]\n0 2000000000\n[/gold limit from level]"), making, random: _ => 0);
 
         Character Fixture(int cubes = 250, int cloth = 60, byte targetLock = 0, bool withTarget = true, int blueprintItem = Blueprint)
         {
@@ -48,15 +59,24 @@ internal static class RecipeCraftServiceTests
                     Attr = 7, GenuineUpgrade = 3, EnchantCardId = 900, EmblemSocketCount = 1, Emblem1 = 42,
                     Random0 = new(1, 2, 3), EquipmentLockId = targetLock
                 }));
-            return new Character(1, 0, "Recipe", 0, new(1, 0, 0, 0), null) { Level = 90, Inventory = new([.. items]) };
+            return new Character(1, 0, "Recipe", 0, new(1, 0, 0, 0), null) { Level = 90, Inventory = new([.. items], Gold: 10000) };
         }
 
         var character = Fixture();
         var before = character.Inventory;
-        var result = service.Craft(character, BlueprintSlot, out var receipt);
+        InventoryResult Craft(Character role, out RecipeCraftReceipt? detail) => service.Craft(role, 65, 0, 1, out detail);
+        var result = Craft(character, out var receipt);
         That(result.Accepted && result.Plan is not null, "配方匹配时接受");
-        That(receipt is { ItemId: Output, Count: 1 }, "回执携带产物编号与数量");
-        That(CompoundPackets.Result(result) is [1, 0, 0, 0], "成功回包为4字节 01 00 00 00");
+        That(receipt is { RecipeId: Blueprint, Success: true, Products: [{ ItemId: Output, Count: 1 }] }, "回执携带真实产物槽位与数量");
+        var committed = new InventoryCommitReceipt(character with { Inventory = result.Plan!.After }, 1, 1);
+        byte[] ack = CompoundPackets.Result(result with { Receipt = committed }, receipt);
+        int product = 4 + 7 * receipt!.Consumed.Length;
+        That(ack.Length == product + 124 && ack[1] == 4 && ack[product - 2] == 1 && ack[product - 1] == 1 &&
+            ack[product] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(ack.AsSpan(product + 1)) == TargetSlot.Index &&
+            BinaryPrimitives.ReadInt32LittleEndian(ack.AsSpan(product + 3)) == Output, "原生ACK包含消耗、结果标记及完整123B产物行");
+        That(ack[product + 14] == 0 && result.Plan.After.Find(TargetSlot)!.Core.SealFlag == 0,
+            "保留型升级不因产物模板为sealing而重新封装已解封原件，数据库与完整回包保持一致");
+        Reject<InvalidDataException>(() => CompoundPackets.Result(result, receipt), "规划中的物品不能冒充已提交实例发包");
         That(CompoundPackets.Result(InventoryResult.Reject(7)) is [0, 7, 0], "失败回包为0+u16错误码");
         var after = result.Plan!.After;
         That(after.Find(BlueprintSlot) is null, "设计图被整件消耗");
@@ -67,14 +87,84 @@ internal static class RecipeCraftServiceTests
             "产物沿用原实例并保留强化/锻造/附魔/徽章/随机属性");
         That(after.Items.Single(item => item.Uid == 13).Core.Count == 150 &&
             after.Items.Single(item => item.Uid == 14).Core.Count == 40, "只按配方数量扣材料");
-        That(before.Items.Length == 4 && before.Find(TargetSlot)!.Core.ItemId == Target, "规划不修改原快照");
+        That(before.Items.Length == 4 && before.Find(TargetSlot)!.Core.ItemId == Target && after.Gold == before.Gold, "规划不修改原快照，也不把设计图售价当制作费");
 
-        That(!service.Craft(Fixture(cubes: 99), BlueprintSlot, out _).Accepted, "材料不足整单拒绝");
-        That(!service.Craft(Fixture(cloth: 19), BlueprintSlot, out _).Accepted, "第二种材料不足同样拒绝");
-        That(!service.Craft(Fixture(targetLock: 1), BlueprintSlot, out _).Accepted, "锁定装备不能制造");
-        That(!service.Craft(Fixture(withTarget: false), BlueprintSlot, out _).Accepted, "缺少被改造装备时拒绝");
-        That(!service.Craft(Fixture(blueprintItem: Cube), BlueprintSlot, out _).Accepted, "槽位不是配方物品时拒绝");
-        That(!service.Craft(Fixture(), new(InventoryListType.PersonalCargo, 5), out _).Accepted, "非Main槽位不能当设计图");
+        That(!Craft(Fixture(cubes: 99), out _).Accepted, "材料不足整单拒绝");
+        That(!Craft(Fixture(cloth: 19), out _).Accepted, "第二种材料不足同样拒绝");
+        That(!Craft(Fixture(targetLock: 1), out _).Accepted, "锁定装备不能制造");
+        That(!Craft(Fixture(withTarget: false), out _).Accepted, "缺少被改造装备时拒绝");
+        That(!Craft(Fixture(blueprintItem: Cube), out _).Accepted, "槽位不是配方物品时拒绝");
+        That(!service.Craft(Fixture(), uint.MaxValue, 0, 1, out _).Accepted &&
+            !service.Craft(Fixture(), 65, 2, 1, out _).Accepted && !service.Craft(Fixture(), 65, 0, 0, out _).Accepted,
+            "越界来源、未知模式和零数量不产生溢出或费用");
+
+        var pure = Fixture(withTarget: false, blueprintItem: Ordinary) with { Level = 14 };
+        var made = Craft(pure, out var madeReceipt);
+        var newItem = made.Plan!.After.Items.Single(item => item.Core.ItemId == Output);
+        That(made.Accepted && newItem.Uid == 0 && newItem.Position.Index == 9 && newItem.Core.Attr == 4 &&
+            made.Plan.After.Gold == 9800 && made.Plan.After.ItemMakingSkills.Points[2] == 1 &&
+            madeReceipt!.MakingGain == new ItemMakingSkillGain(2, 0, 1), "纯材料配方新建装备，按输入扣金币并原子累计对应熟练度");
+        var sealedInventory = made.Plan.After with { Items = made.Plan.After.Items.Select(item => item.Uid == 0 ? item with { Uid = 1000 } : item).ToImmutableArray() };
+        byte[] sealedAck = CompoundPackets.Result(made with { Receipt = new(pure with { Inventory = sealedInventory }, 1, 1) }, madeReceipt);
+        That(newItem.Core.SealFlag == 1 && sealedAck[4 + 7 * madeReceipt!.Consumed.Length + 14] == 1,
+            "新造产物按EQU的sealing创建封装状态，熟练强化重建后仍在123B物品行下发SealFlag=1");
+        That(made.Plan.After.Find(CubeSlot)!.Core.Count == 240 && made.Plan.After.Find(ClothSlot)!.Core.Count == 58,
+            "第一输入同样是材料，不再丢失或误判为原装备");
+        That(service.Craft(pure, Ordinary, 1, 1, out _).Error == 179, "物品编号模式不能绕过背包设计图消费");
+        That(Craft(pure with { Inventory = pure.Inventory with { Gold = 199 } }, out _).Error == 14, "金币不足整单拒绝");
+        var full = pure with { Inventory = pure.Inventory with { Items = pure.Inventory.Items.AddRange(Enumerable.Range(9, 56)
+            .Select(slot => new InventoryItem(100 + slot, new(InventoryListType.Main, (short)slot), new(Target, ItemKind.Equipment, 1)))) } };
+        That(Craft(full, out _).Error == 4 && pure.Inventory.ItemMakingSkills.Points[2] == 0,
+            "无产物空间时不消费源、不抽强化、不增加熟练度");
+
+        var npc = service.Craft(Fixture(withTarget: false), Npc, 1, 3, out var npcReceipt);
+        That(npc.Accepted && npc.Plan!.After.Gold == 9400 && npc.Plan.After.Find(ClothSlot)!.Core.Count == 57 &&
+            npc.Plan.After.Find(CubeSlot)!.Core.Count == 253 && npc.Plan.After.Find(BlueprintSlot)!.Core.Count == 1 &&
+            npcReceipt!.MakingGain is null && npcReceipt.Products is [{ ItemId: Cube, Count: 3 }],
+            "NPC模式批量按输入扣料、扣金币并合堆，不要求或消耗实体设计图、不误加制作熟练度");
+        var missingNpc = service.Craft(Fixture(cloth: 2), Npc, 1, 3, out _);
+        That(missingNpc.Error == 19 && !service.Craft(Fixture(), Npc, 1, ushort.MaxValue, out _).Accepted,
+            "NPC整批缺料或超大数量无部分制作");
+        var chanceService = new InventoryRecipeCraftService(recipes, catalog, new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
+            new GoldLimitCatalog("[gold limit from level]\n0 2000000000\n[/gold limit from level]"), making, random: maximum => maximum - 1);
+        var chance = chanceService.Craft(Fixture(blueprintItem: Failed), 65, 0, 1, out var chanceReceipt);
+        That(chance.Accepted && chanceReceipt is { Success: false, Products.IsEmpty: true } &&
+            chance.Plan!.After.Find(BlueprintSlot) is null && chance.Plan.After.Find(ClothSlot)!.Core.Count == 59,
+            "原生制作失败仍消费设计图和材料，回包结果2但不伪造产物");
+        var expired = pure with { Inventory = pure.Inventory with { Items = pure.Inventory.Items.Select(item =>
+            item.Position == CubeSlot ? item with { Core = item.Core with { ExpireTime = 1 } } : item).ToImmutableArray() } };
+        That(!Craft(expired, out _).Accepted, "过期输入不能参加制作");
+        var progressed = pure with { Inventory = pure.Inventory with { ItemMakingSkills = ItemMakingSkillState.Empty.Set(2, 19) } };
+        var growth = ItemMakingSkillPolicy.Gain(progressed, ordinary, making, maximum => maximum - 1);
+        That(growth.State.Points[2] == 20 && growth.Gain == new ItemMakingSkillGain(2, 0, 1), "角色等级限制钳住跨阈值收益，通知实际增量");
+        growth = ItemMakingSkillPolicy.Gain(pure with { Inventory = progressed.Inventory with { ItemMakingSkills = growth.State } }, ordinary, making, _ => 0);
+        That(growth.Gain == new ItemMakingSkillGain(2, 22, 0), "达到角色等级阈值时消费仍可执行，熟练度不再增长");
+        growth = ItemMakingSkillPolicy.Gain(progressed with { Level = 90, Inventory = progressed.Inventory with { ItemMakingSkills = ItemMakingSkillState.Empty.Set(2, 40) } }, ordinary, making, _ => 0);
+        That(growth.Gain == new ItemMakingSkillGain(2, 13, 0) && growth.State.Points[2] == 40, "制作等级超过推荐两级时无经验，不能倒扣");
+        That(making.Level(0, 1) == 1 && making.Level(40, 14) == 1 && making.Level(40, 30) == 3 &&
+            making.Upgrade(1, maximum => maximum - 1) == 12 && making.Upgrade(1, _ => 0) == 4,
+            "制作等级同时受点数与角色等级限制，强化按常见和稀有区间取值");
+        That(Convert.ToHexString(CompoundPackets.MakingGain(new(2, 0, 3))) == "00020300" &&
+            CompoundPackets.MakingSkills(ItemMakingSkillState.Empty).Length == 34,
+            "本版351为11类绝对点数、352为状态类别和u16增量");
+        var noMaking = new InventoryRecipeCraftService(recipes, catalog,
+            new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
+            new GoldLimitCatalog("[gold limit from level]\n0 2000000000\n[/gold limit from level]"),
+            new ItemMakingSkillCatalog((PvfLib.ItemMakingSkillFile?)null));
+        That(!noMaking.Craft(pure, 65, 0, 1, out _).Accepted && noMaking.Craft(pure, Npc, 1, 1, out _).Accepted,
+            "缺熟练度资源只关闭带声明的配方，不关闭NPC普通材料制作");
+        growth = ItemMakingSkillPolicy.Gain(pure with { Level = 95, Inventory = pure.Inventory with
+            { ItemMakingSkills = ItemMakingSkillState.Empty.Set(2, 40) } }, ordinary, making, _ => 0);
+        That(growth.Gain == new ItemMakingSkillGain(2, 22, 0), "角色满级沿当前PVF末项限制，不照抄旧70级常量");
+        growth = ItemMakingSkillPolicy.Gain(pure with { Level = 90, Inventory = pure.Inventory with
+            { ItemMakingSkills = ItemMakingSkillState.Empty.Set(2, 1000) } }, ordinary, making, _ => 0);
+        That(growth.Gain == new ItemMakingSkillGain(2, 95, 0) && growth.State.Points[2] == 1000, "1000点上限通知为95，不能溢出或倒扣");
+        long deadline = DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeSeconds();
+        var timed = pure with { Inventory = pure.Inventory with { Items = pure.Inventory.Items.Select(item =>
+            item.Position == BlueprintSlot ? item with { Core = item.Core with { ExpireTime = checked((int)deadline) } } : item).ToImmutableArray() } };
+        var timedPlan = Craft(timed, out _).Plan!;
+        That(timedPlan.CharacterPrecondition is { } guard && !guard.IsExpired(deadline - 1) && guard.IsExpired(deadline),
+            "设计图期限在提交前再次复核，不能使用过期前的旧规划");
         // 请求宽度与字段：实机 9 字节 610000000001000001 = 槽位97/方式0/数量1/尾 00 01。
         var extended = DfoServer.Network.Parsers.Inventory.CompoundRequests.Read(Convert.FromHexString("610000000001000001"));
         That(extended.Raw == 97 && extended.Mode == 0 && extended.Count == 1, "9字节请求解出槽位/方式/数量");

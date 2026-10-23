@@ -52,6 +52,8 @@ internal static class ServerRuntime
         var channels = LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
         var gameChannels = new GameChannelListeners(options, channels);
         log.Write("startup", new { Stage = "Runtime assembly", State = "starting" });
+        if (!itemResources.ItemMakingSkills.Available)
+            log.Write("resource_warning", new { Stage = "Item making skills", Missing = "etc/itemmakingskill.etc", Disabled = "带制作熟练度声明的配方" });
         var timer = Stopwatch.StartNew();
         // 支持模板全集在监听就绪前准备，首位玩家选角不承担STK扫描。
         var boosterTimer = Stopwatch.StartNew();
@@ -305,7 +307,7 @@ internal static class ServerRuntime
                 itemResources.EpicPieces, clock), inventoryProjection),
             // 设计图制造：CMD25，配方来自 [recipe] 设计图的 [input item]/[output item]。
             new CompoundHandler(new InventoryRecipeCraftService(itemResources.ItemRecipes, itemResources.Items,
-                itemResources.EpicPieces, clock), inventoryProjection, log),
+                itemResources.EpicPieces, itemResources.GoldLimits, itemResources.ItemMakingSkills, clock), inventoryProjection, log),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
                 debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages, clock: clock), inventoryProjection,
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),

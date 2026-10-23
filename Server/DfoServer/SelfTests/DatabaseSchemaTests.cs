@@ -156,6 +156,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            ItemMakingUpgrade(root);
             PassiveItemsUpgrade(root);
             PickupUidUpgrade(root);
             ConsumableStatesUpgrade(root);

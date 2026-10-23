@@ -298,6 +298,7 @@ internal static class TcpRegressionTests
         ("avatar-disjoint", AvatarDisjointTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
+        ("recipe-craft", RecipeCraftTcpTests.RunAsync),
         ("daily-retained-booster", DailyRetainedBoosterTcpTests.RunAsync),
         ("booster", BoosterTcpTests.RunAsync),
         ("magic-box", MagicBoxTcpTests.RunAsync),
