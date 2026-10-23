@@ -33,6 +33,7 @@ internal sealed class ItemResources
     public EnhancementCatalog Enhancements { get; }
     public AmplificationCatalog Amplifications { get; }
     public AmplifyUpgradeCatalog AmplifyUpgrades { get; }
+    public MedalUpgradeCatalog MedalUpgrades { get; }
     public CreatureEggCatalog CreatureEggs { get; }
     public CollectBoxCatalog CollectBoxes { get; }
     public GameWorld.Creatures.CreatureCatalog Creatures { get; }
@@ -79,6 +80,7 @@ internal sealed class ItemResources
         Enhancements = new(archive, stackable, equipment);
         Amplifications = new(archive, stackable, equipment);
         AmplifyUpgrades = new(archive, stackable);
+        MedalUpgrades = new(archive);
         CreatureEggs = new(archive, equipment, Items);
         AvatarPackages = new(archive, equipment, stackable);
         EmblemCompounds = new(archive, stackable);

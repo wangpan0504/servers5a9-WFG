@@ -22,14 +22,27 @@ internal static class GuildMedalTcpTests
                 Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills
             });
             var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            InventoryService.Commit(repo, owner, role, service.Grant(role, [new(100380044, 2), new(90000, 2), new(90001, 1), new(90032, 2)]));
+            InventoryService.Commit(repo, owner, role, service.Grant(role, [new(100380044, 2), new(90000, 2), new(90001, 1), new(90032, 2),
+                new(490011648, 100)]));
         }
+        int cost = itemResources.MedalUpgrades.Rules.CoinCost(itemResources.Items.Get(100380044).Rarity, 1);
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
             peer.Select();
             var list = peer.SpecialContainers[3].Body;
             That(list.Length == 618 && list[0] == 38 && U16(list, 1) == 5, "nonempty medal/gem list has 123B entries");
+            peer.Send(80, EnhancementTests.Request(0, 38, 0, 100380044, 121, []));
+            var upgrade = peer.Expect(1, 80).Body;
+            That(upgrade.Length == 27 && upgrade[0] == 1 && upgrade[1] == 0 && U16(upgrade, 2) == 121 &&
+                U32(upgrade, 4) == 100 - cost && U16(upgrade, 8) == ushort.MaxValue && upgrade[10] == 0 && upgrade[11] == 0 &&
+                upgrade[12] == 0 && upgrade[13] == 1 && upgrade[14] == 38 && U16(upgrade, 15) == 0 &&
+                U16(upgrade, 17) == ushort.MaxValue && U16(upgrade, 19) == ushort.MaxValue && U32(upgrade, 21) == 0 &&
+                upgrade[25] == 0 && upgrade[26] == 0, "CMD80勋章+0必成回包带回列表38槽位与公会硬币绝对余量");
+            peer.Barrier();
+            peer.Send(80, EnhancementTests.Request(0, 38, 0, 100380045, 121, []));
+            peer.Expect(1, 80, [0, 23, 0]);
+            peer.Barrier();
             peer.Send(19, Move(38, 1, 100380044, 0, 3, 0));
             peer.Expect(1, 19, MoveAck(38, 1, 0, 3));
             peer.Expect(0, 14); peer.Expect(0, 14);
@@ -79,6 +92,11 @@ internal static class GuildMedalTcpTests
             peer.Send(831, new byte[10]);
             peer.Closed();
         }
+        That(fixture.Query("SELECT json_extract(i.item_core,'$.Attr') FROM character_inventory_items i " +
+            "JOIN character_inventory_slots s USING(item_uid) WHERE s.list_type=38 AND s.slot_index=48") is [[long attr]] && attr == 1 &&
+            fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items " +
+            "WHERE json_extract(item_core,'$.ItemId')=490011648") is [[long coins]] && coins == 100 - cost,
+            "reconnect keeps committed medal upgrade level and guild coin deduction");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "medal TCP fixture remains consistent after rejection, faults and reconnect");
 

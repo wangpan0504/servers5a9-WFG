@@ -34,6 +34,7 @@ internal static class SelfTestRunner
         EnhancementTests.RunCore();
         AmplificationTests.RunCore();
         AmplifyUpgradeTests.RunCore();
+        MedalUpgradeTests.RunCore();
         CreatureSkinTests.RunCore();
         CreatureEggTests.RunCore();
         BoosterCreatureTests.RunCore();
@@ -269,6 +270,7 @@ internal static class SelfTestRunner
         InventoryCoreGrantTests.Run(itemResources);
         SpecialContainerTests.Run(towns, characters, itemResources);
         GuildMedalTests.Run(towns, characters, itemResources);
+        MedalUpgradeTests.RunResources(towns, itemResources);
         CurrencyTests.Run(towns, characters, itemResources);
         CargoTests.Run(towns, characters, itemResources);
         ShopTests.Run(towns, characters, itemResources);
