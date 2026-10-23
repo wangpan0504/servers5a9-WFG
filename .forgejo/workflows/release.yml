@@ -13,12 +13,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  package:
+  # medium 每个 job 最多十分钟；检查与发布分别分配预算，检查失败不得发布。
+  verify:
+    name: Release 无资源基础检查
     if: ${{ forgejo.ref == 'refs/heads/master' }}
     runs-on: codeberg-medium
     container:
       image: mcr.microsoft.com/dotnet/sdk:10.0-noble
-    timeout-minutes: 25
+    timeout-minutes: 9
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      TZ: Asia/Shanghai
+      SOURCE_COMMIT: ${{ forgejo.sha }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      MSBUILDDISABLENODEREUSE: '1'
+    steps:
+      - name: 检出本次选择的 master 提交
+        shell: bash
+        env:
+          REPOSITORY_URL: ${{ forgejo.server_url }}/${{ forgejo.repository }}.git
+        run: |
+          set -eu
+          git init .
+          git remote add origin "$REPOSITORY_URL"
+          git fetch --depth=1 origin "$SOURCE_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+
+      - name: Release 无资源基础检查
+        run: ./Tools/Check-Development.ps1 -Configuration Release
+
+  package:
+    needs: verify
+    if: ${{ forgejo.ref == 'refs/heads/master' }}
+    runs-on: codeberg-medium
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:10.0-noble
+    timeout-minutes: 9
     defaults:
       run:
         shell: pwsh
@@ -46,9 +79,6 @@ jobs:
         env:
           FORGEJO_TOKEN: ${{ forgejo.token }}
         run: ./Tools/Publish-Release.ps1 -Version $env:VERSION -Commit $env:SOURCE_COMMIT -CheckOnly
-
-      - name: Release 无资源基础检查
-        run: ./Tools/Check-Development.ps1 -Configuration Release
 
       - name: 沿用单 EXE 构建入口生成 ZIP 与 SHA256
         env:
