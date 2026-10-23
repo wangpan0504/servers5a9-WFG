@@ -165,7 +165,22 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             }
         }
 
-        foreach (var (kind, amount) in new[] { (CurrencyKind.Cera, total), (CurrencyKind.Gold, gold), (CurrencyKind.WinPoint, winPoints) })
+        // 商城结算：客户端只上报「支付方式 0 = 点券」，代币券/欢乐代币券能不能花由服务端决定。
+        // 参考同族服务端口径，按官方瀑布语义依次扣 欢乐代币券 → 代币券 → 点券，扣到够为止；
+        // 只扣点券会让界面里代币券有余额、按钮可点的玩家买不成。
+        long paidCera = 0;
+        foreach (var kind in new[] { CurrencyKind.HappyTokenCera, CurrencyKind.TokenCera, CurrencyKind.Cera })
+        {
+            long balance = CurrencyWallet.Get(paid, kind);
+            long take = Math.Min(Math.Max(balance, 0), total - paidCera);
+            if (take <= 0)
+                continue;
+            paid = CurrencyWallet.Set(paid, kind, balance - take);
+            paidCera += take;
+        }
+        if (paidCera != total)
+            return InventoryResult.Reject(10);
+        foreach (var (kind, amount) in new[] { (CurrencyKind.Gold, gold), (CurrencyKind.WinPoint, winPoints) })
         {
             var spent = CurrencyService.Spend(paid, kind, checked((int)amount));
             if (!spent.Accepted) return InventoryResult.Reject(10);

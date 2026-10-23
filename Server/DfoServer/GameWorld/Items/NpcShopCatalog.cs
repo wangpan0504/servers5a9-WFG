@@ -6,7 +6,11 @@ using static PvfLib.PvfScript;
 
 namespace DfoServer.GameWorld.Items;
 
-internal sealed record NpcShop(int NpcId, FrozenSet<int> Items);
+internal sealed record NpcShop(int NpcId, FrozenSet<int> Items)
+{
+    // 攻坚商店(.shp)不写[NPC]段，按文件类型识别；购买时不再校验商人，见 Allows 的说明。
+    public bool Raid { get; init; }
+}
 internal sealed class NpcShopCatalog
 {
     readonly FrozenSet<int> saleRestrictions;
@@ -27,7 +31,9 @@ internal sealed class NpcShopCatalog
                     ?? throw new InvalidDataException("PVF 商店文件缺失: " + path);
             string text = pvf.ReadText(resolved);
             int npc = Integers(Section(text, "NPC")).FirstOrDefault(-1);
-            if (npc < 0)
+            // 攻坚商店没有[NPC]声明，靠 [type] `[etc shop]` 与商人的[raid shop]角色位识别。
+            bool raid = npc < 0 && Regex.IsMatch(Section(text, "type"), @"`\[etc shop\]`", RegexOptions.IgnoreCase);
+            if (npc < 0 && !raid)
                 continue;
             // 职业分页只是商品展示；递归收集各页，不能据此禁止跨职业购买。
             string sell = string.Join("\n", Regex.Matches(text, @"\[sell info\](.*?)\[/sell info\]", RegexOptions.Singleline | RegexOptions.IgnoreCase)
@@ -35,7 +41,7 @@ internal sealed class NpcShopCatalog
             var items = Regex.Matches(sell, @"\[item list\](.*?)\[/item list\]", RegexOptions.Singleline | RegexOptions.IgnoreCase)
                 .SelectMany(match => Integers(match.Groups[1].Value)).Where(item => item > 0)
                 .Concat(Integers(Section(text, "one a day item")).Where(item => item > 0)).ToFrozenSet();
-            shops.Add(id, new(npc, items));
+            shops.Add(id, new(npc, items) { Raid = raid });
         }
         if (shops.Count == 0 || EquipmentSellRate < 0)
             throw new InvalidDataException("PVF 商店或售价表无效");
@@ -43,7 +49,12 @@ internal sealed class NpcShopCatalog
     }
 
     public bool Allows(int npcId, int shopId, int itemId) => Shops.TryGetValue(shopId, out var shop) &&
-        shop.NpcId == npcId && shop.Items.Contains(itemId);
+        shop.Items.Contains(itemId) &&
+        (shop.Raid || shop.NpcId == npcId);
+
+    // 攻坚商店不校验商人：实机同一家店的不同入口 NPC 声明并不统一——
+    // 卢克的艾丽卡(460)有 [raid shop]，超时空漩涡的假面骑士(619)只有 [move town]，
+    // 而客户端照样能开出该店。入口由客户端 UI 决定，服务端只核对商品是否属于该店。
 
     public bool CanSell(int itemId) => itemId > 0 && !saleRestrictions.Contains(itemId);
 

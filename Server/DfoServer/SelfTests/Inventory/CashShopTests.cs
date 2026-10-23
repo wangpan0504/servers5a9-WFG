@@ -210,6 +210,31 @@ internal static partial class CashShopTests
         That(result.Accepted && receipt is not null, $"cash shop purchase charges Cera and returns receipt (error={result.Error}, item={product.ItemId}, section={product.Section}, count={product.Count})");
         That(result.Plan!.After.AccountWallet.Get(DfoServer.Game.Currency.CurrencyKind.Cera) ==
             100_000 - product.CeraPrice, "cash shop purchase deducts exact Cera price");
+        // 代币券瀑布：欢乐代币券 → 代币券 → 点券，依次扣到够为止（客户端只上报支付方式0）。
+        var voucherWallet = character.Inventory.AccountWallet
+            .Set(DfoServer.Game.Currency.CurrencyKind.HappyTokenCera, 5)
+            .Set(DfoServer.Game.Currency.CurrencyKind.TokenCera, 20);
+        var voucherCharacter = character with { Inventory = character.Inventory with { AccountWallet = voucherWallet } };
+        var voucher = service.Buy(voucherCharacter, new(0, [new(product.CommodityId, 0)]), out _);
+        var voucherAfter = voucher.Plan?.After.AccountWallet;
+        That(voucher.Accepted && voucherAfter is not null &&
+            voucherAfter.Get(DfoServer.Game.Currency.CurrencyKind.HappyTokenCera) == 0 &&
+            voucherAfter.Get(DfoServer.Game.Currency.CurrencyKind.TokenCera) == 0 &&
+            voucherAfter.Get(DfoServer.Game.Currency.CurrencyKind.Cera) == 100_000 - (product.CeraPrice - 25),
+            "代币券先于点券被扣，扣到够为止");
+        // 只有代币券、没有点券时也能买成（实机现场：界面显示代币券余额、按钮可点）。
+        var tokenOnlyCharacter = character with
+        {
+            Inventory = character.Inventory with
+            {
+                AccountWallet = character.Inventory.AccountWallet
+                    .Set(DfoServer.Game.Currency.CurrencyKind.Cera, 0)
+                    .Set(DfoServer.Game.Currency.CurrencyKind.TokenCera, 100_000)
+            }
+        };
+        var tokenOnly = service.Buy(tokenOnlyCharacter, new(0, [new(product.CommodityId, 0)]), out _);
+        That(tokenOnly.Accepted && tokenOnly.Plan!.After.AccountWallet.Get(DfoServer.Game.Currency.CurrencyKind.TokenCera) ==
+            100_000 - product.CeraPrice, "点券为零时代币券可完成支付");
         var item = result.Plan.After.Items.FirstOrDefault(row => row.Core.ItemId == product.ItemId);
         That(item is not null && item.Position.List == ItemSlotBoundService.List(resources.Items.Get(product.ItemId).Kind),
             "cash shop reward enters the PVF-defined inventory list");
