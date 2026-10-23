@@ -7,6 +7,7 @@ using DfoServer.Game.Quests;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Quests;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -22,6 +23,7 @@ internal static class QuestPassiveClearTcpTests
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (bool ordinary in new[] { false, true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         VerifyZeroKill(fixture,resources,growth,drain);
+        VerifyMagtonium(fixture,resources,growth,drain);
         VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,3738,102,16120,76530,
             [0,0,7,5,4,6,5,15],[76532,76533,76534]);
@@ -33,6 +35,135 @@ internal static class QuestPassiveClearTcpTests
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,3646,74,10624,91901,
             [0,8,0,3,3,5,6,0,2],[91902,91904,91909,91905],
             [91901,91908,91902,91903,91909,91904,91905,91906,91907],expectedStartMap:91901);
+    }
+
+    // #217：使用真实3735路线和合成74B报告，验证完整掉落、重放及34消费；不把正文附加值当实例号。
+    static void VerifyMagtonium(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
+        Action<TcpPeer,Action<WirePacket>?> drain)
+    {
+        const string account = "magtonium-3735";
+        var quest = resources.Quests.Get(3735);
+        That(QuestFixedRewardDefinition.Parse(quest).ForJob(0) is [{ ItemId:10164801, Count:50 }],
+            "3735当前资源交付奖励为同一任务物品50份，不擅自替换为普通魔刹石3341");
+        var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,quest,102);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
+        Character created;
+        using (var owner = new AccountOwners().Acquire(account,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare("Magtonium",resources.Characters.Get(0),entrance.Position,entrance.Position,resources.Learning.Get);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with
+            {
+                Level = 95, AcceptedStoryLevel = 95, CompletedQuests = entrance.Completed,
+                InitialLearning = SkillPointLedger.Synchronize(0,0,95,candidate.InitialLearning with
+                    { Experience = growth.GetLevelStartExperience(95) },resources.Learning)
+            });
+        }
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            byte[] information = [];
+            var map = FormalDungeonTcpTests.Enter(peer,3735,102,row => information = row);
+            var maze = dungeons.Get(102).Mazes.Single(row => row.SourceOrdinal == information[7]);
+            var route = maze.MapSpecification!;
+            FormalDungeonTcpTests.Load(peer); Drain();
+            That(quest.Condition == "[seeking]" && quest.IntData.SequenceEqual(new[] {10164801,15}),"3735真实寻物目标为研究用魔刹石15份，不用猎杀33补进度");
+            foreach (var scenario in new[] {(Map:76511,Sources:4,Total:4),(Map:76512,Sources:9,Total:13),(Map:76513,Sources:7,Total:15)})
+            {
+                var target = route.Single(row => row.Id == scenario.Map);
+                var path = QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),target.Position);
+                foreach (var next in path.Skip(1))
+                {
+                    foreach (int offset in Enumerable.Range(0,map[13] == 0 ? 0 : map[18]).Select(at => 19+22*at)
+                        .Where(at => map[at+21] == 0 && map[at+13] != 9))
+                    {
+                        peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12])); Drain();
+                    }
+                    var move = new byte[100]; move[0] = checked((byte)next.X); move[1] = checked((byte)next.Y);
+                    peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+                    FormalDungeonTcpTests.Load(peer); Drain();
+                }
+                That(U32(map,14) == scenario.Map,"3735沿真实连接进入对应MAP，不借用相邻任务路线");
+                var room = rooms.Get(target,requirePassiveDefinitions:false);
+                var sources = room.PassiveObjects.Select(row => row.ObjectId).Concat(room.SpecialObjects.Select(row => row.ObjectId))
+                    .Where(id => id is 16111 or 16112).ToArray();
+                That(sources.Length == scenario.Sources,"3735普通放置与特殊父物件的真实资源份数");
+                var counters = new Dictionary<int,ushort>();
+                foreach (int template in sources)
+                {
+                    ushort stamp = counters[template] = (ushort)(counters.GetValueOrDefault(template)+1);
+                    byte[] body = Report(template,stamp);
+                    string before = State();
+                    var damaged = body.ToArray(); damaged[^1] ^= 1;
+                    peer.Send(39,damaged); Drain();
+                    That(State() == before,"物件报告坏摘要不能消费资源槽或发任务材料");
+                    int count = Quantity(10164801);
+                    peer.Send(39,body); Drain();
+                    That(Quantity(10164801) == Math.Min(15,count+1),"同模板不同正文沿原掉落事务逐份入包，并受实际15份持有上限约束");
+                    before = State(); peer.Send(39,body); Drain();
+                    That(State() == before,"同房精确重放不消费下一放置槽或重复发物品");
+                }
+                That(Quantity(10164801) == scenario.Total,"三个实机故障房间分别累计4、13、15份材料");
+                string complete = State();
+                foreach (int template in new[] {16111,16112}) { peer.Send(39,Report(template,300)); Drain(); }
+                That(State() == complete,"资源槽耗尽或任务材料已满后，新正文也不能无界发放");
+            }
+            That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3735",peer.Id) is [[0L]],
+                "15份实际入包才由寻物进度归零");
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); Drain();
+            string pendingQuest = fixture.Snapshot("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id);
+            foreach (uint requested in new uint[] { 3735,0 })
+            {
+                peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27);
+                byte[] selection = Convert.FromHexString("660000000300000000FFFF0000000000970E00000000000000");
+                BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),requested);
+                peer.Send(16,selection);
+                var ordinaryInfo = peer.Expect(0,28).Body;
+                var ordinaryMap = peer.Expect(0,29).Body;
+                That(ordinaryInfo[7] == 0 && U32(ordinaryMap,14) == 42151,
+                    "3735达成未交时显式任务与普通0请求均可用难度3进入真实普通地图");
+                FormalDungeonTcpTests.Load(peer); Drain();
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); Drain();
+                That(Quantity(10164801) == 15 && pendingQuest == fixture.Snapshot(
+                    "SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id) &&
+                    fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3735",peer.Id) is [[0L]],
+                    "普通高难度入场、加载及退图保留待交付任务与15份材料，不自动交付或奖励");
+            }
+            peer.Send(34,[34,0,151,14,255,255,1,0,255,255]);
+            var ack = peer.Expect(1,34).Body; Drain();
+            That(ack[0] == 1 && Quantity(10164801) == 50 && Quantity(3341) == 0 && fixture.Query(
+                "SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3735",peer.Id) is [[1L]],
+                "3735真实34原子消耗15份研究石并只发一次资源声明的同物品50份");
+            using var consumed = JsonDocument.Parse((string)fixture.Query(
+                "SELECT consumed FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3735",peer.Id)[0][0]);
+            That(consumed.RootElement.GetArrayLength() == 1 && consumed.RootElement[0].GetProperty("ItemId").GetInt32() == 10164801 &&
+                consumed.RootElement[0].GetProperty("Count").GetInt32() == 15,
+                "同物品奖励不能掩盖消费：34回执独立记录实际扣除的原15份");
+            string finished = State();
+            peer.Send(34,[34,0,151,14,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+            peer.Send(39,Report(16111,301)); Drain();
+            That(State() == finished,"交付重放及退出后的旧物件报告不重复材料或奖励");
+
+            void Drain() => drain(peer,null);
+        }
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(created.Slot,prepared:true); peer.Barrier();
+            That(peer.CompletedQuestHistory[4+3735] == 1 && Quantity(10164801) == 50 && Quantity(3341) == 0,
+                "重连恢复3735完成位、消费结果和一次正式奖励");
+        }
+        int Quantity(int item) => checked((int)(long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) " +
+            "FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1",created.Id,item)[0][0]);
+        string State() => CharacterState(fixture,created.Id) + fixture.Snapshot(
+            "SELECT scene_event FROM character_quest_lifecycle_receipts WHERE character_id=$p0 ORDER BY revision",created.Id);
+        static byte[] Report(int template,ushort value)
+        {
+            var body = PassiveDeath(checked((uint)template),74);
+            // 只制造不同的合法正文；该附加值仍保持未知，不用作客户端演员身份。
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(39),value);
+            FormalDungeonTcpTests.SealDeath(body);
+            return body;
+        }
     }
 
     // #181/#218/#238/#240：准确任务复用同一热服务；单份、多份及跨房回访通过合成33驱动，不把消费槽解释成实例号。

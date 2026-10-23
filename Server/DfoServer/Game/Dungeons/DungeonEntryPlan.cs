@@ -188,10 +188,21 @@ internal sealed record DungeonEntryPlan(
         uint routeQuest = !isReplay && quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
         bool ordinaryHunt = false;
         StoryQuest? layoutQuest = quest;
+        // 已达成但未交付的寻物任务保留接取身份，再次选图使用真实普通路线。
+        // 同时复核实际库存，不能让裸条件值0或已过期材料绕过剧情路线。
+        var completedSeeking = new HashSet<int>();
+        if (!isReplay && !practice && !hellParty)
+            foreach (var accepted in character.ActiveMainQuests)
+            {
+                var acceptedDefinition = quest?.Id == accepted.QuestId ? quest :
+                    quests is not null && quests.TryGet(accepted.QuestId,out var found) ? found : null;
+                if (acceptedDefinition is not null && CanLeaveSeekingRoute(definition,character,acceptedDefinition,accepted))
+                    completedSeeking.Add(accepted.QuestId);
+            }
         var candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)));
-        if (practice)
+        bool completedSeekingRequest = questId != 0 && completedSeeking.Contains((int)questId);
+        if (practice || completedSeekingRequest)
         {
-            // 练习不借用当前主线的剧情迷宫，也不冻结任何正式任务接取。
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
             if (candidates.Length > 1)
             {
@@ -199,10 +210,17 @@ internal sealed record DungeonEntryPlan(
                 if (index < 0 || index >= candidates.Length) throw new InvalidDataException("练习迷宫随机索引越界");
                 candidates = [candidates[index]];
             }
+            if (completedSeekingRequest)
+            {
+                ordinaryHunt = true;
+                routeQuest = 0;
+                layoutQuest = null;
+            }
         }
         else if (questId == 0 && quests is not null)
         {
-            candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active => maze.ConnectsQuest(active.QuestId,difficulty))));
+            candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active =>
+                !completedSeeking.Contains(active.QuestId) && maze.ConnectsQuest(active.QuestId,difficulty))));
             var sequences = new List<(StoryQuest Parent, StoryQuest Child)>();
             if (candidates.Length == 0)
             {
@@ -501,6 +519,23 @@ internal sealed record DungeonEntryPlan(
         var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
         return active.AcceptanceId != Guid.Empty &&
             character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) == 1;
+    }
+
+    static bool CanLeaveSeekingRoute(DungeonDefinition definition, Character character, StoryQuest quest, ActiveMainQuest active)
+    {
+        if (definition.IsTutorial || definition.IsClassExperience || definition.Id == 5000 ||
+            character.Level < definition.MinimumLevel || quest.Condition != "[seeking]" || quest.MainQuest is not null ||
+            !QuestLifecyclePlan.SeekingSubtype(quest) || quest.Definition is not { Diagnostics.Length: 0 } declared ||
+            !declared.Dungeons.Any(row => row.DungeonId == definition.Id) ||
+            !definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count == 0) ||
+            !definition.Mazes.Any(maze => maze.HasActiveQuestConnection(quest.Id)) ||
+            active.ConditionState != 0 || active.Slot > 29 || active.AcceptanceId == Guid.Empty ||
+            QuestEligibility.Completed(character).Contains(quest.Id) ||
+            character.ActiveMainQuests.Count(row => row.QuestId == active.QuestId) != 1 ||
+            character.ActiveMainQuests.Count(row => row.Slot == active.Slot) != 1 ||
+            character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) != 1)
+            return false;
+        return QuestLifecyclePlan.HasMaterials(character,quest,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }
 
     static StoryQuest? CurrentSequentialChild(Character character, StoryQuest parent, QuestCatalog quests, uint dungeonId, byte difficulty)

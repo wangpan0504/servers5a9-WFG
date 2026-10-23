@@ -5,6 +5,8 @@ using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
 using PvfLib;
 
@@ -12,6 +14,46 @@ namespace DfoServer;
 
 internal static class DungeonEntryPlanTests
 {
+    static void CompletedSeekingRoutes(DungeonCatalog catalog, QuestCatalog quests, Character basis)
+    {
+        var quest = quests.Get(3735);
+        var active = new ActiveMainQuest(0,3735,0) { AcceptanceId = Guid.NewGuid() };
+        var material = new InventoryItem(1,new(InventoryListType.Main,177),new(10164801,ItemKind.Quest,15));
+        var ready = basis with { Level = 95, ActiveMainQuests = [active], Inventory = new([material]) };
+        foreach (uint request in new uint[] { 0,3735 })
+        {
+            for (byte difficulty = 0; difficulty <= 4; difficulty++)
+                That(DungeonEntryPlan.TryCreate(catalog,ready,102,request,difficulty,out var plan,out var reason,
+                        quest: request == 0 ? null : quest,quests: quests,draw: _ => 0) &&
+                    plan is { RouteQuestId: 0, IsOrdinary: true, UsesFatigue: true } && plan.QuestId == request &&
+                    plan.Maze.QuestConnectionTokens.Count == 0 && plan.StartMap.Id == 42151 &&
+                    plan.QuestAcceptances.Single() == active &&
+                    plan.QuestAcceptanceId == (request == 0 ? Guid.Empty : active.AcceptanceId),
+                    "3735达成未交的显式与普通入口使用真实普通路线，保留难度、费用和接取身份：" + reason);
+            foreach (var incomplete in new[]
+            {
+                ready with { ActiveMainQuests = [active with { ConditionState = 1 }] },
+                ready with { Inventory = new([material with { Core = material.Core with { Value = 14 } }]) },
+                ready with { Inventory = new([material with { Core = material.Core with { ExpireTime = 1 } }]) },
+                ready with { ActiveMainQuests = [active with { AcceptanceId = Guid.Empty }] }
+            })
+            {
+                That(DungeonEntryPlan.TryCreate(catalog,incomplete,102,request,0,out var story,out _,
+                        quest: request == 0 ? null : quest,quests: quests) && story is { RouteQuestId: 3735, IsOrdinary: false } &&
+                    story.StartMap.Id == 76510,"未达成、材料不足或过期、无接取身份均不能凭裸state0改普通路线");
+                That(!DungeonEntryPlan.TryCreate(catalog,incomplete,102,request,3,out _,out var rejected,
+                        quest: request == 0 ? null : quest,quests: quests) && rejected == "difficulty-unsupported",
+                    "未完成收集的剧情路线继续使用原难度限制");
+            }
+        }
+        That(ready.ActiveMainQuests.Single() == active && ready.CompletedQuests.Length == 0 &&
+            ready.Inventory.Items.Single().Core.Value == 15,"路线规划不交任务、不消耗或奖励材料");
+        var definition = catalog.Get(102);
+        That(DungeonEntryPlan.TryCreate(definition with { Mazes = definition.Mazes.Where(row => row.QuestConnectionTokens.Count != 0).ToArray() },
+                ready,102,3735,0,out var taskOnly,out _,quest:quest,quests:quests) && taskOnly!.RouteQuestId == 3735,
+            "没有真实普通maze时仍保留任务路线，不伪造房间");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
@@ -113,6 +155,7 @@ internal static class DungeonEntryPlanTests
         AwakeningDungeonRoutes(catalog,quests,rooms,character);
         TournamentEntry(catalog,character,rooms);
         HarlemSeekingRoutes(catalog,quests,character);
+        CompletedSeekingRoutes(catalog,quests,character);
         GentSouthGateQuestLevel(catalog,quests,character);
         NonoraGroznyEntry(catalog,quests,rooms,character,pvf);
         RecoverAt5tWalkerEntry(catalog,quests,rooms,character);
