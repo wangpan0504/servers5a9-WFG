@@ -72,15 +72,15 @@ internal static class QuestRelationProgress
         return parent.IntData.Count(done.Contains) >= parent.Definition!.MinimumClearCount!.Value ? 0u : 1u;
     }
 
-    // 原生末子任务的34会转向父任务；只为已确认的普通寻物末子合并扣料及固定奖励。
+    // 原生末子任务的34会转向父任务；普通寻物末子合并扣料，奖励仅支持固定物品或已确认的0/0占位。
     public static StoryQuest? TerminalSeeking(StoryQuest parent, QuestCatalog quests)
     {
         if (!SequentialParent(parent,quests) || parent.RewardType != "[item]") return null;
         var child = quests.Get(parent.IntData[^1]);
         return child is { Condition: "[seeking]", SubType: -1, RewardType: "[item]", DeclaredGoldMultiple: null or 0 } &&
             child.Attributes.Contains("not give exp quest") && QuestLifecyclePlan.ValidSeeking(child) &&
-            child.Rewards.Count > 0 && child.Rewards.Count % 2 == 0 &&
-            child.Rewards.All(token => token.Type == 0 && token.Text is null && token.Value > 0) &&
+            (ZeroRewardChild(child) || child.Rewards.Count > 0 && child.Rewards.Count % 2 == 0 &&
+                child.Rewards.All(token => token.Type == 0 && token.Text is null && token.Value > 0)) &&
             QuestCoverage.HasOrdinaryDeclarations(child) &&
             child.Definition is { AccountQuest: false, JobChange: 0, SelectRewards.Length: 0, AcceptanceRewards.Length: 0 } &&
             !child.Definition.Has("casecade clear") && !QuestCycle.Daily(child) && !QuestCycle.Repeat(child)

@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
@@ -45,6 +47,57 @@ internal static class QuestBilmarkEntryTcpTests
             "D240当前子任务唯一六房91981至91986，不借普通37052路线或相邻任务迷宫");
         var entrance = Entrance(resources.Towns);
         foreach (ushort requested in new ushort[] { 3656,3692,0 }) VerifyCase(requested);
+        VerifyDelivery();
+
+        void VerifyDelivery()
+        {
+            const string account = "bilmarkdelivery";
+            Character created;
+            using (var owner = new AccountOwners().Acquire(account,() => { }))
+            {
+                var candidate = CharacterCreation.Prepare("BilmarkBox",resources.Characters.Get(0),resources.Towns.Room,resources.Towns.InitialReturn,resources.Learning.Get);
+                var template = resources.ItemResources.Items.Get(10164767);
+                var range = ItemSlotBoundService.Range(template.Kind,candidate.Inventory.Expansion);
+                short slot = Enumerable.Range(range.Start,range.End-range.Start+1).Select(value => checked((short)value))
+                    .First(value => candidate.Inventory.Find(new(InventoryListType.Main,value)) is null);
+                created = new CharacterRepository(fixture.Database).Create(owner,candidate with
+                {
+                    Level=79,CompletedQuests=[3655,3692],ActiveMainQuests=[new(0,3656,1)],
+                    InitialLearning=SkillPointLedger.Synchronize(0,0,79,candidate.InitialLearning with
+                        {Experience=growth.GetLevelStartExperience(79)},resources.Learning),
+                    Inventory=candidate.Inventory with {Items=candidate.Inventory.Items.Add(new(0,new(InventoryListType.Main,slot),
+                        InventoryRewardGrantService.Create(template,1)))}
+                });
+            }
+            using (var peer = Open(fixture,account))
+            {
+                peer.Select(0,prepared:true);
+                peer.Send(31,Request(31,3693,[])); peer.Expect(1,31); drain(peer,null);
+                That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id",created.Id) is [[3656L,0L],[3693L,0L]],
+                    "真实31接取有小盒子的零奖励末子，父子归零但不提前归档");
+                peer.Send(34,Request(34,3656,[255,255,1,0,255,255]));
+                var ack = peer.Expect(1,34).Body; drain(peer,null);
+                That(ack.Length > 10 && ack[0] == 1 && U16(ack,1) == 3656 && ack[3] == 44 &&
+                    fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0",created.Id) is [[3656L]] &&
+                    fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]] &&
+                    fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10164767",created.Id) is [[0L]],
+                    "单个正式父34成功，原事务扣一个小盒子、清父子槽并只建立父领奖回执");
+                string state = fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",created.Id)+fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id);
+                foreach (ushort id in new ushort[] {3656,3693})
+                {
+                    peer.Send(34,Request(34,id,[255,255,1,0,255,255])); peer.Expect(1,34,[0,19,0]); drain(peer,null);
+                }
+                That(state == fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",created.Id)+fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id),
+                    "真实父子重复34不再次发装备金币或改资产");
+            }
+            using (var peer = Open(fixture,account))
+            {
+                peer.Select(0,prepared:true); peer.Barrier();
+                That(peer.CompletedQuestHistory[4+3656] == 1 && peer.CompletedQuestHistory[4+3693] == 1 &&
+                    fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0",created.Id) is [[1L]],
+                    "重连恢复父子完成位，零奖励末子不另建领奖事务");
+            }
+        }
 
         void VerifyCase(ushort requested)
         {

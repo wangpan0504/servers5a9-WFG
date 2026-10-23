@@ -380,7 +380,7 @@ internal sealed class QuestCompletionPlan
             }
             var definition = QuestFixedRewardDefinition.Parse(profession is not null || characterReward || creatureReward || expertJob is not null ? quest with { Rewards = [] } : quest, allowGold: true);
             var requested = definition.ForJob(expected.Job,expected.GrowType).ToBuilder();
-            if (terminalSeeking is not null)
+            if (terminalSeeking is not null && !QuestRelationProgress.ZeroRewardChild(terminalSeeking))
                 requested.AddRange(QuestFixedRewardDefinition.Parse(terminalSeeking).ForJob(expected.Job,expected.GrowType));
             var selected = QuestFixedRewardDefinition.Parse(quest with { Rewards = quest.Definition!.SelectRewards }).ForJob(expected.Job,expected.GrowType);
             if (selected.Length == 0 ? selector != ushort.MaxValue : selector >= selected.Length)
