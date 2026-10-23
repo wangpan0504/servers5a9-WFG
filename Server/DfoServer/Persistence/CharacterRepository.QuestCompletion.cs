@@ -22,7 +22,9 @@ internal sealed partial class CharacterRepository
         uint? goldMailId = null;
         var active = expected.ActiveMainQuests.SingleOrDefault(row => row.AcceptanceId == plan.AcceptanceId);
         var closed = plan.ClosedChildren.Select(row => row.AcceptanceId).ToHashSet();
+        if (plan.CompletedChild is { } terminalChild) closed.Add(terminalChild.AcceptanceId);
         var newCompleted = new[] { (int)plan.QuestId }.Concat(plan.CascadeMarkerQuestId is { } marker ? new[] { marker } : [])
+            .Concat(plan.CompletedChild is { } completedChild ? new[] { (int)completedChild.QuestId } : [])
             .Except(QuestEligibility.Completed(expected)).Order().ToArray();
         if (expected.Id == 0 || expected.Job > 15 || plan.AcceptanceId == Guid.Empty || active is null ||
             active.QuestId != plan.QuestId || active.Slot != plan.QuestSlot || expected.CompletedQuests.Contains(plan.QuestId) ||
@@ -30,7 +32,9 @@ internal sealed partial class CharacterRepository
             reward.ResourcePath != QuestRewardParameterCatalog.ResourcePath ||
             (plan.GrowthPlan?.RequestedExperience ?? 0) != plan.TotalRequestedExperience ||
             plan.TargetLearning.Experience != (plan.GrowthPlan?.Learning.Experience ?? expected.Learning.Experience) ||
-            closed.Count != plan.ClosedChildren.Length || closed.Contains(plan.AcceptanceId) ||
+            closed.Count != plan.ClosedChildren.Length + (plan.CompletedChild is null ? 0 : 1) || closed.Contains(plan.AcceptanceId) ||
+            plan.CompletedChild is { } readyChild && (plan.ConditionType != 44 || readyChild.AcceptanceId == Guid.Empty || readyChild.ConditionState != 0 ||
+                !expected.ActiveMainQuests.Contains(readyChild) || QuestEligibility.Completed(expected).Contains(readyChild.QuestId)) ||
             plan.ClosedChildren.Length != 0 && plan.ConditionType != 70 ||
             plan.ClosedChildren.Any(row => row.AcceptanceId == Guid.Empty || !expected.ActiveMainQuests.Contains(row)) ||
             !plan.ActiveAfter.Select(row => (row.Slot, row.QuestId, row.AcceptanceId)).SequenceEqual(
@@ -43,7 +47,7 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("领奖必须使用原接取、完整资产和成长规划");
             if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
             plan.Snapshot is null || plan.MailedGoldAmount != 0 && plan.MailedGoldAmount != plan.GoldAmount ||
-            plan.ConditionType is not (0 or 42) && active.ConditionState != 0 ||
+            plan.ConditionType is not (0 or 42) && active.ConditionState != 0 && !(plan.CompletedChild is not null && active.ConditionState == 1) ||
             plan.TotalRequestedExperience == 0 && plan.GrowthPlan is not null || plan.TotalRequestedExperience != 0 && plan.GrowthPlan is null ||
             plan.GrowthPlan is { } growth && (growth.CharacterId != expected.Id || growth.Revision != expected.Revision) ||
             (plan.ConditionType is 1 or 3 or 45) != (clear is not null) ||
@@ -176,14 +180,14 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$slot", plan.QuestSlot);
         command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND slot=$slot AND quest_id=$quest AND acceptance_id=$acceptance";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("原接取活动任务不能原子清槽");
-        foreach (var child in plan.ClosedChildren)
+        foreach (var child in plan.ClosedChildren.Concat(plan.CompletedChild is { } completed ? new[] { completed } : []))
         {
             command.Parameters.AddWithValue("$childSlot",child.Slot);
             command.Parameters.AddWithValue("$childQuest",child.QuestId);
             command.Parameters.AddWithValue("$childAcceptance",child.AcceptanceId.ToString("N"));
             command.Parameters.AddWithValue("$childScalar",(long)child.ConditionState);
             command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND slot=$childSlot AND quest_id=$childQuest AND acceptance_id=$childAcceptance AND condition_state=$childScalar";
-            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("阈值父任务不能原子关闭子任务原接取");
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("父任务不能原子关闭子任务原接取");
             foreach (string key in new[] { "$childSlot","$childQuest","$childAcceptance","$childScalar" }) command.Parameters.RemoveAt(key);
         }
         WriteQuestConditions(db, tx, current.Id, expected.ActiveMainQuests, plan.ActiveAfter);
@@ -191,6 +195,13 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$answer",(object?)plan.Answer ?? DBNull.Value);
         command.CommandText = "INSERT INTO character_completed_quests(character_id,quest_id,daily_period,answer) VALUES($id,$quest,$period,$answer)";
         command.ExecuteNonQuery();
+        if (plan.CompletedChild is { } finishedChild)
+        {
+            command.Parameters.AddWithValue("$finishedChild",finishedChild.QuestId);
+            command.CommandText = "INSERT INTO character_completed_quests(character_id,quest_id,daily_period,answer) VALUES($id,$finishedChild,0,NULL)";
+            command.ExecuteNonQuery();
+            command.Parameters.RemoveAt("$finishedChild");
+        }
         if (plan.CascadeMarkerQuestId is { } markerQuest && plan.NewCompletedQuestIds.Contains(markerQuest))
         {
             command.Parameters.AddWithValue("$marker",markerQuest);

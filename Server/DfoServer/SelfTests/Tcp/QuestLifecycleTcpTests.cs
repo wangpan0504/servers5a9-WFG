@@ -925,16 +925,17 @@ internal static class QuestLifecycleTcpTests
             string once = State(created.Id);
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(State(created.Id) == once,"3472重复34拒绝且不重复奖励");
-            peer.Send(31,[31,0,145,13]); peer.Expect(1,31,Convert.FromHexString("01910D0000000000")); peer.Expect(0,21);
+            peer.Send(31,[31,0,145,13]); peer.Expect(1,31,Convert.FromHexString("01910D0000000000"));
+            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000")); peer.Expect(0,21);
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
             held = State(created.Id);
             peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
-            peer.Expect(0,574,Convert.FromHexString("02000000820D01000000910D00000000"));
+            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
             That(State(created.Id) == held,"3473条件0且碎片4时重接3472只回放父子活动槽和356，不扣3也不交付");
             peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,Reward(3473,0,3,4));
             Balance(peer,5);
-            peer.Expect(0,574,Convert.FromHexString("01000000820D00000000")); peer.Expect(0,21);
+            peer.Expect(0,21);
             History(peer.Expect(0,356).Body,3472,3473); peer.Barrier();
             That(Materials(created.Id) == 5 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id)
                 is [[3458L,0L]],"真实3473完整37B ACK34扣3发4，实际库存4→5，父1→0并保留未领奖父接取");
@@ -973,7 +974,7 @@ internal static class QuestLifecycleTcpTests
             peer.Send(34,[34,0,130,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(State(created.Id) == once,"父34重复拒绝，经验、金币、碎片及三项完成回执不重复发放");
         }
-        var (poor,_) = Prepare("AlbertPoor",2,[new(0,3458,1)],[3457,3472]);
+        var (poor,nativeSlot) = Prepare("AlbertPoor",2,[new(0,3458,1)],[3457,3472]);
         using (var peer = Open(fixture))
         {
             peer.Select(poor.Slot,prepared:true);
@@ -981,6 +982,65 @@ internal static class QuestLifecycleTcpTests
             string before = State(poor.Id);
             peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(State(poor.Id) == before && Materials(poor.Id) == 2,"真实3473库存2/3拒绝交付且连接可继续，父子与资产不变");
+            peer.Send(34,[34,0,130,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
+            That(State(poor.Id) == before,"原生父34同样不能用旧末子条件绕过2/3材料");
+        }
+
+        // 断线后复用同一隔离角色准备报告中的旧存档，避免额外占用共享fixture的角色槽。
+        var native = poor;
+        fixture.Sql("UPDATE character_inventory_items SET item_core=json_set(item_core,'$.Value',4) WHERE " +
+            "item_uid IN (SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0) AND json_extract(item_core,'$.ItemId')=10164800",native.Id);
+        fixture.Sql("UPDATE character_active_main_quests SET condition_state=0 WHERE character_id=$p0 AND quest_id=3473",native.Id);
+        string nativeAcceptance = (string)fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3473",native.Id)[0][0];
+        using (var peer = Open(fixture))
+        {
+            peer.Select(native.Slot,prepared:true);
+            string before = State(native.Id);
+            // 重放报告中的31顺序，恢复父显示，不把重接请求当作扣料或领奖。
+            foreach (byte child in new byte[] {144,145})
+            {
+                peer.Send(31,[31,0,child,13]); peer.Expect(1,31,[0,18,0]);
+                peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
+                History(peer.Expect(0,356).Body,3472); peer.Barrier();
+                That(State(native.Id) == before,"报告中的重接只恢复实际足额父0/末子0，不写库、不扣料或发奖");
+            }
+            peer.Send(34,[34,0,130,13,255,255,1,0,255,255]);
+            var ack = Finished(peer).Body;
+            var receipt = fixture.Query("SELECT experience_amount,gold_amount,consumed,plan_snapshot FROM character_quest_completion_receipts WHERE character_id=$p0",native.Id);
+            That(receipt is [[long exp,long gold,string consumed,string snapshot]] && exp > 0 && gold > 0 &&
+                ack.Length == 48 && U16(ack,1) == 3458 && ack[3] == 44 && U32(ack,4) == exp && ack[8] == 0 && ack[9] == 2 &&
+                U16(ack,10) == nativeSlot && U32(ack,12) == 10164800 && U32(ack,16) == 4 && ack.AsSpan(20,9).SequenceEqual(new byte[9]) &&
+                U16(ack,29) == 0 && U32(ack,31) == 0 && U32(ack,35) == gold && ack.AsSpan(39).SequenceEqual(new byte[9]) &&
+                consumed.Contains("\"Count\":3",StringComparison.Ordinal) && snapshot.Contains("TerminalSeeking",StringComparison.Ordinal) &&
+                snapshot.Contains(Guid.Parse(nativeAcceptance).ToString(),StringComparison.OrdinalIgnoreCase),
+                "原生父34分类44保持已证无消耗段合同，原子回执绑定末子原接取并完整发4碎片及父金币经验");
+            var inventory = peer.Expect(0,14).Body;
+            That(inventory.Length == 249 && U16(inventory,1) == 2 && new[] {3,126}.Any(at =>
+                U16(inventory,at) == nativeSlot && U32(inventory,at+2) == 10164800 && U32(inventory,at+6) == 5),
+                "父34后完整14将实际扣3发4的绝对碎片余额校准为5，并同步父金币");
+            peer.Expect(0,37);
+            bool activeCleared = false, historyRestored = false;
+            DrainNotifications(peer,packet =>
+            {
+                if (packet.Kind == 0 && packet.Opcode == 574) { Bytes(packet.Body,new byte[4],"父末子同事务清两槽"); activeCleared = true; }
+                if (packet.Kind == 0 && packet.Opcode == 356) { History(packet.Body,3458,3472,3473); historyRestored = true; }
+            });
+            That(activeCleared && historyRestored && Materials(native.Id) == 5 &&
+                fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",native.Id) is [[0L]],
+                "正式父34后才归档父与末子，两槽删除及余额一致");
+            before = State(native.Id);
+            foreach (byte quest in new byte[] {130,145})
+            {
+                peer.Send(34,[34,0,quest,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
+                That(State(native.Id) == before,"父子迟到34不重复消费或发奖");
+            }
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(native.Slot,prepared:true);
+            History(peer.CompletedQuestHistory,3458,3472,3473);
+            That(Materials(native.Id) == 5 && fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0",native.Id) is [[1L]],
+                "重连恢复合并父回执、两完成位及余额，末子不另立第二笔奖励事务");
         }
 
         (Character Character,ushort Slot) Prepare(string name,int count,ActiveMainQuest[] active,int[] done)

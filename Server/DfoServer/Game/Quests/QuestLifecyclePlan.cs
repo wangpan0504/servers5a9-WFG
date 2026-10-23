@@ -154,7 +154,7 @@ internal sealed class QuestLifecyclePlan
         var activeQuest = new ActiveMainQuest(free, checked((ushort)quest.Id), initial) { AcceptanceId = Guid.NewGuid() };
         return new(expected, QuestLifecycleAction.Accept, activeQuest.QuestId, activeQuest.AcceptanceId,
             QuestInventoryProgress.Refresh(expected.ActiveMainQuests.Append(activeQuest).OrderBy(active => active.Slot).ToArray(),
-                grant.Plan.After, catalog, now.ToUnixTimeSeconds()), new(expected.Inventory, grant.Plan.After, "quest_accept"))
+                grant.Plan.After, catalog, now.ToUnixTimeSeconds(),QuestEligibility.Completed(expected)), new(expected.Inventory, grant.Plan.After, "quest_accept"))
         {
             // 两端接取重复任务时清当前完成投影；领奖历史仍按独立接取身份保留。
             CompletedAfter = expected.CompletedQuests.Where(id => !QuestCycle.Repeat(quest) || id != quest.Id).ToImmutableArray(),
@@ -182,7 +182,7 @@ internal sealed class QuestLifecyclePlan
         var activeAfter = expected.ActiveMainQuests.Where(active => !remove.Contains(active.QuestId)).ToImmutableArray();
         var inventory = ReclaimQuestItems(expected,definitions,activeAfter,catalog,now);
         return new(expected, QuestLifecycleAction.Giveup, accepted.QuestId, accepted.AcceptanceId,
-            QuestInventoryProgress.Refresh(activeAfter, inventory, catalog, now.ToUnixTimeSeconds()), new(expected.Inventory, inventory, "quest_giveup"));
+            QuestInventoryProgress.Refresh(activeAfter, inventory, catalog, now.ToUnixTimeSeconds(),QuestEligibility.Completed(expected)), new(expected.Inventory, inventory, "quest_giveup"));
     }
 
     // 父交付关闭未选活动分支；真实完成列表和子奖励保持原义，后续32只确认已提交的关闭结果。
@@ -256,7 +256,7 @@ internal sealed class QuestLifecyclePlan
         return expected.Inventory with { Items = planned.ToImmutable() };
     }
 
-    public static QuestLifecyclePlan SetCondition(Character expected, StoryQuest quest, uint scalar)
+    public static QuestLifecyclePlan SetCondition(Character expected, StoryQuest quest, uint scalar, QuestCatalog? catalog = null)
     {
         var active = expected.ActiveMainQuests.SingleOrDefault(value => value.QuestId == quest.Id)
             ?? throw new InvalidDataException("任务未接取");
@@ -274,8 +274,9 @@ internal sealed class QuestLifecyclePlan
         bool observedExpert = QuestExpertJobProgress.Tutorial(quest) && scalar == 0 && active.ConditionState == 0;
         if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !storage && !question && !state && !observedClear && !observedRental && !observedExpert && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
             throw new InvalidDataException("条件类型或接取身份不符");
+        var after = expected.ActiveMainQuests.Select(value => value.AcceptanceId == active.AcceptanceId ? value with { ConditionState = scalar } : value).ToImmutableArray();
         return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
-            expected.ActiveMainQuests.Select(value => value.AcceptanceId == active.AcceptanceId ? value with { ConditionState = scalar } : value).ToImmutableArray(),
+            catalog is null ? after : QuestRelationProgress.Refresh(after,QuestEligibility.Completed(expected),catalog),
             new(expected.Inventory, expected.Inventory, "quest_condition"));
     }
 

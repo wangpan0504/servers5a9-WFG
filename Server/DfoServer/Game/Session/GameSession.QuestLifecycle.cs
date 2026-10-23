@@ -130,7 +130,7 @@ internal sealed partial class GameSession
                 parentReport.Value <= quest.IntData.Count &&
                 (capture.Phase == SessionPhase.Town || capture.Entry is { } parentEntry && parentEntry.RouteQuestId == quest.Id &&
                     expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,parentEntry))))
-                return QuestLifecyclePlan.SetCondition(expected,quest,QuestRelationProgress.Initial(quest,quests,expected.CompletedQuests));
+                return QuestLifecyclePlan.SetCondition(expected,quest,QuestRelationProgress.Initial(quest,quests,expected.CompletedQuests,expected.ActiveMainQuests));
             if (condition is { Channel: null, Reserved: 0 } answer && capture.Phase == SessionPhase.Town &&
                 QuestQuestionProgress.OrdinaryChoice(quest,answer.Value,quests) &&
                 HasDialogueNpc(quest.IntData[0]))
@@ -191,7 +191,7 @@ internal sealed partial class GameSession
                 scalar = 0;
             else
                 throw new NotSupportedException("任务目标或NPC场景尚未满足");
-            return QuestLifecyclePlan.SetCondition(expected, quest, scalar);
+            return QuestLifecyclePlan.SetCondition(expected, quest, scalar,quests);
         }
 
         bool HasDialogueNpc(int npcId)

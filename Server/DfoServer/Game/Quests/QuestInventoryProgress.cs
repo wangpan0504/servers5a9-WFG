@@ -9,7 +9,7 @@ namespace DfoServer.Game.Quests;
 internal static class QuestInventoryProgress
 {
     public static ImmutableArray<ActiveMainQuest> Refresh(IReadOnlyList<ActiveMainQuest> active, InventorySnapshot inventory,
-        QuestCatalog quests, long utcSeconds)
+        QuestCatalog quests, long utcSeconds, IReadOnlyCollection<int>? completed = null)
     {
         var result = ImmutableArray.CreateBuilder<ActiveMainQuest>(active.Count);
         foreach (var row in active)
@@ -24,6 +24,7 @@ internal static class QuestInventoryProgress
             result.Add(row with { ConditionState = quest.Condition == "[seek n meet npc]"
                 ? (row.ConditionState & 512u) | material : material });
         }
-        return result.ToImmutable();
+        var refreshed = result.ToImmutable();
+        return completed is null ? refreshed : QuestRelationProgress.Refresh(refreshed,completed,quests);
     }
 }

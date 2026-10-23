@@ -360,7 +360,7 @@ internal sealed partial class CharacterRepository
         var active = current.ActiveMainQuests;
         if (quests is not null && !plan.Reason.StartsWith("quest_", StringComparison.Ordinal))
         {
-            var refreshed = DfoServer.Game.Quests.QuestInventoryProgress.Refresh(active, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            var refreshed = DfoServer.Game.Quests.QuestInventoryProgress.Refresh(active, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),DfoServer.Game.Quests.QuestEligibility.Completed(current));
             WriteQuestConditions(db, transaction, current.Id, active, refreshed);
             active = refreshed.ToArray();
         }

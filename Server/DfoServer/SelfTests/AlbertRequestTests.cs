@@ -10,6 +10,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Persistence;
+using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 using OrdinaryFixture = DfoServer.QuestOrdinaryCompletionTests.Fixture;
 
@@ -97,10 +98,60 @@ internal static class AlbertRequestTests
             That(f.Finish(ushort.MaxValue,3473).Outcome == QuestFinishOutcome.Rejected && QuestCompletionRepositoryTests.Same(before,f.Read()) && f.Receipts == 0,
                 "碎片2/3正式交付拒绝，材料、父子和领奖回执零变化");
         }
-        Console.WriteLine($"PASS {Count-checks} 阿尔伯特GM56→57→58、实际父子交付及保存回放资源断言；不包含完整猎杀或客户端验收");
+        foreach (int count in new[] { 2,3,4 })
+        {
+            // 保留旧存档父1/末子0，原生客户端只交父34，不能靠测试先交3473。
+            using var f = Make(count,[new(0,3458,1),new(1,3473,0)],[3457,3472]);
+            var before = f.Read();
+            var refreshed = QuestInventoryProgress.Refresh(before.ActiveMainQuests,before.Inventory,f.Catalog,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(),QuestEligibility.Completed(before));
+            That(refreshed.Single(row => row.QuestId == 3458).ConditionState == (count < 3 ? 1u : 0u),
+                "父进度按实际末子材料重算，足额归零但不提前标记3473完成");
+            if (count == 2)
+            {
+                That(f.Finish(ushort.MaxValue,3458).Outcome == QuestFinishOutcome.Rejected &&
+                    QuestCompletionRepositoryTests.Same(before,f.Read()) && f.Receipts == 0,
+                    "旧末子scalar0不能替代实际2/3库存，父34整体拒绝");
+                continue;
+            }
+            if (count == 4)
+            {
+                f.Sql("CREATE TRIGGER albert_terminal_abort AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT RAISE(ABORT,'terminal rollback'); END");
+                Reject<SqliteException>(() => f.Finish(ushort.MaxValue,3458),"末子扣料和父奖励末段SQL故障");
+                That(QuestCompletionRepositoryTests.Same(before,f.Read()) && f.Receipts == 0,
+                    "末子扣3发4、父成长金币、两槽删除和两完成位同事务回滚");
+                f.Sql("DROP TRIGGER albert_terminal_abort");
+            }
+            var result = f.Finish(ushort.MaxValue,3458);
+            var after = f.Read();
+            That(result.Receipt?.Commit is { ConditionType:44,Consumed:[{ItemId:10164800,Count:3}],Rewards:[{GrantedCount:4}] } &&
+                after.Revision == before.Revision+1 && after.ActiveMainQuests.Length == 0 && Materials(after) == count+1 &&
+                after.CompletedQuests.Contains(3458) && after.CompletedQuests.Contains(3473) && f.Receipts == 1,
+                "单个原生父34原子交付末子3材料及4碎片奖励，并仅领取一次父成长金币");
+            That(f.Finish(ushort.MaxValue,3458).Outcome == QuestFinishOutcome.AlreadyCompleted &&
+                f.Finish(ushort.MaxValue,3473).Outcome == QuestFinishOutcome.AlreadyCompleted &&
+                QuestCompletionRepositoryTests.Same(after,f.Read()),"父子迟到重复34都不再扣料或发奖");
+            f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+            That(QuestCompletionRepositoryTests.Same(after,f.Session.Selected!),"父合并交付重选恢复两完成位与真实余额");
+        }
+        using (var f = Make(4,[new(0,3458,1),new(1,3473,0)],[3457,3472],loseResult:true))
+        {
+            Reject<IOException>(() => f.Finish(ushort.MaxValue,3458),"合并交付提交返回丢失");
+            var saved = f.Read();
+            That(f.Finish(ushort.MaxValue,3458).Receipt?.Commit is { Duplicate:true,ProjectionCurrent:true } &&
+                Materials(saved) == 5 && f.Receipts == 1 && QuestCompletionRepositoryTests.Same(saved,f.Read()),
+                "同父接取精确恢复合并回执，不重新扣末子材料或重复发奖");
+        }
+        using (var f = Make(4,[new(0,3458,1),new(1,3473,0)],[3457]))
+        {
+            var before = f.Read();
+            That(f.Finish(ushort.MaxValue,3458).Outcome == QuestFinishOutcome.Rejected &&
+                QuestCompletionRepositoryTests.Same(before,f.Read()),"末子活动槽不能绕过猎杀子3472正式完成");
+        }
+        Console.WriteLine($"PASS {Count-checks} 阿尔伯特父子交付、原生末子合并及保存回放资源断言；不包含客户端验收");
 
-        OrdinaryFixture Make(int count,ActiveMainQuest[] active,int[] done) => new(towns,characters,skills,growth,parameters,items,seek,
-            materialCount:0,definitions:[parent,hunt,seek,quests.Get(3457)],active:active,configure:candidate =>
+        OrdinaryFixture Make(int count,ActiveMainQuest[] active,int[] done,bool loseResult=false) => new(towns,characters,skills,growth,parameters,items,seek,
+            materialCount:0,definitions:[parent,hunt,seek,quests.Get(3457)],active:active,loseResult:loseResult,configure:candidate =>
             {
                 var template = items.Items.Get(10164800);
                 var range = ItemSlotBoundService.Range(template.Kind,candidate.Inventory.Expansion);

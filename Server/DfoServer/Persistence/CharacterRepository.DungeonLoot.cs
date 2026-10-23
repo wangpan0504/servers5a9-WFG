@@ -176,7 +176,7 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("拾取revision冲突");
         var inventory = WriteInventory(db, tx, owner, current.Id, plan, plan.After);
         var active = quests is null ? current.ActiveMainQuests : DfoServer.Game.Quests.QuestInventoryProgress.Refresh(
-            current.ActiveMainQuests, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds()).ToArray();
+            current.ActiveMainQuests, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),DfoServer.Game.Quests.QuestEligibility.Completed(current)).ToArray();
         WriteQuestConditions(db, tx, current.Id, current.ActiveMainQuests, active);
         var actual = inventory.Find(slot) ?? throw new InvalidOperationException("已提交拾取缺目标槽");
         command.Parameters.AddWithValue("$key", ground.Reservation.GroundKey);

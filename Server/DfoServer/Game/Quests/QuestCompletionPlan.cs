@@ -30,7 +30,7 @@ internal sealed class QuestCompletionPlan
         byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
         byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold,
         int? completedParentId = null, QuestStagePlan? stagePlan = null, byte? expertJob = null,
-        ProficiencyAdvance? proficiency = null)
+        ProficiencyAdvance? proficiency = null, ActiveMainQuest? completedChild = null, StoryQuest? terminalSeeking = null)
     {
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
         CompletedParentId = completedParentId;
@@ -61,16 +61,19 @@ internal sealed class QuestCompletionPlan
         // mode3 解锁提示只对已逆向确认的 [hell challenge] 成立；inferno/cosmo/6081 为假设性放行，仍走普通 mode0（Refs #256）。
         HellChallenge = quest.RewardType == "[hell challenge]" && QuestCharacterReward.TryHellChallenge(quest);
         ClosedChildren = closedChildren;
+        CompletedChild = completedChild;
         CascadeMarkerQuestId = QuestRelationProgress.CascadeMarker(quest,quests);
         SyncedQuestIds = (CascadeMarkerQuestId is { } synced && QuestRelationProgress.IsAccountSyncMarker(quests.Get(synced))
             ? new[] { synced } : []).Except(expected.AccountCompletedQuests).ToImmutableArray();
         AccountCompletedAfter = (AccountQuest ? expected.AccountCompletedQuests.Append(quest.Id) : expected.AccountCompletedQuests)
             .Concat(SyncedQuestIds).Distinct().Order().ToImmutableArray();
         NewCompletedQuestIds = new[] { (int)quest.Id }.Concat(CascadeMarkerQuestId is { } marker ? new[] { marker } : [])
+            .Concat(completedChild is { } terminal ? new[] { (int)terminal.QuestId } : [])
             .Except(QuestEligibility.Completed(expected)).Order().ToImmutableArray();
         CompletedAfter = expected.CompletedQuests.Concat(NewCompletedQuestIds).Distinct().Order().ToImmutableArray();
         var activeAfter = QuestRelationProgress.Refresh(QuestInventoryProgress.Refresh(
             expected.ActiveMainQuests.Where(row => row.AcceptanceId != active.AcceptanceId &&
+                row.AcceptanceId != completedChild?.AcceptanceId &&
                 !ClosedChildren.Any(child => child.AcceptanceId == row.AcceptanceId)).ToArray(), inventory.After, quests, now.ToUnixTimeSeconds()),
             CompletedAfter.Concat(AccountCompletedAfter).ToArray(), quests);
         ActiveAfter = QuestStateProgress.Refresh(activeAfter,expected with { Inventory = inventory.After, Level = TargetLevel,
@@ -78,6 +81,13 @@ internal sealed class QuestCompletionPlan
         Snapshot = JsonSerializer.Serialize(new { QuestId, AcceptanceId, QuestSlot, ConditionType, RewardSelector, Multiplier,
             ExperienceReward, GoldAmount, goldBase, goldMultiple, penalty, Consumed, Rewards, Currencies, FrozenAt, DailyPeriod, AccountQuest,
             AuthoritativeClear, Answer, Learning = TargetLearning, Level = TargetLevel, GrowType = TargetGrowType, EquipmentSlotFlags = TargetEquipmentSlotFlags });
+        if (completedChild is not null)
+        {
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot["TerminalSeeking"] = JsonSerializer.SerializeToNode(new {
+                Acceptance = completedChild, terminalSeeking!.Path, terminalSeeking.IntData, terminalSeeking.Rewards });
+            Snapshot = snapshot.ToJsonString();
+        }
         if (StagePlan is not null)
         {
             var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
@@ -172,6 +182,7 @@ internal sealed class QuestCompletionPlan
     public ushort TpAmount { get; }
     public bool HellChallenge { get; }
     public ImmutableArray<ActiveMainQuest> ClosedChildren { get; }
+    public ActiveMainQuest? CompletedChild { get; }
     public byte TargetGrowType => ProfessionGrowType ?? Expected.GrowType;
     public CharacterLearningState TargetLearning => RewardLearning ?? GrowthPlan?.Learning ?? Expected.Learning;
     public byte TargetLevel => GrowthPlan?.TargetLevel ?? Expected.Level;
@@ -227,6 +238,19 @@ internal sealed class QuestCompletionPlan
             }
             bool threshold = QuestRelationProgress.ThresholdParent(quest,quests);
             bool parent = QuestRelationProgress.SequentialParent(quest,quests) || threshold;
+            StoryQuest? terminalSeeking = null;
+            ActiveMainQuest? completedChild = null;
+            if (QuestRelationProgress.TerminalSeeking(quest,quests) is { } terminal &&
+                !expected.CompletedQuests.Contains(terminal.Id) &&
+                quest.IntData.Where(id => id != terminal.Id).All(expected.CompletedQuests.Contains))
+            {
+                completedChild = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == terminal.Id);
+                if (completedChild is not { ConditionState: 0 } || completedChild.AcceptanceId == Guid.Empty ||
+                    active.ConditionState > 1 ||
+                    !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != completedChild).ToArray() },terminal,quests).Eligible)
+                    throw new InvalidDataException("顺序末子任务需要原接取、已达成条件及全部前序完成记录");
+                terminalSeeking = terminal;
+            }
             byte? profession = quest.RewardType is "[grow type]" or "[awakening type]"
                 ? QuestProfessionReward.Target(expected, quest, growthCatalog.Learning ?? throw new NotSupportedException("职业变化技能资源未装配")) : null;
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
@@ -278,7 +302,7 @@ internal sealed class QuestCompletionPlan
             }
             else if (quest.Condition == "[quest clear]")
             {
-                if (!parent || active.ConditionState != 0 || !quest.IntData.All(expected.CompletedQuests.Contains))
+                if (!parent || completedChild is null && (active.ConditionState != 0 || !quest.IntData.All(expected.CompletedQuests.Contains)))
                     throw new InvalidDataException("父任务必须具有全部真实子任务完成记录");
             }
             else if (quest.Condition == "[clear multi quest]")
@@ -320,11 +344,12 @@ internal sealed class QuestCompletionPlan
             // 先关闭未选子任务并回收其任务物品，再规划父奖励，避免回收刚发的同ID奖励。
             var paid = reclaim?.After ?? expected.Inventory;
             var consumed = ImmutableArray.CreateBuilder<QuestConsumedItem>();
-            if (quest.Condition is "[seeking]" or "[seek n meet npc]")
+            var materialQuest = terminalSeeking ?? quest;
+            if (materialQuest.Condition is "[seeking]" or "[seek n meet npc]")
             {
                 var wanted = new Dictionary<int, long>();
-                for (int at = 0; at < QuestLifecyclePlan.MaterialLength(quest); at += 2)
-                    wanted[quest.IntData[at]] = checked(wanted.GetValueOrDefault(quest.IntData[at]) + (long)quest.IntData[at + 1]*multiplier);
+                for (int at = 0; at < QuestLifecyclePlan.MaterialLength(materialQuest); at += 2)
+                    wanted[materialQuest.IntData[at]] = checked(wanted.GetValueOrDefault(materialQuest.IntData[at]) + (long)materialQuest.IntData[at + 1]*multiplier);
                 foreach (var requirement in wanted)
                 {
                     if (CurrencyWallet.RewardKind(requirement.Key) is { } kind)
@@ -355,6 +380,8 @@ internal sealed class QuestCompletionPlan
             }
             var definition = QuestFixedRewardDefinition.Parse(profession is not null || characterReward || creatureReward || expertJob is not null ? quest with { Rewards = [] } : quest, allowGold: true);
             var requested = definition.ForJob(expected.Job,expected.GrowType).ToBuilder();
+            if (terminalSeeking is not null)
+                requested.AddRange(QuestFixedRewardDefinition.Parse(terminalSeeking).ForJob(expected.Job,expected.GrowType));
             var selected = QuestFixedRewardDefinition.Parse(quest with { Rewards = quest.Definition!.SelectRewards }).ForJob(expected.Job,expected.GrowType);
             if (selected.Length == 0 ? selector != ushort.MaxValue : selector >= selected.Length)
                 throw new InvalidDataException("选择奖励索引不属于当前职业候选");
@@ -471,7 +498,7 @@ internal sealed class QuestCompletionPlan
                     new(expected.Inventory, after, "quest_complete", creaturePrecondition), finalGrowth, rewards.ToImmutable(), consumed.ToImmutable(),
                     gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, finalLearning, multiplier, currencies.ToImmutable(),
                     QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage,
-                    expertJob: expertJob, proficiency: proficiency);
+                    expertJob: expertJob, proficiency: proficiency, completedChild: completedChild, terminalSeeking: terminalSeeking);
             }
             var normal = Create(growth, rewardLearning);
             if ((stageGraph is null) != (stageState is null)) throw new InvalidDataException("阶段图与持久状态必须同时提供");

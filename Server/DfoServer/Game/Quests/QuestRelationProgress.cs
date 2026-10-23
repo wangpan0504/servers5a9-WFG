@@ -72,12 +72,32 @@ internal static class QuestRelationProgress
         return parent.IntData.Count(done.Contains) >= parent.Definition!.MinimumClearCount!.Value ? 0u : 1u;
     }
 
-    public static uint Initial(StoryQuest parent, QuestCatalog quests, IReadOnlyCollection<int> completed)
+    // 原生末子任务的34会转向父任务；只为已确认的普通寻物末子合并扣料及固定奖励。
+    public static StoryQuest? TerminalSeeking(StoryQuest parent, QuestCatalog quests)
+    {
+        if (!SequentialParent(parent,quests) || parent.RewardType != "[item]") return null;
+        var child = quests.Get(parent.IntData[^1]);
+        return child is { Condition: "[seeking]", SubType: -1, RewardType: "[item]", DeclaredGoldMultiple: null or 0 } &&
+            child.Attributes.Contains("not give exp quest") && QuestLifecyclePlan.ValidSeeking(child) &&
+            child.Rewards.Count > 0 && child.Rewards.Count % 2 == 0 &&
+            child.Rewards.All(token => token.Type == 0 && token.Text is null && token.Value > 0) &&
+            QuestCoverage.HasOrdinaryDeclarations(child) &&
+            child.Definition is { AccountQuest: false, JobChange: 0, SelectRewards.Length: 0, AcceptanceRewards.Length: 0 } &&
+            !child.Definition.Has("casecade clear") && !QuestCycle.Daily(child) && !QuestCycle.Repeat(child)
+                ? child : null;
+    }
+
+    public static uint Initial(StoryQuest parent, QuestCatalog quests, IReadOnlyCollection<int> completed,
+        IReadOnlyList<ActiveMainQuest>? active = null)
     {
         if (ThresholdParent(parent,quests)) return ThresholdScalar(parent,completed);
         if (!SequentialParent(parent,quests)) throw new NotSupportedException("父任务不是已确认的完整顺序关系");
         var done = completed.ToHashSet();
-        return checked((uint)parent.IntData.Count(id => !done.Contains(id)));
+        uint remaining = checked((uint)parent.IntData.Count(id => !done.Contains(id)));
+        if (remaining == 1 && TerminalSeeking(parent,quests) is { } terminal && !done.Contains(terminal.Id) &&
+            active?.Any(row => row.QuestId == terminal.Id && row.AcceptanceId != Guid.Empty && row.ConditionState == 0) == true)
+            return 0;
+        return remaining;
     }
 
     public static bool DialogueChild(StoryQuest child, QuestCatalog quests) =>
@@ -114,6 +134,6 @@ internal static class QuestRelationProgress
         var done = completed.ToHashSet();
         return active.Select(row => row.AcceptanceId != Guid.Empty &&
             quests.TryGet(row.QuestId, out var parent) && (SequentialParent(parent, quests) || ThresholdParent(parent,quests))
-                ? row with { ConditionState = Initial(parent,quests,done) } : row).ToImmutableArray();
+                ? row with { ConditionState = Initial(parent,quests,done,active) } : row).ToImmutableArray();
     }
 }

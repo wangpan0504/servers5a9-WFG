@@ -44,16 +44,19 @@ internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog ite
             }
             // Full03 ACK31/32的error18均跳过文案与正文；本服用它作中立业务拒绝。
             await context.Reply(opcode, QuestPackets.Rejected(18), "quest_lifecycle_rejected", Guard);
-            // 顺序父任务的客户端在完成集合缺子任务时会再发C2S31。error18不写入完成位；
-            // 非空574之后补356，避免空574清掉完成集合，也不改活动条件或库存。
+            // 顺序父任务可能重接已完成子或当前寻物末子；error18不恢复活动状态。
+            // 按真实库存回放父与末子条件，再补356；重接请求本身不扣料或发奖。
             if (action == QuestLifecycleAction.Accept && receipt.Outcome == QuestLifecycleOutcome.Rejected &&
-                receipt.Character.CompletedQuests.Contains(questId) &&
+                (receipt.Character.CompletedQuests.Contains(questId) || receipt.Character.ActiveMainQuests.Any(row => row.QuestId == questId)) &&
                 quests.TryGet(questId, out var rejected) && rejected.MainQuest is int parentId &&
                 receipt.Character.ActiveMainQuests.Any(row => row.QuestId == parentId) &&
                 quests.TryGet(parentId, out var parent) && parent.Condition == "[quest clear]" && parent.SubType == 2 &&
+                (receipt.Character.CompletedQuests.Contains(questId) || QuestRelationProgress.TerminalSeeking(parent,quests)?.Id == questId) &&
                 parent.IntData.Contains(questId) && receipt.Character.ActiveMainQuests.Length != 0)
             {
-                await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
+                var refreshed = QuestInventoryProgress.Refresh(receipt.Character.ActiveMainQuests,receipt.Character.Inventory,quests,
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds(),QuestEligibility.Completed(receipt.Character));
+                await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(refreshed),
                     "quest_completed_child_active", Guard);
                 await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(receipt.Character),
                     "quest_completed_child_history", Guard);
