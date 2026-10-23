@@ -133,6 +133,16 @@ internal sealed record DungeonEntryPlan(
             reason = "dungeon-resource-mismatch";
             return false;
         }
+        bool cosmo = definition.RequiresCosmoEntryContract;
+        if (cosmo)
+        {
+            if (!hellParty || hellLegend || practice || isReplay || questId != 0)
+            { reason = "cosmo-mode-required"; return false; }
+            if (!definition.IsCosmoDungeon || definition.CosmoInvitationCount != 40 || definition.CosmoStoneCount != 4 ||
+                definition.CosmoQuestId != 10112 || !definition.TryGetDesignatedDifficulty(out byte cosmoDifficulty) || cosmoDifficulty != 4 ||
+                definition.StartFatigue != 8)
+            { reason = "cosmo-entry-contract-unsupported"; return false; }
+        }
         // 几何支持不代表票据、扣费和楼层已经实现。疲劳标记先按客户端谓词核对，其余字段继续拒绝。
         if (definition.RequiresGriefEntryContract)
         {
@@ -286,11 +296,6 @@ internal sealed record DungeonEntryPlan(
             }
         }
         // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
-        bool cosmo = hellParty && definition.IsCosmoDungeon;
-        if (cosmo && (definition.CosmoInvitationCount != 40 || definition.CosmoStoneCount != 4 ||
-            definition.CosmoQuestId != 10112 || !definition.TryGetDesignatedDifficulty(out byte cosmoDifficulty) || cosmoDifficulty != 4 ||
-            definition.StartFatigue != 8))
-        { reason = "cosmo-entry-contract-unsupported"; return false; }
         if (hellParty)
         {
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && (cosmo || maze.HellParty is not null) &&

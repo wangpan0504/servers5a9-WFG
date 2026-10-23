@@ -60,6 +60,16 @@ internal static class DungeonEntryCostTests
 
         var (cosmoDone, cosmoPosition) = Selection(towns, 7191);
         cosmoDone.UnionWith(towns.DungeonMaps[AreaDungeonWorldMap(towns)].HellQuests);
+        using (var cosmoLocked = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,
+            [.. cosmoDone.Where(id => id != cosmo.CosmoQuestId).Order()],position:cosmoPosition,
+            items:[(3330,40),(10305821,4)],fatigueRemaining:100))
+        {
+            var before = cosmoLocked.Read();
+            That(cosmoLocked.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,pieces:items.EpicPieces,hellParty:true) is null &&
+                cosmoLocked.Session.LastFormalDungeonRejection is "hell-party-quest-required:10112" or "selection-quest-required:10112" &&
+                QuestCompletionRepositoryTests.Same(before, cosmoLocked.Read()),
+                "材料齐全也不能绕过超星空任务，缺少10112时保持全部资产与入场状态：" + cosmoLocked.Session.LastFormalDungeonRejection);
+        }
         cosmoDone.Add(cosmo.CosmoQuestId);
         using (var cosmoPoor = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,[.. cosmoDone.Order()],position:cosmoPosition,
             items:[(3330,40)],fatigueRemaining:100))
@@ -85,6 +95,10 @@ internal static class DungeonEntryCostTests
             items:[(3330,40),(10305821,4)],fatigueRemaining:100))
         {
             var before = cosmoRich.Read();
+            That(cosmoRich.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,pieces:items.EpicPieces,hellParty:true,sealDoor:true) is null &&
+                cosmoRich.Session.LastFormalDungeonRejection == "hell-party-mode-unsupported" &&
+                QuestCompletionRepositoryTests.Same(before, cosmoRich.Read()),
+                "超星空不能借免费密门模式进入，拒绝后资产与实例状态不变");
             var receipt = cosmoRich.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,pieces:items.EpicPieces,hellParty:true);
             var after = cosmoRich.Read();
             That(receipt is { Entry: { IsCosmo: true, Difficulty: 4, StartFatigue: 8, Maze.StaticTopology.Supported: true },

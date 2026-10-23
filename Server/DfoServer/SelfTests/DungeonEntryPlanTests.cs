@@ -61,6 +61,23 @@ internal static class DungeonEntryPlanTests
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var ekern = new Character(17, 0, "Ekern", 1, new Location(35, 1, 0, 0, 0), null) { Level = 90 };
         var noQuests = new QuestCatalog(new());
+        var cosmoCharacter = new Character(18, 0, "CosmoMode", 0, new Location(54, 2, 0, 0), null) { Level = 95 };
+        That(!DungeonEntryPlan.TryCreate(catalog, cosmoCharacter, 7191, 0, 4, out _, out var cosmoModeReason,
+                quests: noQuests, draw: _ => 0) && cosmoModeReason == "cosmo-mode-required",
+            "超星空不能省略深渊模式退化成免邀请函、免灵石的普通副本：" + cosmoModeReason);
+        That(!DungeonEntryPlan.TryCreate(catalog, cosmoCharacter, 7191, 0, 4, out _, out _,
+                quests: noQuests, draw: _ => 0, hellParty: true, hellLegend: true),
+            "超星空不能冒充每日星空目标模式");
+        var cosmoDefinition = catalog.Get(7191);
+        foreach (var malformed in new[]
+        {
+            cosmoDefinition with { RawSections = cosmoDefinition.RawSections.Where(row => row.Tag != "cosmo dungeon").ToArray() },
+            cosmoDefinition with { RawSections = [.. cosmoDefinition.RawSections, new("cosmo dungeon", [])] },
+            cosmoDefinition with { Id = 7192 }
+        })
+            That(!DungeonEntryPlan.TryCreate(malformed, cosmoCharacter, (uint)malformed.Id, 0, 4, out _, out var malformedReason,
+                    quests: noQuests, draw: _ => 0, hellParty: true) && malformedReason == "cosmo-entry-contract-unsupported",
+                "缺失、重复模式声明及未经支持的超星空编号不借普通布局放行：" + malformedReason);
         foreach (uint ekernDungeon in new uint[] { 5097, 5098 })
         {
             That(DungeonEntryPlan.TryCreate(catalog, ekern, ekernDungeon, 0, 2, out var opened, out var openedReason, draw: _ => 0, quests: noQuests) &&

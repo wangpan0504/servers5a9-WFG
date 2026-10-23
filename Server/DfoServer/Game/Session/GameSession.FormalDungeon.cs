@@ -140,7 +140,8 @@ internal sealed partial class GameSession
         // 票据在下面统一规划并随实例安装原子提交；组队规则未接入。
         if (hellParty)
         {
-            if (retry is not null && !retry.Entry.IsCosmo || training || trainingRoom || classExperience || assault is not null || questId != 0 || (sealDoor && hellLegend))
+            if (retry is not null && !retry.Entry.IsCosmo || training || trainingRoom || classExperience || assault is not null || questId != 0 ||
+                sealDoor && (hellLegend || dungeonId == DungeonCosmoRewardCatalog.DungeonId))
                 return RejectFormal("hell-party-mode-unsupported");
             if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var hellArea) || hellArea.DungeonWorldMap is not { } hellWorld ||
                 !towns.DungeonMaps.TryGetValue(hellWorld, out var hellMap) || hellMap.Error is not null ||

@@ -125,7 +125,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     // [crack of dimension dungeon] 正数：异次元裂缝副本，通关奖励读 etc/crackofdimensionlist.etc。
     public bool IsCrackOfDimension => RawSections.Where(row => row.Tag == "crack of dimension dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 }] }];
-    public bool IsCosmoDungeon => Id == 7191 &&
+    // 独立模式声明残缺时也不能落回普通入场，绕过任务和双材料消耗。
+    public bool RequiresCosmoEntryContract => Id == DungeonCosmoRewardCatalog.DungeonId || RawSections.Any(row => row.Tag == "cosmo dungeon");
+    public bool IsCosmoDungeon => Id == DungeonCosmoRewardCatalog.DungeonId &&
         RawSections.Where(row => row.Tag == "cosmo dungeon").ToArray() is [{ Tokens.Count: 0 }];
     public int CosmoInvitationCount => RawSections.Where(row => row.Tag == "hell party required item count").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } count] }] ? count.Value : 0;

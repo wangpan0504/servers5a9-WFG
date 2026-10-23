@@ -170,6 +170,8 @@ internal static class TcpRegressionTests
         {
             QuestReplayTests.RunCore();
             DungeonEntryPlanTests.Run(resources.Archive);
+            DungeonEntryCostTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
+                resources.Quests, resources.Learning);
             return Task.CompletedTask;
         }),
         ("dungeon-settlement", async (_, _, resources) =>
