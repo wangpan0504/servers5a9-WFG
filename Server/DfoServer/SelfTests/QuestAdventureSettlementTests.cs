@@ -23,6 +23,33 @@ internal static class QuestAdventureSettlementTests
         var parameters = Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var dungeons = Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
+        var summit = quests.Get(7975);
+        var summitEntrance = MiddleQuestEntryTests.Entrance(towns,summit,9618);
+        That(summit.MinimumLevel == 85 && summit.MaximumLevel == 99 && summit.Prerequisites.SequenceEqual([3779]) &&
+            summit.IntData.SequenceEqual([655964]) && summitEntrance.Position is { Town:18,Area:0 } &&
+            towns.Areas[(18,0)].DungeonWorldMap == 30 && towns.DungeonMaps[30].Options
+                .Where(row => row.DungeonId == 9618).Select(row => (row.QuestId,row.InProgress)).SequenceEqual([(7975,true),(7979,true)]),
+            "山巅修炼场保持真实任务等级、前置、末图及月轮山进行中门禁");
+        foreach (uint request in new uint[] {7975,0})
+        {
+            using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,85,
+                summitEntrance.Completed,position:summitEntrance.Position);
+            var before = f.Read();
+            That(f.Session.EnterFormalDungeon(9618,request,0,dungeons,rooms) is null &&
+                f.Session.LastFormalDungeonRejection == "selection-quest-in-progress-required:7975" &&
+                QuestCompletionRepositoryTests.Same(before,f.Read()),"未接取任务仍不能进入山巅修炼场，拒绝不保存");
+            That(f.Session.ChangeQuest(7975,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
+                "7975沿真实前置正式接取");
+            foreach (byte difficulty in new byte[] {0,1,2,3,4})
+            {
+                var opening = f.Session.EnterFormalDungeon(9618,request,difficulty,dungeons,rooms);
+                That(opening is not null && opening.Entry.RouteQuestId == 7975 && opening.Entry.Difficulty == difficulty &&
+                    opening.Entry.Maze.MapSpecification!.Select(map => map.Id).SequenceEqual([655961,655962,655963,655964]),
+                    "7975显式及普通0入口的五档难度均准备完整四房："+f.Session.LastFormalDungeonRejection);
+                That(f.Session.CompleteFormalDungeonLoading() is not null && f.Session.ReturnFromFormalDungeon() is not null,
+                    "山巅任务真实加载与回城沿既有实例入口，不伪造清图");
+            }
+        }
         // 扫描真实单故事块得到的同类资源样本；仅断言难度归属，不绕过各任务的其它准入资格。
         foreach (var sample in new (int Dungeon,int Story,int[] Quests)[]
         {

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
@@ -931,7 +932,7 @@ internal static partial class FormalDungeonTcpTests
                 ExpectFatigue(visited.Count);
                 if (revisit) return;
                 var room = rooms.Get(currentMap, requirePassiveDefinitions: false);
-                int expectedActors = room.Monsters.Count + room.AiCharacters.Count + room.SpecialObjects.Count +
+                int expectedActors = room.Monsters.Count + room.AiCharacters.Count(row => !DungeonCompanion.IsCompanionRow(row.Id)) + room.SpecialObjects.Count +
                     room.SpecialObjects.Sum(parent => parent.Children.Count(child => child.Kind == "[monster]"));
                 That(mapBody[18] == expectedActors, "普通六图通知包含完整资源怪物、APC和特殊父子对象，不用删行通过挑战");
                 foreach (int index in Enumerable.Range(0, room.Monsters.Count).OrderBy(index => room.Monsters[index].RankKind == "[boss]"))
@@ -1494,12 +1495,17 @@ internal static partial class FormalDungeonTcpTests
         }
     }
 
-    static void SelectMap(TcpPeer peer)
+    // 亡者峡谷世界地图同时含悲叹之塔入口：选图空列表末尾u16带当前悲叹楼层，且前面必须先发0x34通关状态。
+    static void SelectMap(TcpPeer peer, ushort griefLayer = 0)
     {
         peer.Send(15, new byte[4]);
         peer.Expect(1, 15, [1]);
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-        peer.Expect(0, 27, new byte[42]);
+        byte[] notice = new byte[42];
+        BinaryPrimitives.WriteUInt16LittleEndian(notice.AsSpan(39), griefLayer);
+        peer.Expect(0, 27, notice);
+        That(griefLayer == 0 ? peer.GriefTowerClearInfo.Length == 0 : peer.GriefTowerClearInfo is [0x34, _],
+            "悲叹入口世界地图的选图通知与0x34通关状态成对，空列表只带当前楼层");
     }
     static byte[] Selection(byte difficulty = 0)
     {

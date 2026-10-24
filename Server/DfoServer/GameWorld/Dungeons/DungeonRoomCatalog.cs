@@ -24,7 +24,12 @@ internal sealed record DungeonRoomPassiveObject(int ObjectId, IReadOnlyList<int>
 }
 internal sealed record DungeonRoomSpecialChild(int SourceOrdinal, string Kind, IReadOnlyList<int> RawValues, string? Path);
 internal sealed record DungeonRoomSpecialObject(int SourceOrdinal, int ObjectId, IReadOnlyList<int> RawValues,
-    string? Path, IReadOnlyList<DungeonRoomSpecialChild> Children);
+    string? Path, IReadOnlyList<DungeonRoomSpecialChild> Children)
+{
+    // 本版9618含未登记、无子规则的精确空行；保留原序号供后续真实父子关联。
+    public bool IsEmptyPlaceholder => Path is null && ObjectId == 0 &&
+        RawValues is [0, 1, -1, -1, 0] && Children.Count == 0;
+}
 internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level);
 internal sealed record TournamentEnemy(int PartyCount, int Code, int Strength);
 internal sealed record TournamentSource(int PartyCount, IReadOnlyList<TournamentEnemy> Enemies, int OpponentX, int OpponentY, bool HasStartArea);
@@ -421,8 +426,11 @@ internal sealed class DungeonRoomCatalog
             foreach (var objectRow in MapSpecialObjects.Read(specialTokens, resolve))
             {
                 var raw = objectRow.Values;
+                // 仅兼容已核对的空行；ID 0已登记时仍须严格解析真实对象，不能吞掉缺失脚本。
+                bool emptyPlaceholder = raw is [0, 1, -1, -1, 0] && !objectPaths.ContainsKey(0);
                 // 仅训练保留已从LST移除的历史hellparty声明，不生成新演员或奖励。
-                string? path = allowUnresolvedSpecialMetadata && objectRow.Children.All(child => child.Kind == "[hellparty]")
+                string? path = emptyPlaceholder ? null :
+                    allowUnresolvedSpecialMetadata && objectRow.Children.All(child => child.Kind == "[hellparty]")
                     ? objectPaths.TryGetValue(raw[0], out var listed) && listed.Length != 0 && exists(listed) ? listed : null
                     : Resolve(raw[0], objectPaths, "special passive object");
                 var children = new List<DungeonRoomSpecialChild>();

@@ -59,7 +59,7 @@ internal static class QuestCounterattackEntryTcpTests
                 var room = rooms.Get(source,requirePassiveDefinitions:false);
                 var plan = DungeonMonsterPlan.FromRoom(room,created.Id,checked((ushort)next),definition.BasisLevel,playerTeam:0);
                 That(plan.Monsters.Count(actor => actor.Source is { SpecialChild:null }) == room.Monsters.Count &&
-                    plan.Monsters.Count(actor => actor.AiCharacter is not null) == room.AiCharacters.Count &&
+                    plan.Monsters.Count(actor => actor.AiCharacter is not null) == room.AiCharacters.Count(row => !DungeonCompanion.IsCompanionRow(row.Id)) &&
                     plan.SpecialObjects.Count == room.SpecialObjects.Count,"3553完整准备有效房间所有演员："+source.Id);
                 plans.Add(plan);
                 if (plan.Monsters.Count != 0 || plan.SpecialObjects.Count != 0) next = plan.NextObjectKey;

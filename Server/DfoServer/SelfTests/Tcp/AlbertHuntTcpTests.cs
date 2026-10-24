@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -103,7 +104,8 @@ internal static class AlbertHuntTcpTests
                 var source = rooms.Get(maze.MapSpecification![roomIndex]);
                 passiveObjects += source.PassiveObjects.Count;
                 That(source.Monsters.Select(actor => actor.MonsterId).SequenceEqual(expected.Monsters) &&
-                    source.PassiveObjects.Count == expected.Objects && source.AiCharacters.Count == 0 && source.SpecialObjects.Count == 0 &&
+                    source.PassiveObjects.Count == expected.Objects && source.AiCharacters.All(row => DungeonCompanion.IsCompanionRow(row.Id)) &&
+                    source.SpecialObjects.Count == 0 &&
                     source.MonsterTeams is null or { Count: 0 } && source.Monsters.All(actor => actor.Modifiers.Count == 0),
                     "每图完整演员及普通物件保留，无友方/APC/dummy或特殊父子："+source.Map.Id);
                 That(U32(map,14) == 70248+roomIndex && map[0] == expected.Position.X && map[1] == expected.Position.Y &&

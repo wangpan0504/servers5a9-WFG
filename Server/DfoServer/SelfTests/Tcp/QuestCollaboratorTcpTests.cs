@@ -140,7 +140,7 @@ internal static class QuestCollaboratorTcpTests
                 var room = rooms.Get(map,requirePassiveDefinitions:false);
                 var plan = DungeonMonsterPlan.FromRoom(room,created.Id,checked((ushort)next),definition.BasisLevel,playerTeam:0);
                 That(plan.Monsters.Count(actor => actor.Source is { SpecialChild:null }) == room.Monsters.Count &&
-                    plan.Monsters.Count(actor => actor.AiCharacter is not null) == room.AiCharacters.Count &&
+                    plan.Monsters.Count(actor => actor.AiCharacter is not null) == room.AiCharacters.Count(row => !DungeonCompanion.IsCompanionRow(row.Id)) &&
                     plan.SpecialObjects.Count == room.SpecialObjects.Count, "完整准备七图普通/APC/特殊身份，不删后续演员：" + map.Id);
                 result.Add(plan);
                 if (plan.Monsters.Count != 0 || plan.SpecialObjects.Count != 0) next = plan.NextObjectKey;

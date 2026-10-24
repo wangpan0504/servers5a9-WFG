@@ -367,9 +367,11 @@ internal sealed partial class SinglePlayerDungeonRun
             DungeonMonsterPlan resourcePlan;
             try
             {
-                // 入场与复验采用同一训练策略；普通副本继续要求完整特殊父子演员。
+                // 入场与复验采用同一训练策略；普通副本继续要求完整特殊父子演员。伴侣行按同一放行集合复验。
                 resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel,
-                    includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam);
+                    includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
+                    // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
+                    companionRows: plan.Room.Map.Id == entry.StartMap.Id ? entry.CompanionMapRows : []);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException or DungeonObjectKeyOverflowException)
             {

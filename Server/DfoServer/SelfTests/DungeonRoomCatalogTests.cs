@@ -44,6 +44,32 @@ internal static class DungeonRoomCatalogTests
             fixture.String("[trap]"), new(0, 40002), new(0, 40), new(0, 1), new(0, 10), new(0, -1),
             fixture.String("[monster]"), new(0, 1), new(0, 5), new(0, 3), new(0, 10), new(0, -1)]);
         var parsedSpecial = fixture.Parse(special).SpecialObjects;
+        var emptySpecial = fixture.Block("special passive object", [
+            new(0,0),new(0,1),new(0,-1),new(0,-1),new(0,0),
+            .. special[1..^1],new(0,0),new(0,1),new(0,-1),new(0,-1),new(0,0)]);
+        var emptyRoom = fixture.Parse([.. fixture.Monster(),.. emptySpecial]);
+        That(emptyRoom.SpecialObjects is [{ IsEmptyPlaceholder: true, SourceOrdinal: 0 },
+                { IsEmptyPlaceholder: false, SourceOrdinal: 1 },{ IsEmptyPlaceholder: true, SourceOrdinal: 2 }],
+            "空特殊父行保留原序号，不能压缩后续真实父子关联");
+        var emptyPlan = DungeonMonsterPlan.FromRoom(emptyRoom,99,10,5);
+        That(emptyPlan.SpecialObjects is [{ ObjectKey: 11, Source.SourceOrdinal: 1 }] &&
+            emptyPlan.Monsters.Count == 2 && emptyPlan.Monsters[1].Source!.SpecialParent!.SourceOrdinal == 1 &&
+            emptyPlan.NextObjectKey == 13,
+            "空父行不占key或生成type9，真实父子及普通怪仍完整生成");
+        var zeroObjectPaths = new Dictionary<int,string> { [0] = "passiveobject/zero.obj" };
+        var zeroObject = fixture.Block("special passive object", [new(0,0),new(0,1),new(0,-1),new(0,-1),new(0,0)]);
+        var registeredZero = fixture.Parse(zeroObject,objectPaths:zeroObjectPaths);
+        That(registeredZero.SpecialObjects is [{ IsEmptyPlaceholder: false, Path: "passiveobject/zero.obj" }] &&
+            DungeonMonsterPlan.FromRoom(registeredZero,99,10,5).SpecialObjects is [{ ObjectKey: 10 }],
+            "已登记ID0仍生成真实对象，不能仅凭整数形状吞掉演员");
+        TestCheck.Reject<InvalidDataException>(() => fixture.Parse(zeroObject,exists:false,objectPaths:zeroObjectPaths),
+            "已登记ID0的脚本缺失仍拒绝，不能作为空占位放行");
+        foreach (int[] raw in new[] { new[] {99,1,-1,-1,0}, [0,1,0,-1,0], [0,1,-1,-1,1] })
+            Reject(fixture.Block("special passive object", [.. raw.Select(value => new PvfToken(0,value))]),
+                "其它缺失父对象、未知形状或截断子项仍拒绝");
+        Reject(fixture.Block("special passive object", [new(0,0),new(0,1),new(0,-1),new(0,-1),new(0,1),
+            fixture.String("[monster]"),new(0,1),new(0,5),new(0,3),new(0,10),new(0,-1)]),
+            "缺失父对象带真实子怪不能沿空行规则放行");
         That(parsedSpecial.Count == 1 && parsedSpecial[0].SourceOrdinal == 0 && parsedSpecial[0].RawValues.SequenceEqual([3, -20, 150, 0, 2]) &&
             parsedSpecial[0].Children.Select(child => child.Kind).SequenceEqual(["[trap]", "[monster]"]) &&
             parsedSpecial[0].Children[1].SourceOrdinal == 1 && parsedSpecial[0].Children[1].Path == "monster/fixture.mob" &&
@@ -447,9 +473,10 @@ internal static class DungeonRoomCatalogTests
         public PvfToken[] Monster(int[]? values = null, string placement = "[fixed]", string rank = "[normal]") =>
             Block("monster", [.. (values ?? [1, 0, 3, 573, 197, 0, 1, 1]).Select(value => new PvfToken(0, value)), String(placement), String(rank)]);
         public DungeonRoomDefinition Parse(PvfToken[] tokens, bool exists = true, bool requirePassiveDefinitions = true,
-            Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter?>? resolveAiCharacter = null) => DungeonRoomCatalog.ParseResource(
+            Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter?>? resolveAiCharacter = null,
+            IReadOnlyDictionary<int,string>? objectPaths = null) => DungeonRoomCatalog.ParseResource(
             new("map", new(0, 0), 1, "map/fixture.map"), tokens, id => strings[id],
             new Dictionary<int, string> { [1] = "monster/fixture.mob", [62531] = "monster/merman-king-fixture.mob" },
-            new Dictionary<int, string> { [3] = "passiveobject/fixture.obj" }, _ => exists,requirePassiveDefinitions,resolveAiCharacter);
+            objectPaths ?? new Dictionary<int, string> { [3] = "passiveobject/fixture.obj" }, _ => exists,requirePassiveDefinitions,resolveAiCharacter);
     }
 }

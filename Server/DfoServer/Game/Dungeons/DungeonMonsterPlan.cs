@@ -39,7 +39,10 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
     internal static DungeonMonsterPlan FromAltarRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey,
         int level, Func<int, int> draw)
     {
-        if (room.AltarWaves is null || room.Monsters.Count != 0 || room.AiCharacters.Count != 0 || room.SpecialObjects.Count != 0)
+        // 祭坛不放行AI：部署侧伴侣补丁会把20900行写进祭坛图，伴侣行一律丢弃；
+        // 其余AI演员仍按祭坛独立波次合同拒绝，避免静默混入普通演员。
+        if (room.AltarWaves is null || room.Monsters.Count != 0 ||
+            room.AiCharacters.Any(row => !DungeonCompanion.IsCompanionRow(row.Id)) || room.SpecialObjects.Count != 0)
             throw new InvalidDataException("祭坛房间必须使用独立波次且不混入普通演员");
         var altar = DungeonAltarPlan.Create(DungeonAltarDefinition.Read(room.AltarWaves), characterId, firstObjectKey,
             level, room.Map.Kind == "boss", draw);
@@ -109,7 +112,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel, playerTeam: playerTeam);
 
     internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
-        bool includeSpecial = true, int? playerTeam = null)
+        bool includeSpecial = true, int? playerTeam = null, IReadOnlyList<int>? companionRows = null)
     {
         if (room.AltarWaves is not null)
             throw new NotSupportedException("unsupported: 祭坛波次需要专用调度，不能作为普通怪物房间生成");
@@ -178,9 +181,17 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             nextKey++;
         }
 
+        // 地图自带原生 [ai character] 行（如 91548 的 55430）时不再叠加伴侣：该图的AI演员集合与资源一致
+        // 是客户端与自测断言的前提，伴侣只用于资源原本没有AI演员的普通房间。
+        bool companionsAllowed = companionRows is not null &&
+            !room.AiCharacters.Any(row => !DungeonCompanion.IsCompanionRow(row.Id));
         for (int index = 0; index < room.AiCharacters.Count; index++)
         {
             var source = room.AiCharacters[index];
+            // 伴侣行（20900）只在当前放行集合内发送：默认集合为空，起始房间由入场计划给出。
+            // 客户端会让该AIC跨房间存活，逐房重发会每房多出一名并卡清房。丢弃时不占用对象key，其余行号保持原索引。
+            // 未放行的行不参与资源校验：部署侧地图补丁写坏的行不能影响开关关闭时的正常入场。
+            if (DungeonCompanion.IsCompanionRow(source.Id) && !(companionsAllowed && companionRows!.Contains(source.Id))) continue;
             if (source.RawValues.Count != 6 || source.RawValues[0] != source.Id || source.Id <= 0 ||
                 source.Level is < 1 or > 255 || source.Faction is not ("[monster]" or "[character]" or "[neutral]") ||
                 source.RankKind is not ("[normal]" or "[champion]" or "[super champion]" or "[boss]"))
@@ -204,6 +215,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (parent.SourceOrdinal is < 0 or > sbyte.MaxValue || parent.RawValues.Count != 5 || parent.RawValues[0] != parent.ObjectId ||
                 parent.RawValues[4] != parent.Children.Count)
                 throw new NotSupportedException("特殊父对象身份或关联范围未支持");
+            // 02A216D7..02A216E4在父对象加载为空时返回；目录确认的空行不生成type9，也不占用key。
+            if (parent.IsEmptyPlaceholder) continue;
             // 带 [hellparty] 的柱子由地图文件在客户端本地生成。再发一条 type9 会叠出第二根柱子，打到的也不是地图脚本那根。
             if (!parent.Children.Any(child => child.Kind == "[hellparty]"))
                 objects.Add(new(Allocate(), parent));

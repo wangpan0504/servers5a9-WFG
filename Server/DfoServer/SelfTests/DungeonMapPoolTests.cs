@@ -320,7 +320,7 @@ internal static class DungeonMapPoolTests
             grief.MapSpecification is [{ Id: 100247, Path: "map/towerofgrief_down/100247_001.map" }],
             "真实D5115仅补精确100247，不改原始BB几何");
         var room = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf).Get(grief.MapSpecification![0]);
-        That(room.DeclaredType == "[normal]" && room.AiCharacters is [{ Id: 470, Faction: "[monster]", RankKind: "[boss]" }],
+        That(room.DeclaredType == "[normal]" && room.AiCharacters.Where(row => !DungeonCompanion.IsCompanionRow(row.Id)).ToArray() is [{ Id: 470, Faction: "[monster]", RankKind: "[boss]" }],
             "真实100247仍保留敌对Boss APC470，不为单房拓扑删除演员");
         var eligible = new Character(99,0,"GriefResource",0,new(38,2,1085,249),null) { Level = 90 };
         That(!DungeonEntryPlan.TryCreate(catalog,eligible,5115,0,0,out var entry,out string reason) && entry is null &&

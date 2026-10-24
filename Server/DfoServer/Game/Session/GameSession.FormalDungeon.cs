@@ -361,6 +361,16 @@ internal sealed partial class GameSession
         if (firstObjectKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("对象key尾部已耗尽");
         var topology = entry!.Maze.StaticTopology;
         if (!topology.Supported) return RejectFormal("maze-topology-unsupported");
+        // GM伴侣：王富贵开关默认关闭，开启只放20900。
+        // 只作用于正式副本流程，训练/职业体验/练习/比赛不注入；
+        // 深渊波次模板与宇宙裂缝的槽位行也不叠加；祭坛、绝望之塔、Boss Rush 与眩惑之塔按资源标记 AllowsCompanionAi 整类排除。
+        // 放行集合冻结进入场计划，起始房间之外的房间一律丢弃。
+        if (!entry.IsTutorial && !entry.IsTrainingRoom && !entry.IsClassExperience && !entry.IsPractice &&
+            !entry.IsTournament && entry.HellParty is null && !entry.IsCosmo && entry.AllowsCompanionAi)
+        {
+            var companionRows = DungeonCompanion.WangFuguiRows(debugSettings?.SummonWangFugui == true);
+            if (!companionRows.IsEmpty) entry = entry with { CompanionMapRows = companionRows };
+        }
         var plans = new List<DungeonMonsterPlan>();
         uint next = firstObjectKey;
         uint mapSeed = checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue));
@@ -380,7 +390,9 @@ internal sealed partial class GameSession
                     ? DungeonTournamentPlan.CreateRoomPlan(rooms,room,rooms.ReadTournamentSource(map),mapSeed,expected.Id,checked((ushort)next),
                         tournamentLevel,entry.PlayerTeam)
                     : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.BasisLevel,
-                        includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam);
+                        includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam,
+                        // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
+                        companionRows: map.Id == entry.StartMap.Id ? entry.CompanionMapRows : []);
                 if (entry.ChampionPercents.Length > 0)
                     plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, RandomNumberGenerator.GetInt32);
                 // 实验性（未在95客户端实证）：深渊派对房间（[seal door pos] 处换成 [seal door map index] 深渊图）抽波次。

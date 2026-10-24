@@ -15,6 +15,7 @@ internal static class QuestAdventureSettlementTcpTests
     internal static void Verify(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
+        VerifySummitEntry(fixture,resources,growth,drain);
         var quest = resources.Quests.Get(7930);
         var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,quest,152);
         foreach (var scenario in new[] { (Request:7930u,Difficulty:(byte)1),(Request:0u,Difficulty:(byte)2) })
@@ -95,6 +96,58 @@ internal static class QuestAdventureSettlementTcpTests
                     fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
                     "回城重连保留已交付任务及唯一结算回执");
             }
+        }
+    }
+    static void VerifySummitEntry(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
+        Action<TcpPeer,Action<WirePacket>?> drain)
+    {
+        var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,resources.Quests.Get(7975),9618);
+        foreach (var scenario in new[] { (Request:7975u,Difficulty:(byte)0),(Request:0u,Difficulty:(byte)4) })
+        {
+            string account = "summit-7975-"+scenario.Request;
+            Character created;
+            using (var owner = new AccountOwners().Acquire(account,() => { }))
+            {
+                var candidate = CharacterCreation.Prepare("Summit"+scenario.Difficulty,resources.Characters.Get(0),
+                    entrance.Position,entrance.Position,resources.Learning.Get);
+                created = new CharacterRepository(fixture.Database).Create(owner,candidate with
+                {
+                    Level = 85,AcceptedStoryLevel = 85,CompletedQuests = entrance.Completed,
+                    InitialLearning = SkillPointLedger.Synchronize(0,0,85,candidate.InitialLearning with
+                        { Experience = growth.GetLevelStartExperience(85) },resources.Learning)
+                });
+            }
+            using var peer = Open(fixture,account);
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            byte[] selection = Convert.FromHexString("922500000000000000FFFF0000000000271F00000000000000");
+            selection[4] = scenario.Difficulty;
+            BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),scenario.Request);
+            peer.Send(16,selection); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+            peer.Send(31,[31,0,39,31]); That(peer.Expect(1,31).Body[0] == 1,"7975 TCP真实接取成功"); drain(peer,null);
+            peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]); peer.Expect(0,27,new byte[42]);
+            peer.Send(16,selection); var info = peer.Expect(0,28).Body;
+            That(U32(info,0) == 9618 && info[4] == scenario.Difficulty,"山巅两入口保留副本与所选难度");
+            var map = peer.Expect(0,29).Body;
+            for (byte x = 0; x < 3; x++)
+            {
+                That(U32(map,14) == 655961u+x,"山巅TCP沿实际路线到达原先拒绝的第三房");
+                FormalDungeonTcpTests.Load(peer); drain(peer,null);
+                if (x == 2)
+                {
+                    That(map[18] == 6 && Enumerable.Range(0,6).All(i => map[19+22*i+13] == 0),
+                        "第三房完整生成六只普通怪，不为两个空父行发送type9");
+                    break;
+                }
+                foreach (int offset in Enumerable.Range(0,map[18]).Select(i => 19+22*i).Where(at => map[at+21] == 0))
+                { peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12])); drain(peer,null); }
+                var move = new byte[100]; move[0] = (byte)(x+1);
+                peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+            }
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "空父行兼容不伪造通关或结算回执");
         }
     }
 }

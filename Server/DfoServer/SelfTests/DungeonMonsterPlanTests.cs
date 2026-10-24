@@ -190,6 +190,52 @@ internal static class DungeonMonsterPlanTests
         foreach (string faction in new[] { "[character]", "[neutral]" })
             That(!DungeonMonsterPlan.FromRoom(room with { AiCharacters = [apcs[^1] with { Faction = faction }] },99,10).Monsters[^1].CanReportDeath,
                 "友方和中立APC不能通过死亡报告生成奖励或Boss通关事实");
+        // GM伴侣：地图 [ai character] 行按入场放行集合发送；集合为空时全部丢弃，不占用对象key。
+        // 客户端保留上一间房的AIC，逐房重发会每房多出一名并卡清房，所以只有起始房间带集合。
+        var companionActors = new[] { DungeonCompanion.WangFuguiId }
+            .Select((id, index) => new DungeonRoomAiCharacter(id, [id, 100 + index, 200, 0, 0, 0], "[character]", "[normal]",
+                "aicharacter/fixture.aic", 95)).ToArray();
+        var companionRoom = room with { AiCharacters = [.. apcs, .. companionActors] };
+        var closed = DungeonMonsterPlan.FromRoom(companionRoom, 99, 10);
+        That(closed.Monsters.Select(row => row.SourceOrdinal).SequenceEqual([0,1,0,1,2,3]) &&
+            closed.Monsters.Select(row => row.ObjectKey).SequenceEqual(new ushort[] { 10,11,12,13,14,15 }),
+            "开关关闭时伴侣行不发送，也不影响其他演员行号与对象key");
+        // 放行断言使用只有伴侣行的房间：带原生AI演员的地图按设计整组丢弃伴侣，不能作为放行基线。
+        var companionOnlyRoom = room with { AiCharacters = companionActors };
+        var companionOnlyClosed = DungeonMonsterPlan.FromRoom(companionOnlyRoom, 99, 10);
+        var wangOnly = DungeonMonsterPlan.FromRoom(companionOnlyRoom, 99, 10, companionRows: DungeonCompanion.WangFuguiRows(true));
+        That(wangOnly.Monsters.Count == companionOnlyClosed.Monsters.Count + 1 &&
+            wangOnly.Monsters[^1] is { SpawnType: 5, IsFriendly: true, IsBlocking: false, CanReportDeath: false, IsBoss: false } wang &&
+            wang.AiCharacter is { Id: DungeonCompanion.WangFuguiId },
+            "召唤王富贵只放行20900那一行");
+        // 地图自带原生AI演员时（91548 的 55430 一类）不叠加伴侣：该图AI集合与资源一致是客户端与自测断言的前提。
+        var nativeActor = new DungeonRoomAiCharacter(55430, [55430, 100, 200, 0, 0, 0], "[monster]", "[boss]", "aicharacter/fixture.aic", 95);
+        var nativeRoom = DungeonMonsterPlan.FromRoom(room with { AiCharacters = [nativeActor, .. companionActors] }, 99, 10,
+            companionRows: DungeonCompanion.WangFuguiRows(true));
+        That(nativeRoom.Monsters.Count(row => row.AiCharacter is not null) == 1 &&
+            nativeRoom.Monsters.Single(row => row.AiCharacter is not null).AiCharacter!.Id == 55430 &&
+            nativeRoom.Monsters.Select(row => row.SourceOrdinal).SequenceEqual([0, 1, 0]),
+            "原生AI演员地图不叠加伴侣行，伴侣行照常丢弃且不占对象key");
+        var nextRoom = DungeonMonsterPlan.FromRoom(companionOnlyRoom, 99, 10, companionRows: []);
+        That(nextRoom.Monsters.Select(row => (row.SourceOrdinal, row.ObjectKey))
+                .SequenceEqual(companionOnlyClosed.Monsters.Select(row => (row.SourceOrdinal, row.ObjectKey))) &&
+            wangOnly.Monsters.Take(companionOnlyClosed.Monsters.Count).Select(row => (row.SourceOrdinal, row.ObjectKey))
+                .SequenceEqual(companionOnlyClosed.Monsters.Select(row => (row.SourceOrdinal, row.ObjectKey))),
+            "非起始房间丢弃伴侣行时不占用对象key，起始房间的既有演员行号/key也不变");
+        // 部署侧地图补丁可能写坏行：未放行时不做资源校验，放行后仍按原规则拒绝，不能静默刷出坏行。
+        var malformed = new DungeonRoomAiCharacter(DungeonCompanion.WangFuguiId, [DungeonCompanion.WangFuguiId, 100, 200],
+            "[character]", "[normal]", "aicharacter/fixture.aic", 95);
+        var malformedClosed = DungeonMonsterPlan.FromRoom(room with { AiCharacters = [malformed] }, 99, 10);
+        That(malformedClosed.Monsters.All(row => row.AiCharacter is null),
+            "开关关闭时未放行的伴侣行不参与资源校验，坏行不阻断房间计划");
+        bool malformedRejected = false;
+        try
+        {
+            DungeonMonsterPlan.FromRoom(room with { AiCharacters = [malformed] }, 99, 10,
+                companionRows: DungeonCompanion.WangFuguiRows(true));
+        }
+        catch (NotSupportedException) { malformedRejected = true; }
+        That(malformedRejected, "放行的伴侣行仍按原规则校验，字段不完整不能静默刷出");
         Console.WriteLine($"PASS {Count - checks} dungeon blocking monster plan assertions");
     }
 

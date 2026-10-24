@@ -477,7 +477,7 @@ internal static class MetroQuestEntryCoverageTests
                 var plan = DungeonMonsterPlan.FromRoom(room, entry.CharacterId, checked((ushort)next), entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam);
                 That(plan.Monsters.Count(actor => actor.Source is { SpecialChild: null }) == room.Monsters.Count &&
-                    plan.Monsters.Count(actor => actor.AiCharacter is not null) == room.AiCharacters.Count &&
+                    plan.Monsters.Count(actor => actor.AiCharacter is not null) == room.AiCharacters.Count(row => !DungeonCompanion.IsCompanionRow(row.Id)) &&
                     plan.SpecialObjects.Count == room.SpecialObjects.Count &&
                     plan.Monsters.Select(actor => actor.ObjectKey).Concat(plan.SpecialObjects.Select(actor => actor.ObjectKey))
                         .All(key => key != entry.CharacterId && keys.Add(key)), "完整MAP保留全部演员及全实例唯一key：" + map.Id);

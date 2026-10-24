@@ -192,7 +192,7 @@ internal static class HarlemQuestEntryTests
             var room = rooms.Get(map,requirePassiveDefinitions:false);
             var plan = DungeonMonsterPlan.FromRoom(room,entry.CharacterId,next,entry.BasisLevel,playerTeam:entry.PlayerTeam);
             That(plan.Monsters.Count(row => row.Source is { SpecialChild:null }) == room.Monsters.Count &&
-                plan.Monsters.Count(row => row.AiCharacter is not null) == room.AiCharacters.Count &&
+                plan.Monsters.Count(row => row.AiCharacter is not null) == room.AiCharacters.Count(row => !DungeonCompanion.IsCompanionRow(row.Id)) &&
                 plan.SpecialObjects.Count == room.SpecialObjects.Count &&
                 plan.Monsters.Select(row => row.ObjectKey).Concat(plan.SpecialObjects.Select(row => row.ObjectKey))
                     .All(key => key != entry.CharacterId && keys.Add(key)),
