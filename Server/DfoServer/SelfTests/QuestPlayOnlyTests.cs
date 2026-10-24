@@ -117,7 +117,7 @@ internal static class QuestPlayOnlyTests
                     "未接取不能因type49空参数直接完成或领奖");
                 output.Frames.Clear();
                 That(await commands.DispatchAsync(context,Identity(31)) == CommandResult.Handled &&
-                    output.Opcodes.SequenceEqual(new ushort[] {31,21}),"真实31接取play-only侧边任务");
+                    output.Opcodes.SequenceEqual(new ushort[] {31,21,356}),"真实31接取play-only侧边任务");
                 var first = f.Read(); var firstActive = first.ActiveMainQuests.Single();
                 That(firstActive.ConditionState == 0 && firstActive.AcceptanceId != Guid.Empty &&
                     first.CompletedQuests.Length == 0 && f.Receipts == 0 && first.Revision == original.Revision+1,
@@ -128,7 +128,7 @@ internal static class QuestPlayOnlyTests
                     "未发送33也能重登恢复实际接取归零，不依赖客户端重放成功31");
                 output.Frames.Clear();
                 That(await commands.DispatchAsync(context,Identity(32)) == CommandResult.Handled &&
-                    output.Opcodes.SequenceEqual(new ushort[] {32,21}) && f.Read().ActiveMainQuests.Length == 0,
+                    output.Opcodes.SequenceEqual(new ushort[] {32,21,356}) && f.Read().ActiveMainQuests.Length == 0,
                     "普通可放弃侧边任务走既有32规则清槽");
                 output.Frames.Clear();
                 await commands.DispatchAsync(context,Identity(31));

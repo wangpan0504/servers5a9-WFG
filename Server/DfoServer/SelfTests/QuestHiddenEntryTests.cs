@@ -106,7 +106,7 @@ internal static class QuestHiddenEntryTests
                 output.Opcodes.SequenceEqual(new ushort[] {884}) && Same(before,f.Read()),"缺失qid不生成822或修改数据库");
             output.Frames.Clear();
             That(await commands.DispatchAsync(context,new(1,31,[31,0,100,0])) == CommandResult.Handled &&
-                output.Opcodes.SequenceEqual(new ushort[] {31,21}) && !f.Session.CanPublishQuestHidden(opening),
+                output.Opcodes.SequenceEqual(new ushort[] {31,21,356}) && !f.Session.CanPublishQuestHidden(opening),
                 "实际31仍用公共接取事务，旧开启回执随revision快照失效");
             var accepted = f.Read();
             That(accepted.ActiveMainQuests.Single() is { ConditionState: 0,AcceptanceId: var identity } && identity != Guid.Empty &&

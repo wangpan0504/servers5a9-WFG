@@ -23,7 +23,7 @@ internal static class DungeonProbeTcpTests
             {
                 peer.Send(31, Convert.FromHexString("1F00490C"));
                 peer.Expect(1, 31);
-                peer.Expect(0, 21);
+                peer.Expect(0, 21); peer.Expect(0, 356);
             }
             peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
             peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);

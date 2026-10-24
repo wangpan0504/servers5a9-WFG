@@ -97,17 +97,19 @@ internal static class CharacterProgressTcpTests
             var completed = completedAfterGrow.ToHashSet();
             That(history.Length == 30004 && U32(history) == 30000 && completed.All(id => id is > 0 and < 30000),
                 "重启选角的完成历史使用完整30000项表，持久任务编号合法");
-            That(Enumerable.Range(0, 30000).All(id => history[4 + id] == (completed.Contains(id) ? 1 : 0)),
-                "重启选角逐项恢复已提交转职觉醒历史，不漏报也不增加完成位");
+            That(Enumerable.Range(0, 30000).All(id => history[4 + id] == (id == 13700 || completed.Contains(id) ? 1 : 0)),
+                "重启选角逐项恢复已提交转职觉醒历史及独立月轮山显示位");
             Bytes(peer.SkillInfo, SkillPackets.Initialized(Role(0).Learning), "服务重启保留职业、技能和点数");
         }
         using (var peer = Open(fixture))
         {
             var role = Role(1);
             That(role.CompletedQuests.Length == 0 && role.AccountCompletedQuests.Length == 0,
-                "特殊职业未产生完成任务时仍沿无356的严格入城包序");
+                "特殊职业的真实任务账本在重启后保持空集");
             peer.Select(1, combos: SkillPackets.Combos(role.Learning));
-            That(peer.CompletedQuestHistory.Length == 0, "空账本重启选角不伪造完成历史通知");
+            That(peer.CompletedQuestHistory.Length == 30004 && U32(peer.CompletedQuestHistory) == 30000 &&
+                Enumerable.Range(0,30000).All(id => peer.CompletedQuestHistory[4+id] == (id == 13700 ? 1 : 0)),
+                "空账本重启选角严格只投影月轮山显示位，不伪造其他任务完成记录");
             Bytes(peer.SkillInfo, SkillPackets.Initialized(role.Learning), "特殊职业重启回放默认连招、觉醒与点数");
         }
         await fixture.StopAsync();

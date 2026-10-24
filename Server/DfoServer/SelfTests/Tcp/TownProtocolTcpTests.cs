@@ -26,6 +26,21 @@ internal static partial class TownProtocolTcpTests
             peer.Create("DoorTest", variant: 1);
             peer.Select();
             DfoServer.WorldMapHoverTests.AssertPermissionBody(peer.DungeonPermission, towns);
+            byte[] mapHistory = new byte[30004];
+            mapHistory[0] = 0x30;
+            mapHistory[1] = 0x75;
+            mapHistory[4 + 13700] = 1;
+            Bytes(peer.CompletedQuestHistory, mapHistory, "空历史角色真实入城356包含月轮山标记，其他完成位全零");
+            That(fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0", peer.Id) is [[0L]],
+                "线上显示标记不伪造持久任务完成记录");
+            peer.Send(31, Convert.FromHexString("1F00490C"));
+            peer.Expect(1, 31, Convert.FromHexString("01490C0100000000"));
+            peer.Expect(0, 21);
+            Bytes(peer.Expect(0, 356).Body, mapHistory, "零真实完成记录时接取任务仍恢复月轮山显示标记");
+            peer.Send(32, Convert.FromHexString("2000490C"));
+            peer.Expect(1, 32, Convert.FromHexString("01490C"));
+            peer.Expect(0, 21);
+            Bytes(peer.Expect(0, 356).Body, mapHistory, "放弃最后任务后显示标记仍保留");
             peer.Travel(38, 0, 622, 196, 38, 1, bottom: true);
             peer.Travel(38, 1, 873, 253, 38, 0, returnTown: 38);
             peer.Travel(38, 0, 645, 251, 38, 1, kind: 6);
@@ -52,6 +67,7 @@ internal static partial class TownProtocolTcpTests
             peer.Expect(1, 692, [0, 24, 0]);
             That(fixture.Snapshot() == before, "return selection and unselected movement preserve all persisted fields");
             peer.Select();
+            Bytes(peer.CompletedQuestHistory, mapHistory, "返回选角再入城恢复同一月轮山显示标记");
         }
 
         foreach (byte variant in new byte[]
@@ -246,7 +262,9 @@ internal static partial class TownProtocolTcpTests
             var player = packets[3].Body;
             That(player.Length == 257 && player[143] == 0 && player[144] == 15 && player[190] == 15, "prepared skill trees");
             completed = packets[6].Body;
-            That(completed.Length == 30004 && U32(completed) == 30000 && quests.Count == 943 && completed.AsSpan(4).ToArray().Select((b, i) => (b, i)).Where(p => p.b != 0).Select(p => p.i).ToHashSet().SetEquals(quests), "complete quest bitmap");
+            That(completed.Length == 30004 && U32(completed) == 30000 && quests.Count == 943 &&
+                completed.AsSpan(4).ToArray().Select((b, i) => (b, i)).Where(p => p.b != 0).Select(p => p.i)
+                    .ToHashSet().SetEquals(quests.Append(13700)), "完整任务位图逐位等于真实进度及独立月轮山显示标记");
             Bytes(packets[^2].Body, [38, 0, 0, 0], "initial return town");
             peer.Barrier();
             Trip[] trips = [new(38, 0, 622, 196, 38, 1, true), new(38, 3, 176, 154, 38, 0), new(39, 0, 330, 130, 38, 3), new(40, 0, 55, 270, 39, 0), new(40, 1, 1142, 124, 40, 0), new(54, 1, 201, 570, 40, 1), new(31, 1, 2508, 220, 54, 1), new(6, 3, 1668, 213, 31, 1), new(11, 1, 315, 215, 6, 3), new(17, 1, 1409, 346, 11, 1), new(22, 3, 77, 256, 17, 1), new(40, 1, 1672, 200, 22, 3), new(40, 0, 1519, 489, 40, 1), new(39, 0, 3547, 270, 40, 0), new(38, 1, 433, 311, 39, 0, ReturnTown: 39), new(39, 0, 596, 144, 38, 1, true), new(38, 1, 433, 311, 39, 0, ReturnTown: 39), new(39, 0, 596, 144, 38, 1), new(38, 3, 780, 362, 39, 0), new(38, 0, 1407, 360, 38, 3), new(38, 1, 873, 253, 38, 0, ReturnTown: 38), new(40, 1, 1782, 193, 38, 1, Kind: 5), new(54, 1, 201, 570, 40, 1, Kind: 255), new(40, 1, 1672, 200, 54, 1, Kind: 254), new(40, 0, 1519, 489, 40, 1, Kind: 253), new(38, 1, 433, 311, 40, 0, ReturnTown: 40, Kind: 252), new(39, 2, 552, 218, 38, 1, Kind: 5)];
